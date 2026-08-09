@@ -1,0 +1,239 @@
+import { readdir, readFile, stat } from 'node:fs/promises'
+import { basename, resolve } from 'node:path'
+import { join } from 'node:path'
+import { parse as parseYaml } from 'yaml'
+import type { DiscoveryResult, Harness, Project } from '../types'
+import { hasClaudeDir, readClaudeInventory } from './claude-inventory'
+import { readGitStates } from './git'
+
+/**
+ * Turns a list of root paths into the launcher's tree.
+ *
+ * The shape it looks for, in order:
+ *   1. the root itself is a harness  (`harness.yaml`)  -> harness + its repos/*
+ *   2. the root *contains* harnesses                    -> each one, as above
+ *   3. anything else                                    -> a plain folder
+ *
+ * SPEC's portability requirement is the reason for step 3: Helm must be useful
+ * pointed at a directory of ordinary repos, with no harness anywhere in sight.
+ */
+
+const HARNESS_MANIFEST = 'harness.yaml'
+const REPOS_DIRNAME = 'repos'
+
+/** Directories that are never projects, skipped before any I/O is spent on them. */
+const SKIP_DIRS = new Set([
+  'node_modules',
+  '.git',
+  '.svn',
+  '.hg',
+  'dist',
+  'build',
+  'out',
+  '.next',
+  '.turbo',
+  '.venv',
+  '__pycache__'
+])
+
+export interface ScanOptions {
+  roots: string[]
+  /** Read git state for every discovered project. Off for a fast first paint. */
+  includeGit?: boolean
+  /** How deep to look for harnesses below a root. 1 finds `<root>/<harness>`. */
+  maxDepth?: number
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+async function readHarnessManifest(
+  path: string
+): Promise<{ name: string | null; template: string | null; version: string | null } | null> {
+  try {
+    const raw = await readFile(join(path, HARNESS_MANIFEST), 'utf8')
+    const parsed: unknown = parseYaml(raw)
+    if (parsed === null || typeof parsed !== 'object') return { name: null, template: null, version: null }
+    const record = parsed as Record<string, unknown>
+    const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
+    return {
+      name: str(record['name']),
+      template: str(record['template']),
+      version: str(record['version'])
+    }
+  } catch {
+    // A harness with an unreadable or malformed manifest is still a harness -
+    // the file's presence is the signal, its contents are decoration.
+    return null
+  }
+}
+
+async function listDirs(path: string): Promise<string[]> {
+  const entries = await readdir(path, { withFileTypes: true })
+  return entries
+    .filter((e) => e.isDirectory() && !e.name.startsWith('.') && !SKIP_DIRS.has(e.name))
+    .map((e) => e.name)
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+}
+
+async function describeProject(
+  path: string,
+  kind: Project['kind'],
+  harnessPath: string | null
+): Promise<Project> {
+  const [inventory, claudeDir] = await Promise.all([
+    readClaudeInventory(path),
+    hasClaudeDir(path)
+  ])
+  return {
+    path,
+    name: basename(path),
+    kind,
+    harnessPath,
+    hasClaudeDir: claudeDir,
+    inventory,
+    git: null
+  }
+}
+
+/** A harness and every project under its `repos/`. */
+async function scanHarness(
+  path: string
+): Promise<{ harness: Harness; projects: Project[] }> {
+  const manifest = await readHarnessManifest(path)
+  const reposDir = join(path, REPOS_DIRNAME)
+
+  let repoNames: string[] = []
+  if (await isDirectory(reposDir)) {
+    try {
+      repoNames = await listDirs(reposDir)
+    } catch {
+      repoNames = []
+    }
+  }
+
+  const repoPaths = repoNames.map((name) => join(reposDir, name))
+  const projects = await Promise.all([
+    // The harness root is itself a project: it has its own `.claude/` and is
+    // the cwd a session actually launches from.
+    describeProject(path, 'harness', path),
+    ...repoPaths.map((repoPath) => describeProject(repoPath, 'repo', path))
+  ])
+
+  return {
+    harness: {
+      path,
+      name: manifest?.name ?? basename(path),
+      template: manifest?.template ?? null,
+      version: manifest?.version ?? null,
+      repoPaths
+    },
+    projects
+  }
+}
+
+async function isHarness(path: string): Promise<boolean> {
+  try {
+    return (await stat(join(path, HARNESS_MANIFEST))).isFile()
+  } catch {
+    return false
+  }
+}
+
+export async function scan(opts: ScanOptions): Promise<DiscoveryResult> {
+  const startedAt = Date.now()
+  const maxDepth = opts.maxDepth ?? 1
+
+  const harnesses: Harness[] = []
+  const projects: Project[] = []
+  const errors: Array<{ path: string; message: string }> = []
+  const seen = new Set<string>()
+
+  const roots = opts.roots.map((r) => resolve(r))
+
+  const addProjects = (found: Project[]): void => {
+    for (const project of found) {
+      const key = project.path.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      projects.push(project)
+    }
+  }
+
+  const visit = async (path: string, depth: number): Promise<void> => {
+    if (await isHarness(path)) {
+      const { harness, projects: found } = await scanHarness(path)
+      harnesses.push(harness)
+      addProjects(found)
+      return
+    }
+
+    if (depth >= maxDepth) {
+      // Out of budget to look deeper, so treat what we are standing on as a
+      // project in its own right rather than reporting nothing.
+      addProjects([await describeProject(path, 'folder', null)])
+      return
+    }
+
+    let children: string[]
+    try {
+      children = await listDirs(path)
+    } catch (err) {
+      errors.push({ path, message: err instanceof Error ? err.message : String(err) })
+      return
+    }
+
+    const results = await Promise.all(
+      children.map(async (name) => {
+        const child = join(path, name)
+        return { child, harness: await isHarness(child) }
+      })
+    )
+
+    const harnessChildren = results.filter((r) => r.harness)
+    if (harnessChildren.length > 0) {
+      // A directory of harnesses. Its non-harness siblings are not projects -
+      // they are whatever else happens to live beside them.
+      for (const { child } of harnessChildren) await visit(child, depth + 1)
+      return
+    }
+
+    // No harness anywhere below: the root's immediate children are the projects.
+    addProjects(
+      await Promise.all(results.map(({ child }) => describeProject(child, 'folder', null)))
+    )
+  }
+
+  for (const root of roots) {
+    if (!(await isDirectory(root))) {
+      errors.push({ path: root, message: 'not a directory' })
+      continue
+    }
+    try {
+      await visit(root, 0)
+    } catch (err) {
+      errors.push({ path: root, message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  if (opts.includeGit) {
+    const states = await readGitStates(projects.map((p) => p.path))
+    for (const project of projects) project.git = states.get(project.path) ?? null
+  }
+
+  projects.sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: 'base' }))
+
+  return {
+    roots,
+    harnesses,
+    projects,
+    errors,
+    scannedAt: new Date().toISOString(),
+    durationMs: Date.now() - startedAt
+  }
+}

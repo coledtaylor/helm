@@ -17,15 +17,39 @@ in the "the author's workspace" space. [docs/TASKS.md](docs/TASKS.md) maps task 
 - Spike findings also get a reference note in the harness (`../../notes/`) per
   harness convention.
 
+## Layout
+
+```
+packages/
+├── core/     # headless: discovery/, store/ (+ launch/, config/ to come)
+├── ui/       # React components
+└── desktop/  # Electron main + preload + renderer + the spike harness
+```
+
+pnpm workspaces, `node-linker=hoisted` (see `.npmrc` for why). `core` and `ui`
+export TypeScript source rather than a build output, so the bundler compiles
+them in and there is one build step, not three. `pnpm check` is what CI runs.
+
 ## Hard rules
 
-- `packages/core/` must never import Electron. Enforced by ESLint once M1 lands;
-  until then, enforced by you.
-- The terminal configuration in `src/renderer/src/terminal.ts` and `ptyEnv` in
-  `src/main/pty.ts` is load-bearing for TUI fidelity, and every line of it is
-  there because Spike C measured the failure it prevents. Do not "simplify" it
-  without reading [docs/SPIKE-C.md](docs/SPIKE-C.md); `npm run fidelity` and
-  `npm run claude-check` are the regression tests.
+- `packages/core/` must never import Electron. Enforced by the
+  `no-electron-in-core` block in `eslint.config.js`, which blocks static
+  imports, `require()`, and dynamic `import()`. If core needs something from the
+  host, the host passes it in as an argument.
+- The terminal configuration in `packages/desktop/src/renderer/src/terminal.ts`
+  and `ptyEnv` in `packages/desktop/src/main/pty.ts` is load-bearing for TUI
+  fidelity, and every line of it is there because Spike C measured the failure
+  it prevents. Do not "simplify" it without reading
+  [docs/SPIKE-C.md](docs/SPIKE-C.md); `pnpm fidelity` and `pnpm claude-check`
+  are the regression tests. They render `spike.html`, a separate page from the
+  app, so app layout changes cannot move the terminal under them.
+- Every renderer↔main channel is declared in
+  `packages/desktop/src/shared/ipc.ts` and nowhere else. The preload exposes
+  three generic functions; a feature adds a channel to the contract, not a
+  method to the bridge.
+- Schema changes: edit `packages/core/src/store/schema.ts`, then
+  `pnpm db:generate`. The generated SQL is embedded into the bundle, so a
+  packaged exe carries its migrations rather than needing files beside it.
 - Do not use `@anthropic-ai/claude-agent-sdk`. Helm shells out to the `claude`
   CLI. This is a deliberate architectural decision (see SPEC "Supersedes the SDK
   draft") - the app hosts the TUI, it does not reimplement the client.

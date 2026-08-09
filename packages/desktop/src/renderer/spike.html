@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Helm - spike harness</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #11121a;
+        overflow: hidden;
+      }
+      /* Positioned rather than padded: FitAddon derives the row count from this
+         element's box, and padding plus a fractional line height rounds a row
+         past the bottom edge, clipping the TUI's status line. */
+      #terminal {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        right: 8px;
+        bottom: 8px;
+        overflow: hidden;
+      }
+      /* The pane owns the scrollback; the page itself must never scroll, or a
+         resize would move the grid out from under the synthetic mouse events. */
+      .xterm .xterm-viewport {
+        scrollbar-width: thin;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="terminal"></div>
+    <script type="module" src="./src/spike.ts"></script>
+  </body>
+</html>

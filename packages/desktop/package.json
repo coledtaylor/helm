@@ -1,0 +1,49 @@
+{
+  "name": "@helm/desktop",
+  "version": "0.0.1",
+  "description": "Helm's Electron shell: main process, preload, renderer.",
+  "//productName": "Electron derives app.getName() - and therefore %APPDATA%\\<name> - from this file. Without productName a scoped package name puts the database in %APPDATA%\\@helm/desktop, creating a nested folder from the scope. electron-builder sets the same value for packaged builds.",
+  "productName": "Helm",
+  "author": "Cole Taylor",
+  "license": "MIT",
+  "private": true,
+  "main": "./out/main/index.js",
+  "scripts": {
+    "//dev": "--watch is what makes the main process and preload reload too. Without it electron-vite only gives the renderer HMR, and every main-process edit needs the app killed and restarted by hand.",
+    "dev": "electron-vite dev --watch",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "shell": "electron-vite build && electron . --shell --cwd=.",
+    "selftest": "electron-vite build && electron . --selftest",
+    "fidelity": "electron-vite build && electron . --fidelity",
+    "claude-check": "electron-vite build && electron . --claude-check",
+    "claude": "electron-vite build && electron . --claude --cwd=.",
+    "dist:win": "electron-vite build && electron-builder --win"
+  },
+  "dependencies": {
+    "@helm/core": "workspace:*",
+    "@helm/ui": "workspace:*",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/addon-unicode11": "^0.9.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^6.0.0",
+    "better-sqlite3": "^13.0.3",
+    "node-pty": "^1.1.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "tailwindcss": "^4.3.3",
+    "vite": "^7.3.6"
+  }
+}

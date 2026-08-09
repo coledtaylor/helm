@@ -49,9 +49,10 @@ what keeps the app portable and a future mobile client possible.
 
 ## Status
 
-All three de-risking spikes are **GO**; milestone work (M1) is next. See
-[docs/SPEC.md](docs/SPEC.md) for the full v1 spec and
-[docs/TASKS.md](docs/TASKS.md) for the work plan.
+All three de-risking spikes are **GO**. **M1 (foundation) has landed**: the
+monorepo, SQLite store, project discovery, and the window shell. M2 (embedded
+terminal in tabs) is next. See [docs/SPEC.md](docs/SPEC.md) for the full v1 spec
+and [docs/TASKS.md](docs/TASKS.md) for the work plan.
 
 | Spike | Question | Verdict |
 |---|---|---|
@@ -61,14 +62,32 @@ All three de-risking spikes are **GO**; milestone work (M1) is next. See
 
 ## Development
 
+Requires Node 22+ and pnpm 10. `node-linker=hoisted` is set in `.npmrc` so
+`node_modules` has the flat shape Spike B verified the packaging against.
+
 ```bash
-npm ci
-npm run shell          # interactive pane hosting the real claude TUI
-npm run fidelity       # terminal fidelity checks     (C1-C9)
-npm run claude-check   # real-TUI checks              (D0-D7)
-npm run selftest       # Spike B packaging regression
-npm run dist:win       # portable exe + NSIS installer
+pnpm install
+pnpm dev               # the app, with hot reload
+pnpm check             # typecheck + lint + unit tests (what CI runs)
+pnpm dist:win          # portable exe + NSIS installer
+```
+
+Spike B and C's harnesses are the regression tests for the terminal
+configuration. They render their own page (`spike.html`) and open no database:
+
+```bash
+pnpm shell             # interactive pane hosting pwsh
+pnpm --filter @helm/desktop claude   # ...hosting the real claude TUI
+pnpm fidelity          # terminal fidelity checks     (C1-C9)
+pnpm claude-check      # real-TUI checks              (D0-D7)
+pnpm selftest          # Spike B packaging regression
 ```
 
 The check drivers accept `--only=C5,C6` to re-run individual checks. They write
 a JSON report and screenshots to the app data directory.
+
+Schema changes go through Drizzle:
+
+```bash
+pnpm db:generate       # drizzle-kit generate, then embed the SQL into the bundle
+```
