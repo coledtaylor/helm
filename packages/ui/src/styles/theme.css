@@ -55,6 +55,12 @@
 
   --helm-shadow: 0 1px 2px rgb(16 20 30 / 0.06), 0 4px 12px rgb(16 20 30 / 0.05);
 
+  /* Not themed, and deliberately so: this is the terminal's own background,
+   * fixed by Spike C's 24-bit theme, and the pane has to match it exactly or a
+   * seam appears around the grid. A light-mode variant would mean re-proving
+   * every colour check in that spike against a second palette. */
+  --helm-terminal: #11121a;
+
   color-scheme: light;
 }
 
@@ -111,6 +117,7 @@
   --color-success: var(--helm-success);
   --color-warn: var(--helm-warn);
   --color-danger: var(--helm-danger);
+  --color-terminal: var(--helm-terminal);
 
   --shadow-panel: var(--helm-shadow);
 

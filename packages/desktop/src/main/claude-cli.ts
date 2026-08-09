@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
-import { accessSync, constants } from 'node:fs'
+import { accessSync, constants, statSync } from 'node:fs'
+import { delimiter, extname, join } from 'node:path'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { promisify } from 'node:util'
 
 const run = promisify(execFile)
@@ -15,28 +15,95 @@ const run = promisify(execFile)
  * failed launch later with no explanation.
  */
 
-const CANDIDATES = [
+const INSTALL_CANDIDATES = [
   join(homedir(), '.local', 'bin', 'claude.exe'),
+  join(homedir(), '.local', 'bin', 'claude.cmd'),
   join(homedir(), '.local', 'bin', 'claude')
 ]
 
-export function findClaudeExecutable(): string | null {
-  for (const candidate of CANDIDATES) {
-    try {
-      accessSync(candidate, constants.X_OK)
-      return candidate
-    } catch {
-      continue
+function isExecutableFile(path: string): boolean {
+  try {
+    if (!statSync(path).isFile()) return false
+    accessSync(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * PATH resolution, done here rather than left to the spawn.
+ *
+ * ConPTY spawns through `CreateProcess`, which searches PATH but reports a
+ * failure as a generic error with no indication that the *executable* was the
+ * problem. Resolving first means a missing CLI is a sentence in the UI instead
+ * of a pty that opens and immediately closes.
+ */
+function searchPath(): string | null {
+  const path = process.env['PATH'] ?? process.env['Path']
+  if (!path) return null
+
+  const exts =
+    process.platform === 'win32'
+      ? (process.env['PATHEXT'] ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+      : ['']
+
+  for (const dir of path.split(delimiter)) {
+    if (!dir) continue
+    for (const ext of exts) {
+      const candidate = join(dir, `claude${ext}`)
+      if (isExecutableFile(candidate)) return candidate
     }
   }
-  // Fall back to PATH resolution by the shell that spawns it.
   return null
 }
 
+/** The `claude` entry point on this machine, or null if there is not one. */
+export function findClaudeExecutable(): string | null {
+  for (const candidate of INSTALL_CANDIDATES) {
+    if (isExecutableFile(candidate)) return candidate
+  }
+  return searchPath()
+}
+
+export interface ClaudeCommand {
+  /** What to hand node-pty. */
+  file: string
+  /** Args that must come before the caller's own. */
+  prefixArgs: string[]
+  /** The CLI entry point itself, for diagnostics and the status bar. */
+  resolved: string
+}
+
+/**
+ * How to spawn `claude` in a pty.
+ *
+ * Usually the executable directly. When the installation is a `.cmd` or `.bat`
+ * shim - which is what an npm-installed CLI leaves on Windows - it goes through
+ * `cmd.exe /c`, because `CreateProcess` cannot execute a batch file and ConPTY
+ * has no shell of its own to do it. The wrapper becomes the pty's process and
+ * `claude` its child, which is one more reason session teardown kills the tree
+ * rather than the pid (see `treeKill`).
+ */
+export function resolveClaudeCommand(): ClaudeCommand | null {
+  const resolved = findClaudeExecutable()
+  if (!resolved) return null
+
+  const ext = extname(resolved).toLowerCase()
+  if (process.platform === 'win32' && (ext === '.cmd' || ext === '.bat')) {
+    return { file: process.env['COMSPEC'] ?? 'cmd.exe', prefixArgs: ['/c', resolved], resolved }
+  }
+  return { file: resolved, prefixArgs: [], resolved }
+}
+
 export async function readClaudeVersion(): Promise<string | null> {
-  const exe = findClaudeExecutable() ?? (process.platform === 'win32' ? 'claude.exe' : 'claude')
+  const command = resolveClaudeCommand()
+  if (!command) return null
   try {
-    const { stdout } = await run(exe, ['--version'], { timeout: 15_000, windowsHide: true })
+    const { stdout } = await run(command.file, [...command.prefixArgs, '--version'], {
+      timeout: 15_000,
+      windowsHide: true
+    })
     return stdout.trim() || null
   } catch {
     return null

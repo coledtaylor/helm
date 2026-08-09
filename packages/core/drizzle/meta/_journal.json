@@ -8,6 +8,13 @@
       "when": 1786304735809,
       "tag": "0000_purple_silver_fox",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1786311711693,
+      "tag": "0001_calm_cloak",
+      "breakpoints": true
     }
   ]
 }

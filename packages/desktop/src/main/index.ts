@@ -5,8 +5,10 @@ import { homedir } from 'node:os'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { emit, registerIpc, resolvedTheme } from './ipc'
 import { appMode, dataDir, initDataDir } from './paths'
-import { activePty, killPty, spawnPty, windowsBuildNumber } from './pty'
+import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
 import { createServices, refreshGit, runScan, type Services } from './services'
+import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
+import { createCollector, runM2Checks, type M2Context } from './m2check'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -24,19 +26,22 @@ import { screenshot } from './bridge'
  * no database.
  */
 
-type Mode = 'app' | 'shell' | 'selftest' | 'fidelity' | 'claude-check' | 'claude'
+type Mode = 'app' | 'shell' | 'selftest' | 'fidelity' | 'claude-check' | 'claude' | 'm2-check'
 
 function modeFromArgv(): Mode {
   if (process.argv.includes('--selftest')) return 'selftest'
   if (process.argv.includes('--fidelity')) return 'fidelity'
   if (process.argv.includes('--claude-check')) return 'claude-check'
+  if (process.argv.includes('--m2-check')) return 'm2-check'
   if (process.argv.includes('--claude')) return 'claude'
   if (process.argv.includes('--shell')) return 'shell'
   return 'app'
 }
 
 const mode = modeFromArgv()
-const isSpikeMode = mode !== 'app'
+// `--m2-check` is the app: it drives the real window, so it needs the real
+// startup path, the database included.
+const isSpikeMode = mode !== 'app' && mode !== 'm2-check'
 
 initDataDir()
 
@@ -95,13 +100,33 @@ function writeReport(name: string, report: unknown): string {
 // App mode
 // ---------------------------------------------------------------------------
 
-function startApp(): void {
+export interface AppOptions {
+  /** Taps for `--m2-check`; the app itself passes none. */
+  observer?: SessionObserver | undefined
+  /** Answers the "this session is still running" question. Defaults to a dialog. */
+  confirm?: Confirm | undefined
+  /** Called once the renderer has mounted and the first scan is under way. */
+  onReady?: ((ctx: M2Context) => void) | undefined
+}
+
+function startApp(options: AppOptions = {}): void {
   const services: Services = createServices()
+  if (services.lostSessions > 0) {
+    console.warn(`${services.lostSessions} session(s) did not outlive the last run; marked lost`)
+  }
 
   let win: BrowserWindow | null = createWindow('index', services.settings.windowBounds ?? null)
 
+  const sessions = createSessionHost({
+    services,
+    window: () => win,
+    observer: options.observer,
+    confirm: options.confirm
+  })
+
   registerIpc({
     services,
+    sessions,
     window: () => win,
     rendererReady: () => {
       emit(win, 'settings:changed', services.settings)
@@ -128,11 +153,23 @@ function startApp(): void {
           })
         })
       emit(win, 'scan:status', { running: true })
+
+      if (win) options.onReady?.({ win, services, sessions })
     }
   })
 
+  /**
+   * Set once the database has been let go of. Every write below checks it,
+   * because the order of Electron's shutdown events is not the order the app
+   * was written in: `before-quit` fires before the window's own `close`, so a
+   * teardown that closed the store first would leave the close handler writing
+   * to a closed connection - which throws in the middle of quitting, where an
+   * uncaught error stalls the whole shutdown rather than being reported.
+   */
+  let storeClosed = false
+
   const persistBounds = (): void => {
-    if (!win || win.isDestroyed() || win.isMinimized()) return
+    if (storeClosed || !win || win.isDestroyed() || win.isMinimized()) return
     const { width, height, x, y } = win.getNormalBounds()
     services.settings = { ...services.settings, windowBounds: { width, height, x, y } }
     writeSetting(services.store, 'windowBounds', services.settings.windowBounds)
@@ -176,6 +213,29 @@ function startApp(): void {
       })
   })
 
+  /**
+   * Closing the window ends every hosted session, so it asks first - once, for
+   * all of them, rather than a dialog per tab.
+   *
+   * `close` is also the last moment the window still exists, so this is where
+   * the bounds are flushed: by `closed` the geometry is gone and whatever the
+   * debounce was still holding would be lost.
+   */
+  let closeConfirmed = false
+  win.on('close', (event) => {
+    if (boundsTimer) clearTimeout(boundsTimer)
+    boundsTimer = null
+    persistBounds()
+
+    if (closeConfirmed || sessions.runningCount() === 0) return
+    event.preventDefault()
+    void sessions.confirmCloseAll().then((confirmed) => {
+      if (!confirmed) return
+      closeConfirmed = true
+      win?.close()
+    })
+  })
+
   win.on('closed', () => {
     if (boundsTimer) clearTimeout(boundsTimer)
     boundsTimer = null
@@ -189,11 +249,22 @@ function startApp(): void {
   })
 
   app.on('before-quit', () => {
-    // Flush whatever the debounce is still holding, then let go of the file so
-    // the WAL is checkpointed rather than left for the next launch to recover.
+    // Flush whatever the debounce is still holding.
     if (boundsTimer) clearTimeout(boundsTimer)
     boundsTimer = null
     persistBounds()
+    // Synchronously, because this is the last point the main process is
+    // guaranteed a turn. Anything deferred here is a process left behind.
+    sessions.shutdown()
+  })
+
+  app.on('will-quit', () => {
+    // Not in `before-quit`: the windows have not closed yet at that point, and
+    // closing a window persists its bounds. Here every window is gone, so this
+    // is the first moment nothing can still want the database. Letting go of it
+    // checkpoints the WAL rather than leaving it for the next launch.
+    if (storeClosed) return
+    storeClosed = true
     services.store.close()
   })
 }
@@ -302,13 +373,71 @@ app.whenReady().then(() => {
   // cannot ship that menu.
   Menu.setApplicationMenu(null)
 
-  if (isSpikeMode) startSpike()
-  else startApp()
+  // Windows resolves a toast back to an installed application through this id.
+  // Without it the exit notifications either carry electron.app.Electron's
+  // identity in dev or do not appear at all.
+  app.setAppUserModelId('dev.coletaylor.helm')
+
+  if (isSpikeMode) {
+    startSpike()
+    return
+  }
+
+  if (mode === 'm2-check') {
+    const collector = createCollector()
+    startApp({
+      observer: collector,
+      confirm: collector.confirm,
+      onReady: (ctx) => {
+        void runM2Checks(ctx, collector, join(dataDir, 'screenshots'))
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('m2-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`m2-check report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            // `quit`, not `exit`: M2-9 left a session running on purpose, and
+            // the whole point is to make the app's own teardown deal with it.
+            // `exit` would skip `before-quit` and prove nothing.
+            // Quitting is itself under test - M2-9 left a session running for
+            // the app's own teardown to reap - so the run ends with `quit`,
+            // not `exit`, and forces the status once the teardown is done.
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            // Armed before the quit, not after: if `app.quit()` throws or a
+            // handler blocks, a watchdog scheduled behind it never exists.
+            setTimeout(() => app.exit(pass ? 0 : 1), 30_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`m2-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  startApp()
 })
 
 app.on('window-all-closed', () => {
   killPty()
   app.quit()
 })
+
+/**
+ * The backstop. `before-quit` does the orderly teardown - rows first, then the
+ * processes - but it does not run for every way a process can end, and a
+ * hosted `claude` outliving the app it was launched from is the one failure
+ * this milestone is not allowed to have.
+ */
+app.on('will-quit', () => killAllSessionsSync())
 
 

@@ -2,10 +2,10 @@ import { sql } from 'drizzle-orm'
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 
 /**
- * The four tables M1 stands up. `profiles` and `config_snapshots` are not read
- * by any M1 surface - they exist now so that M3 (profiles) and M5 (snapshot
- * every config write) start from a migrated schema rather than a schema change
- * on a database that already holds a user's data.
+ * `profiles` and `config_snapshots` are not read by any surface yet - they exist
+ * so that M3 (profiles) and M5 (snapshot every config write) start from a
+ * migrated schema rather than a schema change on a database that already holds
+ * a user's data.
  */
 
 const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`
@@ -85,6 +85,38 @@ export const configSnapshots = sqliteTable(
     createdAt: text('created_at').notNull().default(now)
   },
   (t) => [index('config_snapshots_file_idx').on(t.projectPath, t.filePath, t.createdAt)]
+)
+
+/**
+ * Every hosted `claude` process Helm has spawned, with how it ended.
+ *
+ * Written on spawn rather than on exit: a row that exists only once a process
+ * has terminated cannot answer "what is running right now", and it loses the
+ * session entirely if the app dies first. The cost is that a crash leaves rows
+ * claiming to be running, which the next launch reconciles to `lost`.
+ */
+export const sessions = sqliteTable(
+  'sessions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    /** Passed to the CLI as `-n`; what `/resume` shows later. */
+    name: text('name').notNull(),
+    cwd: text('cwd').notNull(),
+    /** Path of the discovered project, or null for a cwd chosen another way. */
+    projectPath: text('project_path'),
+    /** JSON array of the argv after the executable. */
+    argv: text('argv', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    status: text('status', { enum: ['running', 'exited', 'lost'] })
+      .notNull()
+      .default('running'),
+    startedAt: text('started_at').notNull().default(now),
+    endedAt: text('ended_at'),
+    durationMs: integer('duration_ms'),
+    exitCode: integer('exit_code')
+  },
+  // M4 lists sessions newest-first across every project, which is the one query
+  // this table is going to be asked for at any size.
+  (t) => [index('sessions_started_idx').on(t.startedAt), index('sessions_status_idx').on(t.status)]
 )
 
 /** Single-row-per-key JSON blobs. See `AppSettings` for the key space. */

@@ -2,7 +2,7 @@ import type { JSX, ReactNode } from 'react'
 import type { Project } from '@helm/core'
 import { cn } from '../lib/cn'
 import { GitChip } from './GitChip'
-import { FolderIcon, HarnessIcon, RepoIcon } from './icons'
+import { FolderIcon, HarnessIcon, RepoIcon, TerminalIcon } from './icons'
 
 const KIND_ICON = {
   harness: HarnessIcon,
@@ -19,16 +19,29 @@ const KIND_LABEL = {
 export interface ProjectPaneProps {
   project: Project
   onReveal: (path: string) => void
+  /** Opens a Claude Code session with this project as the working directory. */
+  onLaunch: (project: Project) => void
+  /** Shown in place of the button while a launch is in flight. */
+  launching?: boolean | undefined
+  /** Why the last launch failed, if it did. */
+  launchError?: string | null | undefined
 }
 
 /**
- * What M1 puts in a tab: everything discovery knows about one project.
+ * Everything discovery knows about one project, and the button that turns it
+ * into a session.
  *
- * The inventory table is the point. It is the same count the sidebar chips
- * carry, laid out so the number that matters - how much a project would
- * contribute to a composed session - is readable rather than glanceable.
+ * The inventory table is the argument for the button: it is the same count the
+ * sidebar chips carry, laid out so the number that matters - how much this
+ * project would contribute to a session - is readable rather than glanceable.
  */
-export function ProjectPane({ project, onReveal }: ProjectPaneProps): JSX.Element {
+export function ProjectPane({
+  project,
+  onReveal,
+  onLaunch,
+  launching = false,
+  launchError = null
+}: ProjectPaneProps): JSX.Element {
   const KindIcon = KIND_ICON[project.kind]
   const { inventory } = project
 
@@ -54,6 +67,34 @@ export function ProjectPane({ project, onReveal }: ProjectPaneProps): JSX.Elemen
             {KIND_LABEL[project.kind]}
           </span>
         </header>
+
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => onLaunch(project)}
+            disabled={launching}
+            className={cn(
+              'flex items-center gap-2 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium',
+              'text-accent-fg shadow-panel transition',
+              launching ? 'cursor-default opacity-70' : 'hover:brightness-110 active:brightness-95'
+            )}
+          >
+            <TerminalIcon width={14} height={14} />
+            {launching ? 'Starting…' : 'Start session here'}
+          </button>
+          <span className="text-[11px] text-fg-subtle">
+            Runs <code className="font-mono">claude</code> with this folder as the working directory.
+          </span>
+        </div>
+
+        {launchError !== null && (
+          <p
+            role="alert"
+            className="mt-3 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
+          >
+            {launchError}
+          </p>
+        )}
 
         <div className="mt-6 grid gap-3 sm:grid-cols-2">
           <Panel title="Git">

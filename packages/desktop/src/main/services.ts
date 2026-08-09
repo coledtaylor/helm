@@ -4,6 +4,7 @@ import {
   readCachedProjects,
   readGitStates,
   readSettings,
+  reconcileRunningSessions,
   scan,
   suggestRoots,
   writeSettings,
@@ -25,11 +26,22 @@ export interface Services {
   settings: AppSettings
   /** Last completed scan, or null before the first one. */
   lastScan: DiscoveryResult | null
+  /**
+   * Sessions the previous run left claiming to be running - a crash, or a kill
+   * from Task Manager. Reconciled on the way in, and counted so the number can
+   * be reported rather than silently swallowed.
+   */
+  lostSessions: number
 }
 
 export function createServices(): Services {
   const store = openStore({ file: dbFile })
-  return { store, settings: readSettings(store), lastScan: null }
+  return {
+    store,
+    settings: readSettings(store),
+    lastScan: null,
+    lostSessions: reconcileRunningSessions(store)
+  }
 }
 
 export function updateSettings(services: Services, patch: Partial<AppSettings>): AppSettings {

@@ -43,10 +43,26 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   [docs/SPIKE-C.md](docs/SPIKE-C.md); `pnpm fidelity` and `pnpm claude-check`
   are the regression tests. They render `spike.html`, a separate page from the
   app, so app layout changes cannot move the terminal under them.
+- `pnpm m2-check` is the same idea for the app itself: it drives the real
+  window - clicking sidebar rows, the launch button, tabs and their close
+  buttons - and asserts on processes, grids and database rows. Run it after
+  touching session lifecycle, the tab strip, or shutdown.
 - Every renderer↔main channel is declared in
   `packages/desktop/src/shared/ipc.ts` and nowhere else. The preload exposes
   three generic functions; a feature adds a channel to the contract, not a
-  method to the bridge.
+  method to the bridge. Two terminal families exist and do not mix: `term:*` is
+  the spike page's single pty, `session:*` is the app's many. Changing `term:*`
+  changes what `pnpm fidelity` and `pnpm claude-check` measure.
+- A session's terminal lives in
+  `packages/desktop/src/renderer/src/app/terminals.ts`, outside React, and is
+  disposed when its tab closes rather than when a component unmounts. Scrollback
+  cannot be rebuilt from props, so it must not depend on a render. Panes are
+  hidden, never unmounted - and a hidden pane measures 0x0, which `FitAddon`
+  turns into a 1x1 grid the pty acts on. That guard is in `terminal.ts`.
+- The main process owns process lifetime: rows are written on spawn (so a
+  session that dies immediately still happened), `before-quit` ends sessions,
+  `will-quit` releases the database. Nothing else may close the store - the
+  window's own `close` handler still writes to it after `before-quit` has run.
 - Schema changes: edit `packages/core/src/store/schema.ts`, then
   `pnpm db:generate`. The generated SQL is embedded into the bundle, so a
   packaged exe carries its migrations rather than needing files beside it.

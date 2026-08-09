@@ -1,4 +1,5 @@
 import type { BrowserWindow } from 'electron'
+import { execFile, execFileSync } from 'node:child_process'
 import * as pty from 'node-pty'
 import { release } from 'node:os'
 
@@ -52,6 +53,197 @@ export function windowsBuildNumber(): number | undefined {
   return Number.isFinite(build) ? build : undefined
 }
 
+export interface SpawnOptions {
+  file: string
+  args?: string[]
+  cols: number
+  rows: number
+  cwd: string
+  env?: Record<string, string>
+}
+
+function open(opts: SpawnOptions): pty.IPty {
+  return pty.spawn(opts.file, opts.args ?? [], {
+    name: 'xterm-256color',
+    cols: opts.cols,
+    rows: opts.rows,
+    cwd: opts.cwd,
+    env: ptyEnv(opts.env),
+    useConpty: true,
+    conptyInheritCursor: false
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Termination
+// ---------------------------------------------------------------------------
+
+/**
+ * The backstop behind `IPty.kill()`.
+ *
+ * Spike C deviation #8: node-pty's console-process enumeration hits
+ * `AttachConsole failed` and falls back to killing the pty's own pid alone. A
+ * hosted `claude` is a process *tree* - it spawns Node children for MCP
+ * servers, ripgrep for searches, whatever a Bash tool call started - so that
+ * fallback can leave the tree behind while the pane it belonged to is gone.
+ * `taskkill /T` walks the tree the way node-pty could not.
+ *
+ * Not a substitute for `IPty.kill()`, which is still what releases the ConPTY
+ * handles: this runs alongside it.
+ */
+function treeKill(pid: number, sync: boolean): void {
+  if (pid <= 0) return
+  if (process.platform !== 'win32') {
+    try {
+      // Negative pid = the process group, which is the POSIX equivalent of /T.
+      process.kill(-pid, 'SIGKILL')
+    } catch {
+      // Already gone, or never had a group of its own.
+    }
+    return
+  }
+  const args = ['/PID', String(pid), '/T', '/F']
+  if (sync) {
+    try {
+      execFileSync('taskkill.exe', args, { windowsHide: true, stdio: 'ignore', timeout: 4000 })
+    } catch {
+      // Exit code 128 means "no such process", which is the outcome we wanted.
+    }
+    return
+  }
+  execFile('taskkill.exe', args, { windowsHide: true, timeout: 4000 }, () => undefined)
+}
+
+/** How long a process gets to honour `IPty.kill()` before the tree kill. */
+const GRACE_MS = 1500
+
+// ---------------------------------------------------------------------------
+// App sessions - many at once, one per tab
+// ---------------------------------------------------------------------------
+
+export interface SessionHandle {
+  id: string
+  pid: number
+  write: (data: string) => void
+  resize: (cols: number, rows: number) => void
+  /** Terminate. Idempotent; the hard kill follows if the process ignores it. */
+  kill: () => void
+  exitCode: () => number | null
+}
+
+interface LiveSession extends SessionHandle {
+  pty: pty.IPty
+  hardKillTimer: NodeJS.Timeout | null
+}
+
+const live = new Map<string, LiveSession>()
+
+export interface SessionSpawnOptions extends SpawnOptions {
+  id: string
+  onData: (chunk: string) => void
+  /** Fires once, whether the process exited on its own or was killed. */
+  onExit: (exitCode: number, signal: number | undefined) => void
+}
+
+export function spawnSession(opts: SessionSpawnOptions): SessionHandle {
+  const p = open(opts)
+  let code: number | null = null
+
+  const session: LiveSession = {
+    id: opts.id,
+    pid: p.pid,
+    pty: p,
+    hardKillTimer: null,
+    write: (data) => {
+      try {
+        p.write(data)
+      } catch {
+        // Raced with the process exiting; the keystroke has nowhere to go.
+      }
+    },
+    resize: (cols, rows) => {
+      try {
+        p.resize(Math.max(cols, 1), Math.max(rows, 1))
+      } catch {
+        // Same race. A resize that misses is corrected by the next one.
+      }
+    },
+    kill: () => killSession(opts.id),
+    exitCode: () => code
+  }
+
+  p.onData(opts.onData)
+  p.onExit(({ exitCode, signal }) => {
+    code = exitCode
+    if (session.hardKillTimer) clearTimeout(session.hardKillTimer)
+    live.delete(opts.id)
+    opts.onExit(exitCode, signal)
+  })
+
+  live.set(opts.id, session)
+  return session
+}
+
+export function getSession(id: string): SessionHandle | undefined {
+  return live.get(id)
+}
+
+export function liveSessionIds(): string[] {
+  return [...live.keys()]
+}
+
+export function killSession(id: string): void {
+  const session = live.get(id)
+  if (!session) return
+
+  try {
+    session.pty.kill()
+  } catch {
+    // Already gone.
+  }
+  // `onExit` clears this. If it has not fired by then the process outlived the
+  // polite kill, which is exactly the case deviation #8 predicted.
+  if (!session.hardKillTimer) {
+    session.hardKillTimer = setTimeout(() => {
+      if (live.has(id)) treeKill(session.pid, false)
+    }, GRACE_MS)
+  }
+}
+
+/**
+ * Terminates everything, synchronously, for app shutdown.
+ *
+ * Synchronous on purpose: `before-quit` is the last moment the main process is
+ * guaranteed to still be running, and a kill scheduled on a timer there is a
+ * kill that may never happen. The tree kill goes first so that the tree is
+ * still intact when it walks it - once the pty's own process has gone, its
+ * children have been reparented and `/T` finds nothing.
+ */
+export function killAllSessionsSync(): void {
+  for (const session of live.values()) {
+    treeKill(session.pid, true)
+    try {
+      session.pty.kill()
+    } catch {
+      // Expected: the tree kill above already took it.
+    }
+    if (session.hardKillTimer) clearTimeout(session.hardKillTimer)
+  }
+  live.clear()
+}
+
+// ---------------------------------------------------------------------------
+// Spike harness - one pty, fully recorded
+// ---------------------------------------------------------------------------
+
+/**
+ * The single-pty surface Spike B and C's drivers assert against. It records
+ * both directions of the wire, which is what makes key encodings and bracketed
+ * paste provable, and it is deliberately separate from the session registry
+ * above: the regression checks measure one terminal in a page with nothing else
+ * in it, and a shared registry would put the app's lifecycle in the middle of
+ * that measurement.
+ */
 export interface PtyHandle {
   pty: pty.IPty
   /** Everything the process has written, unmodified. */
@@ -70,25 +262,8 @@ export function activePty(): PtyHandle | null {
   return current
 }
 
-export interface SpawnOptions {
-  file: string
-  args?: string[]
-  cols: number
-  rows: number
-  cwd: string
-  env?: Record<string, string>
-}
-
 export function spawnPty(win: BrowserWindow, opts: SpawnOptions): PtyHandle {
-  const p = pty.spawn(opts.file, opts.args ?? [], {
-    name: 'xterm-256color',
-    cols: opts.cols,
-    rows: opts.rows,
-    cwd: opts.cwd,
-    env: ptyEnv(opts.env),
-    useConpty: true,
-    conptyInheritCursor: false
-  })
+  const p = open(opts)
 
   let out = ''
   let inp = ''
@@ -127,10 +302,14 @@ export function spawnPty(win: BrowserWindow, opts: SpawnOptions): PtyHandle {
 }
 
 export function killPty(): void {
+  if (!current) return
+  // Tree first, then the pty - same order and the same reason as
+  // `killAllSessionsSync`.
+  treeKill(current.pty.pid, true)
   try {
-    current?.pty.kill()
+    current.pty.kill()
   } catch {
-    // already gone
+    // Expected once the tree kill has taken it.
   }
   current = null
 }

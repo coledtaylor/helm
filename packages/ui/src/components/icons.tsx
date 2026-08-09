@@ -164,6 +164,17 @@ export function DirtyIcon(props: IconProps): JSX.Element {
   )
 }
 
+/** The launch affordance. A prompt caret, not a media "play" triangle. */
+export function TerminalIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
+      <path d="M4.75 6.5 6.75 8.25l-2 1.75" />
+      <path d="M8.75 10.25h3" />
+    </Icon>
+  )
+}
+
 export function MonitorIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>

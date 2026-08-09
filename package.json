@@ -24,6 +24,7 @@
     "selftest": "pnpm --filter @helm/desktop selftest",
     "fidelity": "pnpm --filter @helm/desktop fidelity",
     "claude-check": "pnpm --filter @helm/desktop claude-check",
+    "m2-check": "pnpm --filter @helm/desktop m2-check",
     "dist:win": "pnpm --filter @helm/desktop dist:win",
     "db:generate": "pnpm --filter @helm/core db:generate"
   },

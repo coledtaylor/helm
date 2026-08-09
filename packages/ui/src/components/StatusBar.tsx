@@ -9,6 +9,8 @@ export interface StatusBarProps {
   claudeVersion: string | null
   scanning: boolean
   lastScan: { projects: number; durationMs: number; at: string } | null
+  /** Hosted `claude` processes currently alive. */
+  runningSessions: number
   onRevealDb: () => void
 }
 
@@ -24,6 +26,7 @@ export function StatusBar({
   claudeVersion,
   scanning,
   lastScan,
+  runningSessions,
   onRevealDb
 }: StatusBarProps): JSX.Element {
   return (
@@ -55,6 +58,19 @@ export function StatusBar({
       </span>
 
       <span className="flex-1" />
+
+      {runningSessions > 0 && (
+        <>
+          <span
+            className="flex shrink-0 items-center gap-1.5 tabular-nums"
+            title="Hosted claude processes. All of them end when Helm quits."
+          >
+            <span aria-hidden className="size-1.5 rounded-full bg-success" />
+            {runningSessions} session{runningSessions === 1 ? '' : 's'}
+          </span>
+          <Divider />
+        </>
+      )}
 
       <span className="shrink-0 tabular-nums">
         {scanning

@@ -1,0 +1,76 @@
+/**
+ * What a session launch is, before anything Electron-shaped touches it.
+ *
+ * M2 launches one project at a time, so the only flag here is `-n`. The shape
+ * is a spec object rather than a string of flags because M3 composes overlays
+ * into this same call - `--plugin-dir` per overlay, `--add-dir` per access
+ * path - and argv assembly that started life inline in the main process would
+ * have to be moved out of it first, untested, to get there.
+ */
+
+/** Long enough for "atlas-reporting accruals", short enough to fit a tab. */
+const MAX_NAME = 60
+
+export interface SessionSpec {
+  /** Working directory. Claude Code resolves all `.claude/` config from it. */
+  cwd: string
+  /** Display name, passed as `-n`. */
+  name: string
+  /** Appended verbatim after the generated flags. */
+  extraArgs?: string[]
+}
+
+/**
+ * Argv *after* the executable. The name is passed even when it was generated
+ * rather than typed: an unnamed session shows up in `/resume` as its first
+ * prompt, which is unrecognisable a day later and identical across every
+ * session that started with `/recap`.
+ */
+export function buildClaudeArgs(spec: SessionSpec): string[] {
+  return ['-n', sanitizeSessionName(spec.name), ...(spec.extraArgs ?? [])]
+}
+
+/**
+ * The CLI takes the name as one argv entry, so quoting is not a concern - but a
+ * control or format character would corrupt the TUI that renders the name in a
+ * picker later, and an empty name would silently make the next argv element the
+ * value of `-n`.
+ *
+ * `\p{C}` rather than an explicit `\x00-\x1f` range: it also covers the
+ * zero-width and bidi-override characters that a name pasted from a web page
+ * carries, which are invisible in an input box and reorder a terminal row.
+ */
+export function sanitizeSessionName(name: string): string {
+  const clean = name.replace(/\p{C}/gu, ' ').replace(/\s+/g, ' ').trim()
+  if (clean.length === 0) return 'session'
+  return clean.length > MAX_NAME ? clean.slice(0, MAX_NAME).trimEnd() : clean
+}
+
+/**
+ * `base`, or `base 2`, `base 3`... - whichever is free.
+ *
+ * Three sessions against one repo is the normal case, that being the point of
+ * tabs, and `/resume` shows only the name - so uniqueness is what makes the
+ * list readable. Compared case-insensitively because these names are read by a
+ * person, not matched by a program.
+ */
+export function uniqueSessionName(base: string, taken: Iterable<string>): string {
+  const used = new Set<string>()
+  for (const name of taken) used.add(name.toLowerCase())
+
+  const root = sanitizeSessionName(base)
+  if (!used.has(root.toLowerCase())) return root
+
+  for (let n = 2; ; n++) {
+    const suffix = ` ${n}`
+    // Trimmed to leave room for the suffix rather than trimmed after it: a root
+    // already at the length cap would otherwise truncate back to itself and
+    // this loop would never find a free name.
+    const stem =
+      root.length + suffix.length > MAX_NAME
+        ? root.slice(0, MAX_NAME - suffix.length).trimEnd()
+        : root
+    const candidate = `${stem}${suffix}`
+    if (!used.has(candidate.toLowerCase())) return candidate
+  }
+}

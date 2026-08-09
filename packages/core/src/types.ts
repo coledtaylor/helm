@@ -87,6 +87,35 @@ export interface DiscoveryResult {
   durationMs: number
 }
 
+/**
+ * How a hosted session ended, or that it has not.
+ *
+ * `lost` is the honest answer for a row that was still `running` when the
+ * process that owned it went away - a crash, a kill from Task Manager, a power
+ * cut. The alternative, stamping an end time at the next launch, would invent a
+ * duration nobody measured.
+ */
+export type SessionStatus = 'running' | 'exited' | 'lost'
+
+/** One hosted `claude` process, from spawn to exit. */
+export interface SessionRecord {
+  id: number
+  /** The `-n` name handed to the CLI, so the session is identifiable in
+   * `/resume` later (SPEC 4.1, and M4 reads these rows). */
+  name: string
+  cwd: string
+  /** The discovered project it was launched against, if it was one. */
+  projectPath: string | null
+  /** Argv after the executable, as spawned. */
+  argv: string[]
+  status: SessionStatus
+  startedAt: string
+  endedAt: string | null
+  durationMs: number | null
+  /** Null while running, and for a session whose exit code was never observed. */
+  exitCode: number | null
+}
+
 export type ThemePreference = 'system' | 'light' | 'dark'
 
 /**

@@ -18,6 +18,8 @@
     "selftest": "electron-vite build && electron . --selftest",
     "fidelity": "electron-vite build && electron . --fidelity",
     "claude-check": "electron-vite build && electron . --claude-check",
+    "//m2-check": "M2's acceptance criteria, driven through the real app window. Spawns real claude sessions and ends them; see src/main/m2check.ts.",
+    "m2-check": "electron-vite build && electron . --m2-check && node scripts/verify-orphans.mjs",
     "claude": "electron-vite build && electron . --claude --cwd=.",
     "dist:win": "electron-vite build && electron-builder --win"
   },

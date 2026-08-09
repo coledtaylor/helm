@@ -35,6 +35,17 @@ const THEME = {
   brightWhite: '#ffffff'
 }
 
+/**
+ * The pane's font metrics, in one place because two things need them: the
+ * terminal itself, and the estimate of how many cells fit in a pane that does
+ * not have a terminal in it yet (see `estimateGrid`).
+ */
+export const TERMINAL_FONT = {
+  family: '"Cascadia Mono", "Consolas", monospace',
+  size: 14,
+  lineHeight: 1.0
+} as const
+
 export interface WheelRecord {
   deltaY: number
   deltaMode: number
@@ -52,6 +63,10 @@ export interface TerminalHost {
   readonly rendererKind: 'webgl' | 'dom'
   element: HTMLElement
   lastWheel: () => WheelRecord | null
+  /** Re-measure against the container. Call after the pane becomes visible. */
+  refit: () => void
+  /** Releases the terminal, its addons, and the resize observer. */
+  dispose: () => void
 }
 
 export interface TerminalHooks {
@@ -75,9 +90,9 @@ export function createTerminal(
     // Unicode 11 widths are proposed API; without this the addon cannot load
     // and emoji fall back to Unicode 6 widths, which mis-measures most of them.
     allowProposedApi: true,
-    fontFamily: '"Cascadia Mono", "Consolas", monospace',
-    fontSize: 14,
-    lineHeight: 1.0,
+    fontFamily: TERMINAL_FONT.family,
+    fontSize: TERMINAL_FONT.size,
+    lineHeight: TERMINAL_FONT.lineHeight,
     letterSpacing: 0,
     scrollback: 10000,
     // Any value above 1 rewrites colours to hit a contrast target. A host that
@@ -140,13 +155,33 @@ export function createTerminal(
     hooks.onInput(out)
   })
 
-  if (fit) {
+  /**
+   * Fit, then tell the pty - but only when there is something to fit to and
+   * only when the answer changed.
+   *
+   * A hidden pane measures 0x0 and FitAddon turns that into a 1x1 grid. That is
+   * a real resize as far as the child process is concerned: it redraws its
+   * whole UI into one column, and the damage is still there when the tab comes
+   * back. Reporting an unchanged size is the milder version of the same
+   * problem - every pixel of a window drag would be a SIGWINCH, and Claude
+   * Code repaints on each one.
+   */
+  let reported: { cols: number; rows: number } | null = null
+  const applyFit = (): void => {
+    if (!fit) return
+    const { width, height } = container.getBoundingClientRect()
+    if (width < 1 || height < 1) return
     fit.fit()
+    if (reported?.cols === term.cols && reported.rows === term.rows) return
+    reported = { cols: term.cols, rows: term.rows }
     hooks.onResize(term.cols, term.rows)
-    new ResizeObserver(() => {
-      fit!.fit()
-      hooks.onResize(term.cols, term.rows)
-    }).observe(container)
+  }
+
+  let observer: ResizeObserver | null = null
+  if (fit) {
+    applyFit()
+    observer = new ResizeObserver(applyFit)
+    observer.observe(container)
   }
 
   attachKeyBindings(term, hooks)
@@ -179,7 +214,14 @@ export function createTerminal(
       return renderer.kind
     },
     element: container,
-    lastWheel: () => wheel
+    lastWheel: () => wheel,
+    refit: applyFit,
+    dispose: () => {
+      observer?.disconnect()
+      observer = null
+      // Disposes the loaded addons with it, webgl's GL context included.
+      term.dispose()
+    }
   }
 }
 

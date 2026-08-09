@@ -1,0 +1,117 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { Project, SessionRecord } from '@helm/core'
+import { helm } from './bridge'
+import { disposeTerminal, estimateGrid } from './terminals'
+
+/**
+ * The renderer's half of session ownership.
+ *
+ * Main owns the processes and the rows; this owns which of them have a tab and
+ * in what order. The split matters at both ends: a tab closed here does not
+ * decide whether the process died (main confirms first, and the user can say
+ * no), and a process that exits on its own does not remove its tab - the
+ * scrollback is still worth reading.
+ */
+
+export interface SessionsState {
+  /** Open session tabs, in tab-strip order. */
+  sessions: SessionRecord[]
+  /** Set when the last launch failed, until the next one is attempted. */
+  launchError: string | null
+  dismissLaunchError: () => void
+  /** Spawns a session against a project and returns its id, or null on failure. */
+  launch: (project: Project, paneSize: HTMLElement | null) => Promise<number | null>
+  /** Asks main to end and forget it. Main may ask the user first. */
+  close: (id: number) => Promise<boolean>
+  /** Moves a session tab to `toIndex` within the session tabs. */
+  reorder: (id: number, toIndex: number) => void
+  /** Tells main which pane is on screen, for the exit notification. */
+  reportFocus: (id: number | null) => void
+}
+
+export function useSessions(onActivate: (id: number) => void): SessionsState {
+  const [sessions, setSessions] = useState<SessionRecord[]>([])
+  const [launchError, setLaunchError] = useState<string | null>(null)
+
+  // The subscription below is registered once, so it reaches the caller
+  // through a ref rather than closing over the callback it was mounted with.
+  const activateRef = useRef(onActivate)
+  useEffect(() => {
+    activateRef.current = onActivate
+  }, [onActivate])
+
+  useEffect(() => {
+    const offs = [
+      helm.on('session:exit', (record) => {
+        // Replaced rather than removed: an exited session keeps its tab and its
+        // scrollback until someone closes it.
+        setSessions((current) => current.map((s) => (s.id === record.id ? record : s)))
+      }),
+      helm.on('session:activate', ({ id }) => activateRef.current(id))
+    ]
+
+    // A renderer reload (dev HMR, or a crashed renderer) leaves main holding
+    // processes this side has forgotten. Adopting them back is the difference
+    // between a reload and an orphan.
+    void helm.invoke('session:list').then((live) => {
+      setSessions((current) => (current.length > 0 ? current : live))
+    })
+
+    return () => {
+      for (const off of offs) off()
+    }
+  }, [])
+
+  const launch = useCallback(
+    async (project: Project, paneSize: HTMLElement | null): Promise<number | null> => {
+      setLaunchError(null)
+      const { cols, rows } = estimateGrid(paneSize)
+      try {
+        const record = await helm.invoke('session:start', {
+          cwd: project.path,
+          projectPath: project.path,
+          name: project.name,
+          cols,
+          rows
+        })
+        setSessions((current) => [...current, record])
+        return record.id
+      } catch (err: unknown) {
+        // Electron prefixes the renderer-side rejection with the channel it
+        // came from; the sentence main wrote is what the user needs.
+        const message = err instanceof Error ? err.message : String(err)
+        setLaunchError(message.replace(/^Error invoking remote method '[^']*':\s*/, ''))
+        return null
+      }
+    },
+    []
+  )
+
+  const close = useCallback(async (id: number): Promise<boolean> => {
+    const { closed } = await helm.invoke('session:close', { id })
+    if (!closed) return false
+    setSessions((current) => current.filter((s) => s.id !== id))
+    disposeTerminal(id)
+    return true
+  }, [])
+
+  const reorder = useCallback((id: number, toIndex: number) => {
+    setSessions((current) => {
+      const from = current.findIndex((s) => s.id === id)
+      if (from < 0) return current
+      const next = [...current]
+      const [moved] = next.splice(from, 1)
+      if (!moved) return current
+      next.splice(Math.max(0, Math.min(toIndex, next.length)), 0, moved)
+      return next
+    })
+  }, [])
+
+  const reportFocus = useCallback((id: number | null) => {
+    helm.send('session:focus', { id })
+  }, [])
+
+  const dismissLaunchError = useCallback(() => setLaunchError(null), [])
+
+  return { sessions, launchError, dismissLaunchError, launch, close, reorder, reportFocus }
+}

@@ -2,8 +2,9 @@ import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell
 import { suggestRoots } from '@helm/core'
 import { readClaudeVersion } from './claude-cli'
 import { appMode, dataDir, dbFile } from './paths'
-import { activePty } from './pty'
+import { activePty, windowsBuildNumber } from './pty'
 import { cachedProjects, runScan, updateSettings, type Services } from './services'
+import type { SessionHost } from './sessions'
 import type {
   EventChannel,
   EventPayload,
@@ -50,6 +51,8 @@ export function emit<K extends EventChannel>(
 export interface IpcContext {
   services: Services
   window: () => BrowserWindow | null
+  /** Owns the hosted `claude` processes; see `sessions.ts`. */
+  sessions: SessionHost
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
 }
@@ -69,7 +72,8 @@ export function registerIpc(ctx: IpcContext): void {
         chrome: process.versions['chrome'] ?? 'unknown',
         node: process.versions['node'] ?? 'unknown'
       },
-      claudeVersion: await readClaudeVersion()
+      claudeVersion: await readClaudeVersion(),
+      windowsBuild: windowsBuildNumber() ?? null
     }),
 
     'settings:read': () => services.settings,
@@ -141,6 +145,12 @@ export function registerIpc(ctx: IpcContext): void {
       shell.showItemInFolder(path)
     },
 
+    // The renderer awaits this one, so a failure to spawn arrives as a rejected
+    // promise with a sentence in it rather than a tab that never fills in.
+    'session:start': (request) => ctx.sessions.start(request),
+    'session:close': (request) => ctx.sessions.close(request),
+    'session:list': () => ctx.sessions.list(),
+
     'clipboard:read': () => clipboard.readText(),
     'clipboard:write': (text) => {
       clipboard.writeText(text)
@@ -161,6 +171,10 @@ export function registerIpc(ctx: IpcContext): void {
         // The pty may have exited between the resize event and this call.
       }
     },
+
+    'session:input': ({ id, data }) => ctx.sessions.input(id, data),
+    'session:resize': ({ id, cols, rows }) => ctx.sessions.resize(id, cols, rows),
+    'session:focus': ({ id }) => ctx.sessions.setFocus(id),
 
     // Consumed by one-shot `ipcMain.once` listeners in the spike drivers, which
     // register alongside these. A no-op here keeps the contract exhaustive

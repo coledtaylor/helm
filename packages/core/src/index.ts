@@ -7,4 +7,5 @@
 
 export * from './types'
 export * from './discovery'
+export * from './launch'
 export * from './store'

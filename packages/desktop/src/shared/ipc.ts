@@ -3,6 +3,7 @@ import type {
   CachedProject,
   DiscoveryResult,
   GitState,
+  SessionRecord,
   ThemePreference
 } from '@helm/core'
 import type { ProbeOp, TermCreateOptions } from './protocol'
@@ -42,6 +43,8 @@ export interface AppInfo {
    * going: the CLI is required to launch a session, not to browse config.
    */
   claudeVersion: string | null
+  /** Windows build number; xterm uses it to pick ConPTY quirk handling. */
+  windowsBuild: number | null
 }
 
 export interface ScanRequest {
@@ -60,6 +63,33 @@ export interface TermCreatedInfo {
   cols: number
   rows: number
   unicodeVersion: string
+}
+
+export interface StartSessionRequest {
+  /** Working directory for the session. Claude Code resolves `.claude/` from it. */
+  cwd: string
+  /** The discovered project this is, when it is one. Recorded, not used to launch. */
+  projectPath?: string | null
+  /** Basis for the `-n` name. Made unique against the running sessions. */
+  name?: string
+  /** Initial grid, from the pane that will host it. */
+  cols: number
+  rows: number
+}
+
+export interface CloseSessionRequest {
+  id: number
+  /**
+   * Skip the "this session is still running" confirmation. Set when the caller
+   * has already asked - closing the window, for one, where the user answered
+   * about all of them at once.
+   */
+  force?: boolean
+}
+
+export interface CloseSessionResult {
+  /** False when the user declined the confirmation. */
+  closed: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +118,18 @@ export interface IpcRequests {
   /** Open a path in the OS file manager. */
   'shell:showItem': { request: { path: string }; response: void }
 
+  /**
+   * Spawn a hosted `claude`. Rejects with a readable message when the CLI
+   * cannot be found or the pty will not open - the renderer has nowhere else to
+   * learn that, and a tab holding a terminal that never started is worse than
+   * no tab.
+   */
+  'session:start': { request: StartSessionRequest; response: SessionRecord }
+  /** Terminate and forget. Confirms first if the process is still alive. */
+  'session:close': { request: CloseSessionRequest; response: CloseSessionResult }
+  /** Sessions this main process is currently hosting, for a renderer reload. */
+  'session:list': { request: void; response: SessionRecord[] }
+
   /** The terminal pane's clipboard, routed through Electron rather than the
    * async DOM Clipboard API, which needs a permission prompt and a focused
    * document - neither of which a hosted TUI can rely on. */
@@ -111,6 +153,16 @@ export interface IpcSends {
   'pty:resize': { cols: number; rows: number }
   'term:created': TermCreatedInfo
   'term:resized': void
+
+  /** The app's equivalents, addressed to one session. Same reasoning. */
+  'session:input': { id: number; data: string }
+  'session:resize': { id: number; cols: number; rows: number }
+  /**
+   * Which session the user is actually looking at, or null for a non-terminal
+   * tab. Only the renderer knows this, and the main process needs it to decide
+   * whether an exit is worth a notification.
+   */
+  'session:focus': { id: number | null }
 
   /** Spike harness: the renderer's answer to a `probe:req`. */
   'probe:res': { id: number; value: unknown }
@@ -136,6 +188,13 @@ export interface IpcEvents {
   'term:create': TermCreateOptions
   'term:write': string
   'term:resize': { cols: number; rows: number }
+
+  /** Process output, addressed to the pane hosting that session. */
+  'session:data': { id: number; data: string }
+  /** The finished row, exit code and measured duration included. */
+  'session:exit': SessionRecord
+  /** Bring a session's tab forward - sent when its exit notification is clicked. */
+  'session:activate': { id: number }
 
   /** Spike harness: main asks the renderer to inspect the live terminal. */
   'probe:req': { id: number; req: ProbeOp }
@@ -191,6 +250,9 @@ export const REQUEST_CHANNELS = Object.keys({
   'roots:remove': true,
   'theme:resolved': true,
   'shell:showItem': true,
+  'session:start': true,
+  'session:close': true,
+  'session:list': true,
   'clipboard:read': true,
   'clipboard:write': true
 } satisfies Record<RequestChannel, true>) as RequestChannel[]
@@ -201,6 +263,9 @@ export const SEND_CHANNELS = Object.keys({
   'pty:resize': true,
   'term:created': true,
   'term:resized': true,
+  'session:input': true,
+  'session:resize': true,
+  'session:focus': true,
   'probe:res': true
 } satisfies Record<SendChannel, true>) as SendChannel[]
 
@@ -213,5 +278,8 @@ export const EVENT_CHANNELS = Object.keys({
   'term:create': true,
   'term:write': true,
   'term:resize': true,
+  'session:data': true,
+  'session:exit': true,
+  'session:activate': true,
   'probe:req': true
 } satisfies Record<EventChannel, true>) as EventChannel[]

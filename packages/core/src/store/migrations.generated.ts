@@ -18,5 +18,13 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "CREATE TABLE `projects` (\n\t`path` text PRIMARY KEY NOT NULL,\n\t`name` text NOT NULL,\n\t`kind` text NOT NULL,\n\t`harness_path` text,\n\t`has_claude_dir` integer DEFAULT false NOT NULL,\n\t`inventory` text NOT NULL,\n\t`git` text,\n\t`last_seen_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL\n);",
       "CREATE INDEX `projects_harness_idx` ON `projects` (`harness_path`);"
     ]
+  },
+  {
+    "tag": "0001_calm_cloak",
+    "statements": [
+      "CREATE TABLE `sessions` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,\n\t`name` text NOT NULL,\n\t`cwd` text NOT NULL,\n\t`project_path` text,\n\t`argv` text DEFAULT '[]' NOT NULL,\n\t`status` text DEFAULT 'running' NOT NULL,\n\t`started_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL,\n\t`ended_at` text,\n\t`duration_ms` integer,\n\t`exit_code` integer\n);",
+      "CREATE INDEX `sessions_started_idx` ON `sessions` (`started_at`);",
+      "CREATE INDEX `sessions_status_idx` ON `sessions` (`status`);"
+    ]
   }
 ]
