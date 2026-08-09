@@ -21,6 +21,11 @@ in the "the author's workspace" space. [docs/TASKS.md](docs/TASKS.md) maps task 
 
 - `packages/core/` must never import Electron. Enforced by ESLint once M1 lands;
   until then, enforced by you.
+- The terminal configuration in `src/renderer/src/terminal.ts` and `ptyEnv` in
+  `src/main/pty.ts` is load-bearing for TUI fidelity, and every line of it is
+  there because Spike C measured the failure it prevents. Do not "simplify" it
+  without reading [docs/SPIKE-C.md](docs/SPIKE-C.md); `npm run fidelity` and
+  `npm run claude-check` are the regression tests.
 - Do not use `@anthropic-ai/claude-agent-sdk`. Helm shells out to the `claude`
   CLI. This is a deliberate architectural decision (see SPEC "Supersedes the SDK
   draft") - the app hosts the TUI, it does not reimplement the client.

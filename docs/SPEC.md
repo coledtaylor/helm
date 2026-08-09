@@ -267,19 +267,22 @@ actually expose project skills, the premise is wrong and it is cheap to learn th
 | **Junctions on Windows** | `mklink /J` needs no elevation. Fall back to copy + watch. |
 | **Native modules** (`node-pty`, `better-sqlite3`) vs portable exe | Spike B: package a hello-world with both. |
 | **CLI flag drift** across Claude Code releases | Flags are a stable public surface, far safer than the 0.3.x SDK. Pin a tested version, assert on `claude --version` at startup. |
-| **TUI inside xterm.js** feels wrong (resize, mouse, colour) | Spike C: run a real session in a bare xterm+pty harness before committing. |
+| ~~**TUI inside xterm.js** feels wrong (resize, mouse, colour)~~ | **Closed by Spike C.** Fidelity holds; latency is within noise of no terminal at all. The residual risk moved: an *unconfigured* pane degrades the TUI five ways at once, so the configuration in `terminal.ts` and `ptyEnv` is load-bearing and each fix has a regression check. |
 
 ---
 
 ## 9. Spikes
 
-- [ ] **Spike A - Composition.** Synthesise an overlay plugin for
+- [x] **Spike A - Composition.** Synthesise an overlay plugin for
       `repos/atlas/.claude`, launch `claude` from the harness root with
       `--plugin-dir`, confirm a project skill resolves. *Everything depends on this.*
-- [ ] **Spike B - Packaging.** Electron + `node-pty` + `better-sqlite3` built as a
-      portable exe.
-- [ ] **Spike C - Terminal fidelity.** Real `claude` TUI in xterm.js: resize,
-      mouse, 24-bit colour, paste, Ctrl-C.
+      **GO.**
+- [x] **Spike B - Packaging.** Electron + `node-pty` + `better-sqlite3` built as a
+      portable exe. **GO** - see [SPIKE-B.md](SPIKE-B.md).
+- [x] **Spike C - Terminal fidelity.** Real `claude` TUI in xterm.js: resize,
+      mouse, 24-bit colour, paste, Ctrl-C. **GO, embedded-first, no external
+      fallback** - see [SPIKE-C.md](SPIKE-C.md). Fidelity requires five host-side
+      fixes, all landed in `src/renderer/src/terminal.ts` and `src/main/pty.ts`.
 
 ---
 

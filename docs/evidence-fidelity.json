@@ -1,0 +1,322 @@
+{
+  "startedAt": "2026-08-09T18:25:25.011Z",
+  "mode": "dev",
+  "dataDir": "C:\\Users\\user\\AppData\\Roaming\\helm",
+  "versions": {
+    "node": "24.18.1",
+    "acorn": "8.16.0",
+    "ada": "3.4.4",
+    "amaro": "1.1.9",
+    "ares": "1.34.6",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.2",
+    "llhttp": "9.4.3",
+    "merve": "1.2.2",
+    "modules": "148",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.69.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "0.0.0",
+    "simdjson": "4.6.4",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.1",
+    "tz": "2025c",
+    "undici": "7.29.0",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "15.0.245.23-electron.0",
+    "zlib": "1.3.2.1-motley",
+    "zstd": "1.6.0",
+    "electron": "43.3.0",
+    "chrome": "150.0.7871.212"
+  },
+  "pass": true,
+  "checks": [
+    {
+      "id": "C1",
+      "criterion": "24-bit color and theme render correctly",
+      "title": "24-bit colour survives parse and paint",
+      "ok": true,
+      "detail": {
+        "background": {
+          "violet": {
+            "bgMode": 2,
+            "bg": "c71585",
+            "expected": "c71585",
+            "ok": true
+          },
+          "jade": {
+            "bgMode": 2,
+            "bg": "11c75b",
+            "expected": "11c75b",
+            "ok": true
+          },
+          "amber": {
+            "bgMode": 2,
+            "bg": "e77607",
+            "expected": "e77607",
+            "ok": true
+          }
+        },
+        "foreground": {
+          "fgMode": 2,
+          "fg": "c71585",
+          "expected": "c71585"
+        },
+        "exactPixelCounts": {
+          "violet": 1775,
+          "jade": 1722,
+          "amber": 1732
+        },
+        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c1-truecolor.png"
+      },
+      "notes": [
+        "Exact RGB triples present in the composited frame - no palette quantisation."
+      ]
+    },
+    {
+      "id": "C2",
+      "criterion": "Unicode/emoji/box-drawing render without misalignment",
+      "title": "Wide characters measured with Unicode 11 widths",
+      "ok": true,
+      "detail": {
+        "unicodeVersion": "11",
+        "borderColumns": [
+          13,
+          13,
+          13,
+          13,
+          13,
+          13
+        ],
+        "cellWidths": {
+          "box ─": 1,
+          "CJK 中": 2,
+          "emoji 🚀": 2,
+          "block █": 1
+        },
+        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c2-unicode.png"
+      },
+      "notes": [
+        "Unicode width table in use: 11 (available: 6, 11)"
+      ]
+    },
+    {
+      "id": "C3",
+      "criterion": "Window/pane resize reflows the TUI correctly",
+      "title": "Reflow preserves logical lines across widths",
+      "ok": true,
+      "detail": {
+        "widths": [
+          {
+            "cols": 100,
+            "intact": true,
+            "wrappedRows": 3,
+            "shot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c3-reflow-100.png"
+          },
+          {
+            "cols": 132,
+            "intact": true,
+            "wrappedRows": 3,
+            "shot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c3-reflow-132.png"
+          },
+          {
+            "cols": 61,
+            "intact": true,
+            "wrappedRows": 5,
+            "shot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c3-reflow-61.png"
+          },
+          {
+            "cols": 100,
+            "intact": true,
+            "wrappedRows": 3,
+            "shot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c3-reflow-100.png"
+          }
+        ]
+      },
+      "notes": [
+        "A 300-character line reassembled byte-identical at 4 widths, including a shrink below its original wrap point."
+      ]
+    },
+    {
+      "id": "C4",
+      "criterion": "Keyboard: Ctrl-C interrupt, Esc, arrow-key history, tab completion, Shift+Enter",
+      "title": "Key encoding through the real Chromium -> xterm path",
+      "ok": true,
+      "detail": {
+        "ctrlC": {
+          "bytesSent": "\"\\u0003\"",
+          "sawEtx": true,
+          "returnedToPrompt": true
+        },
+        "arrowUp": {
+          "bytesSent": "\"\\u001b[A\"",
+          "line": "PS C:\\Users\\user> Write-Host \"HISTMARKER\"",
+          "ok": true
+        },
+        "escape": {
+          "bytesSent": "\"\\u001b\"",
+          "line": "PS C:\\Users\\user>",
+          "ok": true
+        },
+        "tab": {
+          "bytesSent": "\"Get-Chi\\t\"",
+          "line": "PS C:\\Users\\user> Get-ChildItem",
+          "ok": true
+        },
+        "enter": {
+          "enter": "\"\\r\"",
+          "shiftEnter": "\"\\u001b\\r\"",
+          "distinguishable": true
+        },
+        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c4-keyboard.png"
+      },
+      "notes": [
+        "Shift+Enter produces a distinct sequence from Enter."
+      ]
+    },
+    {
+      "id": "C5",
+      "criterion": "Paste works, including multi-line (bracketed) and large pastes",
+      "title": "Bracketed, unbracketed and 100 KB paste",
+      "ok": true,
+      "detail": {
+        "sinkStarted": true,
+        "bracketed": {
+          "wrapped": true,
+          "contentOk": true,
+          "raw": "\"\\u001b[200~first line\\rsecond line\\rthird line\\u001b[201~\"",
+          "note": "xterm normalises newlines to CR inside the paste, which is what a TUI expects"
+        },
+        "ctrlV": {
+          "ok": true,
+          "raw": "\"\\u001b[200~first line\\rsecond line\\rthird line\\u001b[201~\\u001b[200~first line\\rsecond line\\rthird line\\u001b[201~\""
+        },
+        "unbracketed": {
+          "noMarkers": true,
+          "raw": "\"first line\\rsecond line\\rthird line\""
+        },
+        "large": {
+          "bytesPasted": 100000,
+          "bytesHandedToPty": 100012,
+          "bytesReceivedByChild": 100180,
+          "bracketedFlags": 3,
+          "hostDeliveryMs": 64,
+          "delivered": true,
+          "lossless": true
+        },
+        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c5-paste.png"
+      },
+      "notes": [
+        "100 KB paste delivered end-to-end in 64 ms with no truncation."
+      ]
+    },
+    {
+      "id": "C6",
+      "criterion": "Mouse: scrollback while output streams",
+      "title": "Wheel scrollback holds position under streaming output",
+      "ok": true,
+      "detail": {
+        "parkedViewportY": 836,
+        "parkedBaseY": 1173,
+        "scrolledOffBottom": true,
+        "wheelEventSeenByPane": {
+          "deltaY": -400,
+          "deltaMode": 0,
+          "wheelDeltaY": 480,
+          "target": "xterm-link-layer",
+          "count": 3
+        },
+        "baseYProgression": [
+          1473,
+          1773,
+          2000,
+          2073,
+          2373,
+          2673,
+          2973,
+          3043
+        ],
+        "viewportYProgression": [
+          836,
+          836,
+          836,
+          836,
+          836,
+          836,
+          836,
+          836
+        ],
+        "visibleWhileParked": [
+          "stream line 835",
+          "stream line 836",
+          "stream line 837"
+        ],
+        "scrollToBottomWorks": true,
+        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c6-scrollback.png"
+      },
+      "notes": [
+        "Viewport stayed parked at row 836 while the buffer grew from 1473 to 3043."
+      ]
+    },
+    {
+      "id": "C7",
+      "criterion": "Mouse: text selection + copy",
+      "title": "Drag-select, copy, and interrupt coexist",
+      "ok": true,
+      "detail": {
+        "selected": "SELECTME-0123456789-ABCDEFGHIJ",
+        "clipboard": "SELECTME-0123456789-ABCDEFGHIJ",
+        "copyConsumedCtrlC": true,
+        "interruptRestoredAfterCopy": true,
+        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c7-selection.png"
+      },
+      "notes": [
+        "Ctrl-C copies only while a selection is live and reverts to interrupt immediately after, and any other keystroke drops the selection - the Windows Terminal contract."
+      ]
+    },
+    {
+      "id": "C8",
+      "criterion": "Latency feels indistinguishable from Windows Terminal",
+      "title": "Keystroke round-trip latency",
+      "ok": true,
+      "detail": {
+        "samples": 150,
+        "roundTrip": {
+          "p50": 1,
+          "p95": 7,
+          "max": 16.4
+        },
+        "hostInput": {
+          "p50": 0,
+          "p95": 0.1,
+          "max": 0.1
+        }
+      },
+      "notes": [
+        "Round trip is keydown -> IPC -> pty -> raw echo -> IPC -> parse -> next painted frame. p50 1 ms, p95 7 ms.",
+        "Of that, the host's own share (keydown -> byte handed to the pty) is p50 0 ms."
+      ]
+    },
+    {
+      "id": "C9",
+      "criterion": "Latency feels indistinguishable from Windows Terminal (bulk output)",
+      "title": "Drain rate for 40k lines of streamed output",
+      "ok": true,
+      "detail": {
+        "grid": "100x30",
+        "elapsedMs": 4071,
+        "command": "$sw=[Diagnostics.Stopwatch]::StartNew(); 1..40000 | ForEach-Object { \"line $_ the quick brown fox jumps over the lazy dog\" } | Out-Host; Write-Host \"THROUGHPUT $($sw.ElapsedMilliseconds)\"",
+        "note": "ConPTY back-pressures the writer when the terminal drains slowly, so the time the shell measures is a proxy for terminal throughput. Run the same command in Windows Terminal at the same grid size to compare."
+      },
+      "notes": [
+        "40,000 lines drained in 4071 ms at 100x30."
+      ]
+    }
+  ]
+}
