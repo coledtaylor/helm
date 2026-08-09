@@ -104,11 +104,14 @@ composed in. The tradeoff disappears.
 Windows note: use **directory junctions** (`mklink /J`), which need no elevation,
 rather than symlinks, which do. Copy as a fallback.
 
-> [!caution] This is the load-bearing assumption
-> `--plugin-dir` loading a *synthesised* directory is verified by structure, not
-> by execution. **Spike A must prove it before anything else is built.** If it
-> fails, the fallback is copy-composition into a single generated overlay plugin,
-> which is uglier but works the same way.
+> [!note] Proven by Spike A (2026-08-08)
+> `--plugin-dir` accepts a synthesised junction-based shim: skills, agents, and
+> commands from two composed overlays all resolved and invoked from the harness
+> root. The platform namespaces everything automatically
+> (`<plugin-name>:<skill>`), so cross-overlay name collisions are impossible.
+> One caveat: **plugins do not carry the overlaid repo's CLAUDE.md** - the
+> `--add-dir` flag claims to pull in CLAUDE.md dirs; M3 must verify that.
+> See [SPIKE-A findings](../../../notes/reference-helm-spike-a-overlay-composition.md).
 
 ---
 
@@ -162,9 +165,10 @@ The `.claude/` directory of whatever scope you point at, as a real interface.
 - Browse and edit `skills/`, `commands/`, `agents/`, `hooks/`, `settings.json`,
   `CLAUDE.md`, `.mcp.json`
 - **Effective view:** given a profile, show what is *actually* active - which
-  skills resolve, which are shadowed by a name collision, which scope won for each
-  setting. This is the payoff of the composition model and the thing no file
-  explorer can tell you.
+  skills resolve and under which overlay namespace (deterministic per Spike A:
+  `<overlay-name>:<skill-name>`), and which scope won for each setting (user vs
+  project vs local) and why. This is the payoff of the composition model and the
+  thing no file explorer can tell you.
 - MCP managed by shelling out to `claude mcp add / get / add-json` rather than
   editing JSON by hand
 - Every write snapshotted to SQLite first, with per-file undo history
@@ -262,8 +266,9 @@ actually expose project skills, the premise is wrong and it is cheap to learn th
 
 | Risk | Mitigation |
 |---|---|
-| **`--plugin-dir` may not accept a synthesised dir** | Spike A, before any build. Fallback: copy-composition into one generated plugin. |
-| **Skill name collisions** across composed overlays | Namespace on synthesis (`atlas:notes`); surface collisions in the effective view. |
+| ~~**`--plugin-dir` may not accept a synthesised dir**~~ | **Closed by Spike A.** Junction-based shims work; two overlays composed in one session. Copy fallback exists but was not needed. |
+| ~~**Skill name collisions** across composed overlays~~ | **Closed by Spike A.** The platform namespaces every overlay automatically (`<plugin-name>:<skill>`); same-named skills in two overlays coexist. Helm only sanitizes plugin manifest names. |
+| **Project CLAUDE.md not carried by `--plugin-dir`** (Spike A finding) | `--add-dir` claims to pull in CLAUDE.md dirs; verify in M3. If it doesn't, inject the content another way (e.g. `--append-system-prompt`) or accept the loss explicitly. |
 | **Junctions on Windows** | `mklink /J` needs no elevation. Fall back to copy + watch. |
 | **Native modules** (`node-pty`, `better-sqlite3`) vs portable exe | Spike B: package a hello-world with both. |
 | **CLI flag drift** across Claude Code releases | Flags are a stable public surface, far safer than the 0.3.x SDK. Pin a tested version, assert on `claude --version` at startup. |
@@ -276,7 +281,10 @@ actually expose project skills, the premise is wrong and it is cheap to learn th
 - [x] **Spike A - Composition.** Synthesise an overlay plugin for
       `repos/atlas/.claude`, launch `claude` from the harness root with
       `--plugin-dir`, confirm a project skill resolves. *Everything depends on this.*
-      **GO.**
+      **GO** - automatic namespacing makes cross-overlay collisions impossible;
+      CLAUDE.md is not carried by plugins (M3 verifies `--add-dir` covers it).
+      Headless (`-p`) only; M3's first profile launch doubles as the interactive
+      proof. See `notes/reference-helm-spike-a-overlay-composition.md`.
 - [x] **Spike B - Packaging.** Electron + `node-pty` + `better-sqlite3` built as a
       portable exe. **GO** - see [SPIKE-B.md](SPIKE-B.md).
 - [x] **Spike C - Terminal fidelity.** Real `claude` TUI in xterm.js: resize,
