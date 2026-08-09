@@ -1,0 +1,31 @@
+# Spike B verified config (2026-08-08, Electron 43.3.0, Win11).
+#
+# npmRebuild is off - deliberately. better-sqlite3 >=13 (gypfile:false) and
+# node-pty 1.1.0 both ship N-API prebuilds (prebuilds/<platform>-<arch>) that
+# load unchanged in Electron; no ABI rebuild is needed for either. Running
+# @electron/rebuild anyway BREAKS the build: it cannot compile node-pty on
+# Windows (winpty GetCommitHash.bat gyp bug).
+#
+# asarUnpack is required for both: native .node binaries and node-pty's
+# conpty/winpty helper binaries (conpty.dll, OpenConsole.exe, winpty-agent.exe)
+# cannot be loaded from inside the asar archive.
+appId: dev.coletaylor.helm
+productName: Helm
+directories:
+  output: dist-app
+npmRebuild: false
+files:
+  - out/**
+asarUnpack:
+  - '**/node_modules/better-sqlite3/**'
+  - '**/node_modules/node-pty/**'
+win:
+  target:
+    - portable
+    - nsis
+portable:
+  artifactName: Helm-${version}-portable.exe
+nsis:
+  artifactName: Helm-${version}-setup.exe
+  oneClick: true
+  perMachine: false
