@@ -27,9 +27,14 @@
  * pixels so they cannot thin out to nothing: at 16px the wheel's spokes would
  * otherwise be four tenths of a pixel wide.
  *
- * Below 32px the spokes are dropped entirely. Eight of them inside a 16px
- * circle is noise, not detail, and the mark reads better as a rim with handles.
- * This is the ordinary practice of drawing small sizes as their own artwork.
+ * The small sizes are their own drawings rather than the big one shrunk, which
+ * is ordinary practice for icons. What survives is chosen by what the mark
+ * needs to stay legible: the spokes are the wheel, so they are the last thing
+ * to go. Dropping them below 32px and keeping the round knobs was tried first
+ * and produced a flower. Below 24px it is four spokes, a wider rim and no hub,
+ * because eight spokes and a hub inside a four-pixel radius merge into a blob.
+ * `build/preview.png` shows 16 through 48 magnified, so this is a thing that
+ * can be looked at rather than assumed.
  *
  * When real artwork replaces this, none of the above applies - export a
  * 1024px PNG from a vector tool and use an icon generator. See the README of
@@ -102,21 +107,35 @@ function draw(size) {
   const px = new Uint8Array(size * size * 4)
 
   // Stroke weights carry a floor in device pixels so the small sizes survive.
-  const detailed = size >= 32
+  //
+  // Detail is shed in order of what the mark can spare. The knobs go first and
+  // the spokes last: radiating lines crossing a rim are what read as a wheel,
+  // and a ring of round knobs without them is a flower - which is what shipped
+  // on 2026-08-10 and was immediately spotted as one.
+  //
+  // Below 24px even eight spokes are too many, and a hub closes the gaps into a
+  // solid blob, so that size gets four spokes, a proportionally wider rim, and
+  // no hub at all.
+  const tiny = size < 24
+  const knobbed = size >= 48
+  const hubDetail = size >= 64
+  const spokeCount = tiny ? 4 : 8
   const corner = 56 * s
-  const rimR = 62 * s
-  const rimHalf = Math.max(8 * s, 1.15)
-  const spokeHalf = Math.max(6.5 * s, 1.0)
-  const spokeLen = 101 * s
-  const knobR = Math.max(13 * s, size >= 32 ? 1.8 : 2.0)
-  const hubR = detailed ? Math.max(21 * s, 2.6) : Math.max(14 * s, 1.9)
+  const rimR = tiny ? size * 0.29 : 62 * s
+  const rimHalf = tiny ? 0.9 : Math.max(8 * s, 1.1)
+  const spokeHalf = tiny ? 0.75 : Math.max(6.5 * s, 0.9)
+  // Without knobs the spokes have to reach where the knobs would have been, or
+  // the mark loses the handles that make it a ship's wheel rather than a gear.
+  const spokeLen = tiny ? size * 0.45 : (knobbed ? 101 : 104) * s
+  const knobR = Math.max(13 * s, 2.2)
+  const hubR = hubDetail ? Math.max(21 * s, 3) : tiny ? 0 : Math.max(16 * s, 1.4)
   const hubDarkR = 8 * s
 
   const c = size / 2
   const spokes = []
   const knobs = []
-  for (let i = 0; i < 8; i++) {
-    const a = (i * Math.PI) / 4
+  for (let i = 0; i < spokeCount; i++) {
+    const a = (i * 2 * Math.PI) / spokeCount
     const ex = c + spokeLen * Math.cos(a)
     const ey = c + spokeLen * Math.sin(a)
     spokes.push([ex, ey])
@@ -132,20 +151,20 @@ function draw(size) {
       over(px, i, NAVY, coverage(sdRoundedRect(cx, cy, size, size, corner)))
 
       let brass = 0
-      if (detailed) {
-        for (const [ex, ey] of spokes) {
-          brass = Math.max(brass, coverage(sdCapsule(cx, cy, c, c, ex, ey, spokeHalf)))
-        }
+      for (const [ex, ey] of spokes) {
+        brass = Math.max(brass, coverage(sdCapsule(cx, cy, c, c, ex, ey, spokeHalf)))
       }
-      for (const [kx, ky] of knobs) {
-        brass = Math.max(brass, coverage(sdCircle(cx, cy, kx, ky, knobR)))
+      if (knobbed) {
+        for (const [kx, ky] of knobs) {
+          brass = Math.max(brass, coverage(sdCircle(cx, cy, kx, ky, knobR)))
+        }
       }
       // A ring is the circle's distance folded about its own edge.
       brass = Math.max(brass, coverage(Math.abs(sdCircle(cx, cy, c, c, rimR)) - rimHalf))
-      brass = Math.max(brass, coverage(sdCircle(cx, cy, c, c, hubR)))
+      if (hubR > 0) brass = Math.max(brass, coverage(sdCircle(cx, cy, c, c, hubR)))
       over(px, i, BRASS, brass)
 
-      if (detailed) {
+      if (hubR > 0 && hubDetail) {
         over(px, i, BRASS_DARK, coverage(sdCircle(cx, cy, c, c, hubDarkR)))
       }
     }
@@ -183,10 +202,10 @@ function chunk(type, data) {
   return Buffer.concat([len, body, crc])
 }
 
-function encodePng(px, size) {
+function encodePng(px, width, height = width) {
   const ihdr = Buffer.alloc(13)
-  ihdr.writeUInt32BE(size, 0)
-  ihdr.writeUInt32BE(size, 4)
+  ihdr.writeUInt32BE(width, 0)
+  ihdr.writeUInt32BE(height, 4)
   ihdr.writeUInt8(8, 8) // bit depth
   ihdr.writeUInt8(6, 9) // truecolour with alpha
   ihdr.writeUInt8(0, 10)
@@ -194,11 +213,12 @@ function encodePng(px, size) {
   ihdr.writeUInt8(0, 12)
 
   // One filter byte per scanline; filter 0 (None) compresses fine at this size.
-  const raw = Buffer.alloc(size * (size * 4 + 1))
-  for (let y = 0; y < size; y++) {
-    const at = y * (size * 4 + 1)
+  const stride = width * 4
+  const raw = Buffer.alloc(height * (stride + 1))
+  for (let y = 0; y < height; y++) {
+    const at = y * (stride + 1)
     raw[at] = 0
-    Buffer.from(px.buffer, px.byteOffset + y * size * 4, size * 4).copy(raw, at + 1)
+    Buffer.from(px.buffer, px.byteOffset + y * stride, stride).copy(raw, at + 1)
   }
 
   return Buffer.concat([
@@ -246,7 +266,53 @@ const entries = SIZES.map((size) => {
   return { size, png }
 })
 
+/**
+ * A strip of the small sizes, nearest-neighbour magnified.
+ *
+ * Not shipped - it exists so the sizes that actually get looked at can be
+ * looked at. Judging a 16px icon by opening the 256px one is how the small
+ * version ended up reading as a flower.
+ */
+function writePreview() {
+  const shown = [16, 24, 32, 48]
+  const zoom = 8
+  const pad = 12
+  const cell = 48 * zoom
+  const w = shown.length * cell + (shown.length + 1) * pad
+  const h = cell + pad * 2
+  const out = new Uint8Array(w * h * 4)
+  for (let i = 0; i < out.length; i += 4) {
+    out[i] = 0x2a
+    out[i + 1] = 0x2a
+    out[i + 2] = 0x30
+    out[i + 3] = 0xff
+  }
+
+  shown.forEach((size, n) => {
+    const src = draw(size)
+    const scale = (48 * zoom) / size
+    const ox = pad + n * (cell + pad)
+    const oy = pad
+    for (let y = 0; y < cell; y++) {
+      for (let x = 0; x < cell; x++) {
+        const sx = Math.min(size - 1, Math.floor(x / scale))
+        const sy = Math.min(size - 1, Math.floor(y / scale))
+        const si = (sy * size + sx) * 4
+        const di = ((oy + y) * w + (ox + x)) * 4
+        const a = src[si + 3] / 255
+        for (let ch = 0; ch < 3; ch++) {
+          out[di + ch] = Math.round(src[si + ch] * a + out[di + ch] * (1 - a))
+        }
+        out[di + 3] = 0xff
+      }
+    }
+  })
+
+  writeFileSync(join(BUILD, 'preview.png'), encodePng(out, w, h))
+}
+
 writeFileSync(join(BUILD, 'icon.ico'), buildIco(entries))
+writePreview()
 // electron-builder's Linux target and the runtime window icon both want a PNG.
 writeFileSync(join(BUILD, 'icon.png'), entries[entries.length - 1].png)
 process.stdout.write(`icon.ico written with ${String(entries.length)} sizes\n`)

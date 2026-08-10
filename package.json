@@ -32,7 +32,8 @@
     "m7-check": "pnpm --filter @helm/desktop m7-check",
     "usage-check": "pnpm --filter @helm/desktop usage-check",
     "dist:win": "pnpm --filter @helm/desktop dist:win",
-    "db:generate": "pnpm --filter @helm/core db:generate"
+    "db:generate": "pnpm --filter @helm/core db:generate",
+    "icon": "pnpm --filter @helm/desktop icon"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
