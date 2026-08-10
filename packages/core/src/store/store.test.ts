@@ -59,7 +59,10 @@ describe('openStore', () => {
         'projects',
         'config_snapshots',
         'app_settings',
-        'sessions'
+        'sessions',
+        'history_prompts',
+        'history_sessions',
+        'history_index'
       ])
     )
   })

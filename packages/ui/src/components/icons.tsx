@@ -195,6 +195,38 @@ export function LayersIcon(props: IconProps): JSX.Element {
   )
 }
 
+/** Session history: a clock with the hands set back. */
+export function HistoryIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M2.75 8a5.25 5.25 0 1 0 1.62-3.79" />
+      <path d="M2.5 2.75v3h3" />
+      <path d="M8 5.25V8l2 1.25" />
+    </Icon>
+  )
+}
+
+/** Resume: the prompt caret of TerminalIcon, pointed back into a conversation. */
+export function ResumeIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M13.25 8a5.25 5.25 0 1 0-1.62 3.79" />
+      <path d="M13.5 12.75v-3h-3" />
+      <path d="M6.75 5.75 10 8l-3.25 2.25z" />
+    </Icon>
+  )
+}
+
+/** A search field's glyph. */
+export function SearchIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <circle cx="7" cy="7" r="4.25" />
+      <path d="m10.25 10.25 3 3" />
+    </Icon>
+  )
+}
+
 export function PinIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>

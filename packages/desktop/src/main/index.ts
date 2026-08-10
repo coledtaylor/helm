@@ -7,9 +7,11 @@ import { emit, registerIpc, resolvedTheme } from './ipc'
 import { appMode, dataDir, initDataDir, shimRoot } from './paths'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
 import { createServices, refreshGit, runScan, type Services } from './services'
+import { createHistoryService } from './history'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
 import { createCollector, runM2Checks, type M2Context } from './m2check'
 import { runM3Checks } from './m3check'
+import { runM4Checks } from './m4check'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -36,6 +38,7 @@ type Mode =
   | 'claude'
   | 'm2-check'
   | 'm3-check'
+  | 'm4-check'
   | 'shim-sweep'
 
 function modeFromArgv(): Mode {
@@ -44,6 +47,7 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--claude-check')) return 'claude-check'
   if (process.argv.includes('--m2-check')) return 'm2-check'
   if (process.argv.includes('--m3-check')) return 'm3-check'
+  if (process.argv.includes('--m4-check')) return 'm4-check'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
   if (process.argv.includes('--claude')) return 'claude'
   if (process.argv.includes('--shell')) return 'shell'
@@ -53,7 +57,8 @@ function modeFromArgv(): Mode {
 const mode = modeFromArgv()
 // The check modes are the app: they drive the real window, so they need the
 // real startup path, the database included.
-const isSpikeMode = mode !== 'app' && mode !== 'm2-check' && mode !== 'm3-check'
+const isSpikeMode =
+  mode !== 'app' && mode !== 'm2-check' && mode !== 'm3-check' && mode !== 'm4-check'
 
 initDataDir()
 
@@ -119,6 +124,12 @@ export interface AppOptions {
   confirm?: Confirm | undefined
   /** Called once the renderer has mounted and the first scan is under way. */
   onReady?: ((ctx: M2Context) => void) | undefined
+  /**
+   * Index a different `.claude` tree. Only `--m4-check` passes one, so that
+   * the watch can be proved against a fixture it is allowed to append to as
+   * well as against the real file.
+   */
+  claudeHome?: string | undefined
 }
 
 function startApp(options: AppOptions = {}): void {
@@ -139,9 +150,16 @@ function startApp(options: AppOptions = {}): void {
     confirm: options.confirm
   })
 
+  const history = createHistoryService({
+    store: services.store,
+    home: options.claudeHome,
+    onChange: (summary) => emit(win, 'history:changed', summary)
+  })
+
   registerIpc({
     services,
     sessions,
+    history,
     window: () => win,
     rendererReady: () => {
       emit(win, 'settings:changed', services.settings)
@@ -169,7 +187,19 @@ function startApp(options: AppOptions = {}): void {
         })
       emit(win, 'scan:status', { running: true })
 
-      if (win) options.onReady?.({ win, services, sessions })
+      // Off the renderer's critical path: the first pass reads 875 KB and
+      // writes 3,470 rows, which is ~30ms the launcher should not spend
+      // before it paints. The window gets `history:changed` when it lands.
+      setImmediate(() => {
+        try {
+          emit(win, 'history:changed', history.refresh())
+        } catch (err) {
+          console.warn(`history index could not be built: ${String(err)}`)
+        }
+        history.start()
+      })
+
+      if (win) options.onReady?.({ win, services, sessions, history })
     }
   })
 
@@ -268,6 +298,9 @@ function startApp(options: AppOptions = {}): void {
     if (boundsTimer) clearTimeout(boundsTimer)
     boundsTimer = null
     persistBounds()
+    // Before the store is let go of: a debounced index pass that fired after
+    // `will-quit` would write to a closed connection.
+    history.stop()
     // Synchronously, because this is the last point the main process is
     // guaranteed a turn. Anything deferred here is a process left behind.
     sessions.shutdown()
@@ -493,6 +526,48 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`m3-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  if (mode === 'm4-check') {
+    const collector = createCollector()
+    startApp({
+      observer: collector,
+      confirm: collector.confirm,
+      onReady: (ctx) => {
+        // The driver closes the session it resumed, so every confirmation is
+        // one it asked for on purpose.
+        collector.answerWith(true)
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runM4Checks(
+          ctx,
+          collector,
+          join(dataDir, 'screenshots'),
+          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
+        )
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('m4-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`m4-check report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`m4-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

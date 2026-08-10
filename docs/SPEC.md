@@ -168,9 +168,32 @@ Profiles live in SQLite, exportable to YAML so they travel with a harness.
 - Tree of harnesses and projects, auto-detected (`harness.yaml`, then `repos/*`,
   degrading gracefully to "just a folder")
 - Saved profiles, pinned and ordered
-- Session list from `history.jsonl` - **744 sessions across 35 projects**, which
-  `/resume` can never show you because it only sees the current directory
+- Session list from `history.jsonl` - **799 sessions across 36 projects** at the
+  time M4 landed, which `/resume` can never show you because it only sees the
+  current directory
 - Click a session to resume it into a tab
+
+> [!note] Built by M4 (2026-08-09)
+> The index mirrors `history.jsonl` into SQLite incrementally, and marks each
+> session with whether it can actually be reopened. Three findings shaped it,
+> all measured on 2.1.225:
+>
+> - **`--resume <id>` is resolved against the working directory.** The same id
+>   that resumes from the session's own folder reports "No conversation found
+>   with session ID" and exits 1 from anywhere else. So resuming needs the
+>   recorded directory to still exist, and a deleted folder is as fatal as a
+>   reaped transcript - the launcher distinguishes the two.
+> - **A transcript cannot be found by deriving its path from the project.** The
+>   directory under `projects/` carries whatever casing the CLI was started
+>   with and `history.jsonl` records its own; two transcripts here live under
+>   `...-repos-atlas-reporting` for sessions whose recorded project is
+>   `...\repos\atlas-reporting`. The scan is by session id.
+> - **Retention is 13%, not 9%** - 106 of 799. Still the reason resumability is
+>   read off the disk on every pass rather than remembered.
+>
+> Search is `LIKE`, not FTS5: a filter box has to match `geofenc` inside
+> `geofencing`, which a tokenising index does not. Measured p95 **3 ms** over
+> 3,472 prompts against a 100 ms budget (`pnpm m4-check`, M4-4).
 - Per-project git state at a glance: branch, dirty count, ahead/behind
 
 ### 4.2 Config Console
@@ -252,10 +275,14 @@ option open and is what makes the app genuinely portable.
 - The Agent SDK, in any form
 - Rendering messages, diffs, or permission dialogs
 - Mobile, cloud sync, teams
-- Transcript archival - **worth noting anyway: only 68 transcripts survive for 744
-  sessions, a 9% retention rate.** Prompts persist in `history.jsonl`; the
-  conversations are reaped. Strong v1.1 candidate, and a pure-win feature since an
-  external process copying files cannot break anything.
+- Transcript archival - **worth noting anyway: 106 transcripts survive for 799
+  sessions, a 13% retention rate** (re-measured by M4; the first count of 9% was
+  taken by deriving transcript paths from the recorded project, which misses the
+  ones whose directory was created under a different casing). Prompts persist in
+  `history.jsonl`; the conversations are reaped. Strong v1.1 candidate, and a
+  pure-win feature since an external process copying files cannot break anything.
+  M4 makes the case for it visible: 694 of the rows in the session launcher are
+  history-only, and every one of them is a conversation that could have been kept.
 - WIP dashboard (dirty repos, stale branches) beyond the git chips in the launcher
 
 ---

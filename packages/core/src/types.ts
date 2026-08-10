@@ -120,6 +120,114 @@ export interface SessionRecord {
 }
 
 /**
+ * One prompt a person submitted, as `~/.claude/history.jsonl` recorded it.
+ *
+ * This file is Claude Code's own, shared by every session on the machine and
+ * appended to whether or not Helm is running. Helm reads it and never writes
+ * to it.
+ */
+export interface HistoryPrompt {
+  sessionId: string
+  /** Submission order across the whole file. Monotonic, not necessarily dense. */
+  seq: number
+  /** The prompt as typed, verbatim. */
+  text: string
+  /** Epoch milliseconds, as recorded. */
+  at: number
+}
+
+/**
+ * A session `history.jsonl` knows about, and whether it can still be resumed.
+ *
+ * The two facts come from different places and only one of them is durable.
+ * The prompts persist indefinitely; the transcript that `--resume` actually
+ * needs is reaped on Claude Code's own schedule - 105 of 799 survive on the
+ * machine this was built against - so resumability is a property of the disk
+ * right now, re-read on every index pass rather than remembered.
+ */
+export interface HistorySession {
+  sessionId: string
+  /** Working directory the session ran in, exactly as history recorded it. */
+  project: string
+  /** Last path segment of `project`, for a list that has no room for the rest. */
+  projectName: string
+  promptCount: number
+  firstAt: number
+  lastAt: number
+  /** The opening prompt: what identifies a conversation at a glance. */
+  firstPrompt: string
+  /** The transcript on disk, or null once it has been reaped. */
+  transcriptFile: string | null
+  transcriptBytes: number | null
+  /** False when the recorded working directory is no longer there. */
+  projectExists: boolean
+  /**
+   * The first prompt that matched the search, when the query had one. Absent
+   * for an unfiltered listing rather than set to the opening prompt, so the UI
+   * can tell "matched here" from "this is just the start of it".
+   */
+  match?: string | undefined
+}
+
+/**
+ * Resuming needs both halves: the conversation to restore and the directory to
+ * restore it in. `--resume <id>` is resolved against the working directory - a
+ * session resumed from anywhere else reports "No conversation found", measured
+ * on 2.1.225 - so a project that has been deleted is as fatal as a reaped
+ * transcript, and the launcher says which one it is.
+ */
+export function canResume(session: HistorySession): boolean {
+  return session.transcriptFile !== null && session.projectExists
+}
+
+/** One recorded working directory, with how much history it holds. */
+export interface HistoryProject {
+  project: string
+  name: string
+  sessions: number
+  prompts: number
+  lastAt: number
+  resumable: number
+  exists: boolean
+}
+
+/** What the index currently holds. Cheap enough to recompute on every change. */
+export interface HistorySummary {
+  sessions: number
+  prompts: number
+  projects: number
+  /** Sessions that could be resumed right now. */
+  resumable: number
+  /** Newest prompt in the index, or null when it is empty. */
+  latestAt: number | null
+  /** The file being indexed, so the UI can say where this came from. */
+  historyFile: string
+  /** Bytes of it consumed so far; the cursor an incremental pass resumes at. */
+  indexedBytes: number
+  /** Set when the file could not be read at all. */
+  error?: string | undefined
+}
+
+export interface HistoryQuery {
+  /** Case-insensitive substring of a prompt. Empty means no filter. */
+  search?: string | undefined
+  /** One recorded working directory, compared case-insensitively. */
+  project?: string | undefined
+  /** Drop sessions that could not be resumed. */
+  resumableOnly?: boolean | undefined
+  limit?: number | undefined
+}
+
+export interface HistoryPage {
+  /** Most recently active first. */
+  sessions: HistorySession[]
+  /** Sessions the query matched, before `limit` was applied. */
+  total: number
+  /** How long the query itself took, in milliseconds. */
+  tookMs: number
+}
+
+/**
  * The launch knobs a profile carries, named as the CLI names them.
  *
  * Both lists are the CLI's own, copied rather than derived: they are the

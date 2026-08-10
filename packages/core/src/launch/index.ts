@@ -1,5 +1,6 @@
 export {
   buildClaudeArgs,
+  buildResumeArgs,
   sanitizeSessionName,
   uniqueSessionName,
   type SessionSpec

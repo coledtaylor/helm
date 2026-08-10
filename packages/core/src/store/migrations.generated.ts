@@ -32,5 +32,16 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
     "statements": [
       "ALTER TABLE `sessions` ADD `profile_id` integer;"
     ]
+  },
+  {
+    "tag": "0003_smart_nightmare",
+    "statements": [
+      "CREATE TABLE `history_index` (\n\t`file` text PRIMARY KEY NOT NULL,\n\t`bytes` integer NOT NULL,\n\t`indexed_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL\n);",
+      "CREATE TABLE `history_prompts` (\n\t`seq` integer PRIMARY KEY NOT NULL,\n\t`session_id` text NOT NULL,\n\t`project` text NOT NULL,\n\t`at` integer NOT NULL,\n\t`text` text NOT NULL\n);",
+      "CREATE INDEX `history_prompts_session_idx` ON `history_prompts` (`session_id`,`seq`);",
+      "CREATE TABLE `history_sessions` (\n\t`session_id` text PRIMARY KEY NOT NULL,\n\t`project` text NOT NULL,\n\t`project_key` text NOT NULL,\n\t`prompt_count` integer NOT NULL,\n\t`first_at` integer NOT NULL,\n\t`last_at` integer NOT NULL,\n\t`first_prompt` text NOT NULL,\n\t`transcript_file` text,\n\t`transcript_bytes` integer,\n\t`project_exists` integer DEFAULT false NOT NULL\n);",
+      "CREATE INDEX `history_sessions_last_idx` ON `history_sessions` (`last_at`);",
+      "CREATE INDEX `history_sessions_project_idx` ON `history_sessions` (`project_key`,`last_at`);"
+    ]
   }
 ]

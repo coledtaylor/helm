@@ -1,15 +1,17 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Profile, ProfileDraft, Project, SessionRecord } from '@helm/core'
+import type { HistorySession, Profile, ProfileDraft, Project, SessionRecord } from '@helm/core'
 import {
   AppShell,
   cn,
   FolderIcon,
   HarnessIcon,
+  HistoryIcon,
   ProfileEditor,
   ProfileList,
   ProjectPane,
   RepoIcon,
+  SessionHistory,
   Sidebar,
   StatusBar,
   TabBar,
@@ -19,6 +21,7 @@ import {
   type TabIndicator
 } from '@helm/ui'
 import { TerminalPane } from './TerminalPane'
+import { useHistory } from './useHistory'
 import { useLauncher } from './useLauncher'
 import { useProfiles } from './useProfiles'
 import { useSessions } from './useSessions'
@@ -30,17 +33,28 @@ const KIND_ICON = {
 } as const
 
 /**
- * Two kinds of tab, one strip.
+ * Three kinds of tab, one strip.
  *
  * A project tab is a view of discovery's data and can be thrown away and
- * rebuilt at will. A session tab has a process behind it, so it is closed by
- * asking the main process, and its pane stays mounted even while another tab is
- * on screen - unmounting it would drop the scrollback of a live session.
+ * rebuilt at will, and so can the history tab - there is only ever one of it,
+ * and every piece of state it has lives in `useHistory` rather than in the
+ * component, so closing and reopening it does not lose a search. A session tab
+ * has a process behind it, so it is closed by asking the main process, and its
+ * pane stays mounted even while another tab is on screen - unmounting it would
+ * drop the scrollback of a live session.
  */
-type PaneRef = { kind: 'project'; path: string } | { kind: 'session'; id: number }
+type PaneRef =
+  | { kind: 'project'; path: string }
+  | { kind: 'session'; id: number }
+  | { kind: 'history' }
 
-const tabId = (ref: PaneRef): string =>
-  ref.kind === 'project' ? `project:${ref.path}` : `session:${String(ref.id)}`
+const HISTORY_TAB = 'history'
+
+const tabId = (ref: PaneRef): string => {
+  if (ref.kind === 'project') return `project:${ref.path}`
+  if (ref.kind === 'session') return `session:${String(ref.id)}`
+  return HISTORY_TAB
+}
 
 export function App(): JSX.Element {
   const launcher = useLauncher()
@@ -61,6 +75,7 @@ export function App(): JSX.Element {
   const sessionState = useSessions(activateSession)
   const { sessions } = sessionState
   const profileState = useProfiles()
+  const historyState = useHistory()
 
   /** The profile being edited, `'new'` for one being created from scratch, or
    * a seeded draft from "save as profile". Null when the dialog is closed. */
@@ -95,9 +110,11 @@ export function App(): JSX.Element {
    * been moved or closed is simply appended.
    */
   const openPanes = useMemo(() => {
-    const placed = order.filter((ref) =>
-      ref.kind === 'project' ? !discovery || projectsByPath.has(ref.path) : sessionsById.has(ref.id)
-    )
+    const placed = order.filter((ref) => {
+      if (ref.kind === 'project') return !discovery || projectsByPath.has(ref.path)
+      if (ref.kind === 'session') return sessionsById.has(ref.id)
+      return true
+    })
     const known = new Set(placed.filter((ref) => ref.kind === 'session').map((ref) => ref.id))
     const appended = sessions
       .filter((session) => !known.has(session.id))
@@ -118,14 +135,22 @@ export function App(): JSX.Element {
     reportFocus(activePane?.kind === 'session' ? activePane.id : null)
   }, [activePane, reportFocus])
 
-  const openProject = useCallback((project: Project | null) => {
-    if (!project) return
-    const ref: PaneRef = { kind: 'project', path: project.path }
+  const openPane = useCallback((ref: PaneRef) => {
     setOrder((current) =>
       current.some((r) => tabId(r) === tabId(ref)) ? current : [...current, ref]
     )
     setRequestedId(tabId(ref))
   }, [])
+
+  const openProject = useCallback(
+    (project: Project | null) => {
+      if (!project) return
+      openPane({ kind: 'project', path: project.path })
+    },
+    [openPane]
+  )
+
+  const openHistory = useCallback(() => openPane({ kind: 'history' }), [openPane])
 
   const launch = useCallback(
     async (project: Project) => {
@@ -159,6 +184,22 @@ export function App(): JSX.Element {
       setRequestedId(tabId({ kind: 'session', id: session.id }))
     },
     [profileState, sessionState]
+  )
+
+  /**
+   * A resumed conversation is a session like any other once it exists - the
+   * only difference is upstream, where main decided whether it could be
+   * reopened at all and built `--resume` argv for it.
+   */
+  const resumeSession = useCallback(
+    async (session: HistorySession) => {
+      const record = await historyState.resume(session, paneRef.current)
+      if (!record) return
+      sessionState.adopt(record)
+      setOrder((current) => [...current, { kind: 'session', id: record.id }])
+      setRequestedId(tabId({ kind: 'session', id: record.id }))
+    },
+    [historyState, sessionState]
   )
 
   const blankProfile = useCallback(
@@ -206,7 +247,7 @@ export function App(): JSX.Element {
       const ref = openPanes.find((candidate) => tabId(candidate) === id)
       if (!ref) return
 
-      if (ref.kind === 'project') {
+      if (ref.kind !== 'session') {
         setOrder(openPanes.filter((candidate) => tabId(candidate) !== id))
         return
       }
@@ -254,6 +295,17 @@ export function App(): JSX.Element {
   }, [openPanes, activeId])
 
   const tabs: Tab[] = openPanes.flatMap((ref): Tab[] => {
+    if (ref.kind === 'history') {
+      return [
+        {
+          id: HISTORY_TAB,
+          title: 'Session history',
+          hint: historyState.summary?.historyFile ?? 'Every session on this machine',
+          icon: <HistoryIcon width={13} height={13} />
+        }
+      ]
+    }
+
     if (ref.kind === 'project') {
       const project = projectsByPath.get(ref.path)
       if (!project) return []
@@ -319,6 +371,14 @@ export function App(): JSX.Element {
               onReorder={(ids) => void profileState.reorder(ids)}
             />
           }
+          onOpenHistory={openHistory}
+          {...(historyState.summary
+            ? {
+                historyCount: historyState.summary.sessions,
+                historyResumable: historyState.summary.resumable
+              }
+            : {})}
+          historyActive={activePane?.kind === 'history'}
           discovery={discovery}
           scanning={launcher.scanning}
           scanError={launcher.scanError}
@@ -385,6 +445,36 @@ export function App(): JSX.Element {
             </div>
           )
         })}
+
+        {activePane?.kind === 'history' && (
+          <div className="absolute inset-0">
+            <SessionHistory
+              summary={historyState.summary}
+              page={historyState.page}
+              loading={historyState.loading}
+              error={historyState.error}
+              search={historyState.search}
+              onSearchChange={historyState.setSearch}
+              grouping={historyState.grouping}
+              onGroupingChange={historyState.setGrouping}
+              resumableOnly={historyState.resumableOnly}
+              onResumableOnlyChange={historyState.setResumableOnly}
+              project={historyState.project}
+              onProjectChange={historyState.setProject}
+              selected={historyState.selected}
+              onSelect={historyState.select}
+              prompts={historyState.prompts}
+              promptsLoading={historyState.promptsLoading}
+              onRefresh={historyState.refresh}
+              refreshing={historyState.refreshing}
+              onResume={(session) => void resumeSession(session)}
+              resuming={historyState.resuming}
+              resumeError={historyState.resumeError}
+              onDismissResumeError={historyState.dismissResumeError}
+              onReveal={launcher.reveal}
+            />
+          </div>
+        )}
 
         {activeProject && (
           <div className="absolute inset-0">

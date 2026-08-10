@@ -122,6 +122,75 @@ export const sessions = sqliteTable(
   (t) => [index('sessions_started_idx').on(t.startedAt), index('sessions_status_idx').on(t.status)]
 )
 
+/**
+ * Every prompt `~/.claude/history.jsonl` has ever recorded, on any project.
+ *
+ * A mirror of a file Helm does not own, kept in SQLite so it can be searched
+ * and grouped rather than re-parsed per keystroke. `seq` is submission order,
+ * assigned by the indexer as lines arrive - the file has no id of its own, and
+ * the timestamp is not unique enough to order by on its own.
+ */
+export const historyPrompts = sqliteTable(
+  'history_prompts',
+  {
+    seq: integer('seq').primaryKey(),
+    sessionId: text('session_id').notNull(),
+    /** Working directory as recorded, casing and all. */
+    project: text('project').notNull(),
+    /** Epoch milliseconds. */
+    at: integer('at').notNull(),
+    text: text('text').notNull()
+  },
+  // The search is a substring match, which no index can serve - so the index
+  // that matters is the one that turns a matched session back into its
+  // prompts, and the one that finds a session's opening prompt.
+  (t) => [index('history_prompts_session_idx').on(t.sessionId, t.seq)]
+)
+
+/**
+ * One row per session in `history_prompts`, aggregated, plus what the disk
+ * currently says about resuming it.
+ *
+ * Derived rather than authoritative: everything except the transcript columns
+ * is recomputed from `history_prompts`, and the transcript columns are
+ * recomputed from `projects/*`. The table exists because the launcher's default
+ * view is 799 sessions ordered by recency, and doing that as a GROUP BY on
+ * every repaint is work with a known answer.
+ */
+export const historySessions = sqliteTable(
+  'history_sessions',
+  {
+    sessionId: text('session_id').primaryKey(),
+    project: text('project').notNull(),
+    /** Lowercased `project`. The same folder gets recorded under more than one
+     * casing, and grouping by the raw string splits it in two. */
+    projectKey: text('project_key').notNull(),
+    promptCount: integer('prompt_count').notNull(),
+    firstAt: integer('first_at').notNull(),
+    lastAt: integer('last_at').notNull(),
+    firstPrompt: text('first_prompt').notNull(),
+    /** Null once Claude Code has reaped it; the session is then history-only. */
+    transcriptFile: text('transcript_file'),
+    transcriptBytes: integer('transcript_bytes'),
+    projectExists: integer('project_exists', { mode: 'boolean' }).notNull().default(false)
+  },
+  (t) => [
+    index('history_sessions_last_idx').on(t.lastAt),
+    index('history_sessions_project_idx').on(t.projectKey, t.lastAt)
+  ]
+)
+
+/**
+ * How much of the history file has been consumed, so the next pass reads only
+ * what has appeared since. Keyed by path: pointing `CLAUDE_CONFIG_DIR` at a
+ * different tree is a different cursor, not a corrupt one.
+ */
+export const historyIndex = sqliteTable('history_index', {
+  file: text('file').primaryKey(),
+  bytes: integer('bytes').notNull(),
+  indexedAt: text('indexed_at').notNull().default(now)
+})
+
 /** Single-row-per-key JSON blobs. See `AppSettings` for the key space. */
 export const appSettings = sqliteTable('app_settings', {
   key: text('key').primaryKey(),

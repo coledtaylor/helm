@@ -11,6 +11,11 @@ export {
   formatDuration,
   type SessionEndedBarProps
 } from './components/SessionEndedBar'
+export {
+  SessionHistory,
+  type HistoryGrouping,
+  type SessionHistoryProps
+} from './components/SessionHistory'
 export { Sidebar, type SidebarProps } from './components/Sidebar'
 export { StatusBar, type StatusBarProps } from './components/StatusBar'
 export { TabBar, type Tab, type TabBarProps, type TabIndicator } from './components/TabBar'
@@ -18,3 +23,4 @@ export { ThemeToggle, type ThemeToggleProps } from './components/ThemeToggle'
 export { WelcomePane, type WelcomePaneProps } from './components/WelcomePane'
 export * from './components/icons'
 export { cn } from './lib/cn'
+export { formatAge, formatBytes, formatMoment } from './lib/time'

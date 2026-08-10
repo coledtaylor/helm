@@ -1,5 +1,11 @@
 import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron'
-import { suggestRoots } from '@helm/core'
+import {
+  readHistoryProjects,
+  readHistoryPrompts,
+  readHistorySessions,
+  suggestRoots
+} from '@helm/core'
+import type { HistoryService } from './history'
 import { readClaudeVersion } from './claude-cli'
 import { appMode, dataDir, dbFile } from './paths'
 import { activePty, windowsBuildNumber } from './pty'
@@ -61,6 +67,8 @@ export interface IpcContext {
   window: () => BrowserWindow | null
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
   sessions: SessionHost
+  /** Keeps the index over `~/.claude/history.jsonl` current; see `history.ts`. */
+  history: HistoryService
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
 }
@@ -188,6 +196,16 @@ export function registerIpc(ctx: IpcContext): void {
     },
 
     'profile:launch': (request) => ctx.sessions.launchProfile(request),
+
+    'history:summary': () => ctx.history.summary(),
+    'history:sessions': (query) => readHistorySessions(services.store, query ?? {}),
+    'history:prompts': ({ sessionId }) => readHistoryPrompts(services.store, sessionId),
+    'history:projects': () => readHistoryProjects(services.store),
+    'history:refresh': () => ctx.history.refresh(),
+    // Awaited by the renderer for the same reason `session:start` is: the
+    // reasons a resume cannot happen are sentences, and a tab is the wrong
+    // place to learn them.
+    'history:resume': (request) => ctx.sessions.resume(request),
 
     'clipboard:read': () => clipboard.readText(),
     'clipboard:write': (text) => {

@@ -1,11 +1,14 @@
 import { type BrowserWindow, dialog, Notification } from 'electron'
 import { basename } from 'node:path'
 import {
+  buildResumeArgs,
   finishSession,
   launchRequestFromProfile,
   prepareLaunch,
+  readHistorySession,
   readProfile,
   runningSessionNames,
+  sanitizeSessionName,
   startSession,
   uniqueSessionName,
   type LaunchPlan,
@@ -21,6 +24,8 @@ import type {
   CloseSessionResult,
   LaunchedProfile,
   LaunchProfileRequest,
+  ResumedSession,
+  ResumeSessionRequest,
   StartSessionRequest
 } from '../shared/ipc'
 
@@ -105,6 +110,8 @@ export interface SessionHost {
   start: (req: StartSessionRequest) => SessionRecord
   /** Synthesises the profile's overlays, then spawns against them. */
   launchProfile: (req: LaunchProfileRequest) => LaunchedProfile
+  /** Reopens a conversation from the history index in a new tab. */
+  resume: (req: ResumeSessionRequest) => ResumedSession
   close: (req: CloseSessionRequest) => Promise<CloseSessionResult>
   /** Sessions this process is hosting, running or exited-but-not-yet-closed. */
   list: () => SessionRecord[]
@@ -274,6 +281,57 @@ export function createSessionHost({
         composedInstructions: plan.memoryFile !== null,
         warnings: plan.warnings
       }
+    },
+
+    /**
+     * Reopening a conversation `history.jsonl` remembers.
+     *
+     * Both preconditions are checked here rather than trusted from the
+     * renderer. The launcher already refuses to offer a session it knows is
+     * reaped, but "knows" is an index that was current a moment ago, and the
+     * failure it is guarding against - `claude` printing "No conversation
+     * found" into a fresh tab and exiting - is exactly the broken terminal the
+     * milestone is about. A sentence the pane can show is better than a tab
+     * that dies in front of the user.
+     */
+    resume(req) {
+      const history = readHistorySession(services.store, req.sessionId)
+      if (!history) {
+        throw new Error('That session is not in the history index any more.')
+      }
+      if (!history.projectExists) {
+        throw new Error(
+          `${history.project} is no longer on disk. Claude Code resolves a session id against the working directory, so this conversation cannot be reopened from anywhere else.`
+        )
+      }
+      if (history.transcriptFile === null) {
+        throw new Error(
+          'Claude Code has removed this conversation’s transcript, so there is nothing left to resume. Its prompts are still in the history.'
+        )
+      }
+
+      // Helm's own label for the tab, not the session's name - `-n` is not
+      // passed, so nothing here reaches the CLI. The opening prompt is what
+      // makes a conversation recognisable in a strip of tabs.
+      const label = uniqueSessionName(
+        sanitizeSessionName(history.firstPrompt) || history.projectName,
+        runningSessionNames(services.store)
+      )
+
+      const session = spawn(
+        {
+          cwd: history.project,
+          name: label,
+          argv: buildResumeArgs(history.sessionId),
+          overlays: [],
+          memoryFile: null,
+          warnings: []
+        },
+        req,
+        { projectPath: history.project }
+      )
+
+      return { session, history }
     },
 
     async close(req) {

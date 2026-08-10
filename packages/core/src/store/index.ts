@@ -1,4 +1,14 @@
 export { openStore, type HelmDatabase, type OpenStoreOptions, type Store } from './db'
+export {
+  historyCursor,
+  historySummary,
+  indexHistory,
+  readHistoryProjects,
+  readHistoryPrompts,
+  readHistorySession,
+  readHistorySessions,
+  type HistoryIndexInput
+} from './history'
 export { knownMigrations, migrate, type MigrationOutcome } from './migrate'
 export { cacheProjects, readCachedProjects, type CachedProject } from './projects'
 export {

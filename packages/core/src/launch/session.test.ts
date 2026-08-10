@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildClaudeArgs, sanitizeSessionName, uniqueSessionName } from './session'
+import {
+  buildClaudeArgs,
+  buildResumeArgs,
+  sanitizeSessionName,
+  uniqueSessionName
+} from './session'
 
 describe('buildClaudeArgs', () => {
   it('names every session, so /resume shows something recognisable', () => {
@@ -47,6 +52,27 @@ describe('sanitizeSessionName', () => {
 
   it('keeps non-ASCII, which is a legitimate name and not a control character', () => {
     expect(sanitizeSessionName('會計 🚀')).toBe('會計 🚀')
+  })
+})
+
+describe('buildResumeArgs', () => {
+  it('is the flag and the id, and nothing else', () => {
+    expect(buildResumeArgs('7d2b0a1e-0000-4000-8000-000000000001')).toEqual([
+      '--resume',
+      '7d2b0a1e-0000-4000-8000-000000000001'
+    ])
+  })
+
+  it('does not pass -n, which would rename the session being resumed', () => {
+    // The name belongs to the conversation, not to the tab Helm opened it in.
+    expect(buildResumeArgs('abc')).not.toContain('-n')
+  })
+
+  it('puts the id immediately after the flag, whose value is optional', () => {
+    // `--resume` with no value opens the CLI's own picker. Anything between
+    // the two would be read as the id, and the id as a bare prompt.
+    const argv = buildResumeArgs('abc')
+    expect(argv.indexOf('abc')).toBe(argv.indexOf('--resume') + 1)
   })
 })
 

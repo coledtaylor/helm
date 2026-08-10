@@ -3,6 +3,12 @@ import type {
   CachedProject,
   DiscoveryResult,
   GitState,
+  HistoryPage,
+  HistoryProject,
+  HistoryPrompt,
+  HistoryQuery,
+  HistorySession,
+  HistorySummary,
   Profile,
   ProfileDraft,
   SessionRecord,
@@ -130,6 +136,26 @@ export interface ExportProfileResult {
   file: string | null
 }
 
+/**
+ * Reopening a conversation from the session index.
+ *
+ * Only an id and a grid: the working directory, the argv and whether it is
+ * even possible are all decided in the main process from the indexed row.
+ * Sending the cwd from the renderer would let a stale list resume a session
+ * into the wrong directory, where `--resume` silently finds nothing.
+ */
+export interface ResumeSessionRequest {
+  sessionId: string
+  cols: number
+  rows: number
+}
+
+export interface ResumedSession {
+  session: SessionRecord
+  /** The indexed row it came from, for the pane to caption before the TUI paints. */
+  history: HistorySession
+}
+
 export interface CloseSessionRequest {
   id: number
   /**
@@ -199,6 +225,23 @@ export interface IpcRequests {
    */
   'profile:launch': { request: LaunchProfileRequest; response: LaunchedProfile }
 
+  /**
+   * The session index over `~/.claude/history.jsonl` (M4). Read-only: Helm
+   * mirrors that file and never writes to it.
+   */
+  'history:summary': { request: void; response: HistorySummary }
+  'history:sessions': { request: HistoryQuery; response: HistoryPage }
+  'history:prompts': { request: { sessionId: string }; response: HistoryPrompt[] }
+  'history:projects': { request: void; response: HistoryProject[] }
+  /** Forces a pass now. The index also keeps itself current; this is the button. */
+  'history:refresh': { request: void; response: HistorySummary }
+  /**
+   * Spawns `claude --resume <id>` in the directory history recorded. Rejects
+   * with a readable sentence when the transcript or the directory has gone,
+   * rather than opening a tab that prints "No conversation found" and exits.
+   */
+  'history:resume': { request: ResumeSessionRequest; response: ResumedSession }
+
   /** The terminal pane's clipboard, routed through Electron rather than the
    * async DOM Clipboard API, which needs a permission prompt and a focused
    * document - neither of which a hosted TUI can rely on. */
@@ -256,6 +299,12 @@ export interface IpcEvents {
    * without each of them refetching. */
   'profiles:changed': Profile[]
   'theme:changed': { preference: ThemePreference; resolved: ResolvedTheme }
+  /**
+   * The session index moved. Pushed rather than polled: the file is shared
+   * with every `claude` on the machine, so the change that matters most is the
+   * one Helm did not cause.
+   */
+  'history:changed': HistorySummary
 
   'term:create': TermCreateOptions
   'term:write': string
@@ -332,6 +381,12 @@ export const REQUEST_CHANNELS = Object.keys({
   'profile:export': true,
   'profile:import': true,
   'profile:launch': true,
+  'history:summary': true,
+  'history:sessions': true,
+  'history:prompts': true,
+  'history:projects': true,
+  'history:refresh': true,
+  'history:resume': true,
   'clipboard:read': true,
   'clipboard:write': true
 } satisfies Record<RequestChannel, true>) as RequestChannel[]
@@ -355,6 +410,7 @@ export const EVENT_CHANNELS = Object.keys({
   'settings:changed': true,
   'profiles:changed': true,
   'theme:changed': true,
+  'history:changed': true,
   'term:create': true,
   'term:write': true,
   'term:resize': true,

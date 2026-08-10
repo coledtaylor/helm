@@ -70,6 +70,26 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   takes minutes. It runs in three phases - the driver, a second real app start
   (`--shim-sweep`), then `scripts/verify-shims.mjs` - because "stale shims are
   cleaned at startup" cannot be asserted by the process that already started.
+- `pnpm m4-check` covers the session index. It drives the history pane through
+  the real window and checks every count against its own independent read of
+  `~/.claude/history.jsonl` - a parser agreeing with itself proves nothing. It
+  spawns two real `claude` sessions (one resumed through the app, one on its own
+  pty to prove the watcher notices a session Helm did not start), so it takes
+  minutes; `--only=list,search,resume,reaped,outside` narrows a re-run.
+- `~/.claude` is Claude Code's, and Helm only ever reads it. Two facts about it
+  are load-bearing and were measured on 2.1.225, not assumed:
+  - `--resume <id>` resolves the id **against the working directory**. From
+    anywhere else it prints "No conversation found with session ID" and exits 1.
+    So a resume must set cwd to the directory `history.jsonl` recorded, and a
+    project that has been deleted makes a session unresumable even though its
+    transcript is still there.
+  - A transcript is found by **scanning `projects/*` for `<uuid>.jsonl`**, never
+    by deriving a path from the recorded project. The directory name carries
+    whatever casing the CLI was started with, `history.jsonl` records its own,
+    and the two disagree on this machine - a derived path reports live
+    conversations as reaped.
+  Resuming passes no `-n`: the session already has a name, and renaming it
+  would be a side effect of Helm having opened it. The tab's label is Helm's own.
 - Every renderer↔main channel is declared in
   `packages/desktop/src/shared/ipc.ts` and nowhere else. The preload exposes
   three generic functions; a feature adds a channel to the contract, not a

@@ -23,8 +23,11 @@ overlay - root cwd, project skills composed in.
 - **Profile** - a saved launch composition: root cwd + overlay projects +
   `--add-dir` access + model/effort/permission-mode + MCP set + opening prompt.
   One click to launch. Exportable as YAML.
-- **Launcher** - all projects and all historical sessions across every directory
-  (the CLI's `/resume` only sees the cwd), resume into tabs.
+- **Launcher** - all projects, plus every session ever recorded in
+  `~/.claude/history.jsonl` across every directory (the CLI's `/resume` only sees
+  the cwd), searchable by prompt text and resumable into tabs. Claude Code reaps
+  transcripts and keeps prompts, so the ones that can no longer be reopened say
+  so rather than offering a resume that fails.
 - **Config console** - browse/edit any scope's `.claude/` tree with an *effective
   view* showing what a session would actually see, every write snapshotted with undo.
 - **Content viewer** - rendered markdown (Obsidian flavor, `[[wikilinks]]`) and
@@ -49,16 +52,22 @@ what keeps the app portable and a future mobile client possible.
 
 ## Status
 
-All three de-risking spikes are **GO**. **M1 (foundation) has landed**: the
-monorepo, SQLite store, project discovery, and the window shell. M2 (embedded
-terminal in tabs) is next. See [docs/SPEC.md](docs/SPEC.md) for the full v1 spec
-and [docs/TASKS.md](docs/TASKS.md) for the work plan.
+All three de-risking spikes are **GO**, and M1-M4 have landed. M5 (config
+console) is next. See [docs/SPEC.md](docs/SPEC.md) for the full v1 spec and
+[docs/TASKS.md](docs/TASKS.md) for the work plan.
 
 | Spike | Question | Verdict |
 |---|---|---|
 | A | Does `--plugin-dir` load a *synthesised* overlay? | GO |
 | B | Do `node-pty` and `better-sqlite3` survive portable packaging? | GO - [docs/SPIKE-B.md](docs/SPIKE-B.md) |
 | C | Is the real `claude` TUI fully usable inside xterm.js? | GO, embedded-first - [docs/SPIKE-C.md](docs/SPIKE-C.md) |
+
+| Milestone | Landed |
+|---|---|
+| M1 Foundation | monorepo, SQLite store, project discovery, window shell |
+| M2 Embedded terminal | real `claude` TUI in tabs, session lifecycle recorded, clean teardown |
+| M3 Profiles | overlay composition through `--plugin-dir`, YAML round-trip - **the product premise, proven** |
+| M4 Session launcher | 799 sessions / 36 projects indexed from `history.jsonl`, ~3 ms search, resume into a tab |
 
 ## Development
 
@@ -83,8 +92,20 @@ pnpm claude-check      # real-TUI checks              (D0-D7)
 pnpm selftest          # Spike B packaging regression
 ```
 
-The check drivers accept `--only=C5,C6` to re-run individual checks. They write
-a JSON report and screenshots to the app data directory.
+Each milestone has its own driver, which exercises the app through the real
+window - clicking sidebar rows, typing into search boxes, spawning real `claude`
+sessions - rather than calling the main process directly:
+
+```bash
+pnpm m2-check          # sessions, tabs, teardown
+pnpm m3-check          # overlay composition, asked of a live session
+pnpm m4-check          # the session index, checked against ~/.claude itself
+```
+
+All the drivers accept `--only=` to re-run part of a run (`--only=C5,C6`,
+`--only=list,search`). They write a JSON report and screenshots to the app data
+directory, and the report - not the exit status - is the verdict: node-pty's
+teardown can lose the exit code after the checks have already passed.
 
 Schema changes go through Drizzle:
 

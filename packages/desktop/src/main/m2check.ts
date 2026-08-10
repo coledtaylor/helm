@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { readSessions, type Project, type SessionRecord } from '@helm/core'
 import { screenshot, sleep, squash, stripAnsi, waitFor } from './bridge'
 import type { Check } from './fidelity'
+import type { HistoryService } from './history'
 import type { Confirm, ConfirmRequest, SessionHost, SessionObserver } from './sessions'
 import type { Services } from './services'
 
@@ -21,6 +22,8 @@ export interface M2Context {
   win: BrowserWindow
   services: Services
   sessions: SessionHost
+  /** M4's driver reads and forces passes through this; M2's ignores it. */
+  history: HistoryService
 }
 
 // ---------------------------------------------------------------------------

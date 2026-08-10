@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import type { DiscoveryResult, Harness, Project } from '@helm/core'
 import { cn } from '../lib/cn'
 import { ProjectRow } from './ProjectRow'
-import { PlusIcon, RefreshIcon } from './icons'
+import { HistoryIcon, PlusIcon, RefreshIcon } from './icons'
 
 export interface SidebarProps {
   /**
@@ -13,6 +13,13 @@ export interface SidebarProps {
    * knowing only about discovery.
    */
   profiles?: ReactNode | undefined
+  /** Opens the session-history pane. */
+  onOpenHistory?: (() => void) | undefined
+  /** Sessions the index holds, and how many of them can still be reopened. */
+  historyCount?: number | undefined
+  historyResumable?: number | undefined
+  /** True while the history pane is the tab on screen. */
+  historyActive?: boolean | undefined
   discovery: DiscoveryResult | null
   scanning: boolean
   scanError?: string | undefined
@@ -73,6 +80,10 @@ function matches(project: Project, query: string): boolean {
 
 export function Sidebar({
   profiles,
+  onOpenHistory,
+  historyCount,
+  historyResumable,
+  historyActive = false,
   discovery,
   scanning,
   scanError,
@@ -103,6 +114,39 @@ export function Sidebar({
 
   return (
     <aside className="flex h-full w-[320px] shrink-0 flex-col border-r border-border bg-surface">
+      {/* Above the profiles, because it is the one row that is about the whole
+          machine rather than about anything configured in Helm - and because
+          "where did I do that thing last week" is how a session starts at
+          least as often as picking a project does. */}
+      {onOpenHistory && (
+        <div className="shrink-0 border-b border-border p-2">
+          <button
+            type="button"
+            data-open-history
+            onClick={onOpenHistory}
+            aria-current={historyActive}
+            title="Every Claude Code session on this machine"
+            className={cn(
+              'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+              historyActive ? 'bg-accent-soft' : 'hover:bg-hover'
+            )}
+          >
+            <HistoryIcon
+              width={13}
+              height={13}
+              className={cn('shrink-0', historyActive ? 'text-accent' : 'text-fg-subtle')}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[12px] text-fg">Session history</span>
+              <span className="block truncate text-[10px] text-fg-subtle">
+                {historyCount === undefined
+                  ? 'Reading…'
+                  : `${historyCount.toLocaleString()} sessions · ${String(historyResumable ?? 0)} resumable`}
+              </span>
+            </span>
+          </button>
+        </div>
+      )}
       {profiles}
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <span className="text-[13px] font-semibold tracking-tight text-fg">Projects</span>

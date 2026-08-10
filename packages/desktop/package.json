@@ -22,6 +22,8 @@
     "m2-check": "electron-vite build && electron . --m2-check && node scripts/verify-orphans.mjs",
     "//m3-check": "M3's acceptance criteria. Builds a profile through the real form, launches it, and asks the live session whether the composition worked. Three phases, orchestrated by run-m3.mjs rather than by && because node-pty's teardown loses the exit code; the report is the verdict. Pass --only=compose|fixture|shims through to re-run one group.",
     "m3-check": "electron-vite build && node scripts/run-m3.mjs",
+    "//m4-check": "M4's acceptance criteria. Drives the session-history pane through the real window and checks every count against an independent read of ~/.claude/history.jsonl. Spawns two real claude sessions - one resumed through the app, one on its own pty to prove the index notices a session Helm did not start - so it takes minutes. Verdict is in m4-report.json; run-m4.mjs exists for the same reason run-m3.mjs does.",
+    "m4-check": "electron-vite build && node scripts/run-m4.mjs",
     "claude": "electron-vite build && electron . --claude --cwd=.",
     "dist:win": "electron-vite build && electron-builder --win"
   },

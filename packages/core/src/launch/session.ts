@@ -31,6 +31,29 @@ export function buildClaudeArgs(spec: SessionSpec): string[] {
 }
 
 /**
+ * Argv for reopening a conversation that already exists.
+ *
+ * Three things are deliberately absent.
+ *
+ * `-n` - resuming does not create a session, it continues one that already has
+ * a name of its own. Passing one would rename the user's session as a side
+ * effect of Helm having opened it. The tab's label comes from Helm's own row
+ * instead.
+ *
+ * The working directory - it is not a flag. `--resume <id>` is resolved
+ * against the cwd, and a session resumed from anywhere else reports "No
+ * conversation found with session ID" and exits 1 (measured on 2.1.225). The
+ * caller sets cwd to the directory history recorded, or does not launch.
+ *
+ * Everything else - a model, an effort level, an overlay set. The conversation
+ * was had under whatever it was had under; a resume that quietly changed the
+ * model would be a different session wearing the same id.
+ */
+export function buildResumeArgs(sessionId: string): string[] {
+  return ['--resume', sessionId]
+}
+
+/**
  * The CLI takes the name as one argv entry, so quoting is not a concern - but a
  * control or format character would corrupt the TUI that renders the name in a
  * picker later, and an empty name would silently make the next argv element the
