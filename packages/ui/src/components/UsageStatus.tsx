@@ -92,7 +92,11 @@ function limitLabel(limit: UsageLimit): string {
  */
 function Meter({ percent, severity }: Pick<UsageBucket, 'percent' | 'severity'>): JSX.Element {
   return (
-    <span aria-hidden className="h-[3px] w-6 shrink-0 overflow-hidden rounded-full bg-border">
+    // `border-strong` rather than `border`: at three pixels tall on the status
+    // bar's own surface the ordinary border colour disappears in dark mode, and
+    // an invisible track turns the meter into a dash of varying length - which
+    // conveys "some" but not "some out of what".
+    <span aria-hidden className="h-[3px] w-6 shrink-0 overflow-hidden rounded-full bg-border-strong">
       <span
         className={cn('block h-full rounded-full', SEVERITY_FILL[severity])}
         // A limit can pass 100% when extra usage is enabled; the bar stops at
@@ -158,7 +162,18 @@ export function UsageStatus({ snapshot, mode, onModeChange }: UsageStatusProps):
       )}
     >
       {showing.length === 0 ? (
-        <span className={cn(mode === 'off' && 'text-fg-subtle')}>Usage</span>
+        // Dotted underline only when there is a reason to read: it is the
+        // conventional "there is an explanation behind this" affordance, and
+        // hiding usage on purpose is not something that needs explaining.
+        <span
+          className={cn(
+            mode === 'percent' &&
+              view.problem !== null &&
+              'underline decoration-border-strong decoration-dotted underline-offset-[3px]'
+          )}
+        >
+          Usage
+        </span>
       ) : (
         showing.map((bucket, at) => (
           <span key={bucket.group} className="flex items-center gap-2.5">

@@ -1,6 +1,6 @@
 import { type BrowserWindow } from 'electron'
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { claudeConfigFileIn, claudeHome, projectsDirIn, readSettings } from '@helm/core'
 import { screenshot, sleep, stripAnsi, waitFor } from './bridge'
 import type { Check } from './fidelity'
@@ -664,6 +664,9 @@ export async function runUsageChecks(
       const silentHere = !showsAnyNumber(text)
       const explains = title.includes(testCase.expectInTitle)
       if (!silentHere || !explains) allSilent = false
+      if (testCase.name === 'stale reading') {
+        await screenshot(win, shotDir, 'usage-5-degraded.png')
+      }
       results.push({
         case: testCase.name,
         why: testCase.why,
@@ -947,9 +950,11 @@ export async function runUsageChecks(
     usage.pointAt(null)
     await ensurePercentMode(win)
 
-    // The repo itself: a directory the CLI has already been trusted in, so the
-    // session reaches its prompt instead of sitting on a gate.
-    const cwd = process.cwd()
+    // The repo root: a directory the CLI has already been trusted in, so the
+    // session reaches its prompt instead of sitting on a gate. Electron is
+    // started from `packages/desktop`, hence the two levels up. The gates are
+    // answered anyway - this only makes it quicker.
+    const cwd = resolve(process.cwd(), '..', '..')
     const record = ctx.sessions.start({
       cwd,
       name: 'usage check',
