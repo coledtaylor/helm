@@ -129,6 +129,18 @@ export function snapshotKey(scopePath: string, path: string): string {
 }
 
 /**
+ * What a caller is allowed to write, decided by the surface that is asking.
+ *
+ * The config console may write configuration; the content viewer may write
+ * notes and docs. Neither may write the other's files, and neither may write
+ * anything outside the scope it named. Passing the rule in rather than
+ * branching on a flag is what keeps the three guarantees below - the snapshot,
+ * the conflict check, the refusal to touch a binary - identical for both, which
+ * is the entire reason M6 does not have a write path of its own.
+ */
+export type WriteGuard = (scopePath: string, path: string) => void
+
+/**
  * Takes the snapshot, then replaces the file.
  *
  * Returns rather than throws for the two outcomes a user causes - a conflicting
@@ -136,8 +148,12 @@ export function snapshotKey(scopePath: string, path: string): string {
  * the editor has to *show*, and an exception carrying structured state back
  * across an IPC boundary arrives as a string.
  */
-export function writeConfigFile(store: Store, req: WriteConfigRequest): WriteConfigResult {
-  assertWritable(req.scopePath, req.path)
+export function writeSnapshottedFile(
+  store: Store,
+  req: WriteConfigRequest,
+  guard: WriteGuard
+): WriteConfigResult {
+  guard(req.scopePath, req.path)
   const absolute = resolve(req.path)
   const current = readConfigFileContent(absolute)
 
@@ -197,6 +213,11 @@ export function writeConfigFile(store: Store, req: WriteConfigRequest): WriteCon
   }
 }
 
+/** The config console's write: configuration files, and nothing else. */
+export function writeConfigFile(store: Store, req: WriteConfigRequest): WriteConfigResult {
+  return writeSnapshottedFile(store, req, assertWritable)
+}
+
 /**
  * Puts a snapshot's bytes back, taking a snapshot of what is there first.
  *
@@ -210,10 +231,11 @@ export function writeConfigFile(store: Store, req: WriteConfigRequest): WriteCon
  * that is empty is a parse error, where a `settings.json` that is absent is a
  * layer the CLI skips.
  */
-export function restoreConfigSnapshot(
+export function restoreSnapshot(
   store: Store,
   id: number,
-  filePath: string
+  filePath: string,
+  guard: WriteGuard
 ): WriteConfigResult {
   const snapshot = readConfigSnapshot(store, id)
   if (!snapshot) {
@@ -226,7 +248,7 @@ export function restoreConfigSnapshot(
     }
   }
 
-  assertWritable(snapshot.scopePath, filePath)
+  guard(snapshot.scopePath, filePath)
   const absolute = resolve(filePath)
   const current = readConfigFileContent(absolute)
 
@@ -253,11 +275,23 @@ export function restoreConfigSnapshot(
   // Restoring goes through the normal write, which means it gets the same
   // snapshot and the same guard rails. `expectedHash` is the file as it is
   // right now, because the user is deliberately discarding it.
-  return writeConfigFile(store, {
-    scopePath: snapshot.scopePath,
-    path: absolute,
-    content: snapshot.content,
-    expectedHash: current.exists ? current.hash : null,
-    reason: 'restore'
-  })
+  return writeSnapshottedFile(
+    store,
+    {
+      scopePath: snapshot.scopePath,
+      path: absolute,
+      content: snapshot.content,
+      expectedHash: current.exists ? current.hash : null,
+      reason: 'restore'
+    },
+    guard
+  )
+}
+
+export function restoreConfigSnapshot(
+  store: Store,
+  id: number,
+  filePath: string
+): WriteConfigResult {
+  return restoreSnapshot(store, id, filePath, assertWritable)
 }

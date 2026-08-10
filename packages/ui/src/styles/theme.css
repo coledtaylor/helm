@@ -1,5 +1,10 @@
 @import 'tailwindcss';
 
+/* Rendered markdown (M6). Separated because it styles HTML that arrives as a
+ * string from the main process, so none of it can be expressed as a utility on
+ * a call site - there is no call site. */
+@import './markdown.css';
+
 /*
  * Tailwind v4 detects source files by walking up from the Vite root, which here
  * is `packages/desktop/src/renderer`. That never reaches `packages/ui`, so

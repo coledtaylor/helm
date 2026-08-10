@@ -663,6 +663,195 @@ export interface McpResult {
   snapshotId: number | null
 }
 
+// ---------------------------------------------------------------------------
+// Content viewer (M6)
+// ---------------------------------------------------------------------------
+
+/**
+ * A directory of things worth reading, inside a scope.
+ *
+ * The four the spec names - `notes/`, `context/`, `.claude/skills/`, `docs/` -
+ * are always offered when they exist, in that order, because they are the ones
+ * a person goes looking for by name. Everything else is *found*: a top-level
+ * directory holding markdown or HTML is content whatever it is called, which is
+ * how `lessons/` and `reference/` - full of artifacts Claude produced - end up
+ * reachable without this file knowing they exist.
+ */
+export type ContentRootKind = 'notes' | 'context' | 'skills' | 'docs' | 'root' | 'found'
+
+export interface ContentRoot {
+  kind: ContentRootKind
+  /** Relative to the scope, forward-slashed. `''` is the scope directory itself. */
+  relPath: string
+  path: string
+  label: string
+  files: number
+}
+
+/**
+ * What Helm will do with a file.
+ *
+ * `markdown` is rendered, `html` goes to the sandboxed frame, `data` and `text`
+ * are shown as source. The distinction is by extension rather than by content
+ * because it decides which *surface* opens, and a surface that changed after
+ * the read would flash the wrong one first.
+ */
+export type ContentFileKind = 'markdown' | 'html' | 'data' | 'text'
+
+export interface ContentFile {
+  path: string
+  /** Relative to the scope, forward-slashed. */
+  relPath: string
+  /** The `relPath` of the root it was found under. */
+  root: string
+  rootKind: ContentRootKind
+  kind: ContentFileKind
+  /** Basename without extension: what `[[a wikilink]]` names. */
+  slug: string
+  /** Frontmatter `title`, else the first heading, else the slug. */
+  title: string
+  size: number
+  mtimeMs: number
+  /** Frontmatter `type`, `date` and `tags` - the vault's own convention. */
+  noteType: string | null
+  date: string | null
+  tags: string[]
+}
+
+export interface ContentScope {
+  kind: ConfigScopeKind
+  path: string
+  label: string
+}
+
+export interface ContentTree {
+  scope: ContentScope
+  roots: ContentRoot[]
+  files: ContentFile[]
+  /** Directories that could not be read. Not fatal; the rest of the tree stands. */
+  errors: string[]
+  scannedAt: string
+  /** How long the walk took, for the pane's own honesty about a cold scope. */
+  tookMs: number
+}
+
+/** One `key: value` from the frontmatter, as the header chip row shows it. */
+export interface ContentChip {
+  key: string
+  value: string
+  /** A list-valued key (`tags`) renders as several chips rather than one. */
+  values: string[]
+}
+
+export interface ContentHeading {
+  depth: number
+  text: string
+  slug: string
+}
+
+/**
+ * One `[[wikilink]]`, and whether the vault has anything to point it at.
+ *
+ * A broken link is not an error here. The vault's own convention is that a link
+ * to a note nobody has written yet is a note worth writing, so the renderer
+ * marks it and moves on - which is why `resolved` is nullable rather than the
+ * link being dropped.
+ */
+export interface ContentWikilink {
+  /** Exactly what was between the brackets, before `|` and `#` were split off. */
+  target: string
+  label: string
+  heading: string | null
+  /** Absolute path, or null when nothing in the scope matches. */
+  resolved: string | null
+}
+
+/** What the source turned out to contain. Counted while rendering, so a check
+ * can compare them against its own read of the same file. */
+export interface ContentCounts {
+  tables: number
+  taskItems: number
+  taskItemsChecked: number
+  codeBlocks: number
+  /** Code blocks that got a real grammar rather than plain text. */
+  highlightedBlocks: number
+  callouts: number
+  wikilinks: number
+  brokenWikilinks: number
+  tags: number
+  headings: number
+}
+
+export interface RenderedMarkdown {
+  /** Sanitised HTML. The renderer injects it; it never evaluates it. */
+  html: string
+  frontmatter: {
+    /** Present at all - a file with no `---` block has none. */
+    present: boolean
+    fields: ContentChip[]
+    raw: string
+    /** Set when the block is there and is not parseable YAML. */
+    error: string | null
+    /** Line the closing fence sits on, 1-based, for the source view. */
+    endLine: number
+  }
+  headings: ContentHeading[]
+  links: ContentWikilink[]
+  tags: string[]
+  words: number
+  counts: ContentCounts
+  /** Languages a code fence asked for that no grammar was loaded for. */
+  unknownLanguages: string[]
+  tookMs: number
+}
+
+/** A file, its bytes, and - for markdown - what they render to. */
+export interface ContentDocument {
+  file: ContentFile
+  content: ConfigFileContent
+  rendered: RenderedMarkdown | null
+  /** Set when the file could not be rendered at all; the source still shows. */
+  error: string | null
+}
+
+export interface ContentSearchLine {
+  line: number
+  /** The line, trimmed, with the match still inside it. */
+  text: string
+  /** Offsets of the match within `text`. */
+  from: number
+  to: number
+}
+
+export interface ContentSearchHit {
+  path: string
+  relPath: string
+  root: string
+  title: string
+  matches: number
+  /**
+   * The file's own name or title matched, whether or not its text did. Kept
+   * separate from `matches` so a search for `journal-2026-08` finds the note
+   * whose *filename* says so and the result can say that is why.
+   */
+  nameMatch: boolean
+  /** The first few matching lines. Bounded, so one file cannot fill the pane. */
+  lines: ContentSearchLine[]
+}
+
+export interface ContentSearchResult {
+  query: string
+  hits: ContentSearchHit[]
+  filesSearched: number
+  bytesSearched: number
+  totalMatches: number
+  /** Measured around the search itself, not around the read. */
+  tookMs: number
+  /** True when the corpus had to be read from disk rather than served warm. */
+  cold: boolean
+  truncated: boolean
+}
+
 // --- Health ----------------------------------------------------------------
 
 export interface DoctorReport {

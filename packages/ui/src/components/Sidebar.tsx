@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import type { DiscoveryResult, Harness, Project } from '@helm/core'
 import { cn } from '../lib/cn'
 import { ProjectRow } from './ProjectRow'
-import { HistoryIcon, PlusIcon, RefreshIcon, SlidersIcon } from './icons'
+import { BookIcon, HistoryIcon, PlusIcon, RefreshIcon, SlidersIcon } from './icons'
 
 export interface SidebarProps {
   /**
@@ -25,6 +25,12 @@ export interface SidebarProps {
   configActive?: boolean | undefined
   /** How many `.claude` trees the console can reach. */
   configScopes?: number | undefined
+  /** Opens the content viewer. */
+  onOpenContent?: (() => void) | undefined
+  contentActive?: boolean | undefined
+  /** Files the viewer can reach in the scope it is pointed at. */
+  contentFiles?: number | undefined
+  contentScopeLabel?: string | undefined
   discovery: DiscoveryResult | null
   scanning: boolean
   scanError?: string | undefined
@@ -92,6 +98,10 @@ export function Sidebar({
   onOpenConfig,
   configActive = false,
   configScopes,
+  onOpenContent,
+  contentActive = false,
+  contentFiles,
+  contentScopeLabel,
   discovery,
   scanning,
   scanError,
@@ -126,7 +136,7 @@ export function Sidebar({
           machine rather than about anything configured in Helm - and because
           "where did I do that thing last week" is how a session starts at
           least as often as picking a project does. */}
-      {(onOpenHistory || onOpenConfig) && (
+      {(onOpenHistory || onOpenConfig || onOpenContent) && (
         <div className="shrink-0 space-y-0.5 border-b border-border p-2">
           {onOpenHistory && (
             <button
@@ -178,6 +188,33 @@ export function Sidebar({
                   {configScopes === undefined || configScopes === 0
                     ? 'Skills, settings, MCP'
                     : `${configScopes} scopes · what a session would see`}
+                </span>
+              </span>
+            </button>
+          )}
+          {onOpenContent && (
+            <button
+              type="button"
+              data-open-content
+              onClick={onOpenContent}
+              aria-current={contentActive}
+              title="Read the notes, docs and artifacts in a project or harness"
+              className={cn(
+                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                contentActive ? 'bg-accent-soft' : 'hover:bg-hover'
+              )}
+            >
+              <BookIcon
+                width={13}
+                height={13}
+                className={cn('shrink-0', contentActive ? 'text-accent' : 'text-fg-subtle')}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12px] text-fg">Content</span>
+                <span className="block truncate text-[10px] text-fg-subtle">
+                  {contentFiles === undefined || contentFiles === 0
+                    ? 'Notes, docs, skills, artifacts'
+                    : `${contentFiles} files · ${contentScopeLabel ?? 'this scope'}`}
                 </span>
               </span>
             </button>

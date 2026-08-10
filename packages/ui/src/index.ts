@@ -8,6 +8,17 @@ export {
 } from './components/ConfigConsole'
 export { ConfigEditor, type ConfigEditorProps } from './components/ConfigEditor'
 export {
+  ContentViewer,
+  ContentNothingSelected,
+  type ContentViewerProps
+} from './components/ContentViewer'
+export {
+  ContentDocumentPane,
+  type ArtifactConsoleEntry,
+  type ContentDocumentPaneProps,
+  type ContentMode
+} from './components/ContentDocumentPane'
+export {
   EffectiveViewPane,
   type EffectiveViewPaneProps
 } from './components/EffectiveViewPane'

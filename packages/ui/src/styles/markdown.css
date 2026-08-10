@@ -1,0 +1,481 @@
+/*
+ * Rendered markdown.
+ *
+ * Plain CSS rather than Tailwind utilities, for one reason: the HTML is
+ * generated in the main process and arrives as a string, so there is no call
+ * site to put a class on. A `prose` plugin would work too and would bring a
+ * type scale, a colour set and a set of opinions that are not this app's -
+ * every value below is one of Helm's own tokens.
+ *
+ * The measure is the decision everything else follows from. Body text is capped
+ * at 74 characters; wide things - tables, code, callouts - are allowed past it,
+ * because a table clipped to the measure is a table nobody can read. The result
+ * is a column of prose with occasional full-width evidence in it, which is what
+ * these notes actually are.
+ */
+
+.markdown {
+  --md-measure: 74ch;
+  --md-rhythm: 1rem;
+
+  font-size: 13.5px;
+  line-height: 1.72;
+  color: var(--helm-fg);
+  overflow-wrap: break-word;
+}
+
+.markdown > * {
+  max-width: var(--md-measure);
+}
+
+/* The one thing that earns the full width.
+ *
+ * A seven-column table of measurements is evidence and wants the room. A
+ * callout and a code block are prose and do not: at full width they end four
+ * hundred pixels to the right of every paragraph around them, which reads as a
+ * layout bug rather than as emphasis. Code scrolls inside the measure instead. */
+.markdown > .md-table-scroll {
+  max-width: none;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+/* --------------------------------------------------------------------------
+ * Headings
+ *
+ * The scale is 1.5x / 1.25x / 1.08x off the body size and then flat, because a
+ * note that is five levels deep is using depth for structure rather than for
+ * emphasis - and five distinct sizes in a 13.5px column is noise. Levels 4 to 6
+ * separate themselves by weight and colour instead.
+ *
+ * Space above is roughly twice the space below, so a heading belongs to the
+ * text under it rather than floating between two blocks.
+ * ------------------------------------------------------------------------ */
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 1.9em 0 0.55em;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.011em;
+  color: var(--helm-fg);
+  scroll-margin-top: 1.5rem;
+}
+
+.markdown h1 {
+  font-size: 1.5em;
+  margin-top: 0;
+  letter-spacing: -0.02em;
+}
+
+.markdown h2 {
+  font-size: 1.25em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--helm-border);
+}
+
+.markdown h3 {
+  font-size: 1.08em;
+}
+
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: 1em;
+  color: var(--helm-fg-muted);
+}
+
+.markdown h5,
+.markdown h6 {
+  font-size: 0.92em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--helm-fg-subtle);
+}
+
+/* --------------------------------------------------------------------------
+ * Blocks
+ * ------------------------------------------------------------------------ */
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown blockquote,
+.markdown table,
+.markdown pre,
+.markdown .callout,
+.markdown details {
+  margin: 0 0 var(--md-rhythm);
+}
+
+/* Tailwind's preflight resets `list-style` to none on every `ul` and `ol`,
+ * which is right for an app chrome built out of lists and wrong for a
+ * document. Put back explicitly, because a rendered note without its bullets
+ * reads as a run-on paragraph with strange line breaks in it. */
+.markdown ul {
+  padding-left: 1.35em;
+  list-style: disc;
+}
+
+.markdown ol {
+  padding-left: 1.5em;
+  list-style: decimal;
+}
+
+.markdown ul ul {
+  list-style: circle;
+}
+
+.markdown ul ul ul {
+  list-style: square;
+}
+
+.markdown li {
+  margin: 0.22em 0;
+}
+
+.markdown li > ul,
+.markdown li > ol {
+  margin: 0.22em 0;
+}
+
+.markdown li::marker {
+  color: var(--helm-fg-subtle);
+}
+
+.markdown hr {
+  height: 1px;
+  margin: 2em 0;
+  border: 0;
+  background: var(--helm-border);
+}
+
+.markdown blockquote {
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 2px solid var(--helm-border-strong);
+  color: var(--helm-fg-muted);
+}
+
+.markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown a {
+  color: var(--helm-accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--helm-accent) 35%, transparent);
+}
+
+.markdown a:hover {
+  border-bottom-color: var(--helm-accent);
+}
+
+.markdown strong {
+  font-weight: 600;
+  color: var(--helm-fg);
+}
+
+.markdown img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+
+.markdown kbd {
+  padding: 0.1em 0.4em;
+  border: 1px solid var(--helm-border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--helm-surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+/* --------------------------------------------------------------------------
+ * Task lists
+ *
+ * GFM renders these as disabled inputs. Left as native checkboxes rather than
+ * redrawn, so a reader sees the control their operating system draws.
+ *
+ * The checkbox hangs out of the text block on a negative margin rather than
+ * being laid out with flex. Flex was the first attempt and it is wrong for a
+ * reason worth remembering: every *child* of a flex container becomes a flex
+ * item, and a task item's children are the input and then whatever inline
+ * markup the line contains - so an item with an `*emphasis*` and a `**bold**`
+ * in it came out as four columns instead of one sentence.
+ * ------------------------------------------------------------------------ */
+.markdown .contains-task-list {
+  padding-left: 1.55em;
+  list-style: none !important;
+}
+
+.markdown .task-list-item input[type='checkbox'] {
+  width: 12px;
+  height: 12px;
+  margin: 0 0.45em 0 -1.55em;
+  translate: 0 1px;
+  accent-color: var(--helm-accent);
+}
+
+/* --------------------------------------------------------------------------
+ * Tables
+ *
+ * A single hairline grid rather than zebra striping: these tables are usually
+ * three columns of measurements, and stripes across four rows read as decoration.
+ * Wrapped in a scroller by the renderer so a wide one scrolls itself instead of
+ * pushing the whole document sideways.
+ * ------------------------------------------------------------------------ */
+.markdown .md-table-scroll {
+  margin: 0 0 var(--md-rhythm);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.markdown table {
+  margin: 0;
+  border-collapse: collapse;
+  font-size: 0.94em;
+  line-height: 1.5;
+}
+
+.markdown th,
+.markdown td {
+  padding: 0.42em 0.85em;
+  border: 1px solid var(--helm-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown th {
+  background: var(--helm-surface-sunken);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.markdown tbody tr:hover td {
+  background: color-mix(in srgb, var(--helm-hover) 55%, transparent);
+}
+
+/* --------------------------------------------------------------------------
+ * Code
+ *
+ * Shiki emits both themes at once as `--shiki-light` / `--shiki-dark` custom
+ * properties, and the rules below pick a side. That is what lets the theme
+ * toggle recolour every open document instantly instead of re-highlighting it.
+ *
+ * The block's own background is overridden to Helm's sunken surface: shiki's
+ * themes bring their own, and two greys a shade apart inside one pane look like
+ * a rendering mistake rather than a choice.
+ * ------------------------------------------------------------------------ */
+.markdown :not(pre) > code {
+  padding: 0.14em 0.36em;
+  border: 1px solid var(--helm-border);
+  border-radius: 4px;
+  background: var(--helm-surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  color: var(--helm-fg);
+  white-space: break-spaces;
+}
+
+.markdown pre {
+  position: relative;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--helm-border);
+  border-radius: 8px;
+  background: var(--helm-surface-sunken) !important;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.markdown pre code {
+  display: block;
+  min-width: max-content;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+}
+
+.markdown pre .line {
+  display: block;
+  min-height: 1lh;
+}
+
+/* The language, set into the block's top-right corner. Small, subtle, and
+ * absent for a fence that declared nothing - a grey `text` label on every
+ * unlabelled block would be four words of noise per note. */
+.markdown pre[data-language]:not([data-language='text'])::after {
+  content: attr(data-language);
+  position: absolute;
+  top: 0.35rem;
+  right: 0.6rem;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--helm-fg-subtle);
+  pointer-events: none;
+}
+
+.markdown .shiki,
+.markdown .shiki span {
+  color: var(--shiki-light);
+  font-style: var(--shiki-light-font-style);
+  font-weight: var(--shiki-light-font-weight);
+  text-decoration: var(--shiki-light-text-decoration);
+}
+
+.dark .markdown .shiki,
+.dark .markdown .shiki span {
+  color: var(--shiki-dark);
+  font-style: var(--shiki-dark-font-style);
+  font-weight: var(--shiki-dark-font-weight);
+  text-decoration: var(--shiki-dark-text-decoration);
+}
+
+/* --------------------------------------------------------------------------
+ * Wikilinks
+ *
+ * A resolved link looks like a link. A broken one is dashed and warm-toned -
+ * distinctly *not* an error red, because in this vault an unresolved link is
+ * not a mistake: it marks a note worth writing. Both are underlined the same
+ * amount, so the difference reads as a state rather than as damage.
+ * ------------------------------------------------------------------------ */
+.markdown a.wikilink {
+  border-bottom: 1px solid color-mix(in srgb, var(--helm-accent) 40%, transparent);
+  cursor: pointer;
+}
+
+.markdown a.wikilink::before {
+  content: '';
+  display: inline-block;
+  width: 0.42em;
+  height: 0.42em;
+  margin-right: 0.34em;
+  translate: 0 -0.12em;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.markdown a.wikilink-broken {
+  color: var(--helm-warn);
+  border-bottom-style: dashed;
+  border-bottom-color: color-mix(in srgb, var(--helm-warn) 55%, transparent);
+}
+
+.markdown a.wikilink-broken::before {
+  background: none;
+  border: 1px dashed currentColor;
+  border-radius: 1px;
+}
+
+/* --------------------------------------------------------------------------
+ * Tags
+ * ------------------------------------------------------------------------ */
+.markdown .md-tag {
+  padding: 0.06em 0.4em;
+  border-radius: 999px;
+  background: var(--helm-accent-soft);
+  font-size: 0.86em;
+  color: var(--helm-accent);
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+ * Callouts
+ *
+ * Obsidian's admonitions. A tinted left rule and a tinted ground rather than a
+ * full border, so a document with three of them still reads as one column.
+ * ------------------------------------------------------------------------ */
+.markdown .callout {
+  --callout-color: var(--helm-accent);
+
+  padding: 0.7rem 1rem 0.75rem;
+  border-left: 3px solid var(--callout-color);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--callout-color) 9%, transparent);
+}
+
+.markdown .callout > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown .callout-title {
+  margin-bottom: 0.35em;
+  font-size: 0.94em;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  color: var(--callout-color);
+}
+
+.markdown .callout-title:last-child {
+  margin-bottom: 0;
+}
+
+.markdown .callout-warning,
+.markdown .callout-caution,
+.markdown .callout-attention {
+  --callout-color: var(--helm-warn);
+}
+
+.markdown .callout-danger,
+.markdown .callout-error,
+.markdown .callout-bug,
+.markdown .callout-failure {
+  --callout-color: var(--helm-danger);
+}
+
+.markdown .callout-success,
+.markdown .callout-tip,
+.markdown .callout-check,
+.markdown .callout-done {
+  --callout-color: var(--helm-success);
+}
+
+.markdown .callout-quote,
+.markdown .callout-example,
+.markdown .callout-abstract,
+.markdown .callout-summary {
+  --callout-color: var(--helm-fg-muted);
+}
+
+/* The term a document was opened from, marked in place after render so a search
+ * result lands on the sentence rather than at the top of the file. */
+.markdown mark.md-hit {
+  padding: 0 0.12em;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--helm-warn) 30%, transparent);
+  color: inherit;
+}
+
+/* --------------------------------------------------------------------------
+ * Footnotes, from GFM
+ * ------------------------------------------------------------------------ */
+.markdown .footnotes {
+  margin-top: 2rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--helm-border);
+  font-size: 0.92em;
+  color: var(--helm-fg-muted);
+}
+
+.markdown .footnotes h2 {
+  font-size: 0.95em;
+  border: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--helm-fg-subtle);
+}
