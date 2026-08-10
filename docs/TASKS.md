@@ -15,4 +15,5 @@ Priority-ordered; work top-down. Full descriptions and acceptance criteria live 
 | [868knyahd](https://app.clickup.com/t/868knyahd) | M5: Config console + effective view | |
 | [868knyahg](https://app.clickup.com/t/868knyahg) | M6: Content viewer - markdown/HTML/wikilinks | |
 | [868knyahn](https://app.clickup.com/t/868knyahn) | M7: Portable packaging + first-run | Clean machine → session in <5 min |
+| [868kp18rk](https://app.clickup.com/t/868kp18rk) | Status bar: session/weekly usage, % or estimated dollars | Percentages are free and real (`~/.claude.json` → `cachedUsageUtilization`); dollars are an estimate on a subscription plan and need a usage index over 217 MB of transcripts |
 | [868knyahu](https://app.clickup.com/t/868knyahu) | Backlog: Transcript archive (v1.1) | Deferred |
