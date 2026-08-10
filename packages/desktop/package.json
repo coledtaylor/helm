@@ -33,7 +33,8 @@
     "//usage-check": "The status bar's usage figures. Drives the real window: checks the painted percentages against its own JSON.parse of ~/.claude.json, watches a rewritten fixture reach the bar with no restart, lets a usage window roll over underneath the segment, points the reader at six broken readings and proves each paints nothing, measures the bar at four widths in both themes, measures the full transcript parse it avoids, and finally asks a live claude for /usage and compares. Pass --only=read|watch|resets|degrade|setting|width|cost|live to re-run one group.",
     "usage-check": "electron-vite build && node scripts/run-usage.mjs",
     "claude": "electron-vite build && electron . --claude --cwd=.",
-    "dist:win": "electron-vite build && electron-builder --win"
+    "//dist:win": "Goes through scripts/dist-win.mjs rather than calling electron-builder directly. electron-builder resolves pnpm with which(), which prefers pnpm.EXE over pnpm.CMD on Windows; a stale standalone pnpm shadowing the managed one makes it either fail outright or - worse - fall back to the npm collector and silently produce artefacts with no app.asar.unpacked, which is an exe that cannot dlopen better-sqlite3. The wrapper checks the resolved pnpm answers the declared version and shims it for the child process if not.",
+    "dist:win": "electron-vite build && node scripts/dist-win.mjs --win"
   },
   "dependencies": {
     "@helm/core": "workspace:*",
@@ -57,10 +58,11 @@
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^5.2.0",
-    "electron": "^43.3.0",
+    "electron": "43.3.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "tailwindcss": "^4.3.3",
     "vite": "^7.3.6"
-  }
+  },
+  "//electron": "Pinned exactly, not a range. electron-builder downloads platform binaries for one specific release and refuses to guess which - a caret here fails the packaging step outright (electron-builder 26.15.3). It is also the right shape regardless: the packaged app must ship the runtime the drivers measured against."
 }

@@ -30,7 +30,8 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
-  statSync
+  statSync,
+  writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -167,6 +168,7 @@ if (wants('package')) {
     }
   }
 
+  checks.push(unpackedNativeModulesCheck())
   checks.push(...portableChecks(portableExe))
   checks.push(...installerChecks(setupExe))
 }
@@ -175,8 +177,23 @@ if (wants('package')) {
 
 const failed = checks.filter((c) => !c.ok)
 
+// Every phase's checks in one file. Phases one and two write their own, but
+// phase three has no app behind it to write anything, and a packaging failure
+// with nothing to read afterwards is a packaging failure nobody can diagnose.
+const combined = join(realDataDir, 'm7-packaging.json')
+mkdirSync(realDataDir, { recursive: true })
+writeFileSync(
+  combined,
+  JSON.stringify(
+    { startedAt: new Date().toISOString(), groups: groups ?? 'all', pass: failed.length === 0, checks },
+    null,
+    2
+  )
+)
+
 console.log('')
 for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+console.log(`\nreport: ${combined}`)
 
 if (checks.length === 0 || failed.length > 0) {
   console.error(`\nFAIL  ${String(failed.length)} of ${String(checks.length)} checks`)
@@ -185,6 +202,54 @@ if (checks.length === 0 || failed.length > 0) {
 console.log(`\nPASS  all ${String(checks.length)} checks`)
 
 // ---------------------------------------------------------------------------
+
+/**
+ * M7-P0: the two native modules are unpacked beside the asar.
+ *
+ * Checked before either exe is run, because the failure it catches is silent at
+ * build time and loud only much later. `process.dlopen` cannot load a `.node`
+ * from inside an asar archive and node-pty's ConPTY helpers have to exist as
+ * real files to be spawned, so `asarUnpack` is load-bearing (Spike B). When
+ * electron-builder cannot get a dependency graph out of the package manager it
+ * does not fail - it warns "cannot find path for dependency ...@undefined" and
+ * ships a 95 MB exe with no `app.asar.unpacked` at all. That happened on this
+ * machine and is what `scripts/dist-win.mjs` now prevents.
+ */
+function unpackedNativeModulesCheck() {
+  const unpacked = join(distDir, 'win-unpacked', 'resources', 'app.asar.unpacked', 'node_modules')
+  const wanted = {
+    'better-sqlite3': join(unpacked, 'better-sqlite3', 'prebuilds'),
+    'node-pty': join(unpacked, 'node-pty', 'prebuilds')
+  }
+  const found = Object.fromEntries(
+    Object.entries(wanted).map(([name, path]) => [
+      name,
+      existsSync(path) ? readdirSync(path).sort() : null
+    ])
+  )
+  const helpers = [
+    join(unpacked, 'node-pty', 'prebuilds', 'win32-x64', 'winpty-agent.exe'),
+    join(unpacked, 'node-pty', 'prebuilds', 'win32-x64', 'conpty', 'OpenConsole.exe')
+  ]
+  return {
+    id: 'M7-P0',
+    criterion: 'packaging: the native modules are unpacked beside the asar, not inside it',
+    title: 'better-sqlite3 and node-pty prebuilds are real files in app.asar.unpacked',
+    ok:
+      found['better-sqlite3'] !== null &&
+      found['node-pty'] !== null &&
+      helpers.every((path) => existsSync(path)),
+    detail: {
+      unpackedDir: unpacked,
+      prebuilds: found,
+      helperBinaries: helpers.map((path) => ({ path, exists: existsSync(path) }))
+    },
+    notes: [
+      'A build that loses these produces an exe that starts and then dies on its first dlopen, so it is checked before anything is run rather than diagnosed afterwards.',
+      "electron-builder reports the cause as a warning, not an error - `cannot find path for dependency ...@undefined` - which is why this is an assertion and not a reading of the build log."
+    ]
+  }
+}
 
 /** M7-1: the portable exe, run from a directory it has never seen. */
 function portableChecks(exe) {
@@ -236,13 +301,7 @@ function portableChecks(exe) {
         mode: report?.mode ?? null,
         selftestPass: report?.pass ?? null,
         selftest: report
-          ? {
-              sqlite: report.sqlite,
-              shell: report.shell,
-              keyboard: report.keyboard,
-              resize: report.resize,
-              claude: report.claude
-            }
+          ? { sqlite: report.sqlite, pty: report.pty, resize: report.resize, claude: report.claude }
           : null,
         dataDir,
         dataFiles: existsSync(dataDir) ? readdirSync(dataDir).sort() : [],
@@ -289,6 +348,10 @@ function installerChecks(setupExe) {
     'Programs',
     'Helm.lnk'
   )
+  // Deliberately not created (`createDesktopShortcut: false`), so its absence is
+  // checked at both ends rather than only after the uninstall.
+  const desktopShortcut = join(process.env.USERPROFILE ?? '', 'Desktop', 'Helm.lnk')
+  const desktopShortcutBefore = existsSync(desktopShortcut)
 
   const alreadyInstalled = existsSync(installedExe)
   if (alreadyInstalled) {
@@ -302,6 +365,8 @@ function installerChecks(setupExe) {
   waitForFile(installedExe, 60_000)
 
   const installed = existsSync(installedExe)
+  const shortcutCreated = existsSync(startMenu)
+  const desktopShortcutCreated = !desktopShortcutBefore && existsSync(desktopShortcut)
   const registry = readUninstallRegistry()
 
   let report = null
@@ -319,11 +384,28 @@ function installerChecks(setupExe) {
   say('uninstalling...')
   let uninstallRan = false
   if (existsSync(uninstaller)) {
-    spawnSync(uninstaller, ['/S'], { stdio: 'inherit', timeout: 300_000 })
+    // Through Start-Process -Wait, not spawnSync: the NSIS uninstaller
+    // relaunches itself from a temp copy and the first process returns
+    // immediately, so a plain spawn is a race against the thing being measured.
+    spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Start-Process -FilePath '${uninstaller}' -ArgumentList '/S' -Wait`
+      ],
+      { stdio: 'inherit', timeout: 300_000 }
+    )
     uninstallRan = true
-    waitForGone(installDir, 60_000)
+    waitForEmpty(installDir, 60_000)
   }
-  const installDirGone = !existsSync(installDir)
+  // Empty counts as gone. NSIS deletes every file it installed but cannot
+  // remove the directory the uninstaller is itself running out of, so a
+  // successful uninstall routinely leaves an empty folder behind. What matters
+  // is that nothing is left *in* it.
+  const remaining = existsSync(installDir) ? readdirSync(installDir) : []
+  const installDirGone = remaining.length === 0
   const registryAfter = readUninstallRegistry()
   const shortcutGone = !existsSync(startMenu)
   // Deliberately kept: uninstalling an app must not delete the user's data, and
@@ -345,10 +427,12 @@ function installerChecks(setupExe) {
         report.mode === 'installed' &&
         String(report.dataDir ?? '').toLowerCase() === realDataDir.toLowerCase() &&
         besideExe.length === 0 &&
+        shortcutCreated &&
+        !desktopShortcutCreated &&
         uninstallRan &&
         installDirGone &&
         shortcutGone &&
-        registryAfter.length < registry.length + 1 &&
+        registryAfter.length === 0 &&
         appDataKept,
       detail: {
         setupExe,
@@ -363,16 +447,24 @@ function installerChecks(setupExe) {
         selftestPass: report?.pass ?? null,
         dataFilesBesideExe: besideExe,
         appDataEntries: appDataFilesAfter.length,
-        startMenuShortcut: { path: startMenu, goneAfterUninstall: shortcutGone },
+        startMenuShortcut: {
+          path: startMenu,
+          createdByInstall: shortcutCreated,
+          goneAfterUninstall: shortcutGone
+        },
+        desktopShortcut: { path: desktopShortcut, createdByInstall: desktopShortcutCreated },
         uninstallEntriesBefore: registry,
         uninstallEntriesAfter: registryAfter,
-        installDirGoneAfterUninstall: installDirGone,
+        filesLeftInInstallDir: remaining,
+        installDirEmptyAfterUninstall: installDirGone,
         appDataKeptOnPurpose: appDataKept
       },
       notes: [
         'Installed silently as the ordinary user. This shell is not elevated, and a per-machine installer would fail here rather than prompt, so "no elevation" is the reason it worked rather than an assumption.',
         'The installed app is asked for the same selftest the portable exe ran, and it reports its own mode and data directory, which are compared against %APPDATA%\\Helm.',
         'Nothing landed beside the exe: the install directory holds no helm-data, no .db and no WAL.',
+        'A start-menu entry is created and a desktop icon deliberately is not. Both are checked, and the uninstall has to take back the one it made.',
+        'An empty install directory counts as removed: NSIS deletes every file it installed but cannot remove the folder its own uninstaller is running out of, so an empty shell is the ordinary successful outcome.',
         '%APPDATA%\\Helm is deliberately NOT removed by the uninstaller. deleteAppDataOnUninstall stays false: the database holds the user\'s profiles, session index and config snapshots, and an uninstall is not a request to destroy them.'
       ]
     }
@@ -428,8 +520,10 @@ function waitForFile(path, timeoutMs) {
   return existsSync(path)
 }
 
-function waitForGone(path, timeoutMs) {
+/** Waits for a directory to be gone, or to hold nothing. */
+function waitForEmpty(path, timeoutMs) {
   const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline && existsSync(path)) sleepSync(500)
-  return !existsSync(path)
+  const empty = () => !existsSync(path) || readdirSync(path).length === 0
+  while (Date.now() < deadline && !empty()) sleepSync(500)
+  return empty()
 }
