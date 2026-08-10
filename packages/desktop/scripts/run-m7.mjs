@@ -373,10 +373,18 @@ function installerChecks(setupExe) {
   // NSIS one-click returns before the files have settled on some machines.
   waitForFile(installedExe, 60_000)
   // `runAfterFinish` is true, because an installer that finishes and does
-  // nothing looks broken to the person who ran it. That means the install just
-  // started the app, and everything below - the selftest, the "nothing was
-  // written beside the exe" read, the uninstall - assumes it did not. End it,
-  // matched by executable path rather than by image name, so a portable or dev
+  // nothing looks broken to the person who ran it - there is no completion page
+  // on a one-click install to say otherwise.
+  //
+  // NSIS suppresses that auto-run under `/S`, which is what this install uses,
+  // so today nothing is started here and this call is a no-op. It stays anyway:
+  // everything below - the selftest, the "nothing was written beside the exe"
+  // read, and an uninstall that cannot remove files a live process holds -
+  // assumes no app is running, and the day this install stops being silent that
+  // assumption breaks silently. Measured on 2026-08-10: `/S` launched nothing,
+  // the same installer double-clicked launched the app.
+  //
+  // Matched by executable path rather than image name, so a portable or dev
   // instance running from elsewhere on this machine is left alone.
   endInstalledApp(installDir)
 
