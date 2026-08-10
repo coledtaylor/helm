@@ -1174,6 +1174,55 @@ async function linkChecks(ctx: M2Context, shotDir: string, harnessPath: string):
     }
   }
 
+  /**
+   * An `https://` link in a note, and the two halves of what happens to it.
+   *
+   * The click is checked by watching whether the document's own handler
+   * cancelled the event - `will-navigate` is prevented and the window-open
+   * handler denies, so a link this pane does not intercept is a link that does
+   * nothing at all, silently. The listener bubbles from `window`, so it runs
+   * after the pane's and sees the decision rather than making it.
+   *
+   * The refusal is checked directly, with a `file:` URL. That is the half that
+   * matters: `shell.openExternal` on a local path is a way to run a program,
+   * and a note is content. The accepting half is deliberately *not* exercised -
+   * a check that opens a browser window is a check nobody runs twice.
+   */
+  const withExternal = markdown.find((file) =>
+    /\]\(https:\/\//.test(readFileSync(file.path, 'utf8'))
+  )
+  if (withExternal) {
+    await js<boolean>(
+      win,
+      `(() => { const row = [...document.querySelectorAll('button[data-content-file]')]
+          .find((el) => el.dataset.contentFile === ${JSON.stringify(withExternal.relPath)});
+        if (!row) return false; row.click(); return true })()`
+    )
+    await pollJs(
+      win,
+      `document.querySelector('[data-content-body]')?.dataset.contentPath === ${JSON.stringify(withExternal.path)}`,
+      15_000
+    )
+    await sleep(400)
+  }
+  const externalLink = await js<{ found: boolean; href: string; intercepted: boolean }>(
+    win,
+    `(async () => {
+      const a = document.querySelector('[data-content-body] a[href^="https://"]');
+      if (!a) return { found: false, href: '', intercepted: false };
+      let intercepted = false;
+      const watch = (ev) => { intercepted = ev.defaultPrevented };
+      window.addEventListener('click', watch);
+      a.click();
+      window.removeEventListener('click', watch);
+      return { found: true, href: a.getAttribute('href'), intercepted };
+    })()`
+  )
+  const refusedFileUrl = await js<{ opened: boolean }>(
+    win,
+    `window.helm.invoke('shell:openExternal', { url: 'file:///C:/Windows/win.ini' })`
+  )
+
   const shot = await screenshot(win, shotDir, 'm6-wikilinks.png')
 
   const brokenStyle = styling['broken'] as { color?: string; borderBottomStyle?: string } | null
@@ -1199,6 +1248,19 @@ async function linkChecks(ctx: M2Context, shotDir: string, harnessPath: string):
         'a claim about what the reader sees rather than about which class was applied.',
         'A broken link is warm-toned and dashed rather than red: in this vault an unresolved',
         'link marks a note worth writing, which is not an error.'
+      ]
+    },
+    {
+      id: 'M6-11',
+      criterion: 'A link in a note goes somewhere; a link that is not a link goes nowhere',
+      title: 'An https link is intercepted rather than left inert, and a file: URL is refused',
+      ok: externalLink.found && externalLink.intercepted && refusedFileUrl.opened === false,
+      detail: { inFile: withExternal?.relPath ?? null, externalLink, fileUrlRefused: refusedFileUrl },
+      notes: [
+        'Without the interception an `https://` link in a note does nothing: `will-navigate` is',
+        'prevented and `setWindowOpenHandler` denies, so the click is swallowed silently.',
+        'Only the refusal is exercised end to end. Opening the accepting half would open a',
+        'browser window on the user’s desktop every time this check runs.'
       ]
     },
     {
