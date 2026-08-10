@@ -24,6 +24,8 @@
     "m3-check": "electron-vite build && node scripts/run-m3.mjs",
     "//m4-check": "M4's acceptance criteria. Drives the session-history pane through the real window and checks every count against an independent read of ~/.claude/history.jsonl. Spawns two real claude sessions - one resumed through the app, one on its own pty to prove the index notices a session Helm did not start - so it takes minutes. Verdict is in m4-report.json; run-m4.mjs exists for the same reason run-m3.mjs does.",
     "m4-check": "electron-vite build && node scripts/run-m4.mjs",
+    "//m5-check": "M5's acceptance criteria. Drives the config console through the real window: browses every scope against an independent readdir walk, edits a file in each and restores it hash-verified, adds an MCP server through the UI, then launches a real claude session and asks it whether the effective view predicted what it actually sees. Spawns one claude session on haiku, so it takes minutes. Pass --only=browse|edit|snapshot|json|external|mcp|effective|doctor to re-run one group.",
+    "m5-check": "electron-vite build && node scripts/run-m5.mjs",
     "claude": "electron-vite build && electron . --claude --cwd=.",
     "dist:win": "electron-vite build && electron-builder --win"
   },

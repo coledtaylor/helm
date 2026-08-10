@@ -150,7 +150,7 @@ async function pollJs(win: BrowserWindow, expression: string, timeoutMs: number)
  * Occurrences are counted rather than matched, so a second prompt with the same
  * wording is still answered and an already-answered one is not answered twice.
  */
-function answerConsent(ctx: M3Context, collector: Collector, ids: number[]): () => void {
+export function answerConsent(ctx: M3Context, collector: Collector, ids: number[]): () => void {
   const answered = new Map<string, number>()
   const count = (text: string, re: RegExp): number => (text.match(re) ?? []).length
 
@@ -213,7 +213,7 @@ function answerConsent(ctx: M3Context, collector: Collector, ids: number[]): () 
  * one write, a long line arrives as a paste, which the composer treats
  * differently from typed input.
  */
-async function ask(
+export async function ask(
   ctx: M3Context,
   collector: Collector,
   id: number,
@@ -239,7 +239,7 @@ async function ask(
 }
 
 /** Brings a session to the point where it will accept a prompt. */
-async function waitForPrompt(
+export async function waitForPrompt(
   ctx: M3Context,
   collector: Collector,
   id: number,
@@ -553,20 +553,46 @@ async function runComposeChecks(
     [`SKILL1=${atlasThink}`, `SKILL2=${reportingThink}`]
   )
 
+  /**
+   * The probe is only evidence if the two headings exist and differ.
+   *
+   * `firstHeading` returns `''` for a file that is not there, which turns the
+   * expected tokens into `SKILL1=` and `SKILL2=` - substrings of any answer
+   * that uses the requested format at all. So a check with no fixtures behind
+   * it passed while proving nothing, which is how it was found: the two source
+   * repos lost their `.claude/skills` to an early version of the shim teardown
+   * (fixed by `removeShimDir`, which unlinks junctions before recursing), and
+   * this check went on reporting green afterwards.
+   */
+  const headingsUsable =
+    atlasThink !== '' && reportingThink !== '' && atlasThink !== reportingThink
+
   checks.push({
     id: 'M3-4',
     criterion:
       'A project skill invokes in a root-launched session; same-named skills in two overlays coexist',
     title: 'Both overlays’ `think` skills resolved under their own prefixes and both invoked',
-    ok: skills.ok,
+    ok: headingsUsable && skills.ok,
     detail: {
       cwd: session.cwd,
       expected: { SKILL1: atlasThink, SKILL2: reportingThink },
+      headingsUsableAsEvidence: headingsUsable,
+      ...(headingsUsable
+        ? {}
+        : {
+            why: [
+              `${join(atlas.path, '.claude', 'skills', 'think', 'SKILL.md')} and`,
+              `${join(reporting.path, '.claude', 'skills', 'think', 'SKILL.md')} must both exist`,
+              'and differ. An absent file yields an empty heading, which every answer matches.'
+            ].join(' ')
+          }),
       answer: skills.answer
     },
     notes: [
       'The two bodies differ, so matching both headings is proof of two distinct skills',
-      'rather than one resolving twice. Spike A showed the namespacing; this shows it interactively.'
+      'rather than one resolving twice. Spike A showed the namespacing; this shows it interactively.',
+      'The guard above is not belt and braces: without it this check passes when the fixtures',
+      'are missing, which is exactly the state it was found in.'
     ]
   })
 

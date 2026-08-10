@@ -2,6 +2,7 @@ import { type BrowserWindow } from 'electron'
 import { execFileSync } from 'node:child_process'
 import { readSessions, type Project, type SessionRecord } from '@helm/core'
 import { screenshot, sleep, squash, stripAnsi, waitFor } from './bridge'
+import type { ConfigService } from './config'
 import type { Check } from './fidelity'
 import type { HistoryService } from './history'
 import type { Confirm, ConfirmRequest, SessionHost, SessionObserver } from './sessions'
@@ -24,6 +25,8 @@ export interface M2Context {
   sessions: SessionHost
   /** M4's driver reads and forces passes through this; M2's ignores it. */
   history: HistoryService
+  /** M5's driver reads and writes config through this; nothing else uses it. */
+  config: ConfigService
 }
 
 // ---------------------------------------------------------------------------

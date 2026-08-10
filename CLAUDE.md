@@ -76,7 +76,26 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   spawns two real `claude` sessions (one resumed through the app, one on its own
   pty to prove the watcher notices a session Helm did not start), so it takes
   minutes; `--only=list,search,resume,reaped,outside` narrows a re-run.
-- `~/.claude` is Claude Code's, and Helm only ever reads it. Two facts about it
+- `pnpm m5-check` covers the config console. Same discipline: the tree is
+  checked against its own `readdirSync` walk, restores against its own
+  `sha256`, and predicted overlay namespaces against a hand-built
+  `basename(overlay):skill` list. The effective view is then checked against a
+  **live session** - three predicted skills invoked, and the settings winner
+  read back out of `env` - because a prediction about a session is only worth
+  what a session says about it. Spawns one `claude` on haiku;
+  `--only=browse,edit,snapshot,json,external,mcp,effective,doctor` narrows it.
+- **A check that can pass with no evidence behind it is worse than no check.**
+  M3-4 asked a session to quote two skills' headings and compared against the
+  files on disk - and when those files went missing, `firstHeading` returned
+  `''`, the expected token became `SKILL1=`, and every answer matched. It
+  reported green for weeks. Any probe that reads an expected value out of a
+  fixture must assert the fixture is there and is discriminating.
+- `~/.claude` is Claude Code's, and Helm only ever reads it - with one
+  exception, which is the whole of M5: the config console **writes** to it.
+  That is why the snapshot is not optional. Every byte Helm puts into a
+  `.claude` tree goes through `config:write` -> `writeConfigFile`, which takes
+  the previous content into `config_snapshots` *before* touching the file and
+  aborts the write if the row cannot be taken. Two facts about the directory
   are load-bearing and were measured on 2.1.225, not assumed:
   - `--resume <id>` resolves the id **against the working directory**. From
     anywhere else it prints "No conversation found with session ID" and exits 1.
@@ -90,6 +109,17 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
     conversations as reaped.
   Resuming passes no `-n`: the session already has a name, and renaming it
   would be a side effect of Helm having opened it. The tab's label is Helm's own.
+- Settings layers merge **per leaf**, not per top-level key: a project
+  `settings.json` setting `env.A` and a `settings.local.json` setting `env.B`
+  produce a session with both, and where they name the same leaf the local one
+  wins. Measured on 2.1.225 by reading `env` back out of a live session, which
+  is why `EffectiveSetting` is keyed by `env.A` rather than by `env`.
+  Precedence is local > project > user; enterprise policy and CLI flags sit
+  above all three and are not files this console edits.
+- `CLAUDE_CONFIG_DIR` genuinely moves the config directory - credentials
+  included - so a session pointed at a fixture home cannot log in. Anything
+  that has to measure the *user* settings layer has to use the real
+  `~/.claude/settings.json`, snapshot it, and put it back.
 - Every renderer↔main channel is declared in
   `packages/desktop/src/shared/ipc.ts` and nowhere else. The preload exposes
   three generic functions; a feature adds a channel to the contract, not a

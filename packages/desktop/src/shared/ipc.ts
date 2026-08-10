@@ -1,7 +1,13 @@
 import type {
   AppSettings,
   CachedProject,
+  ConfigFileContent,
+  ConfigScope,
+  ConfigSnapshotMeta,
+  ConfigTree,
   DiscoveryResult,
+  DoctorReport,
+  EffectiveView,
   GitState,
   HistoryPage,
   HistoryProject,
@@ -9,10 +15,16 @@ import type {
   HistoryQuery,
   HistorySession,
   HistorySummary,
+  McpAddRequest,
+  McpPreview,
+  McpResult,
+  McpScope,
   Profile,
   ProfileDraft,
   SessionRecord,
-  ThemePreference
+  ThemePreference,
+  WriteConfigRequest,
+  WriteConfigResult
 } from '@helm/core'
 import type { ProbeOp, TermCreateOptions } from './protocol'
 
@@ -171,6 +183,49 @@ export interface CloseSessionResult {
   closed: boolean
 }
 
+/**
+ * Which file the config editor currently has open.
+ *
+ * The main process watches it so that a change made in another editor reaches
+ * the window *before* the user saves over it. Null means nothing is open, which
+ * releases the watch - an app that keeps a handle on every file it has ever
+ * shown is an app that stops other tools from renaming them on Windows.
+ */
+export interface WatchConfigRequest {
+  path: string | null
+}
+
+/** A file the editor has open was changed by something that is not Helm. */
+export interface ConfigExternalChange {
+  path: string
+  /** sha256 of the bytes now on disk, or '' if it has been removed. */
+  hash: string
+  exists: boolean
+  mtimeMs: number
+}
+
+export interface EffectiveViewRequest {
+  /** Computed for a saved profile - its root and its overlays. */
+  profileId?: number | null
+  /** Or for a plain directory, with whatever overlays are passed alongside. */
+  cwd?: string | null
+  overlays?: string[]
+}
+
+/**
+ * Approving a `.mcp.json` server for a project.
+ *
+ * A server declared in `.mcp.json` gates on first launch until a settings layer
+ * lists it, so this writes `enabledMcpjsonServers` into the scope's
+ * `settings.local.json` - through the same snapshotted write path as any other
+ * edit, because it is one.
+ */
+export interface McpApproveRequest {
+  cwd: string
+  name: string
+  approved: boolean
+}
+
 // ---------------------------------------------------------------------------
 // Renderer -> main, with a response
 // ---------------------------------------------------------------------------
@@ -242,6 +297,42 @@ export interface IpcRequests {
    */
   'history:resume': { request: ResumeSessionRequest; response: ResumedSession }
 
+  /**
+   * The config console (M5). This is the one surface that *writes* to a
+   * `.claude` tree, which is why every write goes through `config:write` and
+   * nothing else - the snapshot is taken there, and a second path into the
+   * filesystem would be a path with no undo behind it.
+   */
+  'config:scopes': { request: void; response: ConfigScope[] }
+  'config:tree': { request: { scopePath: string }; response: ConfigTree }
+  'config:read': { request: { path: string }; response: ConfigFileContent }
+  'config:write': { request: WriteConfigRequest; response: WriteConfigResult }
+  /** Versions of one file, newest first, without their contents. */
+  'config:snapshots': {
+    request: { scopePath: string; path: string }
+    response: ConfigSnapshotMeta[]
+  }
+  /** The bytes of one version, for a preview before restoring it. */
+  'config:snapshot': { request: { id: number }; response: { content: string } | null }
+  'config:restore': { request: { id: number; path: string }; response: WriteConfigResult }
+  /** Tells main which file to watch for changes made outside the app. */
+  'config:watch': { request: WatchConfigRequest; response: void }
+
+  'config:effective': { request: EffectiveViewRequest; response: EffectiveView }
+
+  'config:mcpPreview': { request: McpAddRequest; response: McpPreview }
+  /** Runs `claude mcp add-json`, having snapshotted the file it will rewrite. */
+  'config:mcpAdd': { request: McpAddRequest; response: McpResult }
+  'config:mcpRemove': {
+    request: { name: string; scope: McpScope; cwd: string }
+    response: McpResult
+  }
+  'config:mcpApprove': { request: McpApproveRequest; response: WriteConfigResult }
+  /** `claude mcp list`, which health-checks every server, so it is slow. */
+  'config:mcpList': { request: { cwd: string }; response: McpResult }
+
+  'config:doctor': { request: void; response: DoctorReport }
+
   /** The terminal pane's clipboard, routed through Electron rather than the
    * async DOM Clipboard API, which needs a permission prompt and a focused
    * document - neither of which a hosted TUI can rely on. */
@@ -305,6 +396,14 @@ export interface IpcEvents {
    * one Helm did not cause.
    */
   'history:changed': HistorySummary
+
+  /**
+   * The file the config editor has open changed on disk, and Helm was not the
+   * one who changed it. Pushed rather than discovered at save time: by then the
+   * user has typed a screen of text they are about to lose, and the point of
+   * the warning is to arrive before that.
+   */
+  'config:externalChange': ConfigExternalChange
 
   'term:create': TermCreateOptions
   'term:write': string
@@ -387,6 +486,21 @@ export const REQUEST_CHANNELS = Object.keys({
   'history:projects': true,
   'history:refresh': true,
   'history:resume': true,
+  'config:scopes': true,
+  'config:tree': true,
+  'config:read': true,
+  'config:write': true,
+  'config:snapshots': true,
+  'config:snapshot': true,
+  'config:restore': true,
+  'config:watch': true,
+  'config:effective': true,
+  'config:mcpPreview': true,
+  'config:mcpAdd': true,
+  'config:mcpRemove': true,
+  'config:mcpApprove': true,
+  'config:mcpList': true,
+  'config:doctor': true,
   'clipboard:read': true,
   'clipboard:write': true
 } satisfies Record<RequestChannel, true>) as RequestChannel[]
@@ -411,6 +525,7 @@ export const EVENT_CHANNELS = Object.keys({
   'profiles:changed': true,
   'theme:changed': true,
   'history:changed': true,
+  'config:externalChange': true,
   'term:create': true,
   'term:write': true,
   'term:resize': true,

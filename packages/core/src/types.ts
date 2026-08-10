@@ -2,7 +2,27 @@
  * The vocabulary every surface shares. Nothing here may reference Electron,
  * the DOM, or a database driver - these are the shapes that cross the IPC wire
  * and get persisted, and both sides have to agree on them.
+ *
+ * It is also the one module the renderer may import *values* from, so the two
+ * config parsers the editor needs before it is allowed to save are re-exported
+ * through here. Both files they come from are pure by construction; adding a
+ * `node:` import to either would break the renderer bundle at rollup rather
+ * than at typecheck (CLAUDE.md, hard rules).
  */
+
+export {
+  frontmatterField,
+  parseFrontmatter,
+  validateJson,
+  type Frontmatter,
+  type JsonProblem
+} from './config/validate'
+export {
+  settingHint,
+  topLevelKey,
+  SETTING_HINTS,
+  type SettingHint
+} from './config/settings-schema'
 
 /** What a discovered directory turned out to be. */
 export type ProjectKind =
@@ -349,4 +369,310 @@ export const DEFAULT_SETTINGS: AppSettings = {
   scanRoots: [],
   windowBounds: null,
   firstRunCompletedAt: null
+}
+
+// ---------------------------------------------------------------------------
+// Config console (M5)
+// ---------------------------------------------------------------------------
+
+/**
+ * One `.claude/` tree, and where it sits in the precedence chain.
+ *
+ * `user` is `~/.claude` itself; the other two are directories that *contain* a
+ * `.claude`, which is why `path` is the base rather than the config directory -
+ * `CLAUDE.md` and `.mcp.json` live beside `.claude/`, not inside it.
+ */
+export type ConfigScopeKind = 'user' | 'harness' | 'project'
+
+export interface ConfigScope {
+  kind: ConfigScopeKind
+  /** The directory config resolves from. For `user`, the home directory. */
+  path: string
+  /** The `.claude` directory. Equal to `path` for the user scope. */
+  claudeDir: string
+  label: string
+  /** Present so the switcher can say so rather than showing an empty tree. */
+  exists: boolean
+}
+
+/**
+ * What a file in a `.claude` tree is, as Claude Code resolves it.
+ *
+ * `skill` is the `SKILL.md` inside a skill directory, not the directory: the
+ * directory name is the skill's name and the file is what gets edited.
+ */
+export type ConfigFileKind =
+  | 'skill'
+  | 'command'
+  | 'agent'
+  | 'hook'
+  | 'settings'
+  | 'settings-local'
+  | 'claude-md'
+  | 'mcp'
+  | 'rule'
+  | 'other'
+
+export interface ConfigFile {
+  path: string
+  /** Relative to the scope's base directory, with forward slashes. */
+  relPath: string
+  kind: ConfigFileKind
+  /**
+   * How it is addressed: a skill's directory name, a command's `spec:plan`
+   * namespace path, or the file name for everything else.
+   */
+  name: string
+  size: number
+  mtimeMs: number
+  /** `description:` from the frontmatter, when there is one. */
+  description: string | null
+  /** True for a file Helm will not offer to edit as text. */
+  binary: boolean
+}
+
+export interface ConfigTree {
+  scope: ConfigScope
+  files: ConfigFile[]
+  /** Directories that could not be read. Not fatal; the rest of the tree stands. */
+  errors: string[]
+  scannedAt: string
+}
+
+/** A file's bytes, with the hash every write is checked against. */
+export interface ConfigFileContent {
+  path: string
+  exists: boolean
+  content: string
+  /** sha256 of the bytes on disk, hex. The editor's basis for its next write. */
+  hash: string
+  size: number
+  mtimeMs: number
+  /** Set when the bytes are not decodable text; the editor refuses these. */
+  binary: boolean
+}
+
+/** Why a snapshot was taken. Stored on the row and shown in the file's history. */
+export type ConfigWriteReason = 'edit' | 'create' | 'restore' | 'mcp' | 'approve'
+
+export interface ConfigSnapshotMeta {
+  id: number
+  scopePath: string
+  /** Relative to `scopePath`, forward-slashed - the same key the index uses. */
+  filePath: string
+  contentHash: string
+  bytes: number
+  reason: ConfigWriteReason
+  createdAt: string
+}
+
+export interface ConfigSnapshot extends ConfigSnapshotMeta {
+  content: string
+}
+
+export interface WriteConfigRequest {
+  /** The scope's base directory. Recorded on the snapshot. */
+  scopePath: string
+  path: string
+  content: string
+  /**
+   * The hash the editor's content was derived from, or null for a file it knows
+   * does not exist yet. A mismatch is an external edit and stops the write.
+   */
+  expectedHash: string | null
+  reason: ConfigWriteReason
+}
+
+export interface WriteConfigResult {
+  ok: boolean
+  /** The file after the write, or as it stands now when the write was refused. */
+  file: ConfigFileContent
+  /** Null when nothing was written; otherwise the row taken first. */
+  snapshotId: number | null
+  /** The bytes were already what was asked for, so nothing was written. */
+  unchanged: boolean
+  /**
+   * Set when the file on disk is not what the editor was based on. Carries the
+   * current bytes so the editor can show what it would have overwritten.
+   */
+  conflict?: {
+    onDiskHash: string
+    onDiskContent: string
+    mtimeMs: number
+  }
+  /** Set when the write was refused for a reason other than a conflict. */
+  error?: string
+}
+
+// --- Effective view --------------------------------------------------------
+
+/** Where a resolved capability came from. */
+export type EffectiveSource = 'user' | 'cwd' | 'overlay'
+
+/**
+ * One skill, command or agent as a session would actually address it.
+ *
+ * The namespace is *predicted*, not observed: the platform prefixes everything
+ * an overlay contributes with the plugin's manifest name (Spike A), and Helm
+ * chooses that name when it synthesises the shim - so `<overlay>:<skill>` is
+ * decidable before anything is launched. Cross-overlay collisions are therefore
+ * impossible, and two overlays defining the same skill both appear, each under
+ * its own prefix.
+ */
+export interface EffectiveEntry {
+  /** What you type: `atlas:think`, or `think` for an unnamespaced one. */
+  invocation: string
+  name: string
+  source: EffectiveSource
+  /** The overlay's plugin name, or null when the entry resolves unprefixed. */
+  namespace: string | null
+  /** The directory it came from. */
+  origin: string
+  path: string
+  description: string | null
+}
+
+export type SettingsLayerKind = 'user' | 'project' | 'local'
+
+export interface SettingsLayer {
+  kind: SettingsLayerKind
+  file: string
+  exists: boolean
+  /** Leaf paths the layer defines. */
+  keys: number
+  /** Set when the file is there but could not be parsed. */
+  error: string | null
+}
+
+/**
+ * One setting, and which layer's value a session would see.
+ *
+ * Keyed by leaf path (`env.FOO`, `permissions.defaultMode`) rather than by
+ * top-level key, because the layers merge per leaf: measured on 2.1.225, a
+ * project `settings.json` that sets `env.A` and a `settings.local.json` that
+ * sets `env.B` yield a session with both, and where they set the same name the
+ * local one wins. A top-level view would have reported `env` as wholly replaced.
+ */
+export interface EffectiveSetting {
+  key: string
+  /** JSON encoding of the winning value. */
+  value: string
+  winner: SettingsLayerKind
+  winnerFile: string
+  /** Every layer defining this key, highest precedence first. */
+  candidates: Array<{ layer: SettingsLayerKind; file: string; value: string }>
+  /** True when a lower layer's value is being shadowed. */
+  overridden: boolean
+}
+
+/** An MCP server as configured, and whether a session would actually load it. */
+export interface EffectiveMcpServer {
+  name: string
+  /** `project` is `.mcp.json`; `local` and `user` live in `~/.claude.json`. */
+  scope: 'project' | 'local' | 'user'
+  /** The file that defines it. */
+  file: string
+  /** The server's JSON, pretty-printed. */
+  config: string
+  transport: string
+  /**
+   * `.mcp.json` servers gate on first launch unless a settings layer has
+   * approved them. Null for scopes where the question does not arise.
+   */
+  approved: boolean | null
+  /** Why `approved` is what it is. */
+  approvedBy: string | null
+  /** Set when a higher-precedence scope defines the same name. */
+  shadowedBy: string | null
+}
+
+export interface EffectiveView {
+  cwd: string
+  /** The profile this was computed for, or null for a plain directory. */
+  profileId: number | null
+  profileName: string | null
+  overlays: Array<{
+    /** The plugin manifest name, which is the namespace. */
+    name: string
+    projectPath: string
+    exists: boolean
+    skills: number
+    commands: number
+    agents: number
+  }>
+  skills: EffectiveEntry[]
+  commands: EffectiveEntry[]
+  agents: EffectiveEntry[]
+  /**
+   * Names carried by more than one source, each under its own invocation. Not
+   * a collision report - it cannot be one - but the thing a person wants to see
+   * when two repos both define `think`.
+   */
+  sharedNames: Array<{ name: string; invocations: string[] }>
+  settingsLayers: SettingsLayer[]
+  settings: EffectiveSetting[]
+  /** Instruction files the session would be given, in the order they arrive. */
+  instructions: Array<{ path: string; source: EffectiveSource; bytes: number; origin: string }>
+  mcpServers: EffectiveMcpServer[]
+  warnings: string[]
+  computedAt: string
+}
+
+// --- MCP management --------------------------------------------------------
+
+export type McpScope = 'local' | 'user' | 'project'
+
+export interface McpAddRequest {
+  scope: McpScope
+  name: string
+  /** The server object, as `claude mcp add-json` takes it. */
+  json: string
+  /** Working directory the CLI resolves `project` and `local` against. */
+  cwd: string
+}
+
+/**
+ * What the file would look like afterwards, computed before anything is run.
+ *
+ * The write itself is `claude mcp add-json` rather than a JSON edit (SPEC 4.2),
+ * so the result cannot be known for certain in advance - this is Helm merging
+ * the same object into the same document and showing the diff. The applied
+ * result is re-read afterwards and shown too, so a prediction that was wrong is
+ * visible rather than assumed.
+ */
+export interface McpPreview {
+  file: string
+  before: string
+  after: string
+  /** Unified-ish diff lines, each tagged. */
+  diff: Array<{ sign: ' ' | '+' | '-'; text: string }>
+  /** Set when the name is already configured in this scope. */
+  replaces: string | null
+  /** Set when the JSON the user typed is not usable. */
+  error: string | null
+}
+
+export interface McpResult {
+  ok: boolean
+  /** What the CLI printed, trimmed. */
+  output: string
+  exitCode: number | null
+  /** The file after the CLI ran, so the pane can show what actually changed. */
+  after: string
+  /** The snapshot taken before the subprocess ran. */
+  snapshotId: number | null
+}
+
+// --- Health ----------------------------------------------------------------
+
+export interface DoctorReport {
+  /** `claude doctor` stdout, verbatim. */
+  output: string
+  /** Parsed `Label: value` lines, in order. */
+  rows: Array<{ label: string; value: string }>
+  exitCode: number | null
+  ranAt: string
+  durationMs: number
+  /** Set when the CLI could not be run at all. */
+  error: string | null
 }

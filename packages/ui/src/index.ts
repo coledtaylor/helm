@@ -1,5 +1,18 @@
 export { AppShell, type AppShellProps } from './components/AppShell'
 export { Chip, type ChipProps, type ChipTone } from './components/Chip'
+export {
+  ConfigConsole,
+  ConfigNothingSelected,
+  type ConfigConsoleProps,
+  type ConfigViewKind
+} from './components/ConfigConsole'
+export { ConfigEditor, type ConfigEditorProps } from './components/ConfigEditor'
+export {
+  EffectiveViewPane,
+  type EffectiveViewPaneProps
+} from './components/EffectiveViewPane'
+export { HealthPanel, type HealthPanelProps } from './components/HealthPanel'
+export { McpPanel, type McpPanelProps } from './components/McpPanel'
 export { GitChip, type GitChipProps } from './components/GitChip'
 export { InventoryChips, type InventoryChipsProps } from './components/InventoryChips'
 export { ProfileEditor, type ProfileEditorProps } from './components/ProfileEditor'

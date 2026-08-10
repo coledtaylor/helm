@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import type { DiscoveryResult, Harness, Project } from '@helm/core'
 import { cn } from '../lib/cn'
 import { ProjectRow } from './ProjectRow'
-import { HistoryIcon, PlusIcon, RefreshIcon } from './icons'
+import { HistoryIcon, PlusIcon, RefreshIcon, SlidersIcon } from './icons'
 
 export interface SidebarProps {
   /**
@@ -20,6 +20,11 @@ export interface SidebarProps {
   historyResumable?: number | undefined
   /** True while the history pane is the tab on screen. */
   historyActive?: boolean | undefined
+  /** Opens the config console. */
+  onOpenConfig?: (() => void) | undefined
+  configActive?: boolean | undefined
+  /** How many `.claude` trees the console can reach. */
+  configScopes?: number | undefined
   discovery: DiscoveryResult | null
   scanning: boolean
   scanError?: string | undefined
@@ -84,6 +89,9 @@ export function Sidebar({
   historyCount,
   historyResumable,
   historyActive = false,
+  onOpenConfig,
+  configActive = false,
+  configScopes,
   discovery,
   scanning,
   scanError,
@@ -118,33 +126,62 @@ export function Sidebar({
           machine rather than about anything configured in Helm - and because
           "where did I do that thing last week" is how a session starts at
           least as often as picking a project does. */}
-      {onOpenHistory && (
-        <div className="shrink-0 border-b border-border p-2">
-          <button
-            type="button"
-            data-open-history
-            onClick={onOpenHistory}
-            aria-current={historyActive}
-            title="Every Claude Code session on this machine"
-            className={cn(
-              'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
-              historyActive ? 'bg-accent-soft' : 'hover:bg-hover'
-            )}
-          >
-            <HistoryIcon
-              width={13}
-              height={13}
-              className={cn('shrink-0', historyActive ? 'text-accent' : 'text-fg-subtle')}
-            />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-[12px] text-fg">Session history</span>
-              <span className="block truncate text-[10px] text-fg-subtle">
-                {historyCount === undefined
-                  ? 'Reading…'
-                  : `${historyCount.toLocaleString()} sessions · ${String(historyResumable ?? 0)} resumable`}
+      {(onOpenHistory || onOpenConfig) && (
+        <div className="shrink-0 space-y-0.5 border-b border-border p-2">
+          {onOpenHistory && (
+            <button
+              type="button"
+              data-open-history
+              onClick={onOpenHistory}
+              aria-current={historyActive}
+              title="Every Claude Code session on this machine"
+              className={cn(
+                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                historyActive ? 'bg-accent-soft' : 'hover:bg-hover'
+              )}
+            >
+              <HistoryIcon
+                width={13}
+                height={13}
+                className={cn('shrink-0', historyActive ? 'text-accent' : 'text-fg-subtle')}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12px] text-fg">Session history</span>
+                <span className="block truncate text-[10px] text-fg-subtle">
+                  {historyCount === undefined
+                    ? 'Reading…'
+                    : `${historyCount.toLocaleString()} sessions · ${String(historyResumable ?? 0)} resumable`}
+                </span>
               </span>
-            </span>
-          </button>
+            </button>
+          )}
+          {onOpenConfig && (
+            <button
+              type="button"
+              data-open-config
+              onClick={onOpenConfig}
+              aria-current={configActive}
+              title="Browse and edit the .claude configuration of any scope"
+              className={cn(
+                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                configActive ? 'bg-accent-soft' : 'hover:bg-hover'
+              )}
+            >
+              <SlidersIcon
+                width={13}
+                height={13}
+                className={cn('shrink-0', configActive ? 'text-accent' : 'text-fg-subtle')}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12px] text-fg">Config</span>
+                <span className="block truncate text-[10px] text-fg-subtle">
+                  {configScopes === undefined || configScopes === 0
+                    ? 'Skills, settings, MCP'
+                    : `${configScopes} scopes · what a session would see`}
+                </span>
+              </span>
+            </button>
+          )}
         </div>
       )}
       {profiles}
