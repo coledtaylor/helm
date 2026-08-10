@@ -372,6 +372,13 @@ function installerChecks(setupExe) {
   spawnSync(setupExe, ['/S'], { stdio: 'inherit', timeout: 300_000 })
   // NSIS one-click returns before the files have settled on some machines.
   waitForFile(installedExe, 60_000)
+  // `runAfterFinish` is true, because an installer that finishes and does
+  // nothing looks broken to the person who ran it. That means the install just
+  // started the app, and everything below - the selftest, the "nothing was
+  // written beside the exe" read, the uninstall - assumes it did not. End it,
+  // matched by executable path rather than by image name, so a portable or dev
+  // instance running from elsewhere on this machine is left alone.
+  endInstalledApp(installDir)
 
   const installed = existsSync(installedExe)
   const shortcutCreated = existsSync(startMenu)
@@ -527,6 +534,45 @@ function waitForFile(path, timeoutMs) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline && !existsSync(path)) sleepSync(500)
   return existsSync(path)
+}
+
+/**
+ * Ends the app the installer launched, and only that one.
+ *
+ * Matched by `ExecutablePath` under the install directory rather than by image
+ * name: a developer running this check almost certainly has a dev or portable
+ * Helm open, and killing by name would take those with it. Waits for the
+ * processes to actually be gone, because the uninstall that follows cannot
+ * remove files a live process still holds.
+ */
+function endInstalledApp(installDir) {
+  const script =
+    `Get-CimInstance Win32_Process -Filter "Name = 'Helm.exe'" | ` +
+    `Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith(${JSON.stringify(installDir)}) } | ` +
+    `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`
+  spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    stdio: 'ignore',
+    timeout: 60_000
+  })
+
+  const stillRunning = () => {
+    const probe = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `@(Get-CimInstance Win32_Process -Filter "Name = 'Helm.exe'" | ` +
+          `Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith(${JSON.stringify(installDir)}) }).Count`
+      ],
+      { encoding: 'utf8', timeout: 60_000 }
+    )
+    return Number((probe.stdout ?? '0').trim()) > 0
+  }
+
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline && stillRunning()) sleepSync(500)
+  return !stillRunning()
 }
 
 /** Waits for a directory to be gone, or to hold nothing. */
