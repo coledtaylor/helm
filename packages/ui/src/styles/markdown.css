@@ -28,11 +28,13 @@
   max-width: var(--md-measure);
 }
 
-/* The things that earn the full width. */
-.markdown > .md-table-scroll,
-.markdown > pre,
-.markdown > .callout,
-.markdown > hr {
+/* The one thing that earns the full width.
+ *
+ * A seven-column table of measurements is evidence and wants the room. A
+ * callout and a code block are prose and do not: at full width they end four
+ * hundred pixels to the right of every paragraph around them, which reads as a
+ * layout bug rather than as emphasis. Code scrolls inside the measure instead. */
+.markdown > .md-table-scroll {
   max-width: none;
 }
 
@@ -114,9 +116,26 @@
   margin: 0 0 var(--md-rhythm);
 }
 
-.markdown ul,
-.markdown ol {
+/* Tailwind's preflight resets `list-style` to none on every `ul` and `ol`,
+ * which is right for an app chrome built out of lists and wrong for a
+ * document. Put back explicitly, because a rendered note without its bullets
+ * reads as a run-on paragraph with strange line breaks in it. */
+.markdown ul {
   padding-left: 1.35em;
+  list-style: disc;
+}
+
+.markdown ol {
+  padding-left: 1.5em;
+  list-style: decimal;
+}
+
+.markdown ul ul {
+  list-style: circle;
+}
+
+.markdown ul ul ul {
+  list-style: square;
 }
 
 .markdown li {
@@ -184,32 +203,26 @@
  * Task lists
  *
  * GFM renders these as disabled inputs. Left as native checkboxes rather than
- * redrawn, so a reader sees the control their operating system draws - and
- * pulled out of the list indentation so the text lines up with the paragraphs
- * above it rather than hanging off a bullet that is not there.
+ * redrawn, so a reader sees the control their operating system draws.
+ *
+ * The checkbox hangs out of the text block on a negative margin rather than
+ * being laid out with flex. Flex was the first attempt and it is wrong for a
+ * reason worth remembering: every *child* of a flex container becomes a flex
+ * item, and a task item's children are the input and then whatever inline
+ * markup the line contains - so an item with an `*emphasis*` and a `**bold**`
+ * in it came out as four columns instead of one sentence.
  * ------------------------------------------------------------------------ */
 .markdown .contains-task-list {
-  padding-left: 0.15em;
-  list-style: none;
-}
-
-.markdown .task-list-item {
-  display: flex;
-  gap: 0.55em;
-  align-items: baseline;
+  padding-left: 1.55em;
+  list-style: none !important;
 }
 
 .markdown .task-list-item input[type='checkbox'] {
-  flex: none;
   width: 12px;
   height: 12px;
-  margin: 0;
-  accent-color: var(--helm-accent);
+  margin: 0 0.45em 0 -1.55em;
   translate: 0 1px;
-}
-
-.markdown .task-list-item input[type='checkbox']:checked + * {
-  color: var(--helm-fg-subtle);
+  accent-color: var(--helm-accent);
 }
 
 /* --------------------------------------------------------------------------

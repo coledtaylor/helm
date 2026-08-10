@@ -810,8 +810,102 @@ async function renderChecks(
     })()`
   )
 
-  const shot = await screenshot(win, shotDir, 'm6-rendered.png')
   const consoleErrors = appConsole.slice(consoleBefore)
+
+  /**
+   * The evidence shot is chosen rather than whatever happened to be last.
+   *
+   * The document with the most tables, code blocks and checkboxes in it is the
+   * one worth looking at, because it is the one where a rendering mistake would
+   * show. Picking it by count means the screenshot stays the strongest example
+   * as the vault changes, instead of being whichever file sorts last today.
+   */
+  const richest = [...painted]
+    .filter((doc) => doc.ok)
+    .sort(
+      (a, b) =>
+        b.tables * 3 + b.codeBlocks * 2 + b.taskItems - (a.tables * 3 + a.codeBlocks * 2 + a.taskItems)
+    )[0]
+  if (richest) {
+    const row = markdown.find((file) => file.path === richest.path)
+    if (row) {
+      await js<boolean>(
+        win,
+        `(() => { const el = [...document.querySelectorAll('button[data-content-file]')]
+            .find((e) => e.dataset.contentFile === ${JSON.stringify(row.relPath)});
+          if (!el) return false; el.click(); return true })()`
+      )
+      await pollJs(
+        win,
+        `document.querySelector('[data-content-body]')?.dataset.contentPath === ${JSON.stringify(row.path)}`,
+        15_000
+      )
+      await sleep(500)
+    }
+  }
+  /**
+   * The list markers, read out of the computed style.
+   *
+   * Tailwind's preflight sets `list-style: none` on every `ul` and `ol` in the
+   * document, which is right for an app built out of lists and silently wrong
+   * for a rendered note - the bullets vanish and a list reads as a paragraph
+   * with strange line breaks. Nothing about the HTML says so, which is why this
+   * is asserted against `getComputedStyle` rather than against the markup.
+   */
+  const markers = await js<{ ul: string | null; ol: string | null; task: string | null }>(
+    win,
+    `(() => {
+      const read = (sel) => { const el = document.querySelector(sel);
+        return el ? getComputedStyle(el).listStyleType : null };
+      return { ul: read('[data-content-body] ul:not(.contains-task-list)'),
+        ol: read('[data-content-body] ol'),
+        task: read('[data-content-body] ul.contains-task-list') };
+    })()`
+  )
+
+  const shot = await screenshot(win, shotDir, 'm6-rendered.png')
+
+  /**
+   * The document with callouts in it, in both themes.
+   *
+   * Two screenshots rather than one because the code blocks carry *both*
+   * palettes as CSS custom properties and the stylesheet picks a side from the
+   * `dark` class - which is a claim that is only worth anything if somebody has
+   * looked at the light one. The theme is changed through `settings:write`,
+   * which is the path the toggle in the tab strip takes.
+   */
+  const withCallouts = markdown.find(
+    (file) => (readFileSync(file.path, 'utf8').match(/^>\s*\[!/gm) ?? []).length > 0
+  )
+  const themeShots: string[] = []
+  let calloutsPainted = 0
+  if (withCallouts) {
+    await js<boolean>(
+      win,
+      `(() => { const row = [...document.querySelectorAll('button[data-content-file]')]
+          .find((el) => el.dataset.contentFile === ${JSON.stringify(withCallouts.relPath)});
+        if (!row) return false; row.click(); return true })()`
+    )
+    await pollJs(
+      win,
+      `document.querySelector('[data-content-body]')?.dataset.contentPath === ${JSON.stringify(withCallouts.path)}`,
+      15_000
+    )
+    await sleep(500)
+    calloutsPainted = await js<number>(
+      win,
+      `document.querySelectorAll('[data-content-body] [data-callout]').length`
+    )
+    themeShots.push((await screenshot(win, shotDir, 'm6-callouts-dark.png')).file)
+
+    await js<unknown>(win, `window.helm.invoke('settings:write', { theme: 'light' })`)
+    await pollJs(win, `!document.documentElement.classList.contains('dark')`, 10_000)
+    await sleep(700)
+    themeShots.push((await screenshot(win, shotDir, 'm6-callouts-light.png')).file)
+    await js<unknown>(win, `window.helm.invoke('settings:write', { theme: 'dark' })`)
+    await pollJs(win, `document.documentElement.classList.contains('dark')`, 10_000)
+    await sleep(400)
+  }
 
   // ---- against the driver's own read of the same files --------------------
   const byPath = new Map(painted.map((doc) => [doc.path, doc]))
@@ -889,7 +983,11 @@ async function renderChecks(
         totals.withTables > 0 &&
         totals.withTasks > 0 &&
         totals.withCode > 0 &&
-        totals.highlighted > 0,
+        totals.highlighted > 0 &&
+        totals.callouts > 0 &&
+        calloutsPainted > 0 &&
+        markers.ul === 'disc' &&
+        (markers.task === null || markers.task === 'none'),
       detail: {
         scope: harnessPath,
         markdownFiles: markdown.length,
@@ -898,7 +996,10 @@ async function renderChecks(
         filesShowingRawFrontmatter: rawAnywhere,
         consoleErrorsDuringThePass: consoleErrors,
         totals,
-        screenshot: shot.file
+        calloutsIn: withCallouts?.relPath ?? null,
+        calloutsPainted,
+        listMarkers: markers,
+        screenshots: [shot.file, ...themeShots]
       },
       notes: [
         'Every file is clicked in the list and read back out of the DOM - `table`,',
