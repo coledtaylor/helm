@@ -5,6 +5,7 @@ import {
   readHistorySessions,
   suggestRoots
 } from '@helm/core'
+import type { ConfigService } from './config'
 import type { HistoryService } from './history'
 import { readClaudeVersion } from './claude-cli'
 import { appMode, dataDir, dbFile } from './paths'
@@ -69,6 +70,8 @@ export interface IpcContext {
   sessions: SessionHost
   /** Keeps the index over `~/.claude/history.jsonl` current; see `history.ts`. */
   history: HistoryService
+  /** The one surface that writes to a `.claude` tree; see `config.ts`. */
+  config: ConfigService
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
 }
@@ -206,6 +209,30 @@ export function registerIpc(ctx: IpcContext): void {
     // reasons a resume cannot happen are sentences, and a tab is the wrong
     // place to learn them.
     'history:resume': (request) => ctx.sessions.resume(request),
+
+    'config:scopes': () => ctx.config.scopes(),
+    'config:tree': ({ scopePath }) => ctx.config.tree(scopePath),
+    'config:read': ({ path }) => ctx.config.read(path),
+    // Every byte Helm writes into a `.claude` tree goes through this one
+    // handler, which is what makes "no write without a snapshot" a property of
+    // the app rather than of whoever remembered to take one.
+    'config:write': (request) => ctx.config.write(request),
+    'config:snapshots': ({ scopePath, path }) => ctx.config.snapshots(scopePath, path),
+    'config:snapshot': ({ id }) => ctx.config.snapshot(id),
+    'config:restore': ({ id, path }) => ctx.config.restore(id, path),
+    'config:watch': ({ path }) => {
+      ctx.config.watch(path)
+    },
+
+    'config:effective': (request) => ctx.config.effective(request),
+
+    'config:mcpPreview': (request) => ctx.config.mcpPreview(request),
+    'config:mcpAdd': (request) => ctx.config.mcpAdd(request),
+    'config:mcpRemove': (request) => ctx.config.mcpRemove(request),
+    'config:mcpApprove': (request) => ctx.config.mcpApprove(request),
+    'config:mcpList': ({ cwd }) => ctx.config.mcpList(cwd),
+
+    'config:doctor': () => ctx.config.doctor(),
 
     'clipboard:read': () => clipboard.readText(),
     'clipboard:write': (text) => {

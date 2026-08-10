@@ -7,11 +7,13 @@ import { emit, registerIpc, resolvedTheme } from './ipc'
 import { appMode, dataDir, initDataDir, shimRoot } from './paths'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
 import { createServices, refreshGit, runScan, type Services } from './services'
+import { createConfigService } from './config'
 import { createHistoryService } from './history'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
 import { createCollector, runM2Checks, type M2Context } from './m2check'
 import { runM3Checks } from './m3check'
 import { runM4Checks } from './m4check'
+import { runM5Checks } from './m5check'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -39,6 +41,7 @@ type Mode =
   | 'm2-check'
   | 'm3-check'
   | 'm4-check'
+  | 'm5-check'
   | 'shim-sweep'
 
 function modeFromArgv(): Mode {
@@ -48,6 +51,7 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--m2-check')) return 'm2-check'
   if (process.argv.includes('--m3-check')) return 'm3-check'
   if (process.argv.includes('--m4-check')) return 'm4-check'
+  if (process.argv.includes('--m5-check')) return 'm5-check'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
   if (process.argv.includes('--claude')) return 'claude'
   if (process.argv.includes('--shell')) return 'shell'
@@ -58,7 +62,11 @@ const mode = modeFromArgv()
 // The check modes are the app: they drive the real window, so they need the
 // real startup path, the database included.
 const isSpikeMode =
-  mode !== 'app' && mode !== 'm2-check' && mode !== 'm3-check' && mode !== 'm4-check'
+  mode !== 'app' &&
+  mode !== 'm2-check' &&
+  mode !== 'm3-check' &&
+  mode !== 'm4-check' &&
+  mode !== 'm5-check'
 
 initDataDir()
 
@@ -156,10 +164,17 @@ function startApp(options: AppOptions = {}): void {
     onChange: (summary) => emit(win, 'history:changed', summary)
   })
 
+  const config = createConfigService({
+    services,
+    ...(options.claudeHome !== undefined ? { userHome: options.claudeHome } : {}),
+    onExternalChange: (change) => emit(win, 'config:externalChange', change)
+  })
+
   registerIpc({
     services,
     sessions,
     history,
+    config,
     window: () => win,
     rendererReady: () => {
       emit(win, 'settings:changed', services.settings)
@@ -199,7 +214,7 @@ function startApp(options: AppOptions = {}): void {
         history.start()
       })
 
-      if (win) options.onReady?.({ win, services, sessions, history })
+      if (win) options.onReady?.({ win, services, sessions, history, config })
     }
   })
 
@@ -298,9 +313,10 @@ function startApp(options: AppOptions = {}): void {
     if (boundsTimer) clearTimeout(boundsTimer)
     boundsTimer = null
     persistBounds()
-    // Before the store is let go of: a debounced index pass that fired after
-    // `will-quit` would write to a closed connection.
+    // Before the store is let go of: a debounced index pass, or a config watch
+    // firing after `will-quit`, would write to a closed connection.
     history.stop()
+    config.stop()
     // Synchronously, because this is the last point the main process is
     // guaranteed a turn. Anything deferred here is a process left behind.
     sessions.shutdown()
@@ -568,6 +584,49 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`m4-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  if (mode === 'm5-check') {
+    const collector = createCollector()
+    startApp({
+      observer: collector,
+      confirm: collector.confirm,
+      onReady: (ctx) => {
+        // The driver closes the session it launched, so every confirmation is
+        // one it asked for on purpose.
+        collector.answerWith(true)
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runM5Checks(
+          ctx,
+          collector,
+          join(dataDir, 'screenshots'),
+          dataDir,
+          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
+        )
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('m5-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`m5-check report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`m5-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

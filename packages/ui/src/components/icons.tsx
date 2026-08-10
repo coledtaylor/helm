@@ -227,6 +227,97 @@ export function SearchIcon(props: IconProps): JSX.Element {
   )
 }
 
+/** The config console: sliders, because a scope is a set of knobs with values. */
+export function SlidersIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M2.75 4.5h10.5M2.75 11.5h10.5" />
+      <circle cx="6" cy="4.5" r="1.75" />
+      <circle cx="10.5" cy="11.5" r="1.75" />
+    </Icon>
+  )
+}
+
+/** A plain document, for CLAUDE.md and anything else read as prose. */
+export function DocIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M3.5 2.75h5l4 4v6.5a.75.75 0 0 1-.75.75h-8.25a.75.75 0 0 1-.75-.75V3.5a.75.75 0 0 1 .75-.75z" />
+      <path d="M8.5 2.75v4h4" />
+    </Icon>
+  )
+}
+
+/** An MCP server: a plug, since the thing being configured is a connection. */
+export function PlugIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M6 2.25v3.5M10 2.25v3.5" />
+      <path d="M3.75 5.75h8.5v2a4.25 4.25 0 0 1-8.5 0z" />
+      <path d="M8 12v1.75" />
+    </Icon>
+  )
+}
+
+/** The health panel. A pulse line, not a cross - nothing here is medical. */
+export function PulseIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M1.75 8h3l1.5-4 3 8 1.5-4h3.5" />
+    </Icon>
+  )
+}
+
+/** A hook, for the `hooks/` group. */
+export function HookIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M8 2.25v6.5a2.5 2.5 0 0 1-5 0" />
+      <path d="M6 4.25 8 2.25l2 2" />
+      <circle cx="8" cy="12.75" r="1.25" />
+    </Icon>
+  )
+}
+
+export function CheckIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="m3.25 8.5 3 3 6.5-7" />
+    </Icon>
+  )
+}
+
+/** A warning that is not an error: the file is fine, the situation is not. */
+export function WarnIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M8 2.5 14.25 13.25H1.75z" />
+      <path d="M8 6.5v3.25" />
+      <circle cx="8" cy="11.5" r=".6" fill="currentColor" stroke="none" />
+    </Icon>
+  )
+}
+
+/** Restore a snapshot: an arrow turning back on itself. */
+export function RestoreIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M2.75 8a5.25 5.25 0 1 0 1.62-3.79" />
+      <path d="M2.5 2.75v3h3" />
+    </Icon>
+  )
+}
+
+export function SaveIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M3 3.5A.5.5 0 0 1 3.5 3h7l2.5 2.5v7a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5z" />
+      <path d="M5.25 3v3.25h5V3" />
+      <path d="M5.25 13V9.75h5.5V13" />
+    </Icon>
+  )
+}
+
 export function PinIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>

@@ -4,15 +4,22 @@ import type { HistorySession, Profile, ProfileDraft, Project, SessionRecord } fr
 import {
   AppShell,
   cn,
+  ConfigConsole,
+  ConfigEditor,
+  ConfigNothingSelected,
+  EffectiveViewPane,
   FolderIcon,
   HarnessIcon,
+  HealthPanel,
   HistoryIcon,
+  McpPanel,
   ProfileEditor,
   ProfileList,
   ProjectPane,
   RepoIcon,
   SessionHistory,
   Sidebar,
+  SlidersIcon,
   StatusBar,
   TabBar,
   ThemeToggle,
@@ -21,6 +28,7 @@ import {
   type TabIndicator
 } from '@helm/ui'
 import { TerminalPane } from './TerminalPane'
+import { useConfig } from './useConfig'
 import { useHistory } from './useHistory'
 import { useLauncher } from './useLauncher'
 import { useProfiles } from './useProfiles'
@@ -47,12 +55,15 @@ type PaneRef =
   | { kind: 'project'; path: string }
   | { kind: 'session'; id: number }
   | { kind: 'history' }
+  | { kind: 'config' }
 
 const HISTORY_TAB = 'history'
+const CONFIG_TAB = 'config'
 
 const tabId = (ref: PaneRef): string => {
   if (ref.kind === 'project') return `project:${ref.path}`
   if (ref.kind === 'session') return `session:${String(ref.id)}`
+  if (ref.kind === 'config') return CONFIG_TAB
   return HISTORY_TAB
 }
 
@@ -76,6 +87,7 @@ export function App(): JSX.Element {
   const { sessions } = sessionState
   const profileState = useProfiles()
   const historyState = useHistory()
+  const configState = useConfig()
 
   /** The profile being edited, `'new'` for one being created from scratch, or
    * a seeded draft from "save as profile". Null when the dialog is closed. */
@@ -151,6 +163,7 @@ export function App(): JSX.Element {
   )
 
   const openHistory = useCallback(() => openPane({ kind: 'history' }), [openPane])
+  const openConfig = useCallback(() => openPane({ kind: 'config' }), [openPane])
 
   const launch = useCallback(
     async (project: Project) => {
@@ -306,6 +319,18 @@ export function App(): JSX.Element {
       ]
     }
 
+    if (ref.kind === 'config') {
+      return [
+        {
+          id: CONFIG_TAB,
+          title: 'Config',
+          hint: configState.scope?.path ?? 'Browse and edit .claude configuration',
+          ...(configState.scope ? { subtitle: configState.scope.label } : {}),
+          icon: <SlidersIcon width={13} height={13} />
+        }
+      ]
+    }
+
     if (ref.kind === 'project') {
       const project = projectsByPath.get(ref.path)
       if (!project) return []
@@ -379,6 +404,9 @@ export function App(): JSX.Element {
               }
             : {})}
           historyActive={activePane?.kind === 'history'}
+          onOpenConfig={openConfig}
+          configActive={activePane?.kind === 'config'}
+          configScopes={configState.scopes.length}
           discovery={discovery}
           scanning={launcher.scanning}
           scanError={launcher.scanError}
@@ -473,6 +501,95 @@ export function App(): JSX.Element {
               onDismissResumeError={historyState.dismissResumeError}
               onReveal={launcher.reveal}
             />
+          </div>
+        )}
+
+        {activePane?.kind === 'config' && (
+          <div className="absolute inset-0">
+            <ConfigConsole
+              scopes={configState.scopes}
+              scopePath={configState.scopePath}
+              onScopeChange={configState.setScopePath}
+              view={configState.view}
+              onViewChange={configState.setView}
+              tree={configState.tree}
+              treeLoading={configState.treeLoading}
+              selected={configState.selected}
+              onSelect={configState.select}
+              dirty={configState.dirty}
+              onRefresh={configState.refresh}
+              refreshing={configState.refreshing}
+            >
+              {configState.view === 'files' ? (
+                configState.selected === null ? (
+                  <ConfigNothingSelected
+                    scope={configState.scope}
+                    fileCount={configState.tree?.files.length ?? 0}
+                  />
+                ) : (
+                  <ConfigEditor
+                    // Keyed on the path so switching files rebuilds the editor
+                    // rather than leaving one file's draft in another's box.
+                    key={configState.selected.path}
+                    file={configState.selected}
+                    loaded={configState.loaded}
+                    snapshots={configState.snapshots}
+                    saving={configState.saving}
+                    error={configState.editorError}
+                    external={configState.external}
+                    onSave={configState.save}
+                    onReload={configState.reload}
+                    onRestore={configState.restore}
+                    onReveal={launcher.reveal}
+                    onDirtyChange={configState.setDirty}
+                  />
+                )
+              ) : configState.view === 'effective' ? (
+                <EffectiveViewPane
+                  profiles={profileState.profiles}
+                  profileId={configState.effectiveProfileId}
+                  onProfileChange={configState.setEffectiveProfileId}
+                  cwd={configState.effectiveCwd}
+                  onCwdChange={configState.setEffectiveCwd}
+                  view={configState.effective}
+                  loading={configState.effectiveLoading}
+                  error={configState.effectiveError}
+                  onReveal={launcher.reveal}
+                  onOpenFile={configState.openPath}
+                />
+              ) : configState.view === 'mcp' ? (
+                <McpPanel
+                  cwd={
+                    configState.scope?.kind === 'user'
+                      ? (configState.scopes.find((s) => s.kind !== 'user')?.path ?? '')
+                      : (configState.scope?.path ?? '')
+                  }
+                  servers={configState.mcpServers}
+                  listing={configState.mcpListing}
+                  listing_busy={configState.mcpListing_busy}
+                  onList={configState.runMcpList}
+                  draft={configState.mcpDraft}
+                  onDraftChange={configState.setMcpDraft}
+                  preview={configState.mcpPreview}
+                  onPreview={configState.requestMcpPreview}
+                  onApply={configState.applyMcp}
+                  onCancelPreview={configState.cancelMcpPreview}
+                  applying={configState.mcpApplying}
+                  result={configState.mcpResult}
+                  onDismissResult={configState.dismissMcpResult}
+                  onRemove={configState.removeMcp}
+                  onApprove={configState.approveMcp}
+                  onOpenFile={configState.openPath}
+                />
+              ) : (
+                <HealthPanel
+                  report={configState.doctor}
+                  running={configState.doctorRunning}
+                  onRun={configState.runDoctor}
+                  claudeVersion={info?.claudeVersion ?? null}
+                />
+              )}
+            </ConfigConsole>
           </div>
         )}
 

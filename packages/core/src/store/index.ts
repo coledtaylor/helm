@@ -1,3 +1,11 @@
+export {
+  countConfigSnapshots,
+  insertConfigSnapshot,
+  readAllConfigSnapshots,
+  readConfigSnapshot,
+  readConfigSnapshots,
+  type NewConfigSnapshot
+} from './config'
 export { openStore, type HelmDatabase, type OpenStoreOptions, type Store } from './db'
 export {
   historyCursor,

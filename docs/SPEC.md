@@ -213,6 +213,32 @@ The `.claude/` directory of whatever scope you point at, as a real interface.
 - Every write snapshotted to SQLite first, with per-file undo history
 - `claude doctor` surfaced as a health panel
 
+> [!note] Built by M5 (2026-08-10)
+> Four views over one scope switcher - files, effective, MCP, health - and the
+> only surface in Helm that writes to a `.claude` tree. Three findings shaped
+> it, all measured on 2.1.225:
+>
+> - **Settings merge per leaf, not per key.** A project `settings.json` setting
+>   `env.A` and a `settings.local.json` setting `env.B` yield a session with
+>   both, and the local file wins where they collide. A view keyed by top-level
+>   key would have reported `env` as wholly replaced, which is wrong in the
+>   direction that loses settings. The effective view is keyed by `env.A`, and
+>   the winner is read back out of a live session rather than assumed.
+> - **`CLAUDE_CONFIG_DIR` moves the credentials too**, so the user layer cannot
+>   be measured against a fixture home - a session pointed at one cannot log
+>   in. `pnpm m5-check` therefore borrows the real `~/.claude/settings.json`,
+>   through the console's own snapshotted write, and hash-verifies it back.
+> - **The JSON error position cannot be read out of V8's message.** On Node 24
+>   a trailing comma reports `Unexpected token ',' ... is not valid JSON` with
+>   no offset at all, and falling back to the end of the file marks a line
+>   twenty below the mistake. Helm scans for the position itself.
+>
+> The namespace prediction needed no measurement - Spike A settled it. Overlay
+> skills resolve as `<overlay>:<skill>`, which is decidable from the profile,
+> so the view predicts names rather than detecting collisions. `pnpm m5-check`
+> checks all of it against a second, independent read, and the effective view
+> against a real session on haiku.
+
 ### 4.3 Content Viewer
 
 Read what Claude writes without a detour through Explorer and a text editor.
