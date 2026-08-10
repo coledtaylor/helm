@@ -108,9 +108,12 @@ async function tabOrder(win: BrowserWindow): Promise<string[]> {
 }
 
 async function activeTab(win: BrowserWindow): Promise<string | null> {
+  // Scoped to session tabs: the split view keeps a workspace strip and a
+  // session strip, each with its own active tab, and the check that calls
+  // this is asking which *session* is in front.
   return js<string | null>(
     win,
-    `(() => { const el = document.querySelector('[role="tab"][aria-selected="true"]');
+    `(() => { const el = document.querySelector('[role="tab"][data-tab^="session:"][aria-selected="true"]');
       return el ? (el.dataset.tab ?? '') : null })()`
   )
 }

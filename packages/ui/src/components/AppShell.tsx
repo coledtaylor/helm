@@ -1,8 +1,10 @@
 import type { JSX, ReactNode } from 'react'
+import { TitleBar } from './TitleBar'
 
 export interface AppShellProps {
   sidebar: ReactNode
-  tabBar: ReactNode
+  /** Omitted when the panes carry their own strips - the split view does. */
+  tabBar?: ReactNode | undefined
   children: ReactNode
   statusBar: ReactNode
   /**
@@ -12,6 +14,8 @@ export interface AppShellProps {
    * banner floating on top of it covers the composer.
    */
   banner?: ReactNode | undefined
+  /** Window-level controls for the brand strip - the theme toggle lives here. */
+  titleActions?: ReactNode | undefined
 }
 
 /**
@@ -33,11 +37,13 @@ export function AppShell({
   tabBar,
   children,
   statusBar,
-  banner
+  banner,
+  titleActions
 }: AppShellProps): JSX.Element {
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-bg text-fg">
-      <div className="flex min-h-0 flex-1 gap-2 px-2 pt-2">
+      <TitleBar>{titleActions}</TitleBar>
+      <div className="flex min-h-0 flex-1 gap-2 px-2 pt-0.5">
         {sidebar}
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           {banner}

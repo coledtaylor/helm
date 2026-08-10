@@ -35,6 +35,8 @@ export interface SidebarProps {
   scanning: boolean
   scanError?: string | undefined
   selectedPath: string | null
+  /** Lower-cased project paths with a running session - the green dots. */
+  livePaths?: ReadonlySet<string> | undefined
   onSelect: (project: Project) => void
   onRescan: () => void
   onAddRoot: () => void
@@ -112,6 +114,7 @@ export function Sidebar({
   scanning,
   scanError,
   selectedPath,
+  livePaths,
   onSelect,
   onRescan,
   onAddRoot,
@@ -313,6 +316,7 @@ export function Sidebar({
                   <ProjectRow
                     project={group.root}
                     selected={group.root.path === selectedPath}
+                    live={livePaths?.has(group.root.path.toLowerCase()) ?? false}
                     onSelect={onSelect}
                   />
                 ) : (
@@ -331,6 +335,7 @@ export function Sidebar({
                   key={project.path}
                   project={project}
                   selected={project.path === selectedPath}
+                  live={livePaths?.has(project.path.toLowerCase()) ?? false}
                   onSelect={onSelect}
                   indent={group.harness !== null}
                 />

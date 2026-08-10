@@ -18,6 +18,8 @@ import { createHistoryService } from './history'
 import { createUsageService } from './usage'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
 import { createCollector, runM2Checks, type M2Context } from './m2check'
+import { TITLEBAR_OVERLAY } from './chrome'
+import { createPtermHost } from './pterm'
 import { runDesignShot } from './designshot'
 import { runM3Checks } from './m3check'
 import { runM4Checks } from './m4check'
@@ -140,6 +142,16 @@ function createWindow(
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#12131f' : '#eceef4',
     show: true,
     autoHideMenuBar: true,
+    // The app window replaces the OS-accent title bar with its own brand
+    // strip plus the Window Controls Overlay (see chrome.ts). The spike pages
+    // keep the native frame: their drivers predate the strip and measure a
+    // page, not the chrome.
+    ...(page === 'index' && process.platform === 'win32'
+      ? {
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: TITLEBAR_OVERLAY[nativeTheme.shouldUseDarkColors ? 'dark' : 'light']
+        }
+      : {}),
     // A packaged Electron window does NOT inherit the exe's icon: given no
     // `icon` it uses Electron's own, which is what the taskbar showed on
     // 2026-08-10 while the exe itself was correctly stamped.
@@ -235,6 +247,8 @@ function startApp(options: AppOptions = {}): void {
     confirm: options.confirm
   })
 
+  const pterm = createPtermHost(() => win)
+
   const history = createHistoryService({
     store: services.store,
     home: options.claudeHome,
@@ -259,6 +273,7 @@ function startApp(options: AppOptions = {}): void {
   registerIpc({
     services,
     sessions,
+    pterm,
     history,
     usage,
     config,

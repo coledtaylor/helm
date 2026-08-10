@@ -17,6 +17,8 @@ export interface ProjectRowProps {
   onSelect: (project: Project) => void
   /** Harness roots sit flush; their repos are indented under them. */
   indent?: boolean | undefined
+  /** A session is running in this project - the green dot beside the name. */
+  live?: boolean | undefined
 }
 
 /**
@@ -31,7 +33,8 @@ export function ProjectRow({
   project,
   selected,
   onSelect,
-  indent = false
+  indent = false,
+  live = false
 }: ProjectRowProps): JSX.Element {
   const KindIcon = KIND_ICON[project.kind]
   const hasMeta =
@@ -67,13 +70,22 @@ export function ProjectRow({
       />
 
       <span className="min-w-0 flex-1">
-        <span
-          className={cn(
-            'block truncate text-[13px] leading-[18px]',
-            selected ? 'font-medium text-fg' : 'text-fg'
+        <span className="flex items-center gap-1.5">
+          <span
+            className={cn(
+              'min-w-0 truncate text-[13px] leading-[18px]',
+              selected ? 'font-medium text-fg' : 'text-fg'
+            )}
+          >
+            {project.name}
+          </span>
+          {live && (
+            <span
+              aria-hidden
+              title="A session is running here"
+              className="size-[5px] shrink-0 rounded-full bg-success"
+            />
           )}
-        >
-          {project.name}
         </span>
 
         {hasMeta && (

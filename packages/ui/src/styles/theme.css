@@ -187,6 +187,20 @@ body {
   border-radius: 3px;
 }
 
+/* The brand strip doubles as the window's drag region: the native title bar
+ * is hidden (Window Controls Overlay) and this is what replaces it.
+ * Interactive children opt back out. */
+.app-drag {
+  -webkit-app-region: drag;
+}
+
+.app-no-drag,
+.app-drag button,
+.app-drag input,
+.app-drag select {
+  -webkit-app-region: no-drag;
+}
+
 /* A divider inside an island fades to transparent at its ends, so it reads as
  * a crease in the surface rather than a wall across it (DESIGN.md). */
 .island-rule {

@@ -87,5 +87,26 @@ export async function runDesignShot(ctx: M2Context, outDir: string): Promise<str
   await click(win, `button[aria-label="${THEME_LABEL[before]}"]`)
   await sleep(200)
 
+  // The split view, with a real session on the right and the workspace still
+  // browsable on the left. The session is reaped by the app's own teardown
+  // when the run quits - the same path M2-9 proves.
+  await click(win, 'aside nav button[title]')
+  await sleep(400)
+  const launched = await click(win, '[data-tab]') // focus strip first for a stable shot
+  if (launched) {
+    const started = await js<boolean>(
+      win,
+      `(() => { const el = [...document.querySelectorAll('button')]
+          .find((b) => (b.textContent ?? '').includes('Start session here'));
+        if (!el) return false; el.click(); return true })()`
+    )
+    if (started) {
+      await pollJs(win, `document.querySelector('[data-tab^="session:"]')`, 20_000)
+      await sleep(8000)
+      const shot = await screenshot(win, outDir, 'session-split.png')
+      files.push(shot.file)
+    }
+  }
+
   return files
 }

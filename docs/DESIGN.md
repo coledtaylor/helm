@@ -119,6 +119,21 @@ Dividers inside an island fade to transparent at their ends - use the
 - **Section labels**: the 10px/600 caps label style, everywhere a section
   needs a name.
 
+## 5b. Shell chrome
+
+- **Title bar**: the native bar is hidden on Windows; Helm draws its own
+  brand strip (accent square + "Helm", the drag region, the theme toggle) and
+  the Window Controls Overlay paints the min/max/close buttons in canvas
+  colours (`main/chrome.ts`). The overlay is retinted on every theme change.
+- **Split view**: sessions never share the workspace strip. They dock as a
+  resizable split on the right with their own folder-tab row; the divider is
+  a 3px `border-strong` grip that goes accent on hover, drag-bounded 20-80%.
+  Each strip ends in a ⤢/⇱ maximize toggle.
+- **Project shell**: a project pane carries a plain shell (PowerShell, cwd at
+  the project) as a terminal island below it - roughly a third of the pane,
+  hidden while the session split is open. It is furniture, not a session: no
+  row, no history, no notification.
+
 ## 6. Foreign-ground islands
 
 Two islands host content Helm does not own: the terminal and the embedded

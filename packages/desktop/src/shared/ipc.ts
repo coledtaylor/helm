@@ -378,6 +378,19 @@ export interface IpcRequests {
   /** Sessions this main process is currently hosting, for a renderer reload. */
   'session:list': { request: void; response: SessionRecord[] }
 
+  /**
+   * The project shell - a plain terminal under the project pane, opened in
+   * that project's directory. Not a session: no row, no history, no
+   * notification (see main/pterm.ts). Opening an already-open path reattaches
+   * to the shell it has.
+   */
+  'pterm:open': {
+    request: { path: string; cols: number; rows: number }
+    response: { id: number; shell: string }
+  }
+  /** Kill the shell. Called when the project's tab closes, not when it hides. */
+  'pterm:close': { request: { id: number }; response: void }
+
   'profile:list': { request: void; response: Profile[] }
   /** Create or update. Returns the problems instead of throwing for a draft
    * the form should show errors against rather than a dialog. */
@@ -539,6 +552,10 @@ export interface IpcSends {
   /** The app's equivalents, addressed to one session. Same reasoning. */
   'session:input': { id: number; data: string }
   'session:resize': { id: number; cols: number; rows: number }
+
+  /** The project shell's wire, one-way for the same echo-path reason. */
+  'pterm:input': { id: number; data: string }
+  'pterm:resize': { id: number; cols: number; rows: number }
   /**
    * Which session the user is actually looking at, or null for a non-terminal
    * tab. Only the renderer knows this, and the main process needs it to decide
@@ -609,6 +626,9 @@ export interface IpcEvents {
 
   /** Process output, addressed to the pane hosting that session. */
   'session:data': { id: number; data: string }
+  /** Project-shell output and death, addressed to the pane hosting it. */
+  'pterm:data': { id: number; data: string }
+  'pterm:exit': { id: number; exitCode: number }
   /** The finished row, exit code and measured duration included. */
   'session:exit': SessionRecord
   /** Bring a session's tab forward - sent when its exit notification is clicked. */
@@ -678,6 +698,8 @@ export const REQUEST_CHANNELS = Object.keys({
   'session:start': true,
   'session:close': true,
   'session:list': true,
+  'pterm:open': true,
+  'pterm:close': true,
   'profile:list': true,
   'profile:save': true,
   'profile:delete': true,
@@ -730,6 +752,8 @@ export const SEND_CHANNELS = Object.keys({
   'session:input': true,
   'session:resize': true,
   'session:focus': true,
+  'pterm:input': true,
+  'pterm:resize': true,
   'probe:res': true
 } satisfies Record<SendChannel, true>) as SendChannel[]
 
@@ -750,5 +774,7 @@ export const EVENT_CHANNELS = Object.keys({
   'session:data': true,
   'session:exit': true,
   'session:activate': true,
+  'pterm:data': true,
+  'pterm:exit': true,
   'probe:req': true
 } satisfies Record<EventChannel, true>) as EventChannel[]

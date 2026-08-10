@@ -11,6 +11,8 @@ import type { ConfigService } from './config'
 import type { ContentService } from './content'
 import type { HistoryService } from './history'
 import type { UsageService } from './usage'
+import { applyTitleBarOverlay } from './chrome'
+import type { PtermHost } from './pterm'
 import { readClaudeVersion, setClaudeOverride } from './claude-cli'
 import { readClaudeStatus, verifyClaudeAt } from './setup'
 import { checkForUpdate } from './update'
@@ -74,6 +76,8 @@ export interface IpcContext {
   window: () => BrowserWindow | null
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
   sessions: SessionHost
+  /** Owns the project shells; see `pterm.ts`. */
+  pterm: PtermHost
   /** Keeps the index over `~/.claude/history.jsonl` current; see `history.ts`. */
   history: HistoryService
   /** Mirrors Claude Code's cached plan-limit figures; see `usage.ts`. */
@@ -166,6 +170,7 @@ export function registerIpc(ctx: IpcContext): void {
       if (patch.claudePath !== undefined) setClaudeOverride(next.claudePath)
       if (patch.theme !== undefined) {
         nativeTheme.themeSource = patch.theme
+        applyTitleBarOverlay(ctx.window(), resolvedTheme())
         emit(ctx.window(), 'theme:changed', {
           preference: next.theme,
           resolved: resolvedTheme()
@@ -312,6 +317,11 @@ export function registerIpc(ctx: IpcContext): void {
     'session:close': (request) => ctx.sessions.close(request),
     'session:list': () => ctx.sessions.list(),
 
+    'pterm:open': ({ path, cols, rows }) => ctx.pterm.open(path, cols, rows),
+    'pterm:close': ({ id }) => {
+      ctx.pterm.close(id)
+    },
+
     'profile:list': () => profiles(services),
 
     'profile:save': (request) => {
@@ -432,6 +442,9 @@ export function registerIpc(ctx: IpcContext): void {
     'session:resize': ({ id, cols, rows }) => ctx.sessions.resize(id, cols, rows),
     'session:focus': ({ id }) => ctx.sessions.setFocus(id),
 
+    'pterm:input': ({ id, data }) => ctx.pterm.input(id, data),
+    'pterm:resize': ({ id, cols, rows }) => ctx.pterm.resize(id, cols, rows),
+
     // Consumed by one-shot `ipcMain.once` listeners in the spike drivers, which
     // register alongside these. A no-op here keeps the contract exhaustive
     // without stealing the event.
@@ -457,6 +470,9 @@ export function registerIpc(ctx: IpcContext): void {
 
   nativeTheme.themeSource = services.settings.theme
   nativeTheme.on('updated', () => {
+    // The overlay buttons are native chrome, so the theme swap has to be told
+    // to them separately - they do not follow the renderer's class.
+    applyTitleBarOverlay(ctx.window(), resolvedTheme())
     emit(ctx.window(), 'theme:changed', {
       preference: services.settings.theme,
       resolved: resolvedTheme()
