@@ -916,49 +916,77 @@ export async function runUsageChecks(
   // U-6: the mode is a setting, and it is written down
   // -------------------------------------------------------------------------
   if (run('setting')) {
+    // The cycle length is a function of what can be filled: `cost` joins it
+    // only once the index has an estimate. Drive the index to completion first
+    // so which cycle is under test is decided here rather than by whatever the
+    // background catch-up happened to have reached.
+    let passes = 0
+    let indexed
+    do {
+      indexed = usage.index.pass()
+      passes++
+    } while (!indexed.caughtUp && passes < 200)
+    usage.refresh()
+    await sleep(400)
+
     await ensurePercentMode(win)
-    const started = await segmentMode(win)
+    const seen: Array<{ mode: string; text: string }> = []
+    // Four clicks: three to walk percent -> cost -> off and back, and a fourth
+    // to prove it is a cycle rather than a sequence that stops.
+    for (let click = 0; click < 4; click++) {
+      seen.push({ mode: await segmentMode(win), text: await segmentText(win) })
+      await clickSegment(win)
+      await sleep(350)
+    }
+    const modes = seen.map((s) => s.mode)
 
-    await clickSegment(win)
-    await sleep(400)
-    const afterOne = await segmentMode(win)
-    const textWhenOff = await segmentText(win)
-
-    await clickSegment(win)
-    await sleep(400)
-    const afterTwo = await segmentMode(win)
-
-    // Back to off, and left there: the second phase of this run is a fresh app
-    // start that has to find something other than the default in the database.
-    await clickSegment(win)
-    await sleep(400)
-    const parked = await segmentMode(win)
+    // Park on a value that is not the default, so the restart phase is reading
+    // something the app could not have produced by simply starting fresh.
+    let parked = await segmentMode(win)
+    for (let attempt = 0; attempt < 4 && parked !== 'off'; attempt++) {
+      await clickSegment(win)
+      await sleep(350)
+      parked = await segmentMode(win)
+    }
 
     // Read straight out of the database rather than from the object the main
     // process is holding, because the claim is about what a restart will find.
     const persisted = readSettings(services.store).usageDisplay
 
+    const percentPane = seen.find((s) => s.mode === 'percent')
+    const costPane = seen.find((s) => s.mode === 'cost')
+    const offPane = seen.find((s) => s.mode === 'off')
+
     checks.push({
       id: 'U-6',
       criterion: 'The mode is persisted in settings',
-      title: 'Clicking the segment cycles the mode and writes it to app_settings',
+      title: 'Clicking the segment cycles all three modes and writes the choice down',
       ok:
-        started === 'percent' &&
-        afterOne === 'off' &&
-        afterTwo === 'percent' &&
+        modes.join(',') === 'percent,cost,off,percent' &&
         parked === 'off' &&
         persisted === 'off' &&
-        !showsAnyNumber(textWhenOff),
+        percentPane !== undefined &&
+        showsAnyNumber(percentPane.text) &&
+        costPane !== undefined &&
+        costPane.text.includes('$') &&
+        !showsAnyNumber(costPane.text) &&
+        offPane !== undefined &&
+        !showsAnyNumber(offPane.text) &&
+        !offPane.text.includes('$'),
       detail: {
-        cycle: [started, afterOne, afterTwo, parked],
+        cycle: modes,
+        painted: Object.fromEntries(seen.map((s) => [s.mode, s.text])),
+        parkedOn: parked,
         persistedInDatabase: persisted,
-        textWhenOff,
+        indexPasses: passes,
         databaseFile: services.store.file
       },
       notes: [
-        'Two modes in the cycle, not three: `cost` is only offered once the index',
-        'has an estimate to show, and offering a mode that would paint nothing is',
-        'offering a broken setting.',
+        'Three modes, because the index has an estimate to fill the third with.',
+        'Only offer buckets the chosen mode can honestly fill: percent mode shows',
+        'no daily figure - the plan windows are 5-hour and 7-day - and cost mode',
+        'shows no percentage, because dollars are not a percentage of anything on',
+        'a plan that is not billed per token.',
         'Left on `off` on purpose. Whether it survives a restart is decided by the',
         'second phase in scripts/run-usage.mjs, which starts the app again and',
         'reports what it read - this process cannot assert that about itself.'
