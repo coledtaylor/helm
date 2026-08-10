@@ -18,6 +18,7 @@ import { createHistoryService } from './history'
 import { createUsageService } from './usage'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
 import { createCollector, runM2Checks, type M2Context } from './m2check'
+import { runDesignShot } from './designshot'
 import { runM3Checks } from './m3check'
 import { runM4Checks } from './m4check'
 import { runM5Checks } from './m5check'
@@ -58,8 +59,10 @@ type Mode =
   | 'usage-check'
   | 'usage-settings'
   | 'shim-sweep'
+  | 'design-shot'
 
 function modeFromArgv(): Mode {
+  if (process.argv.includes('--design-shot')) return 'design-shot'
   if (process.argv.includes('--selftest')) return 'selftest'
   if (process.argv.includes('--fidelity')) return 'fidelity'
   if (process.argv.includes('--claude-check')) return 'claude-check'
@@ -90,7 +93,8 @@ const isSpikeMode =
   mode !== 'm6-check' &&
   mode !== 'm7-check' &&
   mode !== 'm7-firstrun' &&
-  mode !== 'usage-check'
+  mode !== 'usage-check' &&
+  mode !== 'design-shot'
 
 initDataDir()
 
@@ -131,7 +135,9 @@ function createWindow(
     minHeight: 560,
     // Painted before the renderer's first frame, so a cold start does not flash
     // white on a dark desktop.
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0e0f16' : '#f7f7f9',
+    // The canvas tokens from theme.css - a mismatch here flashes the old
+    // colour for a frame on every cold start.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#12131f' : '#eceef4',
     show: true,
     autoHideMenuBar: true,
     // A packaged Electron window does NOT inherit the exe's icon: given no
@@ -617,6 +623,23 @@ app.whenReady().then(() => {
 
   if (isSpikeMode) {
     startSpike()
+    return
+  }
+
+  if (mode === 'design-shot') {
+    startApp({
+      onReady: (ctx) => {
+        void runDesignShot(ctx, join(dataDir, 'screenshots', 'design'))
+          .then((files) => {
+            for (const file of files) console.log(`design-shot: ${file}`)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`design-shot crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
     return
   }
 

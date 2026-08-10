@@ -149,10 +149,13 @@ export function ConfigConsole({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg">
-      <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-surface px-4">
+    // A column of islands with 8px of canvas between them: the header strip,
+    // then the file list beside the editor. The header is the island the
+    // active folder tab lifts into.
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <header className="flex h-11 shrink-0 items-center gap-3 rounded-island border border-border bg-surface px-4">
         <SlidersIcon width={15} height={15} className="shrink-0 text-accent" />
-        <h1 className="shrink-0 text-[13px] font-semibold tracking-tight text-fg">Config</h1>
+        <h1 className="shrink-0 text-[13px] font-medium tracking-tight text-fg">Config</h1>
 
         <label className="flex min-w-0 items-center gap-2">
           <span className="sr-only">Scope</span>
@@ -162,7 +165,7 @@ export function ConfigConsole({
             value={scopePath}
             onChange={(event) => onScopeChange(event.target.value)}
             className={cn(
-              'h-7 max-w-64 min-w-40 rounded-md border border-border bg-surface-sunken px-2',
+              'h-7 max-w-64 min-w-40 rounded-well border border-border bg-surface-sunken px-2',
               'text-[12px] text-fg focus:border-accent focus:outline-none'
             )}
           >
@@ -194,7 +197,13 @@ export function ConfigConsole({
 
         <span className="flex-1" />
 
-        <div role="group" aria-label="View" className="flex overflow-hidden rounded-md border border-border">
+        <div
+          role="group"
+          aria-label="View"
+          // A segmented control (DESIGN.md): sunken well, and the chosen
+          // segment lifts to the raised surface with a hairline ring.
+          className="flex gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
+        >
           {VIEWS.map((option) => (
             <button
               key={option.id}
@@ -203,10 +212,10 @@ export function ConfigConsole({
               aria-pressed={view === option.id}
               onClick={() => onViewChange(option.id)}
               className={cn(
-                'px-2.5 py-0.5 text-[11px] transition-colors',
+                'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
                 view === option.id
-                  ? 'bg-accent-soft text-fg'
-                  : 'text-fg-subtle hover:bg-hover hover:text-fg'
+                  ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                  : 'text-fg-muted hover:text-fg'
               )}
             >
               {option.label}
@@ -231,9 +240,11 @@ export function ConfigConsole({
       </header>
 
       {view !== 'files' ? (
-        <div className="min-h-0 flex-1">{children}</div>
+        <div className="min-h-0 flex-1 overflow-hidden rounded-island border border-border bg-surface">
+          {children}
+        </div>
       ) : (
-        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 flex-1 gap-2">
           {/* Proportional and bounded, the same way the history list is: the
               rows carry a skill's description, which is what makes one worth
               opening, and a fixed width either truncates it or wastes half a
@@ -241,10 +252,10 @@ export function ConfigConsole({
           <div
             className={cn(
               'flex w-[34%] max-w-[480px] min-w-[300px] shrink-0 flex-col',
-              'border-r border-border bg-surface'
+              'overflow-hidden rounded-island border border-border bg-surface'
             )}
           >
-            <div className="shrink-0 border-b border-border p-2">
+            <div className="shrink-0 p-2">
               <div className="relative">
                 <SearchIcon
                   width={13}
@@ -259,7 +270,7 @@ export function ConfigConsole({
                   spellCheck={false}
                   aria-label="Filter this scope"
                   className={cn(
-                    'h-7 w-full rounded-md border border-border bg-surface-sunken pr-2 pl-7',
+                    'h-[26px] w-full rounded-well border border-border bg-surface-sunken pr-2 pl-7',
                     'text-[12px] text-fg select-text placeholder:text-fg-subtle',
                     'focus:border-accent focus:outline-none'
                   )}
@@ -298,7 +309,7 @@ export function ConfigConsole({
                     <p
                       className={cn(
                         'sticky top-0 z-10 mt-3 flex items-baseline gap-2 bg-surface px-2 py-1',
-                        'text-[11px] font-medium tracking-wide text-fg-subtle uppercase first:mt-0'
+                        'text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase first:mt-0'
                       )}
                     >
                       <span className="min-w-0 truncate">{label}</span>
@@ -319,7 +330,9 @@ export function ConfigConsole({
             </div>
           </div>
 
-          <div className="min-w-0 flex-1">{children}</div>
+          <div className="min-w-0 flex-1 overflow-hidden rounded-island border border-border bg-surface">
+            {children}
+          </div>
         </div>
       )}
     </div>
@@ -348,10 +361,16 @@ function Row({
       onClick={() => onSelect(file)}
       title={file.path}
       className={cn(
-        'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+        'relative flex w-full items-start gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
         selected ? 'bg-accent-soft' : 'hover:bg-hover'
       )}
     >
+      {selected && (
+        <span
+          aria-hidden
+          className="absolute top-1.5 bottom-1.5 left-0 w-[2px] rounded-full bg-accent"
+        />
+      )}
       <Icon
         width={13}
         height={13}

@@ -138,19 +138,19 @@ export function ConfigEditor({
       <header className="shrink-0 border-b border-border px-5 pt-4 pb-3">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-[15px] leading-tight font-semibold tracking-tight text-fg">
+            <h2 className="truncate text-[15px] leading-tight font-medium tracking-tight text-fg">
               {file.name}
             </h2>
             <button
               type="button"
               onClick={() => onReveal(file.path)}
               title="Show in Explorer"
-              className="mt-0.5 block max-w-full truncate text-left font-mono text-[11px] text-fg-subtle transition-colors hover:text-accent"
+              className="mt-0.5 block max-w-full truncate text-left font-mono text-[11px] text-fg-subtle transition-colors hover:text-accent-text"
             >
               {file.relPath}
             </button>
           </div>
-          <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] tracking-wide text-fg-muted uppercase">
+          <span className="shrink-0 rounded-full bg-accent-soft px-2.5 py-0.5 text-[10px] tracking-[.05em] text-accent-text uppercase">
             {file.kind === 'settings-local' ? 'settings.local' : file.kind}
           </span>
         </div>
@@ -222,7 +222,7 @@ export function ConfigEditor({
               type="button"
               data-reload-external
               onClick={onReload}
-              className="rounded-md bg-warn px-2.5 py-1 text-[11px] font-medium text-bg transition hover:brightness-110"
+              className="rounded-well bg-warn px-2.5 py-1 text-[11px] font-medium text-bg transition hover:brightness-110"
             >
               Reload from disk
             </button>
@@ -232,7 +232,7 @@ export function ConfigEditor({
               onClick={() => onSave(draft)}
               disabled={blocked}
               className={cn(
-                'rounded-md border border-border px-2.5 py-1 text-[11px] text-fg transition-colors',
+                'rounded-well border border-border-strong px-2.5 py-1 text-[11px] text-fg transition-colors',
                 blocked ? 'cursor-default opacity-50' : 'hover:bg-hover'
               )}
             >
@@ -259,7 +259,7 @@ export function ConfigEditor({
         {loaded === null ? (
           <p className="text-[12px] text-fg-subtle">Reading&hellip;</p>
         ) : loaded.binary ? (
-          <p className="rounded-md border border-border bg-surface-sunken px-3 py-2 text-[12px] text-fg-muted">
+          <p className="rounded-raised border border-border bg-surface-sunken px-3 py-2 text-[12px] text-fg-muted">
             {formatBytes(loaded.size)} of binary content. Helm will not rewrite a file it cannot
             read as text.
           </p>
@@ -275,7 +275,7 @@ export function ConfigEditor({
             wrap="off"
             aria-label={`Edit ${file.relPath}`}
             className={cn(
-              'h-full w-full resize-none rounded-md border bg-surface-sunken p-3',
+              'h-full w-full resize-none rounded-raised border bg-surface-sunken p-3',
               'font-mono text-[12px] leading-[1.55] text-fg select-text',
               'focus:outline-none',
               problem !== null ? 'border-danger/50' : 'border-border focus:border-accent'
@@ -320,7 +320,7 @@ export function ConfigEditor({
               data-toggle-history
               aria-expanded={showHistory}
               onClick={() => setShowHistory((open) => !open)}
-              className="text-[11px] text-fg-subtle transition-colors hover:text-accent"
+              className="text-[11px] text-fg-subtle transition-colors hover:text-accent-text"
             >
               {snapshots.length} {snapshots.length === 1 ? 'version' : 'versions'}
             </button>
@@ -339,7 +339,7 @@ export function ConfigEditor({
             <button
               type="button"
               onClick={() => loaded && setDraft(loaded.content)}
-              className="rounded-md border border-border px-2.5 py-1 text-[11px] text-fg transition-colors hover:bg-hover"
+              className="rounded-well border border-border-strong px-2.5 py-1 text-[11px] text-fg transition-colors hover:bg-hover"
             >
               Revert
             </button>
@@ -357,10 +357,12 @@ export function ConfigEditor({
                   : 'Write this file'
             }
             className={cn(
-              'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition',
+              // Outlined accent, never filled (DESIGN.md); disabled keeps the
+              // outline at half strength rather than swapping to a grey fill.
+              'flex items-center gap-1.5 rounded-well border px-2.5 py-1 text-[11px] font-medium transition-colors',
               canSave
-                ? 'bg-accent text-accent-fg hover:brightness-110 active:brightness-95'
-                : 'cursor-default bg-accent/40 text-accent-fg/70'
+                ? 'border-accent text-accent-text hover:bg-accent-soft'
+                : 'cursor-default border-border text-fg-subtle opacity-60'
             )}
           >
             <SaveIcon width={12} height={12} />
@@ -444,7 +446,7 @@ export function Result({
   return (
     <p
       className={cn(
-        'flex items-start gap-2 rounded-md border px-3 py-2 text-[11px]',
+        'flex items-start gap-2 rounded-raised border px-3 py-2 text-[11px]',
         ok ? 'border-success/30 bg-success/10 text-success' : 'border-danger/30 bg-danger/10 text-danger'
       )}
     >

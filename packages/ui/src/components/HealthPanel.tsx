@@ -32,7 +32,7 @@ export function HealthPanel({
       <div className="mx-auto max-w-3xl px-8 py-7">
         <header className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="text-[17px] leading-snug font-semibold tracking-tight text-fg">
+            <h2 className="text-[17px] leading-snug font-medium tracking-tight text-fg">
               Installation health
             </h2>
             <p className="mt-1.5 text-[12px] leading-relaxed text-fg-muted">
@@ -53,9 +53,9 @@ export function HealthPanel({
             onClick={onRun}
             disabled={running}
             className={cn(
-              'flex shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5 py-1',
-              'text-[11px] font-medium text-accent-fg transition',
-              running ? 'cursor-default opacity-70' : 'hover:brightness-110'
+              'flex shrink-0 items-center gap-1.5 rounded-well border border-accent px-2.5 py-1',
+              'text-[11px] font-medium text-accent-text transition-colors',
+              running ? 'cursor-default opacity-60' : 'hover:bg-accent-soft'
             )}
           >
             <RefreshIcon width={12} height={12} className={cn(running && 'animate-spin')} />
@@ -77,7 +77,7 @@ export function HealthPanel({
             {report.error !== null && (
               <p
                 role="alert"
-                className="mt-4 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
+                className="mt-4 rounded-raised border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
               >
                 {report.error}
               </p>
@@ -96,7 +96,7 @@ export function HealthPanel({
             {report.rows.length > 0 && (
               <dl
                 data-doctor-rows
-                className="mt-4 overflow-hidden rounded-lg border border-border bg-surface"
+                className="mt-4 overflow-hidden rounded-raised border border-border bg-surface-raised"
               >
                 {report.rows.map((row, index) => (
                   <div
@@ -115,12 +115,12 @@ export function HealthPanel({
             )}
 
             <section className="mt-6">
-              <h3 className="mb-2 text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+              <h3 className="mb-2 text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
                 Output
               </h3>
               <pre
                 data-doctor-output
-                className="overflow-auto rounded-lg border border-border bg-surface-sunken px-3 py-2 font-mono text-[11px] leading-[1.55] whitespace-pre-wrap text-fg-muted select-text"
+                className="overflow-auto rounded-raised border border-border bg-surface-sunken px-3 py-2 font-mono text-[11px] leading-[1.55] whitespace-pre-wrap text-fg-muted select-text"
               >
                 {report.output || 'The CLI printed nothing.'}
               </pre>

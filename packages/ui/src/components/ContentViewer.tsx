@@ -122,10 +122,11 @@ export function ContentViewer({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg">
-      <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-surface px-4">
+    // Islands with canvas gutters, like the config console (DESIGN.md).
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <header className="flex h-11 shrink-0 items-center gap-3 rounded-island border border-border bg-surface px-4">
         <BookIcon width={15} height={15} className="shrink-0 text-accent" />
-        <h1 className="shrink-0 text-[13px] font-semibold tracking-tight text-fg">Content</h1>
+        <h1 className="shrink-0 text-[13px] font-medium tracking-tight text-fg">Content</h1>
 
         <label className="flex min-w-0 items-center gap-2">
           <span className="sr-only">Scope</span>
@@ -135,7 +136,7 @@ export function ContentViewer({
             value={scopePath}
             onChange={(event) => onScopeChange(event.target.value)}
             className={cn(
-              'h-7 max-w-64 min-w-40 rounded-md border border-border bg-surface-sunken px-2',
+              'h-7 max-w-64 min-w-40 rounded-well border border-border bg-surface-sunken px-2',
               'text-[12px] text-fg focus:border-accent focus:outline-none'
             )}
           >
@@ -188,14 +189,14 @@ export function ContentViewer({
         </button>
       </header>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 gap-2">
         <div
           className={cn(
             'flex w-[32%] max-w-[440px] min-w-[290px] shrink-0 flex-col',
-            'border-r border-border bg-surface'
+            'overflow-hidden rounded-island border border-border bg-surface'
           )}
         >
-          <div className="shrink-0 border-b border-border p-2">
+          <div className="shrink-0 p-2">
             <div className="relative">
               <SearchIcon
                 width={13}
@@ -210,7 +211,7 @@ export function ContentViewer({
                 spellCheck={false}
                 aria-label="Search the markdown in this scope"
                 className={cn(
-                  'h-7 w-full rounded-md border border-border bg-surface-sunken pr-2 pl-7',
+                  'h-7 w-full rounded-well border border-border bg-surface-sunken pr-2 pl-7',
                   'text-[12px] text-fg select-text placeholder:text-fg-subtle',
                   'focus:border-accent focus:outline-none'
                 )}
@@ -309,7 +310,9 @@ export function ContentViewer({
           </div>
         </div>
 
-        <div className="min-w-0 flex-1">{children}</div>
+        <div className="min-w-0 flex-1 overflow-hidden rounded-island border border-border bg-surface">
+          {children}
+        </div>
       </div>
     </div>
   )
@@ -340,10 +343,16 @@ function Row({
       onClick={() => onSelect(file)}
       title={file.path}
       className={cn(
-        'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+        'relative flex w-full items-start gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
         selected ? 'bg-accent-soft' : 'hover:bg-hover'
       )}
     >
+      {selected && (
+        <span
+          aria-hidden
+          className="absolute top-1.5 bottom-1.5 left-0 w-[2px] rounded-full bg-accent"
+        />
+      )}
       <Icon
         width={13}
         height={13}
@@ -459,7 +468,7 @@ function Hit({
   onSelect: (file: ContentFile, line?: number) => void
 }): JSX.Element {
   return (
-    <div className={cn('mt-1 rounded-md first:mt-0', selected && 'bg-accent-soft')}>
+    <div className={cn('mt-1 rounded-well first:mt-0', selected && 'bg-accent-soft')}>
       <button
         type="button"
         data-content-file={file.relPath}
@@ -468,7 +477,7 @@ function Hit({
         onClick={() => onSelect(file)}
         title={file.path}
         className={cn(
-          'flex w-full items-baseline gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+          'flex w-full items-baseline gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
           !selected && 'hover:bg-hover'
         )}
       >

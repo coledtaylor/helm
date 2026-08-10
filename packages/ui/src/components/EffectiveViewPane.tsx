@@ -81,7 +81,7 @@ export function EffectiveViewPane({
         {/* What is being predicted                                          */}
         {/* --------------------------------------------------------------- */}
         <header>
-          <h2 className="text-[17px] leading-snug font-semibold tracking-tight text-fg">
+          <h2 className="text-[17px] leading-snug font-medium tracking-tight text-fg">
             What a session would see
           </h2>
           <p className="mt-1.5 max-w-2xl text-[12px] leading-relaxed text-fg-muted">
@@ -134,7 +134,7 @@ export function EffectiveViewPane({
         </div>
 
         {error !== null && (
-          <p className="mt-4 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">
+          <p className="mt-4 rounded-raised border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">
             {error}
           </p>
         )}
@@ -157,7 +157,7 @@ export function EffectiveViewPane({
               <button
                 type="button"
                 onClick={() => onReveal(view.cwd)}
-                className="max-w-full truncate font-mono text-fg-muted transition-colors hover:text-accent"
+                className="max-w-full truncate font-mono text-fg-muted transition-colors hover:text-accent-text"
               >
                 {view.cwd}
               </button>
@@ -168,7 +168,7 @@ export function EffectiveViewPane({
                 {view.warnings.map((warning) => (
                   <li
                     key={warning}
-                    className="flex items-start gap-2 rounded-md border border-warn/30 bg-warn/10 px-3 py-1.5 text-[11px] text-fg-muted"
+                    className="flex items-start gap-2 rounded-raised border border-warn/30 bg-warn/10 px-3 py-1.5 text-[11px] text-fg-muted"
                   >
                     <WarnIcon width={12} height={12} className="mt-0.5 shrink-0 text-warn" />
                     <span className="min-w-0">{warning}</span>
@@ -182,7 +182,7 @@ export function EffectiveViewPane({
             {/* ----------------------------------------------------------- */}
             {view.overlays.length > 0 && (
               <Section title="Overlays" hint="Each contributes under its own namespace.">
-                <ul className="overflow-hidden rounded-lg border border-border bg-surface">
+                <ul className="overflow-hidden rounded-raised border border-border bg-surface-raised">
                   {view.overlays.map((overlay) => (
                     <li
                       key={overlay.projectPath}
@@ -200,7 +200,7 @@ export function EffectiveViewPane({
                       <button
                         type="button"
                         onClick={() => onReveal(overlay.projectPath)}
-                        className="min-w-0 flex-1 truncate text-left font-mono text-[10px] text-fg-subtle transition-colors hover:text-accent"
+                        className="min-w-0 flex-1 truncate text-left font-mono text-[10px] text-fg-subtle transition-colors hover:text-accent-text"
                       >
                         {overlay.projectPath}
                       </button>
@@ -234,7 +234,7 @@ export function EffectiveViewPane({
                     <li
                       key={shared.name}
                       data-shared-name={shared.name}
-                      className="flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-md border border-border bg-surface px-3 py-1.5"
+                      className="flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-raised border border-border bg-surface-raised px-3 py-1.5"
                     >
                       <span className="text-[12px] font-medium text-fg">{shared.name}</span>
                       <span className="text-[10px] text-fg-subtle">resolves as</span>
@@ -260,7 +260,7 @@ export function EffectiveViewPane({
               hint="What you can type at the prompt in this session."
               actions={
                 <div className="flex items-center gap-2">
-                  <div className="flex overflow-hidden rounded-md border border-border">
+                  <div className="flex gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5">
                     {(['skills', 'commands', 'agents'] as const).map((option) => (
                       <button
                         key={option}
@@ -269,10 +269,10 @@ export function EffectiveViewPane({
                         aria-pressed={kind === option}
                         onClick={() => setKind(option)}
                         className={cn(
-                          'px-2 py-0.5 text-[11px] capitalize transition-colors',
+                          'rounded-[5px] px-2 py-0.5 text-[11px] capitalize transition-colors',
                           kind === option
-                            ? 'bg-accent-soft text-fg'
-                            : 'text-fg-subtle hover:bg-hover hover:text-fg'
+                            ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                            : 'text-fg-muted hover:text-fg'
                         )}
                       >
                         {option}
@@ -298,11 +298,11 @@ export function EffectiveViewPane({
               }
             >
               {entries.length === 0 ? (
-                <p className="rounded-lg border border-border bg-surface px-3 py-6 text-center text-[12px] text-fg-subtle">
+                <p className="rounded-raised border border-border bg-surface-raised px-3 py-6 text-center text-[12px] text-fg-subtle">
                   {filter === '' ? `No ${kind} would resolve here.` : 'Nothing matches that.'}
                 </p>
               ) : (
-                <ul className="overflow-hidden rounded-lg border border-border bg-surface">
+                <ul className="overflow-hidden rounded-raised border border-border bg-surface-raised">
                   {entries.map((entry) => (
                     <Entry key={`${entry.invocation}:${entry.path}`} entry={entry} kind={kind} onOpen={onOpenFile} />
                   ))}
@@ -336,11 +336,11 @@ export function EffectiveViewPane({
                     data-settings-layer={layer.kind}
                     title={layer.file}
                     className={cn(
-                      'flex items-baseline gap-1.5 rounded-md border px-2 py-1 text-[11px]',
+                      'flex items-baseline gap-1.5 rounded-well border px-2 py-1 text-[11px]',
                       layer.error !== null
                         ? 'border-danger/40 bg-danger/10 text-danger'
                         : layer.exists
-                          ? 'border-border bg-surface text-fg-muted'
+                          ? 'border-border-strong text-fg-muted'
                           : 'border-dashed border-border text-fg-subtle'
                     )}
                   >
@@ -357,13 +357,13 @@ export function EffectiveViewPane({
               </ul>
 
               {settings.length === 0 ? (
-                <p className="rounded-lg border border-border bg-surface px-3 py-6 text-center text-[12px] text-fg-subtle">
+                <p className="rounded-raised border border-border bg-surface-raised px-3 py-6 text-center text-[12px] text-fg-subtle">
                   {onlyOverridden
                     ? 'No key is defined by more than one layer with a different value.'
                     : 'No settings are defined at any layer.'}
                 </p>
               ) : (
-                <ul className="overflow-hidden rounded-lg border border-border bg-surface">
+                <ul className="overflow-hidden rounded-raised border border-border bg-surface-raised">
                   {settings.map((setting) => (
                     <li
                       key={setting.key}
@@ -415,11 +415,11 @@ export function EffectiveViewPane({
               hint="An overlay's CLAUDE.md arrives via --append-system-prompt-file; nothing else carries it."
             >
               {view.instructions.length === 0 ? (
-                <p className="rounded-lg border border-border bg-surface px-3 py-6 text-center text-[12px] text-fg-subtle">
+                <p className="rounded-raised border border-border bg-surface-raised px-3 py-6 text-center text-[12px] text-fg-subtle">
                   No CLAUDE.md would reach this session.
                 </p>
               ) : (
-                <ul className="overflow-hidden rounded-lg border border-border bg-surface">
+                <ul className="overflow-hidden rounded-raised border border-border bg-surface-raised">
                   {view.instructions.map((instruction) => (
                     <li
                       key={instruction.path}
@@ -432,7 +432,7 @@ export function EffectiveViewPane({
                       <button
                         type="button"
                         onClick={() => onOpenFile(instruction.path)}
-                        className="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-fg-muted transition-colors hover:text-accent"
+                        className="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-fg-muted transition-colors hover:text-accent-text"
                       >
                         {instruction.path}
                       </button>
@@ -483,7 +483,7 @@ function Entry({
           type="button"
           onClick={() => onOpen(entry.path)}
           title={entry.path}
-          className="block max-w-full truncate text-left font-mono text-[12px] text-fg transition-colors hover:text-accent"
+          className="block max-w-full truncate text-left font-mono text-[12px] text-fg transition-colors hover:text-accent-text"
         >
           {/* The prefix is the whole point, so it carries the colour and the
               bare name does not - a list of `api:` in accent and `think`
@@ -505,7 +505,7 @@ function Entry({
 }
 
 const fieldClass = cn(
-  'h-7 w-full rounded-md border border-border bg-surface-sunken px-2 text-[12px]',
+  'h-7 w-full rounded-well border border-border bg-surface-sunken px-2 text-[12px]',
   'text-fg placeholder:text-fg-subtle select-text',
   'focus:border-accent focus:outline-none'
 )
@@ -523,7 +523,7 @@ function Metric({ label, value }: { label: string; value: number }): JSX.Element
     <div>
       <dd
         className={cn(
-          'text-[22px] leading-tight font-semibold tabular-nums',
+          'text-[22px] leading-tight font-medium tabular-nums',
           value === 0 ? 'text-fg-subtle' : 'text-fg'
         )}
       >
@@ -548,7 +548,7 @@ function Section({
   return (
     <section className="mt-7">
       <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h3 className="text-[11px] font-medium tracking-wide text-fg-subtle uppercase">{title}</h3>
+        <h3 className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">{title}</h3>
         {hint !== undefined && (
           <p className="min-w-0 flex-1 text-[11px] text-fg-subtle">{hint}</p>
         )}

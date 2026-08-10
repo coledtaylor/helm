@@ -24,6 +24,7 @@
     "selftest": "pnpm --filter @helm/desktop selftest",
     "fidelity": "pnpm --filter @helm/desktop fidelity",
     "claude-check": "pnpm --filter @helm/desktop claude-check",
+    "design-shot": "pnpm --filter @helm/desktop design-shot",
     "m2-check": "pnpm --filter @helm/desktop m2-check",
     "m3-check": "pnpm --filter @helm/desktop m3-check",
     "m4-check": "pnpm --filter @helm/desktop m4-check",

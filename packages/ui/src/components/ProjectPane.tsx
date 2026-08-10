@@ -2,13 +2,7 @@ import type { JSX, ReactNode } from 'react'
 import type { Project } from '@helm/core'
 import { cn } from '../lib/cn'
 import { GitChip } from './GitChip'
-import { FolderIcon, HarnessIcon, LayersIcon, RepoIcon, TerminalIcon } from './icons'
-
-const KIND_ICON = {
-  harness: HarnessIcon,
-  repo: RepoIcon,
-  folder: FolderIcon
-} as const
+import { LayersIcon, TerminalIcon } from './icons'
 
 const KIND_LABEL = {
   harness: 'Harness',
@@ -45,41 +39,40 @@ export function ProjectPane({
   launchError = null,
   onSaveAsProfile
 }: ProjectPaneProps): JSX.Element {
-  const KindIcon = KIND_ICON[project.kind]
   const { inventory } = project
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-3xl px-8 py-8">
-        <header className="flex items-start gap-3">
-          <KindIcon width={20} height={20} className="mt-1 shrink-0 text-accent" />
-          <div className="min-w-0 flex-1">
-            <h1 className="truncate text-[20px] leading-tight font-semibold tracking-tight text-fg">
-              {project.name}
-            </h1>
-            <button
-              type="button"
-              onClick={() => onReveal(project.path)}
-              title="Show in Explorer"
-              className="mt-1 block max-w-full truncate text-left font-mono text-[11px] text-fg-subtle transition-colors hover:text-accent"
-            >
-              {project.path}
-            </button>
-          </div>
-          <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] text-fg-muted">
+    // The pane island the active folder tab lifts into.
+    <div className="h-full overflow-y-auto rounded-island border border-border bg-surface">
+      <div className="px-6 py-5">
+        <header className="flex items-baseline gap-3">
+          <h1 className="shrink-0 truncate text-[21px] leading-tight font-medium tracking-tight text-fg">
+            {project.name}
+          </h1>
+          <button
+            type="button"
+            onClick={() => onReveal(project.path)}
+            title="Show in Explorer"
+            className="min-w-0 truncate text-left font-mono text-[11px] text-fg-subtle transition-colors hover:text-accent-text"
+          >
+            {project.path}
+          </button>
+          <span className="ml-auto shrink-0 self-center rounded-full border border-border-strong px-2.5 py-0.5 text-[10px] text-fg-muted">
             {KIND_LABEL[project.kind]}
           </span>
         </header>
 
-        <div className="mt-5 flex flex-wrap items-center gap-3">
+        <div className="mt-4 flex flex-wrap items-center gap-2.5">
           <button
             type="button"
             onClick={() => onLaunch(project)}
             disabled={launching}
             className={cn(
-              'flex items-center gap-2 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium',
-              'text-accent-fg shadow-panel transition',
-              launching ? 'cursor-default opacity-70' : 'hover:brightness-110 active:brightness-95'
+              // Outlined in the accent, never filled (DESIGN.md "no solid
+              // accent fills") - the tint arrives on hover, not at rest.
+              'flex items-center gap-2 rounded-well border border-accent px-3.5 py-1.5',
+              'text-[12px] font-medium text-accent-text transition-colors',
+              launching ? 'cursor-default opacity-60' : 'hover:bg-accent-soft active:bg-active'
             )}
           >
             <TerminalIcon width={14} height={14} />
@@ -90,7 +83,7 @@ export function ProjectPane({
               type="button"
               onClick={() => onSaveAsProfile(project)}
               className={cn(
-                'flex items-center gap-2 rounded-md border border-border px-3 py-1.5',
+                'flex items-center gap-2 rounded-well border border-border-strong px-3.5 py-1.5',
                 'text-[12px] text-fg transition-colors hover:bg-hover'
               )}
             >
@@ -106,18 +99,18 @@ export function ProjectPane({
         {launchError !== null && (
           <p
             role="alert"
-            className="mt-3 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
+            className="mt-3 rounded-raised border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
           >
             {launchError}
           </p>
         )}
 
-        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+        <div className="mt-5 grid gap-2 sm:grid-cols-2">
           <Panel title="Git">
             {project.git ? (
               <div className="flex flex-col gap-2">
                 <GitChip git={project.git} />
-                <dl className="grid grid-cols-3 gap-2 text-[11px]">
+                <dl className="flex flex-wrap gap-x-7 gap-y-2 text-[11px]">
                   <Stat label="changed" value={project.git.dirty} />
                   <Stat label="ahead" value={project.git.ahead} />
                   <Stat label="behind" value={project.git.behind} />
@@ -139,8 +132,10 @@ export function ProjectPane({
           </Panel>
         </div>
 
-        <Panel title="What this project would contribute to a session" className="mt-3">
-          <dl className="grid grid-cols-3 gap-3">
+        <Panel title="What this project would contribute to a session" className="mt-2">
+          {/* Clustered, not spread: a stat group reads as one phrase, and
+              justifying three numbers across a wide card breaks it into three. */}
+          <dl className="flex flex-wrap gap-x-11 gap-y-3">
             <Stat large label="skills" value={inventory.skills} />
             <Stat large label="agents" value={inventory.agents} />
             <Stat large label="commands" value={inventory.commands} />
@@ -167,10 +162,12 @@ function Panel({
   className?: string | undefined
 }): JSX.Element {
   return (
+    // A raised surface inside the island: one ramp step lighter, 8px radius,
+    // no shadow (DESIGN.md "Island anatomy").
     <section
-      className={cn('rounded-lg border border-border bg-surface p-4 shadow-panel', className)}
+      className={cn('rounded-raised border border-border bg-surface-raised px-4 py-3.5', className)}
     >
-      <h2 className="mb-3 text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+      <h2 className="mb-2.5 text-[9.5px] font-semibold tracking-[.08em] text-fg-subtle uppercase">
         {title}
       </h2>
       {children}
@@ -191,8 +188,10 @@ function Stat({
     <div>
       <dd
         className={cn(
+          // Weight stops at 500: hierarchy is size and space, not boldness
+          // (DESIGN.md "no heading weight past 500").
           'tabular-nums',
-          large ? 'text-[22px] leading-tight font-semibold' : 'text-[13px] font-medium',
+          large ? 'text-[21px] leading-tight font-medium' : 'text-[13px] font-medium',
           value === 0 ? 'text-fg-subtle' : 'text-fg'
         )}
       >
@@ -208,7 +207,10 @@ function Flag({ on, children }: { on: boolean; children: ReactNode }): JSX.Eleme
     <li className={cn('flex items-center gap-2', on ? 'text-fg' : 'text-fg-subtle')}>
       <span
         aria-hidden
-        className={cn('size-1.5 shrink-0 rounded-full', on ? 'bg-success' : 'bg-border-strong')}
+        className={cn(
+          'size-1.5 shrink-0 rounded-full',
+          on ? 'bg-success' : 'bg-fg-subtle opacity-50'
+        )}
       />
       <span className="font-mono text-[11px]">{children}</span>
       <span className="sr-only">{on ? 'present' : 'absent'}</span>

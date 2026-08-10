@@ -18,6 +18,8 @@
     "selftest": "electron-vite build && electron . --selftest",
     "fidelity": "electron-vite build && electron . --fidelity",
     "claude-check": "electron-vite build && electron . --claude-check",
+    "//design-shot": "Not a check. Opens the real window, walks the main views, and screenshots each in both themes - evidence for a design review against docs/DESIGN.md.",
+    "design-shot": "electron-vite build && electron . --design-shot",
     "//m2-check": "M2's acceptance criteria, driven through the real app window. Spawns real claude sessions and ends them; see src/main/m2check.ts.",
     "m2-check": "electron-vite build && electron . --m2-check && node scripts/verify-orphans.mjs",
     "//m3-check": "M3's acceptance criteria. Builds a profile through the real form, launches it, and asks the live session whether the composition worked. Three phases, orchestrated by run-m3.mjs rather than by && because node-pty's teardown loses the exit code; the report is the verdict. Pass --only=compose|fixture|shims through to re-run one group.",

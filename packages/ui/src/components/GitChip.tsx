@@ -39,6 +39,9 @@ export function GitChip({ git, className }: GitChipProps): JSX.Element | null {
         tone={git.detached ? 'warn' : 'neutral'}
         title={git.detached ? 'HEAD is detached' : `On branch ${label}`}
         truncate
+        // Machine data reads in mono (DESIGN.md): branches sit beside counts,
+        // and the two typefaces are what separates a name from a number.
+        className="font-mono text-[10.5px]"
       >
         {label}
       </Chip>

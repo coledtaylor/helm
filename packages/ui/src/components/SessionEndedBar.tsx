@@ -35,7 +35,7 @@ export function SessionEndedBar({
     >
       <span
         aria-hidden
-        className={cn('size-1.5 shrink-0 rounded-full', failed ? 'bg-danger' : 'bg-border-strong')}
+        className={cn('size-1.5 shrink-0 rounded-full', failed ? 'bg-danger' : 'bg-fg-subtle')}
       />
       <span className="font-medium">
         {exitCode === null

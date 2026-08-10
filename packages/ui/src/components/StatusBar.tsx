@@ -39,7 +39,10 @@ export function StatusBar({
   onRevealDb
 }: StatusBarProps): JSX.Element {
   return (
-    <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-border bg-surface px-3 text-[11px] text-fg-subtle">
+    // No island and no border: the status bar is the one strip that sits
+    // directly on the canvas (DESIGN.md), a caption under the islands rather
+    // than a panel of its own.
+    <footer className="flex h-7 shrink-0 items-center gap-2.5 px-4 text-[10.5px] text-fg-subtle tabular-nums">
       <span className="shrink-0">Helm {build}</span>
 
       <Divider />
@@ -48,7 +51,7 @@ export function StatusBar({
         type="button"
         onClick={onRevealDb}
         title={`${dbFile}\n${migrations.length} migration(s): ${migrations.join(', ')}`}
-        className="shrink-0 transition-colors hover:text-accent"
+        className="shrink-0 transition-colors hover:text-accent-text"
       >
         SQLite &middot; {migrations.length} migration{migrations.length === 1 ? '' : 's'}
       </button>
@@ -103,5 +106,5 @@ export function StatusBar({
 }
 
 function Divider(): JSX.Element {
-  return <span aria-hidden className="h-3 w-px shrink-0 bg-border" />
+  return <span aria-hidden className="h-2.5 w-px shrink-0 bg-border-strong" />
 }

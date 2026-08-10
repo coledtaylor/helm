@@ -14,7 +14,7 @@ import {
   type Project
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
-import { CloseIcon, LayersIcon } from './icons'
+import { CloseIcon } from './icons'
 
 export interface ProfileEditorProps {
   /** The profile being edited, or a draft to seed a new one. */
@@ -151,13 +151,15 @@ export function ProfileEditor({
         aria-modal="true"
         aria-label={'id' in initial ? `Edit ${initial.name}` : 'New profile'}
         className={cn(
-          'flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-lg',
-          'border border-border bg-surface shadow-panel'
+          // A modal is the one surface that gets a shadow (DESIGN.md): a 12px
+          // island lifted off a dimmed canvas, with the stronger hairline.
+          'flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-xl',
+          'border border-border-strong bg-surface shadow-panel'
         )}
       >
         <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-4">
-          <LayersIcon width={14} height={14} className="text-accent" />
-          <h2 className="text-[13px] font-semibold tracking-tight text-fg">
+          <span aria-hidden className="size-[11px] rounded-[3px] bg-accent" />
+          <h2 className="text-[13px] font-medium tracking-tight text-fg">
             {'id' in initial ? 'Edit profile' : 'New profile'}
           </h2>
           <span className="flex-1" />
@@ -176,7 +178,7 @@ export function ProfileEditor({
           {problems.length > 0 && (
             <ul
               role="alert"
-              className="mb-4 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
+              className="mb-4 rounded-raised border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
             >
               {problems.map((problem) => (
                 <li key={problem}>{problem}</li>
@@ -207,7 +209,7 @@ export function ProfileEditor({
           </div>
 
           <fieldset className="mt-4">
-            <legend className="text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+            <legend className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
               Composition
             </legend>
             <p className="mt-1 text-[11px] text-fg-muted">
@@ -226,7 +228,7 @@ export function ProfileEditor({
               className={cn(inputClass, 'mt-2')}
             />
 
-            <div className="mt-2 max-h-56 overflow-y-auto rounded-md border border-border">
+            <div className="mt-2 max-h-56 overflow-y-auto rounded-raised border border-border">
               <table className="w-full border-collapse text-[12px]">
                 <thead className="sticky top-0 bg-surface-sunken">
                   <tr className="text-[10px] tracking-wide text-fg-subtle uppercase">
@@ -357,7 +359,7 @@ export function ProfileEditor({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-md border border-border px-3 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
+            className="rounded-well border border-border-strong px-3.5 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
           >
             Cancel
           </button>
@@ -366,8 +368,8 @@ export function ProfileEditor({
             onClick={submit}
             disabled={saving}
             className={cn(
-              'rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-accent-fg transition',
-              saving ? 'cursor-default opacity-70' : 'hover:brightness-110 active:brightness-95'
+              'rounded-well border border-accent px-3.5 py-1.5 text-[12px] font-medium text-accent-text transition-colors',
+              saving ? 'cursor-default opacity-60' : 'hover:bg-accent-soft active:bg-active'
             )}
           >
             {saving ? 'Saving…' : 'Save profile'}
@@ -379,7 +381,7 @@ export function ProfileEditor({
 }
 
 const inputClass = cn(
-  'h-7 w-full rounded-md border border-border bg-surface-sunken px-2 text-[12px]',
+  'h-7 w-full rounded-well border border-border bg-surface-sunken px-2 text-[12px]',
   'text-fg placeholder:text-fg-subtle select-text',
   'focus:border-accent focus:outline-none'
 )
@@ -395,7 +397,7 @@ function Field({
 }): JSX.Element {
   return (
     <label className="block">
-      <span className="mb-1 block text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+      <span className="mb-1 block text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
         {label}
       </span>
       {children}

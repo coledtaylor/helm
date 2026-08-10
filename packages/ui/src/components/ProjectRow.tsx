@@ -47,7 +47,7 @@ export function ProjectRow({
       title={project.path}
       aria-current={selected ? 'true' : undefined}
       className={cn(
-        'group relative flex w-full items-start gap-2 rounded-md py-1.5 pr-2 text-left transition-colors',
+        'group relative flex w-full items-start gap-2 rounded-well py-1.5 pr-2 text-left transition-colors',
         indent ? 'pl-7' : 'pl-2',
         selected ? 'bg-accent-soft' : 'hover:bg-hover'
       )}

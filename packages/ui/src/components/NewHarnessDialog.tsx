@@ -78,13 +78,15 @@ export function NewHarnessDialog({
         aria-label={mode === 'new' ? 'Create a harness' : 'Turn a folder into a harness'}
         data-harness-dialog={mode}
         className={cn(
-          'flex w-full max-w-lg flex-col overflow-hidden rounded-lg',
-          'border border-border bg-surface shadow-panel'
+          // The modal island: 12px radius, stronger hairline, and the one
+          // shadow the system allows (DESIGN.md).
+          'flex w-full max-w-lg flex-col overflow-hidden rounded-xl',
+          'border border-border-strong bg-surface shadow-panel'
         )}
       >
         <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-4">
           <HarnessIcon width={14} height={14} className="text-accent" />
-          <h2 className="text-[13px] font-semibold tracking-tight text-fg">
+          <h2 className="text-[13px] font-medium tracking-tight text-fg">
             {mode === 'new' ? 'Create a harness' : 'Turn a folder into a harness'}
           </h2>
           <span className="flex-1" />
@@ -103,7 +105,7 @@ export function NewHarnessDialog({
           <div
             role="radiogroup"
             aria-label="What to create"
-            className="mb-4 flex gap-1 rounded-md border border-border bg-surface-sunken p-1"
+            className="mb-4 flex gap-1 rounded-well border border-border bg-surface-sunken p-0.5"
           >
             {(['new', 'convert'] as const).map((candidate) => (
               <button
@@ -114,8 +116,10 @@ export function NewHarnessDialog({
                 data-harness-mode={candidate}
                 onClick={() => setMode(candidate)}
                 className={cn(
-                  'flex-1 rounded px-2.5 py-1 text-[12px] transition-colors',
-                  mode === candidate ? 'bg-surface text-fg shadow-panel' : 'text-fg-muted hover:text-fg'
+                  'flex-1 rounded-[5px] px-2.5 py-1 text-[12px] transition-colors',
+                  mode === candidate
+                    ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                    : 'text-fg-muted hover:text-fg'
                 )}
               >
                 {candidate === 'new' ? 'A new folder' : 'A folder I already have'}
@@ -127,7 +131,7 @@ export function NewHarnessDialog({
             <ul
               role="alert"
               data-harness-problems
-              className="mb-4 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
+              className="mb-4 rounded-raised border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
             >
               {problems.map((problem) => (
                 <li key={problem}>{problem}</li>
@@ -135,7 +139,7 @@ export function NewHarnessDialog({
             </ul>
           )}
 
-          <label className="block text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+          <label className="block text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
             {mode === 'new' ? 'Create it inside' : 'The folder'}
           </label>
           <div className="mt-1.5 flex gap-2">
@@ -146,7 +150,7 @@ export function NewHarnessDialog({
               data-harness-dir
               placeholder="Choose a folder…"
               className={cn(
-                'h-8 min-w-0 flex-1 rounded-md border border-border bg-surface-sunken px-2',
+                'h-8 min-w-0 flex-1 rounded-well border border-border bg-surface-sunken px-2',
                 'font-mono text-[11px] text-fg-muted select-text'
               )}
             />
@@ -154,7 +158,7 @@ export function NewHarnessDialog({
               type="button"
               data-harness-choose
               onClick={onChooseDir}
-              className="shrink-0 rounded-md border border-border px-2.5 text-[12px] text-fg transition-colors hover:bg-hover"
+              className="shrink-0 rounded-well border border-border-strong px-2.5 text-[12px] text-fg transition-colors hover:bg-hover"
             >
               Choose…
             </button>
@@ -164,7 +168,7 @@ export function NewHarnessDialog({
             <>
               <label
                 htmlFor="harness-name"
-                className="mt-4 block text-[11px] font-medium tracking-wide text-fg-subtle uppercase"
+                className="mt-4 block text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase"
               >
                 Name
               </label>
@@ -177,7 +181,7 @@ export function NewHarnessDialog({
                 data-harness-name
                 placeholder="work"
                 className={cn(
-                  'mt-1.5 h-8 w-full rounded-md border border-border bg-surface-sunken px-2',
+                  'mt-1.5 h-8 w-full rounded-well border border-border bg-surface-sunken px-2',
                   'text-[12px] text-fg select-text placeholder:text-fg-subtle',
                   'focus:border-accent focus:outline-none'
                 )}
@@ -185,8 +189,8 @@ export function NewHarnessDialog({
             </>
           )}
 
-          <div className="mt-4 rounded-md border border-border bg-surface-sunken px-3 py-2.5">
-            <p className="text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+          <div className="mt-4 rounded-raised border border-border bg-surface-sunken px-3 py-2.5">
+            <p className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
               What gets written
             </p>
             <p
@@ -213,7 +217,7 @@ export function NewHarnessDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-md border border-border px-3 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
+            className="rounded-well border border-border-strong px-3 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
           >
             Cancel
           </button>
@@ -223,10 +227,10 @@ export function NewHarnessDialog({
             disabled={!ready || busy}
             onClick={() => onCreate({ mode, dir, name: trimmed })}
             className={cn(
-              'rounded-md px-3 py-1.5 text-[12px] font-medium transition-colors',
+              'rounded-well border px-3.5 py-1.5 text-[12px] font-medium transition-colors',
               ready && !busy
-                ? 'bg-accent text-accent-fg hover:opacity-90'
-                : 'cursor-default border border-border text-fg-subtle opacity-60'
+                ? 'border-accent text-accent-text hover:bg-accent-soft'
+                : 'cursor-default border-border text-fg-subtle opacity-60'
             )}
           >
             {busy ? 'Creating…' : mode === 'new' ? 'Create' : 'Convert'}

@@ -58,7 +58,9 @@ export function TerminalPane({
   }, [ended, session.id])
 
   return (
-    <div className="flex h-full w-full flex-col bg-terminal">
+    // A terminal island (DESIGN.md "foreign-ground islands"): Helm's radius
+    // and hairline edge, the terminal's own fixed ground.
+    <div className="flex h-full w-full flex-col overflow-hidden rounded-island border border-border bg-terminal">
       {ended && (
         <SessionEndedBar
           exitCode={session.exitCode}
@@ -69,7 +71,7 @@ export function TerminalPane({
       {/* The gutter is a wrapper rather than padding on the terminal's own
           container: xterm sizes the grid from that container's box, so the
           element it measures has to be exactly the area it is allowed to fill. */}
-      <div className="min-h-0 flex-1 p-2">
+      <div className="min-h-0 flex-1 p-2.5">
         <div ref={boxRef} className="h-full w-full" />
       </div>
     </div>

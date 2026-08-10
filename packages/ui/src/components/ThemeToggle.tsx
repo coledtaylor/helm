@@ -25,7 +25,9 @@ export function ThemeToggle({ value, onChange }: ThemeToggleProps): JSX.Element 
     <div
       role="radiogroup"
       aria-label="Theme"
-      className="flex items-center gap-0.5 rounded-md bg-surface-sunken p-0.5"
+      // A segmented control (DESIGN.md): a sunken well whose selected segment
+      // lifts to the raised surface with a hairline ring - tone, not shadow.
+      className="flex items-center gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
     >
       {OPTIONS.map(({ value: option, label, Icon }) => (
         <button
@@ -37,9 +39,9 @@ export function ThemeToggle({ value, onChange }: ThemeToggleProps): JSX.Element 
           title={label}
           onClick={() => onChange(option)}
           className={cn(
-            'grid size-6 place-items-center rounded transition-colors',
+            'grid size-6 place-items-center rounded-[5px] transition-colors',
             value === option
-              ? 'bg-surface-raised text-fg shadow-sm'
+              ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
               : 'text-fg-subtle hover:text-fg'
           )}
         >

@@ -75,7 +75,7 @@ export function SetupPane({
   return (
     <div className="h-full overflow-y-auto bg-bg" data-setup-pane>
       <div className="mx-auto w-full max-w-2xl px-8 py-12">
-        <h1 className="text-[20px] font-semibold tracking-tight text-fg">Set up Helm</h1>
+        <h1 className="text-[20px] font-medium tracking-tight text-fg">Set up Helm</h1>
         <p className="mt-1.5 text-[13px] text-fg-muted">
           Helm hosts the real <code className="font-mono text-[12px]">claude</code> CLI and points it
           at your own folders. Two things to check and one to choose.
@@ -103,7 +103,7 @@ export function SetupPane({
           }
         >
           {roots.length > 0 && (
-            <ul className="mb-3 overflow-hidden rounded-md border border-border">
+            <ul className="mb-3 overflow-hidden rounded-raised border border-border bg-surface">
               {roots.map((root) => (
                 <li
                   key={root}
@@ -120,7 +120,7 @@ export function SetupPane({
           {suggestions.filter((s) => !roots.some((r) => r.toLowerCase() === s.toLowerCase()))
             .length > 0 && (
             <div className="mb-3">
-              <p className="mb-1.5 text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+              <p className="mb-1.5 text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
                 Found on this machine
               </p>
               <ul className="space-y-1">
@@ -134,7 +134,7 @@ export function SetupPane({
                         onClick={() => onAcceptSuggestion(path)}
                         title={path}
                         className={cn(
-                          'flex w-full items-center gap-2 rounded-md border border-border px-3 py-1.5',
+                          'flex w-full items-center gap-2 rounded-well border border-border bg-surface px-3 py-1.5',
                           'text-left transition-colors hover:bg-hover'
                         )}
                       >
@@ -142,7 +142,7 @@ export function SetupPane({
                         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg-muted">
                           {path}
                         </span>
-                        <span className="shrink-0 text-[11px] text-accent">Use this</span>
+                        <span className="shrink-0 text-[11px] text-accent-text">Use this</span>
                       </button>
                     </li>
                   ))}
@@ -175,10 +175,11 @@ export function SetupPane({
             disabled={!ready}
             onClick={onFinish}
             className={cn(
-              'rounded-md px-3.5 py-1.5 text-[12px] font-medium transition-colors',
+              // Primary means outlined in the accent, not filled (DESIGN.md).
+              'rounded-well border px-3.5 py-1.5 text-[12px] font-medium transition-colors',
               ready
-                ? 'bg-accent text-accent-fg shadow-panel hover:opacity-90'
-                : 'cursor-default border border-border text-fg-subtle opacity-60'
+                ? 'border-accent text-accent-text hover:bg-accent-soft'
+                : 'cursor-default border-border text-fg-subtle opacity-60'
             )}
           >
             Open the launcher
@@ -226,7 +227,7 @@ function ClaudeStep({
       {found && !status.tested && (
         <p
           data-setup-version-warning
-          className="mb-3 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-[12px] text-warn"
+          className="mb-3 rounded-raised border border-warn/30 bg-warn/10 px-3 py-2 text-[12px] text-warn"
         >
           Helm was tested against {status.testedRange.min} up to (not including){' '}
           {status.testedRange.max}. {status.semver ?? status.version} is outside that, so a flag may
@@ -280,7 +281,7 @@ function AuthStep({ status }: { status: SetupClaudeStatus | null }): JSX.Element
             <code className="font-mono text-[11px]">{status?.configDir ?? '~/.claude'}</code> is the
             one Helm&rsquo;s sessions use.
           </p>
-          <pre className="mt-2 overflow-x-auto rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-[12px] text-fg select-text">
+          <pre className="mt-2 overflow-x-auto rounded-well border border-border bg-surface-sunken px-3 py-2 font-mono text-[12px] text-fg select-text">
             claude
           </pre>
           <p className="mt-2 text-[11px] text-fg-subtle">
@@ -329,7 +330,7 @@ function Step({
             n
           )}
         </span>
-        <h2 className="text-[13px] font-semibold tracking-tight text-fg">{title}</h2>
+        <h2 className="text-[13px] font-medium tracking-tight text-fg">{title}</h2>
       </header>
       <p className="mt-1 mb-3 ml-[30px] truncate font-mono text-[11px] text-fg-subtle" title={detail}>
         {detail}
@@ -358,10 +359,10 @@ function Action({
       disabled={disabled}
       {...rest}
       className={cn(
-        'rounded-md px-3 py-1.5 text-[12px] transition-colors disabled:opacity-50',
+        'rounded-well border px-3 py-1.5 text-[12px] transition-colors disabled:opacity-50',
         primary
-          ? 'border border-accent/40 bg-accent-soft text-fg hover:bg-hover'
-          : 'border border-border bg-surface text-fg hover:bg-hover'
+          ? 'border-accent text-accent-text hover:bg-accent-soft'
+          : 'border-border-strong text-fg hover:bg-hover'
       )}
     >
       {children}

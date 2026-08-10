@@ -396,7 +396,10 @@ export function App(): JSX.Element {
         title: session.name,
         hint: `${session.name} · ${session.cwd}`,
         ...(project && project.name !== session.name ? { subtitle: project.name } : {}),
-        indicator
+        indicator,
+        // A session tab lifts into the terminal's fixed ground, not the
+        // island's - see Tab.ground.
+        ground: 'terminal' as const
       }
     ]
   })
@@ -817,7 +820,7 @@ export function App(): JSX.Element {
             <div
               role="status"
               className={cn(
-                'pointer-events-auto flex max-w-2xl items-start gap-3 rounded-md border px-3 py-2',
+                'pointer-events-auto flex max-w-2xl items-start gap-3 rounded-raised border px-3 py-2',
                 'text-[12px] shadow-panel',
                 profileState.error !== null
                   ? 'border-danger/30 bg-danger/10 text-danger'

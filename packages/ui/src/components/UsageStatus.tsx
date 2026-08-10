@@ -140,7 +140,7 @@ function Bucket({ bucket, now }: { bucket: UsageBucket; now: number }): JSX.Elem
 }
 
 function Divider(): JSX.Element {
-  return <span aria-hidden className="h-3 w-px shrink-0 bg-border" />
+  return <span aria-hidden className="h-2.5 w-px shrink-0 bg-border-strong" />
 }
 
 /**

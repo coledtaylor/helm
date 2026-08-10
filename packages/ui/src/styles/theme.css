@@ -26,39 +26,49 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* --------------------------------------------------------------------------
- * Tokens
+ * Tokens - "Nocturne Islands" (docs/DESIGN.md, Helm design system v1)
  *
  * Light is the base declaration and dark overrides it, so every colour has a
- * value before any variant applies. The dark surfaces descend from the
- * terminal's own background (#11121a, fixed by Spike C's theme) so a terminal
- * tab sits in the window without a seam.
+ * value before any variant applies. Same eleven roles in both modes, so every
+ * component maps 1:1. Two rules the values encode:
+ *
+ * - Borders are alpha hairlines, not opaque greys: rgba(fg, .08) at rest and
+ *   rgba(fg, .16) where an edge must read (border-strong). They sit on any
+ *   surface without picking a parent to match.
+ * - The accent never floods. Fills come from accent-soft at ~14% alpha
+ *   (10% in light); accent itself is for 2px marks, outlines and checkboxes,
+ *   and accent-text is the readable tint for text and labels on either mode.
  * ------------------------------------------------------------------------ */
 :root {
-  --helm-bg: #f4f5f7;
+  --helm-bg: #eceef4;
   --helm-surface: #ffffff;
-  --helm-surface-raised: #ffffff;
-  --helm-surface-sunken: #eceef2;
-  --helm-hover: #e8eaf0;
-  --helm-active: #dee1e9;
+  --helm-surface-raised: #f4f5fa;
+  --helm-surface-sunken: #e2e5ee;
+  --helm-hover: #e6e8f1;
+  --helm-active: #dde0ec;
 
-  --helm-border: #dfe2e8;
-  --helm-border-strong: #c3c8d2;
+  --helm-border: rgb(22 24 38 / 0.1);
+  --helm-border-strong: rgb(22 24 38 / 0.2);
 
-  --helm-fg: #1a1d25;
-  --helm-fg-muted: #59616f;
+  --helm-fg: #1d1f2e;
+  --helm-fg-muted: #595d6c;
   /* Carries the 11px chip text, which is where the contrast floor actually
-   * binds: the lighter grey this started at measured 3.2:1 on white. */
-  --helm-fg-subtle: #6c7382;
+   * binds: 4.54:1 on white. */
+  --helm-fg-subtle: #75798c;
 
-  --helm-accent: #3563c4;
+  /* Accent-600: the blurple deepens in light mode to hold 4.5:1 on white. */
+  --helm-accent: #6f61c4;
   --helm-accent-fg: #ffffff;
-  --helm-accent-soft: #e4ebfa;
+  --helm-accent-soft: rgb(111 97 196 / 0.1);
+  --helm-accent-text: #5a4da8;
 
   --helm-success: #2f7a43;
   --helm-warn: #9a6b12;
   --helm-danger: #c03b38;
 
-  --helm-shadow: 0 1px 2px rgb(16 20 30 / 0.06), 0 4px 12px rgb(16 20 30 / 0.05);
+  /* Modals only. Islands get no shadow - elevation is an edge plus the sunken
+   * canvas behind it (DESIGN.md "no stacked shadows"). */
+  --helm-shadow: 0 24px 64px rgb(16 20 30 / 0.18);
 
   /* Not themed, and deliberately so: this is the terminal's own background,
    * fixed by Spike C's 24-bit theme, and the pane has to match it exactly or a
@@ -70,29 +80,32 @@
 }
 
 .dark {
-  --helm-bg: #0e0f16;
-  --helm-surface: #12141d;
-  --helm-surface-raised: #171a24;
-  --helm-surface-sunken: #0a0b11;
-  --helm-hover: #1b1e2a;
-  --helm-active: #222634;
+  --helm-bg: #12131f;
+  --helm-surface: #1a1c2b;
+  --helm-surface-raised: #202233;
+  --helm-surface-sunken: #0d0e17;
+  --helm-hover: #242639;
+  --helm-active: #2b2d44;
 
-  --helm-border: #242838;
-  --helm-border-strong: #343a4d;
+  --helm-border: rgb(233 233 237 / 0.08);
+  --helm-border-strong: rgb(233 233 237 / 0.16);
 
-  --helm-fg: #dde1ea;
-  --helm-fg-muted: #98a0b3;
-  --helm-fg-subtle: #6b7385;
+  --helm-fg: #e9e9ed;
+  --helm-fg-muted: #9397ab;
+  --helm-fg-subtle: #75798c;
 
-  --helm-accent: #7aa2f7;
-  --helm-accent-fg: #0e0f16;
-  --helm-accent-soft: #1d2740;
+  --helm-accent: #9184d9;
+  /* Text on a solid accent fill (checkbox glyphs): the canvas colour, so the
+   * mark reads as punched out of the accent rather than white-on-purple. */
+  --helm-accent-fg: #12131f;
+  --helm-accent-soft: rgb(145 132 217 / 0.14);
+  --helm-accent-text: #d2cefd;
 
-  --helm-success: #98c379;
-  --helm-warn: #e5c07b;
-  --helm-danger: #e06c75;
+  --helm-success: #8fbf7f;
+  --helm-warn: #d9b36c;
+  --helm-danger: #d97c76;
 
-  --helm-shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.35);
+  --helm-shadow: 0 24px 64px rgb(0 0 0 / 0.5);
 
   color-scheme: dark;
 }
@@ -118,6 +131,7 @@
   --color-accent: var(--helm-accent);
   --color-accent-fg: var(--helm-accent-fg);
   --color-accent-soft: var(--helm-accent-soft);
+  --color-accent-text: var(--helm-accent-text);
 
   --color-success: var(--helm-success);
   --color-warn: var(--helm-warn);
@@ -125,6 +139,13 @@
   --color-terminal: var(--helm-terminal);
 
   --shadow-panel: var(--helm-shadow);
+
+  /* The three elevations of an island (DESIGN.md "Island anatomy"):
+   * rounded-island for panes on the canvas, rounded-raised for stat cards and
+   * code wells inside one, rounded-well for inputs and filter fields. */
+  --radius-island: 10px;
+  --radius-raised: 8px;
+  --radius-well: 7px;
 
   --font-sans:
     'Inter var', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -162,8 +183,22 @@ body {
 
 :focus-visible {
   outline: 2px solid var(--helm-accent);
-  outline-offset: 1px;
+  outline-offset: 2px;
   border-radius: 3px;
+}
+
+/* A divider inside an island fades to transparent at its ends, so it reads as
+ * a crease in the surface rather than a wall across it (DESIGN.md). */
+.island-rule {
+  height: 1px;
+  flex-shrink: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--helm-border-strong) 20%,
+    var(--helm-border-strong) 80%,
+    transparent
+  );
 }
 
 /* Chromium's default scrollbar is a light grey slab that ignores the theme. */

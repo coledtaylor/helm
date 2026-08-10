@@ -138,13 +138,13 @@ export function Sidebar({
   const shown = filtered.reduce((n, g) => n + g.members.length + (g.root ? 1 : 0), 0)
 
   return (
-    <aside className="flex h-full w-[320px] shrink-0 flex-col border-r border-border bg-surface">
+    <aside className="flex h-full w-[280px] shrink-0 flex-col overflow-hidden rounded-island border border-border bg-surface">
       {/* Above the profiles, because it is the one row that is about the whole
           machine rather than about anything configured in Helm - and because
           "where did I do that thing last week" is how a session starts at
           least as often as picking a project does. */}
       {(onOpenHistory || onOpenConfig || onOpenContent) && (
-        <div className="shrink-0 space-y-0.5 border-b border-border p-2">
+        <div className="shrink-0 space-y-0.5 p-2 pb-1.5">
           {onOpenHistory && (
             <button
               type="button"
@@ -153,7 +153,7 @@ export function Sidebar({
               aria-current={historyActive}
               title="Every Claude Code session on this machine"
               className={cn(
-                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                'flex w-full items-center gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
                 historyActive ? 'bg-accent-soft' : 'hover:bg-hover'
               )}
             >
@@ -180,7 +180,7 @@ export function Sidebar({
               aria-current={configActive}
               title="Browse and edit the .claude configuration of any scope"
               className={cn(
-                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                'flex w-full items-center gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
                 configActive ? 'bg-accent-soft' : 'hover:bg-hover'
               )}
             >
@@ -207,7 +207,7 @@ export function Sidebar({
               aria-current={contentActive}
               title="Read the notes, docs and artifacts in a project or harness"
               className={cn(
-                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                'flex w-full items-center gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
                 contentActive ? 'bg-accent-soft' : 'hover:bg-hover'
               )}
             >
@@ -228,10 +228,14 @@ export function Sidebar({
           )}
         </div>
       )}
+      <div aria-hidden className="island-rule mx-3 my-0.5" />
       {profiles}
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
-        <span className="text-[13px] font-semibold tracking-tight text-fg">Projects</span>
-        <span className="text-[11px] tabular-nums text-fg-subtle">
+      <div aria-hidden className="island-rule mx-3 my-0.5" />
+      <header className="flex h-9 shrink-0 items-center gap-2 px-3.5">
+        <span className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
+          Projects
+        </span>
+        <span className="text-[10px] tabular-nums text-fg-subtle">
           {query === '' ? total : `${shown}/${total}`}
         </span>
         <span className="flex-1" />
@@ -272,7 +276,7 @@ export function Sidebar({
         </button>
       </header>
 
-      <div className="shrink-0 border-b border-border p-2">
+      <div className="shrink-0 px-2 pb-1.5">
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -280,7 +284,7 @@ export function Sidebar({
           spellCheck={false}
           aria-label="Filter projects"
           className={cn(
-            'h-7 w-full rounded-md border border-border bg-surface-sunken px-2 text-[12px]',
+            'h-[26px] w-full rounded-well border border-border bg-surface-sunken px-2.5 text-[12px]',
             'text-fg placeholder:text-fg-subtle select-text',
             'focus:border-accent focus:outline-none'
           )}
@@ -289,7 +293,7 @@ export function Sidebar({
 
       <nav className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2">
         {scanError !== undefined && (
-          <p className="mb-2 rounded-md border border-danger/30 bg-danger/10 px-2 py-1.5 text-[11px] text-danger">
+          <p className="mb-2 rounded-raised border border-danger/30 bg-danger/10 px-2 py-1.5 text-[11px] text-danger">
             {scanError}
           </p>
         )}
@@ -312,12 +316,12 @@ export function Sidebar({
                     onSelect={onSelect}
                   />
                 ) : (
-                  <p className="px-2 py-1 text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+                  <p className="px-2 py-1 text-[10.5px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
                     {group.harness.name}
                   </p>
                 )
               ) : (
-                <p className="px-2 py-1 text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+                <p className="px-2 py-1 text-[10.5px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
                   Folders
                 </p>
               )}
@@ -364,7 +368,7 @@ function EmptyState({
       <button
         type="button"
         onClick={onAddRoot}
-        className="mt-3 rounded-md border border-border px-2.5 py-1 text-[12px] text-fg transition-colors hover:bg-hover"
+        className="mt-3 rounded-well border border-border-strong px-2.5 py-1 text-[12px] text-fg transition-colors hover:bg-hover"
       >
         Add a folder
       </button>

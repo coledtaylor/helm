@@ -136,10 +136,11 @@ export function SessionHistory({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg">
-      <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-surface px-4">
+    // Islands with canvas gutters, like every other console (DESIGN.md).
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <header className="flex h-11 shrink-0 items-center gap-3 rounded-island border border-border bg-surface px-4">
         <HistoryIcon width={15} height={15} className="shrink-0 text-accent" />
-        <h1 className="text-[13px] font-semibold tracking-tight text-fg">Session history</h1>
+        <h1 className="text-[13px] font-medium tracking-tight text-fg">Session history</h1>
         {summary && (
           <p className="min-w-0 truncate text-[11px] text-fg-subtle">
             <Count n={summary.sessions} one="session" /> · <Count n={summary.prompts} one="prompt" />{' '}
@@ -172,7 +173,7 @@ export function SessionHistory({
         </button>
       </header>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 gap-2">
         {/* ------------------------------------------------------------- */}
         {/* The list                                                       */}
         {/* ------------------------------------------------------------- */}
@@ -184,10 +185,10 @@ export function SessionHistory({
         <div
           className={cn(
             'flex w-[38%] max-w-[560px] min-w-[340px] shrink-0 flex-col',
-            'border-r border-border bg-surface'
+            'overflow-hidden rounded-island border border-border bg-surface'
           )}
         >
-          <div className="shrink-0 space-y-2 border-b border-border p-2">
+          <div className="shrink-0 space-y-2 p-2">
             <div className="relative">
               <SearchIcon
                 width={13}
@@ -202,7 +203,7 @@ export function SessionHistory({
                 spellCheck={false}
                 aria-label="Search every prompt"
                 className={cn(
-                  'h-7 w-full rounded-md border border-border bg-surface-sunken pr-7 pl-7',
+                  'h-7 w-full rounded-well border border-border bg-surface-sunken pr-7 pl-7',
                   'text-[12px] text-fg select-text placeholder:text-fg-subtle',
                   'focus:border-accent focus:outline-none'
                 )}
@@ -224,7 +225,7 @@ export function SessionHistory({
               <div
                 role="group"
                 aria-label="Grouping"
-                className="flex overflow-hidden rounded-md border border-border"
+                className="flex gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
               >
                 <Segment
                   active={grouping === 'recent'}
@@ -285,7 +286,7 @@ export function SessionHistory({
           </div>
 
           {error !== null && (
-            <p className="m-2 rounded-md border border-danger/30 bg-danger/10 px-2 py-1.5 text-[11px] text-danger">
+            <p className="m-2 rounded-raised border border-danger/30 bg-danger/10 px-2 py-1.5 text-[11px] text-danger">
               {error}
             </p>
           )}
@@ -310,7 +311,7 @@ export function SessionHistory({
                     title={`Show only ${group.path}`}
                     className={cn(
                       'sticky top-0 z-10 mt-3 flex w-full items-baseline gap-2 bg-surface px-2 py-1',
-                      'text-left text-[11px] font-medium tracking-wide text-fg-subtle uppercase',
+                      'text-left text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase',
                       'first:mt-0 hover:text-fg'
                     )}
                   >
@@ -347,7 +348,7 @@ export function SessionHistory({
         {/* ------------------------------------------------------------- */}
         {/* The detail                                                     */}
         {/* ------------------------------------------------------------- */}
-        <div className="min-w-0 flex-1 overflow-y-auto">
+        <div className="min-w-0 flex-1 overflow-y-auto rounded-island border border-border bg-surface">
           {selected === null ? (
             <NothingSelected summary={summary} />
           ) : (
@@ -403,7 +404,7 @@ function Row({
       onClick={() => onSelect(session)}
       title={`${session.projectName} · ${formatMoment(session.lastAt)}`}
       className={cn(
-        'relative flex w-full flex-col gap-0.5 rounded-md py-1.5 pr-2 pl-4 text-left',
+        'relative flex w-full flex-col gap-0.5 rounded-well py-1.5 pr-2 pl-4 text-left',
         'transition-colors',
         selected ? 'bg-accent-soft' : 'hover:bg-hover'
       )}
@@ -415,7 +416,7 @@ function Row({
         aria-hidden
         className={cn(
           'absolute top-[9px] left-1.5 size-1.5 rounded-full',
-          blocked === null ? 'bg-accent' : 'border border-border-strong'
+          blocked === null ? 'bg-accent' : 'border border-fg-subtle opacity-60'
         )}
       />
       <span
@@ -495,8 +496,10 @@ function Segment({
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        'px-2 py-0.5 text-[11px] transition-colors',
-        active ? 'bg-accent-soft text-fg' : 'text-fg-subtle hover:bg-hover hover:text-fg'
+        'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
+        active
+          ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+          : 'text-fg-muted hover:text-fg'
       )}
     >
       {label}
@@ -565,7 +568,7 @@ function Detail({
   return (
     <div className="mx-auto max-w-3xl px-8 py-7">
       <header>
-        <h2 className="text-[17px] leading-snug font-semibold tracking-tight text-fg">
+        <h2 className="text-[17px] leading-snug font-medium tracking-tight text-fg">
           {session.firstPrompt.trim() === '' ? (
             <span className="text-fg-subtle italic">Session with no recorded prompt</span>
           ) : (
@@ -577,7 +580,7 @@ function Detail({
             type="button"
             onClick={() => onProjectChange(session.project)}
             title={`Show only ${session.project}`}
-            className="max-w-full truncate font-mono text-fg-muted transition-colors hover:text-accent"
+            className="max-w-full truncate font-mono text-fg-muted transition-colors hover:text-accent-text"
           >
             {session.project}
           </button>
@@ -585,7 +588,7 @@ function Detail({
             <button
               type="button"
               onClick={() => onReveal(session.project)}
-              className="transition-colors hover:text-accent"
+              className="text-accent-text transition-colors hover:underline"
             >
               Show in Explorer
             </button>
@@ -625,9 +628,9 @@ function Detail({
               onClick={() => onResume(session)}
               disabled={resuming}
               className={cn(
-                'flex items-center gap-2 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium',
-                'text-accent-fg shadow-panel transition',
-                resuming ? 'cursor-default opacity-70' : 'hover:brightness-110 active:brightness-95'
+                'flex items-center gap-2 rounded-well border border-accent px-3.5 py-1.5',
+                'text-[12px] font-medium text-accent-text transition-colors',
+                resuming ? 'cursor-default opacity-60' : 'hover:bg-accent-soft active:bg-active'
               )}
             >
               <ResumeIcon width={14} height={14} />
@@ -651,7 +654,7 @@ function Detail({
       {resumeError !== null && resumeError !== undefined && (
         <div
           role="alert"
-          className="mt-3 flex items-start gap-3 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
+          className="mt-3 flex items-start gap-3 rounded-raised border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
         >
           <span className="min-w-0 flex-1">{resumeError}</span>
           <button
@@ -666,14 +669,14 @@ function Detail({
       )}
 
       <section className="mt-7">
-        <h3 className="mb-2 flex items-baseline gap-2 text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+        <h3 className="mb-2 flex items-baseline gap-2 text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
           Prompts
           <span className="tabular-nums normal-case">{session.promptCount}</span>
         </h3>
         {promptsLoading && prompts.length === 0 ? (
           <p className="text-[12px] text-fg-subtle">Reading&hellip;</p>
         ) : (
-          <ol className="overflow-hidden rounded-lg border border-border bg-surface">
+          <ol className="overflow-hidden rounded-raised border border-border bg-surface-raised">
             {prompts.map((prompt, index) => (
               <li
                 key={prompt.seq}
@@ -724,11 +727,11 @@ function Unavailable({
   totalResumable: number
 }): JSX.Element {
   return (
-    <div data-unavailable={reason} className="rounded-lg border border-border bg-surface-sunken p-4">
+    <div data-unavailable={reason} className="rounded-raised border border-border bg-surface-sunken p-4">
       <p className="flex items-center gap-2 text-[12px] font-medium text-fg">
         <span
           aria-hidden
-          className="size-1.5 shrink-0 rounded-full border border-border-strong"
+          className="size-1.5 shrink-0 rounded-full border border-fg-subtle opacity-60"
         />
         {reason === 'reaped'
           ? 'This conversation cannot be reopened'

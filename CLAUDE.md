@@ -4,6 +4,14 @@ Desktop shell on top of Claude Code. Read [docs/SPEC.md](docs/SPEC.md) before
 doing anything - it contains the measured evidence and design decisions. Do not
 re-litigate decisions recorded there without new evidence.
 
+**All UI work follows [docs/DESIGN.md](docs/DESIGN.md)** - the "Nocturne
+Islands" design system. Read it before touching anything a user sees. The
+short version: semantic tokens only (no raw hex in components), islands with
+hairline edges on a sunken canvas, the accent never solid-fills anything, no
+shadows outside modals, no text weight past 500, mono for machine data. If a
+change cannot be expressed in the system's tokens and rules, amend DESIGN.md
+deliberately or reconsider the change.
+
 ## Work tracking
 
 Work is tracked in ClickUp: list **"Helm - Claude Code Shell"** (id `901114291892`)

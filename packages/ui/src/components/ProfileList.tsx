@@ -82,10 +82,12 @@ export function ProfileList({
   }
 
   return (
-    <section className="flex shrink-0 flex-col border-b border-border">
-      <header className="flex h-11 shrink-0 items-center gap-2 px-3">
-        <span className="text-[13px] font-semibold tracking-tight text-fg">Profiles</span>
-        <span className="text-[11px] tabular-nums text-fg-subtle">{profiles.length}</span>
+    <section className="flex shrink-0 flex-col">
+      <header className="flex h-9 shrink-0 items-center gap-2 px-3.5">
+        <span className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
+          Profiles
+        </span>
+        <span className="text-[10px] tabular-nums text-fg-subtle">{profiles.length}</span>
         <span className="flex-1" />
         <IconButton label="Import a profile" onClick={onImport}>
           <ImportIcon />
@@ -142,7 +144,7 @@ export function ProfileList({
                   finishDrag()
                 }}
                 className={cn(
-                  'group relative rounded-md',
+                  'group relative rounded-well',
                   dragging === profile.id && 'opacity-40',
                   // A hairline between the last pinned profile and the rest, so
                   // "pinned" is visible rather than merely true.
@@ -175,7 +177,7 @@ export function ProfileList({
                     disabled={launching}
                     title={`${profile.name} — ${profile.root}`}
                     className={cn(
-                      'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left',
+                      'flex min-w-0 flex-1 items-center gap-2 rounded-well px-2 py-1.5 text-left',
                       'transition-colors hover:bg-hover disabled:cursor-default'
                     )}
                   >
