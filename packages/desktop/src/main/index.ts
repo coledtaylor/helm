@@ -134,6 +134,10 @@ function createWindow(
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0e0f16' : '#f7f7f9',
     show: true,
     autoHideMenuBar: true,
+    // Only `pnpm dev` needs this. A packaged build takes its window icon from
+    // the exe, which electron-builder stamps from `build/icon.ico`; unpackaged,
+    // Electron has no exe of its own to read and falls back to its default.
+    ...(app.isPackaged ? {} : { icon: join(__dirname, '../../build/icon.png') }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
