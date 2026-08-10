@@ -191,6 +191,51 @@ export const historyIndex = sqliteTable('history_index', {
   indexedAt: text('indexed_at').notNull().default(now)
 })
 
+/**
+ * One assistant message's token usage, out of a transcript under `projects/`.
+ *
+ * Rows rather than pre-summed buckets. The windows this answers - the 5-hour
+ * one aligned with the plan's own reset time, local midnight to now, a rolling
+ * 7 days - all slide, and none of them land on an hour boundary, so a bucketed
+ * table would be wrong by up to a bucket at every edge. 22,180 rows over the
+ * surviving 26 days is small enough that a SUM over an index on `at` is not
+ * worth optimising away.
+ *
+ * The primary key is the transcript row's own uuid, which is what makes the
+ * index idempotent: a forked conversation copies its parent's history into a
+ * new file, and re-reading a file from zero re-offers rows already counted.
+ */
+export const usageMessages = sqliteTable(
+  'usage_messages',
+  {
+    uuid: text('uuid').primaryKey(),
+    /** Epoch ms. */
+    at: integer('at').notNull(),
+    model: text('model').notNull(),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    /** Split by TTL: a 5-minute write is 1.25x base input, an hour is 2x. */
+    cacheWrite5mTokens: integer('cache_write_5m_tokens').notNull().default(0),
+    cacheWrite1hTokens: integer('cache_write_1h_tokens').notNull().default(0),
+    cacheReadTokens: integer('cache_read_tokens').notNull().default(0)
+  },
+  // Every query this table serves is a range over `at`, grouped by model.
+  (t) => [index('usage_messages_at_idx').on(t.at, t.model)]
+)
+
+/**
+ * How much of each transcript has been consumed. Keyed by path, like
+ * `history_index`, so pointing at a different tree is a different cursor rather
+ * than a corrupt one.
+ */
+export const usageIndex = sqliteTable('usage_index', {
+  file: text('file').primaryKey(),
+  bytes: integer('bytes').notNull(),
+  /** Rows taken from this file. Lets a pass report progress without a COUNT. */
+  rows: integer('rows').notNull().default(0),
+  indexedAt: text('indexed_at').notNull().default(now)
+})
+
 /** Single-row-per-key JSON blobs. See `AppSettings` for the key space. */
 export const appSettings = sqliteTable('app_settings', {
   key: text('key').primaryKey(),

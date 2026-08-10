@@ -39,4 +39,15 @@ export {
   type SessionQuery
 } from './sessions'
 export { readSettings, writeSetting, writeSettings } from './settings'
+export {
+  countUsageMessages,
+  forgetUsageFiles,
+  indexUsageFile,
+  indexedUsageFiles,
+  readUsageMessages,
+  readUsageSpend,
+  usageCursor,
+  type UsageIndexInput,
+  type UsageSpendQuery
+} from './usage'
 export * as schema from './schema'

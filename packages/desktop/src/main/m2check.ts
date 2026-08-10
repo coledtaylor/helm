@@ -8,6 +8,7 @@ import type { Check } from './fidelity'
 import type { HistoryService } from './history'
 import type { Confirm, ConfirmRequest, SessionHost, SessionObserver } from './sessions'
 import type { Services } from './services'
+import type { UsageService } from './usage'
 
 /**
  * M2's acceptance criteria, driven through the app the way a user reaches them.
@@ -30,6 +31,12 @@ export interface M2Context {
   config: ConfigService
   /** M6's driver reads, renders and searches content through this. */
   content: ContentService
+  /**
+   * The usage reader. `usage-check` points it at fixtures through this: it is
+   * the only way to prove a reshaped `cachedUsageUtilization` paints nothing,
+   * and it is deliberately not reachable from the window.
+   */
+  usage: UsageService
 }
 
 // ---------------------------------------------------------------------------

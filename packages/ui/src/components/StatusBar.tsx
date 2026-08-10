@@ -1,5 +1,7 @@
 import type { JSX } from 'react'
+import type { UsageDisplayMode, UsageSnapshot } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { UsageStatus } from './UsageStatus'
 
 export interface StatusBarProps {
   /** e.g. "0.0.1 - dev". */
@@ -11,6 +13,10 @@ export interface StatusBarProps {
   lastScan: { projects: number; durationMs: number; at: string } | null
   /** Hosted `claude` processes currently alive. */
   runningSessions: number
+  /** Claude Code's cached plan-limit figures, or null before the first read. */
+  usage: UsageSnapshot | null
+  usageDisplay: UsageDisplayMode
+  onUsageDisplayChange: (mode: UsageDisplayMode) => void
   onRevealDb: () => void
 }
 
@@ -27,6 +33,9 @@ export function StatusBar({
   scanning,
   lastScan,
   runningSessions,
+  usage,
+  usageDisplay,
+  onUsageDisplayChange,
   onRevealDb
 }: StatusBarProps): JSX.Element {
   return (
@@ -59,6 +68,13 @@ export function StatusBar({
 
       <span className="flex-1" />
 
+      {/* The right of the bar is what is happening now, and how much of the
+          plan it has cost is the first of those things. Left of the session
+          count so the rightmost segment stays where it has always been. */}
+      <UsageStatus snapshot={usage} mode={usageDisplay} onModeChange={onUsageDisplayChange} />
+
+      <Divider />
+
       {runningSessions > 0 && (
         <>
           <span
@@ -72,7 +88,10 @@ export function StatusBar({
         </>
       )}
 
-      <span className="shrink-0 tabular-nums">
+      {/* The one segment allowed to give up room. Everything else on the bar is
+          a fixed-width fact; this one is a sentence, and at the window's
+          minimum width it is the right thing to shorten. */}
+      <span className="min-w-0 truncate tabular-nums">
         {scanning
           ? 'Scanning…'
           : lastScan

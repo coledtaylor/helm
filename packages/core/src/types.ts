@@ -10,6 +10,10 @@
  * than at typecheck (CLAUDE.md, hard rules).
  */
 
+// Imported as well as re-exported: `AppSettings` below names it, and a
+// re-export alone does not bring a name into this file's scope.
+import type { UsageDisplayMode } from './usage/shape'
+
 export {
   frontmatterField,
   parseFrontmatter,
@@ -23,6 +27,43 @@ export {
   SETTING_HINTS,
   type SettingHint
 } from './config/settings-schema'
+/**
+ * The usage reader's pure half, re-exported for the same reason: the status bar
+ * re-derives what it may paint on a timer, from the same functions the main
+ * process parsed with. Two implementations of "is this reading still good" is
+ * exactly the bug this file exists to prevent.
+ */
+export {
+  describeAge,
+  nextUsageMode,
+  parseUsage,
+  usageProblem,
+  usageView,
+  USAGE_DISPLAY_MODES,
+  USAGE_STALE_AFTER_MS,
+  type UsageBucket,
+  type UsageDisplayMode,
+  type UsageGroup,
+  type UsageLimit,
+  type UsageProblem,
+  type UsageProblemKind,
+  type UsageSeverity,
+  type UsageSnapshot,
+  type UsageSpend,
+  type UsageTokens,
+  type UsageView,
+  type UsageWindowCost
+} from './usage/shape'
+export {
+  costOfTokens,
+  priceFor,
+  priceTableAgeDays,
+  PRICES,
+  PRICE_TABLE_DATE,
+  PRICE_TABLE_FRESH_FOR_DAYS,
+  type ModelPrice,
+  type TokenPrice
+} from './usage/prices'
 
 /** What a discovered directory turned out to be. */
 export type ProjectKind =
@@ -362,13 +403,19 @@ export interface AppSettings {
   windowBounds: { width: number; height: number; x?: number; y?: number } | null
   /** Set once first-run has completed, so M7 can tell a fresh profile apart. */
   firstRunCompletedAt: string | null
+  /**
+   * What the status bar's usage segment shows. Cycled by clicking it until M7
+   * builds somewhere for a setting to live.
+   */
+  usageDisplay: UsageDisplayMode
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   scanRoots: [],
   windowBounds: null,
-  firstRunCompletedAt: null
+  firstRunCompletedAt: null,
+  usageDisplay: 'percent'
 }
 
 // ---------------------------------------------------------------------------

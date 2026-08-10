@@ -15,12 +15,14 @@ import {
   registerContentProtocol
 } from './content'
 import { createHistoryService } from './history'
+import { createUsageService } from './usage'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
 import { createCollector, runM2Checks, type M2Context } from './m2check'
 import { runM3Checks } from './m3check'
 import { runM4Checks } from './m4check'
 import { runM5Checks } from './m5check'
 import { runM6Checks } from './m6check'
+import { runUsageChecks } from './usagecheck'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -50,6 +52,8 @@ type Mode =
   | 'm4-check'
   | 'm5-check'
   | 'm6-check'
+  | 'usage-check'
+  | 'usage-settings'
   | 'shim-sweep'
 
 function modeFromArgv(): Mode {
@@ -61,6 +65,8 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--m4-check')) return 'm4-check'
   if (process.argv.includes('--m5-check')) return 'm5-check'
   if (process.argv.includes('--m6-check')) return 'm6-check'
+  if (process.argv.includes('--usage-check')) return 'usage-check'
+  if (process.argv.includes('--usage-settings')) return 'usage-settings'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
   if (process.argv.includes('--claude')) return 'claude'
   if (process.argv.includes('--shell')) return 'shell'
@@ -76,7 +82,8 @@ const isSpikeMode =
   mode !== 'm3-check' &&
   mode !== 'm4-check' &&
   mode !== 'm5-check' &&
-  mode !== 'm6-check'
+  mode !== 'm6-check' &&
+  mode !== 'usage-check'
 
 initDataDir()
 
@@ -191,6 +198,12 @@ function startApp(options: AppOptions = {}): void {
     onChange: (summary) => emit(win, 'history:changed', summary)
   })
 
+  const usage = createUsageService({
+    store: services.store,
+    ...(options.claudeHome !== undefined ? { home: options.claudeHome } : {}),
+    onChange: (snapshot) => emit(win, 'usage:changed', snapshot)
+  })
+
   const config = createConfigService({
     services,
     ...(options.claudeHome !== undefined ? { userHome: options.claudeHome } : {}),
@@ -204,6 +217,7 @@ function startApp(options: AppOptions = {}): void {
     services,
     sessions,
     history,
+    usage,
     config,
     content,
     window: () => win,
@@ -243,9 +257,20 @@ function startApp(options: AppOptions = {}): void {
           console.warn(`history index could not be built: ${String(err)}`)
         }
         history.start()
+
+        // Cheap by comparison - one 134 KB file, parsed - but it is on the
+        // same "after the first paint" footing: the status bar has everything
+        // else it needs before this lands, and gets `usage:changed` when it
+        // does.
+        try {
+          emit(win, 'usage:changed', usage.refresh())
+        } catch (err) {
+          console.warn(`usage figures could not be read: ${String(err)}`)
+        }
+        usage.start()
       })
 
-      if (win) options.onReady?.({ win, services, sessions, history, config, content })
+      if (win) options.onReady?.({ win, services, sessions, history, usage, config, content })
     }
   })
 
@@ -347,6 +372,7 @@ function startApp(options: AppOptions = {}): void {
     // Before the store is let go of: a debounced index pass, or a config watch
     // firing after `will-quit`, would write to a closed connection.
     history.stop()
+    usage.stop()
     config.stop()
     // Synchronously, because this is the last point the main process is
     // guaranteed a turn. Anything deferred here is a process left behind.
@@ -495,6 +521,42 @@ app.whenReady().then(() => {
       removed: services.staleShims
     })
     console.log(`shim sweep: removed ${String(services.staleShims)} shim(s); report: ${file}`)
+    services.store.close()
+    app.exit(0)
+    return
+  }
+
+  /**
+   * The second phase of `usage-check`, and the whole of it.
+   *
+   * "The mode survives a restart" is a claim about a process that has not
+   * started yet, so the process that set the mode cannot make it. The driver
+   * leaves the setting on something other than its default and this reads it
+   * back through the ordinary startup path - same store, same `readSettings` -
+   * and writes down what it found. Same shape as `--shim-sweep`.
+   */
+  if (mode === 'usage-settings') {
+    const services = createServices()
+    const found = services.settings.usageDisplay
+    const file = writeReport('usage-settings.json', {
+      startedAt: new Date().toISOString(),
+      usageDisplay: found,
+      dbFile: services.store.file
+    })
+    console.log(`usage settings after restart: ${found}; report: ${file}`)
+
+    // `--set=` puts the user's own setting back afterwards, because the driver
+    // parked it on a non-default value in the real database to have something
+    // to read.
+    const setArg = process.argv.find((a) => a.startsWith('--set='))
+    if (setArg) {
+      const value = setArg.slice('--set='.length)
+      if (value === 'percent' || value === 'cost' || value === 'off') {
+        writeSetting(services.store, 'usageDisplay', value)
+        console.log(`usage display restored to ${value}`)
+      }
+    }
+
     services.store.close()
     app.exit(0)
     return
@@ -703,6 +765,49 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`m6-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  if (mode === 'usage-check') {
+    const collector = createCollector()
+    startApp({
+      observer: collector,
+      confirm: collector.confirm,
+      onReady: (ctx) => {
+        // The driver closes the session it started, so every confirmation is
+        // one it asked for on purpose.
+        collector.answerWith(true)
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runUsageChecks(
+          ctx,
+          collector,
+          join(dataDir, 'screenshots'),
+          dataDir,
+          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
+        )
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('usage-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`usage-check report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`usage-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

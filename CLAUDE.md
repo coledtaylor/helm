@@ -84,6 +84,31 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   read back out of `env` - because a prediction about a session is only worth
   what a session says about it. Spawns one `claude` on haiku;
   `--only=browse,edit,snapshot,json,external,mcp,effective,doctor` narrows it.
+- `pnpm usage-check` covers the status bar's usage figures. Same discipline: a
+  plain `JSON.parse` beside `parseUsage`, a hand-written "which of these may be
+  shown" beside `usageView`, a hand-computed weekday beside `formatResetsIn`, a
+  hand-written parse of all 163 transcripts beside the incremental index, and a
+  regex over the rendered text beside the component. Three of the criteria could
+  not be settled by agreement and are not: a live `claude` is asked for `/usage`
+  and its own panel compared to the bar, a fixture's window is set to expire ten
+  seconds out so a rollover happens *underneath* the segment, and the full parse
+  the index avoids is measured rather than quoted. Two phases, because "the mode
+  survives a restart" cannot be asserted by the process that set it. Spawns one
+  `claude` session and runs no inference;
+  `--only=read,watch,resets,degrade,setting,width,cost,dollars,live` narrows it.
+- Usage figures degrade to **nothing** rather than to a stale number. The
+  server's own answer in `cachedUsageUtilization` is authoritative but dated, so
+  a reading older than `USAGE_STALE_AFTER_MS`, one whose `resets_at` has already
+  passed, a missing key, or a reshaped object all paint no number and put the
+  reason in the tooltip. Measured on 2.1.225: the 5-hour window rolled over
+  between two reads and the cached figure went 51% to 21%. The binding limit of
+  a group is the one with the **highest percent**, not the one flagged
+  `is_active` - that was observed set on the lower of the two.
+- Dollar figures are **estimates and say so**, because `spend.enabled` is false
+  on a subscription plan and every `*_dollars` the server sends is null. The
+  price table's date lives in `PRICE_TABLE_DATE` and the UI reads it from there,
+  so a stale table is visible rather than merely authoritative-looking. A model
+  with no rate on file is counted, left unpriced, and named.
 - **A check that can pass with no evidence behind it is worse than no check.**
   M3-4 asked a session to quote two skills' headings and compared against the
   files on disk - and when those files went missing, `firstHeading` returned

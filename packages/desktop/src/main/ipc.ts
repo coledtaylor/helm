@@ -8,6 +8,7 @@ import {
 import type { ConfigService } from './config'
 import type { ContentService } from './content'
 import type { HistoryService } from './history'
+import type { UsageService } from './usage'
 import { readClaudeVersion } from './claude-cli'
 import { appMode, dataDir, dbFile } from './paths'
 import { activePty, windowsBuildNumber } from './pty'
@@ -71,6 +72,8 @@ export interface IpcContext {
   sessions: SessionHost
   /** Keeps the index over `~/.claude/history.jsonl` current; see `history.ts`. */
   history: HistoryService
+  /** Mirrors Claude Code's cached plan-limit figures; see `usage.ts`. */
+  usage: UsageService
   /** The one surface that writes to a `.claude` tree; see `config.ts`. */
   config: ConfigService
   /** Reads, renders and searches what Claude writes; see `content.ts`. */
@@ -236,6 +239,11 @@ export function registerIpc(ctx: IpcContext): void {
     'config:mcpList': ({ cwd }) => ctx.config.mcpList(cwd),
 
     'config:doctor': () => ctx.config.doctor(),
+
+    // The last reading rather than a fresh read: the service keeps itself
+    // current, and a status bar that hit the disk every time it repainted
+    // would be the one surface in the app that does.
+    'usage:read': () => ctx.usage.snapshot(),
 
     'content:scopes': () => ctx.content.scopes(),
     'content:tree': ({ scopePath, refresh }) => ctx.content.tree(scopePath, refresh ?? false),

@@ -4,7 +4,8 @@ import type {
   CachedProject,
   DiscoveryResult,
   Project,
-  ThemePreference
+  ThemePreference,
+  UsageDisplayMode
 } from '@helm/core'
 import type { AppInfo, ResolvedTheme } from '../../../shared/ipc'
 import { helm } from './bridge'
@@ -30,6 +31,7 @@ export interface LauncherState {
   rescan: () => void
   addRoot: () => void
   setTheme: (theme: ThemePreference) => void
+  setUsageDisplay: (mode: UsageDisplayMode) => void
   reveal: (path: string) => void
 }
 
@@ -152,6 +154,13 @@ export function useLauncher(): LauncherState {
     void helm.invoke('settings:write', { theme }).then(setSettings)
   }, [])
 
+  // Persisted rather than held in the window, so the choice survives a restart
+  // - and written through the same channel every other setting uses, so the
+  // main process is the one that decides what the settings are.
+  const setUsageDisplay = useCallback((usageDisplay: UsageDisplayMode) => {
+    void helm.invoke('settings:write', { usageDisplay }).then(setSettings)
+  }, [])
+
   const reveal = useCallback((path: string) => {
     void helm.invoke('shell:showItem', { path })
   }, [])
@@ -176,6 +185,7 @@ export function useLauncher(): LauncherState {
     rescan,
     addRoot,
     setTheme,
+    setUsageDisplay,
     reveal
   }
 }
