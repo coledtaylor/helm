@@ -1,7 +1,7 @@
 import { type BrowserWindow } from 'electron'
 import { execFileSync } from 'node:child_process'
 import { readSessions, type Project, type SessionRecord } from '@helm/core'
-import { screenshot, sleep, stripAnsi, waitFor } from './bridge'
+import { screenshot, sleep, squash, stripAnsi, waitFor } from './bridge'
 import type { Check } from './fidelity'
 import type { Confirm, ConfirmRequest, SessionHost, SessionObserver } from './sessions'
 import type { Services } from './services'
@@ -151,16 +151,32 @@ export function createCollector(): Collector {
 
 /** Claude Code's startup gates - folder trust, MCP enablement - are arbitrary
  * dialogs a host must expect rather than a fixed sequence (Spike C, D0). */
-function answerStartupGates(ctx: M2Context, collector: Collector, ids: number[]): () => void {
+export function answerStartupGates(
+  ctx: { sessions: SessionHost },
+  collector: Collector,
+  ids: number[]
+): () => void {
   const answered = new Set<string>()
   const timer = setInterval(() => {
     for (const id of ids) {
-      const text = stripAnsi(collector.output(id))
-      if (!answered.has(`trust:${String(id)}`) && /Do you trust/i.test(text)) {
+      // Squashed, not merely stripped: the TUI positions text by moving the
+      // cursor instead of emitting the spaces between words, so the stream
+      // reads `quicksafetycheck:isthisaproject...` and any pattern containing a
+      // space matches nothing. `/MCP\s*servers/` worked here by accident - its
+      // `\s*` allows the zero spaces that are actually in the stream.
+      const text = squash(collector.output(id))
+      // Wording moves between releases: 2.1.225 asks folder trust as "Quick
+      // safety check: Is this a project you created or one you trust?" where an
+      // earlier one asked "Do you trust the files in this folder?". This only
+      // ever fired against already-trusted folders, so the drift went unseen.
+      if (
+        !answered.has(`trust:${String(id)}`) &&
+        /doyoutrust|trustthisfolder|quicksafetycheck/.test(text)
+      ) {
         answered.add(`trust:${String(id)}`)
         ctx.sessions.input(id, '\r')
       }
-      if (!answered.has(`mcp:${String(id)}`) && /MCP\s*servers/.test(text)) {
+      if (!answered.has(`mcp:${String(id)}`) && /mcpservers/.test(text)) {
         answered.add(`mcp:${String(id)}`)
         ctx.sessions.input(id, '\x1b')
       }
@@ -169,10 +185,10 @@ function answerStartupGates(ctx: M2Context, collector: Collector, ids: number[])
   return () => clearInterval(timer)
 }
 
-const atPrompt = (text: string): boolean =>
+export const atPrompt = (text: string): boolean =>
   /\?\s*for\s*shortcuts/.test(text) || /Claude\s*Code\s*v\d/.test(text)
 
-function processAlive(pid: number): boolean {
+export function processAlive(pid: number): boolean {
   if (pid <= 0) return false
   try {
     // Signal 0 tests for existence without touching the process.

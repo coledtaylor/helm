@@ -183,3 +183,63 @@ export function MonitorIcon(props: IconProps): JSX.Element {
     </Icon>
   )
 }
+
+/** A profile: stacked planes, because a profile is repos composed into one. */
+export function LayersIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M8 1.75 2 5l6 3.25L14 5z" />
+      <path d="m2.75 8 5.25 2.85L13.25 8" />
+      <path d="m2.75 11 5.25 2.85L13.25 11" />
+    </Icon>
+  )
+}
+
+export function PinIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M6 2.25h4l-.5 3.5 2 2.25H4.5l2-2.25z" />
+      <path d="M8 8v5.75" />
+    </Icon>
+  )
+}
+
+export function PencilIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M11.25 2.75 13.25 4.75 5.5 12.5 2.75 13.25 3.5 10.5z" />
+      <path d="m9.75 4.25 2 2" />
+    </Icon>
+  )
+}
+
+export function TrashIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M2.75 4.25h10.5" />
+      <path d="M6.25 4.25V2.75h3.5v1.5" />
+      <path d="M4.25 4.25 5 13.25h6l.75-9" />
+    </Icon>
+  )
+}
+
+/** Import and export, distinguished by the arrow's direction against the tray. */
+export function ImportIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M8 2.25v7" />
+      <path d="M5 6.25 8 9.25l3-3" />
+      <path d="M2.75 11.25v1.5c0 .28.22.5.5.5h9.5a.5.5 0 0 0 .5-.5v-1.5" />
+    </Icon>
+  )
+}
+
+export function ExportIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M8 9.25v-7" />
+      <path d="M5 5.25 8 2.25l3 3" />
+      <path d="M2.75 11.25v1.5c0 .28.22.5.5.5h9.5a.5.5 0 0 0 .5-.5v-1.5" />
+    </Icon>
+  )
+}

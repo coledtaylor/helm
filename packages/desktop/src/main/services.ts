@@ -1,5 +1,6 @@
 import {
   cacheProjects,
+  cleanStaleShims,
   openStore,
   readCachedProjects,
   readGitStates,
@@ -13,7 +14,7 @@ import {
   type GitState,
   type Store
 } from '@helm/core'
-import { dbFile } from './paths'
+import { dbFile, shimRoot } from './paths'
 
 /**
  * The main process's stateful bits, in one object rather than module-level
@@ -32,6 +33,11 @@ export interface Services {
    * be reported rather than silently swallowed.
    */
   lostSessions: number
+  /**
+   * Overlay shim directories left behind by the previous run. Counted for the
+   * same reason lost sessions are: it is evidence of how the last run ended.
+   */
+  staleShims: number
 }
 
 export function createServices(): Services {
@@ -40,7 +46,14 @@ export function createServices(): Services {
     store,
     settings: readSettings(store),
     lastScan: null,
-    lostSessions: reconcileRunningSessions(store)
+    lostSessions: reconcileRunningSessions(store),
+    // Every shim, because at this point in startup nothing is hosting a session
+    // and therefore nothing is reading a plugin directory. Any shim that
+    // exists is from a run that has ended - cleanly or otherwise - and a launch
+    // rebuilds what it needs. This is the only place they are swept: doing it
+    // per launch would pull a plugin directory out from under a live session
+    // started by a different profile.
+    staleShims: cleanStaleShims(shimRoot).length
   }
 }
 

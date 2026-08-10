@@ -1,4 +1,4 @@
-import type { JSX } from 'react'
+import type { JSX, ReactNode } from 'react'
 import { useMemo, useState } from 'react'
 import type { DiscoveryResult, Harness, Project } from '@helm/core'
 import { cn } from '../lib/cn'
@@ -6,6 +6,13 @@ import { ProjectRow } from './ProjectRow'
 import { PlusIcon, RefreshIcon } from './icons'
 
 export interface SidebarProps {
+  /**
+   * Saved profiles, above the tree. The launcher shows both (SPEC 4.1) and they
+   * are one scroll container's worth of sidebar, not two panels - so the list
+   * is passed in rather than reimplemented here, and this component keeps
+   * knowing only about discovery.
+   */
+  profiles?: ReactNode | undefined
   discovery: DiscoveryResult | null
   scanning: boolean
   scanError?: string | undefined
@@ -65,6 +72,7 @@ function matches(project: Project, query: string): boolean {
 }
 
 export function Sidebar({
+  profiles,
   discovery,
   scanning,
   scanError,
@@ -95,6 +103,7 @@ export function Sidebar({
 
   return (
     <aside className="flex h-full w-[320px] shrink-0 flex-col border-r border-border bg-surface">
+      {profiles}
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <span className="text-[13px] font-semibold tracking-tight text-fg">Projects</span>
         <span className="text-[11px] tabular-nums text-fg-subtle">

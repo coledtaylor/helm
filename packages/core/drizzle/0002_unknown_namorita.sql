@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `profile_id` integer;

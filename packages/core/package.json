@@ -5,8 +5,10 @@
   "license": "MIT",
   "private": true,
   "type": "module",
+  "//exports": "`./types` is the only entry point safe to import for its *values* from the renderer. The package root reaches node:fs through launch/ and store/, and a value import of it from a browser bundle fails at rollup rather than at typecheck. Types themselves are erased, so `import type` from the root is fine anywhere.",
   "exports": {
     ".": "./src/index.ts",
+    "./types": "./src/types.ts",
     "./store": "./src/store/index.ts",
     "./discovery": "./src/discovery/index.ts"
   },

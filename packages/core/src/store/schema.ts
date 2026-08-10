@@ -104,6 +104,9 @@ export const sessions = sqliteTable(
     cwd: text('cwd').notNull(),
     /** Path of the discovered project, or null for a cwd chosen another way. */
     projectPath: text('project_path'),
+    /** The profile this was launched from. Deliberately not a foreign key - a
+     * session row is history, and deleting a profile does not unmake it. */
+    profileId: integer('profile_id'),
     /** JSON array of the argv after the executable. */
     argv: text('argv', { mode: 'json' }).$type<string[]>().notNull().default([]),
     status: text('status', { enum: ['running', 'exited', 'lost'] })

@@ -3,6 +3,14 @@ import { suggestRoots } from '@helm/core'
 import { readClaudeVersion } from './claude-cli'
 import { appMode, dataDir, dbFile } from './paths'
 import { activePty, windowsBuildNumber } from './pty'
+import {
+  exportProfile,
+  importProfile,
+  pinProfiles,
+  profiles,
+  removeProfile,
+  saveProfile
+} from './profiles'
 import { cachedProjects, runScan, updateSettings, type Services } from './services'
 import type { SessionHost } from './sessions'
 import type {
@@ -150,6 +158,36 @@ export function registerIpc(ctx: IpcContext): void {
     'session:start': (request) => ctx.sessions.start(request),
     'session:close': (request) => ctx.sessions.close(request),
     'session:list': () => ctx.sessions.list(),
+
+    'profile:list': () => profiles(services),
+
+    'profile:save': (request) => {
+      const result = saveProfile(services, request)
+      if (result.profile) emit(ctx.window(), 'profiles:changed', profiles(services))
+      return result
+    },
+
+    'profile:delete': async ({ id }) => {
+      const deleted = await removeProfile(services, ctx.window(), id)
+      if (deleted) emit(ctx.window(), 'profiles:changed', profiles(services))
+      return { deleted }
+    },
+
+    'profile:pin': ({ ids }) => {
+      const next = pinProfiles(services, ids)
+      emit(ctx.window(), 'profiles:changed', next)
+      return next
+    },
+
+    'profile:export': ({ id }) => exportProfile(services, ctx.window(), id),
+
+    'profile:import': async () => {
+      const result = await importProfile(services, ctx.window())
+      if (result.profile) emit(ctx.window(), 'profiles:changed', profiles(services))
+      return result
+    },
+
+    'profile:launch': (request) => ctx.sessions.launchProfile(request),
 
     'clipboard:read': () => clipboard.readText(),
     'clipboard:write': (text) => {

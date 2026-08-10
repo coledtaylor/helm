@@ -21,6 +21,12 @@ export interface SessionsState {
   dismissLaunchError: () => void
   /** Spawns a session against a project and returns its id, or null on failure. */
   launch: (project: Project, paneSize: HTMLElement | null) => Promise<number | null>
+  /**
+   * Takes ownership of a session someone else spawned - a profile launch, which
+   * goes out on its own channel because the composition is main's to build.
+   * Idempotent, so a record that has already arrived does not open a second tab.
+   */
+  adopt: (record: SessionRecord) => void
   /** Asks main to end and forget it. Main may ask the user first. */
   close: (id: number) => Promise<boolean>
   /** Moves a session tab to `toIndex` within the session tabs. */
@@ -87,6 +93,12 @@ export function useSessions(onActivate: (id: number) => void): SessionsState {
     []
   )
 
+  const adopt = useCallback((record: SessionRecord) => {
+    setSessions((current) =>
+      current.some((s) => s.id === record.id) ? current : [...current, record]
+    )
+  }, [])
+
   const close = useCallback(async (id: number): Promise<boolean> => {
     const { closed } = await helm.invoke('session:close', { id })
     if (!closed) return false
@@ -113,5 +125,5 @@ export function useSessions(onActivate: (id: number) => void): SessionsState {
 
   const dismissLaunchError = useCallback(() => setLaunchError(null), [])
 
-  return { sessions, launchError, dismissLaunchError, launch, close, reorder, reportFocus }
+  return { sessions, launchError, dismissLaunchError, launch, adopt, close, reorder, reportFocus }
 }

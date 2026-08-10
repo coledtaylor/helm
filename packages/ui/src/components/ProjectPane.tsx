@@ -2,7 +2,7 @@ import type { JSX, ReactNode } from 'react'
 import type { Project } from '@helm/core'
 import { cn } from '../lib/cn'
 import { GitChip } from './GitChip'
-import { FolderIcon, HarnessIcon, RepoIcon, TerminalIcon } from './icons'
+import { FolderIcon, HarnessIcon, LayersIcon, RepoIcon, TerminalIcon } from './icons'
 
 const KIND_ICON = {
   harness: HarnessIcon,
@@ -25,6 +25,8 @@ export interface ProjectPaneProps {
   launching?: boolean | undefined
   /** Why the last launch failed, if it did. */
   launchError?: string | null | undefined
+  /** Opens the profile editor seeded with this project as the root. */
+  onSaveAsProfile?: ((project: Project) => void) | undefined
 }
 
 /**
@@ -40,7 +42,8 @@ export function ProjectPane({
   onReveal,
   onLaunch,
   launching = false,
-  launchError = null
+  launchError = null,
+  onSaveAsProfile
 }: ProjectPaneProps): JSX.Element {
   const KindIcon = KIND_ICON[project.kind]
   const { inventory } = project
@@ -82,6 +85,19 @@ export function ProjectPane({
             <TerminalIcon width={14} height={14} />
             {launching ? 'Starting…' : 'Start session here'}
           </button>
+          {onSaveAsProfile && (
+            <button
+              type="button"
+              onClick={() => onSaveAsProfile(project)}
+              className={cn(
+                'flex items-center gap-2 rounded-md border border-border px-3 py-1.5',
+                'text-[12px] text-fg transition-colors hover:bg-hover'
+              )}
+            >
+              <LayersIcon width={14} height={14} className="text-accent" />
+              Save as profile
+            </button>
+          )}
           <span className="text-[11px] text-fg-subtle">
             Runs <code className="font-mono">claude</code> with this folder as the working directory.
           </span>

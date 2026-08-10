@@ -1,11 +1,13 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Project, SessionRecord } from '@helm/core'
+import type { Profile, ProfileDraft, Project, SessionRecord } from '@helm/core'
 import {
   AppShell,
   cn,
   FolderIcon,
   HarnessIcon,
+  ProfileEditor,
+  ProfileList,
   ProjectPane,
   RepoIcon,
   Sidebar,
@@ -18,6 +20,7 @@ import {
 } from '@helm/ui'
 import { TerminalPane } from './TerminalPane'
 import { useLauncher } from './useLauncher'
+import { useProfiles } from './useProfiles'
 import { useSessions } from './useSessions'
 
 const KIND_ICON = {
@@ -57,6 +60,13 @@ export function App(): JSX.Element {
 
   const sessionState = useSessions(activateSession)
   const { sessions } = sessionState
+  const profileState = useProfiles()
+
+  /** The profile being edited, `'new'` for one being created from scratch, or
+   * a seeded draft from "save as profile". Null when the dialog is closed. */
+  const [editing, setEditing] = useState<Profile | ProfileDraft | null>(null)
+  const [saveProblems, setSaveProblems] = useState<string[]>([])
+  const [saving, setSaving] = useState(false)
 
   const projectsByPath = useMemo(() => {
     const map = new Map<string, Project>()
@@ -134,6 +144,61 @@ export function App(): JSX.Element {
       }
     },
     [sessionState]
+  )
+
+  /**
+   * A profile launch lands in a tab exactly the way a project launch does - the
+   * strip does not care which produced the session, only that one exists.
+   */
+  const launchProfile = useCallback(
+    async (profile: Profile) => {
+      const session = await profileState.launch(profile, paneRef.current)
+      if (!session) return
+      sessionState.adopt(session)
+      setOrder((current) => [...current, { kind: 'session', id: session.id }])
+      setRequestedId(tabId({ kind: 'session', id: session.id }))
+    },
+    [profileState, sessionState]
+  )
+
+  const blankProfile = useCallback(
+    (root: string, name: string): ProfileDraft => ({
+      name,
+      root,
+      overlays: [],
+      access: [],
+      model: null,
+      effort: null,
+      permissionMode: null,
+      agent: null,
+      mcp: [],
+      openingPrompt: null,
+      pinnedOrder: null
+    }),
+    []
+  )
+
+  const saveProfile = useCallback(
+    async (draft: ProfileDraft) => {
+      setSaving(true)
+      try {
+        const id = editing !== null && 'id' in editing ? editing.id : null
+        const { ok, problems } = await profileState.save(draft, id)
+        setSaveProblems(problems)
+        if (ok) setEditing(null)
+      } finally {
+        setSaving(false)
+      }
+    },
+    [editing, profileState]
+  )
+
+  // Main asks the user first, so this can be fired and forgotten: the list
+  // refreshes from `profiles:changed` if the answer was yes and does not if it
+  // was no.
+  const deleteProfile = useCallback(
+    (profile: Profile) => void profileState.remove(profile.id),
+    [profileState]
   )
 
   const closeTab = useCallback(
@@ -234,6 +299,26 @@ export function App(): JSX.Element {
     <AppShell
       sidebar={
         <Sidebar
+          profiles={
+            <ProfileList
+              profiles={profileState.profiles}
+              launchingIds={profileState.launching}
+              onLaunch={(profile) => void launchProfile(profile)}
+              onCreate={() => {
+                setSaveProblems([])
+                setEditing(blankProfile(discovery?.roots[0] ?? '', ''))
+              }}
+              onEdit={(profile) => {
+                setSaveProblems([])
+                setEditing(profile)
+              }}
+              onDelete={deleteProfile}
+              onExport={(profile) => void profileState.exportProfile(profile.id)}
+              onImport={() => void profileState.importProfile()}
+              onTogglePin={(profile) => void profileState.togglePin(profile)}
+              onReorder={(ids) => void profileState.reorder(ids)}
+            />
+          }
           discovery={discovery}
           scanning={launcher.scanning}
           scanError={launcher.scanError}
@@ -310,6 +395,16 @@ export function App(): JSX.Element {
               onLaunch={(project) => void launch(project)}
               launching={launching}
               launchError={sessionState.launchError}
+              onSaveAsProfile={(project) => {
+                setSaveProblems([])
+                // Seeded with what is on screen: this project as the root, and
+                // itself composed, which is the launch the button is beside.
+                setEditing({
+                  ...blankProfile(project.path, project.name),
+                  overlays: [project.path],
+                  access: [project.path]
+                })
+              }}
             />
           </div>
         )}
@@ -322,6 +417,54 @@ export function App(): JSX.Element {
               onAddRoot={launcher.addRoot}
             />
           </div>
+        )}
+
+        {/* What a launch composed, and anything that went wrong doing it.
+            Over the pane rather than in it, because a profile is launched from
+            the sidebar and whatever is on screen at the time is unrelated.
+
+            At the top, not the bottom: the pane below is usually a hosted TUI
+            whose composer and status line live along its bottom edge, and a
+            toast there covers the one part of the terminal the user is about to
+            type into. */}
+        {(profileState.notice !== null || profileState.error !== null) && (
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-40 flex justify-center p-3">
+            <div
+              role="status"
+              className={cn(
+                'pointer-events-auto flex max-w-2xl items-start gap-3 rounded-md border px-3 py-2',
+                'text-[12px] shadow-panel',
+                profileState.error !== null
+                  ? 'border-danger/30 bg-danger/10 text-danger'
+                  : 'border-border bg-surface text-fg-muted'
+              )}
+            >
+              <span className="min-w-0">{profileState.error ?? profileState.notice}</span>
+              <button
+                type="button"
+                onClick={
+                  profileState.error !== null
+                    ? profileState.dismissError
+                    : profileState.dismissNotice
+                }
+                aria-label="Dismiss"
+                className="shrink-0 text-fg-subtle hover:text-fg"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        )}
+
+        {editing !== null && (
+          <ProfileEditor
+            initial={editing}
+            projects={discovery?.projects ?? []}
+            problems={saveProblems}
+            saving={saving}
+            onSave={(draft) => void saveProfile(draft)}
+            onCancel={() => setEditing(null)}
+          />
         )}
       </div>
     </AppShell>

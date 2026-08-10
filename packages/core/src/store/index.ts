@@ -2,6 +2,16 @@ export { openStore, type HelmDatabase, type OpenStoreOptions, type Store } from 
 export { knownMigrations, migrate, type MigrationOutcome } from './migrate'
 export { cacheProjects, readCachedProjects, type CachedProject } from './projects'
 export {
+  createProfile,
+  deleteProfile,
+  findProfileByName,
+  listProfiles,
+  readProfile,
+  setPinnedProfiles,
+  updateProfile,
+  uniqueProfileName
+} from './profiles'
+export {
   finishSession,
   readSessions,
   reconcileRunningSessions,

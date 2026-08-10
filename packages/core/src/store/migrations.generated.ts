@@ -26,5 +26,11 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "CREATE INDEX `sessions_started_idx` ON `sessions` (`started_at`);",
       "CREATE INDEX `sessions_status_idx` ON `sessions` (`status`);"
     ]
+  },
+  {
+    "tag": "0002_unknown_namorita",
+    "statements": [
+      "ALTER TABLE `sessions` ADD `profile_id` integer;"
+    ]
   }
 ]

@@ -4,11 +4,12 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { emit, registerIpc, resolvedTheme } from './ipc'
-import { appMode, dataDir, initDataDir } from './paths'
+import { appMode, dataDir, initDataDir, shimRoot } from './paths'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
 import { createServices, refreshGit, runScan, type Services } from './services'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
 import { createCollector, runM2Checks, type M2Context } from './m2check'
+import { runM3Checks } from './m3check'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -26,22 +27,33 @@ import { screenshot } from './bridge'
  * no database.
  */
 
-type Mode = 'app' | 'shell' | 'selftest' | 'fidelity' | 'claude-check' | 'claude' | 'm2-check'
+type Mode =
+  | 'app'
+  | 'shell'
+  | 'selftest'
+  | 'fidelity'
+  | 'claude-check'
+  | 'claude'
+  | 'm2-check'
+  | 'm3-check'
+  | 'shim-sweep'
 
 function modeFromArgv(): Mode {
   if (process.argv.includes('--selftest')) return 'selftest'
   if (process.argv.includes('--fidelity')) return 'fidelity'
   if (process.argv.includes('--claude-check')) return 'claude-check'
   if (process.argv.includes('--m2-check')) return 'm2-check'
+  if (process.argv.includes('--m3-check')) return 'm3-check'
+  if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
   if (process.argv.includes('--claude')) return 'claude'
   if (process.argv.includes('--shell')) return 'shell'
   return 'app'
 }
 
 const mode = modeFromArgv()
-// `--m2-check` is the app: it drives the real window, so it needs the real
-// startup path, the database included.
-const isSpikeMode = mode !== 'app' && mode !== 'm2-check'
+// The check modes are the app: they drive the real window, so they need the
+// real startup path, the database included.
+const isSpikeMode = mode !== 'app' && mode !== 'm2-check' && mode !== 'm3-check'
 
 initDataDir()
 
@@ -113,6 +125,9 @@ function startApp(options: AppOptions = {}): void {
   const services: Services = createServices()
   if (services.lostSessions > 0) {
     console.warn(`${services.lostSessions} session(s) did not outlive the last run; marked lost`)
+  }
+  if (services.staleShims > 0) {
+    console.log(`removed ${String(services.staleShims)} overlay shim(s) left by the last run`)
   }
 
   let win: BrowserWindow | null = createWindow('index', services.settings.windowBounds ?? null)
@@ -378,6 +393,28 @@ app.whenReady().then(() => {
   // identity in dev or do not appear at all.
   app.setAppUserModelId('dev.coletaylor.helm')
 
+  /**
+   * A real app start, and nothing else.
+   *
+   * The "stale shims are swept at startup" criterion is about what
+   * `createServices` does on the way in, which the process that already started
+   * cannot assert about itself. So `--m3-check` plants what a crash would have
+   * left and this runs afterwards: same startup path, no window, and a report
+   * of what it removed.
+   */
+  if (mode === 'shim-sweep') {
+    const services = createServices()
+    const file = writeReport('shim-sweep.json', {
+      startedAt: new Date().toISOString(),
+      shimRoot,
+      removed: services.staleShims
+    })
+    console.log(`shim sweep: removed ${String(services.staleShims)} shim(s); report: ${file}`)
+    services.store.close()
+    app.exit(0)
+    return
+  }
+
   if (isSpikeMode) {
     startSpike()
     return
@@ -417,6 +454,45 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`m2-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  if (mode === 'm3-check') {
+    const collector = createCollector()
+    startApp({
+      observer: collector,
+      confirm: collector.confirm,
+      onReady: (ctx) => {
+        // The driver closes the sessions it opened, so every confirmation it
+        // provokes is one it asked for on purpose.
+        collector.answerWith(true)
+        void runM3Checks(ctx, collector, join(dataDir, 'screenshots'), dataDir)
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('m3-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`m3-check report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            // M3-9 planted a stale shim for the `--shim-sweep` start that
+            // follows, so this run must end the same way a real one does -
+            // through `quit`, not `exit`, which would skip the teardown.
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`m3-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

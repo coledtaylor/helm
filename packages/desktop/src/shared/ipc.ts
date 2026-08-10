@@ -3,6 +3,8 @@ import type {
   CachedProject,
   DiscoveryResult,
   GitState,
+  Profile,
+  ProfileDraft,
   SessionRecord,
   ThemePreference
 } from '@helm/core'
@@ -77,6 +79,57 @@ export interface StartSessionRequest {
   rows: number
 }
 
+/**
+ * Launching a profile is a different request from launching a project: the
+ * profile supplies the cwd, the overlays and every flag, so the renderer sends
+ * an id and a grid and nothing else. Sending the composition from the renderer
+ * would put the argv in the window, where it can drift from what was saved.
+ */
+export interface LaunchProfileRequest {
+  profileId: number
+  cols: number
+  rows: number
+}
+
+/** What a launch composed, for the pane to report before the TUI paints. */
+export interface LaunchedProfile {
+  session: SessionRecord
+  profile: Profile
+  /** Plugin namespaces the session was given, e.g. `['atlas']`. */
+  overlays: string[]
+  /** Whether composed project instructions were passed. */
+  composedInstructions: boolean
+  /** Non-fatal problems: a missing overlay directory, an empty `.claude/`. */
+  warnings: string[]
+}
+
+export interface SaveProfileRequest {
+  /** Absent to create; present to update in place. */
+  id?: number | null
+  draft: ProfileDraft
+}
+
+export interface SaveProfileResult {
+  profile: Profile | null
+  /** Field-level problems. Non-empty means nothing was written. */
+  problems: string[]
+}
+
+export interface ImportProfileResult {
+  profile: Profile | null
+  /** Set when the user cancelled the file picker. */
+  cancelled: boolean
+  /** Set when the file was not a profile. */
+  error?: string
+  /** The name it had to be given because one was taken. */
+  renamedTo?: string
+}
+
+export interface ExportProfileResult {
+  /** Where it was written, or null if the user cancelled. */
+  file: string | null
+}
+
 export interface CloseSessionRequest {
   id: number
   /**
@@ -129,6 +182,22 @@ export interface IpcRequests {
   'session:close': { request: CloseSessionRequest; response: CloseSessionResult }
   /** Sessions this main process is currently hosting, for a renderer reload. */
   'session:list': { request: void; response: SessionRecord[] }
+
+  'profile:list': { request: void; response: Profile[] }
+  /** Create or update. Returns the problems instead of throwing for a draft
+   * the form should show errors against rather than a dialog. */
+  'profile:save': { request: SaveProfileRequest; response: SaveProfileResult }
+  'profile:delete': { request: { id: number }; response: { deleted: boolean } }
+  /** Rewrites the pin order from the given ids; anything omitted is unpinned. */
+  'profile:pin': { request: { ids: number[] }; response: Profile[] }
+  /** Native save dialog, then the YAML. */
+  'profile:export': { request: { id: number }; response: ExportProfileResult }
+  'profile:import': { request: void; response: ImportProfileResult }
+  /**
+   * Synthesise the overlays and spawn. Rejects with a readable message for the
+   * same reason `session:start` does.
+   */
+  'profile:launch': { request: LaunchProfileRequest; response: LaunchedProfile }
 
   /** The terminal pane's clipboard, routed through Electron rather than the
    * async DOM Clipboard API, which needs a permission prompt and a focused
@@ -183,6 +252,9 @@ export interface IpcEvents {
   'git:updated': Record<string, GitState | null>
   'scan:status': ScanStatus
   'settings:changed': AppSettings
+  /** The whole list after any write, so every surface showing profiles agrees
+   * without each of them refetching. */
+  'profiles:changed': Profile[]
   'theme:changed': { preference: ThemePreference; resolved: ResolvedTheme }
 
   'term:create': TermCreateOptions
@@ -253,6 +325,13 @@ export const REQUEST_CHANNELS = Object.keys({
   'session:start': true,
   'session:close': true,
   'session:list': true,
+  'profile:list': true,
+  'profile:save': true,
+  'profile:delete': true,
+  'profile:pin': true,
+  'profile:export': true,
+  'profile:import': true,
+  'profile:launch': true,
   'clipboard:read': true,
   'clipboard:write': true
 } satisfies Record<RequestChannel, true>) as RequestChannel[]
@@ -274,6 +353,7 @@ export const EVENT_CHANNELS = Object.keys({
   'git:updated': true,
   'scan:status': true,
   'settings:changed': true,
+  'profiles:changed': true,
   'theme:changed': true,
   'term:create': true,
   'term:write': true,

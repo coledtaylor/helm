@@ -17,6 +17,7 @@ export interface NewSession {
   name: string
   cwd: string
   projectPath?: string | null
+  profileId?: number | null
   /** Argv after the executable, as spawned. */
   argv?: string[]
 }
@@ -29,6 +30,7 @@ function toRecord(row: Row): SessionRecord {
     name: row.name,
     cwd: row.cwd,
     projectPath: row.projectPath,
+    profileId: row.profileId,
     argv: row.argv,
     status: row.status as SessionStatus,
     startedAt: row.startedAt,
@@ -45,6 +47,7 @@ export function startSession(store: Store, input: NewSession): SessionRecord {
       name: input.name,
       cwd: input.cwd,
       projectPath: input.projectPath ?? null,
+      profileId: input.profileId ?? null,
       argv: input.argv ?? [],
       status: 'running'
     })

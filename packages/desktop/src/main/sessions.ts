@@ -1,18 +1,28 @@
 import { type BrowserWindow, dialog, Notification } from 'electron'
 import { basename } from 'node:path'
 import {
-  buildClaudeArgs,
   finishSession,
+  launchRequestFromProfile,
+  prepareLaunch,
+  readProfile,
   runningSessionNames,
   startSession,
   uniqueSessionName,
+  type LaunchPlan,
   type SessionRecord
 } from '@helm/core'
 import { resolveClaudeCommand } from './claude-cli'
 import { emit } from './ipc'
+import { shimRoot } from './paths'
 import { killAllSessionsSync, killSession, spawnSession, type SessionHandle } from './pty'
 import type { Services } from './services'
-import type { CloseSessionRequest, CloseSessionResult, StartSessionRequest } from '../shared/ipc'
+import type {
+  CloseSessionRequest,
+  CloseSessionResult,
+  LaunchedProfile,
+  LaunchProfileRequest,
+  StartSessionRequest
+} from '../shared/ipc'
 
 /**
  * The lifecycle of a hosted `claude`, from argv to exit code.
@@ -93,6 +103,8 @@ function nativeConfirm(window: () => BrowserWindow | null): Confirm {
 
 export interface SessionHost {
   start: (req: StartSessionRequest) => SessionRecord
+  /** Synthesises the profile's overlays, then spawns against them. */
+  launchProfile: (req: LaunchProfileRequest) => LaunchedProfile
   close: (req: CloseSessionRequest) => Promise<CloseSessionResult>
   /** Sessions this process is hosting, running or exited-but-not-yet-closed. */
   list: () => SessionRecord[]
@@ -175,51 +187,93 @@ export function createSessionHost({
     observer?.onNotified?.(record)
   }
 
+  /**
+   * The one path a session is spawned by, whether it came from a project row or
+   * from a profile. Both produce a `LaunchPlan` first - the only difference
+   * between them is how many flags ended up in it.
+   */
+  function spawn(
+    plan: LaunchPlan,
+    grid: { cols: number; rows: number },
+    origin: { projectPath?: string | null | undefined; profileId?: number | null | undefined }
+  ): SessionRecord {
+    const command = resolveClaudeCommand()
+    if (!command) {
+      throw new Error(
+        'Claude Code CLI not found. Install it (or put `claude` on PATH) and restart Helm.'
+      )
+    }
+
+    const argv = [...command.prefixArgs, ...plan.argv]
+
+    // The row goes in before the spawn so that a session which dies in its
+    // first second is still a session that happened, with a reason.
+    const record = startSession(services.store, {
+      name: plan.name,
+      cwd: plan.cwd,
+      projectPath: origin.projectPath ?? null,
+      profileId: origin.profileId ?? null,
+      argv
+    })
+
+    let handle: SessionHandle
+    try {
+      handle = spawnSession({
+        id: String(record.id),
+        file: command.file,
+        args: argv,
+        cols: Math.max(grid.cols, 1),
+        rows: Math.max(grid.rows, 1),
+        cwd: plan.cwd,
+        onData: (data) => {
+          emit(window(), 'session:data', { id: record.id, data })
+          observer?.onOutput?.(record.id, data)
+        },
+        onExit: (exitCode) => onExit(record.id, exitCode)
+      })
+    } catch (err) {
+      finishSession(services.store, record.id, { exitCode: null })
+      const detail = err instanceof Error ? err.message : String(err)
+      throw new Error(`Could not start a session in ${plan.cwd}: ${detail}`, { cause: err })
+    }
+
+    hosted.set(record.id, { record, handle, closed: false })
+    return record
+  }
+
   return {
     start(req) {
-      const command = resolveClaudeCommand()
-      if (!command) {
-        throw new Error(
-          'Claude Code CLI not found. Install it (or put `claude` on PATH) and restart Helm.'
-        )
-      }
-
       const base = req.name?.trim() || basename(req.cwd) || 'session'
-      const name = uniqueSessionName(base, runningSessionNames(services.store))
-      const args = buildClaudeArgs({ cwd: req.cwd, name })
-
-      // The row goes in before the spawn so that a session which dies in its
-      // first second is still a session that happened, with a reason.
-      const record = startSession(services.store, {
-        name,
-        cwd: req.cwd,
-        projectPath: req.projectPath ?? null,
-        argv: [...command.prefixArgs, ...args]
+      const plan = prepareLaunch({
+        root: req.cwd,
+        name: uniqueSessionName(base, runningSessionNames(services.store)),
+        shimRoot
       })
+      return spawn(plan, req, { projectPath: req.projectPath })
+    },
 
-      let handle: SessionHandle
-      try {
-        handle = spawnSession({
-          id: String(record.id),
-          file: command.file,
-          args: [...command.prefixArgs, ...args],
-          cols: Math.max(req.cols, 1),
-          rows: Math.max(req.rows, 1),
-          cwd: req.cwd,
-          onData: (data) => {
-            emit(window(), 'session:data', { id: record.id, data })
-            observer?.onOutput?.(record.id, data)
-          },
-          onExit: (exitCode) => onExit(record.id, exitCode)
-        })
-      } catch (err) {
-        finishSession(services.store, record.id, { exitCode: null })
-        const detail = err instanceof Error ? err.message : String(err)
-        throw new Error(`Could not start a session in ${req.cwd}: ${detail}`, { cause: err })
+    launchProfile(req) {
+      const profile = readProfile(services.store, req.profileId)
+      if (!profile) throw new Error('That profile no longer exists.')
+
+      // Named after the profile, uniqued against what is running: three
+      // sessions from one profile is the normal case, and `/resume` shows only
+      // the name.
+      const name = uniqueSessionName(profile.name, runningSessionNames(services.store))
+      const plan = prepareLaunch(launchRequestFromProfile(profile, shimRoot, name))
+
+      // The overlay work happens before the row exists, so a profile pointing
+      // at a repo that has been deleted fails here rather than as a session
+      // that starts and quietly composes nothing.
+      const session = spawn(plan, req, { profileId: profile.id })
+
+      return {
+        session,
+        profile,
+        overlays: plan.overlays.map((shim) => shim.name),
+        composedInstructions: plan.memoryFile !== null,
+        warnings: plan.warnings
       }
-
-      hosted.set(record.id, { record, handle, closed: false })
-      return record
     },
 
     async close(req) {

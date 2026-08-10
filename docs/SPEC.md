@@ -92,25 +92,41 @@ and launches:
 ```bash
 claude \
   --add-dir     repos/atlas repos/atlas-reporting \
-  --plugin-dir  %TEMP%/helm/overlay-atlas \
-  --plugin-dir  %TEMP%/helm/overlay-reporting \
-  --model opus --effort high --permission-mode auto -n "accruals"
+  -n "accruals" \
+  --plugin-dir  <data>/overlays/overlay-atlas \
+  --plugin-dir  <data>/overlays/overlay-atlas-reporting \
+  --append-system-prompt-file <data>/overlays/memory-accruals.md \
+  --model opus --effort high --permission-mode auto \
+  "/recap"
 # cwd = harness root
 ```
 
 Result: harness root as the working directory, with project skills and agents
 composed in. The tradeoff disappears.
 
-Windows note: use **directory junctions** (`mklink /J`), which need no elevation,
-rather than symlinks, which do. Copy as a fallback.
+Three details that are load-bearing rather than stylistic:
+
+- **`--append-system-prompt-file`** carries the overlays' CLAUDE.md. Plugins do
+  not (Spike A), and neither does `--add-dir` (M3, measured). See the risk table.
+- **Argument order.** `--add-dir` is variadic, so `-n` follows it to terminate
+  the list and the opening prompt goes last - a positional reachable from
+  `--add-dir` is read as another directory.
+- **The shim root is under the app's data directory, not `%TEMP%`.** A shim
+  contains junctions into real repositories, and a temp cleaner that follows a
+  reparse point instead of unlinking it deletes the repo's `.claude/skills`.
+
+Windows note: **directory junctions**, which need no elevation, rather than
+symlinks, which do - created with `fs.symlinkSync(target, path, 'junction')`
+rather than by shelling out to `mklink /J`. Copy as a fallback.
 
 > [!note] Proven by Spike A (2026-08-08)
 > `--plugin-dir` accepts a synthesised junction-based shim: skills, agents, and
 > commands from two composed overlays all resolved and invoked from the harness
 > root. The platform namespaces everything automatically
 > (`<plugin-name>:<skill>`), so cross-overlay name collisions are impossible.
-> One caveat: **plugins do not carry the overlaid repo's CLAUDE.md** - the
-> `--add-dir` flag claims to pull in CLAUDE.md dirs; M3 must verify that.
+> One caveat: **plugins do not carry the overlaid repo's CLAUDE.md** - and
+> neither does `--add-dir`, which M3 measured and found wanting. Helm composes
+> them into `--append-system-prompt-file` instead.
 > See [SPIKE-A findings](../../../notes/reference-helm-spike-a-overlay-composition.md).
 
 ---
@@ -268,7 +284,7 @@ actually expose project skills, the premise is wrong and it is cheap to learn th
 |---|---|
 | ~~**`--plugin-dir` may not accept a synthesised dir**~~ | **Closed by Spike A.** Junction-based shims work; two overlays composed in one session. Copy fallback exists but was not needed. |
 | ~~**Skill name collisions** across composed overlays~~ | **Closed by Spike A.** The platform namespaces every overlay automatically (`<plugin-name>:<skill>`); same-named skills in two overlays coexist. Helm only sanitizes plugin manifest names. |
-| **Project CLAUDE.md not carried by `--plugin-dir`** (Spike A finding) | `--add-dir` claims to pull in CLAUDE.md dirs; verify in M3. If it doesn't, inject the content another way (e.g. `--append-system-prompt`) or accept the loss explicitly. |
+| ~~**Project CLAUDE.md not carried by `--plugin-dir`**~~ (Spike A finding) | **Closed by M3, but not the way the mitigation guessed.** `--add-dir` does *not* pull in an overlaid repo's CLAUDE.md - measured on 2.1.225, a session launched from the harness root with both flags reported only the user and cwd instruction files. Helm composes the overlays' CLAUDE.md into one document and passes it to **`--append-system-prompt-file`**. A file, not `--append-system-prompt` inline: two repos here total 34 KB against a 32,767-character Windows command line. |
 | **Junctions on Windows** | `mklink /J` needs no elevation. Fall back to copy + watch. |
 | **Native modules** (`node-pty`, `better-sqlite3`) vs portable exe | Spike B: package a hello-world with both. |
 | **CLI flag drift** across Claude Code releases | Flags are a stable public surface, far safer than the 0.3.x SDK. Pin a tested version, assert on `claude --version` at startup. |

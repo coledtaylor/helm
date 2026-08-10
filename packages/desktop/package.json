@@ -20,6 +20,8 @@
     "claude-check": "electron-vite build && electron . --claude-check",
     "//m2-check": "M2's acceptance criteria, driven through the real app window. Spawns real claude sessions and ends them; see src/main/m2check.ts.",
     "m2-check": "electron-vite build && electron . --m2-check && node scripts/verify-orphans.mjs",
+    "//m3-check": "M3's acceptance criteria. Builds a profile through the real form, launches it, and asks the live session whether the composition worked. Three phases, orchestrated by run-m3.mjs rather than by && because node-pty's teardown loses the exit code; the report is the verdict. Pass --only=compose|fixture|shims through to re-run one group.",
+    "m3-check": "electron-vite build && node scripts/run-m3.mjs",
     "claude": "electron-vite build && electron . --claude --cwd=.",
     "dist:win": "electron-vite build && electron-builder --win"
   },

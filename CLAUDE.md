@@ -36,6 +36,22 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   `no-electron-in-core` block in `eslint.config.js`, which blocks static
   imports, `require()`, and dynamic `import()`. If core needs something from the
   host, the host passes it in as an argument.
+- The renderer and `packages/ui/` may import **types** from `@helm/core`
+  anywhere - they are erased - but a **value** import must come from
+  `@helm/core/types`, which has no `node:` imports behind it. The package root
+  reaches the filesystem through `launch/` and `store/`, and pulling that into
+  the browser bundle fails at rollup, not at typecheck, so `pnpm typecheck`
+  will not catch it. `EFFORT_LEVELS` and `PERMISSION_MODES` are the ones this
+  comes up for.
+- Overlay shims live under the app data directory, never `%TEMP%`. Their
+  subdirectories are junctions into the user's real repositories, and a temp
+  cleaner that follows a reparse point rather than unlinking it deletes the
+  repo's `.claude/skills`. For the same reason, anything that removes a shim
+  must use a delete that unlinks junctions (`fs.rm`) and must never walk into
+  one.
+- Overlay shims are swept **only** at app start (`createServices`). Sweeping
+  per launch would pull a plugin directory out from under a live session that a
+  different profile started.
 - The terminal configuration in `packages/desktop/src/renderer/src/terminal.ts`
   and `ptyEnv` in `packages/desktop/src/main/pty.ts` is load-bearing for TUI
   fidelity, and every line of it is there because Spike C measured the failure
@@ -47,6 +63,13 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   window - clicking sidebar rows, the launch button, tabs and their close
   buttons - and asserts on processes, grids and database rows. Run it after
   touching session lifecycle, the tab strip, or shutdown.
+- `pnpm m3-check` does it for composition: it builds a profile through the real
+  form, launches it, and asks the live session whether the overlays' skills and
+  instructions actually arrived. Run it after touching `core/launch/`, the
+  profile UI, or the argv builder. It spawns real `claude` sessions on haiku and
+  takes minutes. It runs in three phases - the driver, a second real app start
+  (`--shim-sweep`), then `scripts/verify-shims.mjs` - because "stale shims are
+  cleaned at startup" cannot be asserted by the process that already started.
 - Every renderer↔main channel is declared in
   `packages/desktop/src/shared/ipc.ts` and nowhere else. The preload exposes
   three generic functions; a feature adds a channel to the contract, not a

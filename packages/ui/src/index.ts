@@ -2,6 +2,8 @@ export { AppShell, type AppShellProps } from './components/AppShell'
 export { Chip, type ChipProps, type ChipTone } from './components/Chip'
 export { GitChip, type GitChipProps } from './components/GitChip'
 export { InventoryChips, type InventoryChipsProps } from './components/InventoryChips'
+export { ProfileEditor, type ProfileEditorProps } from './components/ProfileEditor'
+export { ProfileList, type ProfileListProps } from './components/ProfileList'
 export { ProjectPane, type ProjectPaneProps } from './components/ProjectPane'
 export { ProjectRow, type ProjectRowProps } from './components/ProjectRow'
 export {
