@@ -60,12 +60,12 @@ afterEach(() => {
 
 describe('overlayPluginName', () => {
   it('uses the repo name, which is what skills get prefixed with', () => {
-    expect(overlayPluginName('C:/repos/atlas')).toBe('atlas')
-    expect(overlayPluginName('/home/x/repos/atlas-reporting')).toBe('atlas-reporting')
+    expect(overlayPluginName('C:/repos/acme')).toBe('acme')
+    expect(overlayPluginName('/home/x/repos/acme-reporting')).toBe('acme-reporting')
   })
 
   it('reduces to something a namespace can carry', () => {
-    expect(overlayPluginName('/repos/atlas Project')).toBe('atlas-project')
+    expect(overlayPluginName('/repos/Acme Project')).toBe('acme-project')
     expect(overlayPluginName('/repos/my repo!!')).toBe('my-repo')
   })
 
@@ -74,27 +74,27 @@ describe('overlayPluginName', () => {
   })
 
   it('distinguishes same-named repos from different harnesses', () => {
-    expect(overlayPluginNames(['/a/repos/atlas', '/b/repos/atlas'])).toEqual([
-      'atlas',
-      'atlas-2'
+    expect(overlayPluginNames(['/a/repos/acme', '/b/repos/acme'])).toEqual([
+      'acme',
+      'acme-2'
     ])
   })
 })
 
 describe('syncOverlay', () => {
   it('builds a plugin the CLI can load: manifest plus the convention dirs', () => {
-    const project = makeProject('atlas', { skills: ['think'], agents: ['reviewer'] })
+    const project = makeProject('acme', { skills: ['think'], agents: ['reviewer'] })
     const [plan] = planOverlays([project], shimRoot)
     const shim = syncOverlay(plan!)
 
-    expect(shim.name).toBe('atlas')
+    expect(shim.name).toBe('acme')
     expect(shim.rebuilt).toBe(true)
     expect(shim.linked.sort()).toEqual(['agents', 'skills'])
 
     const manifest: unknown = JSON.parse(
       readFileSync(join(shim.dir, '.claude-plugin', 'plugin.json'), 'utf8')
     )
-    expect(manifest).toMatchObject({ name: 'atlas' })
+    expect(manifest).toMatchObject({ name: 'acme' })
     // Read through the link, which is the thing that has to work.
     expect(readFileSync(join(shim.dir, 'skills', 'think', 'SKILL.md'), 'utf8')).toBe('# think\n')
   })
@@ -107,7 +107,7 @@ describe('syncOverlay', () => {
   })
 
   it('reuses an unchanged shim instead of rebuilding it', () => {
-    const project = makeProject('atlas', { skills: ['think'] })
+    const project = makeProject('acme', { skills: ['think'] })
     const [plan] = planOverlays([project], shimRoot)
     expect(syncOverlay(plan!).rebuilt).toBe(true)
 
@@ -116,7 +116,7 @@ describe('syncOverlay', () => {
   })
 
   it('rebuilds when the source .claude tree changes', () => {
-    const project = makeProject('atlas', { skills: ['think'] })
+    const project = makeProject('acme', { skills: ['think'] })
     syncOverlay(planOverlays([project], shimRoot)[0]!)
 
     mkdirSync(join(project, '.claude', 'skills', 'newer'), { recursive: true })
@@ -126,7 +126,7 @@ describe('syncOverlay', () => {
   })
 
   it('rebuilds when a convention dir appears that was not there before', () => {
-    const project = makeProject('atlas', { skills: ['think'] })
+    const project = makeProject('acme', { skills: ['think'] })
     expect(syncOverlay(planOverlays([project], shimRoot)[0]!).linked).toEqual(['skills'])
 
     mkdirSync(join(project, '.claude', 'agents'), { recursive: true })
@@ -138,7 +138,7 @@ describe('syncOverlay', () => {
   })
 
   it('rebuilds when only CLAUDE.md changed, since that one is copied not linked', () => {
-    const project = makeProject('atlas', { skills: ['think'], claudeMd: '# first\n' })
+    const project = makeProject('acme', { skills: ['think'], claudeMd: '# first\n' })
     syncOverlay(planOverlays([project], shimRoot)[0]!)
 
     writeFileSync(join(project, 'CLAUDE.md'), '# second\n')
@@ -153,7 +153,7 @@ describe('syncOverlay', () => {
    * shim, because the shim being right is not the property that matters here.
    */
   it('a rebuild leaves the source repo untouched behind the junction', () => {
-    const project = makeProject('atlas', { skills: ['think'], agents: ['reviewer'] })
+    const project = makeProject('acme', { skills: ['think'], agents: ['reviewer'] })
     syncOverlay(planOverlays([project], shimRoot)[0]!)
 
     // The edit that forces the rebuild.
@@ -171,7 +171,7 @@ describe('syncOverlay', () => {
   })
 
   it('an edit to a skill is visible through the link without a rebuild', () => {
-    const project = makeProject('atlas', { skills: ['think'] })
+    const project = makeProject('acme', { skills: ['think'] })
     const shim = syncOverlay(planOverlays([project], shimRoot)[0]!)
 
     writeFileSync(join(project, '.claude', 'skills', 'think', 'SKILL.md'), '# edited\n')
@@ -205,12 +205,12 @@ describe('cleanStaleShims', () => {
    * it exists to expose.
    */
   it('unlinks junctions rather than deleting the repo behind them', () => {
-    const project = makeProject('atlas', { skills: ['think'], agents: ['reviewer'] })
+    const project = makeProject('acme', { skills: ['think'], agents: ['reviewer'] })
     syncOverlay(planOverlays([project], shimRoot)[0]!)
 
     cleanStaleShims(shimRoot)
 
-    expect(existsSync(join(shimRoot, 'overlay-atlas'))).toBe(false)
+    expect(existsSync(join(shimRoot, 'overlay-acme'))).toBe(false)
     expect(readFileSync(join(project, '.claude', 'skills', 'think', 'SKILL.md'), 'utf8')).toBe(
       '# think\n'
     )
@@ -244,7 +244,7 @@ describe('cleanStaleShims', () => {
 
 describe('composeOverlayMemory', () => {
   it('carries each overlay CLAUDE.md, attributed to the project it governs', () => {
-    const a = makeProject('atlas', { skills: ['think'], claudeMd: '# atlas\nPyQt5 app.' })
+    const a = makeProject('acme', { skills: ['think'], claudeMd: '# Acme\nPyQt5 app.' })
     const b = makeProject('reporting', { skills: ['think'], claudeMd: '# Reporting\ndotnet API.' })
     const memory = composeOverlayMemory(planOverlays([a, b], shimRoot))
 
@@ -258,7 +258,7 @@ describe('composeOverlayMemory', () => {
   })
 
   it('is null when no overlay has one, so no flag gets emitted', () => {
-    const project = makeProject('atlas', { skills: ['think'] })
+    const project = makeProject('acme', { skills: ['think'] })
     expect(composeOverlayMemory(planOverlays([project], shimRoot))).toBeNull()
   })
 })

@@ -28,7 +28,7 @@ import { readConfigTree, projectConfigScope, userConfigScope } from './tree'
  *
  *   Namespacing is deterministic. The platform prefixes everything an overlay
  *   contributes with the plugin's manifest name (Spike A), and Helm chooses
- *   that name - so `atlas:think` is decidable from the profile alone.
+ *   that name - so `<overlay>:think` is decidable from the profile alone.
  *   Cross-overlay collisions cannot occur, which is why this predicts names
  *   instead of detecting clashes.
  *

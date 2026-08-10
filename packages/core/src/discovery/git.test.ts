@@ -71,7 +71,7 @@ describe('parseGitStatus', () => {
     const out = [
       '# branch.head main',
       '# branch.ab +0 -0',
-      '1 .M N... 100644 100644 100644 aaa bbb atlas Project/README.md',
+      '1 .M N... 100644 100644 100644 aaa bbb Acme Project/README.md',
       ''
     ].join('\n')
 

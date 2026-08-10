@@ -88,8 +88,8 @@ export function findProfileByName(store: Store, name: string): Profile | null {
  *
  * `name`, then `name (2)`, `name (3)`. The suffix is parenthesised rather than
  * appended bare because these are read in a launcher list beside each other,
- * and "atlas cloud sync 2" reads as a second version of a workflow where
- * "atlas cloud sync (2)" reads as a copy.
+ * and "Acme cloud sync 2" reads as a second version of a workflow where
+ * "Acme cloud sync (2)" reads as a copy.
  */
 export function uniqueProfileName(store: Store, base: string): string {
   const root = base.trim() || 'Profile'

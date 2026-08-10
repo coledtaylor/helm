@@ -21,7 +21,7 @@ const INSTALL_CANDIDATES = [
   join(homedir(), '.local', 'bin', 'claude')
 ]
 
-function isExecutableFile(path: string): boolean {
+export function isExecutableFile(path: string): boolean {
   try {
     if (!statSync(path).isFile()) return false
     accessSync(path, constants.X_OK)
@@ -29,6 +29,26 @@ function isExecutableFile(path: string): boolean {
   } catch {
     return false
   }
+}
+
+/**
+ * A path the user picked by hand, which wins over discovery.
+ *
+ * Module state, set once at startup from settings and again when the picker
+ * writes a new one, rather than a parameter threaded through every caller.
+ * Every one of them - the session host, the MCP runner, the check drivers -
+ * wants the same answer, and an override that some code paths honoured and
+ * others did not would be a machine where sessions launch and `claude mcp add`
+ * does not.
+ */
+let overridePath: string | null = null
+
+export function setClaudeOverride(path: string | null): void {
+  overridePath = path !== null && path.trim() !== '' && isExecutableFile(path) ? path : null
+}
+
+export function claudeOverride(): string | null {
+  return overridePath
 }
 
 /**
@@ -60,6 +80,7 @@ function searchPath(): string | null {
 
 /** The `claude` entry point on this machine, or null if there is not one. */
 export function findClaudeExecutable(): string | null {
+  if (overridePath !== null) return overridePath
   for (const candidate of INSTALL_CANDIDATES) {
     if (isExecutableFile(candidate)) return candidate
   }
@@ -85,8 +106,8 @@ export interface ClaudeCommand {
  * `claude` its child, which is one more reason session teardown kills the tree
  * rather than the pid (see `treeKill`).
  */
-export function resolveClaudeCommand(): ClaudeCommand | null {
-  const resolved = findClaudeExecutable()
+export function resolveClaudeCommand(at?: string): ClaudeCommand | null {
+  const resolved = at !== undefined ? (isExecutableFile(at) ? at : null) : findClaudeExecutable()
   if (!resolved) return null
 
   const ext = extname(resolved).toLowerCase()
@@ -96,8 +117,8 @@ export function resolveClaudeCommand(): ClaudeCommand | null {
   return { file: resolved, prefixArgs: [], resolved }
 }
 
-export async function readClaudeVersion(): Promise<string | null> {
-  const command = resolveClaudeCommand()
+export async function readClaudeVersion(at?: string): Promise<string | null> {
+  const command = resolveClaudeCommand(at)
   if (!command) return null
   try {
     const { stdout } = await run(command.file, [...command.prefixArgs, '--version'], {

@@ -1,5 +1,7 @@
 import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron'
+import { isAbsolute, relative } from 'node:path'
 import {
+  createHarness,
   readHistoryProjects,
   readHistoryPrompts,
   readHistorySessions,
@@ -9,7 +11,9 @@ import type { ConfigService } from './config'
 import type { ContentService } from './content'
 import type { HistoryService } from './history'
 import type { UsageService } from './usage'
-import { readClaudeVersion } from './claude-cli'
+import { readClaudeVersion, setClaudeOverride } from './claude-cli'
+import { readClaudeStatus, verifyClaudeAt } from './setup'
+import { checkForUpdate } from './update'
 import { appMode, dataDir, dbFile } from './paths'
 import { activePty, windowsBuildNumber } from './pty'
 import {
@@ -80,10 +84,60 @@ export interface IpcContext {
   content: ContentService
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
+  /**
+   * Stands in for the native file and directory pickers.
+   *
+   * A native dialog has no automation surface, so the first-run driver - which
+   * has to prove that "add a folder" and "locate claude" work end to end -
+   * cannot click one. Same reasoning as the session host's `Confirm`: the
+   * question is answered by the driver, and every other step still goes through
+   * the real handler, the real settings write and the real rescan.
+   *
+   * Only `--m7-firstrun` passes these. The app itself passes none and gets the
+   * dialogs.
+   */
+  chooseDirectory?: ((title: string) => string | null) | undefined
+  chooseFile?: ((title: string) => string | null) | undefined
+  /**
+   * A different `.claude` tree for the setup pane to report on. Only
+   * `--m7-firstrun` passes one - it is how "a machine with a fresh `~/.claude`"
+   * is simulated without going anywhere near the user's real one.
+   */
+  claudeHome?: string | undefined
+}
+
+/**
+ * Whether `path` is `root` or sits under it, compared case-insensitively
+ * because two spellings of the same Windows directory are the same directory.
+ */
+function isWithin(root: string, path: string): boolean {
+  const within = relative(root, path)
+  return within === '' || (!within.startsWith('..') && !isAbsolute(within))
 }
 
 export function registerIpc(ctx: IpcContext): void {
   const { services } = ctx
+
+  /** The CLI status, always read against the same config directory. */
+  const claudeStatus = (picked?: string): ReturnType<typeof readClaudeStatus> =>
+    readClaudeStatus({
+      claudePath: picked ?? services.settings.claudePath,
+      ...(ctx.claudeHome !== undefined ? { configDir: ctx.claudeHome } : {})
+    })
+
+  /** Adds paths that are not already roots, and tells the window. */
+  const addRoots = (paths: string[]): string[] => {
+    const merged = [...services.settings.scanRoots]
+    for (const path of paths) {
+      if (!merged.some((existing) => existing.toLowerCase() === path.toLowerCase())) {
+        merged.push(path)
+      }
+    }
+    if (merged.length === services.settings.scanRoots.length) return services.settings.scanRoots
+    const next = updateSettings(services, { scanRoots: merged })
+    emit(ctx.window(), 'settings:changed', next)
+    return next.scanRoots
+  }
 
   const requests: RequestHandlers = {
     'app:info': async () => ({
@@ -106,6 +160,10 @@ export function registerIpc(ctx: IpcContext): void {
     'settings:write': (patch) => {
       const next = updateSettings(services, patch)
       emit(ctx.window(), 'settings:changed', next)
+      // The session host reads the override, not the settings, so a picked CLI
+      // written through this channel has to reach it too - otherwise sessions
+      // launch from one path and `claude mcp add` from another.
+      if (patch.claudePath !== undefined) setClaudeOverride(next.claudePath)
       if (patch.theme !== undefined) {
         nativeTheme.themeSource = patch.theme
         emit(ctx.window(), 'theme:changed', {
@@ -132,28 +190,24 @@ export function registerIpc(ctx: IpcContext): void {
     'roots:suggest': () => suggestRoots(),
 
     'roots:add': async () => {
-      const win = ctx.window()
-      const result = win
-        ? await dialog.showOpenDialog(win, {
-            title: 'Add a folder to scan',
-            properties: ['openDirectory', 'multiSelections']
-          })
-        : await dialog.showOpenDialog({
-            title: 'Add a folder to scan',
-            properties: ['openDirectory', 'multiSelections']
-          })
-      if (result.canceled || result.filePaths.length === 0) return services.settings.scanRoots
-
-      const merged = [...services.settings.scanRoots]
-      for (const path of result.filePaths) {
-        if (!merged.some((existing) => existing.toLowerCase() === path.toLowerCase())) {
-          merged.push(path)
-        }
+      const title = 'Add a folder to scan'
+      if (ctx.chooseDirectory) {
+        const picked = ctx.chooseDirectory(title)
+        return picked === null ? services.settings.scanRoots : addRoots([picked])
       }
-      const next = updateSettings(services, { scanRoots: merged })
-      emit(ctx.window(), 'settings:changed', next)
-      return next.scanRoots
+      const win = ctx.window()
+      const options: Electron.OpenDialogOptions = {
+        title,
+        properties: ['openDirectory', 'multiSelections']
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      if (result.canceled || result.filePaths.length === 0) return services.settings.scanRoots
+      return addRoots(result.filePaths)
     },
+
+    'roots:accept': ({ path }) => addRoots([path]),
 
     'roots:remove': ({ path }) => {
       const merged = services.settings.scanRoots.filter(
@@ -163,6 +217,88 @@ export function registerIpc(ctx: IpcContext): void {
       emit(ctx.window(), 'settings:changed', next)
       return next.scanRoots
     },
+
+    'setup:status': () => claudeStatus(),
+
+    'setup:locateClaude': async () => {
+      const title = 'Locate the claude executable'
+      let picked: string | undefined
+      if (ctx.chooseFile) {
+        picked = ctx.chooseFile(title) ?? undefined
+      } else {
+        const win = ctx.window()
+        const options: Electron.OpenDialogOptions = {
+          title,
+          properties: ['openFile'],
+          filters:
+            process.platform === 'win32'
+              ? [
+                  { name: 'Programs', extensions: ['exe', 'cmd', 'bat'] },
+                  { name: 'All files', extensions: ['*'] }
+                ]
+              : [{ name: 'All files', extensions: ['*'] }]
+        }
+        const result = win
+          ? await dialog.showOpenDialog(win, options)
+          : await dialog.showOpenDialog(options)
+        picked = result.canceled ? undefined : result.filePaths[0]
+      }
+      if (picked === undefined) {
+        return claudeStatus()
+      }
+
+      // Verified before it is saved. A setting that points at the wrong program
+      // is a launch failure two screens later with nothing to connect it to.
+      const check = await verifyClaudeAt(picked)
+      if (!check.ok) {
+        const status = await claudeStatus()
+        return { ...status, error: check.problem }
+      }
+      const next = updateSettings(services, { claudePath: picked })
+      setClaudeOverride(picked)
+      emit(ctx.window(), 'settings:changed', next)
+      return claudeStatus(picked)
+    },
+
+    'setup:complete': () => {
+      const next = updateSettings(services, { firstRunCompletedAt: new Date().toISOString() })
+      emit(ctx.window(), 'settings:changed', next)
+      return next
+    },
+
+    'path:chooseDirectory': async ({ title }) => {
+      if (ctx.chooseDirectory) return { path: ctx.chooseDirectory(title ?? 'Choose a folder') }
+      const win = ctx.window()
+      const options: Electron.OpenDialogOptions = {
+        title: title ?? 'Choose a folder',
+        properties: ['openDirectory', 'createDirectory']
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      return { path: result.canceled ? null : (result.filePaths[0] ?? null) }
+    },
+
+    'harness:create': async (request) => {
+      const result = await createHarness({
+        mode: request.mode,
+        dir: request.dir,
+        ...(request.name !== undefined ? { name: request.name } : {})
+      })
+      if (result.path === null) {
+        return { ...result, roots: services.settings.scanRoots }
+      }
+      // A harness the launcher cannot see is not one the user created, so the
+      // root goes in with it - unless a root already covers it, in which case
+      // adding the harness itself would list it twice.
+      const covered = services.settings.scanRoots.some((root) =>
+        isWithin(root, result.path as string)
+      )
+      const roots = covered ? services.settings.scanRoots : addRoots([result.path])
+      return { ...result, roots }
+    },
+
+    'update:check': () => checkForUpdate(),
 
     'theme:resolved': () => resolvedTheme(),
 

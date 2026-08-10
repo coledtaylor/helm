@@ -63,13 +63,47 @@ export function updateSettings(services: Services, patch: Partial<AppSettings>):
 }
 
 /**
- * Ensures there is something to scan. On a fresh profile `scanRoots` is empty,
- * so the first launch adopts whichever roots discovery can justify - the
- * harness Helm is running inside, most often. If it can justify none, the value
- * stays empty and the launcher asks.
+ * Whether the setup pane owns the window.
+ *
+ * One question with one answer: has this profile been through setup. Not "does
+ * it have roots" - during setup it acquires roots, and a pane that vanished the
+ * moment the first folder was added would close itself halfway through the
+ * thing it exists to do. The stamp is written by the button, and by nothing
+ * else.
+ */
+export function needsFirstRun(services: Services): boolean {
+  return services.settings.firstRunCompletedAt === null
+}
+
+/**
+ * An install that predates the setup pane, brought up to date.
+ *
+ * It has roots and no stamp, which the rule above would read as "never set up"
+ * and answer with a setup pane over a working launcher. Done here rather than
+ * during the first scan because the window is created immediately afterwards:
+ * a stamp written a second later would show that pane and then take it away.
+ */
+export function adoptExistingProfile(services: Services): boolean {
+  if (services.settings.firstRunCompletedAt !== null) return false
+  if (services.settings.scanRoots.length === 0) return false
+  updateSettings(services, { firstRunCompletedAt: new Date().toISOString() })
+  return true
+}
+
+/**
+ * Ensures there is something to scan.
+ *
+ * A profile that has been through setup adopts whatever discovery can justify
+ * if it somehow has no roots - the harness Helm is running inside, most often.
+ * What it deliberately does *not* do any more is adopt before setup: guessing a
+ * scan root before the user has been asked is how a fresh install ends up
+ * quietly pointed at somebody else's directory. Until then the suggestions are
+ * offered in the pane, where they can be declined.
  */
 export async function ensureScanRoots(services: Services): Promise<string[]> {
   if (services.settings.scanRoots.length > 0) return services.settings.scanRoots
+  if (needsFirstRun(services)) return []
+
   const suggested = await suggestRoots()
   if (suggested.length === 0) return []
   updateSettings(services, { scanRoots: suggested })

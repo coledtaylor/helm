@@ -6,7 +6,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { emit, registerIpc, resolvedTheme } from './ipc'
 import { appMode, dataDir, initDataDir, shimRoot } from './paths'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
-import { createServices, refreshGit, runScan, type Services } from './services'
+import { adoptExistingProfile, createServices, refreshGit, runScan, type Services } from './services'
 import { createConfigService } from './config'
 import {
   attachArtifactConsole,
@@ -26,7 +26,8 @@ import { runUsageChecks } from './usagecheck'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
-import { findClaudeExecutable } from './claude-cli'
+import { findClaudeExecutable, setClaudeOverride } from './claude-cli'
+import { pickerAnswer, runM7Checks } from './m7check'
 import { screenshot } from './bridge'
 
 /**
@@ -52,6 +53,8 @@ type Mode =
   | 'm4-check'
   | 'm5-check'
   | 'm6-check'
+  | 'm7-check'
+  | 'm7-firstrun'
   | 'usage-check'
   | 'usage-settings'
   | 'shim-sweep'
@@ -65,6 +68,8 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--m4-check')) return 'm4-check'
   if (process.argv.includes('--m5-check')) return 'm5-check'
   if (process.argv.includes('--m6-check')) return 'm6-check'
+  if (process.argv.includes('--m7-check')) return 'm7-check'
+  if (process.argv.includes('--m7-firstrun')) return 'm7-firstrun'
   if (process.argv.includes('--usage-check')) return 'usage-check'
   if (process.argv.includes('--usage-settings')) return 'usage-settings'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
@@ -83,6 +88,8 @@ const isSpikeMode =
   mode !== 'm4-check' &&
   mode !== 'm5-check' &&
   mode !== 'm6-check' &&
+  mode !== 'm7-check' &&
+  mode !== 'm7-firstrun' &&
   mode !== 'usage-check'
 
 initDataDir()
@@ -172,10 +179,27 @@ export interface AppOptions {
    * well as against the real file.
    */
   claudeHome?: string | undefined
+  /**
+   * Stand-ins for the native pickers, so `--m7-firstrun` can drive "add a
+   * folder" and "locate claude" through the real handlers. Same shape and same
+   * reasoning as `confirm`.
+   */
+  chooseDirectory?: ((title: string) => string | null) | undefined
+  chooseFile?: ((title: string) => string | null) | undefined
 }
 
 function startApp(options: AppOptions = {}): void {
   const services: Services = createServices()
+  // Before anything can spawn: a `claude` the user picked by hand has to win
+  // over discovery in every caller, and the session host does not read
+  // settings.
+  setClaudeOverride(services.settings.claudePath)
+  // Before the window exists: an install from before the setup pane has roots
+  // and no completion stamp, and stamping it after the first paint would flash
+  // a setup pane over a working launcher.
+  if (adoptExistingProfile(services)) {
+    console.log('existing profile adopted; first run marked complete')
+  }
   if (services.lostSessions > 0) {
     console.warn(`${services.lostSessions} session(s) did not outlive the last run; marked lost`)
   }
@@ -221,6 +245,9 @@ function startApp(options: AppOptions = {}): void {
     config,
     content,
     window: () => win,
+    ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
+    ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),
+    ...(options.chooseFile !== undefined ? { chooseFile: options.chooseFile } : {}),
     rendererReady: () => {
       emit(win, 'settings:changed', services.settings)
       emit(win, 'theme:changed', {
@@ -765,6 +792,79 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`m6-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  /**
+   * M7, in two starts.
+   *
+   * `--m7-check` runs against this machine: the grep audit and what the real
+   * `claude` here actually is.
+   *
+   * `--m7-firstrun` is the other half, and it is a separate process because
+   * "a machine with a fresh `~/.claude` and no harness at all" is not a state
+   * this one can enter. The driver starts it with `PORTABLE_EXECUTABLE_DIR`
+   * pointed at a temporary directory - the app's own portable-mode mechanism,
+   * used as the isolation - so it opens an empty database beside that directory
+   * and touches neither `%APPDATA%\Helm` nor the user's `~/.claude`, which it is
+   * pointed away from with `--claude-home=`.
+   */
+  if (mode === 'm7-check' || mode === 'm7-firstrun') {
+    const collector = createCollector()
+    const arg = (name: string): string | undefined => {
+      const found = process.argv.find((a) => a.startsWith(`--${name}=`))
+      return found?.slice(name.length + 3)
+    }
+    const fixtures = arg('fixtures')
+    const claudeHome = arg('claude-home')
+    const onlyArg = arg('only')
+
+    startApp({
+      observer: collector,
+      confirm: collector.confirm,
+      ...(claudeHome !== undefined ? { claudeHome } : {}),
+      // Answered by the driver, and rewritten by it before each step that
+      // opens one. A native dialog has no automation surface.
+      ...(mode === 'm7-firstrun'
+        ? {
+            chooseDirectory: (title: string) => pickerAnswer('directory', title),
+            chooseFile: (title: string) => pickerAnswer('file', title)
+          }
+        : {}),
+      onReady: (ctx) => {
+        collector.answerWith(true)
+        void runM7Checks(ctx, collector, join(dataDir, 'screenshots'), dataDir, {
+          phase: mode === 'm7-check' ? 'machine' : 'firstrun',
+          ...(fixtures !== undefined ? { fixtures } : {}),
+          ...(claudeHome !== undefined ? { claudeHome } : {}),
+          ...(onlyArg !== undefined ? { only: onlyArg.split(',') } : {})
+        })
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport(
+              mode === 'm7-check' ? 'm7-report.json' : 'm7-firstrun-report.json',
+              {
+                startedAt: new Date().toISOString(),
+                mode: appMode,
+                dataDir,
+                versions: process.versions,
+                pass,
+                checks
+              }
+            )
+            console.log(`${mode} report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`${mode} crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

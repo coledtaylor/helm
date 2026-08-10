@@ -30,9 +30,9 @@ afterEach(async () => {
 })
 
 const draft = (overrides: Partial<ProfileDraft> = {}): ProfileDraft => ({
-  name: 'atlas cloud sync',
+  name: 'Acme cloud sync',
   root: join(dir, 'harness'),
-  overlays: [join(dir, 'harness', 'repos', 'atlas')],
+  overlays: [join(dir, 'harness', 'repos', 'acme')],
   access: [join(dir, 'harness', 'repos', 'atlas-mobile')],
   model: 'opus',
   effort: 'high',
@@ -78,15 +78,15 @@ describe('profile CRUD', () => {
 
   it('finds by name case-insensitively, the way a person types it', () => {
     createProfile(store, draft())
-    expect(findProfileByName(store, 'atlas cloud sync')?.name).toBe('atlas cloud sync')
+    expect(findProfileByName(store, 'acme cloud sync')?.name).toBe('Acme cloud sync')
     expect(findProfileByName(store, 'nothing')).toBeNull()
   })
 
   it('suggests a free name for an import of something already here', () => {
     createProfile(store, draft())
-    expect(uniqueProfileName(store, 'atlas cloud sync')).toBe('atlas cloud sync (2)')
-    createProfile(store, draft({ name: 'atlas cloud sync (2)' }))
-    expect(uniqueProfileName(store, 'atlas cloud sync')).toBe('atlas cloud sync (3)')
+    expect(uniqueProfileName(store, 'Acme cloud sync')).toBe('Acme cloud sync (2)')
+    createProfile(store, draft({ name: 'Acme cloud sync (2)' }))
+    expect(uniqueProfileName(store, 'Acme cloud sync')).toBe('Acme cloud sync (3)')
   })
 })
 

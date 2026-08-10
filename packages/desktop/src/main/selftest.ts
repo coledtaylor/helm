@@ -1,5 +1,5 @@
-import { type BrowserWindow, ipcMain } from 'electron'
-import { join } from 'node:path'
+import { app, type BrowserWindow, ipcMain } from 'electron'
+import { join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import Database from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
@@ -108,7 +108,11 @@ export async function runSelftest(
     file: join(homedir(), '.local', 'bin', 'claude.exe'),
     cols: 100,
     rows: 30,
-    cwd: join(homedir(), '.harness', 'dev', 'repos', 'helm')
+    // This checkout, wherever it is - derived, never a literal path under one
+    // machine's home directory. In a packaged build `getAppPath()` is the asar,
+    // whose parent is beside the exe, which is a directory that exists either
+    // way; the selftest only needs somewhere real to start a session in.
+    cwd: resolve(app.getAppPath(), '..', '..')
   })
   const answered = new Set<string>()
   const gates = setInterval(() => {

@@ -24,6 +24,13 @@ export {
 } from './components/EffectiveViewPane'
 export { HealthPanel, type HealthPanelProps } from './components/HealthPanel'
 export { McpPanel, type McpPanelProps } from './components/McpPanel'
+export { NewHarnessDialog, type NewHarnessDialogProps } from './components/NewHarnessDialog'
+export {
+  SetupPane,
+  type SetupClaudeStatus,
+  type SetupPaneProps
+} from './components/SetupPane'
+export { VersionBanner, type VersionBannerProps } from './components/VersionBanner'
 export { GitChip, type GitChipProps } from './components/GitChip'
 export { InventoryChips, type InventoryChipsProps } from './components/InventoryChips'
 export { ProfileEditor, type ProfileEditorProps } from './components/ProfileEditor'

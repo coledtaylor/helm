@@ -5,6 +5,8 @@ export interface WelcomePaneProps {
   roots: string[]
   projectCount: number
   onAddRoot: () => void
+  /** Scaffold a harness. The same action first run offers, still reachable. */
+  onCreateHarness?: (() => void) | undefined
 }
 
 /** Shown when no project is selected. Names the roots being scanned so an empty
@@ -12,7 +14,8 @@ export interface WelcomePaneProps {
 export function WelcomePane({
   roots,
   projectCount,
-  onAddRoot
+  onAddRoot,
+  onCreateHarness
 }: WelcomePaneProps): JSX.Element {
   return (
     <div className="grid h-full place-items-center px-8">
@@ -46,13 +49,25 @@ export function WelcomePane({
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={onAddRoot}
-          className="mt-5 rounded-md border border-border bg-surface px-3 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
-        >
-          Add a folder
-        </button>
+        <div className="mt-5 flex flex-wrap justify-center gap-2">
+          <button
+            type="button"
+            onClick={onAddRoot}
+            className="rounded-md border border-border bg-surface px-3 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
+          >
+            Add a folder
+          </button>
+          {onCreateHarness && (
+            <button
+              type="button"
+              data-welcome-create-harness
+              onClick={onCreateHarness}
+              className="rounded-md border border-border bg-surface px-3 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
+            >
+              Create a harness
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )
