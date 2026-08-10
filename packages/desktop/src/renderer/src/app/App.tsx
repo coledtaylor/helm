@@ -3,10 +3,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { HistorySession, Profile, ProfileDraft, Project, SessionRecord } from '@helm/core'
 import {
   AppShell,
+  BookIcon,
   cn,
   ConfigConsole,
   ConfigEditor,
   ConfigNothingSelected,
+  ContentDocumentPane,
+  ContentNothingSelected,
+  ContentViewer,
   EffectiveViewPane,
   FolderIcon,
   HarnessIcon,
@@ -27,8 +31,10 @@ import {
   type Tab,
   type TabIndicator
 } from '@helm/ui'
+import { helm } from './bridge'
 import { TerminalPane } from './TerminalPane'
 import { useConfig } from './useConfig'
+import { useContent } from './useContent'
 import { useHistory } from './useHistory'
 import { useLauncher } from './useLauncher'
 import { useProfiles } from './useProfiles'
@@ -56,14 +62,27 @@ type PaneRef =
   | { kind: 'session'; id: number }
   | { kind: 'history' }
   | { kind: 'config' }
+  | { kind: 'content' }
+
+/**
+ * A link in a rendered note, handed to the OS browser.
+ *
+ * Not a hook, because it holds nothing: `will-navigate` is prevented and the
+ * window-open handler denies, so the only thing an `https://` link in a
+ * document can do is ask main to open it somewhere else.
+ */
+const helmOpenExternal = (url: string): Promise<{ opened: boolean }> =>
+  helm.invoke('shell:openExternal', { url })
 
 const HISTORY_TAB = 'history'
 const CONFIG_TAB = 'config'
+const CONTENT_TAB = 'content'
 
 const tabId = (ref: PaneRef): string => {
   if (ref.kind === 'project') return `project:${ref.path}`
   if (ref.kind === 'session') return `session:${String(ref.id)}`
   if (ref.kind === 'config') return CONFIG_TAB
+  if (ref.kind === 'content') return CONTENT_TAB
   return HISTORY_TAB
 }
 
@@ -88,6 +107,7 @@ export function App(): JSX.Element {
   const profileState = useProfiles()
   const historyState = useHistory()
   const configState = useConfig()
+  const contentState = useContent()
 
   /** The profile being edited, `'new'` for one being created from scratch, or
    * a seeded draft from "save as profile". Null when the dialog is closed. */
@@ -164,6 +184,7 @@ export function App(): JSX.Element {
 
   const openHistory = useCallback(() => openPane({ kind: 'history' }), [openPane])
   const openConfig = useCallback(() => openPane({ kind: 'config' }), [openPane])
+  const openContent = useCallback(() => openPane({ kind: 'content' }), [openPane])
 
   const launch = useCallback(
     async (project: Project) => {
@@ -331,6 +352,18 @@ export function App(): JSX.Element {
       ]
     }
 
+    if (ref.kind === 'content') {
+      return [
+        {
+          id: CONTENT_TAB,
+          title: 'Content',
+          hint: contentState.selected?.path ?? 'Notes, docs, skills and artifacts',
+          ...(contentState.scope ? { subtitle: contentState.scope.label } : {}),
+          icon: <BookIcon width={13} height={13} />
+        }
+      ]
+    }
+
     if (ref.kind === 'project') {
       const project = projectsByPath.get(ref.path)
       if (!project) return []
@@ -407,6 +440,10 @@ export function App(): JSX.Element {
           onOpenConfig={openConfig}
           configActive={activePane?.kind === 'config'}
           configScopes={configState.scopes.length}
+          onOpenContent={openContent}
+          contentActive={activePane?.kind === 'content'}
+          contentFiles={contentState.tree?.files.length ?? 0}
+          {...(contentState.scope ? { contentScopeLabel: contentState.scope.label } : {})}
           discovery={discovery}
           scanning={launcher.scanning}
           scanError={launcher.scanError}
@@ -590,6 +627,62 @@ export function App(): JSX.Element {
                 />
               )}
             </ConfigConsole>
+          </div>
+        )}
+
+        {activePane?.kind === 'content' && (
+          <div className="absolute inset-0">
+            <ContentViewer
+              scopes={contentState.scopes}
+              scopePath={contentState.scopePath}
+              onScopeChange={contentState.setScopePath}
+              tree={contentState.tree}
+              treeLoading={contentState.treeLoading}
+              query={contentState.query}
+              onQueryChange={contentState.setQuery}
+              search={contentState.search}
+              searching={contentState.searching}
+              selected={contentState.selected}
+              onSelect={contentState.select}
+              dirty={contentState.dirty}
+              onRefresh={contentState.refresh}
+              refreshing={contentState.refreshing}
+            >
+              {contentState.selected === null ? (
+                <ContentNothingSelected
+                  scope={contentState.scope}
+                  fileCount={contentState.tree?.files.length ?? 0}
+                />
+              ) : (
+                <ContentDocumentPane
+                  // Keyed on the path so opening another note rebuilds the
+                  // pane rather than leaving one document's draft in another's
+                  // editor - the same rule the config editor follows.
+                  key={contentState.selected.path}
+                  file={contentState.selected}
+                  document={contentState.document}
+                  preview={contentState.preview}
+                  previewPending={contentState.previewPending}
+                  mode={contentState.mode}
+                  onModeChange={contentState.setMode}
+                  artifactUrl={contentState.artifactUrl}
+                  artifactConsole={contentState.artifactConsole}
+                  snapshots={contentState.snapshots}
+                  saving={contentState.saving}
+                  error={contentState.error}
+                  external={contentState.external}
+                  highlight={contentState.highlight}
+                  onSave={contentState.save}
+                  onReload={contentState.reload}
+                  onRestore={contentState.restore}
+                  onReveal={launcher.reveal}
+                  onDirtyChange={contentState.setDirty}
+                  onDraftChange={contentState.setDraft}
+                  onOpenPath={contentState.openPath}
+                  onOpenExternal={(url) => void helmOpenExternal(url)}
+                />
+              )}
+            </ContentViewer>
           </div>
         )}
 

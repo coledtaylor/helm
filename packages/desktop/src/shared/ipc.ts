@@ -5,6 +5,10 @@ import type {
   ConfigScope,
   ConfigSnapshotMeta,
   ConfigTree,
+  ContentDocument,
+  ContentScope,
+  ContentSearchResult,
+  ContentTree,
   DiscoveryResult,
   DoctorReport,
   EffectiveView,
@@ -21,6 +25,7 @@ import type {
   McpScope,
   Profile,
   ProfileDraft,
+  RenderedMarkdown,
   SessionRecord,
   ThemePreference,
   WriteConfigRequest,
@@ -333,6 +338,60 @@ export interface IpcRequests {
 
   'config:doctor': { request: void; response: DoctorReport }
 
+  /**
+   * The content viewer (M6). Rendering happens here rather than in the window:
+   * shiki's grammars are megabytes the browser bundle must not carry, and a
+   * live preview that re-parsed a 21 KB note on the UI thread per keystroke
+   * would be the one place in the app that stutters.
+   */
+  'content:scopes': { request: void; response: ContentScope[] }
+  'content:tree': { request: { scopePath: string; refresh?: boolean }; response: ContentTree }
+  /** A file, its bytes, and - for markdown - the HTML it renders to. */
+  'content:document': {
+    request: { scopePath: string; path: string }
+    response: ContentDocument
+  }
+  /** The same render for text that is not on disk yet: the split preview. */
+  'content:render': {
+    request: { scopePath: string; path: string; source: string }
+    response: RenderedMarkdown
+  }
+  'content:search': {
+    request: { scopePath: string; query: string }
+    response: ContentSearchResult
+  }
+  /**
+   * Saving a note. A different channel from `config:write` because it is a
+   * different *permission* - notes here, configuration there - but the same
+   * snapshot table and the same conflict check behind both.
+   */
+  'content:write': { request: WriteConfigRequest; response: WriteConfigResult }
+  'content:snapshots': {
+    request: { scopePath: string; path: string }
+    response: ConfigSnapshotMeta[]
+  }
+  'content:restore': { request: { id: number; path: string }; response: WriteConfigResult }
+  /**
+   * Mints the URL a sandboxed frame may load an HTML artifact from. The
+   * renderer never builds this URL itself: a frame can only reach a directory
+   * the main process pinned to a token it issued for a file the user opened.
+   */
+  'content:artifact': {
+    request: { path: string }
+    response: { url: string; token: string }
+  }
+
+  /**
+   * Hands a link in a rendered note to the OS browser.
+   *
+   * Needed because the alternative is nothing: `will-navigate` is prevented and
+   * `setWindowOpenHandler` denies, so an `https://` link in a note is inert
+   * without this. Restricted to http, https and mailto in the handler - a note
+   * is content, and `shell.openExternal` on an arbitrary scheme is a way to run
+   * a program.
+   */
+  'shell:openExternal': { request: { url: string }; response: { opened: boolean } }
+
   /** The terminal pane's clipboard, routed through Electron rather than the
    * async DOM Clipboard API, which needs a permission prompt and a focused
    * document - neither of which a hosted TUI can rely on. */
@@ -404,6 +463,18 @@ export interface IpcEvents {
    * the warning is to arrive before that.
    */
   'config:externalChange': ConfigExternalChange
+
+  /**
+   * A line an HTML artifact wrote to its console. Pushed from main because the
+   * frame's origin is opaque: the window hosting it cannot read its console,
+   * and the process that owns both of them can.
+   */
+  'content:artifactConsole': {
+    level: string
+    message: string
+    source: string
+    line: number
+  }
 
   'term:create': TermCreateOptions
   'term:write': string
@@ -501,6 +572,16 @@ export const REQUEST_CHANNELS = Object.keys({
   'config:mcpApprove': true,
   'config:mcpList': true,
   'config:doctor': true,
+  'content:scopes': true,
+  'content:tree': true,
+  'content:document': true,
+  'content:render': true,
+  'content:search': true,
+  'content:write': true,
+  'content:snapshots': true,
+  'content:restore': true,
+  'content:artifact': true,
+  'shell:openExternal': true,
   'clipboard:read': true,
   'clipboard:write': true
 } satisfies Record<RequestChannel, true>) as RequestChannel[]
@@ -526,6 +607,7 @@ export const EVENT_CHANNELS = Object.keys({
   'theme:changed': true,
   'history:changed': true,
   'config:externalChange': true,
+  'content:artifactConsole': true,
   'term:create': true,
   'term:write': true,
   'term:resize': true,

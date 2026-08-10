@@ -366,3 +366,63 @@ export function ExportIcon(props: IconProps): JSX.Element {
     </Icon>
   )
 }
+
+/** The content viewer's own glyphs (M6). */
+export function BookIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M2.75 3.25A1.5 1.5 0 0 1 4.25 2H7.5v11H4.25a1.5 1.5 0 0 0-1.5 1.25z" />
+      <path d="M13.25 3.25A1.5 1.5 0 0 0 11.75 2H8.5v11h3.25a1.5 1.5 0 0 1 1.5 1.25z" />
+    </Icon>
+  )
+}
+
+/** An HTML artifact: a document with a frame around it rather than lines on it. */
+export function ArtifactIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <rect x="2.25" y="3" width="11.5" height="10" rx="1.5" />
+      <path d="M2.25 6h11.5" />
+      <path d="M4.25 4.5h.01M6 4.5h.01" />
+    </Icon>
+  )
+}
+
+/** The split editor/preview toggle. */
+export function SplitIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <rect x="2.25" y="3" width="11.5" height="10" rx="1.5" />
+      <path d="M8 3v10" />
+    </Icon>
+  )
+}
+
+export function EyeIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M1.5 8s2.4-4.25 6.5-4.25S14.5 8 14.5 8s-2.4 4.25-6.5 4.25S1.5 8 1.5 8z" />
+      <circle cx="8" cy="8" r="1.75" />
+    </Icon>
+  )
+}
+
+/** A wikilink: two nodes joined. */
+export function LinkIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M6.75 9.25a2.5 2.5 0 0 0 3.5 0l2-2a2.475 2.475 0 0 0-3.5-3.5l-.75.75" />
+      <path d="M9.25 6.75a2.5 2.5 0 0 0-3.5 0l-2 2a2.475 2.475 0 0 0 3.5 3.5l.75-.75" />
+    </Icon>
+  )
+}
+
+/** Table of contents. */
+export function ListIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M5.75 4.25h7.5M5.75 8h7.5M5.75 11.75h7.5" />
+      <path d="M2.9 4.25h.01M2.9 8h.01M2.9 11.75h.01" />
+    </Icon>
+  )
+}

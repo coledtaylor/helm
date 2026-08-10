@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeTheme } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeTheme, protocol } from 'electron'
 import { writeSetting, type AppSettings } from '@helm/core'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -8,12 +8,19 @@ import { appMode, dataDir, initDataDir, shimRoot } from './paths'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
 import { createServices, refreshGit, runScan, type Services } from './services'
 import { createConfigService } from './config'
+import {
+  attachArtifactConsole,
+  CONTENT_SCHEME,
+  createContentService,
+  registerContentProtocol
+} from './content'
 import { createHistoryService } from './history'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
 import { createCollector, runM2Checks, type M2Context } from './m2check'
 import { runM3Checks } from './m3check'
 import { runM4Checks } from './m4check'
 import { runM5Checks } from './m5check'
+import { runM6Checks } from './m6check'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -42,6 +49,7 @@ type Mode =
   | 'm3-check'
   | 'm4-check'
   | 'm5-check'
+  | 'm6-check'
   | 'shim-sweep'
 
 function modeFromArgv(): Mode {
@@ -52,6 +60,7 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--m3-check')) return 'm3-check'
   if (process.argv.includes('--m4-check')) return 'm4-check'
   if (process.argv.includes('--m5-check')) return 'm5-check'
+  if (process.argv.includes('--m6-check')) return 'm6-check'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
   if (process.argv.includes('--claude')) return 'claude'
   if (process.argv.includes('--shell')) return 'shell'
@@ -66,9 +75,27 @@ const isSpikeMode =
   mode !== 'm2-check' &&
   mode !== 'm3-check' &&
   mode !== 'm4-check' &&
-  mode !== 'm5-check'
+  mode !== 'm5-check' &&
+  mode !== 'm6-check'
 
 initDataDir()
+
+/**
+ * The scheme HTML artifacts are served on, declared before the app is ready
+ * because that is the only moment Chromium accepts a privileged scheme.
+ *
+ * `standard` gives it a real origin so relative URLs inside an artifact resolve
+ * against the file's own directory; `secure` keeps it out of Chromium's
+ * mixed-content and "not a secure context" penalty boxes. It is *not*
+ * `corsEnabled` and does not `supportFetchAPI`: the frame gets no network, and
+ * the way to make sure of that is to not build the doors.
+ */
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: CONTENT_SCHEME,
+    privileges: { standard: true, secure: true, supportFetchAPI: false, corsEnabled: false }
+  }
+])
 
 // Every renderer is our own bundle; nothing else may be navigated to or opened.
 app.on('web-contents-created', (_e, contents) => {
@@ -170,11 +197,15 @@ function startApp(options: AppOptions = {}): void {
     onExternalChange: (change) => emit(win, 'config:externalChange', change)
   })
 
+  const content = createContentService({ services })
+  attachArtifactConsole(win, (entry) => emit(win, 'content:artifactConsole', entry))
+
   registerIpc({
     services,
     sessions,
     history,
     config,
+    content,
     window: () => win,
     rendererReady: () => {
       emit(win, 'settings:changed', services.settings)
@@ -214,7 +245,7 @@ function startApp(options: AppOptions = {}): void {
         history.start()
       })
 
-      if (win) options.onReady?.({ win, services, sessions, history, config })
+      if (win) options.onReady?.({ win, services, sessions, history, config, content })
     }
   })
 
@@ -442,6 +473,11 @@ app.whenReady().then(() => {
   // identity in dev or do not appear at all.
   app.setAppUserModelId('dev.coletaylor.helm')
 
+  // The artifact scheme's handler. Registered for every mode that opens a
+  // window, because the spike pages share this process and a scheme with no
+  // handler fails a load rather than falling through to something worse.
+  registerContentProtocol()
+
   /**
    * A real app start, and nothing else.
    *
@@ -627,6 +663,46 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`m5-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  if (mode === 'm6-check') {
+    const collector = createCollector()
+    startApp({
+      observer: collector,
+      confirm: collector.confirm,
+      onReady: (ctx) => {
+        collector.answerWith(true)
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runM6Checks(
+          ctx,
+          join(dataDir, 'screenshots'),
+          dataDir,
+          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
+        )
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('m6-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`m6-check report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`m6-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

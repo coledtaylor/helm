@@ -26,12 +26,16 @@
     "m4-check": "electron-vite build && node scripts/run-m4.mjs",
     "//m5-check": "M5's acceptance criteria. Drives the config console through the real window: browses every scope against an independent readdir walk, edits a file in each and restores it hash-verified, adds an MCP server through the UI, then launches a real claude session and asks it whether the effective view predicted what it actually sees. Spawns one claude session on haiku, so it takes minutes. Pass --only=browse|edit|snapshot|json|external|mcp|effective|doctor to re-run one group.",
     "m5-check": "electron-vite build && node scripts/run-m5.mjs",
+    "//m6-check": "M6's acceptance criteria. Opens every markdown file in the user's harness vault through the real window and checks the DOM it produced against a regex read of the same source, navigates a wikilink, interrogates the artifact frame's sandbox from inside it, measures search latency and scroll frame intervals, and edits a real note through the split editor with a hash-verified restore. Spawns no claude sessions, so it takes about a minute. Pass --only=browse|render|links|artifact|search|edit|scroll to re-run one group.",
+    "m6-check": "electron-vite build && node scripts/run-m6.mjs",
     "claude": "electron-vite build && electron . --claude --cwd=.",
     "dist:win": "electron-vite build && electron-builder --win"
   },
   "dependencies": {
     "@helm/core": "workspace:*",
     "@helm/ui": "workspace:*",
+    "@shikijs/langs": "^4.4.3",
+    "@shikijs/themes": "^4.4.3",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/addon-unicode11": "^0.9.0",
@@ -40,7 +44,8 @@
     "better-sqlite3": "^13.0.3",
     "node-pty": "^1.1.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "shiki": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

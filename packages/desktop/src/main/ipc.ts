@@ -6,6 +6,7 @@ import {
   suggestRoots
 } from '@helm/core'
 import type { ConfigService } from './config'
+import type { ContentService } from './content'
 import type { HistoryService } from './history'
 import { readClaudeVersion } from './claude-cli'
 import { appMode, dataDir, dbFile } from './paths'
@@ -72,6 +73,8 @@ export interface IpcContext {
   history: HistoryService
   /** The one surface that writes to a `.claude` tree; see `config.ts`. */
   config: ConfigService
+  /** Reads, renders and searches what Claude writes; see `content.ts`. */
+  content: ContentService
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
 }
@@ -233,6 +236,32 @@ export function registerIpc(ctx: IpcContext): void {
     'config:mcpList': ({ cwd }) => ctx.config.mcpList(cwd),
 
     'config:doctor': () => ctx.config.doctor(),
+
+    'content:scopes': () => ctx.content.scopes(),
+    'content:tree': ({ scopePath, refresh }) => ctx.content.tree(scopePath, refresh ?? false),
+    'content:document': ({ scopePath, path }) => ctx.content.document(scopePath, path),
+    'content:render': ({ scopePath, path, source }) => ctx.content.render(scopePath, path, source),
+    'content:search': ({ scopePath, query }) => ctx.content.search(scopePath, query),
+    'content:write': (request) => ctx.content.write(request),
+    'content:snapshots': ({ scopePath, path }) => ctx.content.snapshots(scopePath, path),
+    'content:restore': ({ id, path }) => ctx.content.restore(id, path),
+    'content:artifact': ({ path }) => ctx.content.artifact(path),
+
+    // A link in a note is the user's, not Helm's, so it opens where they expect
+    // links to open. The scheme check is the whole security of this handler:
+    // `shell.openExternal` will happily hand a `file:` URL to the shell, which
+    // on Windows is a way to run whatever it points at.
+    'shell:openExternal': async ({ url }) => {
+      let parsed: URL
+      try {
+        parsed = new URL(url)
+      } catch {
+        return { opened: false }
+      }
+      if (!['http:', 'https:', 'mailto:'].includes(parsed.protocol)) return { opened: false }
+      await shell.openExternal(parsed.toString())
+      return { opened: true }
+    },
 
     'clipboard:read': () => clipboard.readText(),
     'clipboard:write': (text) => {
