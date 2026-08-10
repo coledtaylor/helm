@@ -434,32 +434,37 @@ export function attachArtifactConsole(
   win: BrowserWindow,
   onEntry: (entry: ArtifactConsoleEntry) => void
 ): void {
-  win.webContents.on(
-    'console-message',
-    (
-      event: { level?: string; message?: string; lineNumber?: number; sourceId?: string },
-      legacyLevel?: number,
-      legacyMessage?: string,
-      legacyLine?: number,
-      legacySource?: string
-    ) => {
-      // Electron 35 replaced the positional arguments with an event object and
-      // kept the old shape working. Both are read, because a check that stops
-      // seeing console errors after an upgrade is a check that reports green
-      // for the wrong reason.
-      const source = event.sourceId ?? legacySource ?? ''
-      if (!source.startsWith(`${CONTENT_SCHEME}:`)) return
-
-      const LEVELS = ['debug', 'info', 'warning', 'error']
-      const entry: ArtifactConsoleEntry = {
-        level: event.level ?? LEVELS[legacyLevel ?? 1] ?? 'info',
-        message: event.message ?? legacyMessage ?? '',
-        source,
-        line: event.lineNumber ?? legacyLine ?? 0
+  win.webContents.on('console-message', (event) => {
+    // One parameter, deliberately: Electron decides which signature to call by
+    // the listener's arity, and taking the deprecated positional arguments as
+    // well earns a warning on every start.
+    //
+    // The shape is checked rather than assumed. If a future version stops
+    // populating `sourceId`, this listener would silently stop recognising
+    // artifact output and criterion 3 would pass because it saw nothing - the
+    // exact failure M3-4 taught. So an unrecognised event is *recorded*, not
+    // dropped.
+    if (typeof event.sourceId !== 'string' || typeof event.level !== 'string') {
+      const broken: ArtifactConsoleEntry = {
+        level: 'error',
+        message: `console-message arrived in a shape Helm does not recognise: ${JSON.stringify(Object.keys(event))}`,
+        source: `${CONTENT_SCHEME}://unknown`,
+        line: 0
       }
-      artifactConsole.push(entry)
-      if (artifactConsole.length > 200) artifactConsole.shift()
-      onEntry(entry)
+      artifactConsole.push(broken)
+      onEntry(broken)
+      return
     }
-  )
+    if (!event.sourceId.startsWith(`${CONTENT_SCHEME}:`)) return
+
+    const entry: ArtifactConsoleEntry = {
+      level: event.level,
+      message: event.message,
+      source: event.sourceId,
+      line: event.lineNumber
+    }
+    artifactConsole.push(entry)
+    if (artifactConsole.length > 200) artifactConsole.shift()
+    onEntry(entry)
+  })
 }

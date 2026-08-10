@@ -10,7 +10,7 @@ import {
   type ContentFile,
   type Profile
 } from '@helm/core'
-import { screenshot, sleep } from './bridge'
+import { screenshot, sleep, waitFor } from './bridge'
 import { artifactConsoleEntries, artifactRoots, clearArtifactConsole } from './content'
 import type { Check } from './fidelity'
 import type { M2Context } from './m2check'
@@ -116,10 +116,16 @@ function walkContent(dir: string, base: string, into: string[], depth = 0): void
     if (entry.isDirectory()) {
       if (entry.isSymbolicLink()) continue
       if (SKIP.has(entry.name.toLowerCase())) continue
-      // Dot directories are tooling. `.claude` is walked because its `skills`
-      // subtree is content; nothing else under it is reachable by extension.
-      if (entry.name.startsWith('.') && entry.name !== '.claude') continue
-      if (entry.name === '.claude' && depth > 0) continue
+      // Dot directories are tooling and not content. `.claude` is the one
+      // exception, and only its `skills` subtree: `settings.json`,
+      // `commands/` and `rules/` are the config console's, and a content
+      // browser that listed them would be a second, worse config console.
+      if (entry.name.startsWith('.')) {
+        if (entry.name === '.claude' && depth === 0) {
+          walkContent(join(path, 'skills'), base, into, depth + 2)
+        }
+        continue
+      }
       walkContent(path, base, into, depth + 1)
       continue
     }
@@ -170,19 +176,36 @@ function countSource(source: string): SourceCounts {
 
   const body = lines.slice(start)
 
-  // Fenced regions out, remembering how many there were.
+  /**
+   * Fenced regions out, remembering how many there were.
+   *
+   * The fence's *length* is tracked, not just its character. CommonMark says a
+   * closing fence must be at least as long as the one that opened it, and this
+   * vault contains a four-backtick block with three-backtick blocks inside it -
+   * a scanner that closed on the first ``` ends the outer block early and then
+   * miscounts everything after it. That is not a hypothetical: it is what this
+   * check disagreed with the renderer about, and the renderer was right.
+   */
   const kept: string[] = []
   let fence: string | null = null
+  let fenceLength = 0
   let codeBlocks = 0
   for (const line of body) {
-    const opener = /^\s{0,3}(`{3,}|~{3,})/.exec(line)
+    const opener = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line)
     if (fence === null && opener?.[1] !== undefined) {
+      // A backtick fence's info string may not contain a backtick.
+      if (opener[1][0] === '`' && (opener[2] ?? '').includes('`')) {
+        kept.push(line)
+        continue
+      }
       fence = opener[1][0] ?? '`'
+      fenceLength = opener[1].length
       codeBlocks++
       continue
     }
     if (fence !== null) {
-      if (new RegExp(`^\\s{0,3}${fence === '`' ? '`{3,}' : '~{3,}'}\\s*$`).test(line)) fence = null
+      const closer = new RegExp(`^\\s{0,3}\\${fence}{${String(fenceLength)},}\\s*$`)
+      if (closer.test(line)) fence = null
       continue
     }
     kept.push(line)
@@ -527,22 +550,20 @@ export async function runM6Checks(
    * the source URL.
    */
   const appConsole: Array<{ level: string; message: string; source: string }> = []
-  win.webContents.on(
-    'console-message',
-    (
-      event: { level?: string; message?: string; sourceId?: string },
-      legacyLevel?: number,
-      legacyMessage?: string,
-      _legacyLine?: number,
-      legacySource?: string
-    ) => {
-      const source = event.sourceId ?? legacySource ?? ''
-      if (source.startsWith('helm-content:')) return
-      const level = event.level ?? ['debug', 'info', 'warning', 'error'][legacyLevel ?? 1] ?? 'info'
-      if (level !== 'error' && level !== 'warning') return
-      appConsole.push({ level, message: event.message ?? legacyMessage ?? '', source })
-    }
-  )
+  win.webContents.on('console-message', (event) => {
+    const source = event.sourceId
+    if (source.startsWith('helm-content:')) return
+    if (event.level !== 'error' && event.level !== 'warning') return
+    appConsole.push({ level: event.level, message: event.message, source })
+  })
+
+  /**
+   * The first scan has to have landed before anything asks which project is the
+   * harness. It is kicked off when the renderer reports ready and this driver
+   * starts in the same turn, so without this the answer is "there are no
+   * projects" - which is not a failure, it is a race.
+   */
+  await waitFor(() => ctx.services.lastScan !== null, 120_000)
 
   const fixtures = buildFixtures(dataDir)
 
@@ -949,6 +970,24 @@ async function linkChecks(ctx: M2Context, shotDir: string, harnessPath: string):
     return targets.some((target) => names.has(target.toLowerCase().split('/').at(-1) ?? ''))
   })
 
+  /** How the two kinds of link are actually painted, read where each occurs. */
+  const readLinkStyle = async (which: 'live' | 'broken'): Promise<Record<string, string> | null> =>
+    js<Record<string, string> | null>(
+      win,
+      `(() => {
+        const el = document.querySelector(${
+          which === 'broken'
+            ? `'[data-content-body] a.wikilink-broken'`
+            : `'[data-content-body] a.wikilink:not(.wikilink-broken)'`
+        });
+        if (!el) return null;
+        const s = getComputedStyle(el);
+        return { color: s.color, borderBottomStyle: s.borderBottomStyle,
+          borderBottomColor: s.borderBottomColor };
+      })()`
+    )
+
+  let liveStyle: Record<string, string> | null = null
   let navigated: Record<string, unknown> = { attempted: false }
   if (source) {
     await js<boolean>(
@@ -968,6 +1007,9 @@ async function linkChecks(ctx: M2Context, shotDir: string, harnessPath: string):
       win,
       `document.querySelector('[data-content-body] a.wikilink[data-wikilink-path]')?.dataset.wikilinkPath ?? null`
     )
+    // Read where a live link actually is. The note that has a broken one need
+    // not have a resolving one as well, and on this vault it does not.
+    liveStyle = await readLinkStyle('live')
     await js<boolean>(
       win,
       `(() => { const a = document.querySelector('[data-content-body] a.wikilink[data-wikilink-path]');
@@ -1014,29 +1056,31 @@ async function linkChecks(ctx: M2Context, shotDir: string, harnessPath: string):
       15_000
     )
     await sleep(400)
-    styling = await js<Record<string, unknown>>(
-      win,
-      `(() => {
-        const broken = document.querySelector('[data-content-body] a.wikilink-broken');
-        const live = document.querySelector('[data-content-body] a.wikilink:not(.wikilink-broken)');
-        const read = (el) => { if (!el) return null; const s = getComputedStyle(el);
-          return { color: s.color, borderBottomStyle: s.borderBottomStyle, borderBottomColor: s.borderBottomColor }; };
-        return { attempted: true, broken: read(broken), live: read(live),
-          brokenCount: document.querySelectorAll('[data-content-body] a.wikilink-broken').length,
-          badge: document.querySelector('[data-broken-links]')?.dataset.brokenLinks ?? null };
-      })()`
-    )
+    liveStyle ??= await readLinkStyle('live')
+    styling = {
+      attempted: true,
+      inFile: brokenFile.relPath,
+      broken: await readLinkStyle('broken'),
+      live: liveStyle,
+      brokenCount: await js<number>(
+        win,
+        `document.querySelectorAll('[data-content-body] a.wikilink-broken').length`
+      ),
+      badge: await js<string | null>(
+        win,
+        `document.querySelector('[data-broken-links]')?.dataset.brokenLinks ?? null`
+      )
+    }
   }
 
   const shot = await screenshot(win, shotDir, 'm6-wikilinks.png')
 
   const brokenStyle = styling['broken'] as { color?: string; borderBottomStyle?: string } | null
-  const liveStyle = styling['live'] as { color?: string; borderBottomStyle?: string } | null
   const visiblyDifferent =
     brokenStyle != null &&
     liveStyle != null &&
-    (brokenStyle.color !== liveStyle.color ||
-      brokenStyle.borderBottomStyle !== liveStyle.borderBottomStyle)
+    brokenStyle.color !== liveStyle.color &&
+    brokenStyle.borderBottomStyle !== liveStyle.borderBottomStyle
 
   return [
     {
@@ -1218,17 +1262,35 @@ async function artifactChecks(
   const token = roots.find((entry) => entry.file.toLowerCase() === fixtures.hostile.toLowerCase())?.token
   let traversal: Record<string, unknown> = { attempted: false }
   if (token !== undefined) {
-    const escaped = `helm-content://artifact/${token}/%2e%2e/%2e%2e/${encodeURIComponent(basename(fixtures.secret))}`
+    /**
+     * Two spellings of the same attack, because they fail in different places.
+     *
+     * `%2e%2e/` is decoded and *normalised away by the URL parser* before the
+     * handler is reached - `helm-content` is a standard scheme, so Chromium
+     * collapses dot segments and the token itself is popped off the path. The
+     * request arrives naming no token at all, which is a 404. Worth asserting,
+     * but it proves the parser rather than the guard.
+     *
+     * `%2e%2e%2f` survives, because `%2f` is never decoded during
+     * canonicalisation. The handler receives one segment, decodes it itself,
+     * and `../../secret` reaches `resolve()` - which is precisely the input the
+     * containment check exists for, and the only way to actually exercise it.
+     */
+    const secret = encodeURIComponent(basename(fixtures.secret))
+    const normalised = `helm-content://artifact/${token}/%2e%2e/%2e%2e/${secret}`
+    const encoded = `helm-content://artifact/${token}/%2e%2e%2f%2e%2e%2f${secret}`
     const sibling = `helm-content://artifact/${token}/artifact.html`
     try {
-      const denied = await net.fetch(escaped)
+      const byParser = await net.fetch(normalised)
+      const byGuard = await net.fetch(encoded)
       const allowed = await net.fetch(sibling)
-      const deniedBody = await denied.text().catch(() => '')
+      const leaked = `${await byParser.text().catch(() => '')}${await byGuard.text().catch(() => '')}`
       traversal = {
         attempted: true,
-        traversalUrl: escaped,
-        traversalStatus: denied.status,
-        traversalLeakedTheSecret: deniedBody.includes('HELMM6SECRET'),
+        secretOnDisk: fixtures.secret,
+        normalisedByTheUrlParser: { url: normalised, status: byParser.status },
+        refusedByTheContainmentCheck: { url: encoded, status: byGuard.status },
+        eitherLeakedTheSecret: leaked.includes('HELMM6SECRET'),
         siblingStatus: allowed.status,
         siblingIsServed: allowed.status === 200,
         csp: allowed.headers.get('content-security-policy')
@@ -1257,8 +1319,9 @@ async function artifactChecks(
       fetchBlocked &&
       topBlocked &&
       remoteImageBlocked &&
-      traversal['traversalStatus'] === 403 &&
-      traversal['traversalLeakedTheSecret'] === false &&
+      (traversal['refusedByTheContainmentCheck'] as { status?: number } | undefined)?.status === 403 &&
+      (traversal['normalisedByTheUrlParser'] as { status?: number } | undefined)?.status === 404 &&
+      traversal['eitherLeakedTheSecret'] === false &&
       traversal['siblingIsServed'] === true &&
       cspHasNoNetwork,
     detail: {
@@ -1284,9 +1347,10 @@ async function artifactChecks(
       'thing it must not be able to do.',
       'The frame is expected to log CSP violations here; they are the evidence, not a failure.',
       'M6-5 is where "no console errors" is measured, against a real artifact.',
-      'The traversal request uses percent-encoded dot segments, because a literal `..` is',
-      'normalised away by the URL parser before the handler ever sees it - which would have',
-      'made a containment check that passed for the wrong reason.'
+      'The traversal is tried twice. `%2e%2e/` is normalised away by the URL parser and never',
+      'reaches the handler, which is a 404 and proves the parser. `%2e%2e%2f` survives - `%2f`',
+      'is never decoded during canonicalisation - and is what actually reaches `resolve()`, so',
+      'the 403 is the containment check refusing rather than the URL never arriving.'
     ]
   })
 

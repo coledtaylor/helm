@@ -332,7 +332,10 @@ function Row({
       type="button"
       data-content-file={file.relPath}
       data-content-kind={file.kind}
-      data-content-dirty={dirty}
+      // Not `data-content-dirty`: that belongs to the editor's own status, and
+      // two elements answering to one selector is how a driver ends up reading
+      // the first list row's state and calling it the editor's.
+      data-content-row-dirty={dirty}
       aria-current={selected}
       onClick={() => onSelect(file)}
       title={file.path}
