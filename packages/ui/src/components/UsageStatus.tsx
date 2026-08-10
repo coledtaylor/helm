@@ -113,23 +113,28 @@ function Meter({ percent, severity }: Pick<UsageBucket, 'percent' | 'severity'>)
 
 function Bucket({ bucket, now }: { bucket: UsageBucket; now: number }): JSX.Element {
   return (
-    <span className="flex shrink-0 items-center gap-1.5 tabular-nums">
+    <span className="flex shrink-0 items-center gap-1.5">
       <Meter percent={bucket.percent} severity={bucket.severity} />
-      <span>{bucketLabel(bucket)}</span>
-      <span className={cn('font-medium', SEVERITY_TEXT[bucket.severity])}>
-        {Math.round(bucket.percent)}%
-      </span>
-      {bucket.resetsAtMs !== null && (
-        // Hidden rather than shrunk below a wide window: the reset time is the
-        // first thing that can go without the segment becoming a bare number,
-        // and it is in the tooltip at every width.
-        <span className="hidden lg:inline">
-          <span aria-hidden className="mr-1.5 text-fg-subtle/60">
-            &middot;
-          </span>
-          resets {formatResetsIn(bucket.resetsAtMs, now)}
+      {/* One text run, not three flex items: the words between the label, the
+          number and the reset time have to be real spaces, because that string
+          is what a screen reader announces and what a copy takes. */}
+      <span className="whitespace-nowrap tabular-nums">
+        {bucketLabel(bucket)}{' '}
+        <span className={cn('font-medium', SEVERITY_TEXT[bucket.severity])}>
+          {Math.round(bucket.percent)}%
         </span>
-      )}
+        {bucket.resetsAtMs !== null && (
+          // Hidden rather than shrunk below a wide window: the reset time is
+          // the first thing that can go without the segment becoming a bare
+          // number, and it is in the tooltip at every width.
+          <span className="hidden lg:inline">
+            <span aria-hidden className="px-1.5 text-fg-subtle/60">
+              &middot;
+            </span>
+            resets {formatResetsIn(bucket.resetsAtMs, now)}
+          </span>
+        )}
+      </span>
     </span>
   )
 }
@@ -174,9 +179,20 @@ function Spend({ spend, now }: { spend: UsageSpend; now: number }): JSX.Element 
   const age = priceTableAgeDays(now)
   const stale = age > PRICE_TABLE_FRESH_FOR_DAYS
 
+  /**
+   * `$124 5h`, with a real space rather than a flex gap.
+   *
+   * The amount and its window are one phrase, so the space between them has to
+   * be a character: `textContent` is what a screen reader announces, what a
+   * copy takes, and what the check asserts on, and a gap is invisible to all
+   * three. Which also means this span must *not* be a flex container - its
+   * children would become flex items, and a leading space in a flex item is
+   * stripped from the rendering while staying in the text. That combination is
+   * the worst of both: it reads `$1245h` on screen and passes a check.
+   */
   const window = (label: string, cost: UsageWindowCost): JSX.Element => (
-    <span key={label} className="flex shrink-0 items-center gap-1.5 tabular-nums">
-      <span className="font-medium text-fg-muted">{dollars(cost.dollars)}</span>
+    <span key={label} className="shrink-0 whitespace-nowrap tabular-nums">
+      <span className="font-medium text-fg-muted">{dollars(cost.dollars)}</span>{' '}
       <span>{label}</span>
     </span>
   )
@@ -190,7 +206,7 @@ function Spend({ spend, now }: { spend: UsageSpend; now: number }): JSX.Element 
       <Divider />
       {window('7d', spend.week)}
       <Divider />
-      <span className={cn('hidden shrink-0 lg:inline', stale && 'text-warn')}>
+      <span className={cn('hidden shrink-0 whitespace-nowrap lg:inline', stale && 'text-warn')}>
         {spend.pricedAt} prices
       </span>
     </>
