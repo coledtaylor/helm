@@ -73,6 +73,75 @@ export interface AppInfo {
   windowsBuild: number | null
 }
 
+/**
+ * Whether this machine has signed in to Claude Code. `unknown` is a real
+ * answer, not a placeholder: on macOS and Linux the credential legitimately
+ * lives in a store Helm has no business opening.
+ */
+export type ClaudeAuth = 'authenticated' | 'unauthenticated' | 'unknown'
+
+/**
+ * What Helm found out about the CLI, for the setup pane and the version banner.
+ *
+ * Carries no credential and never will. `auth` is decided from the *existence*
+ * of a login artefact, and the remedy for `unauthenticated` is a sentence
+ * telling the user to run `claude` themselves.
+ */
+export interface ClaudeStatus {
+  /** The executable, or null when there is not one. */
+  path: string | null
+  /** `setting` when the user picked it, `discovered` when Helm found it. */
+  source: 'setting' | 'discovered' | null
+  /** Raw `claude --version` output. */
+  version: string | null
+  /** The `x.y.z` parsed out of it, or null if it did not carry one. */
+  semver: string | null
+  /** Whether that version is inside the range this build was tested against. */
+  tested: boolean
+  testedRange: { min: string; max: string }
+  /** `~/.claude`, or wherever `CLAUDE_CONFIG_DIR` points. */
+  configDir: string
+  configDirExists: boolean
+  auth: ClaudeAuth
+  /** Which signal decided `auth`, so the pane can be specific about why. */
+  authSignal: string
+  /** What went wrong locating or running the CLI, if anything. */
+  error: string | null
+}
+
+/** Creating a harness, or turning a folder that holds repos into one. */
+export interface CreateHarnessOutcome {
+  /** The harness directory, or null when nothing was written. */
+  path: string | null
+  /** Paths written, relative to `path`. */
+  created: string[]
+  /** Why nothing was written. Non-empty means `path` is null. */
+  problems: string[]
+  /** The scan roots after the new harness was added to them. */
+  roots: string[]
+}
+
+/**
+ * The result of an explicit "is there a newer Helm" check.
+ *
+ * User-initiated only - see `docs/PACKAGING.md`. Helm makes no network request
+ * unless this channel is invoked, which is why `checkedAt` is here: a pane that
+ * says "up to date" has to be able to say when it last actually asked.
+ */
+export interface UpdateCheck {
+  /** The version running now. */
+  current: string
+  /** The newest published release, or null if the check could not complete. */
+  latest: string | null
+  /** True only when `latest` is a strictly higher version than `current`. */
+  newer: boolean
+  /** Where to go to get it. Opened through `shell:openExternal`, not fetched. */
+  url: string | null
+  /** Why the check could not complete. */
+  error: string | null
+  checkedAt: string
+}
+
 export interface ScanRequest {
   /** Read git state during the scan. A first paint skips it and refreshes after. */
   includeGit?: boolean
@@ -119,7 +188,7 @@ export interface LaunchProfileRequest {
 export interface LaunchedProfile {
   session: SessionRecord
   profile: Profile
-  /** Plugin namespaces the session was given, e.g. `['atlas']`. */
+  /** Plugin namespaces the session was given, e.g. `['api', 'web']`. */
   overlays: string[]
   /** Whether composed project instructions were passed. */
   composedInstructions: boolean
@@ -250,7 +319,46 @@ export interface IpcRequests {
   'roots:suggest': { request: void; response: string[] }
   /** Native directory picker. Returns the roots after the addition. */
   'roots:add': { request: void; response: string[] }
+  /** Adds a path already in hand - a suggestion accepted, a harness created. */
+  'roots:accept': { request: { path: string }; response: string[] }
   'roots:remove': { request: { path: string }; response: string[] }
+
+  /**
+   * First run (M7). Setup is a *state*, not a wizard the app remembers having
+   * shown: the pane is on screen whenever there is nothing to scan and no
+   * completion stamp, so quitting halfway through leaves it exactly where it
+   * was rather than dropping the user into an empty launcher.
+   */
+  'setup:status': { request: void; response: ClaudeStatus }
+  /**
+   * Pick the `claude` executable by hand, for the machine where it is neither
+   * on PATH nor in the usual place. The picked file is run with `--version`
+   * before it is saved, so a mis-click is a sentence rather than a pty that
+   * opens and closes.
+   */
+  'setup:locateClaude': { request: void; response: ClaudeStatus }
+  /** Stamps `firstRunCompletedAt`. The pane closing is a consequence of this. */
+  'setup:complete': { request: void; response: AppSettings }
+
+  /** A directory chosen by the user, without doing anything with it yet. */
+  'path:chooseDirectory': { request: { title?: string }; response: { path: string | null } }
+
+  /**
+   * Scaffold a harness, or turn a folder that already holds repositories into
+   * one. The minimum only - `harness.yaml`, `repos/`, an empty `.claude/` - and
+   * the new harness becomes a scan root in the same call, because a harness the
+   * user cannot see is not one they created.
+   */
+  'harness:create': {
+    request: { mode: 'new' | 'convert'; dir: string; name?: string }
+    response: CreateHarnessOutcome
+  }
+
+  /**
+   * Ask GitHub whether there is a newer release. The only outbound request the
+   * app makes, and it is made only when this channel is invoked.
+   */
+  'update:check': { request: void; response: UpdateCheck }
 
   /** What `theme: 'system'` currently resolves to on this machine. */
   'theme:resolved': { request: void; response: ResolvedTheme }
@@ -557,7 +665,14 @@ export const REQUEST_CHANNELS = Object.keys({
   'discovery:scan': true,
   'roots:suggest': true,
   'roots:add': true,
+  'roots:accept': true,
   'roots:remove': true,
+  'setup:status': true,
+  'setup:locateClaude': true,
+  'setup:complete': true,
+  'path:chooseDirectory': true,
+  'harness:create': true,
+  'update:check': true,
   'theme:resolved': true,
   'shell:showItem': true,
   'session:start': true,

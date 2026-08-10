@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import type { DiscoveryResult, Harness, Project } from '@helm/core'
 import { cn } from '../lib/cn'
 import { ProjectRow } from './ProjectRow'
-import { BookIcon, HistoryIcon, PlusIcon, RefreshIcon, SlidersIcon } from './icons'
+import { BookIcon, HarnessIcon, HistoryIcon, PlusIcon, RefreshIcon, SlidersIcon } from './icons'
 
 export interface SidebarProps {
   /**
@@ -38,6 +38,12 @@ export interface SidebarProps {
   onSelect: (project: Project) => void
   onRescan: () => void
   onAddRoot: () => void
+  /**
+   * Scaffold a harness. Deliberately not first-run-only: someone who starts
+   * with one folder of repos and later wants a second workspace should not have
+   * to reinstall to get the action back.
+   */
+  onCreateHarness?: (() => void) | undefined
 }
 
 interface Group {
@@ -108,7 +114,8 @@ export function Sidebar({
   selectedPath,
   onSelect,
   onRescan,
-  onAddRoot
+  onAddRoot,
+  onCreateHarness
 }: SidebarProps): JSX.Element {
   const [query, setQuery] = useState('')
   const groups = useMemo(() => groupProjects(discovery), [discovery])
@@ -241,8 +248,21 @@ export function Sidebar({
         >
           <RefreshIcon className={cn(scanning && 'animate-spin')} />
         </button>
+        {onCreateHarness && (
+          <button
+            type="button"
+            data-create-harness
+            onClick={onCreateHarness}
+            title="Create a new harness"
+            aria-label="Create a new harness"
+            className="grid size-6 place-items-center rounded text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+          >
+            <HarnessIcon />
+          </button>
+        )}
         <button
           type="button"
+          data-add-root
           onClick={onAddRoot}
           title="Add a folder to scan"
           aria-label="Add a folder to scan"

@@ -24,12 +24,12 @@ import { basename, join, resolve } from 'node:path'
  * manifest. So Helm synthesises the missing shape around the real thing rather
  * than copying it (SPEC 2, proved by Spike A):
  *
- *     <shimRoot>/overlay-atlas/
+ *     <shimRoot>/overlay-acme/
  *     ├── .claude-plugin/plugin.json      generated
  *     ├── .helm-overlay.json              generated: what this was built from
- *     ├── skills/     ──junction──▶  repos/atlas/.claude/skills
- *     ├── commands/   ──junction──▶  repos/atlas/.claude/commands
- *     └── agents/     ──junction──▶  repos/atlas/.claude/agents
+ *     ├── skills/     ──junction──▶  repos/acme/.claude/skills
+ *     ├── commands/   ──junction──▶  repos/acme/.claude/commands
+ *     └── agents/     ──junction──▶  repos/acme/.claude/agents
  *
  * Junctions rather than symlinks because symlinks need elevation on Windows and
  * junctions do not, and rather than copies because a junction is the source
@@ -62,7 +62,7 @@ export const MEMORY_PREFIX = 'memory-'
 /**
  * A plugin name becomes the namespace every skill from that overlay is invoked
  * under, so it is read by a person at a `/` prompt and should look like the repo
- * it came from. Spike A's throwaway `atlas-overlay:` prefix is exactly what
+ * it came from. Spike A's throwaway `acme-overlay:` prefix is exactly what
  * this exists to avoid.
  *
  * Lowercased and reduced to the characters a namespace can safely use; a name
@@ -80,7 +80,7 @@ export function overlayPluginName(projectPath: string): string {
 /**
  * Plugin names within one launch, made distinct.
  *
- * Two projects can share a directory name - `repos/atlas` in two different
+ * Two projects can share a directory name - `repos/acme` in two different
  * harnesses - and the CLI namespaces skills by manifest name, so a collision
  * here would put two overlays' skills under one prefix. That is the one
  * collision Spike A's automatic namespacing does not solve, because it is
@@ -436,7 +436,7 @@ export function cleanStaleShims(shimRoot: string, keep: readonly string[] = []):
  * suggested it might - does not either. Measured on 2.1.225: a session launched
  * from the harness root with both flags reported only the user and cwd
  * instruction files, and could not answer a question whose answer is in
- * `repos/atlas/CLAUDE.md`. Passing this file to
+ * `repos/acme/CLAUDE.md`. Passing this file to
  * `--append-system-prompt-file` does carry it.
  *
  * A file rather than `--append-system-prompt` with the text inline: two repos

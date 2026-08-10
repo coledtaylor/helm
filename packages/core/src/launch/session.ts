@@ -8,7 +8,7 @@
  * have to be moved out of it first, untested, to get there.
  */
 
-/** Long enough for "atlas-reporting accruals", short enough to fit a tab. */
+/** Long enough for "acme-reporting accruals", short enough to fit a tab. */
 const MAX_NAME = 60
 
 export interface SessionSpec {

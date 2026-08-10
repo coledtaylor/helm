@@ -356,7 +356,7 @@ export type ProfileDraft = Omit<Profile, 'id' | 'createdAt' | 'updatedAt'>
  */
 export interface OverlayShim {
   /** The plugin manifest name, and therefore the prefix its skills appear
-   * under - `atlas:think`, not `atlas-overlay:think`. */
+   * under - `acme:think`, not `acme-overlay:think`. */
   name: string
   /** The project this overlay was synthesised from. */
   projectPath: string
@@ -401,8 +401,19 @@ export interface AppSettings {
   scanRoots: string[]
   /** Window geometry, restored on next launch. */
   windowBounds: { width: number; height: number; x?: number; y?: number } | null
-  /** Set once first-run has completed, so M7 can tell a fresh profile apart. */
+  /**
+   * When the first-run flow was finished. Null means it has not been, which is
+   * what puts the setup pane on screen instead of the launcher.
+   */
   firstRunCompletedAt: string | null
+  /**
+   * A `claude` executable the user picked by hand, for the machine where it is
+   * not on PATH and not in the usual install directory. Null means "find it".
+   *
+   * A path, never a credential: Helm locates the CLI and hands it a pty, and
+   * signing in stays entirely between the user and `claude`.
+   */
+  claudePath: string | null
   /**
    * What the status bar's usage segment shows. Cycled by clicking it until M7
    * builds somewhere for a setting to live.
@@ -415,6 +426,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   scanRoots: [],
   windowBounds: null,
   firstRunCompletedAt: null,
+  claudePath: null,
   usageDisplay: 'percent'
 }
 
@@ -567,7 +579,7 @@ export type EffectiveSource = 'user' | 'cwd' | 'overlay'
  * its own prefix.
  */
 export interface EffectiveEntry {
-  /** What you type: `atlas:think`, or `think` for an unnamespaced one. */
+  /** What you type: `acme:think`, or `think` for an unnamespaced one. */
   invocation: string
   name: string
   source: EffectiveSource

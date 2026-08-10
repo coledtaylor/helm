@@ -1,4 +1,6 @@
-# Spike B verified config (2026-08-08, Electron 43.3.0, Win11).
+# Spike B verified this config on 2026-08-08 (Electron 43.3.0, Win11) and M7
+# install-tested it - see docs/PACKAGING.md, which records what each of the
+# non-obvious lines below prevents.
 #
 # npmRebuild is off - deliberately. better-sqlite3 >=13 (gypfile:false) and
 # node-pty 1.1.0 both ship N-API prebuilds (prebuilds/<platform>-<arch>) that
@@ -11,6 +13,19 @@
 # cannot be loaded from inside the asar archive.
 appId: dev.coletaylor.helm
 productName: Helm
+copyright: MIT licensed - see LICENSE
+
+# The install directory's name comes from the *package* name, not productName.
+# `getWindowsInstallationDirName` only prefers productName when the installer
+# lets the user choose a directory - a one-click per-user install always uses
+# `sanitizeFileName(metadata.name)`. With the workspace name that is
+# `@helm/desktop` -> `%LOCALAPPDATA%\Programs\@helmdesktop`, which leaks an
+# internal package name into a path the user sees. Overriding the metadata for
+# the packaged copy fixes the directory and changes nothing else: `app.getName()`
+# still resolves through productName, so the data directory stays %APPDATA%\Helm.
+extraMetadata:
+  name: Helm
+
 directories:
   output: dist-app
 npmRebuild: false
@@ -19,6 +34,15 @@ files:
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'
   - '**/node_modules/node-pty/**'
+
+# No update feed is generated, because there is no auto-updater. The decision
+# and the three reasons behind it are in docs/PACKAGING.md; the short version is
+# that the build is unsigned, half the artefacts (the portable exe) have no
+# install location to replace, and the app hosts long-lived sessions a
+# background restart would end. `update:check` asks GitHub for a version number
+# when the user asks it to, and downloads nothing.
+publish: null
+
 win:
   target:
     - portable
@@ -27,5 +51,22 @@ portable:
   artifactName: Helm-${version}-portable.exe
 nsis:
   artifactName: Helm-${version}-setup.exe
+  # Per-user, in %LOCALAPPDATA%\Programs\Helm. Nothing Helm does needs
+  # administrator rights, and an installer that asks for them is one a person
+  # cannot run on a machine they do not own.
   oneClick: true
   perMachine: false
+  # Explicit rather than inherited: with this false, a future config change that
+  # would need elevation fails the silent install outright instead of quietly
+  # putting a UAC prompt in front of every user.
+  allowElevation: false
+  # Load-bearing. The database under %APPDATA%\Helm holds the user's profiles,
+  # their session index and every config snapshot Helm has taken on their
+  # behalf. Uninstalling the program is not a request to destroy those, and
+  # `pnpm m7-check --only=package` asserts they survive.
+  deleteAppDataOnUninstall: false
+  # The silent install used by the packaging check would otherwise launch the
+  # app at the end of it and race the assertions.
+  runAfterFinish: false
+  createStartMenuShortcut: true
+  createDesktopShortcut: false

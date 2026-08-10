@@ -1,10 +1,11 @@
-import { type BrowserWindow, ipcMain } from 'electron'
-import { join } from 'node:path'
+import { app, type BrowserWindow, ipcMain } from 'electron'
+import { join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import Database from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
-import { screenshot, sleep, stripAnsi, waitFor } from './bridge'
+import { screenshot, sleep, squash, stripAnsi, waitFor } from './bridge'
 import { killPty, spawnPty, windowsBuildNumber } from './pty'
+import { findClaudeExecutable } from './claude-cli'
 
 /**
  * Spike B's proof, kept as a regression: SQLite and node-pty both work from a
@@ -105,19 +106,39 @@ export async function runSelftest(
 
   await resizeTerm(win, 100, 30)
   const claude = spawnPty(win, {
-    file: join(homedir(), '.local', 'bin', 'claude.exe'),
+    // Located rather than named. A literal install path is the same
+    // portability bug as a literal repository path: it works on the machine
+    // it was written on and nowhere else.
+    file: findClaudeExecutable() ?? join(homedir(), '.local', 'bin', 'claude.exe'),
     cols: 100,
     rows: 30,
-    cwd: join(homedir(), '.harness', 'dev', 'repos', 'helm')
+    // This checkout, wherever it is - derived, never a literal path under one
+    // machine's home directory. In a packaged build `getAppPath()` is the asar,
+    // whose parent is beside the exe, which is a directory that exists either
+    // way; the selftest only needs somewhere real to start a session in.
+    cwd: resolve(app.getAppPath(), '..', '..')
   })
+  /**
+   * Startup gates, matched against a *squashed* buffer.
+   *
+   * The TUI positions text by moving the cursor rather than emitting the spaces
+   * between words, so a pattern containing a space matches nothing - which is
+   * why `squash` exists and why every driver uses it. And the wording moves
+   * between releases: 2.1.225 asks folder trust as "Quick safety check: Is this
+   * a project you created or one you trust?" where an earlier one asked "Do you
+   * trust the files in this folder?". The old pattern here only ever ran
+   * against an already-trusted directory, so the drift went unseen until the
+   * packaged exe was run from a temporary folder - which is not trusted, and
+   * never will be, because it is a different folder every time.
+   */
   const answered = new Set<string>()
   const gates = setInterval(() => {
-    const plain = stripAnsi(claude.output())
-    if (!answered.has('mcp') && /MCP\s*servers/.test(plain)) {
+    const text = squash(claude.output())
+    if (!answered.has('mcp') && /mcpservers/.test(text)) {
       answered.add('mcp')
       claude.pty.write('\x1b')
     }
-    if (!answered.has('trust') && /Do you trust/i.test(plain)) {
+    if (!answered.has('trust') && /doyoutrust|trustthisfolder|quicksafetycheck/.test(text)) {
       answered.add('trust')
       claude.pty.write('\r')
     }

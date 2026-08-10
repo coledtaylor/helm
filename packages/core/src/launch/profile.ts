@@ -17,7 +17,7 @@ import {
  * written relative to the profile's own root wherever they are under it. That
  * second part is what makes an export portable rather than merely serialised -
  * the same harness cloned to `D:\work\dev` on another machine still resolves
- * `repos/atlas`, where an absolute path would resolve to nothing.
+ * `repos/acme`, where an absolute path would resolve to nothing.
  *
  * Import reverses it against the root, so a profile that has been through the
  * file is the profile that went in.

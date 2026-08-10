@@ -140,7 +140,7 @@ export function useProfiles(): ProfilesState {
         // than the profile claims and no way to tell from the terminal.
         //
         // The namespaces are named with their colons because that is how they
-        // are typed at a `/` prompt - `atlas:think` - so the notice doubles
+        // are typed at a `/` prompt - `<overlay>:think` - so the notice doubles
         // as the answer to "what do I call these now".
         const parts: string[] = []
         if (result.overlays.length > 0) {

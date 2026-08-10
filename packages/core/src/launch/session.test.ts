@@ -24,7 +24,7 @@ describe('buildClaudeArgs', () => {
 
 describe('sanitizeSessionName', () => {
   it('keeps an ordinary name untouched', () => {
-    expect(sanitizeSessionName('atlas accruals')).toBe('atlas accruals')
+    expect(sanitizeSessionName('acme accruals')).toBe('acme accruals')
   })
 
   it('leaves spaces alone - the name is one argv entry, not a shell word', () => {

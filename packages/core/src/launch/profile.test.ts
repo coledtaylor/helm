@@ -7,10 +7,10 @@ import { profileFromYaml, profileToYaml, validateProfile } from './profile'
 const harness = join(homedir(), '.harness', 'dev')
 
 const sample: ProfileDraft = {
-  name: 'atlas cloud sync',
+  name: 'Acme cloud sync',
   root: harness,
-  overlays: [join(harness, 'repos', 'atlas'), join(harness, 'repos', 'atlas-reporting')],
-  access: [join(harness, 'repos', 'atlas'), join(harness, 'repos', 'atlas-mobile')],
+  overlays: [join(harness, 'repos', 'acme'), join(harness, 'repos', 'acme-reporting')],
+  access: [join(harness, 'repos', 'acme'), join(harness, 'repos', 'atlas-mobile')],
   model: 'opus',
   effort: 'high',
   permissionMode: 'auto',
@@ -23,7 +23,7 @@ const sample: ProfileDraft = {
 describe('profileToYaml', () => {
   it('writes the shape the spec prints', () => {
     const yaml = profileToYaml(sample)
-    expect(yaml).toContain('name: atlas cloud sync')
+    expect(yaml).toContain('name: Acme cloud sync')
     expect(yaml).toContain('permission_mode: auto')
     expect(yaml).toContain('opening_prompt: /recap')
     // snake_case on the wire, camelCase in the object.
@@ -34,9 +34,9 @@ describe('profileToYaml', () => {
    * harness, which is the entire reason the format exists. */
   it('writes paths under the root relative to it, and the root against home', () => {
     const yaml = profileToYaml(sample)
-    expect(yaml).toContain('repos/atlas')
+    expect(yaml).toContain('repos/acme')
     expect(yaml).toContain('~/.harness/dev')
-    expect(yaml).not.toContain(resolve(harness, 'repos', 'atlas'))
+    expect(yaml).not.toContain(resolve(harness, 'repos', 'acme'))
   })
 
   it('keeps a path outside the root addressable', () => {
@@ -82,9 +82,9 @@ describe('profileFromYaml', () => {
 
   it('resolves relative paths against the root, so a moved harness still works', () => {
     const imported = profileFromYaml(
-      ['name: moved', 'root: C:/somewhere/else', 'overlays:', '  - repos/atlas'].join('\n')
+      ['name: moved', 'root: C:/somewhere/else', 'overlays:', '  - repos/acme'].join('\n')
     )
-    expect(imported.overlays).toEqual([resolve('C:/somewhere/else/repos/atlas')])
+    expect(imported.overlays).toEqual([resolve('C:/somewhere/else/repos/acme')])
   })
 
   it('drops a value the CLI would reject rather than refusing the file', () => {

@@ -131,8 +131,8 @@ export interface TranscriptFile {
  * project a session recorded, because the two do not always agree. The
  * directory name is built from whatever casing the CLI was invoked with, and
  * `history.jsonl` records its own: two transcripts on this machine live under
- * `...-repos-atlas-reporting` for sessions whose recorded project is
- * `...\repos\atlas-reporting`. A derived path misses them and reports a
+ * `...-repos-Acme-Reporting` for sessions whose recorded project is
+ * `...\repos\acme-reporting`. A derived path misses them and reports a
  * resumable conversation as reaped. The id is the join key that always holds.
  *
  * Only the top level of each project directory is read. Below it are

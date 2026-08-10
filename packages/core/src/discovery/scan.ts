@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
-import { basename, resolve } from 'node:path'
+import { basename, isAbsolute, relative, resolve } from 'node:path'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import type { DiscoveryResult, Harness, Project } from '../types'
@@ -52,25 +52,61 @@ async function isDirectory(path: string): Promise<boolean> {
   }
 }
 
-async function readHarnessManifest(
-  path: string
-): Promise<{ name: string | null; template: string | null; version: string | null } | null> {
+interface HarnessManifest {
+  name: string | null
+  template: string | null
+  version: string | null
+  /** The `repos:` key, verbatim. Resolved by `reposDirOf`, not here. */
+  repos: string | null
+}
+
+async function readHarnessManifest(path: string): Promise<HarnessManifest | null> {
   try {
     const raw = await readFile(join(path, HARNESS_MANIFEST), 'utf8')
     const parsed: unknown = parseYaml(raw)
-    if (parsed === null || typeof parsed !== 'object') return { name: null, template: null, version: null }
+    if (parsed === null || typeof parsed !== 'object') {
+      return { name: null, template: null, version: null, repos: null }
+    }
     const record = parsed as Record<string, unknown>
     const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
     return {
       name: str(record['name']),
       template: str(record['template']),
-      version: str(record['version'])
+      version: str(record['version']),
+      repos: str(record['repos'])
     }
   } catch {
     // A harness with an unreadable or malformed manifest is still a harness -
     // the file's presence is the signal, its contents are decoration.
     return null
   }
+}
+
+/**
+ * Which directory a harness keeps its repositories in.
+ *
+ * `repos:` is optional and relative to the harness root; absent means `repos/`.
+ * The key exists so an *existing* folder of repositories can become a harness
+ * without hiding them: dropping a bare `harness.yaml` into a directory whose
+ * repos sit at its top level used to make every one of them disappear, because
+ * a harness only ever listed `repos/*`. `repos: .` is the answer to that, and
+ * it is the value the "convert a folder" action writes.
+ *
+ * Two values are refused rather than honoured: an absolute path, and anything
+ * that climbs out of the harness. A manifest is a file that travels with
+ * someone else's workspace, and a scan root that can be redirected to `C:\` by
+ * a line in a YAML file is a scan root that walks the whole disk. Both fall
+ * back to `repos/`.
+ */
+function reposDirOf(harnessPath: string, manifest: HarnessManifest | null): string {
+  const declared = manifest?.repos?.trim()
+  if (declared === undefined || declared === '' || isAbsolute(declared)) {
+    return join(harnessPath, REPOS_DIRNAME)
+  }
+  const resolved = resolve(harnessPath, declared)
+  const within = relative(harnessPath, resolved)
+  const escapes = within.startsWith('..') || isAbsolute(within)
+  return escapes ? join(harnessPath, REPOS_DIRNAME) : resolved
 }
 
 async function listDirs(path: string): Promise<string[]> {
@@ -101,12 +137,12 @@ async function describeProject(
   }
 }
 
-/** A harness and every project under its `repos/`. */
+/** A harness and every project under its repos directory. */
 async function scanHarness(
   path: string
 ): Promise<{ harness: Harness; projects: Project[] }> {
   const manifest = await readHarnessManifest(path)
-  const reposDir = join(path, REPOS_DIRNAME)
+  const reposDir = reposDirOf(path, manifest)
 
   let repoNames: string[] = []
   if (await isDirectory(reposDir)) {

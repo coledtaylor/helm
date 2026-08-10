@@ -17,16 +17,19 @@ import {
   HealthPanel,
   HistoryIcon,
   McpPanel,
+  NewHarnessDialog,
   ProfileEditor,
   ProfileList,
   ProjectPane,
   RepoIcon,
   SessionHistory,
+  SetupPane,
   Sidebar,
   SlidersIcon,
   StatusBar,
   TabBar,
   ThemeToggle,
+  VersionBanner,
   WelcomePane,
   type Tab,
   type TabIndicator
@@ -39,6 +42,7 @@ import { useHistory } from './useHistory'
 import { useLauncher } from './useLauncher'
 import { useProfiles } from './useProfiles'
 import { useSessions } from './useSessions'
+import { useSetup } from './useSetup'
 import { useUsage } from './useUsage'
 
 const KIND_ICON = {
@@ -110,6 +114,7 @@ export function App(): JSX.Element {
   const configState = useConfig()
   const contentState = useContent()
   const usage = useUsage()
+  const setup = useSetup(settings, launcher.rescan)
 
   /** The profile being edited, `'new'` for one being created from scratch, or
    * a seeded draft from "save as profile". Null when the dialog is closed. */
@@ -407,8 +412,75 @@ export function App(): JSX.Element {
   const sessionPanes = openPanes.filter((ref) => ref.kind === 'session')
   const runningSessions = sessions.filter((session) => session.status === 'running').length
 
+  /**
+   * Rendered by both branches below. Creating a harness is a first-run action
+   * and an every-day one, and having two copies of the dialog is how the two
+   * would drift apart.
+   */
+  const harnessDialog =
+    setup.dialog === null ? null : (
+      <NewHarnessDialog
+        mode={setup.dialog}
+        dir={setup.dialogDir}
+        onChooseDir={setup.chooseDialogDir}
+        problems={setup.dialogProblems}
+        busy={setup.creating}
+        onCreate={setup.createHarness}
+        onCancel={setup.closeDialog}
+      />
+    )
+
+  /**
+   * Setup owns the whole window rather than sitting in a tab.
+   *
+   * There is nothing else to look at: no roots means no tree, no config scopes
+   * and no content. A launcher painted empty behind a dismissible dialog would
+   * be four broken surfaces framing the one that works.
+   */
+  if (setup.needed) {
+    return (
+      <div className="h-full w-full bg-bg text-fg">
+        <SetupPane
+          status={setup.status}
+          roots={settings?.scanRoots ?? []}
+          suggestions={setup.suggestions}
+          projectCount={discovery?.projects.length ?? 0}
+          scanning={launcher.scanning}
+          checking={setup.checking}
+          onRecheck={setup.recheck}
+          onLocateClaude={setup.locateClaude}
+          onAddFolder={launcher.addRoot}
+          onAcceptSuggestion={setup.acceptSuggestion}
+          onCreateHarness={() => setup.openDialog('new')}
+          onConvertFolder={() => setup.openDialog('convert')}
+          onFinish={setup.finish}
+        />
+        {harnessDialog}
+      </div>
+    )
+  }
+
+  // A fact about the machine that qualifies the whole window: the CLI is
+  // missing, or it is a version outside what this build was measured against.
+  // It warns and does not gate - see `VersionBanner`.
+  const versionWarning =
+    setup.status !== null &&
+    !setup.bannerDismissed &&
+    (setup.status.path === null || setup.status.version === null || !setup.status.tested)
+
   return (
     <AppShell
+      banner={
+        versionWarning && setup.status ? (
+          <VersionBanner
+            version={setup.status.version}
+            range={setup.status.testedRange}
+            error={setup.status.error}
+            onDismiss={setup.dismissBanner}
+            onLocate={setup.locateClaude}
+          />
+        ) : null
+      }
       sidebar={
         <Sidebar
           profiles={
@@ -453,6 +525,7 @@ export function App(): JSX.Element {
           onSelect={openProject}
           onRescan={launcher.rescan}
           onAddRoot={launcher.addRoot}
+          onCreateHarness={() => setup.openDialog('new')}
         />
       }
       tabBar={
@@ -472,7 +545,11 @@ export function App(): JSX.Element {
           build={info ? `${info.version} · ${info.mode}` : '…'}
           dbFile={info?.dbFile ?? ''}
           migrations={info?.migrations ?? []}
-          claudeVersion={info?.claudeVersion ?? null}
+          // From the setup status, not from `app:info`. `app:info` is read once
+          // at startup, so after the CLI is relocated the strip would keep
+          // naming the old version while the banner above it names the new one
+          // - two numbers on screen at once, both claiming to be `claude`.
+          claudeVersion={setup.status?.version ?? info?.claudeVersion ?? null}
           scanning={launcher.scanning}
           runningSessions={runningSessions}
           usage={usage}
@@ -720,9 +797,12 @@ export function App(): JSX.Element {
               roots={settings?.scanRoots ?? []}
               projectCount={discovery?.projects.length ?? 0}
               onAddRoot={launcher.addRoot}
+              onCreateHarness={() => setup.openDialog('new')}
             />
           </div>
         )}
+
+        {harnessDialog}
 
         {/* What a launch composed, and anything that went wrong doing it.
             Over the pane rather than in it, because a profile is launched from

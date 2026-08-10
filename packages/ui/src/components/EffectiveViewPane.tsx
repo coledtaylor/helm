@@ -30,7 +30,7 @@ type Kind = 'skills' | 'commands' | 'agents'
  * looking at the files:
  *
  *   **Under what name does this resolve?** A skill in an overlaid repo is not
- *   `/think` in a session rooted somewhere else - it is `/atlas:think`,
+ *   `/think` in a session rooted somewhere else - it is `/<overlay>:think`,
  *   because the platform namespaces everything a plugin contributes by the
  *   plugin's manifest name (Spike A) and Helm chooses that name when it
  *   synthesises the shim. So the name is decidable in advance, and two repos
@@ -486,8 +486,8 @@ function Entry({
           className="block max-w-full truncate text-left font-mono text-[12px] text-fg transition-colors hover:text-accent"
         >
           {/* The prefix is the whole point, so it carries the colour and the
-              bare name does not - a list of `atlas:` in accent and `think`
-              in body text reads as "from atlas" at a glance. */}
+              bare name does not - a list of `api:` in accent and `think`
+              in body text reads as "from api" at a glance. */}
           {entry.namespace !== null && <span className="text-accent">{entry.namespace}:</span>}
           {entry.name}
         </button>

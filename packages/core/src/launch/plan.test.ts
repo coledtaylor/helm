@@ -107,8 +107,8 @@ describe('buildLaunchArgs', () => {
 
 describe('prepareLaunch', () => {
   it('composes two overlays into one launch', () => {
-    const a = makeProject('atlas', '# atlas\nPyQt5 desktop app.')
-    const b = makeProject('atlas-reporting', '# Reporting\ndotnet sync receiver.')
+    const a = makeProject('acme', '# Acme\nPyQt5 desktop app.')
+    const b = makeProject('acme-reporting', '# Reporting\ndotnet sync receiver.')
 
     const plan = prepareLaunch({
       root,
@@ -121,7 +121,7 @@ describe('prepareLaunch', () => {
     })
 
     expect(plan.cwd).toBe(resolve(root))
-    expect(plan.overlays.map((o) => o.name)).toEqual(['atlas', 'atlas-reporting'])
+    expect(plan.overlays.map((o) => o.name)).toEqual(['acme', 'acme-reporting'])
 
     // Both shims on the argv, as separate repeated flags.
     expect(plan.argv.filter((a2) => a2 === '--plugin-dir')).toHaveLength(2)
@@ -137,7 +137,7 @@ describe('prepareLaunch', () => {
   })
 
   it('emits no memory flag when no overlay has a CLAUDE.md', () => {
-    const a = makeProject('atlas')
+    const a = makeProject('acme')
     const plan = prepareLaunch({ root, name: 's', overlays: [a], shimRoot })
     expect(plan.memoryFile).toBeNull()
     expect(plan.argv).not.toContain('--append-system-prompt-file')
@@ -145,16 +145,16 @@ describe('prepareLaunch', () => {
   })
 
   it('skips an overlay whose directory has gone and says so', () => {
-    const a = makeProject('atlas', '# atlas')
+    const a = makeProject('acme', '# Acme')
     const gone = join(root, 'deleted')
     const plan = prepareLaunch({ root, name: 's', overlays: [a, gone], shimRoot })
 
-    expect(plan.overlays.map((o) => o.name)).toEqual(['atlas'])
+    expect(plan.overlays.map((o) => o.name)).toEqual(['acme'])
     expect(plan.warnings.some((w) => w.includes('deleted'))).toBe(true)
   })
 
   it('reuses shims across launches and rebuilds when the source changed', () => {
-    const a = makeProject('atlas', '# atlas')
+    const a = makeProject('acme', '# Acme')
     expect(prepareLaunch({ root, name: 's', overlays: [a], shimRoot }).overlays[0]?.rebuilt).toBe(
       true
     )

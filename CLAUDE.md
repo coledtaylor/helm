@@ -96,6 +96,33 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   survives a restart" cannot be asserted by the process that set it. Spawns one
   `claude` session and runs no inference;
   `--only=read,watch,resets,degrade,setting,width,cost,dollars,live` narrows it.
+- `pnpm m7-check` covers first run and the built artefacts, in three phases.
+  Two of its shapes are worth knowing before touching it. **First run is a
+  second process**: "a fresh `~/.claude` and no harness at all" is not a state
+  the developer's profile can enter, so `run-m7.mjs` starts the app again with
+  `PORTABLE_EXECUTABLE_DIR` pointed at a temporary directory - the app's own
+  portable-mode mechanism, not a test hook - and `--claude-home=` pointed away
+  from the real one. Nothing of the user's is backed up because nothing of the
+  user's is opened. And **the grep audit is made to fail first**: a file
+  carrying a Windows profile path, a harness path and a private project name is
+  planted, caught, and deleted before its clean result is believed, because a
+  grep that finds nothing is indistinguishable from a grep looking for nothing.
+  The packaging phase installs the NSIS package for real and uninstalls it;
+  `--only=audit|cli|firstrun|harness|scan|version|package` narrows a re-run, and
+  `--sandbox=` puts the throwaway profile somewhere with no account name in the
+  path, which is how the README's screenshots were taken.
+- `dist:win` goes through `scripts/dist-win.mjs`, not straight to
+  electron-builder. electron-builder resolves the package manager with `which`,
+  which prefers `pnpm.EXE` over `pnpm.CMD` on Windows, and a stale standalone
+  pnpm shadowing the managed one makes it fall back to the npm collector - which
+  does not fail, it warns and ships an exe with **no `app.asar.unpacked`**, so
+  the app dies on its first `dlopen`. The wrapper checks the resolved pnpm
+  answers the declared version; `m7-check --only=package` asserts the prebuilds
+  are there regardless.
+- Never handle or store Claude credentials, and detect a sign-in only from the
+  *existence* of one - `.credentials.json`, `ANTHROPIC_API_KEY`, or an
+  onboarding record in `.claude.json`. Nothing opens any of them. The whole
+  remedy for "not signed in" is a sentence telling the user to run `claude`.
 - Usage figures degrade to **nothing** rather than to a stale number. The
   server's own answer in `cachedUsageUtilization` is authoritative but dated, so
   a reading older than `USAGE_STALE_AFTER_MS`, one whose `resets_at` has already
@@ -170,15 +197,18 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
 - Helm renders no session messages, parses no session output, handles no
   permission prompts. If a feature seems to need that, it belongs in the
   transcript-archive backlog or it is out of scope.
-- Never handle or store Claude credentials. Detect, and direct the user to run
-  `claude` themselves.
 - Windows-first: junctions (`mklink /J`) not symlinks; no elevation assumptions;
   test paths with spaces.
 
 ## Environment notes
 
-- `claude` CLI is at `~/.local/bin/claude` (2.1.x). Pin behavior against the
-  installed version; assert on `claude --version` at startup (warn, don't block).
+This section describes **this development machine**, not the product. Everything
+named here is a fixture; nothing in `packages/` may assume any of it, and
+`pnpm m7-check --only=audit` fails the build if it starts to.
+
+- `claude` CLI is at `~/.local/bin/claude` (2.1.225). The tested range is
+  declared in `CLAUDE_TESTED_RANGE` (`src/main/setup.ts`) and asserted at
+  startup: warn, don't block.
 - This repo lives inside a harness (`~/.harness/dev/repos/helm`). The harness
   root and sibling repos (atlas, atlas-reporting) are the primary test
   fixtures for overlay composition - they have real `.claude/skills` to compose.

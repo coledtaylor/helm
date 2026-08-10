@@ -1,5 +1,5 @@
-import { type BrowserWindow, ipcMain } from 'electron'
-import { join } from 'node:path'
+import { app, type BrowserWindow, ipcMain } from 'electron'
+import { join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { existsSync } from 'node:fs'
 import { probe, screenshot, sendKey, sleep, squash, stripAnsi, typeText, waitFor } from './bridge'
@@ -14,7 +14,17 @@ import type { Check } from './fidelity'
  */
 
 const CLAUDE_EXE = join(homedir(), '.local', 'bin', 'claude.exe')
-const REPO = join(homedir(), '.harness', 'dev', 'repos', 'helm')
+
+/**
+ * The directory the hosted TUI is started in: this checkout, wherever it
+ * happens to be. Derived rather than named - it used to be a literal path under
+ * one machine's home directory, which made the harness a file only that machine
+ * could run.
+ *
+ * `app.getAppPath()` is `packages/desktop` in development, so the repository is
+ * two levels above it.
+ */
+const REPO = resolve(app.getAppPath(), '..', '..')
 
 interface Ctx {
   win: BrowserWindow
@@ -706,7 +716,7 @@ export async function runClaudeChecks(
   }
 
   if (wanted('D5')) {
-    // Cole's config runs in auto mode, which accepts tool calls without asking.
+    // A machine configured for auto mode accepts tool calls without asking.
     // The permission dialog only exists to be tested under a mode that prompts.
     const third = await startClaude(ctx, ['--permission-mode', 'manual'])
     if (third.ready) await run('D5', () => checkPermissionPrompt(ctx, third.h))

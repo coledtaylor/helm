@@ -104,13 +104,80 @@ describe('scan', () => {
     expect(result.projects.map((p) => p.name)).toEqual(['dev'])
   })
 
-  it('handles repo directories whose names contain spaces', async () => {
-    await file('dev/harness.yaml', 'name: "dev"\n')
-    await file('dev/repos/atlas Project/.claude/skills/one/SKILL.md')
+  it('honours a `repos:` key naming a different directory', async () => {
+    await file('dev/harness.yaml', 'name: "dev"\nrepos: "projects"\n')
+    await dir('dev/projects/alpha')
+    await dir('dev/projects/beta')
+    // The default location exists too, and must be ignored: `repos:` names the
+    // directory, it does not add one.
+    await dir('dev/repos/ignored')
 
     const result = await scan({ roots: [join(root, 'dev')] })
 
-    const project = result.projects.find((p) => p.name === 'atlas Project')
+    expect(result.projects.map((p) => p.name).sort()).toEqual(['alpha', 'beta', 'dev'])
+    expect(result.harnesses[0]?.repoPaths.sort()).toEqual([
+      join(root, 'dev', 'projects', 'alpha'),
+      join(root, 'dev', 'projects', 'beta')
+    ])
+  })
+
+  it('falls back to `repos/` when the key is absent, empty or not a string', async () => {
+    await file('a/harness.yaml', 'name: "a"\n')
+    await dir('a/repos/one')
+    await file('b/harness.yaml', 'name: "b"\nrepos: ""\n')
+    await dir('b/repos/two')
+    await file('c/harness.yaml', 'name: "c"\nrepos: 3\n')
+    await dir('c/repos/three')
+
+    for (const [name, repo] of [
+      ['a', 'one'],
+      ['b', 'two'],
+      ['c', 'three']
+    ]) {
+      const result = await scan({ roots: [join(root, name as string)] })
+      expect(result.projects.map((p) => p.name).sort()).toEqual([name, repo].sort())
+    }
+  })
+
+  it('does not hide the repos of a folder converted in place with `repos: .`', async () => {
+    // The failure this key exists for: before it, dropping a harness.yaml into
+    // a folder whose repos sit at its top level made every one of them vanish.
+    await dir('work/alpha')
+    await dir('work/beta')
+    await file('work/alpha/.claude/skills/one/SKILL.md')
+
+    const before = await scan({ roots: [join(root, 'work')] })
+    expect(before.projects.map((p) => p.name).sort()).toEqual(['alpha', 'beta'])
+
+    await file('work/harness.yaml', 'name: "work"\nrepos: "."\n')
+
+    const after = await scan({ roots: [join(root, 'work')] })
+    expect(after.harnesses.map((h) => h.name)).toEqual(['work'])
+    expect(after.projects.map((p) => p.name).sort()).toEqual(['alpha', 'beta', 'work'])
+    expect(after.projects.find((p) => p.name === 'alpha')?.harnessPath).toBe(join(root, 'work'))
+    expect(after.projects.find((p) => p.name === 'alpha')?.inventory.skills).toBe(1)
+  })
+
+  it('refuses a `repos:` that leaves the harness, rather than scanning it', async () => {
+    await dir('outside/secret')
+    await file('dev/harness.yaml', `name: "dev"\nrepos: "../outside"\n`)
+    await dir('dev/repos/alpha')
+
+    const escaped = await scan({ roots: [join(root, 'dev')] })
+    expect(escaped.projects.map((p) => p.name).sort()).toEqual(['alpha', 'dev'])
+
+    await file('dev/harness.yaml', `name: "dev"\nrepos: ${JSON.stringify(join(root, 'outside'))}\n`)
+    const absolute = await scan({ roots: [join(root, 'dev')] })
+    expect(absolute.projects.map((p) => p.name).sort()).toEqual(['alpha', 'dev'])
+  })
+
+  it('handles repo directories whose names contain spaces', async () => {
+    await file('dev/harness.yaml', 'name: "dev"\n')
+    await file('dev/repos/Acme Project/.claude/skills/one/SKILL.md')
+
+    const result = await scan({ roots: [join(root, 'dev')] })
+
+    const project = result.projects.find((p) => p.name === 'Acme Project')
     expect(project).toBeDefined()
     expect(project?.inventory.skills).toBe(1)
   })

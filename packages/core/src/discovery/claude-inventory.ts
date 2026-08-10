@@ -8,7 +8,7 @@ import { EMPTY_INVENTORY, type ClaudeInventory } from '../types'
  * The distinction that matters: a *skill* is a directory containing `SKILL.md`,
  * while *commands* and *agents* are markdown files at any depth. Counting
  * top-level entries instead - the obvious implementation - reports
- * `repos/atlas` as having 1 command when it has 20 under `commands/spec/`,
+ * a repo as having 1 command when it has 20 under `commands/spec/`,
  * because namespaced commands live in subdirectories (`/spec:plan`).
  */
 

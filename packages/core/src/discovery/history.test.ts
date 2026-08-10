@@ -171,8 +171,8 @@ describe('scanTranscripts', () => {
 
   it('matches on the session id, not on a path derived from the project', () => {
     // Measured on the real machine: a directory recorded as
-    // `...repos\atlas-reporting` in history has its transcripts under
-    // `...-repos-atlas-reporting`, because the directory name carries
+    // `...repos\acme-reporting` in history has its transcripts under
+    // `...-repos-Acme-Reporting`, because the directory name carries
     // whatever casing the CLI was started with. Deriving the path from the
     // project string reports those sessions as reaped.
     transcript('C--repos-Alpha-Beta', uuid(1))

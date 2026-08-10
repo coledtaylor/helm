@@ -5,6 +5,13 @@ export interface AppShellProps {
   tabBar: ReactNode
   children: ReactNode
   statusBar: ReactNode
+  /**
+   * A strip above the tabs for a fact about the machine that the whole window
+   * is qualified by - the CLI version guard is the only one so far. Above the
+   * tabs rather than over the pane, because a hosted TUI owns the pane and a
+   * banner floating on top of it covers the composer.
+   */
+  banner?: ReactNode | undefined
 }
 
 /**
@@ -20,13 +27,15 @@ export function AppShell({
   sidebar,
   tabBar,
   children,
-  statusBar
+  statusBar,
+  banner
 }: AppShellProps): JSX.Element {
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-bg text-fg">
       <div className="flex min-h-0 flex-1">
         {sidebar}
         <main className="flex min-w-0 min-h-0 flex-1 flex-col">
+          {banner}
           {tabBar}
           <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
         </main>
