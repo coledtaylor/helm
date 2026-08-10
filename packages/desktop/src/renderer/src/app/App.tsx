@@ -39,6 +39,7 @@ import { useHistory } from './useHistory'
 import { useLauncher } from './useLauncher'
 import { useProfiles } from './useProfiles'
 import { useSessions } from './useSessions'
+import { useUsage } from './useUsage'
 
 const KIND_ICON = {
   harness: HarnessIcon,
@@ -108,6 +109,7 @@ export function App(): JSX.Element {
   const historyState = useHistory()
   const configState = useConfig()
   const contentState = useContent()
+  const usage = useUsage()
 
   /** The profile being edited, `'new'` for one being created from scratch, or
    * a seeded draft from "save as profile". Null when the dialog is closed. */
@@ -473,6 +475,9 @@ export function App(): JSX.Element {
           claudeVersion={info?.claudeVersion ?? null}
           scanning={launcher.scanning}
           runningSessions={runningSessions}
+          usage={usage}
+          usageDisplay={settings?.usageDisplay ?? 'percent'}
+          onUsageDisplayChange={launcher.setUsageDisplay}
           lastScan={
             discovery && discovery.durationMs > 0
               ? {

@@ -28,6 +28,8 @@
     "m5-check": "electron-vite build && node scripts/run-m5.mjs",
     "//m6-check": "M6's acceptance criteria. Opens every markdown file in the user's harness vault through the real window and checks the DOM it produced against a regex read of the same source, navigates a wikilink, interrogates the artifact frame's sandbox from inside it, measures search latency and scroll frame intervals, and edits a real note through the split editor with a hash-verified restore. Spawns no claude sessions, so it takes about a minute. Pass --only=browse|render|links|artifact|search|edit|scroll to re-run one group.",
     "m6-check": "electron-vite build && node scripts/run-m6.mjs",
+    "//usage-check": "The status bar's usage figures. Drives the real window: checks the painted percentages against its own JSON.parse of ~/.claude.json, watches a rewritten fixture reach the bar with no restart, lets a usage window roll over underneath the segment, points the reader at six broken readings and proves each paints nothing, measures the bar at four widths in both themes, measures the full transcript parse it avoids, and finally asks a live claude for /usage and compares. Pass --only=read|watch|resets|degrade|setting|width|cost|live to re-run one group.",
+    "usage-check": "electron-vite build && node scripts/run-usage.mjs",
     "claude": "electron-vite build && electron . --claude --cwd=.",
     "dist:win": "electron-vite build && electron-builder --win"
   },

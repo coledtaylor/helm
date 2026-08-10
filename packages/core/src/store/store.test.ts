@@ -97,14 +97,16 @@ describe('settings', () => {
       theme: 'light',
       scanRoots: [dir, join(dir, 'other')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
-      firstRunCompletedAt: '2026-08-09T12:00:00.000Z'
+      firstRunCompletedAt: '2026-08-09T12:00:00.000Z',
+      usageDisplay: 'cost'
     })
 
     expect(readSettings(store)).toEqual({
       theme: 'light',
       scanRoots: [dir, join(dir, 'other')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
-      firstRunCompletedAt: '2026-08-09T12:00:00.000Z'
+      firstRunCompletedAt: '2026-08-09T12:00:00.000Z',
+      usageDisplay: 'cost'
     })
   })
 

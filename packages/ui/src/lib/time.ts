@@ -26,6 +26,35 @@ export function formatAge(at: number, now = Date.now()): string {
   return `${String(Math.floor(ms / YEAR))}y`
 }
 
+/**
+ * When a usage window resets, in the width a status bar has.
+ *
+ * Relative under a day and absolute over it, because those are the two
+ * questions being asked. The 5-hour window resets while you are working, so
+ * "in 2h 10m" is what you act on; the 7-day one resets on some evening later in
+ * the week, and "Tue, 7:00 PM" is what you plan around. A countdown of "3d 4h"
+ * answers neither well.
+ *
+ * The returned string is the phrase after the word "resets", so it reads
+ * "resets in 2h 10m" and "resets Tue, 7:00 PM".
+ */
+export function formatResetsIn(at: number, now = Date.now()): string {
+  const ms = at - now
+  if (ms <= 0) return 'now'
+  if (ms < MINUTE) return 'in <1m'
+  if (ms < HOUR) return `in ${String(Math.floor(ms / MINUTE))}m`
+  if (ms < DAY) {
+    const hours = Math.floor(ms / HOUR)
+    const minutes = Math.floor((ms % HOUR) / MINUTE)
+    return minutes === 0 ? `in ${String(hours)}h` : `in ${String(hours)}h ${String(minutes)}m`
+  }
+  return new Date(at).toLocaleString(undefined, {
+    weekday: 'short',
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+}
+
 /** The full moment, for a tooltip or a detail row. */
 export function formatMoment(at: number): string {
   return new Date(at).toLocaleString(undefined, {

@@ -29,6 +29,7 @@
     "m4-check": "pnpm --filter @helm/desktop m4-check",
     "m5-check": "pnpm --filter @helm/desktop m5-check",
     "m6-check": "pnpm --filter @helm/desktop m6-check",
+    "usage-check": "pnpm --filter @helm/desktop usage-check",
     "dist:win": "pnpm --filter @helm/desktop dist:win",
     "db:generate": "pnpm --filter @helm/core db:generate"
   },

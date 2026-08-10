@@ -28,6 +28,7 @@ import type {
   RenderedMarkdown,
   SessionRecord,
   ThemePreference,
+  UsageSnapshot,
   WriteConfigRequest,
   WriteConfigResult
 } from '@helm/core'
@@ -339,6 +340,17 @@ export interface IpcRequests {
   'config:doctor': { request: void; response: DoctorReport }
 
   /**
+   * Claude Code's cached answer about plan limits, read out of
+   * `~/.claude.json`. Read-only, like the session index: these are the
+   * server's figures and Helm mirrors them.
+   *
+   * The reading is shipped raw - what may be *painted* from it is decided in
+   * the window, on a timer, because a reading goes stale and a usage window
+   * rolls over without any file having changed.
+   */
+  'usage:read': { request: void; response: UsageSnapshot }
+
+  /**
    * The content viewer (M6). Rendering happens here rather than in the window:
    * shiki's grammars are megabytes the browser bundle must not carry, and a
    * live preview that re-parsed a 21 KB note on the UI thread per keystroke
@@ -457,6 +469,13 @@ export interface IpcEvents {
   'history:changed': HistorySummary
 
   /**
+   * Claude Code refreshed its usage figures. Pushed for the same reason
+   * `history:changed` is: the file belongs to every `claude` on the machine,
+   * and the refresh that matters is the one Helm did not cause.
+   */
+  'usage:changed': UsageSnapshot
+
+  /**
    * The file the config editor has open changed on disk, and Helm was not the
    * one who changed it. Pushed rather than discovered at save time: by then the
    * user has typed a screen of text they are about to lose, and the point of
@@ -572,6 +591,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'config:mcpApprove': true,
   'config:mcpList': true,
   'config:doctor': true,
+  'usage:read': true,
   'content:scopes': true,
   'content:tree': true,
   'content:document': true,
@@ -606,6 +626,7 @@ export const EVENT_CHANNELS = Object.keys({
   'profiles:changed': true,
   'theme:changed': true,
   'history:changed': true,
+  'usage:changed': true,
   'config:externalChange': true,
   'content:artifactConsole': true,
   'term:create': true,
