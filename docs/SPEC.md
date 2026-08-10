@@ -289,10 +289,17 @@ option open and is what makes the app genuinely portable.
 ### Portability
 
 - **Harness-agnostic** - detects `harness.yaml`, falls back to plain folders. No
-  hardcoded paths, no `dev/` assumptions.
+  hardcoded paths, no `dev/` assumptions. A harness is *any* folder with a
+  manifest; its optional `repos:` key names where the repositories are, so a
+  folder that already holds repos at its top level can become one without
+  hiding them (M7).
 - **Portable install** - single `.exe`, app data beside it when portable,
-  `%APPDATA%` when installed.
-- **Shareable** - real first-run setup, no Cole-specific behaviour, README.
+  `%APPDATA%` when installed. Both install-tested by `pnpm m7-check --only=package`;
+  the NSIS build is per-user and needs no elevation. See [PACKAGING.md](PACKAGING.md).
+- **Shareable** - real first-run setup, nothing specific to the machine it was
+  written on, README. Enforced rather than asserted: `pnpm m7-check --only=audit`
+  greps the checkout for personal paths and names, and proves it can catch one
+  before believing that it found none.
 
 ---
 

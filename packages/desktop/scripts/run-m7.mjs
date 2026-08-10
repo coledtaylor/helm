@@ -79,7 +79,16 @@ const FIRSTRUN_GROUPS = ['firstrun', 'harness', 'scan', 'version']
 
 if (FIRSTRUN_GROUPS.some(wants)) {
   say('\n--- phase 2: a fresh profile, a fresh .claude, and no harness ---')
-  const sandbox = mkdtempSync(join(tmpdir(), 'helm-m7-'))
+  // `--sandbox=` puts the throwaway profile somewhere chosen rather than in the
+  // temp directory. The one reason to use it is screenshots: everything this
+  // phase paints shows the paths it was given, and a temp path carries the
+  // account name into every image. The README's screenshots were taken with the
+  // sandbox under a directory that has nobody's name in it.
+  const sandboxArg = args.find((a) => a.startsWith('--sandbox='))
+  const sandbox = sandboxArg
+    ? (mkdirSync(sandboxArg.slice('--sandbox='.length), { recursive: true }),
+      sandboxArg.slice('--sandbox='.length))
+    : mkdtempSync(join(tmpdir(), 'helm-m7-'))
   // A path with a space in it, deliberately: CLAUDE.md requires those to work
   // and this is the one place a fresh install's own data directory is created.
   const portableDir = join(sandbox, 'Portable Install')

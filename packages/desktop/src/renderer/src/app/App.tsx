@@ -545,7 +545,11 @@ export function App(): JSX.Element {
           build={info ? `${info.version} · ${info.mode}` : '…'}
           dbFile={info?.dbFile ?? ''}
           migrations={info?.migrations ?? []}
-          claudeVersion={info?.claudeVersion ?? null}
+          // From the setup status, not from `app:info`. `app:info` is read once
+          // at startup, so after the CLI is relocated the strip would keep
+          // naming the old version while the banner above it names the new one
+          // - two numbers on screen at once, both claiming to be `claude`.
+          claudeVersion={setup.status?.version ?? info?.claudeVersion ?? null}
           scanning={launcher.scanning}
           runningSessions={runningSessions}
           usage={usage}
