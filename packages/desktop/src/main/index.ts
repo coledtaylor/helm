@@ -134,10 +134,19 @@ function createWindow(
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0e0f16' : '#f7f7f9',
     show: true,
     autoHideMenuBar: true,
-    // Only `pnpm dev` needs this. A packaged build takes its window icon from
-    // the exe, which electron-builder stamps from `build/icon.ico`; unpackaged,
-    // Electron has no exe of its own to read and falls back to its default.
-    ...(app.isPackaged ? {} : { icon: join(__dirname, '../../build/icon.png') }),
+    // A packaged Electron window does NOT inherit the exe's icon: given no
+    // `icon` it uses Electron's own, which is what the taskbar showed on
+    // 2026-08-10 while the exe itself was correctly stamped.
+    //
+    // `.ico` on Windows, not the PNG. The taskbar and title bar want 16 and 32
+    // pixel variants, and a lone 256px PNG leaves Windows to invent them - it
+    // kept showing Electron's default instead. The .ico carries every size.
+    // Packaged, the file arrives through `extraResources`; unpackaged it is
+    // read out of `build/` directly.
+    icon: join(
+      app.isPackaged ? process.resourcesPath : join(__dirname, '../../build'),
+      process.platform === 'win32' ? 'icon.ico' : 'icon.png'
+    ),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -528,7 +537,20 @@ app.whenReady().then(() => {
   // Windows resolves a toast back to an installed application through this id.
   // Without it the exit notifications either carry electron.app.Electron's
   // identity in dev or do not appear at all.
-  app.setAppUserModelId('dev.coletaylor.helm')
+  //
+  // Dev gets its OWN id, and that is load-bearing rather than tidy. Windows
+  // requires a Start Menu shortcut declaring an id before it will show a toast
+  // for it, so Electron creates one pointing at whatever exe is running - in
+  // dev that is `node_modules/electron/dist/electron.exe`, carrying Electron's
+  // atom. Two shortcuts then declare the same id, Windows resolves the id to
+  // one of them, and it picked the dev one: the packaged app showed the atom on
+  // its taskbar button while its own title bar showed the right icon, because a
+  // title bar uses the window icon and a taskbar button uses the id.
+  //
+  // Measured 2026-08-10. Neither rebuilding, reinstalling, running from an
+  // uncached path, nor purging the icon cache touched it - the stale
+  // `Electron.lnk` had to go. Keeping the ids apart is what stops it returning.
+  app.setAppUserModelId(app.isPackaged ? 'dev.coletaylor.helm' : 'dev.coletaylor.helm.dev')
 
   // The artifact scheme's handler. Registered for every mode that opens a
   // window, because the spike pages share this process and a scheme with no

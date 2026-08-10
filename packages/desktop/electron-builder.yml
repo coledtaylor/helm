@@ -31,6 +31,17 @@ directories:
 npmRebuild: false
 files:
   - out/**
+
+# The window icon, as opposed to the exe's. `build/` is build resources and
+# never enters the package, so without this the packaged app has no icon file
+# to hand `BrowserWindow` - and an Electron window given no icon falls back to
+# Electron's own, which is what the taskbar showed on 2026-08-10 even with the
+# exe correctly stamped. Lands at `process.resourcesPath/icon.png`.
+extraResources:
+  - from: build/icon.ico
+    to: icon.ico
+  - from: build/icon.png
+    to: icon.png
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'
   - '**/node_modules/node-pty/**'
