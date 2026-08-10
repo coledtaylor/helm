@@ -458,6 +458,24 @@ async function ensurePercentMode(win: BrowserWindow): Promise<boolean> {
   return (await segmentMode(win)) === 'percent'
 }
 
+/**
+ * Leaves the mode on something the default could not have produced.
+ *
+ * `off`, so that the second phase reading `off` out of a fresh app start is
+ * evidence rather than a coincidence - `percent` is what a database with no row
+ * at all reports. Called at the very end of the run because the groups after
+ * the setting one cycle the mode back to `percent` to do their own work.
+ */
+async function park(win: BrowserWindow): Promise<string> {
+  let mode = await segmentMode(win)
+  for (let attempt = 0; attempt < 4 && mode !== 'off'; attempt++) {
+    await clickSegment(win)
+    await sleep(350)
+    mode = await segmentMode(win)
+  }
+  return mode
+}
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
@@ -940,14 +958,7 @@ export async function runUsageChecks(
     }
     const modes = seen.map((s) => s.mode)
 
-    // Park on a value that is not the default, so the restart phase is reading
-    // something the app could not have produced by simply starting fresh.
-    let parked = await segmentMode(win)
-    for (let attempt = 0; attempt < 4 && parked !== 'off'; attempt++) {
-      await clickSegment(win)
-      await sleep(350)
-      parked = await segmentMode(win)
-    }
+    const parked = await park(win)
 
     // Read straight out of the database rather than from the object the main
     // process is holding, because the claim is about what a restart will find.
@@ -1415,5 +1426,21 @@ export async function runUsageChecks(
   }
 
   usage.pointAt(null)
+
+  // Last, after every group that cycles the mode to do its own work: the
+  // restart phase in `run-usage.mjs` reads whatever the app is left on, so the
+  // parking has to be the final thing this process does to the setting.
+  if (run('setting')) {
+    const parked = await park(win)
+    const persisted = readSettings(services.store).usageDisplay
+    if (parked !== 'off' || persisted !== 'off') {
+      const stale = checks.find((check) => check.id === 'U-6')
+      if (stale) {
+        stale.ok = false
+        stale.detail = { ...stale.detail, parkedAtEndOfRun: parked, persistedAtEndOfRun: persisted }
+      }
+    }
+  }
+
   return checks
 }
