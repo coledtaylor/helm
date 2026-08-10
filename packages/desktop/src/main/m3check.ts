@@ -1,6 +1,6 @@
 import { type BrowserWindow } from 'electron'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   createProfile,
   deleteProfile,
@@ -260,6 +260,177 @@ const tail = (collector: Collector, id: number, n = 900): string =>
   stripAnsi(collector.output(id)).replace(/\s+/g, ' ').trim().slice(-n)
 
 // ---------------------------------------------------------------------------
+// Fixtures for the composition criteria
+// ---------------------------------------------------------------------------
+
+/**
+ * A harness the driver owns, with two overlay repos under it.
+ *
+ * This used to compose `repos/atlas` and `repos/atlas-reporting` - the
+ * user's own repositories - and that was a mistake twice over.
+ *
+ * It was fragile. Those directories are mutable and their `.claude/` contents
+ * are gitignored. When both lost their `skills/`, `commands/` and `agents/` to
+ * an early version of the shim teardown, M3-4 did not go red: it read the two
+ * `think` skills' headings off disk, got `''` for both, compared against
+ * `SKILL1=` - a substring of any answer using the requested format - and
+ * reported PASS while proving nothing.
+ *
+ * And it was wrong in principle. A regression check that depends on somebody's
+ * working repositories breaks when they reorganise, cannot run on a second
+ * machine, and - as here - can be silently defeated by a bug in the code it is
+ * supposed to be checking.
+ *
+ * Both overlays define `think` with a *different* token, which is what makes
+ * the same-named-skill criterion checkable at all.
+ */
+export interface ComposeFixtures {
+  /** The harness root, and the composed session's cwd. */
+  root: string
+  alpha: string
+  beta: string
+  /** A fact that exists only in alpha's CLAUDE.md, for M3-5. */
+  alphaFact: string
+}
+
+const FIXTURE_HARNESS = 'helm-m3-harness'
+const FIXTURE_ALPHA = 'helm-m3-alpha'
+const FIXTURE_BETA = 'helm-m3-beta'
+
+function writeComposeSkill(repo: string, name: string, token: string): void {
+  const dir = join(repo, '.claude', 'skills', name)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(
+    join(dir, 'SKILL.md'),
+    [
+      '---',
+      `name: ${name}`,
+      `description: Probe skill used by Helm's M3 acceptance check. Reports ${token}.`,
+      '---',
+      '',
+      `# ${token}`,
+      '',
+      `This skill exists to be read back. Its token is ${token}.`,
+      ''
+    ].join('\n')
+  )
+}
+
+function buildComposeFixtures(dataDir: string): ComposeFixtures {
+  const parent = join(dataDir, 'm3-compose-fixtures')
+  rmSync(parent, { recursive: true, force: true })
+
+  const root = join(parent, FIXTURE_HARNESS)
+  const alpha = join(root, 'repos', FIXTURE_ALPHA)
+  const beta = join(root, 'repos', FIXTURE_BETA)
+  const alphaFact = 'helm-m3-build --alpha'
+
+  // `harness.yaml` is what discovery keys on, and `repos/*` is where it looks
+  // for the projects under it (`scan.ts`).
+  mkdirSync(root, { recursive: true })
+  writeFileSync(
+    join(root, 'harness.yaml'),
+    ['name: helm-m3-harness', 'template: m3-check', 'version: 0.0.0', ''].join('\n')
+  )
+
+  writeComposeSkill(alpha, 'think', 'HELMM3ALPHATHINK')
+  writeComposeSkill(beta, 'think', 'HELMM3BETATHINK')
+  // One more each, so a composed overlay is not a single file.
+  writeComposeSkill(alpha, 'alpha-only', 'HELMM3ALPHAONLY')
+  writeComposeSkill(beta, 'beta-only', 'HELMM3BETAONLY')
+
+  // Carried by `--append-system-prompt-file`, which is the only thing that
+  // carries it - neither `--plugin-dir` nor `--add-dir` does (M3-5).
+  writeFileSync(
+    join(alpha, 'CLAUDE.md'),
+    [
+      `# ${FIXTURE_ALPHA}`,
+      '',
+      `The single command that builds this project is \`${alphaFact}\`.`,
+      'Nothing else on this machine documents that command.',
+      ''
+    ].join('\n')
+  )
+  writeFileSync(
+    join(beta, 'CLAUDE.md'),
+    [`# ${FIXTURE_BETA}`, '', 'This project has no build command.', ''].join('\n')
+  )
+
+  // Read through `--add-dir` by M3-6. The second line differs between them and
+  // is long enough on both sides for `distinctLine` to choose it, so one answer
+  // cannot satisfy both halves of that check.
+  for (const [repo, marker] of [
+    [alpha, 'ALPHA-SETTINGS-LINE-0001'],
+    [beta, 'BETA-SETTINGS-LINE-0002']
+  ] as const) {
+    mkdirSync(join(repo, '.claude'), { recursive: true })
+    writeFileSync(
+      join(repo, '.claude', 'settings.local.json'),
+      `${JSON.stringify({ helmM3Probe: marker }, null, 2)}\n`
+    )
+  }
+
+  return { root, alpha, beta, alphaFact }
+}
+
+/**
+ * Puts the fixture harness in front of discovery, through the app's own IPC.
+ *
+ * Not by calling `runScan` in the main process: the profile form renders
+ * whatever the renderer was last told, so the scan has to be the one that emits
+ * `discovery:updated`. `settings:write` then `discovery:scan` is the path the
+ * "Add a folder" and rescan buttons take.
+ *
+ * Returns the scan roots as they were, for the caller to put back.
+ */
+async function registerFixtureRoot(win: BrowserWindow, root: string): Promise<string[]> {
+  const current = await js<string[]>(
+    win,
+    `window.helm.invoke('settings:read').then((s) => s.scanRoots)`
+  )
+  // The user's roots are whatever is there *minus* this driver's own, so a run
+  // that was killed before its `finally` - a timeout, a crash, Ctrl-C - is
+  // repaired by the next one rather than compounded by it. Appending blind is
+  // how the fixture root ended up in the list three times during development.
+  const before = withoutFixtureRoot(current, root)
+  await setScanRoots(win, [...before, root])
+  return before
+}
+
+/** Case-insensitively, because these are Windows paths. */
+function withoutFixtureRoot(roots: string[], root: string): string[] {
+  return roots.filter((entry) => entry.toLowerCase() !== root.toLowerCase())
+}
+
+async function setScanRoots(win: BrowserWindow, roots: string[]): Promise<void> {
+  await js<unknown>(
+    win,
+    `window.helm.invoke('settings:write', { scanRoots: ${JSON.stringify(roots)} })`
+  )
+  await js<unknown>(win, `window.helm.invoke('discovery:scan', { includeGit: false })`)
+}
+
+/**
+ * Puts the user's scan roots back.
+ *
+ * Takes the roots to restore *and* the fixture root to strip, rather than
+ * trusting the list it was handed: this runs in a `finally`, which is exactly
+ * where the state is least certain.
+ */
+async function restoreScanRoots(
+  win: BrowserWindow,
+  roots: string[],
+  fixtureRoot: string
+): Promise<void> {
+  try {
+    await setScanRoots(win, withoutFixtureRoot(roots, fixtureRoot))
+  } catch {
+    // The window may already be gone if the run is being torn down. These are a
+    // user setting, so this is worth attempting and not worth failing over.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Fixtures for the "edit a skill and relaunch" criterion
 // ---------------------------------------------------------------------------
 
@@ -296,17 +467,28 @@ function writeFixtureSkill(dir: string, token: string): void {
 
 interface Fixtures {
   harness: Project
-  atlas: Project
-  reporting: Project
+  alpha: Project
+  beta: Project
+  content: ComposeFixtures
 }
 
-function pick(services: Services): Fixtures | null {
+/**
+ * The fixture harness and its two repos, as *discovery* sees them.
+ *
+ * Matched on the paths the driver built rather than assumed, because the
+ * profile form offers what discovery found - a check that reached around the
+ * scan would not be driving the form.
+ */
+function pick(services: Services, content: ComposeFixtures): Fixtures | null {
   const projects = services.lastScan?.projects ?? []
-  const harness = projects.find((p) => p.kind === 'harness')
-  const atlas = projects.find((p) => p.name.toLowerCase() === 'atlas')
-  const reporting = projects.find((p) => p.name.toLowerCase() === 'atlas-reporting')
-  if (!harness || !atlas || !reporting) return null
-  return { harness, atlas, reporting }
+  const at = (path: string): Project | undefined =>
+    projects.find((p) => p.path.toLowerCase() === path.toLowerCase())
+
+  const harness = at(content.root)
+  const alpha = at(content.alpha)
+  const beta = at(content.beta)
+  if (!harness || harness.kind !== 'harness' || !alpha || !beta) return null
+  return { harness, alpha, beta, content }
 }
 
 /**
@@ -343,25 +525,54 @@ export async function runM3Checks(
     console.log(`m3-check: running only [${groups.join(', ')}]`)
   }
 
-  const scanned = await waitFor(() => pick(ctx.services) !== null, 120_000)
-  await pollJs(win, `document.querySelectorAll('aside button[title]').length >= 3`, 30_000)
+  // Wait for the app's own first scan to land before adding to it, so the roots
+  // read back below are the user's real ones and not an empty default.
+  await waitFor(() => ctx.services.lastScan !== null, 120_000)
+  await pollJs(win, `document.querySelectorAll('aside button[title]').length >= 1`, 30_000)
+
+  const content = buildComposeFixtures(dataDir)
+  const originalRoots = await registerFixtureRoot(win, dirname(content.root))
+  const scanned = await waitFor(() => pick(ctx.services, content) !== null, 120_000)
   await sleep(500)
-  const fixtures = pick(ctx.services)
+  const fixtures = pick(ctx.services, content)
 
   if (!scanned || !fixtures) {
+    await restoreScanRoots(win, originalRoots, dirname(content.root))
     checks.push({
       id: 'M3-0',
       criterion: 'setup',
-      title: 'Discovery found the harness root and both overlay repos',
+      title: 'Discovery found the fixture harness and both overlay repos',
       ok: false,
-      detail: { scanned, found: (ctx.services.lastScan?.projects ?? []).map((p) => p.name) },
+      detail: {
+        fixtureRoot: content.root,
+        scanned,
+        found: (ctx.services.lastScan?.projects ?? []).map((p) => p.name)
+      },
       notes: [
-        'M3 composes repos/atlas and repos/atlas-reporting from the harness root',
-        '(CLAUDE.md, "Environment notes"). Without them there is nothing to compose.'
+        'The overlays are a harness this driver builds under the app data directory, not the',
+        'user’s repositories - see `buildComposeFixtures`.'
       ]
     })
     return checks
   }
+
+  checks.push({
+    id: 'M3-0',
+    criterion: 'setup',
+    title: 'Discovery found the fixture harness and both overlay repos',
+    ok: true,
+    detail: {
+      harness: fixtures.harness.path,
+      overlays: [fixtures.alpha.path, fixtures.beta.path],
+      skillsEach: [fixtures.alpha.inventory.skills, fixtures.beta.inventory.skills],
+      scanRootsBefore: originalRoots
+    },
+    notes: [
+      'Built by this driver and registered through the app’s own `settings:write` +',
+      '`discovery:scan`, so the profile form offers them the way it offers any project.',
+      'The user’s scan roots are put back at the end of the run.'
+    ]
+  })
 
   // Left over from an earlier run of this driver; the names are unique-indexed.
   for (const name of [PROFILE_NAME, FIXTURE_PROFILE]) {
@@ -369,14 +580,20 @@ export async function runM3Checks(
     if (existing) deleteProfile(ctx.services.store, existing.id)
   }
 
-  if (wants('compose')) {
-    checks.push(...(await runComposeChecks(ctx, collector, shotDir, fixtures)))
-  }
-  if (wants('fixture')) {
-    checks.push(await runFixtureCheck(ctx, collector, dataDir))
-  }
-  if (wants('shims')) {
-    checks.push(plantStaleShim())
+  try {
+    if (wants('compose')) {
+      checks.push(...(await runComposeChecks(ctx, collector, shotDir, fixtures)))
+    }
+    if (wants('fixture')) {
+      checks.push(await runFixtureCheck(ctx, collector, dataDir))
+    }
+    if (wants('shims')) {
+      checks.push(plantStaleShim())
+    }
+  } finally {
+    // The user's scan roots are theirs. Restored whatever happened above,
+    // including a driver that threw halfway through a probe.
+    await restoreScanRoots(win, originalRoots, dirname(content.root))
   }
   return checks
 }
@@ -396,7 +613,7 @@ async function runComposeChecks(
 ): Promise<Check[]> {
   const checks: Check[] = []
   const { win } = ctx
-  const { harness, atlas, reporting } = fixtures
+  const { harness, alpha, beta } = fixtures
 
   // -------------------------------------------------------------------------
   // M3-1: build a profile through the real form
@@ -412,13 +629,13 @@ async function runComposeChecks(
 
   // Ticking "Compose" also ticks "Access" - composing a repo's skills while
   // denying its files produces skills that cannot do anything.
-  await clickByLabel(win, `Compose ${atlas.name}`)
+  await clickByLabel(win, `Compose ${alpha.name}`)
   await sleep(150)
-  await clickByLabel(win, `Compose ${reporting.name}`)
+  await clickByLabel(win, `Compose ${beta.name}`)
   await sleep(150)
   const accessAutoTicked =
-    (await isChecked(win, `Grant access to ${atlas.name}`)) &&
-    (await isChecked(win, `Grant access to ${reporting.name}`))
+    (await isChecked(win, `Grant access to ${alpha.name}`)) &&
+    (await isChecked(win, `Grant access to ${beta.name}`))
 
   const editorShot = await screenshot(win, shotDir, 'm3-profile-editor.png')
   await clickButtonText(win, 'Save profile')
@@ -467,6 +684,27 @@ async function runComposeChecks(
   )
   await waitFor(() => ctx.sessions.list().length > before, 60_000)
   const session = ctx.sessions.list().at(-1)
+
+  /**
+   * Armed the instant the process exists, before anything else is asserted.
+   *
+   * `answerConsent` seeds its counts from the output already in the buffer, so
+   * that it answers the gates *from here on* rather than re-answering ones a
+   * session has long since passed. That is right for a session mid-life and
+   * wrong for one being born: a directory Claude Code has never opened raises
+   * its trust and MCP gates within a second or two of spawning, and every
+   * assertion below - the tab strip, the argv - takes longer than that. Arming
+   * afterwards baselines the gates as already-answered and then waits three
+   * minutes for a token the session cannot print until they are dismissed.
+   *
+   * This is the failure that appeared the moment these checks stopped composing
+   * a directory the user had opened a hundred times. It stays armed through the
+   * opening-prompt window and is released before the first `ask`, which arms
+   * its own.
+   */
+  const stopGates =
+    session === undefined ? (): void => undefined : answerConsent(ctx, collector, [session.id])
+
   await sleep(800)
   const tabs = await tabOrder(win)
 
@@ -507,13 +745,22 @@ async function runComposeChecks(
   // -------------------------------------------------------------------------
   // The composed session itself
   // -------------------------------------------------------------------------
-  const ready = await waitForPrompt(ctx, collector, session.id)
+  // The gate handler armed at spawn is still running, so this waits for the
+  // composer rather than arming a second one - two handlers answering the same
+  // gate would send Escape twice, and the second lands in a session that has
+  // moved on and cancels whatever it is doing.
+  const ready = await waitFor(
+    () => atPrompt(stripAnsi(collector.output(session.id))),
+    120_000
+  )
+  await sleep(2500)
 
   // M3-3: the opening prompt fired without anyone typing it.
   const openingSeen = await waitFor(
     () => squash(collector.output(session.id)).includes(squash(OPENING_TOKEN)),
     180_000
   )
+  stopGates()
   const sessionShot = await screenshot(win, shotDir, 'm3-composed-session.png')
 
   checks.push({
@@ -532,79 +779,74 @@ async function runComposeChecks(
 
   // M3-4: skills from both overlays, including the same-named pair.
   //
-  // `think` is defined in both repos and differs between them, which is what
-  // makes it the discriminator: matching both headings proves two distinct
-  // bodies resolved, where a same-named skill resolving twice to one body would
-  // match only one.
-  const atlasThink = firstHeading(
-    join(atlas.path, '.claude', 'skills', 'think', 'SKILL.md')
-  )
-  const reportingThink = firstHeading(
-    join(reporting.path, '.claude', 'skills', 'think', 'SKILL.md')
-  )
-  const skills = await ask(
-    ctx,
-    collector,
-    session.id,
-    `Invoke the skill named ${overlayName(atlas)}:think, then invoke the skill named ` +
-      `${overlayName(reporting)}:think. Then reply with exactly two lines: ` +
-      `SKILL1=<the first markdown H1 heading in the first skill body> and ` +
-      `SKILL2=<the first markdown H1 heading in the second skill body>.`,
-    [`SKILL1=${atlasThink}`, `SKILL2=${reportingThink}`]
-  )
+  // `think` is defined in both fixture repos with a *different* token, which is
+  // what makes it the discriminator: reporting both proves two distinct bodies
+  // resolved, where a same-named skill resolving twice to one body would match
+  // only one.
+  const alphaThink = skillToken(join(alpha.path, '.claude', 'skills', 'think', 'SKILL.md'))
+  const betaThink = skillToken(join(beta.path, '.claude', 'skills', 'think', 'SKILL.md'))
 
   /**
-   * The probe is only evidence if the two headings exist and differ.
+   * The probe is only evidence if the two tokens exist and differ.
    *
-   * `firstHeading` returns `''` for a file that is not there, which turns the
-   * expected tokens into `SKILL1=` and `SKILL2=` - substrings of any answer
-   * that uses the requested format at all. So a check with no fixtures behind
-   * it passed while proving nothing, which is how it was found: the two source
-   * repos lost their `.claude/skills` to an early version of the shim teardown
-   * (fixed by `removeShimDir`, which unlinks junctions before recursing), and
-   * this check went on reporting green afterwards.
+   * A reader that returns `''` for a missing file turns the expected token into
+   * `SKILL1=` - a substring of any answer using the requested format - and the
+   * check reports PASS having proved nothing. That is not hypothetical: this
+   * check composed the user's own `repos/atlas` and `repos/atlas-reporting`
+   * until 2026-08-10, both lost their `.claude/skills` to an early version of
+   * the shim teardown, and it went on reporting green afterwards.
+   *
+   * The fixtures below are now built by this driver, so tripping this guard
+   * means the driver itself is broken rather than that somebody moved a repo.
    */
-  const headingsUsable =
-    atlasThink !== '' && reportingThink !== '' && atlasThink !== reportingThink
+  const tokensUsable = alphaThink !== '' && betaThink !== '' && alphaThink !== betaThink
+
+  const skills = tokensUsable
+    ? await ask(
+        ctx,
+        collector,
+        session.id,
+        `Invoke the skill named ${overlayName(alpha)}:think, then invoke the skill named ` +
+          `${overlayName(beta)}:think. Each skill body states a token. Then reply with exactly ` +
+          `two lines: SKILL1=<the first skill's token> and SKILL2=<the second skill's token>.`,
+        [`SKILL1=${alphaThink}`, `SKILL2=${betaThink}`]
+      )
+    : { ok: false, answer: 'the fixture skills carry no distinct tokens, so no answer is evidence' }
 
   checks.push({
     id: 'M3-4',
     criterion:
       'A project skill invokes in a root-launched session; same-named skills in two overlays coexist',
     title: 'Both overlays’ `think` skills resolved under their own prefixes and both invoked',
-    ok: headingsUsable && skills.ok,
+    ok: tokensUsable && skills.ok,
     detail: {
       cwd: session.cwd,
-      expected: { SKILL1: atlasThink, SKILL2: reportingThink },
-      headingsUsableAsEvidence: headingsUsable,
-      ...(headingsUsable
-        ? {}
-        : {
-            why: [
-              `${join(atlas.path, '.claude', 'skills', 'think', 'SKILL.md')} and`,
-              `${join(reporting.path, '.claude', 'skills', 'think', 'SKILL.md')} must both exist`,
-              'and differ. An absent file yields an empty heading, which every answer matches.'
-            ].join(' ')
-          }),
+      invocations: [`${overlayName(alpha)}:think`, `${overlayName(beta)}:think`],
+      expected: { SKILL1: alphaThink, SKILL2: betaThink },
+      tokensUsableAsEvidence: tokensUsable,
       answer: skills.answer
     },
     notes: [
-      'The two bodies differ, so matching both headings is proof of two distinct skills',
+      'The two bodies carry different tokens, so reporting both is proof of two distinct skills',
       'rather than one resolving twice. Spike A showed the namespacing; this shows it interactively.',
-      'The guard above is not belt and braces: without it this check passes when the fixtures',
-      'are missing, which is exactly the state it was found in.'
+      'Asked for the token rather than the markdown heading: a model that answers `# TOKEN` has',
+      'read the right file, and an equality check on the heading text calls that a failure.'
     ]
   })
 
   // M3-5: the CLAUDE.md gap Spike A found, closed.
+  //
+  // The fact is written into the alpha fixture's CLAUDE.md by this driver and
+  // exists nowhere else on the machine, so a correct answer can only have come
+  // from that file reaching the session's context.
   const claudeMd = await ask(
     ctx,
     collector,
     session.id,
     'Without using any tools, answer only from the instructions already in your context: ' +
-      'what single python command launches the atlas GUI application? ' +
-      'Reply as PYCMD=<command>. If it is not in your context, reply PYCMD=NOT_IN_CONTEXT.',
-    ['PYCMD=python _launch_atlas.py']
+      `what single command builds the ${FIXTURE_ALPHA} project? ` +
+      'Reply as BUILDCMD=<command>. If it is not in your context, reply BUILDCMD=NOT_IN_CONTEXT.',
+    [`BUILDCMD=${fixtures.content.alphaFact}`]
   )
 
   checks.push({
@@ -612,7 +854,12 @@ async function runComposeChecks(
     criterion: "The overlaid repos' CLAUDE.md instructions are present in the session",
     title: 'An instruction that exists only in an overlay’s CLAUDE.md is in context',
     ok: claudeMd.ok,
-    detail: { answer: claudeMd.answer, memoryFile },
+    detail: {
+      expected: `BUILDCMD=${fixtures.content.alphaFact}`,
+      from: join(alpha.path, 'CLAUDE.md'),
+      answer: claudeMd.answer,
+      memoryFile
+    },
     notes: [
       'Carried by --append-system-prompt-file, not --add-dir. Measured against 2.1.225:',
       '--add-dir does not pull in an overlaid repo’s CLAUDE.md, whatever its help text suggests.',
@@ -628,8 +875,8 @@ async function runComposeChecks(
   // context nor any plugin, so the only way to report a line of it is to have
   // opened it.
   const settings = {
-    a: join(atlas.path, '.claude', 'settings.local.json'),
-    b: join(reporting.path, '.claude', 'settings.local.json')
+    a: join(alpha.path, '.claude', 'settings.local.json'),
+    b: join(beta.path, '.claude', 'settings.local.json')
   }
   const distinct = distinctLine(settings.a, settings.b)
   const files =
@@ -861,11 +1108,21 @@ async function probeFixture(
 
 const overlayName = (project: Project): string => project.name.toLowerCase()
 
-/** The first `# heading` in a skill body, which is what the probes ask for. */
-function firstHeading(file: string): string {
+/**
+ * The token a fixture skill body declares.
+ *
+ * Asked for by name rather than as "the first H1 heading", which is what this
+ * started as and which is not a stable thing to compare against: a model
+ * answering `SKILL1=# HELMM3ALPHATHINK` has read the right file and quoted the
+ * heading *including its hash*, and an equality check on the text calls that a
+ * failure. A bare token has one form.
+ *
+ * Read from the file rather than from the constant it was written with, so the
+ * comparison is still a claim about what is on disk.
+ */
+function skillToken(file: string): string {
   try {
-    const match = /^#\s+(.+)$/m.exec(readFileSync(file, 'utf8'))
-    return match?.[1]?.trim() ?? ''
+    return /Its token is ([A-Z0-9]+)\./.exec(readFileSync(file, 'utf8'))?.[1] ?? ''
   } catch {
     return ''
   }
