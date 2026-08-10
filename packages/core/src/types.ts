@@ -54,6 +54,16 @@ export {
   type UsageView,
   type UsageWindowCost
 } from './usage/shape'
+export {
+  costOfTokens,
+  priceFor,
+  priceTableAgeDays,
+  PRICES,
+  PRICE_TABLE_DATE,
+  PRICE_TABLE_FRESH_FOR_DAYS,
+  type ModelPrice,
+  type TokenPrice
+} from './usage/prices'
 
 /** What a discovered directory turned out to be. */
 export type ProjectKind =

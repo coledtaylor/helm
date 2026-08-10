@@ -1,6 +1,7 @@
-import { closeSync, openSync, readSync, readdirSync, statSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { readTail } from './tail'
 
 /**
  * Claude Code's own record of what has been asked of it.
@@ -94,72 +95,25 @@ function parseLine(raw: string): HistoryLine | null {
  *
  * Incremental because the file only ever grows: re-reading 875 KB to learn
  * about one new prompt is affordable today and stops being so, and the cursor
- * costs one integer. The two things that would break a naive cursor are handled
- * explicitly - a file smaller than the cursor is a different file (rotated,
- * cleared, or a different `CLAUDE_CONFIG_DIR`) and forces a full reindex, and a
- * trailing fragment with no newline is left unconsumed for the next pass.
- *
- * Reading from a byte offset cannot split a UTF-8 sequence here, because every
- * offset this returns is the byte after a `\n`.
+ * costs one integer. The byte arithmetic - the shrink check and the unconsumed
+ * trailing fragment - is in `readTail`, which the usage index shares.
  */
 export function readHistoryTail(file: string, fromBytes: number): HistoryTail {
-  let size: number
-  try {
-    size = statSync(file).size
-  } catch (err) {
-    return {
-      lines: [],
-      bytes: 0,
-      reset: true,
-      skipped: 0,
-      error: err instanceof Error ? err.message : String(err)
-    }
+  const tail = readTail(file, fromBytes)
+  if (tail.error !== undefined) {
+    return { lines: [], bytes: tail.bytes, reset: tail.reset, skipped: 0, error: tail.error }
   }
-
-  const reset = size < fromBytes
-  const start = reset ? 0 : fromBytes
-  if (size === start) return { lines: [], bytes: size, reset, skipped: 0 }
-
-  const length = size - start
-  const buffer = Buffer.allocUnsafe(length)
-  let read = 0
-  const fd = openSync(file, 'r')
-  try {
-    // `readSync` is allowed to return short. Loop rather than assume.
-    while (read < length) {
-      const n = readSync(fd, buffer, read, length - read, start + read)
-      if (n === 0) break
-      read += n
-    }
-  } catch (err) {
-    return {
-      lines: [],
-      bytes: fromBytes,
-      reset: false,
-      skipped: 0,
-      error: err instanceof Error ? err.message : String(err)
-    }
-  } finally {
-    closeSync(fd)
-  }
-
-  const chunk = buffer.subarray(0, read)
-  // Everything after the final newline is a record still being written. Its
-  // byte length - not its character length - is what the cursor has to be held
-  // back by.
-  const lastBreak = chunk.lastIndexOf(0x0a)
-  const complete = lastBreak < 0 ? Buffer.alloc(0) : chunk.subarray(0, lastBreak + 1)
 
   const lines: HistoryLine[] = []
   let skipped = 0
-  for (const raw of complete.toString('utf8').split('\n')) {
+  for (const raw of tail.text.split('\n')) {
     if (raw.trim() === '') continue
     const parsed = parseLine(raw)
     if (parsed === null) skipped++
     else lines.push(parsed)
   }
 
-  return { lines, bytes: start + complete.length, reset, skipped }
+  return { lines, bytes: tail.bytes, reset: tail.reset, skipped }
 }
 
 /** A transcript file that is still on disk. */

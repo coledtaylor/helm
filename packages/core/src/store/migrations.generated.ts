@@ -43,5 +43,13 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "CREATE INDEX `history_sessions_last_idx` ON `history_sessions` (`last_at`);",
       "CREATE INDEX `history_sessions_project_idx` ON `history_sessions` (`project_key`,`last_at`);"
     ]
+  },
+  {
+    "tag": "0004_tan_naoko",
+    "statements": [
+      "CREATE TABLE `usage_index` (\n\t`file` text PRIMARY KEY NOT NULL,\n\t`bytes` integer NOT NULL,\n\t`rows` integer DEFAULT 0 NOT NULL,\n\t`indexed_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL\n);",
+      "CREATE TABLE `usage_messages` (\n\t`uuid` text PRIMARY KEY NOT NULL,\n\t`at` integer NOT NULL,\n\t`model` text NOT NULL,\n\t`input_tokens` integer DEFAULT 0 NOT NULL,\n\t`output_tokens` integer DEFAULT 0 NOT NULL,\n\t`cache_write_5m_tokens` integer DEFAULT 0 NOT NULL,\n\t`cache_write_1h_tokens` integer DEFAULT 0 NOT NULL,\n\t`cache_read_tokens` integer DEFAULT 0 NOT NULL\n);",
+      "CREATE INDEX `usage_messages_at_idx` ON `usage_messages` (`at`,`model`);"
+    ]
   }
 ]

@@ -3,11 +3,15 @@ import { basename, dirname } from 'node:path'
 import {
   claudeConfigFileIn,
   claudeHome,
+  projectsDirIn,
   readUsage,
   usageFileState,
+  type Store,
   type UsageFileState,
-  type UsageSnapshot
+  type UsageSnapshot,
+  type UsageSpend
 } from '@helm/core'
+import { createUsageIndex, USAGE_INDEX_POLL_MS, type UsageIndex } from './usageindex'
 
 /**
  * Keeping the status bar's usage figures level with a file Helm does not own.
@@ -57,6 +61,8 @@ export interface UsageService {
    * business choosing which file the figures come from.
    */
   pointAt: (file: string | null) => UsageSnapshot
+  /** The transcript index behind the dollar estimate; `usage-check` drives it. */
+  index: UsageIndex
   start: () => void
   stop: () => void
 }
@@ -64,6 +70,8 @@ export interface UsageService {
 export interface UsageServiceDeps {
   /** Called after any pass whose reading differs from the one before it. */
   onChange: (snapshot: UsageSnapshot) => void
+  /** Holds the token index. */
+  store: Store
   /** Overridden by the checks to read a fixture instead of the real tree. */
   home?: string | undefined
 }
@@ -92,8 +100,9 @@ function sameState(a: UsageFileState | null, b: UsageFileState | null): boolean 
   return a.size === b.size && a.mtimeMs === b.mtimeMs
 }
 
-export function createUsageService({ onChange, home }: UsageServiceDeps): UsageService {
+export function createUsageService({ onChange, store, home }: UsageServiceDeps): UsageService {
   const realFile = claudeConfigFileIn(home ?? claudeHome())
+  const index = createUsageIndex({ store, projectsDir: projectsDirIn(home ?? claudeHome()) })
 
   let file = realFile
   let last: UsageSnapshot = { file, fetchedAtMs: null, limits: [], problem: null, spend: null }
@@ -102,10 +111,34 @@ export function createUsageService({ onChange, home }: UsageServiceDeps): UsageS
 
   let watcher: FSWatcher | null = null
   let poll: NodeJS.Timeout | null = null
+  let indexPoll: NodeJS.Timeout | null = null
   let debounce: NodeJS.Timeout | null = null
+  let catchUp: NodeJS.Immediate | null = null
+  let indexMs = 0
+
+  /**
+   * The estimate, aligned with the percentage beside it.
+   *
+   * The session window is taken from the plan's own `resets_at` rather than
+   * "the last five hours", so the dollar figure and the percentage describe the
+   * same window - which is the only way a user can read one against the other.
+   * Null until the first catch-up finishes: an estimate over a third of the
+   * transcripts is a wrong number, not a partial one.
+   */
+  function spendFor(snapshot: UsageSnapshot): UsageSpend | null {
+    if (!index.ready()) return null
+    const session = snapshot.limits.find((limit) => limit.group === 'session')
+    try {
+      return index.spend(session?.resetsAtMs ?? null, indexMs)
+    } catch (err) {
+      console.warn(`usage spend could not be summed: ${String(err)}`)
+      return null
+    }
+  }
 
   function refresh(): UsageSnapshot {
-    const next = readUsage(file)
+    const read = readUsage(file)
+    const next: UsageSnapshot = { ...read, spend: spendFor(read) }
     lastState = usageFileState(file)
     last = next
     const nextSignature = signature(next)
@@ -114,6 +147,33 @@ export function createUsageService({ onChange, home }: UsageServiceDeps): UsageS
       onChange(next)
     }
     return next
+  }
+
+  /**
+   * Works the index forward one chunk per tick until it has caught up.
+   *
+   * `setImmediate` rather than a loop: the first pass over 214 MB takes about a
+   * second in total, and the window has to keep painting while it happens.
+   */
+  function scheduleCatchUp(): void {
+    if (catchUp !== null) return
+    catchUp = setImmediate(() => {
+      catchUp = null
+      let result
+      try {
+        result = index.pass()
+      } catch (err) {
+        console.warn(`usage index pass failed: ${String(err)}`)
+        return
+      }
+      indexMs = result.ms
+      if (!result.caughtUp) {
+        scheduleCatchUp()
+        return
+      }
+      // Only once the whole index is current: a partial estimate is wrong.
+      if (result.rows > 0 || result.forgotten > 0 || last.spend === null) refresh()
+    })
   }
 
   function scheduleRefresh(): void {
@@ -154,6 +214,7 @@ export function createUsageService({ onChange, home }: UsageServiceDeps): UsageS
     refresh,
     snapshot: () => last,
     file: () => file,
+    index,
 
     pointAt(next) {
       file = next ?? realFile
@@ -175,6 +236,15 @@ export function createUsageService({ onChange, home }: UsageServiceDeps): UsageS
         scheduleRefresh()
       }, POLL_MS)
       poll.unref()
+
+      // The token index has no watch behind it. `fs.watch` over `projects/`
+      // would have to be recursive to see a transcript grow, and a recursive
+      // watch there fires on every token a live session writes - which is the
+      // one thing the debounce cannot absorb. A ten-second stat sweep over 178
+      // files costs less than that watch does when nothing is happening.
+      scheduleCatchUp()
+      indexPoll = setInterval(scheduleCatchUp, USAGE_INDEX_POLL_MS)
+      indexPoll.unref()
     },
 
     stop() {
@@ -182,6 +252,10 @@ export function createUsageService({ onChange, home }: UsageServiceDeps): UsageS
       debounce = null
       if (poll) clearInterval(poll)
       poll = null
+      if (indexPoll) clearInterval(indexPoll)
+      indexPoll = null
+      if (catchUp) clearImmediate(catchUp)
+      catchUp = null
       watcher?.close()
       watcher = null
     }

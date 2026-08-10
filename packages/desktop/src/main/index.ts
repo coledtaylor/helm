@@ -199,6 +199,7 @@ function startApp(options: AppOptions = {}): void {
   })
 
   const usage = createUsageService({
+    store: services.store,
     ...(options.claudeHome !== undefined ? { home: options.claudeHome } : {}),
     onChange: (snapshot) => emit(win, 'usage:changed', snapshot)
   })

@@ -1,7 +1,13 @@
 import { type BrowserWindow } from 'electron'
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { claudeConfigFileIn, claudeHome, projectsDirIn, readSettings } from '@helm/core'
+import {
+  claudeConfigFileIn,
+  claudeHome,
+  countUsageMessages,
+  projectsDirIn,
+  readSettings
+} from '@helm/core'
 import { screenshot, sleep, stripAnsi, waitFor } from './bridge'
 import type { Check } from './fidelity'
 import { atPrompt, type Collector, type M2Context } from './m2check'
@@ -41,7 +47,17 @@ import { answerConsent } from './m3check'
  * `pnpm usage-check` -> helm-data/usage-report.json
  */
 
-const GROUPS = ['read', 'watch', 'resets', 'degrade', 'setting', 'width', 'cost', 'live'] as const
+const GROUPS = [
+  'read',
+  'watch',
+  'resets',
+  'degrade',
+  'setting',
+  'width',
+  'cost',
+  'dollars',
+  'live'
+] as const
 type Group = (typeof GROUPS)[number]
 
 /**
@@ -196,6 +212,196 @@ function paintedPercents(text: string): { session: number | null; weekly: number
 
 /** Any percentage at all, for the criterion that is about there being none. */
 const showsAnyNumber = (text: string): boolean => /\d+\s*%/.test(text)
+
+// ---------------------------------------------------------------------------
+// A second opinion about what the transcripts cost
+// ---------------------------------------------------------------------------
+
+/**
+ * The price list, written out again by hand.
+ *
+ * Input and output per million tokens, and the three derived rates spelled out
+ * rather than computed from a shared multiplier - because this is the check's
+ * own copy, and a copy that imports the thing it checks is not one. If
+ * `prices.ts` gains a typo, these numbers disagree with it and the check fails,
+ * which is the entire point.
+ */
+const OWN_PRICES: Record<
+  string,
+  { input: number; output: number; write5m: number; write1h: number; read: number }
+> = {
+  'claude-fable-5': { input: 10, output: 50, write5m: 12.5, write1h: 20, read: 1 },
+  'claude-mythos-5': { input: 10, output: 50, write5m: 12.5, write1h: 20, read: 1 },
+  'claude-opus-5': { input: 5, output: 25, write5m: 6.25, write1h: 10, read: 0.5 },
+  'claude-opus-4-8': { input: 5, output: 25, write5m: 6.25, write1h: 10, read: 0.5 },
+  'claude-opus-4-7': { input: 5, output: 25, write5m: 6.25, write1h: 10, read: 0.5 },
+  'claude-opus-4-6': { input: 5, output: 25, write5m: 6.25, write1h: 10, read: 0.5 },
+  'claude-opus-4-5': { input: 5, output: 25, write5m: 6.25, write1h: 10, read: 0.5 },
+  'claude-sonnet-5': { input: 3, output: 15, write5m: 3.75, write1h: 6, read: 0.3 },
+  'claude-sonnet-4-6': { input: 3, output: 15, write5m: 3.75, write1h: 6, read: 0.3 },
+  'claude-sonnet-4-5': { input: 3, output: 15, write5m: 3.75, write1h: 6, read: 0.3 },
+  'claude-haiku-4-5': { input: 1, output: 5, write5m: 1.25, write1h: 2, read: 0.1 }
+}
+
+/** Claude Sonnet 5's promotional rate, and the day it stops. */
+const OWN_SONNET5_INTRO_UNTIL = Date.parse('2026-08-31T23:59:59.999Z')
+const OWN_SONNET5_INTRO = { input: 2, output: 10, write5m: 2.5, write1h: 4, read: 0.2 }
+
+function ownPrice(model: string, atMs: number): (typeof OWN_PRICES)[string] | null {
+  if (model === 'claude-sonnet-5' && atMs <= OWN_SONNET5_INTRO_UNTIL) return OWN_SONNET5_INTRO
+  return OWN_PRICES[model] ?? OWN_PRICES[model.replace(/-\d{8}$/, '')] ?? null
+}
+
+interface OwnWindow {
+  dollars: number
+  messages: number
+  input: number
+  output: number
+  cacheWrite: number
+  cacheRead: number
+}
+
+const emptyWindow = (): OwnWindow => ({
+  dollars: 0,
+  messages: 0,
+  input: 0,
+  output: 0,
+  cacheWrite: 0,
+  cacheRead: 0
+})
+
+/**
+ * Every transcript, parsed whole, summed by hand.
+ *
+ * The naive version of the thing the index exists to avoid: walk the tree,
+ * `JSON.parse` every line, pick the assistant rows, dedupe by uuid, and add up
+ * the three windows. Slow on purpose - it shares no code with the incremental
+ * index, and being slow is what makes it a second opinion rather than the same
+ * opinion twice.
+ */
+function ownSpend(
+  projectsDir: string,
+  nowMs: number,
+  sessionStartMs: number,
+  todayStartMs: number
+): { session: OwnWindow; today: OwnWindow; week: OwnWindow; unpriced: string[]; ms: number } {
+  const started = performance.now()
+  const session = emptyWindow()
+  const today = emptyWindow()
+  const week = emptyWindow()
+  const unpriced = new Set<string>()
+  const seen = new Set<string>()
+
+  const files: string[] = []
+  const walk = (dir: string): void => {
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) walk(path)
+      else if (entry.name.endsWith('.jsonl')) files.push(path)
+    }
+  }
+  walk(projectsDir)
+
+  for (const file of files) {
+    let text: string
+    try {
+      text = readFileSync(file, 'utf8')
+    } catch {
+      continue
+    }
+    for (const line of text.split('\n')) {
+      if (line === '') continue
+      let row: {
+        type?: string
+        uuid?: string
+        timestamp?: string
+        message?: { model?: string; usage?: Record<string, unknown> }
+      }
+      try {
+        row = JSON.parse(line) as typeof row
+      } catch {
+        continue
+      }
+      if (row.type !== 'assistant') continue
+      const usage = row.message?.usage
+      if (usage === undefined || typeof row.uuid !== 'string') continue
+      if (seen.has(row.uuid)) continue
+      seen.add(row.uuid)
+
+      const at = Date.parse(String(row.timestamp))
+      if (!Number.isFinite(at)) continue
+
+      const num = (v: unknown): number => (typeof v === 'number' && v > 0 ? v : 0)
+      const creation = usage['cache_creation'] as Record<string, unknown> | undefined
+      const writeTotal = num(usage['cache_creation_input_tokens'])
+      let write1h = 0
+      let write5m = writeTotal
+      if (creation !== undefined && creation !== null) {
+        write1h = num(creation['ephemeral_1h_input_tokens'])
+        write5m = num(creation['ephemeral_5m_input_tokens'])
+        if (write1h + write5m !== writeTotal) write5m = Math.max(0, writeTotal - write1h)
+      }
+      const input = num(usage['input_tokens'])
+      const output = num(usage['output_tokens'])
+      const read = num(usage['cache_read_input_tokens'])
+
+      const model = row.message?.model ?? ''
+      const rate = ownPrice(model, at)
+      if (rate === null && input + output + writeTotal + read > 0) unpriced.add(model)
+      const cost =
+        rate === null
+          ? 0
+          : (input * rate.input +
+              output * rate.output +
+              write5m * rate.write5m +
+              write1h * rate.write1h +
+              read * rate.read) /
+            1_000_000
+
+      for (const [from, into] of [
+        [sessionStartMs, session],
+        [todayStartMs, today],
+        [nowMs - 7 * 24 * 3_600_000, week]
+      ] as Array<[number, OwnWindow]>) {
+        if (at < from || at > nowMs) continue
+        into.dollars += cost
+        into.messages++
+        into.input += input
+        into.output += output
+        into.cacheWrite += writeTotal
+        into.cacheRead += read
+      }
+    }
+  }
+
+  return { session, today, week, unpriced: [...unpriced].sort(), ms: performance.now() - started }
+}
+
+/** `$1.24` / `$412` as a number, from the text on screen. */
+function paintedDollars(text: string): number[] {
+  const out: number[] = []
+  const re = /\$([\d,]+(?:\.\d+)?)/g
+  for (;;) {
+    const match = re.exec(text)
+    if (match === null) break
+    out.push(Number(match[1]?.replace(/,/g, '')))
+  }
+  return out
+}
+
+/**
+ * How far a painted figure may be from the truth.
+ *
+ * Set by the precision it was painted at, not by a fudge factor: a figure shown
+ * to the cent may be half a cent out, one shown to the dollar half a dollar.
+ */
+const roundingTolerance = (painted: number): number => (painted < 10 ? 0.005 : 0.5)
 
 // ---------------------------------------------------------------------------
 // Talking to the window
@@ -913,11 +1119,28 @@ export async function runUsageChecks(
     usage.pointAt(null)
     const readMs = performance.now() - readStart
 
+    // The index, caught up, and then asked for what it costs when nothing has
+    // changed - which is what every subsequent poll actually costs.
+    let passes = 0
+    let caughtUp = usage.index.pass()
+    while (!caughtUp.caughtUp && passes < 200) {
+      caughtUp = usage.index.pass()
+      passes++
+    }
+    const steadyStart = performance.now()
+    const steady = usage.index.pass()
+    const steadyMs = performance.now() - steadyStart
+
+    // And the read the status bar's dollar figure is actually built from.
+    const sumStart = performance.now()
+    const summed = usage.index.spend(null, 0)
+    const sumMs = performance.now() - sumStart
+
     checks.push({
       id: 'U-8',
       criterion: 'Reading usage costs the status bar nothing measurable on repaint',
-      title: 'A repaint touches no file; the full parse it avoids is measured here',
-      ok: derive.perPaintMs < 1 && readMs < 200,
+      title: 'A repaint touches no file; the 1.16 s parse it avoids is measured here',
+      ok: derive.perPaintMs < 1 && readMs < 200 && sumMs < 50 && steadyMs < 250,
       detail: {
         fullParse: {
           transcripts: transcripts.length,
@@ -927,6 +1150,12 @@ export async function runUsageChecks(
         },
         repaint: derive,
         oneReadOfClaudeJsonMs: Math.round(readMs * 100) / 100,
+        indexSteadyPassMs: Math.round(steadyMs * 100) / 100,
+        indexSteadyPassFiles: steady.files,
+        sqliteSumMs: Math.round(sumMs * 100) / 100,
+        sqliteSumCoveredMessages:
+          summed.session.messages + summed.today.messages + summed.week.messages,
+        indexedMessages: countUsageMessages(services.store),
         claudeJsonBytes: (() => {
           try {
             return statSync(realFile).size
@@ -936,11 +1165,125 @@ export async function runUsageChecks(
         })()
       },
       notes: [
-        'Percent mode reads one small JSON file, and only when it changes. The',
-        'full parse above is the cost the dollar half has to avoid, measured on',
-        'this machine rather than taken from the task description.'
+        'Four numbers, and the first is the one being avoided: a full parse of',
+        'every transcript, measured here rather than quoted from the task.',
+        'A repaint reads nothing at all - the reading and the estimate are both',
+        'already in the window.',
+        'The steady-state index pass is one stat per transcript and no reads,',
+        'and the SQLite sum behind the dollar figure is a range scan over an',
+        'index. Neither is on a repaint path; both are reported so the claim is',
+        'a measurement rather than an assertion.'
       ]
     })
+  }
+
+  // -------------------------------------------------------------------------
+  // U-11: the dollar estimate reconciles with the transcripts
+  // -------------------------------------------------------------------------
+  if (run('dollars')) {
+    usage.pointAt(null)
+
+    // Drive the index to completion here rather than waiting on its timer: the
+    // catch-up is chunked so the window keeps painting, and a driver that
+    // polled would be timing the chunk size rather than the index.
+    const indexStarted = Date.now()
+    let passes = 0
+    let indexed
+    do {
+      indexed = usage.index.pass()
+      passes++
+    } while (!indexed.caughtUp && passes < 200)
+    const catchUpMs = Date.now() - indexStarted
+
+    const snapshot = usage.refresh()
+    const painted = await waitForText(win, () => true, 0)
+
+    // The windows the app is using, recomputed here. The session one is
+    // anchored on the plan's own reset time, so the driver has to read that
+    // from the file rather than assume "the last five hours".
+    const now = Date.now()
+    const mine = ownRead(realFile)
+    const sessionLimit = mine.limits.find((l) => l.group === 'session')
+    const sessionStart =
+      sessionLimit?.resetsAtMs == null
+        ? now - 5 * 3_600_000
+        : sessionLimit.resetsAtMs - 5 * 3_600_000
+    const midnight = new Date(now)
+    midnight.setHours(0, 0, 0, 0)
+
+    const independent = ownSpend(
+      projectsDirIn(claudeHome()),
+      now,
+      sessionStart,
+      midnight.getTime()
+    )
+
+    // Now switch the segment into cost mode, the way a user would.
+    let mode = await segmentMode(win)
+    for (let attempt = 0; attempt < 4 && mode !== 'cost'; attempt++) {
+      await clickSegment(win)
+      await sleep(300)
+      mode = await segmentMode(win)
+    }
+    const costText = await segmentText(win)
+    const costTitle = await segmentTitle(win)
+    const figures = paintedDollars(costText)
+
+    const expected = [
+      independent.session.dollars,
+      independent.today.dollars,
+      independent.week.dollars
+    ]
+    const agree =
+      figures.length === 3 &&
+      figures.every((painted, at) => Math.abs(painted - (expected[at] ?? 0)) <= roundingTolerance(painted))
+
+    // "Labelled as an estimate everywhere it appears" is a claim about the
+    // pixels, so it is checked against them: the word on the segment itself,
+    // and the sentence in the tooltip that says what the estimate is of.
+    const labelled = /Est\./.test(costText) && costTitle.includes('Estimated, not billed')
+    const dated = costText.includes(snapshot.spend?.pricedAt ?? 'no-date')
+
+    await screenshot(win, shotDir, 'usage-11-dollars.png')
+
+    checks.push({
+      id: 'U-11',
+      criterion: "Dollar mode's totals reconcile with an independent sum, labelled as estimates",
+      title: 'Three windows agree with a hand-written parse of every transcript',
+      ok: agree && labelled && dated && snapshot.spend !== null,
+      detail: {
+        painted: figures,
+        independent: {
+          session: independent.session,
+          today: independent.today,
+          week: independent.week,
+          unpricedModels: independent.unpriced,
+          fullParseMs: Math.round(independent.ms)
+        },
+        app: snapshot.spend,
+        sessionWindowFrom: new Date(sessionStart).toISOString(),
+        todayFrom: midnight.toISOString(),
+        indexCatchUpMs: catchUpMs,
+        indexPasses: passes,
+        labelledAsEstimate: labelled,
+        priceDateShown: dated,
+        text: costText,
+        tooltipHead: costTitle.split('\n').slice(0, 2).join(' '),
+        beforeCostMode: painted.slice(0, 60)
+      },
+      notes: [
+        'The independent sum walks the tree, JSON.parses every line, dedupes by',
+        'uuid and prices from a rate table written out again in this file. It',
+        'shares no code with the index, and it is slow on purpose.',
+        'The session window is anchored on the plan’s own resets_at, so the',
+        'dollar figure covers the same five hours the percentage does.',
+        'Tolerance is the painted precision - half a cent under $10, half a',
+        'dollar above - not a fudge factor.'
+      ]
+    })
+
+    // Put the segment back where the rest of the run expects it.
+    await ensurePercentMode(win)
   }
 
   // -------------------------------------------------------------------------

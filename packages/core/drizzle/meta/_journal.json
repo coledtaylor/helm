@@ -29,6 +29,13 @@
       "when": 1786330185941,
       "tag": "0003_smart_nightmare",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786354918396,
+      "tag": "0004_tan_naoko",
+      "breakpoints": true
     }
   ]
 }
