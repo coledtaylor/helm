@@ -189,10 +189,10 @@ async function disabled(win: BrowserWindow, selector: string): Promise<boolean |
  * An expression finding the element whose `data-<name>` is exactly `value`.
  *
  * Not a CSS attribute selector, because the values here are Windows paths and
- * CSS reads a backslash as an escape: `[data-settings-root="C:\Users\x"]`
- * matches an element whose attribute is `C:Usersx`, and `\a` would be a hex
- * escape rather than a letter at all. Comparing the attribute in JavaScript has
- * no such rules.
+ * CSS reads a backslash as an escape: in `[data-settings-root="D:\proj\x"]` the
+ * `\p` is an identity escape, so the selector matches an element whose
+ * attribute reads `D:projx` - and `\a` would be a hex escape rather than a
+ * letter at all. Comparing the attribute in JavaScript has no such rules.
  */
 const byData = (name: string, value: string): string =>
   `[...document.querySelectorAll('[data-${name}]')].find((el) => el.getAttribute('data-${name}') === ${JSON.stringify(value)})`
@@ -919,7 +919,7 @@ export async function runSettingsChecks(
       {
         key: 'scanRoots',
         good: [fixtures.rootA],
-        bad: ['repos/helm'],
+        bad: ['projects/alpha'],
         why: 'a relative path resolves against whatever the cwd happens to be'
       },
       {
