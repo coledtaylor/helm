@@ -1529,10 +1529,17 @@ async function searchChecks(ctx: M2Context, harnessPath: string): Promise<Check[
   const tree = content.tree(harnessPath, true)
   const markdown = tree.files.filter((file) => file.kind === 'markdown')
 
-  /** The corpus, read again here, so the expected counts are this file's own. */
-  const corpus = markdown.map((file) => ({
+  /**
+   * The corpus, read again here, so the expected counts are this file's own.
+   *
+   * Every file, not just the markdown, because that is what the search covers:
+   * markdown is searched by name *and* text, everything else by name alone. A
+   * counter that held only the markdown would expect fewer hits than the pane
+   * honestly returns for any term matching an artifact's or a data file's name.
+   */
+  const corpus = tree.files.map((file) => ({
     file,
-    text: readFileSync(file.path, 'utf8')
+    text: file.kind === 'markdown' ? readFileSync(file.path, 'utf8') : ''
   }))
 
   const countOccurrences = (needle: string): { files: number; matches: number } => {

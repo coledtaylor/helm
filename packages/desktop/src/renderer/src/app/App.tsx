@@ -8,6 +8,7 @@ import {
   ConfigConsole,
   ConfigEditor,
   ConfigNothingSelected,
+  ConfirmSessionDialog,
   ContentDocumentPane,
   ContentNothingSelected,
   ContentViewer,
@@ -35,6 +36,7 @@ import {
   type Tab,
   type TabIndicator
 } from '@helm/ui'
+import type { SessionConfirmRequest } from '../../../shared/ipc'
 import { helm } from './bridge'
 import { ProjectShellPane } from './ProjectShellPane'
 import { disposeShell } from './pterms'
@@ -246,6 +248,13 @@ export function App(): JSX.Element {
   )
 
   const openHistory = useCallback(() => openPane({ kind: 'history' }), [openPane])
+
+  /**
+   * Config and Content open on the scope they already had. They used to be
+   * per-harness links that carried a scope in, which meant the only way to
+   * reach either pane was through a harness that happened to be expanded.
+   * Both panes own a scope switcher, so the entry point does not need to.
+   */
   const openConfig = useCallback(() => openPane({ kind: 'config' }), [openPane])
   const openContent = useCallback(() => openPane({ kind: 'content' }), [openPane])
 
@@ -503,6 +512,47 @@ export function App(): JSX.Element {
   }, [sessions])
 
   /**
+   * "This session is still running", asked by the main process and answered
+   * here. Main owns process lifetime, so it owns the question; the renderer
+   * owns everything the user looks at, so it draws it.
+   *
+   * The answer is sent before the state clears, and only when a request is
+   * actually pending: main matches replies by id, and a second reply to an id
+   * it has already resolved is a reply for a decision that has been taken.
+   */
+  const [confirmRequest, setConfirmRequest] = useState<SessionConfirmRequest | null>(null)
+
+  useEffect(() => helm.on('session:confirm', setConfirmRequest), [])
+
+  const answerConfirm = useCallback(
+    (agreed: boolean) => {
+      if (confirmRequest === null) return
+      helm.send('session:confirmed', { id: confirmRequest.id, agreed })
+      setConfirmRequest(null)
+    },
+    [confirmRequest]
+  )
+
+  /**
+   * Rendered by both branches below, for the same reason `harnessDialog` is -
+   * and one more: main holds the window's `close` open on this promise, so a
+   * branch that did not draw the dialog would be a branch Helm could not quit
+   * from until the fallback timer ran out.
+   */
+  const confirmDialog =
+    confirmRequest === null ? null : (
+      <ConfirmSessionDialog
+        kind={confirmRequest.kind}
+        message={confirmRequest.message}
+        detail={confirmRequest.detail}
+        confirmLabel={confirmRequest.confirmLabel}
+        sessionNames={confirmRequest.sessionNames}
+        onConfirm={() => answerConfirm(true)}
+        onCancel={() => answerConfirm(false)}
+      />
+    )
+
+  /**
    * Rendered by both branches below. Creating a harness is a first-run action
    * and an every-day one, and having two copies of the dialog is how the two
    * would drift apart.
@@ -549,6 +599,7 @@ export function App(): JSX.Element {
           />
         </div>
         {harnessDialog}
+        {confirmDialog}
       </div>
     )
   }
@@ -581,6 +632,7 @@ export function App(): JSX.Element {
           profiles={
             <ProfileList
               profiles={profileState.profiles}
+              harnesses={discovery?.harnesses ?? []}
               launchingIds={profileState.launching}
               onLaunch={(profile) => void launchProfile(profile)}
               onCreate={() => {
@@ -608,11 +660,8 @@ export function App(): JSX.Element {
           historyActive={activePane?.kind === 'history'}
           onOpenConfig={openConfig}
           configActive={activePane?.kind === 'config'}
-          configScopes={configState.scopes.length}
           onOpenContent={openContent}
           contentActive={activePane?.kind === 'content'}
-          contentFiles={contentState.tree?.files.length ?? 0}
-          {...(contentState.scope ? { contentScopeLabel: contentState.scope.label } : {})}
           discovery={discovery}
           scanning={launcher.scanning}
           scanError={launcher.scanError}
@@ -629,9 +678,18 @@ export function App(): JSX.Element {
       }
       statusBar={
         <StatusBar
-          build={info ? `${info.version} · ${info.mode}` : '…'}
-          dbFile={info?.dbFile ?? ''}
-          migrations={info?.migrations ?? []}
+          // The mode is shown only when this copy is not an ordinary install.
+          // `dev` and `portable` both change what the binary is and where the
+          // data lives, so they are worth a word; an installed build is the
+          // case that needs none, and labelling it only adds a segment every
+          // user reads once.
+          build={
+            info === null
+              ? '…'
+              : info.mode === 'installed'
+                ? info.version
+                : `${info.version} · ${info.mode}`
+          }
           // From the setup status, not from `app:info`. `app:info` is read once
           // at startup, so after the CLI is relocated the strip would keep
           // naming the old version while the banner above it names the new one
@@ -651,7 +709,6 @@ export function App(): JSX.Element {
                 }
               : null
           }
-          onRevealDb={() => info && launcher.reveal(info.dbFile)}
         />
       }
     >
@@ -706,6 +763,7 @@ export function App(): JSX.Element {
               resumeError={historyState.resumeError}
               onDismissResumeError={historyState.dismissResumeError}
               onReveal={launcher.reveal}
+              compact={showSessions}
             />
           </div>
         )}
@@ -725,6 +783,8 @@ export function App(): JSX.Element {
               dirty={configState.dirty}
               onRefresh={configState.refresh}
               refreshing={configState.refreshing}
+              compact={showSessions}
+              onBack={() => configState.select(null)}
             >
               {configState.view === 'files' ? (
                 configState.selected === null ? (
@@ -816,6 +876,8 @@ export function App(): JSX.Element {
               dirty={contentState.dirty}
               onRefresh={contentState.refresh}
               refreshing={contentState.refreshing}
+              compact={showSessions}
+              onBack={() => contentState.select(null)}
             >
               {contentState.selected === null ? (
                 <ContentNothingSelected
@@ -971,6 +1033,7 @@ export function App(): JSX.Element {
         )}
 
         {harnessDialog}
+        {confirmDialog}
 
         {/* What a launch composed, and anything that went wrong doing it.
             Over the pane rather than in it, because a profile is launched from
@@ -1017,6 +1080,16 @@ export function App(): JSX.Element {
             saving={saving}
             onSave={(draft) => void saveProfile(draft)}
             onCancel={() => setEditing(null)}
+            // Only for a profile that exists. The same call the list's trash
+            // icon makes; the editor closes because the row it edits is gone.
+            {...('id' in editing
+              ? {
+                  onDelete: () => {
+                    deleteProfile(editing)
+                    setEditing(null)
+                  }
+                }
+              : {})}
           />
         )}
       </div>

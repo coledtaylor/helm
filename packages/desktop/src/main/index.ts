@@ -1,8 +1,17 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeTheme, protocol } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  ipcMain,
+  Menu,
+  nativeTheme,
+  protocol,
+  shell
+} from 'electron'
 import { writeSetting, type AppSettings } from '@helm/core'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { emit, registerIpc, resolvedTheme } from './ipc'
 import { appMode, dataDir, initDataDir, shimRoot } from './paths'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
@@ -549,6 +558,49 @@ function startSpike(): void {
   ipcMain.handle('clipboard:write', (_e, text: string) => clipboard.writeText(text))
 }
 
+/**
+ * Gives the dev app id a Start Menu shortcut of Helm's own, so the dev window's
+ * taskbar button carries the ship's wheel rather than Electron's atom.
+ *
+ * A taskbar button's icon comes from the shortcut that declares its app id, not
+ * from the window. Electron writes that shortcut itself the first time a toast
+ * fires - pointing at `node_modules/electron/dist/electron.exe`, whose icon is
+ * the atom - and then skips the write because one already exists. Writing it
+ * first is therefore the whole fix: same id, same target, Helm's `.ico`.
+ *
+ * Dev only, Windows only, and never fatal. `Electron.lnk` is removed only when
+ * it points at *this* checkout's electron.exe, because that one is an artefact
+ * of running this app and a second shortcut declaring the same id is what put
+ * the atom on the packaged app's button on 2026-08-10.
+ */
+function claimDevShortcut(): void {
+  if (process.platform !== 'win32' || app.isPackaged) return
+  try {
+    const programs = join(app.getPath('appData'), 'Microsoft/Windows/Start Menu/Programs')
+    const icon = join(__dirname, '../../build', 'icon.ico')
+    if (!existsSync(icon)) return
+
+    const stale = join(programs, 'Electron.lnk')
+    if (existsSync(stale)) {
+      const target = shell.readShortcutLink(stale).target.toLowerCase()
+      if (target === process.execPath.toLowerCase()) rmSync(stale, { force: true })
+    }
+
+    // `create`, not `update`: `update` only edits a shortcut that is already
+    // there and fails on the first run, which is the only run that matters.
+    shell.writeShortcutLink(join(programs, 'Helm (dev).lnk'), 'create', {
+      target: process.execPath,
+      args: `"${app.getAppPath()}"`,
+      appUserModelId: 'dev.coletaylor.helm.dev',
+      description: 'Helm, run from source',
+      icon,
+      iconIndex: 0
+    })
+  } catch {
+    // A shortcut is cosmetic. Nothing here is worth failing a start over.
+  }
+}
+
 app.whenReady().then(() => {
   // The default application menu binds Ctrl-C to the Edit>Copy role, which
   // swallows the interrupt before xterm ever sees the keydown. A terminal host
@@ -572,6 +624,7 @@ app.whenReady().then(() => {
   // uncached path, nor purging the icon cache touched it - the stale
   // `Electron.lnk` had to go. Keeping the ids apart is what stops it returning.
   app.setAppUserModelId(app.isPackaged ? 'dev.coletaylor.helm' : 'dev.coletaylor.helm.dev')
+  claimDevShortcut()
 
   // The artifact scheme's handler. Registered for every mode that opens a
   // window, because the spike pages share this process and a scheme with no

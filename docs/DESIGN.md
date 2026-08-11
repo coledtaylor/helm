@@ -79,6 +79,20 @@ Three elevations, encoded as radius tokens:
 it. The one exception is modals: `rounded-xl border-border-strong
 shadow-panel` over a dimmed backdrop.
 
+**Helm draws its own dialogs, including the ones the main process asks for.**
+A `dialog.showMessageBox` is a Win32 window - system typeface, system ground,
+a blue circled "i" - and nothing in this document can reach it. Where main owns
+the question but the user owns the answer, main pushes the question to the
+renderer and waits (`session:confirm`). The native box stays as the fallback
+for when there is no window to ask, because a Helm that cannot be quit is worse
+than an unbranded dialog. A destructive confirmation focuses **Cancel**, and
+its accepting button carries `border-danger/50 text-danger` with a
+`bg-danger/10` hover - never a solid fill, same rule the accent follows. The
+**Cancel** button takes its focus ring on plain `:focus` rather than the global
+`:focus-visible`: focus is placed there by script when the dialog opens,
+Chromium does not count that as visible focus, and a default action nothing
+marks is a default action nobody can see.
+
 Dividers inside an island fade to transparent at their ends - use the
 `.island-rule` class, not `border-b`.
 
@@ -91,8 +105,11 @@ Dividers inside an island fade to transparent at their ends - use the
 - **Ghost button**: no border, `text-fg-muted hover:bg-hover hover:text-fg`.
 - **Danger button**: outlined `border-danger/45 text-danger`.
 - **Input / filter**: sunken well - `rounded-well border-border bg-surface-sunken`,
-  focus swaps the border to the accent. Focus ring elsewhere is 2px accent at
-  2px offset (global `:focus-visible`).
+  focus swaps the border to the accent. That border *is* the focus indicator, so
+  a field takes **no** offset ring - the two together read as two rings around
+  one input. Set globally in `theme.css`, not per component. Focus ring
+  everywhere else is 2px accent at 2px offset (global `:focus-visible`);
+  checkboxes and radios keep it, having no border to move.
 - **Segmented control**: a sunken well (`rounded-well border-border
   bg-surface-sunken p-0.5`) whose chosen segment lifts to
   `bg-surface-raised ring-1 ring-border-strong` at `rounded-[5px]`.
@@ -111,7 +128,10 @@ Dividers inside an island fade to transparent at their ends - use the
 - **Folder tabs**: the active tab lifts into the pane island below it - same
   fill, hairline border on three sides, `rounded-t-[9px]`, `-mb-px` overlap,
   `z-10`. Inactive tabs are bare text (`fg-muted`). A session tab lifts into
-  the terminal ground instead (see below).
+  the terminal ground instead (see below). A strip with no tabs and no
+  trailing actions is **not drawn**: its 40px belong to tabs, and holding them
+  open on the welcome screen pushes the pane island below the top edge of the
+  sidebar island beside it.
 - **Stat groups**: raised cards, 21px/500 tabular figure over a 10px subtle
   label.
 - **Status bar**: plain 10.5px subtle text directly on the canvas, segments
@@ -122,7 +142,8 @@ Dividers inside an island fade to transparent at their ends - use the
 ## 5b. Shell chrome
 
 - **Title bar**: the native bar is hidden on Windows; Helm draws its own
-  brand strip (accent square + "Helm", the drag region, the theme toggle) and
+  brand strip (the accent mark alone - no wordmark, since it named the app to
+  someone already looking at it - the drag region, the theme toggle) and
   the Window Controls Overlay paints the min/max/close buttons in canvas
   colours (`main/chrome.ts`). The overlay is retinted on every theme change.
 - **Split view**: sessions never share the workspace strip. They dock as a
@@ -133,6 +154,32 @@ Dividers inside an island fade to transparent at their ends - use the
   the project) as a terminal island below it - roughly a third of the pane,
   hidden while the session split is open. It is furniture, not a session: no
   row, no history, no notification.
+- **Narrow panes**: the config console, the content viewer and the session
+  history are all a bounded list beside a detail, and that needs roughly 700px
+  before both are readable. Docked next to the session split none of them get
+  it, so each collapses to **one at a time**: the list until something is
+  picked, then the detail alone with a `‹ Back` row above it (`PaneBack`).
+  Clearing the selection is what puts the list back, so the back row and the
+  pane's own empty state stay the same thing. At full width both show and
+  nothing swaps - a click saved is not worth a layout that moves.
+- **Sidebar**: three global rows (session history, Config, Content), then
+  profiles, then the harness tree. A harness is a collapsible group - caret,
+  name in the caps label style but at `fg`, project count, and a
+  running-session count at the right in `accent-text`. Groups are separated by
+  an `.island-rule`, never a border. The global rows share one shape - icon,
+  name, optional second line - and only session history has a fact worth
+  putting on that second line, so the other two are single-line and the group
+  still reads as one list. **Config and Content are global, not scoped**: each
+  pane owns a scope switcher, so its entry point does not need to carry one.
+  They were per-harness links, which made a pane reachable only through a
+  harness that happened to be expanded and forced a second unscoped copy to
+  stand under an empty tree; a destination that can be hidden by a collapsed
+  group is a destination that can be lost.
+- **Project rows in the tree**: kind icon, name, `GitChip`. The icon stays
+  because harness / repo / plain folder is the one thing a row's name and branch
+  cannot say. Inventory counts do not - what a project contributes to a session
+  is answered in full by the project pane, and three numbers in a 280px rail
+  only hint at it.
 
 ## 6. Foreign-ground islands
 

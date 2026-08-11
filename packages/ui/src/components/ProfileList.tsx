@@ -14,6 +14,11 @@ import {
 
 export interface ProfileListProps {
   profiles: Profile[]
+  /**
+   * Discovered harnesses, only so a row can name the one its root sits inside.
+   * Omitted, the pill is simply absent - the list never blocks on discovery.
+   */
+  harnesses?: readonly { name: string; path: string }[] | undefined
   /** Profiles with a session starting right now. */
   launchingIds?: readonly number[] | undefined
   onLaunch: (profile: Profile) => void
@@ -38,6 +43,7 @@ export interface ProfileListProps {
  */
 export function ProfileList({
   profiles,
+  harnesses = [],
   launchingIds = [],
   onLaunch,
   onCreate,
@@ -90,10 +96,10 @@ export function ProfileList({
         <span className="text-[10px] tabular-nums text-fg-subtle">{profiles.length}</span>
         <span className="flex-1" />
         <IconButton label="Import a profile" onClick={onImport}>
-          <ImportIcon />
+          <ImportIcon width={12} height={12} />
         </IconButton>
         <IconButton label="New profile" onClick={onCreate}>
-          <PlusIcon />
+          <PlusIcon width={12} height={12} />
         </IconButton>
       </header>
 
@@ -188,7 +194,7 @@ export function ProfileList({
                     />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-[12px] text-fg">{profile.name}</span>
-                      <span className="block truncate text-[10px] text-fg-subtle">
+                      <span className="block truncate text-[9.5px] text-fg-subtle">
                         {launching ? 'Starting…' : summarise(profile)}
                       </span>
                     </span>
@@ -198,6 +204,14 @@ export function ProfileList({
                         height={10}
                         className="shrink-0 text-fg-subtle group-hover:opacity-0"
                       />
+                    )}
+                    {/* The harness the root sits in, as a neutral outline pill.
+                        It answers "which workspace does this launch into" -
+                        the question a row of otherwise similar names raises. */}
+                    {harnessOf(profile, harnesses) !== null && (
+                      <span className="shrink-0 truncate rounded-full border border-border-strong px-[7px] py-px text-[8.5px] tracking-[.04em] text-fg-muted group-hover:opacity-0">
+                        {harnessOf(profile, harnesses)}
+                      </span>
                     )}
                   </button>
 
@@ -238,15 +252,38 @@ export function ProfileList({
   )
 }
 
-/** What this profile composes, in the width a sidebar row has. */
+/**
+ * What this profile composes, in the width a sidebar row has.
+ *
+ * Composed and access counts rather than model and effort: the two lists are
+ * what a profile *is*, and they are the two the editor is opened to change.
+ * A profile that composes nothing falls back to naming its root, which is then
+ * the only thing about it worth reading.
+ */
 function summarise(profile: Profile): string {
   const parts: string[] = []
-  if (profile.overlays.length > 0) {
-    parts.push(`${String(profile.overlays.length)} overlay${profile.overlays.length === 1 ? '' : 's'}`)
-  }
-  if (profile.model) parts.push(profile.model)
-  if (profile.effort) parts.push(profile.effort)
+  if (profile.overlays.length > 0) parts.push(`${String(profile.overlays.length)} composed`)
+  if (profile.access.length > 0) parts.push(`${String(profile.access.length)} access`)
   return parts.length > 0 ? parts.join(' · ') : profile.root
+}
+
+/**
+ * The harness a profile's root sits inside, by longest matching path. Longest
+ * rather than first: a harness nested inside another would otherwise be
+ * reported as its parent.
+ */
+function harnessOf(
+  profile: Profile,
+  harnesses: readonly { name: string; path: string }[]
+): string | null {
+  const root = profile.root.toLowerCase().replace(/[\\/]+$/, '')
+  let best: { name: string; path: string } | null = null
+  for (const harness of harnesses) {
+    const path = harness.path.toLowerCase().replace(/[\\/]+$/, '')
+    if (root !== path && !root.startsWith(`${path}\\`) && !root.startsWith(`${path}/`)) continue
+    if (best === null || path.length > best.path.length) best = harness
+  }
+  return best?.name ?? null
 }
 
 function IconButton({
@@ -269,7 +306,7 @@ function IconButton({
       title={label}
       aria-label={label}
       className={cn(
-        'grid size-6 place-items-center rounded transition-colors',
+        'grid size-5 shrink-0 place-items-center rounded-[5px] transition-colors',
         active ? 'text-accent' : 'text-fg-subtle',
         danger ? 'hover:bg-danger/15 hover:text-danger' : 'hover:bg-hover hover:text-fg'
       )}

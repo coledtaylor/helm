@@ -301,6 +301,25 @@ export interface McpApproveRequest {
   approved: boolean
 }
 
+/**
+ * A live session is about to be ended, and the user has to agree first.
+ *
+ * Main asks and the *renderer* answers, so the question is a Helm island
+ * rather than a Win32 message box - see `IpcEvents['session:confirm']` for why
+ * the direction is what it is.
+ */
+export interface SessionConfirmRequest {
+  /** Correlates the answer with the question; see `session:confirmed`. */
+  id: number
+  kind: 'close-session' | 'quit'
+  message: string
+  detail: string
+  /** What the agreeing button says. Plural when quitting ends several. */
+  confirmLabel: string
+  /** Names of the sessions this ends, for the dialog to list. */
+  sessionNames: string[]
+}
+
 // ---------------------------------------------------------------------------
 // Renderer -> main, with a response
 // ---------------------------------------------------------------------------
@@ -563,6 +582,13 @@ export interface IpcSends {
    */
   'session:focus': { id: number | null }
 
+  /**
+   * The answer to a `session:confirm`. One-way rather than a request, because
+   * the question travelled the other way: main is the side waiting, and it
+   * matches the reply to the question by `id`.
+   */
+  'session:confirmed': { id: number; agreed: boolean }
+
   /** Spike harness: the renderer's answer to a `probe:req`. */
   'probe:res': { id: number; value: unknown }
 }
@@ -607,6 +633,21 @@ export interface IpcEvents {
    * the warning is to arrive before that.
    */
   'config:externalChange': ConfigExternalChange
+
+  /**
+   * "This session is still running" - asked by main, answered by the renderer
+   * on `session:confirmed`.
+   *
+   * The question belongs to main: it owns process lifetime, and `before-quit`
+   * is raised there with no renderer involvement. But a `dialog.showMessageBox`
+   * is a Win32 window with no styling surface at all - wrong typeface, wrong
+   * ground, wrong everything - so the *asking* is delegated to the renderer and
+   * main waits for the reply. `nativeConfirm` remains the fallback for when
+   * there is no window to ask, which is the case this indirection has to keep
+   * working: a Helm that cannot be quit because its renderer is wedged is worse
+   * than an ugly dialog.
+   */
+  'session:confirm': SessionConfirmRequest
 
   /**
    * A line an HTML artifact wrote to its console. Pushed from main because the
@@ -754,6 +795,7 @@ export const SEND_CHANNELS = Object.keys({
   'session:focus': true,
   'pterm:input': true,
   'pterm:resize': true,
+  'session:confirmed': true,
   'probe:res': true
 } satisfies Record<SendChannel, true>) as SendChannel[]
 
@@ -774,6 +816,7 @@ export const EVENT_CHANNELS = Object.keys({
   'session:data': true,
   'session:exit': true,
   'session:activate': true,
+  'session:confirm': true,
   'pterm:data': true,
   'pterm:exit': true,
   'probe:req': true

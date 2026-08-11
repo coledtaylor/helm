@@ -193,6 +193,29 @@ describe('search', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it('finds a non-markdown file by name without reading its contents', () => {
+    const root = fixture()
+    try {
+      mkdirSync(join(root, 'notes'), { recursive: true })
+      writeFileSync(join(root, 'notes', 'dashboard.html'), '<style>notes { color: red }</style>')
+
+      const tree = readContentTree(contentScope(root))
+      const corpus = buildCorpus(root, tree.files)
+
+      // Found by what it is called...
+      const byName = searchCorpus(corpus, 'dashboard', true)
+      expect(byName.hits.map((hit) => hit.relPath)).toContain('notes/dashboard.html')
+      expect(byName.hits.find((hit) => hit.relPath.endsWith('.html'))?.nameMatch).toBe(true)
+
+      // ...and never by what is inside it. `notes` appears in that stylesheet
+      // and must not put the file in the results on those grounds.
+      const byBody = searchCorpus(corpus, 'color: red', true)
+      expect(byBody.hits.map((hit) => hit.relPath)).not.toContain('notes/dashboard.html')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('assertContentWritable', () => {

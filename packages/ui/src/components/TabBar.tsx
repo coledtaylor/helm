@@ -63,6 +63,11 @@ const INDICATOR_LABEL: Record<TabIndicator, string> = {
  * alone. Ctrl+Shift+Arrow moves the focused tab, because a tab strip that can
  * only be arranged with a mouse is a tab strip half the ways into this app
  * cannot reach - and it costs one key handler.
+ *
+ * With nothing to hang off it - no tabs and no actions - the strip is not
+ * drawn at all rather than drawn empty. Its 40px are reserved for tabs, and
+ * holding them open on the welcome screen would drop the pane island 40px
+ * below the sidebar island beside it, two edges that should line up.
  */
 export function TabBar({
   tabs,
@@ -71,7 +76,7 @@ export function TabBar({
   onClose,
   onReorder,
   actions
-}: TabBarProps): JSX.Element {
+}: TabBarProps): JSX.Element | null {
   const [dragging, setDragging] = useState<string | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
 
@@ -103,12 +108,21 @@ export function TabBar({
     onReorder?.(tabs[index]!.id, target)
   }
 
+  if (tabs.length === 0 && !actions) return null
+
   return (
     <div className="flex h-10 shrink-0 items-end px-1.5">
       <div
         role="tablist"
         aria-label="Open tabs"
-        className="flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto"
+        // `overflow-x-auto` promotes the other axis from `visible` to `auto`,
+        // so the active tab's 1px overlap into the pane below counted as
+        // scrollable overflow and Chromium painted a vertical scrollbar over
+        // the strip. The overlap is unchanged - the strip reaches 1px into the
+        // pane (`-mb-px`) and spends that pixel as bottom padding (`pb-px`), so
+        // the tab's overshoot lands inside the scroll container instead of past
+        // it. `overflow-y-hidden` keeps it that way if a tab ever grows.
+        className="-mb-px flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto overflow-y-hidden pb-px"
       >
         {tabs.map((tab, index) => {
           const active = tab.id === activeId

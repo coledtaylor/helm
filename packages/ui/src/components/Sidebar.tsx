@@ -3,7 +3,16 @@ import { useMemo, useState } from 'react'
 import type { DiscoveryResult, Harness, Project } from '@helm/core'
 import { cn } from '../lib/cn'
 import { ProjectRow } from './ProjectRow'
-import { BookIcon, HarnessIcon, HistoryIcon, PlusIcon, RefreshIcon, SlidersIcon } from './icons'
+import {
+  BookIcon,
+  CaretIcon,
+  HarnessIcon,
+  HistoryIcon,
+  PlusIcon,
+  RefreshIcon,
+  SlidersIcon,
+  TerminalIcon
+} from './icons'
 
 export interface SidebarProps {
   /**
@@ -20,17 +29,12 @@ export interface SidebarProps {
   historyResumable?: number | undefined
   /** True while the history pane is the tab on screen. */
   historyActive?: boolean | undefined
-  /** Opens the config console. */
+  /** Opens the config console. The pane keeps its own scope. */
   onOpenConfig?: (() => void) | undefined
   configActive?: boolean | undefined
-  /** How many `.claude` trees the console can reach. */
-  configScopes?: number | undefined
-  /** Opens the content viewer. */
+  /** Opens the content viewer. The pane keeps its own scope. */
   onOpenContent?: (() => void) | undefined
   contentActive?: boolean | undefined
-  /** Files the viewer can reach in the scope it is pointed at. */
-  contentFiles?: number | undefined
-  contentScopeLabel?: string | undefined
   discovery: DiscoveryResult | null
   scanning: boolean
   scanError?: string | undefined
@@ -105,11 +109,8 @@ export function Sidebar({
   historyActive = false,
   onOpenConfig,
   configActive = false,
-  configScopes,
   onOpenContent,
   contentActive = false,
-  contentFiles,
-  contentScopeLabel,
   discovery,
   scanning,
   scanError,
@@ -121,6 +122,10 @@ export function Sidebar({
   onCreateHarness
 }: SidebarProps): JSX.Element {
   const [query, setQuery] = useState('')
+  // Only the harnesses someone has deliberately shut are in here. Absent means
+  // open, so a harness discovered after this render starts expanded rather than
+  // hidden behind a key nothing has written yet.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const groups = useMemo(() => groupProjects(discovery), [discovery])
 
   const filtered = useMemo(
@@ -139,144 +144,89 @@ export function Sidebar({
 
   const total = discovery?.projects.length ?? 0
   const shown = filtered.reduce((n, g) => n + g.members.length + (g.root ? 1 : 0), 0)
+  const harnessCount = discovery?.harnesses.length ?? 0
+
+  const toggle = (key: string): void =>
+    setCollapsed((current) => {
+      const next = new Set(current)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
+
+  // A filter that hides its own matches is a filter that looks broken, so
+  // searching opens every group it matched.
+  const isExpanded = (key: string): boolean => query !== '' || !collapsed.has(key)
 
   return (
     <aside className="flex h-full w-[280px] shrink-0 flex-col overflow-hidden rounded-island border border-border bg-surface">
-      {/* Above the profiles, because it is the one row that is about the whole
-          machine rather than about anything configured in Helm - and because
-          "where did I do that thing last week" is how a session starts at
-          least as often as picking a project does. */}
-      {(onOpenHistory || onOpenConfig || onOpenContent) && (
-        <div className="shrink-0 space-y-0.5 p-2 pb-1.5">
-          {onOpenHistory && (
-            <button
-              type="button"
-              data-open-history
-              onClick={onOpenHistory}
-              aria-current={historyActive}
-              title="Every Claude Code session on this machine"
-              className={cn(
-                'flex w-full items-center gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
-                historyActive ? 'bg-accent-soft' : 'hover:bg-hover'
-              )}
-            >
-              <HistoryIcon
-                width={13}
-                height={13}
-                className={cn('shrink-0', historyActive ? 'text-accent' : 'text-fg-subtle')}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12px] text-fg">Session history</span>
-                <span className="block truncate text-[10px] text-fg-subtle">
-                  {historyCount === undefined
-                    ? 'Reading…'
-                    : `${historyCount.toLocaleString()} sessions · ${String(historyResumable ?? 0)} resumable`}
-                </span>
-              </span>
-            </button>
-          )}
-          {onOpenConfig && (
-            <button
-              type="button"
-              data-open-config
-              onClick={onOpenConfig}
-              aria-current={configActive}
-              title="Browse and edit the .claude configuration of any scope"
-              className={cn(
-                'flex w-full items-center gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
-                configActive ? 'bg-accent-soft' : 'hover:bg-hover'
-              )}
-            >
-              <SlidersIcon
-                width={13}
-                height={13}
-                className={cn('shrink-0', configActive ? 'text-accent' : 'text-fg-subtle')}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12px] text-fg">Config</span>
-                <span className="block truncate text-[10px] text-fg-subtle">
-                  {configScopes === undefined || configScopes === 0
-                    ? 'Skills, settings, MCP'
-                    : `${configScopes} scopes · what a session would see`}
-                </span>
-              </span>
-            </button>
-          )}
-          {onOpenContent && (
-            <button
-              type="button"
-              data-open-content
-              onClick={onOpenContent}
-              aria-current={contentActive}
-              title="Read the notes, docs and artifacts in a project or harness"
-              className={cn(
-                'flex w-full items-center gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
-                contentActive ? 'bg-accent-soft' : 'hover:bg-hover'
-              )}
-            >
-              <BookIcon
-                width={13}
-                height={13}
-                className={cn('shrink-0', contentActive ? 'text-accent' : 'text-fg-subtle')}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12px] text-fg">Content</span>
-                <span className="block truncate text-[10px] text-fg-subtle">
-                  {contentFiles === undefined || contentFiles === 0
-                    ? 'Notes, docs, skills, artifacts'
-                    : `${contentFiles} files · ${contentScopeLabel ?? 'this scope'}`}
-                </span>
-              </span>
-            </button>
-          )}
-        </div>
-      )}
+      {/* The rows that are about the whole machine rather than about anything
+          configured in Helm. "Where did I do that thing last week" starts a
+          session at least as often as picking a project does, and Config and
+          Content ask machine-wide questions too - each of those panes carries
+          its own scope switcher, so neither needs a harness to hang off and
+          neither can be hidden by a collapsed group or an empty tree. */}
+      <div className="shrink-0 space-y-0.5 p-2 pb-1.5">
+        {onOpenHistory && (
+          <GlobalLink
+            icon={<HistoryIcon width={13} height={13} />}
+            label="Session history"
+            detail={
+              historyCount === undefined
+                ? 'Reading…'
+                : `${historyCount.toLocaleString()} sessions · ${String(historyResumable ?? 0)} resumable`
+            }
+            title="Every Claude Code session on this machine"
+            active={historyActive}
+            onClick={onOpenHistory}
+            data-open-history
+          />
+        )}
+        {onOpenConfig && (
+          <GlobalLink
+            icon={<SlidersIcon width={13} height={13} />}
+            label="Config"
+            title="Browse and edit any .claude configuration"
+            active={configActive}
+            onClick={onOpenConfig}
+            data-open-config
+          />
+        )}
+        {onOpenContent && (
+          <GlobalLink
+            icon={<BookIcon width={13} height={13} />}
+            label="Content"
+            title="Notes, docs, skills and artifacts"
+            active={contentActive}
+            onClick={onOpenContent}
+            data-open-content
+          />
+        )}
+      </div>
+
       <div aria-hidden className="island-rule mx-3 my-0.5" />
       {profiles}
       <div aria-hidden className="island-rule mx-3 my-0.5" />
-      <header className="flex h-9 shrink-0 items-center gap-2 px-3.5">
+
+      <header className="flex h-9 shrink-0 items-center gap-1.5 px-3.5">
         <span className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
-          Projects
+          Harnesses
         </span>
-        <span className="text-[10px] tabular-nums text-fg-subtle">
-          {query === '' ? total : `${shown}/${total}`}
-        </span>
+        <span className="text-[10px] tabular-nums text-fg-subtle">{harnessCount}</span>
         <span className="flex-1" />
-        <button
-          type="button"
-          onClick={onRescan}
-          disabled={scanning}
-          title="Rescan all roots"
-          aria-label="Rescan all roots"
-          className={cn(
-            'grid size-6 place-items-center rounded text-fg-subtle transition-colors',
-            'hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-50'
-          )}
-        >
-          <RefreshIcon className={cn(scanning && 'animate-spin')} />
-        </button>
+        <span className="mr-0.5 truncate text-[9.5px] tabular-nums text-fg-subtle">
+          {query === '' ? `${String(total)} projects` : `${String(shown)}/${String(total)}`}
+        </span>
+        <IconButton label="Rescan all roots" onClick={onRescan} disabled={scanning}>
+          <RefreshIcon width={12} height={12} className={cn(scanning && 'animate-spin')} />
+        </IconButton>
         {onCreateHarness && (
-          <button
-            type="button"
-            data-create-harness
-            onClick={onCreateHarness}
-            title="Create a new harness"
-            aria-label="Create a new harness"
-            className="grid size-6 place-items-center rounded text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
-          >
-            <HarnessIcon />
-          </button>
+          <IconButton label="Create a new harness" onClick={onCreateHarness} data-create-harness>
+            <HarnessIcon width={12} height={12} />
+          </IconButton>
         )}
-        <button
-          type="button"
-          data-add-root
-          onClick={onAddRoot}
-          title="Add a folder to scan"
-          aria-label="Add a folder to scan"
-          className="grid size-6 place-items-center rounded text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
-        >
-          <PlusIcon />
-        </button>
+        <IconButton label="Add a folder to scan" onClick={onAddRoot} data-add-root>
+          <PlusIcon width={12} height={12} />
+        </IconButton>
       </header>
 
       <div className="shrink-0 px-2 pb-1.5">
@@ -294,7 +244,7 @@ export function Sidebar({
         />
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2">
+      <nav className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
         {scanError !== undefined && (
           <p className="mb-2 rounded-raised border border-danger/30 bg-danger/10 px-2 py-1.5 text-[11px] text-danger">
             {scanError}
@@ -309,42 +259,187 @@ export function Sidebar({
             onAddRoot={onAddRoot}
           />
         ) : (
-          filtered.map((group) => (
-            <section key={group.key} className="mb-3 last:mb-1">
-              {group.harness ? (
-                group.root ? (
-                  <ProjectRow
-                    project={group.root}
-                    selected={group.root.path === selectedPath}
-                    live={livePaths?.has(group.root.path.toLowerCase()) ?? false}
-                    onSelect={onSelect}
-                  />
-                ) : (
-                  <p className="px-2 py-1 text-[10.5px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
-                    {group.harness.name}
-                  </p>
-                )
-              ) : (
-                <p className="px-2 py-1 text-[10.5px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
-                  Folders
-                </p>
-              )}
-
-              {group.members.map((project) => (
-                <ProjectRow
-                  key={project.path}
-                  project={project}
-                  selected={project.path === selectedPath}
-                  live={livePaths?.has(project.path.toLowerCase()) ?? false}
-                  onSelect={onSelect}
-                  indent={group.harness !== null}
-                />
-              ))}
-            </section>
-          ))
+          filtered.map((group, index) => {
+            const live = group.members
+              .concat(group.root ? [group.root] : [])
+              .filter((p) => livePaths?.has(p.path.toLowerCase()) ?? false).length
+            return (
+              <HarnessGroup
+                key={group.key}
+                group={group}
+                first={index === 0}
+                expanded={isExpanded(group.key)}
+                running={live}
+                onToggle={() => toggle(group.key)}
+                selectedPath={selectedPath}
+                onSelect={onSelect}
+                {...(livePaths ? { livePaths } : {})}
+              />
+            )
+          })
         )}
       </nav>
     </aside>
+  )
+}
+
+/**
+ * One harness and the projects inside it.
+ *
+ * The header is a label and a disclosure, not a project: the harness root is
+ * still listed as the first row inside, because it is a directory a session can
+ * start in and losing that would cost a capability to gain a tidier tree.
+ */
+function HarnessGroup({
+  group,
+  first,
+  expanded,
+  running,
+  onToggle,
+  selectedPath,
+  livePaths,
+  onSelect
+}: {
+  group: Group
+  first: boolean
+  expanded: boolean
+  running: number
+  onToggle: () => void
+  selectedPath: string | null
+  livePaths?: ReadonlySet<string> | undefined
+  onSelect: (project: Project) => void
+}): JSX.Element {
+  const name = group.harness?.name ?? 'Folders'
+  const count = group.members.length + (group.root ? 1 : 0)
+
+  return (
+    <section className="mb-1">
+      {!first && <div aria-hidden className="island-rule mx-1.5 mt-2 mb-2.5" />}
+
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        aria-label={`${name}, ${String(count)} project${count === 1 ? '' : 's'}`}
+        className="flex w-full items-center gap-1.5 rounded-well px-2 py-1.5 text-left transition-colors hover:bg-hover"
+      >
+        <CaretIcon
+          width={9}
+          height={9}
+          className={cn('shrink-0 text-fg-subtle transition-transform', expanded && 'rotate-90')}
+        />
+        <span className="min-w-0 truncate text-[10.5px] leading-[13px] font-semibold tracking-[.07em] text-fg uppercase">
+          {name}
+        </span>
+        <span className="text-[9.5px] leading-[13px] tabular-nums text-fg-subtle">{count}</span>
+        <span className="flex-1" />
+        {running > 0 && (
+          <span
+            title={`${String(running)} session${running === 1 ? '' : 's'} running here`}
+            className="flex shrink-0 items-center gap-1 text-[9.5px] tabular-nums text-accent-text"
+          >
+            <TerminalIcon width={9} height={9} />
+            {running}
+          </span>
+        )}
+      </button>
+
+      {expanded && (
+        <div className="pl-1.5">
+          {group.root && (
+            <ProjectRow
+              project={group.root}
+              selected={group.root.path === selectedPath}
+              live={livePaths?.has(group.root.path.toLowerCase()) ?? false}
+              onSelect={onSelect}
+            />
+          )}
+          {group.members.map((project) => (
+            <ProjectRow
+              key={project.path}
+              project={project}
+              selected={project.path === selectedPath}
+              live={livePaths?.has(project.path.toLowerCase()) ?? false}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+/**
+ * One of the rows above the tree, each a way into a pane about the whole
+ * machine. They share a shape so the group reads as one list; `detail` is the
+ * second line, which only Session history has a fact worth filling with.
+ */
+function GlobalLink({
+  icon,
+  label,
+  detail,
+  title,
+  active,
+  onClick,
+  ...rest
+}: {
+  icon: JSX.Element
+  label: string
+  detail?: string | undefined
+  title: string
+  active: boolean
+  onClick: () => void
+} & Record<`data-${string}`, unknown>): JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active}
+      title={title}
+      className={cn(
+        'flex w-full items-center gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
+        active ? 'bg-accent-soft' : 'hover:bg-hover'
+      )}
+      {...rest}
+    >
+      <span className={cn('shrink-0', active ? 'text-accent' : 'text-fg-subtle')}>{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[12.5px] text-fg">{label}</span>
+        {detail !== undefined && (
+          <span className="block truncate text-[10px] text-fg-subtle">{detail}</span>
+        )}
+      </span>
+    </button>
+  )
+}
+
+function IconButton({
+  label,
+  onClick,
+  disabled = false,
+  children,
+  ...rest
+}: {
+  label: string
+  onClick: () => void
+  disabled?: boolean | undefined
+  children: JSX.Element
+} & Record<`data-${string}`, unknown>): JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      className={cn(
+        'grid size-5 shrink-0 place-items-center rounded-[5px] text-fg-subtle transition-colors',
+        'hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-50'
+      )}
+      {...rest}
+    >
+      {children}
+    </button>
   )
 }
 

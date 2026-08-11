@@ -426,3 +426,69 @@ export function ListIcon(props: IconProps): JSX.Element {
     </Icon>
   )
 }
+
+/**
+ * The brand mark: the ship's wheel the app icon is drawn from.
+ *
+ * Same proportions as `scripts/make-icon.mjs`, converted from its 256 grid to
+ * this 16 one (rim 62, spokes 101, knobs 13, hub 21, all x 16/256) - so the
+ * mark in the window and the icon on the taskbar are the same drawing, not two
+ * that resemble each other.
+ *
+ * Vector rather than the .ico the window itself is given: this renders at
+ * whatever the display's pixel ratio is, and a 16px bitmap on a 150% monitor is
+ * the one place that artwork visibly softens.
+ *
+ * Filled, not stroked, because it inherits `currentColor` and sits at 13-15px:
+ * a 0.8-wide stroke at that size lands under one device pixel on a 1x display
+ * and drops out.
+ */
+export function HelmMarkIcon(props: IconProps): JSX.Element {
+  const spokes = Array.from({ length: 8 }, (_, i) => {
+    const a = (i * 2 * Math.PI) / 8
+    return { x: 8 + 6.31 * Math.cos(a), y: 8 + 6.31 * Math.sin(a) }
+  })
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      aria-hidden="true"
+      focusable="false"
+      {...props}
+    >
+      {/* Spokes first, so the rim and hub paint over their inner ends. */}
+      {spokes.map((p, i) => (
+        <line
+          key={i}
+          x1="8"
+          y1="8"
+          x2={p.x.toFixed(2)}
+          y2={p.y.toFixed(2)}
+          strokeWidth="0.85"
+          strokeLinecap="round"
+        />
+      ))}
+      {spokes.map((p, i) => (
+        <circle key={`k${String(i)}`} cx={p.x.toFixed(2)} cy={p.y.toFixed(2)} r="0.95" fill="currentColor" stroke="none" />
+      ))}
+      <circle cx="8" cy="8" r="3.88" strokeWidth="1" />
+      <circle cx="8" cy="8" r="1.31" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+/**
+ * The disclosure caret on a collapsible section. Points right; the caller
+ * rotates it 90deg when the section is open, so the two states are one glyph
+ * turning rather than two glyphs swapping.
+ */
+export function CaretIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon strokeWidth="2" {...props}>
+      <path d="M6.25 3.5 10.75 8l-4.5 4.5" />
+    </Icon>
+  )
+}

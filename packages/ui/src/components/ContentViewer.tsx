@@ -1,5 +1,5 @@
 import type { JSX, KeyboardEvent, ReactNode } from 'react'
-import { Fragment, useMemo } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import type {
   ContentFile,
   ContentRootKind,
@@ -10,9 +10,11 @@ import type {
 } from '@helm/core'
 import { cn } from '../lib/cn'
 import { formatAge, formatBytes } from '../lib/time'
+import { PaneBack } from './PaneBack'
 import {
   ArtifactIcon,
   BookIcon,
+  CaretIcon,
   DocIcon,
   FolderIcon,
   RefreshIcon,
@@ -41,6 +43,15 @@ export interface ContentViewerProps {
 
   onRefresh: () => void
   refreshing: boolean
+
+  /**
+   * Docked beside a session split, where the list and the document cannot both
+   * be readable. The pane then shows one at a time: the list until a file is
+   * picked, then the document with a way back.
+   */
+  compact?: boolean | undefined
+  /** Clears the selection, which is what puts the list back. */
+  onBack?: (() => void) | undefined
 
   /** The document, the artifact frame, or the editor. */
   children: ReactNode
@@ -85,10 +96,16 @@ export function ContentViewer({
   dirty = false,
   onRefresh,
   refreshing,
+  compact = false,
+  onBack,
   children
 }: ContentViewerProps): JSX.Element {
   const scope = scopes.find((s) => s.path.toLowerCase() === scopePath.toLowerCase()) ?? null
   const searchingNow = query.trim() !== ''
+  // One at a time, and only when narrow: at full width both fit and swapping
+  // them would cost a click for nothing.
+  const showList = !compact || selected === null
+  const showDetail = !compact || selected !== null
 
   const groups = useMemo(() => {
     if (!tree) return []
@@ -108,6 +125,18 @@ export function ContentViewer({
   }, [tree])
 
   const total = tree?.files.length ?? 0
+
+  // Only the roots someone has deliberately shut, so one discovered later starts
+  // expanded. No "searching opens everything" rule is needed here the way there
+  // is in the config console: a search replaces this list with its hits rather
+  // than filtering it in place, so a collapsed root cannot hide a match.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+  const toggleSection = (key: string): void =>
+    setCollapsed((current) => {
+      const next = new Set(current)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
 
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     const step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0
@@ -190,10 +219,11 @@ export function ContentViewer({
       </header>
 
       <div className="flex min-h-0 flex-1 gap-2">
+        {showList && (
         <div
           className={cn(
-            'flex w-[32%] max-w-[440px] min-w-[290px] shrink-0 flex-col',
-            'overflow-hidden rounded-island border border-border bg-surface'
+            'flex flex-col overflow-hidden rounded-island border border-border bg-surface',
+            compact ? 'min-w-0 flex-1' : 'w-[32%] max-w-[440px] min-w-[290px] shrink-0'
           )}
         >
           <div className="shrink-0 p-2">
@@ -282,37 +312,55 @@ export function ContentViewer({
             ) : (
               groups.map(({ root, files }) => {
                 const Icon = ROOT_ICON[root.kind]
+                const expanded = !collapsed.has(root.relPath)
                 return (
                   <Fragment key={root.relPath}>
-                    <p
+                    <button
+                      type="button"
+                      onClick={() => toggleSection(root.relPath)}
+                      aria-expanded={expanded}
+                      data-content-section={root.relPath}
                       className={cn(
-                        'sticky top-0 z-10 mt-3 flex items-center gap-2 bg-surface px-2 py-1',
-                        'text-[11px] font-medium tracking-wide text-fg-subtle uppercase first:mt-0'
+                        'sticky top-0 z-10 mt-3 flex w-full items-center gap-2 bg-surface px-2 py-1',
+                        'text-left text-[11px] font-medium tracking-wide text-fg-subtle uppercase',
+                        'transition-colors first:mt-0 hover:text-fg'
                       )}
                     >
+                      <CaretIcon
+                        width={8}
+                        height={8}
+                        className={cn('shrink-0 transition-transform', expanded && 'rotate-90')}
+                      />
                       <Icon width={11} height={11} className="shrink-0" />
                       <span className="min-w-0 truncate">{root.label}</span>
                       <span className="tabular-nums">{files.length}</span>
-                    </p>
-                    {files.map((file) => (
-                      <Row
-                        key={file.path}
-                        file={file}
-                        selected={selected?.path === file.path}
-                        dirty={dirty && selected?.path === file.path}
-                        onSelect={onSelect}
-                      />
-                    ))}
+                    </button>
+                    {expanded &&
+                      files.map((file) => (
+                        <Row
+                          key={file.path}
+                          file={file}
+                          selected={selected?.path === file.path}
+                          dirty={dirty && selected?.path === file.path}
+                          onSelect={onSelect}
+                        />
+                      ))}
                   </Fragment>
                 )
               })
             )}
           </div>
         </div>
+        )}
 
-        <div className="min-w-0 flex-1 overflow-hidden rounded-island border border-border bg-surface">
-          {children}
-        </div>
+        {showDetail && (
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-island border border-border bg-surface">
+            {compact && selected !== null && onBack && (
+              <PaneBack label="All files" onBack={onBack} />
+            )}
+            <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+          </div>
+        )}
       </div>
     </div>
   )

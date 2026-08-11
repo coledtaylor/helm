@@ -3,6 +3,7 @@ import { Fragment, useMemo } from 'react'
 import type { HistoryPage, HistoryPrompt, HistorySession, HistorySummary } from '@helm/core'
 import { cn } from '../lib/cn'
 import { formatAge, formatBytes, formatMoment } from '../lib/time'
+import { PaneBack } from './PaneBack'
 import { CloseIcon, HistoryIcon, RefreshIcon, ResumeIcon, SearchIcon } from './icons'
 
 export type HistoryGrouping = 'recent' | 'project'
@@ -37,6 +38,13 @@ export interface SessionHistoryProps {
   onDismissResumeError: () => void
 
   onReveal: (path: string) => void
+
+  /**
+   * Docked beside a session split, where the list and the detail cannot both be
+   * readable. The pane then shows one at a time: the list until a session is
+   * picked, then the detail with a way back.
+   */
+  compact?: boolean | undefined
 }
 
 /**
@@ -99,9 +107,14 @@ export function SessionHistory({
   resuming,
   resumeError = null,
   onDismissResumeError,
-  onReveal
+  onReveal,
+  compact = false
 }: SessionHistoryProps): JSX.Element {
   const sessions = useMemo(() => page?.sessions ?? [], [page])
+  // One at a time, and only when narrow: at full width both fit and swapping
+  // them would cost a click for nothing.
+  const showList = !compact || selected === null
+  const showDetail = !compact || selected !== null
 
   /** Sessions in strip order, with a header before each project's first row. */
   const groups = useMemo(() => {
@@ -182,10 +195,11 @@ export function SessionHistory({
             leaving the detail pane two thirds empty. Bounded at both ends so a
             narrow window still leaves room for the detail and a wide one does
             not stretch a list of one-line rows across half a monitor. */}
+        {showList && (
         <div
           className={cn(
-            'flex w-[38%] max-w-[560px] min-w-[340px] shrink-0 flex-col',
-            'overflow-hidden rounded-island border border-border bg-surface'
+            'flex flex-col overflow-hidden rounded-island border border-border bg-surface',
+            compact ? 'min-w-0 flex-1' : 'w-[38%] max-w-[560px] min-w-[340px] shrink-0'
           )}
         >
           <div className="shrink-0 space-y-2 p-2">
@@ -199,9 +213,9 @@ export function SessionHistory({
                 data-history-search
                 value={search}
                 onChange={(event) => onSearchChange(event.target.value)}
-                placeholder="Search every prompt"
+                placeholder="Search prompts and projects"
                 spellCheck={false}
-                aria-label="Search every prompt"
+                aria-label="Search prompts and projects"
                 className={cn(
                   'h-7 w-full rounded-well border border-border bg-surface-sunken pr-7 pl-7',
                   'text-[12px] text-fg select-text placeholder:text-fg-subtle',
@@ -344,11 +358,17 @@ export function SessionHistory({
             )}
           </div>
         </div>
+        )}
 
         {/* ------------------------------------------------------------- */}
         {/* The detail                                                     */}
         {/* ------------------------------------------------------------- */}
-        <div className="min-w-0 flex-1 overflow-y-auto rounded-island border border-border bg-surface">
+        {showDetail && (
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-island border border-border bg-surface">
+          {compact && selected !== null && (
+            <PaneBack label="All sessions" onBack={() => onSelect(null)} />
+          )}
+          <div className="min-h-0 flex-1 overflow-y-auto">
           {selected === null ? (
             <NothingSelected summary={summary} />
           ) : (
@@ -366,7 +386,9 @@ export function SessionHistory({
               totalResumable={summary?.resumable ?? 0}
             />
           )}
+          </div>
         </div>
+        )}
       </div>
     </div>
   )

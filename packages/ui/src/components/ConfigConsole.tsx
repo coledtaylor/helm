@@ -8,8 +8,10 @@ import type {
 } from '@helm/core'
 import { cn } from '../lib/cn'
 import { formatAge, formatBytes } from '../lib/time'
+import { PaneBack } from './PaneBack'
 import {
   AgentIcon,
+  CaretIcon,
   CommandIcon,
   DocIcon,
   FolderIcon,
@@ -39,6 +41,15 @@ export interface ConfigConsoleProps {
   dirty?: boolean | undefined
   onRefresh: () => void
   refreshing: boolean
+
+  /**
+   * Docked beside a session split, where the list and the editor cannot both be
+   * readable. The pane then shows one at a time: the list until a file is
+   * picked, then the editor with a way back.
+   */
+  compact?: boolean | undefined
+  /** Clears the selection, which is what puts the list back. */
+  onBack?: (() => void) | undefined
 
   /** The editor, the effective view, the MCP panel or the health panel. */
   children: ReactNode
@@ -106,9 +117,15 @@ export function ConfigConsole({
   dirty = false,
   onRefresh,
   refreshing,
+  compact = false,
+  onBack,
   children
 }: ConfigConsoleProps): JSX.Element {
   const [filter, setFilter] = useState('')
+  // One at a time, and only when narrow: at full width both fit and swapping
+  // them would cost a click for nothing.
+  const showList = !compact || selected === null
+  const showDetail = !compact || selected !== null
 
   const scope = scopes.find((s) => s.path.toLowerCase() === scopePath.toLowerCase()) ?? null
 
@@ -135,6 +152,20 @@ export function ConfigConsole({
 
   const shown = groups.reduce((n, [, files]) => n + files.length, 0)
   const total = tree?.files.length ?? 0
+
+  // Only the sections someone has deliberately shut are in here, so a kind that
+  // appears in a scope opened later starts expanded rather than hidden behind a
+  // key nothing has written. Same rule the sidebar's harness groups follow.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+  const toggleSection = (key: string): void =>
+    setCollapsed((current) => {
+      const next = new Set(current)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
+  // A filter that hides its own matches is a filter that looks broken, so
+  // filtering opens every section it matched.
+  const isExpanded = (key: string): boolean => filter.trim() !== '' || !collapsed.has(key)
 
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     const step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0
@@ -249,10 +280,11 @@ export function ConfigConsole({
               rows carry a skill's description, which is what makes one worth
               opening, and a fixed width either truncates it or wastes half a
               wide monitor on a list of short names. */}
+          {showList && (
           <div
             className={cn(
-              'flex w-[34%] max-w-[480px] min-w-[300px] shrink-0 flex-col',
-              'overflow-hidden rounded-island border border-border bg-surface'
+              'flex flex-col overflow-hidden rounded-island border border-border bg-surface',
+              compact ? 'min-w-0 flex-1' : 'w-[34%] max-w-[480px] min-w-[300px] shrink-0'
             )}
           >
             <div className="shrink-0 p-2">
@@ -304,35 +336,55 @@ export function ConfigConsole({
               ) : groups.length === 0 ? (
                 <Empty scope={scope} filtering={filter !== '' && total > 0} />
               ) : (
-                groups.map(([label, files]) => (
-                  <Fragment key={label}>
-                    <p
-                      className={cn(
-                        'sticky top-0 z-10 mt-3 flex items-baseline gap-2 bg-surface px-2 py-1',
-                        'text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase first:mt-0'
-                      )}
-                    >
-                      <span className="min-w-0 truncate">{label}</span>
-                      <span className="tabular-nums">{files.length}</span>
-                    </p>
-                    {files.map((file) => (
-                      <Row
-                        key={file.path}
-                        file={file}
-                        selected={selected?.path === file.path}
-                        dirty={dirty && selected?.path === file.path}
-                        onSelect={onSelect}
-                      />
-                    ))}
-                  </Fragment>
-                ))
+                groups.map(([label, files]) => {
+                  const expanded = isExpanded(label)
+                  return (
+                    <Fragment key={label}>
+                      <button
+                        type="button"
+                        onClick={() => toggleSection(label)}
+                        aria-expanded={expanded}
+                        data-config-section={label}
+                        className={cn(
+                          'sticky top-0 z-10 mt-3 flex w-full items-center gap-1.5 bg-surface px-2 py-1',
+                          'text-left text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase',
+                          'transition-colors first:mt-0 hover:text-fg'
+                        )}
+                      >
+                        <CaretIcon
+                          width={8}
+                          height={8}
+                          className={cn('shrink-0 transition-transform', expanded && 'rotate-90')}
+                        />
+                        <span className="min-w-0 truncate">{label}</span>
+                        <span className="tabular-nums">{files.length}</span>
+                      </button>
+                      {expanded &&
+                        files.map((file) => (
+                          <Row
+                            key={file.path}
+                            file={file}
+                            selected={selected?.path === file.path}
+                            dirty={dirty && selected?.path === file.path}
+                            onSelect={onSelect}
+                          />
+                        ))}
+                    </Fragment>
+                  )
+                })
               )}
             </div>
           </div>
+          )}
 
-          <div className="min-w-0 flex-1 overflow-hidden rounded-island border border-border bg-surface">
-            {children}
-          </div>
+          {showDetail && (
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-island border border-border bg-surface">
+              {compact && selected !== null && onBack && (
+                <PaneBack label="All files" onBack={onBack} />
+              )}
+              <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+            </div>
+          )}
         </div>
       )}
     </div>

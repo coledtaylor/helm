@@ -450,7 +450,10 @@ export function registerIpc(ctx: IpcContext): void {
     // without stealing the event.
     'term:created': () => undefined,
     'term:resized': () => undefined,
-    'probe:res': () => undefined
+    'probe:res': () => undefined,
+    // Same shape: the real listener is the one `sessions.ts` registers at
+    // module scope, which is the side holding the promise this answers.
+    'session:confirmed': () => undefined
   }
 
   // The maps above are where the types are checked. Registration itself is

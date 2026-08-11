@@ -187,6 +187,20 @@ body {
   border-radius: 3px;
 }
 
+/* A field already states its focus with the accent border (DESIGN.md §4), so
+ * the offset ring on top of it reads as two rings around one input. The border
+ * is set here rather than left to each component, so a field that forgets the
+ * utility still says it has focus instead of saying nothing.
+ *
+ * Checkboxes and radios keep the ring: they have no border to move, and the
+ * fill they do have is the checked state, not the focused one. */
+input:not([type='checkbox']):not([type='radio']):focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--helm-accent);
+}
+
 /* The brand strip doubles as the window's drag region: the native title bar
  * is hidden (Window Controls Overlay) and this is what replaces it.
  * Interactive children opt back out. */

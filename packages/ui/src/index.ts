@@ -26,6 +26,10 @@ export { HealthPanel, type HealthPanelProps } from './components/HealthPanel'
 export { McpPanel, type McpPanelProps } from './components/McpPanel'
 export { NewHarnessDialog, type NewHarnessDialogProps } from './components/NewHarnessDialog'
 export {
+  ConfirmSessionDialog,
+  type ConfirmSessionDialogProps
+} from './components/ConfirmSessionDialog'
+export {
   SetupPane,
   type SetupClaudeStatus,
   type SetupPaneProps

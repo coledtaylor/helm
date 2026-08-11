@@ -12,18 +12,25 @@ shadows outside modals, no text weight past 500, mono for machine data. If a
 change cannot be expressed in the system's tokens and rules, amend DESIGN.md
 deliberately or reconsider the change.
 
+Look at the app, not at the class names. `pnpm design-shot` opens the real
+window, walks every main view in both themes and writes PNGs to
+`%APPDATA%\Helm\screenshots\design`. A UI change is not done until you have
+looked at one, and measuring a suspect edge in the PNG beats eyeballing it.
+
 ## Work tracking
 
 Work is tracked in ClickUp: list **"Helm - Claude Code Shell"** (id `901114291892`)
 [docs/TASKS.md](docs/TASKS.md) maps task IDs to scope.
 
-- Pick tasks in priority order. **Spike A gates everything** - if it has no
-  recorded verdict yet, it is the only valid task to start.
+- Pick tasks in priority order. The three spikes and M1-M6 are closed with
+  recorded verdicts; M7 is built with one criterion that needs a second machine,
+  and the transcript archive is deferred to v1.1. TASKS.md has the verdicts -
+  read it there rather than assuming from this list.
 - Each task has checkbox acceptance criteria. A task is done when every box is
   checked, not before. Update the ClickUp task with findings and check the boxes
   as you go.
-- Spike findings also get a reference note in the harness (`../../notes/`) per
-  harness convention.
+- Findings worth keeping also get a reference note in the harness
+  (`../../notes/`) per harness convention.
 
 ## Layout
 
@@ -64,61 +71,31 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   and `ptyEnv` in `packages/desktop/src/main/pty.ts` is load-bearing for TUI
   fidelity, and every line of it is there because Spike C measured the failure
   it prevents. Do not "simplify" it without reading
-  [docs/SPIKE-C.md](docs/SPIKE-C.md); `pnpm fidelity` and `pnpm claude-check`
-  are the regression tests. They render `spike.html`, a separate page from the
-  app, so app layout changes cannot move the terminal under them.
-- `pnpm m2-check` is the same idea for the app itself: it drives the real
-  window - clicking sidebar rows, the launch button, tabs and their close
-  buttons - and asserts on processes, grids and database rows. Run it after
-  touching session lifecycle, the tab strip, or shutdown.
-- `pnpm m3-check` does it for composition: it builds a profile through the real
-  form, launches it, and asks the live session whether the overlays' skills and
-  instructions actually arrived. Run it after touching `core/launch/`, the
-  profile UI, or the argv builder. It spawns real `claude` sessions on haiku and
-  takes minutes. It runs in three phases - the driver, a second real app start
-  (`--shim-sweep`), then `scripts/verify-shims.mjs` - because "stale shims are
-  cleaned at startup" cannot be asserted by the process that already started.
-- `pnpm m4-check` covers the session index. It drives the history pane through
-  the real window and checks every count against its own independent read of
-  `~/.claude/history.jsonl` - a parser agreeing with itself proves nothing. It
-  spawns two real `claude` sessions (one resumed through the app, one on its own
-  pty to prove the watcher notices a session Helm did not start), so it takes
-  minutes; `--only=list,search,resume,reaped,outside` narrows a re-run.
-- `pnpm m5-check` covers the config console. Same discipline: the tree is
-  checked against its own `readdirSync` walk, restores against its own
-  `sha256`, and predicted overlay namespaces against a hand-built
-  `basename(overlay):skill` list. The effective view is then checked against a
-  **live session** - three predicted skills invoked, and the settings winner
-  read back out of `env` - because a prediction about a session is only worth
-  what a session says about it. Spawns one `claude` on haiku;
-  `--only=browse,edit,snapshot,json,external,mcp,effective,doctor` narrows it.
-- `pnpm usage-check` covers the status bar's usage figures. Same discipline: a
-  plain `JSON.parse` beside `parseUsage`, a hand-written "which of these may be
-  shown" beside `usageView`, a hand-computed weekday beside `formatResetsIn`, a
-  hand-written parse of all 163 transcripts beside the incremental index, and a
-  regex over the rendered text beside the component. Three of the criteria could
-  not be settled by agreement and are not: a live `claude` is asked for `/usage`
-  and its own panel compared to the bar, a fixture's window is set to expire ten
-  seconds out so a rollover happens *underneath* the segment, and the full parse
-  the index avoids is measured rather than quoted. Two phases, because "the mode
-  survives a restart" cannot be asserted by the process that set it. Spawns one
-  `claude` session and runs no inference;
-  `--only=read,watch,resets,degrade,setting,width,cost,dollars,live` narrows it.
-- `pnpm m7-check` covers first run and the built artefacts, in three phases.
-  Two of its shapes are worth knowing before touching it. **First run is a
-  second process**: "a fresh `~/.claude` and no harness at all" is not a state
-  the developer's profile can enter, so `run-m7.mjs` starts the app again with
-  `PORTABLE_EXECUTABLE_DIR` pointed at a temporary directory - the app's own
-  portable-mode mechanism, not a test hook - and `--claude-home=` pointed away
-  from the real one. Nothing of the user's is backed up because nothing of the
-  user's is opened. And **the grep audit is made to fail first**: a file
-  carrying a Windows profile path, a harness path and a private project name is
-  planted, caught, and deleted before its clean result is believed, because a
-  grep that finds nothing is indistinguishable from a grep looking for nothing.
-  The packaging phase installs the NSIS package for real and uninstalls it;
-  `--only=audit|cli|firstrun|harness|scan|version|package` narrows a re-run, and
-  `--sandbox=` puts the throwaway profile somewhere with no account name in the
-  path, which is how the README's screenshots were taken.
+  [docs/SPIKE-C.md](docs/SPIKE-C.md). Its two checks render `spike.html`, a
+  separate page from the app, so app layout changes cannot move the terminal
+  under them.
+- The checks below are the same idea for the app itself: they drive the **real
+  window** and most of them spawn real `claude` sessions. They are the only
+  coverage `packages/ui` and `packages/desktop` have - all 270 unit tests live
+  in `packages/core` - so a change to a surface named here is not done until its
+  check is green. They sit outside `pnpm check` deliberately: that stays fast
+  and hermetic, these take minutes and cost tokens. The `mN` names are the
+  ClickUp milestones whose acceptance criteria they encode, which is what
+  TASKS.md maps. What each one actually does - its phases, why it is shaped the
+  way it is, and its `--only` groups - is in the **`checks` skill**; the
+  authority for the groups is the driver's own `GROUPS`, never prose.
+
+  | check | covers | run after touching |
+  |---|---|---|
+  | `pnpm m2-check` | sessions, tabs, teardown | session lifecycle, the tab strip, shutdown |
+  | `pnpm m3-check` | profiles, overlay shims, argv | `core/launch/`, the profile UI, the argv builder |
+  | `pnpm m4-check` | session index, resume | history parsing, the history pane, resume |
+  | `pnpm m5-check` | config console, effective view, MCP | `core/config/`, anything that writes into a `.claude` tree |
+  | `pnpm m6-check` | markdown, artifacts, wikilinks, editor | `core/content/`, the content viewer |
+  | `pnpm m7-check` | first run, packaging, personal-path audit | setup, portable mode, the installer |
+  | `pnpm usage-check` | the status bar's usage figures | `core/usage/`, the status bar |
+  | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
+
 - `dist:win` goes through `scripts/dist-win.mjs`, not straight to
   electron-builder. electron-builder resolves the package manager with `which`,
   which prefers `pnpm.EXE` over `pnpm.CMD` on Windows, and a stale standalone
@@ -214,9 +191,11 @@ This section describes **this development machine**, not the product. Everything
 named here is a fixture; nothing in `packages/` may assume any of it, and
 `pnpm m7-check --only=audit` fails the build if it starts to.
 
-- `claude` CLI is at `~/.local/bin/claude` (2.1.225). The tested range is
-  declared in `CLAUDE_TESTED_RANGE` (`src/main/setup.ts`) and asserted at
-  startup: warn, don't block.
+- `claude` CLI is at `~/.local/bin/claude`. The tested range is declared in
+  `CLAUDE_TESTED_RANGE` (`src/main/setup.ts`) and asserted at startup: warn,
+  don't block. Ask the binary what version it is rather than trusting a number
+  written down here; the "measured on 2.1.225" notes above date the evidence
+  and are not claims about what is installed now.
 - This repo lives inside a harness (`~/.harness/dev/repos/helm`). The harness
   root and its sibling repositories are the primary test fixtures for overlay
   composition - they have real `.claude/skills` to compose. Those repositories

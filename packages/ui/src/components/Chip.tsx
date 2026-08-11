@@ -18,6 +18,11 @@ export interface ChipProps {
   title?: string | undefined
   /** Let the label ellipsise instead of pushing the row wider. */
   truncate?: boolean | undefined
+  /**
+   * The sidebar's line box: 10.5px on a 13px lead. The 15px default is sized
+   * for 11px text, and a two-line list row pays for those 2px on every row.
+   */
+  dense?: boolean | undefined
   className?: string | undefined
 }
 
@@ -37,13 +42,15 @@ export function Chip({
   tone = 'neutral',
   title,
   truncate = false,
+  dense = false,
   className
 }: ChipProps): JSX.Element {
   return (
     <span
       title={title}
       className={cn(
-        'inline-flex items-center gap-1 text-[11px] leading-[15px] tabular-nums',
+        'inline-flex items-center gap-1 tabular-nums',
+        dense ? 'text-[10.5px] leading-[13px]' : 'text-[11px] leading-[15px]',
         truncate ? 'min-w-0' : 'shrink-0 whitespace-nowrap',
         TONE[tone],
         className
