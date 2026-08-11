@@ -76,6 +76,11 @@ export function PullRequestTab({
   const review = useCallback(() => {
     setReviewing(true)
     setReviewError(null)
+    // The note is about the last launch from this tab, so a new attempt clears
+    // it: "Started PR #42 review" sitting above the reason a second attempt was
+    // refused reads as though the refusal happened to the session that is
+    // running perfectly well in the strip.
+    setReviewed(null)
     void onReview(repoPath, number)
       .then((launched) => {
         setReviewed({

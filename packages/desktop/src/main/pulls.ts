@@ -76,6 +76,16 @@ const REMOTE_CONCURRENCY = 8
 const FETCH_CONCURRENCY = 4
 
 /**
+ * How long `gh pr checkout` is given.
+ *
+ * Four times the budget a fetch gets, because this one is not an API call: it
+ * pulls the pull request's head into the repository, and on a large history
+ * over a slow link that is a real transfer. Still bounded - a checkout that has
+ * hung is a button that never comes back.
+ */
+const CHECKOUT_TIMEOUT_MS = 120_000
+
+/**
  * How long a mapped remote is believed.
  *
  * Remotes are changed by hand, once in a while, and re-reading every one of
@@ -529,16 +539,6 @@ export function createPullsService({
   // ---------------------------------------------------------------------
   // Reviewing one
   // ---------------------------------------------------------------------
-
-  /**
-   * How long `gh pr checkout` is given.
-   *
-   * Four times the ordinary budget, because this one is not an API call: it
-   * fetches the pull request's head into the repository, and on a large history
-   * over a slow link that is a real transfer. Still bounded - a checkout that
-   * has hung is a button that never comes back.
-   */
-  const CHECKOUT_TIMEOUT_MS = 120_000
 
   /**
    * The prompt, the working directory, and the checkout if one was asked for.
