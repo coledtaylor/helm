@@ -51,7 +51,8 @@ const GROUPS = [
   'appearance',
   'accessors',
   'validation',
-  'terminal'
+  'terminal',
+  'github'
 ] as const
 type Group = (typeof GROUPS)[number]
 
@@ -499,6 +500,13 @@ interface Fixtures {
   bProjects: string[]
   /** A program that answers `--version` with 9.9.9 and nothing else. */
   stubCli: string
+  /**
+   * A `gh` that is installed and not signed in: it answers `--version` and
+   * fails `auth status` the way the real one does when there is no token.
+   * Which is how the "run gh auth login" sentence is provoked on a machine
+   * where gh *is* signed in.
+   */
+  ghStub: string
   /** A scan root for the terminal group, with two projects to open shells in. */
   termRoot: string
   termProjects: string[]
@@ -525,7 +533,27 @@ function buildFixtures(dataDir: string): Fixtures {
   const stubCli = join(stubDir, 'claude.cmd')
   writeFileSync(stubCli, '@echo off\r\nif "%1"=="--version" echo 9.9.9 (Claude Code)\r\n')
 
-  return { dir, rootA, rootB, aProjects, bProjects, stubCli, termRoot, termProjects }
+  const ghStub = join(stubDir, 'gh.cmd')
+  writeFileSync(
+    ghStub,
+    [
+      '@echo off',
+      'if "%1"=="--version" (',
+      '  echo gh version 9.9.9 ^(fixture^)',
+      '  echo https://github.com/cli/cli',
+      '  exit /b 0',
+      ')',
+      'if "%1"=="auth" (',
+      '  echo You are not logged into any GitHub hosts. 1>&2',
+      '  exit /b 1',
+      ')',
+      'echo gh: not signed in 1>&2',
+      'exit /b 1',
+      ''
+    ].join('\r\n')
+  )
+
+  return { dir, rootA, rootB, aProjects, bProjects, stubCli, ghStub, termRoot, termProjects }
 }
 
 // ---------------------------------------------------------------------------
@@ -631,7 +659,11 @@ export async function runSettingsChecks(
          terminalBlink: Boolean(document.querySelector('[data-settings-terminal-blink]')),
          terminalScrollback: Boolean(document.querySelector('[data-settings-terminal-scrollback]')),
          terminalShell: Boolean(document.querySelector('[data-settings-terminal-shell]')),
-         terminalPreview: Boolean(document.querySelector('[data-settings-terminal-preview]'))
+         terminalPreview: Boolean(document.querySelector('[data-settings-terminal-preview]')),
+         ghPath: Boolean(document.querySelector('[data-settings-gh-path]')),
+         ghLocate: Boolean(document.querySelector('[data-settings-gh-locate]')),
+         ghClear: Boolean(document.querySelector('[data-settings-clear-gh]')),
+         prPoll: Boolean(document.querySelector('[data-settings-pr-poll]'))
        })`
     )
     // Internal state is not a preference, and the pane must not have grown a
@@ -663,13 +695,13 @@ export async function runSettingsChecks(
     checks.push({
       id: 'S-1',
       criterion: 'Gear in the title bar opens the Settings tab; every group renders',
-      title: 'The gear opens a Settings pane with all four groups, and Ctrl+Tab cycles to it',
+      title: 'The gear opens a Settings pane with all five groups, and Ctrl+Tab cycles to it',
       ok:
         gearThere &&
         !paneBefore &&
         opened &&
         tabSelected === 'true' &&
-        groups.join(',') === 'claude,workspace,appearance,terminal' &&
+        groups.join(',') === 'claude,workspace,appearance,terminal,github' &&
         Object.values(controls).every(Boolean) &&
         !internalLeaked &&
         historyUp &&
@@ -1226,6 +1258,18 @@ export async function runSettingsChecks(
         good: now.terminalShell ?? whereIs('cmd.exe')[0] ?? null,
         bad: 'cmd.exe',
         why: 'a bare name is resolved against whatever PATH Helm was started with'
+      },
+      {
+        key: 'ghPath',
+        good: whereIs('gh.exe')[0] ?? fixtures.stubCli,
+        bad: 'gh',
+        why: 'a bare name is not an executable Helm can run for a fetch'
+      },
+      {
+        key: 'prPollMinutes',
+        good: 15,
+        bad: 1,
+        why: 'a one-minute sweep is one gh per remote against the user’s own rate limit'
       }
     ]
 
@@ -2072,6 +2116,171 @@ export async function runSettingsChecks(
   }
 
   // -------------------------------------------------------------------------
+  // S-13: the GitHub group (M10)
+  // -------------------------------------------------------------------------
+  if (run('github')) {
+    /** A fetch pass, forced through the real channel and waited on. */
+    const refreshPulls = (): Promise<{ ghPath: string | null; problem: string | null }> =>
+      js<{ ghPath: string | null; problem: string | null }>(
+        win,
+        `window.helm.invoke('pr:refresh', {}).then((s) => ({
+           ghPath: s.gh.path, problem: s.gh.problem ? s.gh.problem.kind : null }))`
+      )
+
+    // Start from "no override", whatever an earlier run left: this runs against
+    // the real profile, and the group is only meaningful from a known state.
+    await sendWrite(win, { ghPath: null })
+    await refreshPulls()
+    await openSettings(win)
+    await sleep(500)
+
+    // What the pane says gh is, and what this driver finds by asking Windows
+    // and then asking the program itself.
+    const paintedPath = await text(win, '[data-settings-gh-path]')
+    const paintedVersion = await text(win, '[data-settings-gh-version]')
+    const onPath = whereIs('gh.exe').concat(whereIs('gh'))
+    const directVersion =
+      paintedPath === NOTHING ? null : (versionOf(paintedPath)?.split(/\r?\n/)[0]?.trim() ?? null)
+    const agreesWithPath =
+      onPath.length === 0 ||
+      onPath.some((entry) => entry.toLowerCase() === paintedPath.toLowerCase())
+    const clearDisabledBefore = await disabled(win, '[data-settings-clear-gh]')
+
+    // Point it at a gh that is installed and not signed in. Everything after
+    // this is the unauthenticated path, provoked on a machine whose real gh is
+    // signed in - which is the only honest way to see that sentence here.
+    answerPicker('file', fixtures.ghStub)
+    await click(win, '[data-settings-gh-locate]')
+    const overrideShown = await pollJs(
+      win,
+      `(document.querySelector('[data-settings-gh-path]')?.textContent ?? '')
+        .includes(${JSON.stringify('gh.cmd')})`,
+      30_000
+    )
+    await sleep(600)
+
+    const overriddenPath = await text(win, '[data-settings-gh-path]')
+    const overriddenVersion = await text(win, '[data-settings-gh-version]')
+    const stubSays = versionOf(fixtures.ghStub)?.split(/\r?\n/)[0]?.trim() ?? null
+    const ghRowAfterPick = rowValue(dbFile, 'ghPath')
+    const clearDisabledAfter = await disabled(win, '[data-settings-clear-gh]')
+    const afterPick = await refreshPulls()
+
+    // The sentence, where a user would meet it: the Pulls pane and the sidebar
+    // row that leads to it.
+    await click(win, '[data-open-pulls]')
+    const pulled = await pollJs(win, `document.querySelector('[data-pulls-caption]')`, 15_000)
+    await sleep(500)
+    const unauthSentence = await text(win, '[data-pulls-problem="unauthenticated"]')
+    const sidebarLine = await text(win, '[data-open-pulls]')
+    const caption = await text(win, '[data-pulls-caption]')
+    const shotGh = await screenshot(win, shotDir, 'settings-13-github.png')
+
+    await openSettings(win)
+    await sleep(400)
+    await click(win, '[data-settings-clear-gh]')
+    const cleared = await pollJs(
+      win,
+      `!(document.querySelector('[data-settings-gh-path]')?.textContent ?? '')
+        .includes(${JSON.stringify('gh.cmd')})`,
+      30_000
+    )
+    await sleep(500)
+    const ghRowAfterClear = rowValue(dbFile, 'ghPath')
+    const afterClear = await refreshPulls()
+
+    // The interval, through the pane's own picker. Off first, because off is
+    // the state a select could most easily fail to represent.
+    const offered = await js<string[]>(
+      win,
+      `[...(document.querySelector('[data-settings-pr-poll]')?.options ?? [])].map((o) => o.value)`
+    )
+    const pickedOff = await chooseOption(win, '[data-settings-pr-poll]', '0')
+    await sleep(600)
+    const rowWhenOff = rowValue(dbFile, 'prPollMinutes')
+    const pickedFifteen = await chooseOption(win, '[data-settings-pr-poll]', '15')
+    await sleep(600)
+    const rowWhenFifteen = rowValue(dbFile, 'prPollMinutes')
+
+    checks.push({
+      id: 'S-13',
+      criterion: 'ghPath and prPollMinutes are settable from the pane’s GitHub group',
+      title:
+        'The pane names the gh this machine actually has, takes an override that reaches the fetch, and both intervals reach the database',
+      ok:
+        paintedPath !== '' &&
+        paintedPath !== NOTHING &&
+        directVersion !== null &&
+        paintedVersion === directVersion &&
+        agreesWithPath &&
+        clearDisabledBefore === true &&
+        overrideShown &&
+        overriddenPath === fixtures.ghStub &&
+        stubSays !== null &&
+        overriddenVersion === stubSays &&
+        ghRowAfterPick === fixtures.ghStub &&
+        clearDisabledAfter === false &&
+        afterPick.ghPath === fixtures.ghStub &&
+        afterPick.problem === 'unauthenticated' &&
+        pulled &&
+        unauthSentence.includes('gh auth login') &&
+        sidebarLine.includes('Run gh auth login') &&
+        caption.includes('fetched') &&
+        cleared &&
+        ghRowAfterClear === null &&
+        afterClear.ghPath === paintedPath &&
+        afterClear.problem === null &&
+        offered.includes('0') &&
+        pickedOff.offered &&
+        pickedOff.set &&
+        rowWhenOff === 0 &&
+        pickedFifteen.offered &&
+        pickedFifteen.set &&
+        rowWhenFifteen === 15,
+      detail: {
+        discovered: { painted: { path: paintedPath, version: paintedVersion }, whereExeSays: onPath },
+        askedTheExecutableDirectly: directVersion,
+        paintedPathIsTheOneOnPath: agreesWithPath,
+        clearDisabledWithNoOverride: clearDisabledBefore,
+        afterPicking: {
+          painted: { path: overriddenPath, version: overriddenVersion },
+          stubSaysDirectly: stubSays,
+          databaseRow: ghRowAfterPick,
+          snapshot: afterPick,
+          clearEnabled: clearDisabledAfter === false
+        },
+        degradation: {
+          paneSentence: unauthSentence,
+          sidebarSecondLine: sidebarLine,
+          ageCaption: caption
+        },
+        afterClearing: { databaseRow: ghRowAfterClear, snapshot: afterClear },
+        pollInterval: {
+          offeredValues: offered,
+          off: { picked: pickedOff, databaseRow: rowWhenOff },
+          fifteen: { picked: pickedFifteen, databaseRow: rowWhenFifteen }
+        },
+        screenshot: shotGh.file
+      },
+      notes: [
+        'The version on screen is compared with what the executable prints when',
+        'this driver runs it, and the path against `where.exe gh` - the same',
+        'two independent reads the Claude CLI group gets.',
+        'The override is a real program on disk that answers `--version` and',
+        'fails `auth status`, which is the only honest way to see the',
+        '"not signed in" sentence on a machine whose gh is signed in. It is',
+        'picked through the pane’s own button and the real `path:chooseFile`',
+        'handler, and read back out of the database file rather than the app.',
+        'The sentence is then read where a user meets it: in the Pulls pane and',
+        'on the sidebar row, in its short form. Detection is from gh’s exit code',
+        'alone - nothing here or in the app opens a credential store.',
+        'The interval is set through the select, including 0, which is the value',
+        'that disarms the timer rather than a small number inside the range.'
+      ]
+    })
+  }
+
+  // -------------------------------------------------------------------------
   // What the restart phase will look for
   // -------------------------------------------------------------------------
   const parked: Partial<AppSettings> = {
@@ -2094,7 +2303,12 @@ export async function runSettingsChecks(
     terminalCursorStyle: 'bar',
     terminalCursorBlink: false,
     terminalScrollback: 12345,
-    terminalShell: whereIs('cmd.exe')[0] ?? original.terminalShell
+    terminalShell: whereIs('cmd.exe')[0] ?? original.terminalShell,
+    // The real gh rather than the fixture, for the reason `claudePath` uses the
+    // real claude: a restore that somehow does not happen must leave the app
+    // pointed at a working program, not at a stub that refuses to sign in.
+    ...(whereIs('gh.exe')[0] !== undefined ? { ghPath: whereIs('gh.exe')[0] } : {}),
+    prPollMinutes: 30
   }
 
   const applied = await sendWrite(win, parked as Record<string, unknown>)
