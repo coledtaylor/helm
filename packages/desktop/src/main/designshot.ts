@@ -54,7 +54,11 @@ const VIEWS: Array<{ name: string; selector: string | null }> = [
   { name: 'project', selector: 'aside nav button[title]' },
   { name: 'config', selector: '[data-open-config]' },
   { name: 'content', selector: '[data-open-content]' },
-  { name: 'history', selector: '[data-open-history]' }
+  { name: 'history', selector: '[data-open-history]' },
+  // The gear, not a sidebar row: settings is a window-level place. It is the
+  // longest page in the app and the one most likely to grow a control that
+  // does not match the others, which is exactly what a shot is for.
+  { name: 'settings', selector: '[data-open-settings]' }
 ]
 
 const THEME_LABEL = {
@@ -98,6 +102,20 @@ export async function runDesignShot(ctx: M2Context, outDir: string): Promise<str
       const shot = await screenshot(win, outDir, `${view.name}-${theme}.png`)
       files.push(shot.file)
     }
+
+    // The settings pane scrolled to the end, because the Terminal group sits
+    // below the fold on a default-sized window - and it is the group made of
+    // controls the rest of the app does not use (a stepper, a preview well on
+    // the terminal's own fixed ground inside a themed card), so it is the most
+    // likely place for something to stop matching the system in one theme only.
+    await js<void>(
+      win,
+      `(() => { const el = document.querySelector('[data-settings-pane]');
+        if (el) el.scrollTop = el.scrollHeight })()`
+    )
+    await sleep(400)
+    const terminalShot = await screenshot(win, outDir, `settings-terminal-${theme}.png`)
+    files.push(terminalShot.file)
   }
 
   await click(win, `button[aria-label="${THEME_LABEL[before]}"]`)

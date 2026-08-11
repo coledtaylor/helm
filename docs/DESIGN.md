@@ -112,7 +112,20 @@ Dividers inside an island fade to transparent at their ends - use the
   checkboxes and radios keep it, having no border to move.
 - **Segmented control**: a sunken well (`rounded-well border-border
   bg-surface-sunken p-0.5`) whose chosen segment lifts to
-  `bg-surface-raised ring-1 ring-border-strong` at `rounded-[5px]`.
+  `bg-surface-raised ring-1 ring-border-strong` at `rounded-[5px]`. For a
+  choice of two to four; past that it is a select.
+- **Select**: a native `<select>` in the input's sunken-well shape, with
+  `appearance-none` and the app's own `CaretIcon` rotated 90°. Native and not
+  a listbox of our own so that a driver can set it through
+  `HTMLSelectElement.prototype.value`, which a div cannot be. **The platform
+  arrow is always replaced**: Chromium draws a heavy chevron in its own colour
+  that reads as a control borrowed from another program, which is most obvious
+  on a foreign-ground island where nothing else is system-drawn.
+- **Stepper**: a segmented-control shell holding − and + buttons either side of
+  a tabular mono readout. For a small bounded integer someone nudges while
+  watching the result - a terminal's point size, not a scrollback of 25,000.
+  It cannot produce a value out of range, so the control and the validator
+  never have to disagree.
 - **Checkbox**: solid accent with an `accent-fg` check; unchecked is a 1.5px
   `fg-subtle` outline.
 - **Tags / badges**: pills - hairline `border-strong` outline for neutral
@@ -190,6 +203,16 @@ content's ground is its own, fixed in both modes.**
 - The terminal keeps `#11121A` (`bg-terminal`) in both modes - load-bearing
   for Spike C's color checks, and the reason a session's *tab* also keeps its
   own fixed text color (`#dde1ea`) when active.
+- The **palette** is fixed too, and that is a decision rather than an omission:
+  the 24-bit `THEME` in `renderer/terminal.ts` is asserted pixel-for-pixel by
+  the fidelity checks, so terminal colours are deliberately not a setting.
+  What *is* settable (M9) is everything that is not colour - font, size,
+  cursor, scrollback - and the settings pane's preview well paints those on
+  this same fixed ground, in both themes, so the preview is the pane.
+- A **shell pane's header** is themed chrome on that fixed ground: the caps
+  label, the running executable in mono at `#9397ab`, and a select in the
+  standard shape. Foreign ground governs the content, not the furniture
+  around it.
 - A rendered document or artifact paints whatever ground it declares; never
   invert it, never theme it.
 - The hairline edge and the island radius are what make a foreign surface

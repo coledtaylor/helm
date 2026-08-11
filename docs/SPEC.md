@@ -265,6 +265,50 @@ Read what Claude writes without a detour through Explorer and a text editor.
 messages, parses no output, handles no permissions. It supplies the argv, the cwd,
 and the environment, then gets out of the way.
 
+A project pane also carries a plain **shell** in the project's directory - `git
+status` and `pnpm dev`, not a session. Its executable is a setting with a
+per-pane override, and the running one is named in the pane's header.
+
+What a person may change about a terminal is font family, size, cursor shape,
+whether the cursor blinks, and scrollback. What they may not change is the
+**colours**: the 24-bit palette is Spike C's, fixed in both themes and asserted
+pixel-for-pixel by `pnpm fidelity`, so making it settable would be a design
+amendment rather than a row (DESIGN.md par. 6).
+
+> [!note] Built by M9 (2026-08-11)
+> Font changes apply **live to every open terminal** - both registries, session
+> panes and project shells - because a font is judged by looking at the thing
+> you are going to read in it. A pane that is hidden takes the new settings and
+> refits to nothing: a hidden container measures 0x0 and the fit guard refuses
+> to act on that, so its pty hears about the new cell size when the pane comes
+> back rather than being resized to one column in the meantime.
+>
+> The chosen family is **prepended** to the built-in stack, never substituted
+> for it. A font picked for its letterforms is rarely picked for its
+> box-drawing, and Claude Code's whole interface is box-drawing - so a font with
+> holes in it loses a glyph at a time instead of taking the TUI down. There is
+> no way to express "replace the stack" from the pane, on purpose. The pane
+> hints when a family is not installed, and that hint is *measured*:
+> `document.fonts.check` reports on the document's own `@font-face` rules and
+> returns true for a family it has never heard of.
+>
+> `estimateGrid` - the pre-spawn guess that decides what size a pty opens at -
+> reads the same settings, and had to be taught to measure the way xterm does.
+> A canvas and a layout engine resolve a font stack by different rules and
+> disagreed by 6% on this machine; the WebGL renderer then floors a cell to
+> whole device pixels and FitAddon holds back a flat 14px for the overview
+> ruler. With all three, the estimate lands on the fit exactly at 20px, where it
+> was eight columns out before.
+>
+> Shell choice is a default setting plus a per-pane picker, and the resolver
+> reads the setting **per open** rather than memoising it - only the
+> auto-detection is remembered, and that is a fact about the machine. The
+> filename substring test that decided a shell's arguments is replaced by a
+> table keyed on the executable's own name: the old one gave `-NoLogo` to
+> anything whose *path* contained `pwsh`, and `bash -NoLogo` prints a usage
+> error and exits. Claude sessions are untouched by any of it - Helm hands the
+> CLI its own pty.
+
 ### 4.5 Settings
 
 Helm's own configuration, and the permanent home for all of it. Distinct from
@@ -279,6 +323,11 @@ the theme toggle, laid out as one scrolling page of titled groups:
   is inside the tested range, "Locate manually…", and **Clear override**
 - **Workspace** - the scan roots, with add *and remove*
 - **Appearance** - theme, and what the status bar's usage segment shows
+- **Terminal** - font family (with a hint when it is not installed), size,
+  cursor shape, cursor blink, scrollback, and the default shell for project
+  panes; then a preview well rendering a sample at the chosen font on the
+  terminal's own ground. See 4.4 for what these do and why colour is not
+  among them.
 
 > [!note] Built by M8 (2026-08-11)
 > Three things the app had been missing rather than three new settings:

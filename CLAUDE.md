@@ -74,6 +74,30 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   [docs/SPIKE-C.md](docs/SPIKE-C.md). Its two checks render `spike.html`, a
   separate page from the app, so app layout changes cannot move the terminal
   under them.
+  - Five of those values are now **settings** (M9): font family, font size,
+    cursor style, cursor blink, scrollback. `TERMINAL_DEFAULTS` in the same
+    file is what they default to, and it is exactly what was baked in before,
+    so the documented baseline is unchanged - a setting nobody has touched
+    produces the configuration Spike C proved. They reach a terminal by being
+    **passed in**: `createTerminal(container, opts, hooks, prefs)`. The app
+    hands down its effective preferences from `settings:changed` through
+    `app/termprefs.ts`, and `spike.ts` calls the same function with three
+    arguments and gets the defaults - which is why `pnpm fidelity` and
+    `pnpm claude-check` still measure the proven configuration and why a
+    setting must never be routed through the `term:*` channels to reach them.
+  - Everything else in that file stays fixed and is not a setting:
+    `minimumContrastRatio: 1`, `drawBoldTextInBrightColors: false`,
+    `allowProposedApi` / Unicode 11, `lineHeight`, and the whole 24-bit
+    `THEME`. The palette in particular is asserted pixel-for-pixel by fidelity
+    C1; making colours settable is a deliberate DESIGN.md amendment, not a row
+    in the settings pane.
+  - `estimateGrid` (`app/terminals.ts`) reads the same preferences and must
+    keep measuring the way xterm does: a **DOM span**, not a canvas - the two
+    resolve a font stack by different rules and disagreed by 6% on this machine
+    - then the WebGL renderer's device-pixel flooring across and rounding-up
+    down, then FitAddon's flat 14px overview-ruler reserve. Each of those three
+    is worth a column or more; without them the pty opens at a grid the pane
+    does not have.
 - The checks below are the same idea for the app itself: they drive the **real
   window** and most of them spawn real `claude` sessions. They are the only
   coverage `packages/ui` and `packages/desktop` have - all 270 unit tests live
@@ -94,8 +118,14 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   | `pnpm m6-check` | markdown, artifacts, wikilinks, editor | `core/content/`, the content viewer |
   | `pnpm m7-check` | first run, packaging, personal-path audit | setup, portable mode, the installer |
   | `pnpm usage-check` | the status bar's usage figures | `core/usage/`, the status bar |
-  | `pnpm settings-check` | the settings pane, and every app setting | `core/store/settings.ts`, `SettingsPane`, anything that writes a setting |
+  | `pnpm settings-check` | the settings pane, every app setting, and the terminal/shell preferences | `core/store/settings.ts`, `SettingsPane`, `terminal.ts`, `estimateGrid`, `main/pterm.ts`, anything that writes a setting |
   | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
+
+  `terminal.ts` is under two of them and they answer different questions:
+  fidelity says the baked configuration still renders a TUI correctly,
+  `settings-check --only=terminal` says a preference reaches every live
+  terminal without disturbing that. A change there is not done until both are
+  green and fidelity's numbers have not moved.
 
 - `dist:win` goes through `scripts/dist-win.mjs`, not straight to
   electron-builder. electron-builder resolves the package manager with `which`,

@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readSettings, type AppSettings } from '@helm/core'
-import { screenshot, sendKey, sleep } from './bridge'
+import { screenshot, sendKey, sleep, typeText } from './bridge'
 import type { Check } from './fidelity'
 import type { M2Context } from './m2check'
 import { answerPicker } from './m7check'
@@ -44,8 +44,61 @@ import { answerPicker } from './m7check'
  * `pnpm settings-check` -> helm-data/settings-report.json
  */
 
-const GROUPS = ['pane', 'claude', 'roots', 'appearance', 'accessors', 'validation'] as const
+const GROUPS = [
+  'pane',
+  'claude',
+  'roots',
+  'appearance',
+  'accessors',
+  'validation',
+  'terminal'
+] as const
 type Group = (typeof GROUPS)[number]
+
+/**
+ * The built-in font stack, written out again rather than imported from
+ * `terminal.ts`.
+ *
+ * This is the check's own statement of what "the default stack" is, and the
+ * whole of M9's font rule is that a user's family goes in *front* of it rather
+ * than instead of it. Importing the constant would make the assertion "the code
+ * agrees with itself".
+ */
+const DEFAULT_FONT_STACK = '"Cascadia Mono", "Consolas", monospace'
+
+/** Terminal defaults this driver expects a fresh install to be at. Same reason. */
+const DEFAULT_TERMINAL = {
+  fontSize: 14,
+  cursorStyle: 'block',
+  cursorBlink: true,
+  scrollback: 10000
+} as const
+
+/**
+ * The shells this driver goes looking for itself, and the arguments it expects
+ * each to be launched with.
+ *
+ * Its own table, not `pterm.ts`'s. The bug the per-shell table replaces was a
+ * substring test that gave `-NoLogo` to anything whose *path* contained `pwsh`
+ * or `powershell`, so a second opinion about which flags belong to which
+ * program is the point.
+ */
+const EXPECTED_SHELL_ARGS: Record<string, string[]> = {
+  'pwsh.exe': ['-NoLogo'],
+  'powershell.exe': ['-NoLogo'],
+  'cmd.exe': [],
+  'wsl.exe': [],
+  'bash.exe': []
+}
+
+/**
+ * The shells that must actually stay running once launched.
+ *
+ * `wsl.exe` is deliberately not among them: it exists on any machine with the
+ * optional component installed and exits immediately when no distribution is,
+ * which is a fact about this machine rather than about Helm's arguments.
+ */
+const MUST_SURVIVE = ['pwsh.exe', 'powershell.exe', 'cmd.exe', 'bash.exe']
 
 /**
  * What the pane paints in a fact it has no value for.
@@ -127,10 +180,10 @@ function versionOf(exe: string): string | null {
   }
 }
 
-/** `where.exe claude`, which is what a person would type to find out. */
-function whereClaude(): string[] {
+/** `where.exe <name>`, which is what a person would type to find out. */
+function whereIs(name: string): string[] {
   try {
-    return execFileSync('where.exe', ['claude'], { encoding: 'utf8', windowsHide: true })
+    return execFileSync('where.exe', [name], { encoding: 'utf8', windowsHide: true })
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter((line) => line !== '')
@@ -138,6 +191,25 @@ function whereClaude(): string[] {
     return []
   }
 }
+
+const whereClaude = (): string[] => whereIs('claude')
+
+/** What Windows says a live process actually is. */
+function imageNameOf(pid: number): string | null {
+  try {
+    const out = execFileSync(
+      'tasklist.exe',
+      ['/FI', `PID eq ${String(pid)}`, '/FO', 'CSV', '/NH'],
+      { encoding: 'utf8', windowsHide: true, timeout: 10_000 }
+    )
+    const first = out.split(/\r?\n/).find((line) => line.startsWith('"'))
+    return first?.split('","')[0]?.replace(/^"/, '') ?? null
+  } catch {
+    return null
+  }
+}
+
+const baseName = (path: string): string => path.split(/[\\/]/).pop() ?? path
 
 /** `#12131f` -> `rgb(18, 19, 31)`, so a hex and a computed colour can be compared. */
 function hexToRgb(hex: string): string | null {
@@ -223,6 +295,162 @@ async function pollJs(win: BrowserWindow, expression: string, timeoutMs: number)
   }
 }
 
+/**
+ * A sidebar row, clicked by the path in its `title`.
+ *
+ * Matched in JavaScript rather than by a CSS attribute selector for the reason
+ * `byData` gives: these are Windows paths, and a backslash in a selector is an
+ * escape.
+ */
+async function clickProject(win: BrowserWindow, path: string): Promise<boolean> {
+  return js<boolean>(
+    win,
+    `(() => { const el = [...document.querySelectorAll('aside button[title]')]
+        .find((b) => b.title === ${JSON.stringify(path)});
+      if (!el) return false; el.click(); return true })()`
+  )
+}
+
+/** Focus a field, replace what is in it, and commit with Enter. Real keystrokes. */
+async function typeInto(win: BrowserWindow, selector: string, text: string): Promise<boolean> {
+  const focused = await js<boolean>(
+    win,
+    `(() => { const el = document.querySelector(${q(selector)});
+      if (!el) return false; el.focus(); el.select(); return true })()`
+  )
+  if (!focused) return false
+  await typeText(win, text)
+  await sendKey(win, 'Return')
+  return true
+}
+
+/**
+ * Set a `<select>` and let React hear about it.
+ *
+ * Whether the value took is decided **before** the event is dispatched. React
+ * flushes a discrete event synchronously, so by the time `dispatchEvent`
+ * returns the component has already re-rendered from props that the write has
+ * not come back and changed yet - which puts the old value back on the element.
+ * Reading it afterwards reports a failure for a selection that worked.
+ */
+async function chooseOption(
+  win: BrowserWindow,
+  selector: string,
+  value: string
+): Promise<{ found: boolean; offered: boolean; set: boolean }> {
+  return js<{ found: boolean; offered: boolean; set: boolean }>(
+    win,
+    `(() => { const el = document.querySelector(${q(selector)});
+      if (!el) return { found: false, offered: false, set: false };
+      const wanted = ${JSON.stringify(value)};
+      const offered = [...el.options].some((o) => o.value === wanted);
+      el.value = wanted;
+      const set = el.value === wanted;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return { found: true, offered, set } })()`
+  )
+}
+
+/**
+ * This driver's own answer to "does this machine have that font".
+ *
+ * Written here rather than shared with the pane, because the pane's hint is one
+ * of the things under test. Same principle, different code: a probe string is
+ * laid out with the family in front of two fallbacks and again with each
+ * fallback alone, and a family that resolves is one that changes a width.
+ */
+function driverSeesFont(win: BrowserWindow, family: string): Promise<boolean> {
+  return js<boolean>(
+    win,
+    `(() => {
+      const probe = document.createElement('span');
+      probe.style.cssText = 'position:absolute;left:-9999px;white-space:pre;font-size:72px';
+      probe.textContent = 'MWMWiill 0123';
+      document.body.appendChild(probe);
+      const at = (stack) => { probe.style.fontFamily = stack; return probe.getBoundingClientRect().width };
+      const family = ${JSON.stringify(family)};
+      const answer = ['monospace', 'serif'].some(
+        (f) => at('"' + family + '", ' + f) !== at(f)
+      );
+      probe.remove();
+      return answer })()`
+  )
+}
+
+/** One live terminal, as the renderer's inspector reports it. */
+interface TerminalReport {
+  key: string
+  fontFamily: string
+  fontSize: number
+  cursorStyle: string
+  cursorBlink: boolean
+  scrollback: number
+  cols: number
+  rows: number
+  screen: { width: number; height: number } | null
+  attached: boolean
+}
+
+interface TerminalSnapshot {
+  prefs: Record<string, unknown>
+  sessions: TerminalReport[]
+  shells: Array<TerminalReport & { path: string; shell: string }>
+}
+
+const terminalSnapshot = (win: BrowserWindow): Promise<TerminalSnapshot> =>
+  js<TerminalSnapshot>(win, `window.__helmTerminals()`)
+
+/**
+ * The driver's own measurement of a monospace cell, made in the window.
+ *
+ * A canvas of this file's making, with a font string this file composed - so
+ * "the terminal is drawing at 20px in Consolas" is checked against a
+ * measurement Helm had no part in rather than against Helm's own arithmetic.
+ */
+function measureCell(win: BrowserWindow, size: number, stack: string): Promise<CellMeasurement> {
+  return js<CellMeasurement>(
+    win,
+    `(() => {
+      const size = ${JSON.stringify(size)};
+      const stack = ${JSON.stringify(stack)};
+      const c = document.createElement('canvas').getContext('2d');
+      c.font = size + 'px ' + stack;
+      const m = c.measureText('W');
+      const span = document.createElement('span');
+      span.style.cssText = 'position:absolute;left:-9999px;top:0;white-space:pre;'
+        + 'font-kerning:none;line-height:normal;font-size:' + size + 'px;font-family:' + stack;
+      span.textContent = 'W'.repeat(32);
+      document.body.appendChild(span);
+      const r = span.getBoundingClientRect();
+      span.remove();
+      return {
+        canvasWidth: m.width,
+        canvasBox: m.fontBoundingBoxAscent + m.fontBoundingBoxDescent,
+        spanWidth: r.width / 32,
+        spanHeight: r.height,
+        dpr: window.devicePixelRatio
+      } })()`
+  )
+}
+
+/**
+ * A cell measured two ways by this driver.
+ *
+ * `span*` is how xterm's own `CharSizeService` does it - a `white-space: pre`
+ * element in the document, whose width is divided by the number of characters
+ * in it - so that is the number the terminal's painted geometry is checked
+ * against. The canvas figures are here because `estimateGrid` uses a canvas
+ * (there is no terminal to measure yet when it runs), and the difference
+ * between the two is the whole reason a pre-spawn estimate can be off.
+ */
+interface CellMeasurement {
+  canvasWidth: number
+  canvasBox: number
+  spanWidth: number
+  spanHeight: number
+  dpr: number
+}
+
 /** Every project path the sidebar tree is currently showing. */
 async function sidebarPaths(win: BrowserWindow): Promise<string[]> {
   return js<string[]>(
@@ -271,6 +499,9 @@ interface Fixtures {
   bProjects: string[]
   /** A program that answers `--version` with 9.9.9 and nothing else. */
   stubCli: string
+  /** A scan root for the terminal group, with two projects to open shells in. */
+  termRoot: string
+  termProjects: string[]
 }
 
 function buildFixtures(dataDir: string): Fixtures {
@@ -279,18 +510,22 @@ function buildFixtures(dataDir: string): Fixtures {
 
   const rootA = join(dir, 'root a')
   const rootB = join(dir, 'root-b')
+  const termRoot = join(dir, 'root-term')
   const aProjects = [join(rootA, 'alpha one')]
   const bProjects = [join(rootB, 'beta-one'), join(rootB, 'beta-two')]
+  const termProjects = [join(termRoot, 'term one'), join(termRoot, 'term-two')]
   // A path with a space in it on purpose: Windows-first, and every path Helm
   // stores has to survive one.
-  for (const path of [...aProjects, ...bProjects]) mkdirSync(join(path, '.claude'), { recursive: true })
+  for (const path of [...aProjects, ...bProjects, ...termProjects]) {
+    mkdirSync(join(path, '.claude'), { recursive: true })
+  }
 
   const stubDir = join(dir, 'stub')
   mkdirSync(stubDir, { recursive: true })
   const stubCli = join(stubDir, 'claude.cmd')
   writeFileSync(stubCli, '@echo off\r\nif "%1"=="--version" echo 9.9.9 (Claude Code)\r\n')
 
-  return { dir, rootA, rootB, aProjects, bProjects, stubCli }
+  return { dir, rootA, rootB, aProjects, bProjects, stubCli, termRoot, termProjects }
 }
 
 // ---------------------------------------------------------------------------
@@ -389,7 +624,14 @@ export async function runSettingsChecks(
          clear: Boolean(document.querySelector('[data-settings-clear-claude]')),
          addRoot: Boolean(document.querySelector('[data-settings-add-root]')),
          theme: Boolean(document.querySelector('[data-settings-theme]')),
-         usage: Boolean(document.querySelector('[data-settings-usage]'))
+         usage: Boolean(document.querySelector('[data-settings-usage]')),
+         terminalFont: Boolean(document.querySelector('[data-settings-terminal-font]')),
+         terminalSize: Boolean(document.querySelector('[data-settings-terminal-size]')),
+         terminalCursor: Boolean(document.querySelector('[data-settings-terminal-cursor]')),
+         terminalBlink: Boolean(document.querySelector('[data-settings-terminal-blink]')),
+         terminalScrollback: Boolean(document.querySelector('[data-settings-terminal-scrollback]')),
+         terminalShell: Boolean(document.querySelector('[data-settings-terminal-shell]')),
+         terminalPreview: Boolean(document.querySelector('[data-settings-terminal-preview]'))
        })`
     )
     // Internal state is not a preference, and the pane must not have grown a
@@ -421,13 +663,13 @@ export async function runSettingsChecks(
     checks.push({
       id: 'S-1',
       criterion: 'Gear in the title bar opens the Settings tab; every group renders',
-      title: 'The gear opens a Settings pane with all three groups, and Ctrl+Tab cycles to it',
+      title: 'The gear opens a Settings pane with all four groups, and Ctrl+Tab cycles to it',
       ok:
         gearThere &&
         !paneBefore &&
         opened &&
         tabSelected === 'true' &&
-        groups.join(',') === 'claude,workspace,appearance' &&
+        groups.join(',') === 'claude,workspace,appearance,terminal' &&
         Object.values(controls).every(Boolean) &&
         !internalLeaked &&
         historyUp &&
@@ -948,8 +1190,51 @@ export async function runSettingsChecks(
         good: '2026-08-11T00:00:00.000Z',
         bad: 'soon',
         why: 'not a timestamp anything can order'
+      },
+      {
+        key: 'terminalFontFamily',
+        good: 'Consolas',
+        bad: 'Consolas; color: red',
+        why: 'xterm puts this in an inline style, where a semicolon ends the declaration'
+      },
+      {
+        key: 'terminalFontSize',
+        good: 16,
+        bad: 200,
+        why: 'a grid two columns wide is not a terminal any TUI can lay out in'
+      },
+      {
+        key: 'terminalCursorStyle',
+        good: 'bar',
+        bad: 'beam',
+        why: 'not one of the three shapes xterm draws'
+      },
+      {
+        key: 'terminalCursorBlink',
+        good: false,
+        bad: 'false',
+        why: 'the string is truthy, so it would switch blinking on'
+      },
+      {
+        key: 'terminalScrollback',
+        good: 5000,
+        bad: 5_000_000,
+        why: 'a line is about a kilobyte of cell data, per pane'
+      },
+      {
+        key: 'terminalShell',
+        good: now.terminalShell ?? whereIs('cmd.exe')[0] ?? null,
+        bad: 'cmd.exe',
+        why: 'a bare name is resolved against whatever PATH Helm was started with'
       }
     ]
+
+    // A key with no case here is a key nothing proves is validated, and the
+    // table is hand-written, so it is checked against the settings object
+    // itself rather than trusted to have kept up.
+    const covered = cases.map((entry) => entry.key).sort()
+    const everyKey = Object.keys(now).sort()
+    const everyKeyCovered = covered.join(',') === everyKey.join(',')
 
     const results: Array<Record<string, unknown>> = []
     let allRejected = true
@@ -1006,8 +1291,9 @@ export async function runSettingsChecks(
     checks.push({
       id: 'S-7',
       criterion: 'Runtime validation rejects malformed values for every key; unknown keys still tolerated',
-      title: 'Six hand-sent bad writes are refused and change nothing; six good ones land',
+      title: 'A hand-sent bad write for every key is refused and changes nothing; every good one lands',
       ok:
+        everyKeyCovered &&
         allControlsLanded &&
         allRejected &&
         !partial &&
@@ -1015,6 +1301,9 @@ export async function runSettingsChecks(
         themeAfterUnknown === 'light' &&
         unknownStored === undefined,
       detail: {
+        keysProbed: covered,
+        keysInAppSettings: everyKey,
+        everyKeyCovered,
         cases: results,
         patchIsOneEdit: {
           wrote: { theme: 'light', usageDisplay: 'dollars' },
@@ -1037,9 +1326,749 @@ export async function runSettingsChecks(
         'nothing - the same trap M3-4 fell into.',
         'Reads are tolerant and writes are strict on purpose. A row from another',
         'build is a fact about the past; a malformed write is a bug happening now,',
-        'and before this it reached `nativeTheme.themeSource`.'
+        'and before this it reached `nativeTheme.themeSource`.',
+        'The table of cases is checked against the keys of `AppSettings` itself,',
+        'so a setting added later cannot quietly go unprobed.'
       ]
     })
+  }
+
+  // -------------------------------------------------------------------------
+  // S-10 to S-12: the terminal settings (M9)
+  // -------------------------------------------------------------------------
+  if (run('terminal')) {
+    /**
+     * Every resize the main process actually put through to a pty, captured at
+     * the source by wrapping the host objects the IPC handlers call.
+     *
+     * This is the second half of "the pane refit": a terminal whose options
+     * changed but whose grid was never re-reported leaves the child process
+     * drawing into a box that no longer exists. `applyFit` reports only when
+     * the answer changed, and that is exactly what these counts measure.
+     */
+    const sessionResizes: Array<{ id: number; cols: number; rows: number }> = []
+    const shellResizes: Array<{ id: number; cols: number; rows: number }> = []
+    const realSessionResize = ctx.sessions.resize.bind(ctx.sessions)
+    const realShellResize = ctx.pterm.resize.bind(ctx.pterm)
+    ctx.sessions.resize = (id, cols, rows) => {
+      sessionResizes.push({ id, cols, rows })
+      realSessionResize(id, cols, rows)
+    }
+    ctx.pterm.resize = (id, cols, rows) => {
+      shellResizes.push({ id, cols, rows })
+      realShellResize(id, cols, rows)
+    }
+
+    try {
+      // --- setup: a project pane with a shell, and a session beside it -------
+      //
+      // The CLI setting goes back to the real executable first. The validation
+      // group leaves `claudePath` on a stub that answers `--version` and exits,
+      // and a session launched from that is a process which is gone before
+      // anything can look at it - which would make this group's failures a
+      // report about the group that ran before it.
+      await sendWrite(win, { claudePath: claudeForPark })
+      // And the terminal settings start from their documented defaults, for the
+      // same reason: the validation group parks each of them on a value of its
+      // own choosing on the way past, so without this the deltas below would be
+      // measured from wherever that left them.
+      await sendWrite(win, {
+        terminalFontFamily: null,
+        terminalFontSize: DEFAULT_TERMINAL.fontSize,
+        terminalCursorStyle: DEFAULT_TERMINAL.cursorStyle,
+        terminalCursorBlink: DEFAULT_TERMINAL.cursorBlink,
+        terminalScrollback: DEFAULT_TERMINAL.scrollback,
+        terminalShell: null
+      })
+      await sleep(600)
+
+      await js<unknown>(
+        win,
+        `window.helm.invoke('roots:accept', { path: ${JSON.stringify(fixtures.termRoot)} })`
+      )
+      await js<unknown>(win, `window.helm.invoke('discovery:scan', { includeGit: false })`)
+      const treeHasFixtures = await pollJs(
+        win,
+        `[...document.querySelectorAll('aside button[title]')]
+          .filter((b) => b.title.toLowerCase().startsWith(${JSON.stringify(
+            fixtures.termRoot.toLowerCase()
+          )})).length === 2`,
+        45_000
+      )
+
+      const projectOne = fixtures.termProjects[0] ?? ''
+      await clickProject(win, projectOne)
+      const shellUp = await pollJs(
+        win,
+        `window.__helmTerminals().shells.length > 0
+         && document.querySelector('[data-shell-running]')?.dataset.shellRunning`,
+        45_000
+      )
+      await sleep(1200)
+      const shellNameInHeader = await attr(win, '[data-shell-running]', 'data-shell-running')
+
+      // A real session, launched from the pane's own button. The process behind
+      // it is irrelevant to every claim below - what is needed is a terminal in
+      // the *other* registry, which only a session produces.
+      const launched = await js<boolean>(
+        win,
+        `(() => { const el = [...document.querySelectorAll('button')]
+            .find((b) => (b.textContent ?? '').includes('Start session here'));
+          if (!el) return false; el.click(); return true })()`
+      )
+      const sessionUp = await pollJs(win, `window.__helmTerminals().sessions.length > 0`, 60_000)
+      await sleep(2500)
+
+      const sessionIds = ctx.sessions.list().map((record) => record.id)
+      const sessionId = sessionIds.at(-1) ?? -1
+
+      // ---------------------------------------------------------------------
+      // S-10: a size change reaches every terminal, and only the visible pane's
+      // pty is told - until the hidden one comes back
+      // ---------------------------------------------------------------------
+      const before = await terminalSnapshot(win)
+      const shellIdBefore = ctx.pterm.list()[0]?.id ?? -1
+      const sessionGridBefore = ctx.sessions.grid(sessionId)
+      const shellGridBefore = ctx.pterm.grid(shellIdBefore)
+      sessionResizes.length = 0
+      shellResizes.length = 0
+
+      const bigger = 20
+      await sendWrite(win, { terminalFontSize: bigger })
+      const sizeLanded = await pollJs(
+        win,
+        `window.__helmTerminals().sessions.concat(window.__helmTerminals().shells)
+          .every((t) => t.fontSize === ${String(bigger)})`,
+        15_000
+      )
+      await sleep(1200)
+
+      const afterSize = await terminalSnapshot(win)
+      const sessionGridAfter = ctx.sessions.grid(sessionId)
+      const shellGridAfter = ctx.pterm.grid(shellIdBefore)
+      const sessionResizedWhileVisible = sessionResizes.length
+      const shellResizedWhileHidden = shellResizes.length
+
+      /**
+       * The three settings that change how a terminal looks without changing
+       * how big a cell is.
+       *
+       * They have to reach every open terminal, and they must NOT put a resize
+       * through: a cursor shape moves no cells, and a pty told its size has
+       * changed when it has not is a full repaint of whatever TUI is running in
+       * it. This is the other half of "only when it actually changed", and the
+       * half a build that refits unconditionally would fail.
+       */
+      sessionResizes.length = 0
+      shellResizes.length = 0
+      const cosmetic = { cursorStyle: 'bar', cursorBlink: false, scrollback: 2500 } as const
+      await sendWrite(win, {
+        terminalCursorStyle: cosmetic.cursorStyle,
+        terminalCursorBlink: cosmetic.cursorBlink,
+        terminalScrollback: cosmetic.scrollback
+      })
+      const cosmeticLanded = await pollJs(
+        win,
+        `window.__helmTerminals().sessions.concat(window.__helmTerminals().shells)
+          .every((t) => t.cursorStyle === '${cosmetic.cursorStyle}'
+            && t.cursorBlink === false
+            && t.scrollback === ${String(cosmetic.scrollback)})`,
+        15_000
+      )
+      await sleep(1000)
+      const afterCosmetic = await terminalSnapshot(win)
+      const cosmeticResizes = sessionResizes.length + shellResizes.length
+      const cosmeticIsFree = cosmeticLanded && cosmeticResizes === 0
+
+      // The hidden pane comes back. Its terminal was reconfigured while it was
+      // out of the document, measured 0x0, and refused to act on that; showing
+      // it is the moment the pty is allowed to hear about the new cell size.
+      shellResizes.length = 0
+      await click(win, '[data-maximize="workspace"]')
+      const shellVisible = await pollJs(
+        win,
+        `window.__helmTerminals().shells.every((t) => t.attached)`,
+        15_000
+      )
+      await sleep(1500)
+      const shellGridShown = ctx.pterm.grid(shellIdBefore)
+      const shellResizedOnceShown = shellResizes.length
+
+      // The driver's own idea of how wide a cell is at the new size, measured
+      // with a canvas of its own making.
+      const sessionAfter = afterSize.sessions[0] ?? null
+      const measured = await measureCell(win, bigger, sessionAfter?.fontFamily ?? '')
+      const paintedCell =
+        sessionAfter?.screen != null && sessionAfter.cols > 0
+          ? sessionAfter.screen.width / sessionAfter.cols
+          : 0
+      const paintedRow =
+        sessionAfter?.screen != null && sessionAfter.rows > 0
+          ? sessionAfter.screen.height / sessionAfter.rows
+          : 0
+      // xterm quantises a cell to whole device pixels, so the painted cell is
+      // this driver's own measurement rounded down - never wider than it, and
+      // never more than one device pixel narrower. Anything outside that is a
+      // terminal drawing at a size nobody asked for.
+      const step = 1 / (measured.dpr || 1)
+      const cellAgrees =
+        paintedCell > 0 &&
+        paintedCell <= measured.spanWidth + 1e-6 &&
+        measured.spanWidth - paintedCell < step + 1e-6
+
+      // A second write of the same value must move nothing: a settings change
+      // that refits every terminal regardless is a SIGWINCH per unrelated write.
+      sessionResizes.length = 0
+      shellResizes.length = 0
+      await sendWrite(win, { terminalFontSize: bigger })
+      await sleep(900)
+      const idempotent = sessionResizes.length === 0 && shellResizes.length === 0
+
+      // And the pre-spawn estimate: a brand new shell, opened at the changed
+      // size, has to land where the fit puts it. `opened` is the grid
+      // `estimateGrid` produced before any pane had measured itself.
+      const projectTwo = fixtures.termProjects[1] ?? ''
+      await clickProject(win, projectTwo)
+      const secondShellUp = await pollJs(
+        win,
+        `window.__helmTerminals().shells.length === 2`,
+        45_000
+      )
+      await sleep(2000)
+      const secondShell = ctx.pterm
+        .list()
+        .find((entry) => entry.path.toLowerCase() === projectTwo.toLowerCase())
+      const estimate = secondShell?.opened ?? null
+      const settled = secondShell?.grid ?? null
+      const estimateTracks =
+        estimate !== null &&
+        settled !== null &&
+        Math.abs(estimate.cols - settled.cols) <= 1 &&
+        Math.abs(estimate.rows - settled.rows) <= 1
+
+      const shot10 = await screenshot(win, shotDir, 'settings-10-terminal-size.png')
+
+      const everyTerminalResized =
+        afterSize.sessions.length > 0 &&
+        afterSize.shells.length > 0 &&
+        [...afterSize.sessions, ...afterSize.shells].every((t) => t.fontSize === bigger) &&
+        [...before.sessions, ...before.shells].every(
+          (t) =>
+            t.fontSize === DEFAULT_TERMINAL.fontSize &&
+            t.cursorStyle === DEFAULT_TERMINAL.cursorStyle &&
+            t.cursorBlink === DEFAULT_TERMINAL.cursorBlink &&
+            t.scrollback === DEFAULT_TERMINAL.scrollback
+        )
+
+      checks.push({
+        id: 'S-10',
+        criterion:
+          'Font, size, cursor and scrollback apply live to every open terminal; the grid is re-reported to each pty only when it changed',
+        title:
+          'Size, cursor and scrollback reach both registries; only the size resizes a pty, the hidden pane waits until it is shown, and a repeat moves nothing',
+        ok:
+          treeHasFixtures &&
+          shellUp &&
+          launched &&
+          sessionUp &&
+          everyTerminalResized &&
+          sizeLanded &&
+          cosmeticIsFree &&
+          sessionGridBefore !== null &&
+          sessionGridAfter !== null &&
+          sessionGridAfter.cols !== sessionGridBefore.cols &&
+          sessionResizedWhileVisible > 0 &&
+          shellResizedWhileHidden === 0 &&
+          shellVisible &&
+          shellResizedOnceShown > 0 &&
+          shellGridShown !== null &&
+          shellGridBefore !== null &&
+          shellGridShown.cols !== shellGridBefore.cols &&
+          cellAgrees &&
+          idempotent &&
+          secondShellUp &&
+          estimateTracks,
+        detail: {
+          fixtureProjectsInTree: treeHasFixtures,
+          shellStarted: shellUp,
+          shellNameInHeader,
+          sessionStarted: sessionUp,
+          sizeChangedFrom: DEFAULT_TERMINAL.fontSize,
+          sizeChangedTo: bigger,
+          reportedBefore: [...before.sessions, ...before.shells],
+          reportedAfter: [...afterSize.sessions, ...afterSize.shells],
+          cursorAndScrollback: {
+            wrote: cosmetic,
+            reported: [...afterCosmetic.sessions, ...afterCosmetic.shells].map((t) => ({
+              key: t.key,
+              cursorStyle: t.cursorStyle,
+              cursorBlink: t.cursorBlink,
+              scrollback: t.scrollback
+            })),
+            reachedEveryTerminal: cosmeticLanded,
+            ptyResizesItCaused: cosmeticResizes,
+            costNothing: cosmeticIsFree
+          },
+          visiblePane: {
+            grid: { before: sessionGridBefore, after: sessionGridAfter },
+            ptyResizes: sessionResizedWhileVisible
+          },
+          hiddenPane: {
+            grid: { before: shellGridBefore, whileHidden: shellGridAfter, onceShown: shellGridShown },
+            ptyResizesWhileHidden: shellResizedWhileHidden,
+            ptyResizesOnceShown: shellResizedOnceShown
+          },
+          cell: {
+            paintedByXterm: { width: paintedCell, height: paintedRow },
+            measuredByThisDriver: measured,
+            stack: sessionAfter?.fontFamily ?? null,
+            devicePixel: step,
+            agrees: cellAgrees
+          },
+          rewritingTheSameValueMovedNothing: idempotent,
+          preSpawnEstimate: { estimate, settledAfterFit: settled, tracks: estimateTracks }
+        },
+        notes: [
+          'Every resize is captured by wrapping `sessions.resize` and',
+          '`pterm.resize` on the host objects the IPC handlers call, so what is',
+          'counted is what the pty was actually told rather than what the',
+          'renderer believes it sent.',
+          'A hidden pane measures 0x0 and `applyFit` refuses to act on that, so',
+          'its pty must NOT be resized while it is out of the document and must',
+          'be as soon as it comes back. Both halves are asserted; only asserting',
+          'the second would pass for a build that resized a hidden pane to 1x1.',
+          'The cell width xterm painted is compared with a measurement this',
+          'driver made itself at the same size in the same stack.',
+          'Cursor shape, blinking and scrollback are changed in a separate write',
+          'and must reach every terminal while resizing none of them: none of',
+          'the three moves a cell, and a pty told its size changed when it has',
+          'not is a full repaint of whatever is running in it.',
+          'The size is then written again unchanged: a settings write that',
+          'refits regardless would put a SIGWINCH through every running TUI on',
+          'an unrelated setting.',
+          'The estimate is the grid `estimateGrid` produced before a pane had',
+          'measured anything, recorded by the pty host at open. At 20px it can',
+          'only land within a column of the fit if the estimate reads the',
+          'setting rather than the built-in 14.'
+        ]
+      })
+
+      // ---------------------------------------------------------------------
+      // S-11: the user's family is prepended, never substituted
+      // ---------------------------------------------------------------------
+      await openSettings(win)
+      await sleep(400)
+      await js<void>(
+        win,
+        `(() => { const el = document.querySelector('[data-settings-pane]');
+          if (el) el.scrollTop = el.scrollHeight })()`
+      )
+      await sleep(300)
+
+      const present = 'Consolas'
+      const absent = 'Helm No Such Font'
+
+      await typeInto(win, '[data-settings-terminal-font]', present)
+      const presentLanded = await pollJs(
+        win,
+        `window.__helmTerminals().shells.every((t) => t.fontFamily.startsWith('"${present}"'))`,
+        15_000
+      )
+      await sleep(800)
+      const withPresent = await terminalSnapshot(win)
+      const presentStack = withPresent.shells[0]?.fontFamily ?? ''
+      const presentInstalled = await driverSeesFont(win, present)
+      const hintWithPresent = await exists(win, '[data-settings-terminal-font-missing]')
+      const rowWithPresent = rowValue(dbFile, 'terminalFontFamily')
+
+      await typeInto(win, '[data-settings-terminal-font]', absent)
+      const absentLanded = await pollJs(
+        win,
+        `window.__helmTerminals().shells.every((t) => t.fontFamily.startsWith('"${absent}"'))`,
+        15_000
+      )
+      await sleep(800)
+      const withAbsent = await terminalSnapshot(win)
+      const absentStack = withAbsent.shells[0]?.fontFamily ?? ''
+      const absentInstalled = await driverSeesFont(win, absent)
+      const hintWithAbsent = await attr(
+        win,
+        '[data-settings-terminal-font-missing]',
+        'data-settings-terminal-font-missing'
+      )
+      const rowWithAbsent = rowValue(dbFile, 'terminalFontFamily')
+
+      // Three measurements this driver makes for itself. The default stack and
+      // the nonsense-prepended stack must measure the same - that is the
+      // fallback working. The nonsense family *alone* must measure differently,
+      // which is what makes the first comparison mean anything: a build that
+      // replaced the stack instead of prepending would land on that value.
+      const wDefault = (await measureCell(win, 14, DEFAULT_FONT_STACK)).spanWidth
+      const wPrepended = (await measureCell(win, 14, `"${absent}", ${DEFAULT_FONT_STACK}`)).spanWidth
+      const wAlone = (await measureCell(win, 14, `"${absent}"`)).spanWidth
+      const fallbackHeld = Math.abs(wPrepended - wDefault) <= 0.01
+      const fixtureDiscriminates = Math.abs(wAlone - wDefault) > 0.5
+
+      const shot11 = await screenshot(win, shotDir, 'settings-11-terminal-font.png')
+
+      // Back to the built-in stack, through the pane's own button.
+      await click(win, '[data-settings-terminal-font-clear]')
+      const cleared = await pollJs(
+        win,
+        `window.__helmTerminals().shells.every((t) => t.fontFamily === ${JSON.stringify(
+          DEFAULT_FONT_STACK
+        )})`,
+        15_000
+      )
+      const rowAfterClear = rowValue(dbFile, 'terminalFontFamily')
+
+      checks.push({
+        id: 'S-11',
+        criterion:
+          'The user font is prepended to the default stack, never replaces it; a font this machine lacks degrades per glyph',
+        title:
+          'Both an installed and an absent family land in front of the built-in stack, the absent one raises the hint, and rendering falls back',
+        ok:
+          presentLanded &&
+          presentStack === `"${present}", ${DEFAULT_FONT_STACK}` &&
+          presentInstalled &&
+          !hintWithPresent &&
+          rowWithPresent === present &&
+          absentLanded &&
+          absentStack === `"${absent}", ${DEFAULT_FONT_STACK}` &&
+          !absentInstalled &&
+          hintWithAbsent === absent &&
+          rowWithAbsent === absent &&
+          fallbackHeld &&
+          fixtureDiscriminates &&
+          cleared &&
+          rowAfterClear === null,
+        detail: {
+          defaultStackThisDriverExpects: DEFAULT_FONT_STACK,
+          installedFamily: {
+            typed: present,
+            resolvedStack: presentStack,
+            thisDriverSeesTheFont: presentInstalled,
+            hintShown: hintWithPresent,
+            databaseRow: rowWithPresent
+          },
+          absentFamily: {
+            typed: absent,
+            resolvedStack: absentStack,
+            thisDriverSeesTheFont: absentInstalled,
+            hintNames: hintWithAbsent,
+            databaseRow: rowWithAbsent
+          },
+          cellWidthAt14: {
+            defaultStack: wDefault,
+            absentPrependedToIt: wPrepended,
+            absentFamilyAlone: wAlone,
+            fallbackHeld,
+            fixtureDiscriminates
+          },
+          clearedBackToBuiltIn: cleared,
+          databaseRowAfterClear: rowAfterClear,
+          screenshots: [shot11.file]
+        },
+        notes: [
+          'Typed into the real field with real keystrokes and committed with',
+          'Enter, so what is measured is the control a person uses.',
+          'The expected stack is this file’s own constant, not an import from',
+          '`terminal.ts`: the claim is about what the terminal ends up with, and',
+          'importing the value would make it agree with itself.',
+          'The fallback is proved by measurement, not by the string. A nonsense',
+          'family in front of the stack must measure exactly what the stack',
+          'measures - and the same family ALONE must measure something else, or',
+          'the first comparison would pass for a build that had thrown the stack',
+          'away.'
+        ]
+      })
+
+      // ---------------------------------------------------------------------
+      // S-12: the shell a project pane opens
+      // ---------------------------------------------------------------------
+      const swept: Record<string, string | null> = {}
+      for (const name of Object.keys(EXPECTED_SHELL_ARGS)) {
+        swept[name] = whereIs(name)[0] ?? null
+      }
+      const sweptNames = Object.entries(swept)
+        .filter(([, path]) => path !== null)
+        .map(([name]) => name)
+        .sort()
+
+      const offered = ctx.pterm.detected()
+      const offeredNames = offered.map((shell) => shell.name.toLowerCase()).sort()
+      const throughTheChannel = await js<Array<{ name: string; path: string; args: string[] }>>(
+        win,
+        `window.helm.invoke('pterm:shells')`
+      )
+      const listMatches = offeredNames.join(',') === sweptNames.join(',')
+      const pathsMatch = offered.every(
+        (shell) => (swept[shell.name.toLowerCase()] ?? '').toLowerCase() === shell.path.toLowerCase()
+      )
+      const argsMatch = offered.every(
+        (shell) =>
+          JSON.stringify(shell.args) ===
+          JSON.stringify(EXPECTED_SHELL_ARGS[shell.name.toLowerCase()] ?? null)
+      )
+      const channelAgrees =
+        throughTheChannel.map((s) => s.name.toLowerCase()).sort().join(',') === offeredNames.join(',')
+
+      // Every detected shell, actually launched. `bash -NoLogo` - which the
+      // substring test this table replaces would have produced for any bash
+      // under a path containing "pwsh" - prints a usage error and exits, so a
+      // shell that is still alive a second and a half later is the evidence
+      // that its arguments were the right ones.
+      const launchedShells: Array<Record<string, unknown>> = []
+      let everyShellSurvived = true
+      for (const [index, shell] of offered.entries()) {
+        const dir = join(fixtures.dir, `shell-${String(index)}`)
+        mkdirSync(dir, { recursive: true })
+        let opened: { id: number; shell: string } | null = null
+        try {
+          opened = ctx.pterm.open({ path: dir, cols: 80, rows: 24, shell: shell.path })
+        } catch (err) {
+          opened = null
+          launchedShells.push({ name: shell.name, spawnError: String(err) })
+        }
+        if (opened === null) {
+          if (MUST_SURVIVE.includes(shell.name.toLowerCase())) everyShellSurvived = false
+          continue
+        }
+        await sleep(1600)
+        const alive = ctx.pterm.list().some((entry) => entry.id === opened.id)
+        if (!alive && MUST_SURVIVE.includes(shell.name.toLowerCase())) everyShellSurvived = false
+        launchedShells.push({
+          name: shell.name,
+          path: shell.path,
+          args: shell.args,
+          reported: opened.shell,
+          stillRunningAfter1600ms: alive,
+          required: MUST_SURVIVE.includes(shell.name.toLowerCase())
+        })
+        ctx.pterm.close(opened.id)
+      }
+
+      /**
+       * The default shell, flipped twice through the pane's own picker with no
+       * restart in between.
+       *
+       * Neither choice is the one auto-detection would make - `pwsh.exe` is
+       * first in the list and is deliberately not used here - so "the shell it
+       * opened under" cannot be satisfied by a resolver that ignored the
+       * setting entirely. The row is put back to null first, so the first pick
+       * is a change rather than a value an earlier group already left behind.
+       */
+      const auto = offered[0]?.path ?? null
+      const cmd = swept['cmd.exe'] ?? null
+      const winPs = swept['powershell.exe'] ?? null
+      const dirs = ['default-auto', 'default-a', 'default-b'].map((name) => {
+        const dir = join(fixtures.dir, name)
+        mkdirSync(dir, { recursive: true })
+        return dir
+      })
+      const openDefault = (dir: string): Promise<{ shell: string }> =>
+        js<{ shell: string }>(
+          win,
+          `window.helm.invoke('pterm:open', { path: ${JSON.stringify(dir)}, cols: 80, rows: 24 })`
+        )
+
+      await sendWrite(win, { terminalShell: null })
+      await sleep(500)
+      const rowWhenAuto = rowValue(dbFile, 'terminalShell')
+      const underAuto = await openDefault(dirs[0] ?? '')
+
+      await openSettings(win)
+      await sleep(500)
+      const pickedCmd =
+        cmd !== null
+          ? await chooseOption(win, '[data-settings-terminal-shell]', cmd)
+          : { found: false, offered: false, set: false }
+      await sleep(800)
+      const rowAfterCmd = rowValue(dbFile, 'terminalShell')
+      const underCmd = await openDefault(dirs[1] ?? '')
+
+      const pickedWinPs =
+        winPs !== null
+          ? await chooseOption(win, '[data-settings-terminal-shell]', winPs)
+          : { found: false, offered: false, set: false }
+      await sleep(800)
+      const rowAfterWinPs = rowValue(dbFile, 'terminalShell')
+      const underWinPs = await openDefault(dirs[2] ?? '')
+
+      const same = (a: string | null | undefined, b: string | null | undefined): boolean =>
+        (a ?? '').toLowerCase() === (b ?? '').toLowerCase()
+      const flippedWithoutRestart =
+        rowWhenAuto === null &&
+        same(underAuto.shell, auto) &&
+        pickedCmd.offered &&
+        pickedCmd.set &&
+        rowAfterCmd === cmd &&
+        same(underCmd.shell, cmd) &&
+        pickedWinPs.offered &&
+        pickedWinPs.set &&
+        rowAfterWinPs === winPs &&
+        same(underWinPs.shell, winPs)
+      for (const entry of ctx.pterm.list()) {
+        if (dirs.includes(entry.path)) ctx.pterm.close(entry.id)
+      }
+
+      // The per-pane override, driven through the picker in the project shell's
+      // own header while the default sits on something else. What the other
+      // pane is running is written down first, so "it was left alone" is a
+      // comparison rather than an assumption about which shell it had.
+      const otherBefore = ctx.pterm
+        .list()
+        .find((entry) => entry.path.toLowerCase() === projectTwo.toLowerCase())?.shell
+      await clickProject(win, projectOne)
+      await sleep(1500)
+      const overrodeOne =
+        cmd !== null
+          ? await chooseOption(win, '[data-shell-picker]', cmd)
+          : { found: false, offered: false, set: false }
+      const overrideRan = await pollJs(
+        win,
+        `(document.querySelector('[data-shell-running]')?.dataset.shellRunning ?? '')
+          .toLowerCase() === ${JSON.stringify((cmd ?? '').toLowerCase())}`,
+        30_000
+      )
+      await sleep(1500)
+      const runningNow = ctx.pterm.list()
+      const overriddenPane = runningNow.find(
+        (entry) => entry.path.toLowerCase() === projectOne.toLowerCase()
+      )
+      const untouchedPane = runningNow.find(
+        (entry) => entry.path.toLowerCase() === projectTwo.toLowerCase()
+      )
+      // Discriminating only because the override is a shell the default is not:
+      // the default is Windows PowerShell by now and the override is cmd.
+      const overrideIsLocal =
+        !same(cmd, winPs) &&
+        same(overriddenPane?.shell, cmd) &&
+        same(untouchedPane?.shell, otherBefore)
+
+      // And the session is untouched by any of it. Asked of Windows rather than
+      // of Helm: whatever the shell setting says, the process behind a session
+      // pane has to be the CLI.
+      const sessionPid = ctx.sessions.pid(sessionId)
+      const sessionImage = sessionPid === null ? null : imageNameOf(sessionPid)
+      const claudeStatus = await js<{ path: string | null }>(win, `window.helm.invoke('setup:status')`)
+      const expectedImage = claudeStatus.path === null ? null : baseName(claudeStatus.path)
+      const sessionUnaffected =
+        sessionImage !== null &&
+        expectedImage !== null &&
+        sessionImage.toLowerCase() === expectedImage.toLowerCase()
+
+      const shot12 = await screenshot(win, shotDir, 'settings-12-terminal-shell.png')
+
+      checks.push({
+        id: 'S-12',
+        criterion:
+          'The default shell governs new project shells without a restart, a pane can override it for itself, and Claude sessions are unaffected',
+        title:
+          'The detected list matches this driver’s own where.exe sweep, every shell launches and survives, a flipped default takes effect on the next open, and one pane overrides alone',
+        ok:
+          listMatches &&
+          pathsMatch &&
+          argsMatch &&
+          channelAgrees &&
+          offered.length > 0 &&
+          everyShellSurvived &&
+          flippedWithoutRestart &&
+          overrodeOne.offered &&
+          overrodeOne.set &&
+          overrideRan &&
+          overrideIsLocal &&
+          sessionUnaffected,
+        detail: {
+          whereExeSweptByThisDriver: swept,
+          offeredByHelm: offered,
+          offeredThroughTheChannel: throughTheChannel,
+          listMatches,
+          pathsMatch,
+          argsMatchThisDriversTable: argsMatch,
+          expectedArgs: EXPECTED_SHELL_ARGS,
+          channelAgrees,
+          launchedShells,
+          everyRequiredShellSurvived: everyShellSurvived,
+          defaultShell: {
+            autoDetectWouldPick: auto,
+            unset: { databaseRow: rowWhenAuto, openedUnder: underAuto.shell },
+            firstPick: { picked: pickedCmd, databaseRow: rowAfterCmd, openedUnder: underCmd.shell },
+            secondPickNoRestart: {
+              picked: pickedWinPs,
+              databaseRow: rowAfterWinPs,
+              openedUnder: underWinPs.shell
+            },
+            flippedWithoutRestart
+          },
+          perPaneOverride: {
+            picked: overrodeOne,
+            headerFollowed: overrideRan,
+            defaultAtTheTime: winPs,
+            otherPaneBefore: otherBefore,
+            overriddenPane,
+            untouchedPane,
+            localOnly: overrideIsLocal
+          },
+          session: {
+            pid: sessionPid,
+            imageNameFromTasklist: sessionImage,
+            expectedFromSetupStatus: expectedImage,
+            unaffected: sessionUnaffected
+          },
+          screenshots: [shot10.file, shot12.file]
+        },
+        notes: [
+          'The offered list is compared against this driver’s own `where.exe`',
+          'sweep - paths and arguments both - rather than against anything Helm',
+          'computed, and the arguments against a table written here.',
+          'Every detected shell is then actually launched and checked to still',
+          'be alive: `bash -NoLogo`, which the filename substring test this',
+          'replaces would produce for a bash under any path containing "pwsh",',
+          'prints a usage error and exits. `wsl.exe` is launched and reported',
+          'but not required to survive - a machine can have it with no',
+          'distribution installed, which is not a fact about Helm.',
+          'The default is set to nothing, then flipped twice with no restart in',
+          'between, which is what proves the resolver is no longer answering',
+          'from a module-level variable it filled once. Neither chosen shell is',
+          'the one auto-detection picks, so a resolver that ignored the setting',
+          'could not pass by coincidence.',
+          'The per-pane override is driven from the picker in the shell pane’s',
+          'own header, and the other pane is checked to have kept the default -',
+          'an override that changed both would be a global setting with extra',
+          'steps.',
+          'That the session is unaffected is asked of Windows: `tasklist` is',
+          'given the pty’s pid and its answer compared with the executable',
+          '`setup:status` names.'
+        ]
+      })
+
+      // Put the pane back the way a person left it, so the run does not end
+      // with a maximised workspace and two fixture shells running.
+      await click(win, '[data-maximize="workspace"]')
+      await sleep(300)
+      for (const entry of ctx.pterm.list()) {
+        if (entry.path.toLowerCase().startsWith(fixtures.dir.toLowerCase())) {
+          ctx.pterm.close(entry.id)
+        }
+      }
+      // Forced, because the confirmation is the renderer's and nobody is here
+      // to answer it. The session was started by this driver and has no purpose
+      // beyond having been a terminal.
+      await js<unknown>(
+        win,
+        `window.helm.invoke('session:close', { id: ${String(sessionId)}, force: true })`
+      )
+      await js<unknown>(
+        win,
+        `window.helm.invoke('roots:remove', { path: ${JSON.stringify(fixtures.termRoot)} })`
+      )
+      await sleep(600)
+    } finally {
+      ctx.sessions.resize = realSessionResize
+      ctx.pterm.resize = realShellResize
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1055,7 +2084,17 @@ export async function runSettingsChecks(
     // Root A added through the pane and root B removed through it: one array
     // carrying both halves of the criterion across the restart. Root A appears
     // exactly once - `original` has had this driver's own paths scrubbed out.
-    scanRoots: [...original.scanRoots, fixtures.rootA]
+    scanRoots: [...original.scanRoots, fixtures.rootA],
+    // All six terminal settings, every one of them off its default for the same
+    // reason. `terminalShell` is parked on a real program rather than a
+    // fixture: a restore that somehow does not happen must leave the app able
+    // to open a shell.
+    terminalFontFamily: 'Consolas',
+    terminalFontSize: 15,
+    terminalCursorStyle: 'bar',
+    terminalCursorBlink: false,
+    terminalScrollback: 12345,
+    terminalShell: whereIs('cmd.exe')[0] ?? original.terminalShell
   }
 
   const applied = await sendWrite(win, parked as Record<string, unknown>)
@@ -1080,13 +2119,12 @@ export async function runSettingsChecks(
   checks.push({
     id: 'S-8',
     criterion: 'Every visible setting round-trips to the database',
-    title: 'The four settings the restart phase reads are in the file before the app is closed',
+    title: 'Every setting the restart phase reads is in the file before the app is closed',
     ok:
       applied.accepted &&
-      finalRows['theme'] === 'light' &&
-      finalRows['usageDisplay'] === 'off' &&
-      JSON.stringify(finalRows['scanRoots']) === JSON.stringify(parked.scanRoots) &&
-      (parked.claudePath === undefined || finalRows['claudePath'] === parked.claudePath),
+      Object.entries(parked).every(
+        ([key, value]) => JSON.stringify(finalRows[key]) === JSON.stringify(value)
+      ),
     detail: { parked, rowsInFile: finalRows, dbFile, originalSettings: original },
     notes: [
       'Read from the database file through a second connection, not from the',
