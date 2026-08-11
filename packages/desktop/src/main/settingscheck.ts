@@ -47,6 +47,15 @@ import { answerPicker } from './m7check'
 const GROUPS = ['pane', 'claude', 'roots', 'appearance', 'accessors', 'validation'] as const
 type Group = (typeof GROUPS)[number]
 
+/**
+ * What the pane paints in a fact it has no value for.
+ *
+ * Written out again rather than imported from the component: this is the
+ * check's own statement of what "nothing to show" looks like, and if the pane
+ * starts painting something else the two disagree, which is the point.
+ */
+const NOTHING = '-'
+
 // ---------------------------------------------------------------------------
 // The driver's own reads
 // ---------------------------------------------------------------------------
@@ -476,7 +485,7 @@ export async function runSettingsChecks(
     const paintedPath = await text(win, '[data-settings-claude-path]')
     const paintedVersion = await text(win, '[data-settings-claude-version]')
     const onPath = whereClaude()
-    const directVersion = paintedPath === '—' ? null : versionOf(paintedPath)
+    const directVersion = paintedPath === NOTHING ? null : versionOf(paintedPath)
     // `where.exe` is the answer a person would get by typing it, and Helm's
     // discovery is supposed to arrive at the same executable.
     const agreesWithPath =
@@ -529,7 +538,7 @@ export async function runSettingsChecks(
       title: 'The pane shows what the CLI actually is, takes an override, and gives it back',
       ok:
         paintedPath !== '' &&
-        paintedPath !== '—' &&
+        paintedPath !== NOTHING &&
         directVersion !== null &&
         paintedVersion === directVersion &&
         agreesWithPath &&

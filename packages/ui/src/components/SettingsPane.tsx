@@ -66,6 +66,9 @@ export interface SettingsPaneProps {
   hasCostEstimate: boolean
 }
 
+/** What a fact reads when there is nothing to put in it. */
+const NOTHING = '-'
+
 const USAGE_LABEL: Record<UsageDisplayMode, string> = {
   percent: 'Percent',
   cost: 'Cost',
@@ -126,15 +129,15 @@ export function SettingsPane({
             <dl className="mt-2.5 space-y-1.5">
               <Fact label="Path">
                 <span data-settings-claude-path title={status?.path ?? ''}>
-                  {status?.path ?? '—'}
+                  {status?.path ?? NOTHING}
                 </span>
               </Fact>
               <Fact label="Version">
-                <span data-settings-claude-version>{status?.version ?? '—'}</span>
+                <span data-settings-claude-version>{status?.version ?? NOTHING}</span>
               </Fact>
               <Fact label="Config">
                 <span data-settings-claude-config title={status?.configDir ?? ''}>
-                  {status?.configDir ?? '—'}
+                  {status?.configDir ?? NOTHING}
                 </span>
               </Fact>
             </dl>
