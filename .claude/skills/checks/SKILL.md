@@ -1,6 +1,6 @@
 ---
 name: checks
-description: How Helm's real-window checks work - m2-check through m7-check, usage-check, fidelity, claude-check, design-shot. Use when running one, narrowing a re-run with --only, reading a report, diagnosing a failure, or writing a new check.
+description: How Helm's real-window checks work - m2-check through m7-check, usage-check, settings-check, fidelity, claude-check, design-shot. Use when running one, narrowing a re-run with --only, reading a report, diagnosing a failure, or writing a new check.
 ---
 
 ## Helm's checks
@@ -112,6 +112,22 @@ fixture's window is set to expire ten seconds out so a rollover happens
 *underneath* the segment, and the full parse the index avoids is measured rather
 than quoted. Two phases, because "the mode survives a restart" cannot be
 asserted by the process that set it.
+
+**`settings-check`** - the settings pane and every app setting. The second
+reader is this driver's **own read-only connection to `helm.db`**, opened beside
+each UI assertion: reading through `services.store` would be reading the handle
+the app just wrote through, which passes whether or not anything was committed.
+Three things it does not settle by agreement - the removal of a scan root is
+checked against the *next scan's* project set rather than against the list of
+roots, the theme against the colour Electron was handed for the window controls
+(captured by wrapping `setTitleBarOverlay` on the window itself) compared with
+the `--helm-bg` token as CSS resolved it, and the CLI override against a stub
+program on disk that answers `--version` with 9.9.9. Every rejection case is
+preceded by a **valid** write of the same key through the same channel, because
+"the row did not change" is also what a channel that writes nothing would
+report. Two phases: it parks four settings on non-default values, and
+`run-settings.mjs` starts the app again to read them back - and to restore the
+originals, since this one borrows the real database.
 
 **`fidelity` and `claude-check`** - TUI fidelity inside xterm. These render
 `spike.html`, a separate page from the app, so app layout changes cannot move

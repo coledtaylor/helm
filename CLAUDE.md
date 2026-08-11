@@ -94,6 +94,7 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   | `pnpm m6-check` | markdown, artifacts, wikilinks, editor | `core/content/`, the content viewer |
   | `pnpm m7-check` | first run, packaging, personal-path audit | setup, portable mode, the installer |
   | `pnpm usage-check` | the status bar's usage figures | `core/usage/`, the status bar |
+  | `pnpm settings-check` | the settings pane, and every app setting | `core/store/settings.ts`, `SettingsPane`, anything that writes a setting |
   | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
 
 - `dist:win` goes through `scripts/dist-win.mjs`, not straight to
@@ -176,6 +177,29 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
 - Schema changes: edit `packages/core/src/store/schema.ts`, then
   `pnpm db:generate`. The generated SQL is embedded into the bundle, so a
   packaged exe carries its migrations rather than needing files beside it.
+- **Adding an app setting** is four edits and no migration, because
+  `app_settings` is JSON-per-key:
+  1. the key and its default in `AppSettings` / `DEFAULT_SETTINGS`
+     (`core/src/types.ts`) - that is the whole of the persistence step;
+  2. a validator in `SETTING_VALIDATORS` (`core/src/store/settings.ts`). The map
+     is `Record<keyof AppSettings, ...>`, so a key with no validator does not
+     compile, and a value that fails one writes nothing and throws. Add its
+     valid *and* invalid cases to the table in `store.test.ts`;
+  3. a row in the matching group of `ui/src/components/SettingsPane.tsx`, with a
+     `data-settings-*` hook so the driver can drive it;
+  4. only if the value drives something outside the database, a branch in the
+     `settings:write` ladder in `main/ipc.ts` - that ladder is the entire
+     side-effect dispatch (theme retints the overlay, `claudePath` reaches the
+     session host).
+
+  Then extend `pnpm settings-check`: a setting with no assertion in it is a
+  setting nothing proves round-trips. Reads stay tolerant (unknown keys ignored,
+  bad JSON falls back per key) and writes stay strict - a row from another build
+  is a fact about the past, a malformed write is a bug happening now. Internal
+  state (`windowBounds`, `firstRunCompletedAt`) lives in the same table and is
+  deliberately *not* in the pane: those are things Helm remembers, not things
+  anyone chose. Settings for Helm go here; anything that edits a `.claude` tree
+  is the config console's, and the two are not the same surface.
 - Do not use `@anthropic-ai/claude-agent-sdk`. Helm shells out to the `claude`
   CLI. This is a deliberate architectural decision (see SPEC "Supersedes the SDK
   draft") - the app hosts the TUI, it does not reimplement the client.

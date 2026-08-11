@@ -8,10 +8,10 @@ import {
   protocol,
   shell
 } from 'electron'
-import { writeSetting, type AppSettings } from '@helm/core'
+import { writeSetting, writeSettings, type AppSettings } from '@helm/core'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { emit, registerIpc, resolvedTheme } from './ipc'
 import { appMode, dataDir, initDataDir, shimRoot } from './paths'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
@@ -35,6 +35,7 @@ import { runM4Checks } from './m4check'
 import { runM5Checks } from './m5check'
 import { runM6Checks } from './m6check'
 import { runUsageChecks } from './usagecheck'
+import { runSettingsChecks } from './settingscheck'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -69,6 +70,8 @@ type Mode =
   | 'm7-firstrun'
   | 'usage-check'
   | 'usage-settings'
+  | 'settings-check'
+  | 'settings-restart'
   | 'shim-sweep'
   | 'design-shot'
 
@@ -86,6 +89,8 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--m7-firstrun')) return 'm7-firstrun'
   if (process.argv.includes('--usage-check')) return 'usage-check'
   if (process.argv.includes('--usage-settings')) return 'usage-settings'
+  if (process.argv.includes('--settings-check')) return 'settings-check'
+  if (process.argv.includes('--settings-restart')) return 'settings-restart'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
   if (process.argv.includes('--claude')) return 'claude'
   if (process.argv.includes('--shell')) return 'shell'
@@ -105,6 +110,7 @@ const isSpikeMode =
   mode !== 'm7-check' &&
   mode !== 'm7-firstrun' &&
   mode !== 'usage-check' &&
+  mode !== 'settings-check' &&
   mode !== 'design-shot'
 
 initDataDir()
@@ -689,6 +695,44 @@ app.whenReady().then(() => {
     return
   }
 
+  /**
+   * The second phase of `settings-check`, and the whole of it.
+   *
+   * Same shape as `--usage-settings` and for the same reason: the process that
+   * wrote a setting cannot prove a restart finds it. This one starts through
+   * the ordinary path, reports every setting it read, and - given
+   * `--restore=<file>` - puts back the settings the driver wrote down before it
+   * borrowed the real database.
+   */
+  if (mode === 'settings-restart') {
+    const services = createServices()
+    const found = services.settings
+    const file = writeReport('settings-restart.json', {
+      startedAt: new Date().toISOString(),
+      settings: found,
+      dbFile: services.store.file
+    })
+    console.log(`settings after restart: ${JSON.stringify(found)}\nreport: ${file}`)
+
+    const restoreArg = process.argv.find((a) => a.startsWith('--restore='))
+    if (restoreArg) {
+      const from = restoreArg.slice('--restore='.length)
+      try {
+        const saved = JSON.parse(readFileSync(from, 'utf8')) as Partial<AppSettings>
+        // Through the ordinary write path, validators included: whatever is put
+        // back has to be something the app would have accepted anyway.
+        writeSettings(services.store, saved)
+        console.log(`settings restored from ${from}`)
+      } catch (err) {
+        console.error(`could not restore settings from ${from}: ${String(err)}`)
+      }
+    }
+
+    services.store.close()
+    app.exit(0)
+    return
+  }
+
   if (isSpikeMode) {
     startSpike()
     return
@@ -1025,6 +1069,57 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`usage-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  /**
+   * M8's settings pane, driven through the real window.
+   *
+   * The pickers are answered by the driver for the same reason `--m7-firstrun`
+   * answers them: "add a folder" and "locate the CLI" both open a native dialog
+   * that has no automation surface, and everything either one does afterwards -
+   * the handler, the settings write, the rescan - is the real thing.
+   *
+   * It borrows the user's own database, because the claim is about the real
+   * one. `scripts/run-settings.mjs` restarts the app to read what this left and
+   * then puts the originals back.
+   */
+  if (mode === 'settings-check') {
+    startApp({
+      chooseDirectory: (title: string) => pickerAnswer('directory', title),
+      chooseFile: (title: string) => pickerAnswer('file', title),
+      onReady: (ctx) => {
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runSettingsChecks(
+          ctx,
+          join(dataDir, 'screenshots'),
+          dataDir,
+          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
+        )
+          .then(({ checks, parked }) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('settings-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              parked,
+              checks
+            })
+            console.log(`settings-check report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`settings-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

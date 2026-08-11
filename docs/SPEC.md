@@ -164,7 +164,12 @@ Profiles live in SQLite, exportable to YAML so they travel with a harness.
 
 ---
 
-## 4. The Three Surfaces
+## 4. The Surfaces
+
+Three of them are the product - the launcher, the config console and the content
+viewer - and the terminal is what they all point at. Settings (4.5) is the app's
+own, added by M8 because every surface above it had a setting with nowhere to
+live.
 
 ### 4.1 Launcher
 
@@ -259,6 +264,46 @@ Read what Claude writes without a detour through Explorer and a text editor.
 `xterm.js` + `node-pty` hosting the **real** `claude` TUI, in tabs. Helm renders no
 messages, parses no output, handles no permissions. It supplies the argv, the cwd,
 and the environment, then gets out of the way.
+
+### 4.5 Settings
+
+Helm's own configuration, and the permanent home for all of it. Distinct from
+the config console by ownership: 4.2 edits the `.claude` trees that belong to
+Claude Code and are shared with every other client on the machine, this edits
+the app.
+
+A `{kind:'settings'}` workspace pane, opened by the gear in the title bar beside
+the theme toggle, laid out as one scrolling page of titled groups:
+
+- **Claude CLI** - the resolved executable, its version and whether that version
+  is inside the tested range, "Locate manually…", and **Clear override**
+- **Workspace** - the scan roots, with add *and remove*
+- **Appearance** - theme, and what the status bar's usage segment shows
+
+> [!note] Built by M8 (2026-08-11)
+> Three things the app had been missing rather than three new settings:
+> `claudePath` was reachable only during first run, so a wrong pick was
+> permanent once `firstRunCompletedAt` was stamped; `roots:remove` had had a
+> channel and a handler since M7 and **no caller at all**; and the usage mode
+> was reachable only by clicking the status bar until it landed on what you
+> wanted.
+>
+> The two quick accessors stay. A control beside the thing it changes is worth
+> having - what was missing was somewhere to find the setting when you are not
+> already looking at it. Both write `settings:write` and the pane renders
+> `settings:changed`, so they cannot disagree; `pnpm settings-check` clicks each
+> one and watches the pane follow.
+>
+> `app_settings` is JSON-per-key and needed no migration. What it did need was
+> **validation**: there was none, so `{theme:'purple'}` persisted and reached
+> `nativeTheme.themeSource`. Writes now validate per key and a patch applies as
+> one edit - one bad value writes none of them - while reads stay tolerant of
+> unknown keys and unparseable values. Strict in, forgiving out: a row from
+> another build is a fact about the past, a malformed write is a bug happening
+> now.
+>
+> Internal state (`windowBounds`, `firstRunCompletedAt`) is deliberately not
+> shown. Those are things Helm remembers, not things anyone chose.
 
 ---
 
