@@ -1,5 +1,11 @@
+import { isAbsolute } from 'node:path'
 import { sql } from 'drizzle-orm'
-import { DEFAULT_SETTINGS, type AppSettings } from '../types'
+import {
+  DEFAULT_SETTINGS,
+  THEME_PREFERENCES,
+  USAGE_DISPLAY_MODES,
+  type AppSettings
+} from '../types'
 import type { Store } from './db'
 import { appSettings } from './schema'
 
@@ -8,7 +14,129 @@ import { appSettings } from './schema'
  * site. Unknown keys in the table are ignored and missing keys fall back to
  * `DEFAULT_SETTINGS`, so a database written by an older or newer build still
  * loads.
+ *
+ * Reads are tolerant and writes are strict, and the asymmetry is deliberate.
+ * A row this build does not understand is a fact about the past - another
+ * version wrote it - and refusing to start over one would make every settings
+ * change a migration. A *write* that does not match a key's shape is a bug
+ * happening now: `{ theme: 'purple' }` reaches `nativeTheme.themeSource`, and
+ * a value that only fails at the surface it drives fails a long way from
+ * whatever sent it. So `writeSetting` and `writeSettings` validate first and
+ * write nothing at all when a value does not fit.
  */
+
+/**
+ * The shape of every key, restated as a predicate.
+ *
+ * One entry per key of `AppSettings`, enforced by the compiler: adding a key to
+ * the interface without a validator here does not compile. Each returns a
+ * sentence naming what was wrong, or null when the value is fine.
+ */
+type SettingValidators = { [K in keyof AppSettings]: (value: unknown) => string | null }
+
+const oneOf = (allowed: readonly string[]) => {
+  return (value: unknown): string | null =>
+    typeof value === 'string' && allowed.includes(value)
+      ? null
+      : `expected one of ${allowed.join(', ')}, got ${describe(value)}`
+}
+
+/** What a rejected value was, for the message. Short - this goes in an Error. */
+function describe(value: unknown): string {
+  if (value === null) return 'null'
+  if (typeof value === 'string') return JSON.stringify(value)
+  if (Array.isArray(value)) return `an array of ${String(value.length)}`
+  if (typeof value === 'object') return 'an object'
+  return `${typeof value} ${String(value)}`
+}
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value)
+
+export const SETTING_VALIDATORS: SettingValidators = {
+  theme: oneOf(THEME_PREFERENCES),
+
+  usageDisplay: oneOf(USAGE_DISPLAY_MODES),
+
+  /**
+   * Absolute paths only. A relative root would be resolved against whatever
+   * the process's working directory happened to be - which for a packaged app
+   * is wherever the shortcut pointed - so the same setting would scan two
+   * different directories on two different launches.
+   */
+  scanRoots: (value) => {
+    if (!Array.isArray(value)) return `expected an array of paths, got ${describe(value)}`
+    for (const entry of value) {
+      if (typeof entry !== 'string' || entry.trim() === '') {
+        return `expected every root to be a path, got ${describe(entry)}`
+      }
+      if (!isAbsolute(entry)) return `expected an absolute path, got ${JSON.stringify(entry)}`
+    }
+    return null
+  },
+
+  /** Null means "find it"; anything else has to be an absolute path. */
+  claudePath: (value) => {
+    if (value === null) return null
+    if (typeof value !== 'string' || value.trim() === '') {
+      return `expected an absolute path or null, got ${describe(value)}`
+    }
+    if (!isAbsolute(value)) return `expected an absolute path, got ${JSON.stringify(value)}`
+    return null
+  },
+
+  /**
+   * Geometry, not a preference - but it is written on every resize, so a
+   * nonsense value here is a window that opens off screen or 0px wide.
+   * Position is optional and only meaningful as a pair.
+   */
+  windowBounds: (value) => {
+    if (value === null) return null
+    if (typeof value !== 'object' || Array.isArray(value)) {
+      return `expected window bounds or null, got ${describe(value)}`
+    }
+    const bounds = value as Record<string, unknown>
+    if (!isFiniteNumber(bounds['width']) || bounds['width'] <= 0) {
+      return `expected a positive width, got ${describe(bounds['width'])}`
+    }
+    if (!isFiniteNumber(bounds['height']) || bounds['height'] <= 0) {
+      return `expected a positive height, got ${describe(bounds['height'])}`
+    }
+    for (const axis of ['x', 'y'] as const) {
+      const at = bounds[axis]
+      if (at !== undefined && !isFiniteNumber(at)) {
+        return `expected a number for ${axis}, got ${describe(at)}`
+      }
+    }
+    return null
+  },
+
+  /** A timestamp, or null for "has not happened". Parsed, not pattern-matched. */
+  firstRunCompletedAt: (value) => {
+    if (value === null) return null
+    if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
+      return `expected an ISO timestamp or null, got ${describe(value)}`
+    }
+    return null
+  }
+}
+
+/** A write that was refused, with the key and the reason in the message. */
+export class SettingsValidationError extends Error {
+  readonly problems: readonly string[]
+
+  constructor(problems: readonly string[]) {
+    super(`settings rejected: ${problems.join('; ')}`)
+    this.name = 'SettingsValidationError'
+    this.problems = problems
+  }
+}
+
+/** The problem with this value for this key, or null when there is none. */
+export function validateSetting(key: keyof AppSettings, value: unknown): string | null {
+  const problem = SETTING_VALIDATORS[key](value)
+  return problem === null ? null : `${key}: ${problem}`
+}
 
 export function readSettings(store: Store): AppSettings {
   const rows = store.db.select().from(appSettings).all()
@@ -32,6 +160,9 @@ export function writeSetting<K extends keyof AppSettings>(
   key: K,
   value: AppSettings[K]
 ): void {
+  const problem = validateSetting(key, value)
+  if (problem !== null) throw new SettingsValidationError([problem])
+
   store.db
     .insert(appSettings)
     .values({ key, value: JSON.stringify(value) })
@@ -45,12 +176,27 @@ export function writeSetting<K extends keyof AppSettings>(
     .run()
 }
 
+/**
+ * A patch, applied as one edit.
+ *
+ * Every key is validated *before* anything is written, so a patch carrying one
+ * bad value leaves the table exactly as it was rather than half applied - the
+ * caller's next read then still describes a state the app was ever actually in.
+ * Keys this build does not know are skipped rather than rejected: that is the
+ * read side's tolerance, kept on the write side for the same reason.
+ */
 export function writeSettings(store: Store, patch: Partial<AppSettings>): AppSettings {
+  const entries = Object.entries(patch).filter(([key]) => key in DEFAULT_SETTINGS) as Array<
+    [keyof AppSettings, AppSettings[keyof AppSettings]]
+  >
+
+  const problems = entries
+    .map(([key, value]) => validateSetting(key, value))
+    .filter((problem): problem is string => problem !== null)
+  if (problems.length > 0) throw new SettingsValidationError(problems)
+
   const apply = store.raw.transaction(() => {
-    for (const [key, value] of Object.entries(patch)) {
-      if (!(key in DEFAULT_SETTINGS)) continue
-      writeSetting(store, key as keyof AppSettings, value as AppSettings[keyof AppSettings])
-    }
+    for (const [key, value] of entries) writeSetting(store, key, value)
   })
   apply()
   return readSettings(store)

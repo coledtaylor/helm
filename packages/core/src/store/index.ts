@@ -38,7 +38,14 @@ export {
   type NewSession,
   type SessionQuery
 } from './sessions'
-export { readSettings, writeSetting, writeSettings } from './settings'
+export {
+  readSettings,
+  validateSetting,
+  writeSetting,
+  writeSettings,
+  SettingsValidationError,
+  SETTING_VALIDATORS
+} from './settings'
 export {
   countUsageMessages,
   forgetUsageFiles,

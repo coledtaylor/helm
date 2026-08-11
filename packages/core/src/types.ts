@@ -36,9 +36,11 @@ export {
 export {
   describeAge,
   nextUsageMode,
+  offerableUsageModes,
   parseUsage,
   usageProblem,
   usageView,
+  COST_MODE_UNAVAILABLE,
   USAGE_DISPLAY_MODES,
   USAGE_STALE_AFTER_MS,
   type UsageBucket,
@@ -390,6 +392,9 @@ export interface LaunchPlan {
 
 export type ThemePreference = 'system' | 'light' | 'dark'
 
+/** The three, as a value, so a validator and a control can share one list. */
+export const THEME_PREFERENCES: readonly ThemePreference[] = ['system', 'light', 'dark']
+
 /**
  * Persisted application settings. Keys are the column names in `app_settings`;
  * every value is JSON-encoded on the way in, so adding a key here is the only
@@ -415,8 +420,9 @@ export interface AppSettings {
    */
   claudePath: string | null
   /**
-   * What the status bar's usage segment shows. Cycled by clicking it until M7
-   * builds somewhere for a setting to live.
+   * What the status bar's usage segment shows. Set in the settings pane's
+   * Appearance group; clicking the segment itself still cycles it, because a
+   * quick accessor beside the thing it changes is worth keeping.
    */
   usageDisplay: UsageDisplayMode
 }

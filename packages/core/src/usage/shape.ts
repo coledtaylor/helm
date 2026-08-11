@@ -447,13 +447,31 @@ export function describeAge(ms: number): string {
  * What the status bar's usage segment shows.
  *
  * `cost` is only offered once the transcript index has produced an estimate -
- * offering a mode that would paint nothing is offering a broken setting. Until
- * M7 builds a settings surface, clicking the segment cycles through whichever
- * of these the current reading can honestly fill.
+ * offering a mode that would paint nothing is offering a broken setting. The
+ * setting lives in the settings pane's Appearance group; clicking the segment
+ * cycles through whichever of these the current reading can honestly fill,
+ * which is the quick accessor beside the thing it changes rather than the only
+ * way to reach it.
  */
 export type UsageDisplayMode = 'percent' | 'cost' | 'off'
 
 export const USAGE_DISPLAY_MODES: readonly UsageDisplayMode[] = ['percent', 'cost', 'off']
+
+/**
+ * Which modes may be offered for a reading, in one place.
+ *
+ * The status bar cycles them and the settings pane lists them, and the rule
+ * about `cost` is the same rule in both - so it is stated once here rather
+ * than twice, where the two could drift into a segment that cycles through a
+ * mode the pane has greyed out.
+ */
+export function offerableUsageModes(hasEstimate: boolean): UsageDisplayMode[] {
+  return hasEstimate ? ['percent', 'cost', 'off'] : ['percent', 'off']
+}
+
+/** Why `cost` is not on offer yet, for a title on the disabled control. */
+export const COST_MODE_UNAVAILABLE =
+  'Reading the transcripts. The estimate appears when the index has caught up.'
 
 /** The next mode in the cycle, skipping any this reading cannot fill. */
 export function nextUsageMode(

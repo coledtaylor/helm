@@ -14,7 +14,13 @@ import {
   runningSessionNames,
   startSession
 } from './sessions'
-import { readSettings, writeSetting, writeSettings } from './settings'
+import {
+  readSettings,
+  validateSetting,
+  writeSetting,
+  writeSettings,
+  SettingsValidationError
+} from './settings'
 
 let dir: string
 let store: Store
@@ -139,6 +145,151 @@ describe('settings', () => {
 
     expect(readSettings(store).theme).toBe(DEFAULT_SETTINGS.theme)
   })
+})
+
+describe('settings validation', () => {
+  /**
+   * Every key, with a value that fits and one that does not.
+   *
+   * The good column is not decoration: a rejection test whose valid case is
+   * never exercised cannot tell "the validator is right" from "the validator
+   * refuses everything", which is the same trap CLAUDE.md's fixture rule
+   * describes. Both columns run against the same key.
+   */
+  const cases: Array<{
+    key: keyof typeof DEFAULT_SETTINGS
+    good: unknown[]
+    bad: unknown[]
+  }> = [
+    {
+      key: 'theme',
+      good: ['system', 'light', 'dark'],
+      bad: ['purple', 'Dark', '', null, 1, ['dark'], { theme: 'dark' }]
+    },
+    {
+      key: 'usageDisplay',
+      good: ['percent', 'cost', 'off'],
+      bad: ['dollars', 'PERCENT', null, 0, ['off']]
+    },
+    {
+      key: 'scanRoots',
+      good: [[], [join(tmpdir(), 'a')], [join(tmpdir(), 'a'), join(tmpdir(), 'b')]],
+      bad: [null, 'C:\\work', ['repos/helm'], ['../up'], [''], [17], [null]]
+    },
+    {
+      key: 'claudePath',
+      good: [null, join(tmpdir(), 'claude.exe')],
+      bad: ['claude', 'bin\\claude.exe', '', 42, {}]
+    },
+    {
+      key: 'windowBounds',
+      good: [null, { width: 1280, height: 820 }, { width: 1280, height: 820, x: 40, y: 60 }],
+      bad: [
+        { width: 0, height: 820 },
+        { width: -1280, height: 820 },
+        { width: 1280 },
+        { width: '1280', height: '820' },
+        { width: 1280, height: 820, x: 'left', y: 60 },
+        { width: Number.NaN, height: 820 },
+        [1280, 820],
+        'maximized'
+      ]
+    },
+    {
+      key: 'firstRunCompletedAt',
+      good: [null, '2026-08-11T09:00:00.000Z'],
+      bad: ['soon', '', 1786353684315, {}]
+    }
+  ]
+
+  for (const { key, good, bad } of cases) {
+    it(`accepts every valid ${key} and rejects the rest`, () => {
+      for (const value of good) {
+        expect(validateSetting(key, value)).toBeNull()
+        expect(() => writeSetting(store, key, value as never)).not.toThrow()
+        expect(readSettings(store)[key]).toEqual(value)
+      }
+
+      for (const value of bad) {
+        expect(validateSetting(key, value)).toContain(key)
+        expect(() => writeSetting(store, key, value as never)).toThrow(SettingsValidationError)
+      }
+    })
+  }
+
+  it('leaves the stored value untouched when a write is rejected', () => {
+    writeSetting(store, 'theme', 'dark')
+
+    expect(() => writeSetting(store, 'theme', 'purple' as never)).toThrow(SettingsValidationError)
+    expect(readSettings(store).theme).toBe('dark')
+
+    const row = store.raw.prepare("SELECT value FROM app_settings WHERE key = 'theme'").get()
+    expect((row as { value: string }).value).toBe('"dark"')
+  })
+
+  it('applies a patch as one edit: one bad key writes none of them', () => {
+    writeSettings(store, { theme: 'dark', usageDisplay: 'cost' })
+
+    expect(() =>
+      writeSettings(store, { theme: 'light', usageDisplay: 'dollars' as never })
+    ).toThrow(SettingsValidationError)
+
+    expect(readSettings(store)).toMatchObject({ theme: 'dark', usageDisplay: 'cost' })
+  })
+
+  it('names every problem in the patch, not just the first', () => {
+    let thrown: SettingsValidationError | null = null
+    try {
+      writeSettings(store, { theme: 'purple' as never, claudePath: 'claude' })
+    } catch (err) {
+      thrown = err as SettingsValidationError
+    }
+
+    expect(thrown?.problems).toHaveLength(2)
+    expect(thrown?.message).toContain('theme')
+    expect(thrown?.message).toContain('claudePath')
+  })
+
+  it('still ignores keys it does not recognise rather than rejecting the patch', () => {
+    const after = writeSettings(store, {
+      theme: 'light',
+      // A key from a build that is not this one. Tolerated on the way in for
+      // the same reason `readSettings` tolerates it on the way out.
+      somethingLater: 'whatever'
+    } as never)
+
+    expect(after.theme).toBe('light')
+    expect(store.raw.prepare("SELECT * FROM app_settings WHERE key = 'somethingLater'").get()).toBe(
+      undefined
+    )
+  })
+
+  it('accepts a settings object read straight back out of the database', () => {
+    // The round trip that matters: whatever `readSettings` returns has to be
+    // writable again, or a surface that reads, edits one field and writes the
+    // whole object back would be rejected for values it never touched.
+    writeSettings(store, {
+      theme: 'dark',
+      scanRoots: [dir],
+      windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
+      firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
+      claudePath: join(dir, 'claude.exe'),
+      usageDisplay: 'off'
+    })
+
+    expect(() => writeSettings(store, readSettings(store))).not.toThrow()
+    expect(readSettings(store)).toEqual(DEFAULT_SETTINGS_SHAPE(dir))
+  })
+})
+
+/** What the round-trip test above expects, spelled out away from the writer. */
+const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
+  theme: 'dark',
+  scanRoots: [dir],
+  windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
+  firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
+  claudePath: join(dir, 'claude.exe'),
+  usageDisplay: 'off'
 })
 
 describe('project cache', () => {
