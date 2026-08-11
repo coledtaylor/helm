@@ -113,7 +113,18 @@ function Meter({ percent, severity }: Pick<UsageBucket, 'percent' | 'severity'>)
   )
 }
 
-function Bucket({ bucket, now }: { bucket: UsageBucket; now: number }): JSX.Element {
+function Bucket({
+  bucket,
+  now,
+  atLeast,
+  ageMs
+}: {
+  bucket: UsageBucket
+  now: number
+  /** The reading is stale, so this percentage is a floor. See `UsageView`. */
+  atLeast: boolean
+  ageMs: number | null
+}): JSX.Element {
   return (
     <span className="flex shrink-0 items-center gap-1.5">
       <Meter percent={bucket.percent} severity={bucket.severity} />
@@ -123,8 +134,21 @@ function Bucket({ bucket, now }: { bucket: UsageBucket; now: number }): JSX.Elem
       <span className="whitespace-nowrap tabular-nums">
         {bucketLabel(bucket)}{' '}
         <span className={cn('font-medium', SEVERITY_TEXT[bucket.severity])}>
+          {/* The `≥` is not decoration and does not drop at narrow widths. It
+              is the difference between what Helm knows and what it would be
+              claiming without it, and a floor printed as an exact figure is
+              the stale number this whole file exists to refuse. */}
+          {atLeast && <span title="at least">&ge;</span>}
           {Math.round(bucket.percent)}%
         </span>
+        {atLeast && ageMs !== null && (
+          <span className="hidden text-fg-subtle lg:inline">
+            <span aria-hidden className="px-1.5 text-fg-subtle/60">
+              &middot;
+            </span>
+            {describeAge(ageMs)} old
+          </span>
+        )}
         {bucket.resetsAtMs !== null && (
           // Hidden rather than shrunk below a wide window: the reset time is
           // the first thing that can go without the segment becoming a bare
@@ -226,7 +250,7 @@ export function UsageStatus({ snapshot, mode, onModeChange }: UsageStatusProps):
 
   const showing = mode === 'percent' ? view.buckets : []
   const spend = mode === 'cost' ? (snapshot?.spend ?? null) : null
-  const title = tooltip(snapshot, view.problem?.detail ?? null, view.ageMs, mode, now)
+  const title = tooltip(snapshot, view.problem?.detail ?? null, view.ageMs, mode, now, view.atLeast)
 
   return (
     <button
@@ -262,7 +286,7 @@ export function UsageStatus({ snapshot, mode, onModeChange }: UsageStatusProps):
         showing.map((bucket, at) => (
           <span key={bucket.group} className="flex items-center gap-2.5">
             {at > 0 && <Divider />}
-            <Bucket bucket={bucket} now={now} />
+            <Bucket bucket={bucket} now={now} atLeast={view.atLeast} ageMs={view.ageMs} />
           </span>
         ))
       )}
@@ -282,7 +306,9 @@ function tooltip(
   problem: string | null,
   ageMs: number | null,
   mode: UsageDisplayMode,
-  nowMs: number
+  nowMs: number,
+  /** The percentages on the segment are lower bounds. See `UsageView`. */
+  atLeast: boolean
 ): string {
   const lines: string[] = []
 
@@ -323,6 +349,17 @@ function tooltip(
         ageMs === null ? '' : `, ${describeAge(ageMs)} ago`
       }.`
     )
+    if (atLeast) {
+      // Says why the number can be trusted downward and not upward, which is
+      // the entire claim the `≥` on the segment is making.
+      lines.push(
+        '',
+        'Older than Helm stands behind exactly, so these are lower bounds: a',
+        'window only accumulates until it resets, so the real figures are these',
+        'or higher. Helm only reads Claude Code’s cache and never asks for usage',
+        'itself, so they sharpen when Claude Code next writes a newer reading.'
+      )
+    }
     for (const limit of snapshot.limits) {
       const resets =
         limit.resetsAtMs === null ? '' : `, resets ${formatMoment(limit.resetsAtMs)}`
