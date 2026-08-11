@@ -663,7 +663,10 @@ export async function runSettingsChecks(
          ghPath: Boolean(document.querySelector('[data-settings-gh-path]')),
          ghLocate: Boolean(document.querySelector('[data-settings-gh-locate]')),
          ghClear: Boolean(document.querySelector('[data-settings-clear-gh]')),
-         prPoll: Boolean(document.querySelector('[data-settings-pr-poll]'))
+         prPoll: Boolean(document.querySelector('[data-settings-pr-poll]')),
+         prPrompt: Boolean(document.querySelector('[data-settings-pr-prompt]')),
+         prPromptReset: Boolean(document.querySelector('[data-settings-pr-prompt-reset]')),
+         prCheckout: Boolean(document.querySelector('[data-settings-pr-checkout]'))
        })`
     )
     // Internal state is not a preference, and the pane must not have grown a
@@ -1270,6 +1273,18 @@ export async function runSettingsChecks(
         good: 15,
         bad: 1,
         why: 'a one-minute sweep is one gh per remote against the user’s own rate limit'
+      },
+      {
+        key: 'prReviewPrompt',
+        good: '/code-review {number}',
+        bad: '   ',
+        why: 'an empty template makes the review button start an ordinary session'
+      },
+      {
+        key: 'prCheckout',
+        good: 'none',
+        bad: 'worktree',
+        why: 'a mode that is planned and not built would silently do nothing'
       }
     ]
 
@@ -2202,11 +2217,32 @@ export async function runSettingsChecks(
     await sleep(600)
     const rowWhenFifteen = rowValue(dbFile, 'prPollMinutes')
 
+    // The review launch's two settings (M12), through the pane's own controls.
+    // The template is typed rather than written, because a text field that
+    // commits on blur has two ways to fail that a row write does not.
+    const template = 'Review {slug}#{number} on {branch}'
+    const typedTemplate = await typeInto(win, '[data-settings-pr-prompt]', template)
+    await sleep(600)
+    const rowAfterTyping = rowValue(dbFile, 'prReviewPrompt')
+    const resetDisabledWhenCustom = await disabled(win, '[data-settings-pr-prompt-reset]')
+    await click(win, '[data-settings-pr-prompt-reset]')
+    await sleep(600)
+    const rowAfterReset = rowValue(dbFile, 'prReviewPrompt')
+    const resetDisabledWhenDefault = await disabled(win, '[data-settings-pr-prompt-reset]')
+
+    const pickedCheckout = await chooseOption(win, '[data-settings-pr-checkout]', 'checkout')
+    await sleep(600)
+    const rowWhenCheckout = rowValue(dbFile, 'prCheckout')
+    const pickedNone = await chooseOption(win, '[data-settings-pr-checkout]', 'none')
+    await sleep(600)
+    const rowWhenNone = rowValue(dbFile, 'prCheckout')
+
     checks.push({
       id: 'S-13',
-      criterion: 'ghPath and prPollMinutes are settable from the pane’s GitHub group',
+      criterion:
+        'Every GitHub setting is settable from the pane’s GitHub group: the gh path, the interval, the review prompt and the checkout mode',
       title:
-        'The pane names the gh this machine actually has, takes an override that reaches the fetch, and both intervals reach the database',
+        'The pane names the gh this machine actually has, takes an override that reaches the fetch, and the interval, prompt and checkout mode all reach the database',
       ok:
         paintedPath !== '' &&
         paintedPath !== NOTHING &&
@@ -2236,7 +2272,20 @@ export async function runSettingsChecks(
         rowWhenOff === 0 &&
         pickedFifteen.offered &&
         pickedFifteen.set &&
-        rowWhenFifteen === 15,
+        rowWhenFifteen === 15 &&
+        typedTemplate &&
+        rowAfterTyping === template &&
+        resetDisabledWhenCustom === false &&
+        rowAfterReset === '/code-review {number}' &&
+        // Disabled once it is back at the built-in prompt: a Reset that stays
+        // live is a Reset that says the setting is still custom.
+        resetDisabledWhenDefault === true &&
+        pickedCheckout.offered &&
+        pickedCheckout.set &&
+        rowWhenCheckout === 'checkout' &&
+        pickedNone.offered &&
+        pickedNone.set &&
+        rowWhenNone === 'none',
       detail: {
         discovered: { painted: { path: paintedPath, version: paintedVersion }, whereExeSays: onPath },
         askedTheExecutableDirectly: directVersion,
@@ -2260,6 +2309,18 @@ export async function runSettingsChecks(
           off: { picked: pickedOff, databaseRow: rowWhenOff },
           fifteen: { picked: pickedFifteen, databaseRow: rowWhenFifteen }
         },
+        reviewPrompt: {
+          typed: typedTemplate,
+          templateTyped: template,
+          databaseRowAfterTyping: rowAfterTyping,
+          resetEnabledWhileCustom: resetDisabledWhenCustom === false,
+          databaseRowAfterReset: rowAfterReset,
+          resetDisabledAtTheDefault: resetDisabledWhenDefault === true
+        },
+        checkoutMode: {
+          checkout: { picked: pickedCheckout, databaseRow: rowWhenCheckout },
+          none: { picked: pickedNone, databaseRow: rowWhenNone }
+        },
         screenshot: shotGh.file
       },
       notes: [
@@ -2275,7 +2336,14 @@ export async function runSettingsChecks(
         'on the sidebar row, in its short form. Detection is from gh’s exit code',
         'alone - nothing here or in the app opens a credential store.',
         'The interval is set through the select, including 0, which is the value',
-        'that disarms the timer rather than a small number inside the range.'
+        'that disarms the timer rather than a small number inside the range.',
+        'The review prompt is typed into the field and committed the way a person',
+        'commits it, then put back with Reset - and Reset is checked for being',
+        'disabled at the built-in prompt, because a Reset that stays live is one',
+        'saying the setting is still custom when it is not.',
+        'What these two settings actually *do* is `pnpm pr-check`’s: this proves',
+        'they are reachable and persist, and that driver proves the template',
+        'reaches the argv and that checkout mode refuses a dirty tree.'
       ]
     })
   }
@@ -2308,7 +2376,12 @@ export async function runSettingsChecks(
     // real claude: a restore that somehow does not happen must leave the app
     // pointed at a working program, not at a stub that refuses to sign in.
     ...(whereIs('gh.exe')[0] !== undefined ? { ghPath: whereIs('gh.exe')[0] } : {}),
-    prPollMinutes: 30
+    prPollMinutes: 30,
+    // Both off their defaults, like everything else here. The template is one
+    // no default could produce and the checkout mode is the non-default half of
+    // a two-value enum, which is the strongest either can be parked on.
+    prReviewPrompt: '/security-review {number} in {slug}',
+    prCheckout: 'checkout'
   }
 
   const applied = await sendWrite(win, parked as Record<string, unknown>)

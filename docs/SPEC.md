@@ -169,7 +169,8 @@ Profiles live in SQLite, exportable to YAML so they travel with a harness.
 Three of them are the product - the launcher, the config console and the content
 viewer - and the terminal is what they all point at. Settings (4.5) is the app's
 own, added by M8 because every surface above it had a setting with nowhere to
-live.
+live. Pull requests (4.6) is the first surface added after v1, and the first
+that shows something that is not on this machine.
 
 ### 4.1 Launcher
 
@@ -354,6 +355,94 @@ the theme toggle, laid out as one scrolling page of titled groups:
 > Internal state (`windowBounds`, `firstRunCompletedAt`) is deliberately not
 > shown. Those are things Helm remembers, not things anyone chose.
 
+### 4.6 Pull requests
+
+The first surface whose subject is not on this machine: the open pull requests
+of every scanned repository whose `origin` is on github.com, a GitHub-shaped
+detail tab for any one of them, and a button that starts a Claude Code session
+reviewing it.
+
+GitHub.com only, deliberately - there is no provider abstraction here and no
+room reserved for one. A second forge would need a different fetch mechanism, a
+different auth story and a different set of fields, and an interface guessed in
+advance would be wrong about all three.
+
+- **Sidebar** - a second global row under Session history, with the count on its
+  second line (`12 open · 5 repos`) or the reason there is not one.
+- **Pulls pane** - repository-grouped rows under sticky headers. A row is
+  `#42` and a title, then author, age, `head→base` and `+a −d` in mono, with
+  chips for draft and review decision. No buttons on a row (house rule); the row
+  itself opens the pull request.
+- **Pull request tab** - Conversation, Commits and Files behind a segmented
+  control, laid out as GitHub's own page is because that is the shape anybody
+  opening it already knows. Header facts, a state chip in hairline tones, and
+  "Open on GitHub".
+- **Review** - a bottom island: one primary button, and a sentence naming the
+  program, the working directory and the exact opening prompt *before* it is
+  pressed.
+
+**Everything goes through the user's own `gh`.** Helm never receives, stores or
+reads a GitHub token: `gh` owns it, every fetch runs on it, and a sign-in is
+detected **only from the exit code of `gh auth status`**. Nothing opens
+`hosts.yml`, the keyring or `GH_TOKEN`. This is the same rule Claude's
+credentials have, for the same reason, and it is why the surface shells out
+rather than calling the API.
+
+**Degradation is stale-with-age, not degrade-to-nothing** - which is the
+opposite of the usage figures (4.4), and the difference is what the number
+means. A plan percentage from two hours ago is a wrong number; a pull request
+that was open two hours ago is a true fact about two hours ago. So a failed
+fetch leaves the cached rows exactly where they are, puts the reason on the
+repository that failed, and the age caption is **mandatory rather than
+decorative**: `PullsSnapshot.fetchedAtMs` exists so that no surface can paint
+the list without saying how old it is. No `gh` at all gets a sentence naming
+where to get one; an unauthenticated one gets `gh auth login`.
+
+**The review launch composes its prompt in main**, never in the window.
+`pr:review` carries `{repoPath, number, cols, rows}` and nothing else - the
+same shape `profile:launch` takes, and for the same reason: argv assembled in a
+renderer is argv that can drift from what was saved. Main looks the pull request
+up in its own cache, reads `prReviewPrompt` (default `/code-review {number}`,
+the built-in skill) and `prCheckout` out of settings, optionally runs `gh pr
+checkout` - refused outright on a dirty tree, because a tool that moves
+somebody's uncommitted work is a tool they stop trusting - and passes the
+rendered prompt as the trailing positional of an ordinary launch. From the
+moment it starts it is a session tab like any other, and **Helm never reads the
+review's output back**: 6 still applies, and a feature that needed to parse a
+session is a feature that belongs somewhere else.
+
+> [!note] Built by M10, M11 and M12 (2026-08-11)
+> Four v1 limits, flagged rather than discovered later.
+>
+> **Inline diff-thread comments are invisible to `gh --json`.** The JSON surface
+> exposes issue-level comments and each review's summary body; the notes people
+> leave on individual lines live on a review thread and are not in it at all. A
+> `gh api` GraphQL query would reach them. The conversation says so at the
+> bottom, because a conversation missing half its replies with no explanation
+> reads as a bug.
+>
+> **`origin` only.** `upstream` and renamed remotes are unmapped - a cheap later
+> extension, and one nobody has asked for yet.
+>
+> **No diff viewer.** The Files view lists paths and line counts and hands the
+> patch to the browser. A diff needs syntax, wrapping, whitespace modes and
+> review threads, and half of one is worse than a link.
+>
+> **`{branch}` names `headRefName`**, which on a pull request opened from a fork
+> does not exist in the local checkout unless checkout mode is on. The default
+> template uses `{number}` alone for exactly that reason, and the setting's help
+> text says so.
+>
+> `statusCheckRollup` is a GraphQL union whose members agree on nothing - a
+> `CheckRun` has `status`/`conclusion`, a legacy `StatusContext` has `state`
+> spelled differently, and GitHub adds members - so it is reduced defensively to
+> `{total, failing, pending}` and paints **nothing at all** when it cannot be
+> read. Null and `{total: 0}` are different facts and only one of them is safe
+> to show as a green tick.
+>
+> `pnpm pr-check` is the regression test: 13 checks in five phases, four of them
+> against a `gh` the repository wrote and one against the real one.
+
 ---
 
 ## 5. Architecture
@@ -382,6 +471,30 @@ helm/
 
 **The one discipline:** `core/` never imports Electron. That keeps the mobile
 option open and is what makes the app genuinely portable.
+
+### Network posture
+
+Amended by M10, deliberately and in the open, because until then the answer was
+"one request, only when asked" and that is no longer the whole of it.
+
+- **Helm's own process opens exactly one outbound connection**, and only when
+  `update:check` is invoked by hand: the GitHub releases API, for a version
+  number and a URL. It downloads nothing, executes nothing, and never runs on a
+  timer. See [PACKAGING.md](PACKAGING.md) for why there is no auto-updater.
+- **The pull-request surface reaches GitHub through the user's own `gh` CLI**,
+  on a schedule the user sets - `prPollMinutes`, five minutes by default, `0` to
+  turn it off - plus a fetch when a pull request is opened and one when a review
+  checks a branch out. Bytes leave the machine without `update:check` being
+  invoked, so the old sentence would have been false; the qualifier is "direct".
+- **No credential of any kind is stored, read or handled.** Claude's sign-in is
+  detected from the *existence* of an artefact and GitHub's from the *exit code*
+  of `gh auth status`. Nothing opens either. A remote URL carrying an embedded
+  token is a credential too, and it is stripped before anything is written to
+  the database.
+- **Nothing else talks to anything.** No telemetry, no crash reporting, no
+  fonts, no CDN. The renderer's `will-navigate` is prevented and its window-open
+  handler denies, so a link in rendered content is inert without
+  `shell:openExternal`, which is restricted to http, https and mailto.
 
 ### Portability
 

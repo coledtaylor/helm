@@ -149,7 +149,14 @@ it, and otherwise stays out of the way.
 There is no auto-updater, on purpose - see
 [docs/PACKAGING.md](docs/PACKAGING.md) for the three reasons. Helm can ask
 GitHub whether a newer release exists when you ask it to; that is the only
-outbound request the app makes, and it never happens on a timer.
+*direct* network request Helm makes, and it never happens on a timer.
+
+"Direct" earns its place there. The pull-request pane reaches GitHub too, and
+it does it by running **your own `gh` CLI** on a schedule you set - every five
+minutes by default, and `0` in Settings turns it off entirely. Helm opens no
+socket of its own for it and stores no GitHub credential: `gh` owns the token,
+every fetch runs on it, and the only thing Helm reads about your sign-in is the
+exit code of `gh auth status`.
 
 ## Architecture
 

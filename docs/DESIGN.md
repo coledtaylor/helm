@@ -172,6 +172,16 @@ Dividers inside an island fade to transparent at their ends - use the
   separated by 1px x 10px `border-strong` slivers. No border, no fill.
 - **Section labels**: the 10px/600 caps label style, everywhere a section
   needs a name.
+- **Launch disclosure**: a control that starts a process gets a sentence
+  beside it naming what will run, in 11px `fg-subtle` with the machine parts
+  in mono - the program, the working directory, and the argv Helm supplies
+  that the user did not type. `ProjectPane`'s "Runs `claude` with this folder
+  as the working directory" is the short case; the pull request pane's review
+  island is the long one, and it names the exact opening prompt because there
+  the argv is composed from a template the user can get wrong. Written down
+  once there were two of them. The sentence is not a tooltip and not a
+  confirmation: it is on screen *before* the button is pressed, which is also
+  what makes a mistyped placeholder visible rather than invisible.
 
 ## 5b. Shell chrome
 
