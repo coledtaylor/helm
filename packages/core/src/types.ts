@@ -395,6 +395,46 @@ export type ThemePreference = 'system' | 'light' | 'dark'
 /** The three, as a value, so a validator and a control can share one list. */
 export const THEME_PREFERENCES: readonly ThemePreference[] = ['system', 'light', 'dark']
 
+/** xterm's three cursor shapes, restated here so a validator and a control can
+ * share one list without either of them importing xterm. */
+export const TERMINAL_CURSOR_STYLES = ['block', 'underline', 'bar'] as const
+export type TerminalCursorStyle = (typeof TERMINAL_CURSOR_STYLES)[number]
+
+/**
+ * The bounds on the two numeric terminal settings.
+ *
+ * The font size ceiling is not taste. A pane is a few hundred pixels wide, and
+ * a grid narrow enough stops being a terminal: Claude Code's composer and
+ * status line assume they have columns to lay out in, and every check that
+ * asserts a pane came back with a usable grid is only loose because this is
+ * tight. The floor is the point below which the glyphs stop being legible on a
+ * 100% display.
+ */
+export const TERMINAL_FONT_SIZE = { min: 8, max: 32, default: 14 } as const
+
+/** Lines of history a terminal keeps. The ceiling is memory: a line is roughly
+ * a kilobyte of cell data, so a million of them per pane is not a setting. */
+export const TERMINAL_SCROLLBACK = { min: 500, max: 200_000, default: 10_000 } as const
+
+/**
+ * A shell Helm found on this machine, offered in the shell pickers.
+ *
+ * `path` is what gets launched and what gets stored, and it is absolute for the
+ * same reason `claudePath` is: a bare `pwsh.exe` means whatever the process's
+ * PATH happened to resolve it to, which is not necessarily what the user saw in
+ * the picker.
+ */
+export interface DetectedShell {
+  /** Absolute path to the executable. */
+  path: string
+  /** The file name - `pwsh.exe`. What the picker shows as machine data. */
+  name: string
+  /** A human label - "PowerShell 7". */
+  label: string
+  /** The arguments Helm would launch it with, from the per-shell table. */
+  args: string[]
+}
+
 /**
  * Persisted application settings. Keys are the column names in `app_settings`;
  * every value is JSON-encoded on the way in, so adding a key here is the only
@@ -425,6 +465,32 @@ export interface AppSettings {
    * quick accessor beside the thing it changes is worth keeping.
    */
   usageDisplay: UsageDisplayMode
+
+  /**
+   * A font family for the terminal panes, or null for the built-in stack.
+   *
+   * Whatever is named here is **prepended** to the default stack, never
+   * substituted for it. A monospace font chosen for its letterforms is rarely
+   * chosen for its box-drawing, CJK or emoji coverage, and Claude Code's TUI is
+   * made of box-drawing characters - so a font with holes in it has to degrade
+   * one glyph at a time rather than take the whole interface down with it.
+   */
+  terminalFontFamily: string | null
+  /** Point size for the terminal panes. Bounded by `TERMINAL_FONT_SIZE`. */
+  terminalFontSize: number
+  /** Cursor shape in the terminal panes. */
+  terminalCursorStyle: TerminalCursorStyle
+  terminalCursorBlink: boolean
+  /** Lines of history a terminal pane keeps. Bounded by `TERMINAL_SCROLLBACK`. */
+  terminalScrollback: number
+  /**
+   * The executable new project shells are opened with, or null to let Helm
+   * detect one. An absolute path, for the reason `DetectedShell.path` gives.
+   *
+   * Project shells only. A Claude session is not a shell - Helm hands the
+   * `claude` executable its own pty and this setting never reaches it.
+   */
+  terminalShell: string | null
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -433,7 +499,17 @@ export const DEFAULT_SETTINGS: AppSettings = {
   windowBounds: null,
   firstRunCompletedAt: null,
   claudePath: null,
-  usageDisplay: 'percent'
+  usageDisplay: 'percent',
+  // The four defaults below are the values Spike C measured and `terminal.ts`
+  // was built around. They are the documented baseline, not a starting point
+  // someone picked: a setting left alone must produce the configuration the
+  // fidelity checks measure.
+  terminalFontFamily: null,
+  terminalFontSize: TERMINAL_FONT_SIZE.default,
+  terminalCursorStyle: 'block',
+  terminalCursorBlink: true,
+  terminalScrollback: TERMINAL_SCROLLBACK.default,
+  terminalShell: null
 }
 
 // ---------------------------------------------------------------------------

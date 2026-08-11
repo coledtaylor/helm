@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, EMPTY_INVENTORY, type Project } from '../types'
+import { DEFAULT_SETTINGS, EMPTY_INVENTORY, type AppSettings, type Project } from '../types'
 import { openStore, type Store } from './db'
 import { knownMigrations } from './migrate'
 import { cacheProjects, readCachedProjects } from './projects'
@@ -99,23 +99,27 @@ describe('settings', () => {
   })
 
   it('round-trips every value type in AppSettings', () => {
-    writeSettings(store, {
+    const written = {
       theme: 'light',
       scanRoots: [dir, join(dir, 'other')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
       firstRunCompletedAt: '2026-08-09T12:00:00.000Z',
       claudePath: join(dir, 'claude.exe'),
-      usageDisplay: 'cost'
-    })
+      usageDisplay: 'cost',
+      terminalFontFamily: 'Consolas',
+      terminalFontSize: 17,
+      terminalCursorStyle: 'bar',
+      terminalCursorBlink: false,
+      terminalScrollback: 2500,
+      terminalShell: join(dir, 'pwsh.exe')
+    } satisfies AppSettings
 
-    expect(readSettings(store)).toEqual({
-      theme: 'light',
-      scanRoots: [dir, join(dir, 'other')],
-      windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
-      firstRunCompletedAt: '2026-08-09T12:00:00.000Z',
-      claudePath: join(dir, 'claude.exe'),
-      usageDisplay: 'cost'
-    })
+    writeSettings(store, written)
+
+    expect(readSettings(store)).toEqual(written)
+    // Every key of the interface, not merely the ones this test remembered to
+    // list: a key added without a line here would otherwise round-trip untested.
+    expect(Object.keys(written).sort()).toEqual(Object.keys(DEFAULT_SETTINGS).sort())
   })
 
   it('survives a restart', () => {
@@ -199,6 +203,48 @@ describe('settings validation', () => {
       key: 'firstRunCompletedAt',
       good: [null, '2026-08-11T09:00:00.000Z'],
       bad: ['soon', '', 1786353684315, {}]
+    },
+    {
+      key: 'terminalFontFamily',
+      good: [null, 'Consolas', 'Cascadia Mono', 'MesloLGS NF'],
+      bad: [
+        '',
+        '   ',
+        // A stack, which would read as though it replaced the default one.
+        'Fira Code, monospace',
+        // Everything below ends a `font-family` declaration and starts
+        // something else, inside an inline style xterm writes for us.
+        'x; color: red',
+        'x">',
+        'x/*',
+        42,
+        ['Consolas']
+      ]
+    },
+    {
+      key: 'terminalFontSize',
+      good: [8, 14, 32],
+      bad: [7, 33, 0, -14, 14.5, '14', null, Number.NaN, Number.POSITIVE_INFINITY]
+    },
+    {
+      key: 'terminalCursorStyle',
+      good: ['block', 'underline', 'bar'],
+      bad: ['beam', 'BLOCK', '', null, 0]
+    },
+    {
+      key: 'terminalCursorBlink',
+      good: [true, false],
+      bad: ['true', 1, 0, null, {}]
+    },
+    {
+      key: 'terminalScrollback',
+      good: [500, 10_000, 200_000],
+      bad: [499, 200_001, 0, -1, 1000.5, '10000', null]
+    },
+    {
+      key: 'terminalShell',
+      good: [null, join(tmpdir(), 'pwsh.exe'), join(tmpdir(), 'bin', 'bash')],
+      bad: ['pwsh.exe', 'bin\\pwsh.exe', '', 42, {}]
     }
   ]
 
@@ -274,7 +320,13 @@ describe('settings validation', () => {
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
       firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
       claudePath: join(dir, 'claude.exe'),
-      usageDisplay: 'off'
+      usageDisplay: 'off',
+      terminalFontFamily: 'Cascadia Mono',
+      terminalFontSize: 12,
+      terminalCursorStyle: 'underline',
+      terminalCursorBlink: false,
+      terminalScrollback: 50_000,
+      terminalShell: join(dir, 'cmd.exe')
     })
 
     expect(() => writeSettings(store, readSettings(store))).not.toThrow()
@@ -289,7 +341,13 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
   firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
   claudePath: join(dir, 'claude.exe'),
-  usageDisplay: 'off'
+  usageDisplay: 'off',
+  terminalFontFamily: 'Cascadia Mono',
+  terminalFontSize: 12,
+  terminalCursorStyle: 'underline',
+  terminalCursorBlink: false,
+  terminalScrollback: 50_000,
+  terminalShell: join(dir, 'cmd.exe')
 })
 
 describe('project cache', () => {

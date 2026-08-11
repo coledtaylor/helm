@@ -2,6 +2,9 @@ import { isAbsolute } from 'node:path'
 import { sql } from 'drizzle-orm'
 import {
   DEFAULT_SETTINGS,
+  TERMINAL_CURSOR_STYLES,
+  TERMINAL_FONT_SIZE,
+  TERMINAL_SCROLLBACK,
   THEME_PREFERENCES,
   USAGE_DISPLAY_MODES,
   type AppSettings
@@ -52,6 +55,46 @@ function describe(value: unknown): string {
 
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value)
+
+/** A whole number inside `[min, max]`, named for the message. */
+const boundedInteger = (bounds: { min: number; max: number }) => {
+  return (value: unknown): string | null => {
+    if (!isFiniteNumber(value) || !Number.isInteger(value)) {
+      return `expected a whole number, got ${describe(value)}`
+    }
+    if (value < bounds.min || value > bounds.max) {
+      return `expected ${String(bounds.min)} to ${String(bounds.max)}, got ${String(value)}`
+    }
+    return null
+  }
+}
+
+/**
+ * Characters that must not reach a `font-family` declaration.
+ *
+ * The value is assigned to `Terminal.options.fontFamily`, which xterm puts
+ * straight into an element's inline style. A semicolon or a brace there is not
+ * a font name, it is the end of the declaration - so the shape of the value is
+ * checked at the point it is saved rather than at the point it is painted.
+ *
+ * A comma is refused too, and that one is about meaning rather than safety:
+ * this setting names *one* family, which Helm puts in front of the default
+ * stack. A stack typed in here would look like it replaced the default and
+ * would not.
+ */
+const FONT_FAMILY_PUNCTUATION = ";{}<>,\\/*\"'`"
+
+function unsafeFontFamily(value: string): boolean {
+  for (const ch of value) {
+    // Written as a scan rather than a regular expression so the control-character
+    // half of the rule is legible: an escape sequence in a character class is
+    // exactly the kind of thing that gets "tidied" into a range that means
+    // something else.
+    if (ch.charCodeAt(0) < 0x20) return true
+    if (FONT_FAMILY_PUNCTUATION.includes(ch)) return true
+  }
+  return false
+}
 
 export const SETTING_VALIDATORS: SettingValidators = {
   theme: oneOf(THEME_PREFERENCES),
@@ -117,6 +160,49 @@ export const SETTING_VALIDATORS: SettingValidators = {
     if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
       return `expected an ISO timestamp or null, got ${describe(value)}`
     }
+    return null
+  },
+
+  /**
+   * One family name, or null for the built-in stack.
+   *
+   * Length-capped as well as character-checked: this ends up in an inline style
+   * on every terminal, and there is no font name that needs a hundred
+   * characters.
+   */
+  terminalFontFamily: (value) => {
+    if (value === null) return null
+    if (typeof value !== 'string' || value.trim() === '') {
+      return `expected a font family or null, got ${describe(value)}`
+    }
+    if (value.length > 100) return `expected a font family, got ${String(value.length)} characters`
+    if (unsafeFontFamily(value)) {
+      return `expected one plain family name, got ${JSON.stringify(value)}`
+    }
+    return null
+  },
+
+  terminalFontSize: boundedInteger(TERMINAL_FONT_SIZE),
+
+  terminalCursorStyle: oneOf(TERMINAL_CURSOR_STYLES),
+
+  terminalCursorBlink: (value) =>
+    typeof value === 'boolean' ? null : `expected true or false, got ${describe(value)}`,
+
+  terminalScrollback: boundedInteger(TERMINAL_SCROLLBACK),
+
+  /**
+   * Null means "find one"; anything else is an absolute path, for the same
+   * reason `claudePath` is. A bare `pwsh.exe` would be resolved against the
+   * PATH of whatever launched Helm, so the setting would name different
+   * programs on different launches.
+   */
+  terminalShell: (value) => {
+    if (value === null) return null
+    if (typeof value !== 'string' || value.trim() === '') {
+      return `expected an absolute path or null, got ${describe(value)}`
+    }
+    if (!isAbsolute(value)) return `expected an absolute path, got ${JSON.stringify(value)}`
     return null
   }
 }
