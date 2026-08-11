@@ -62,6 +62,19 @@ export interface RenderMarkdownOptions {
   index?: WikiIndex | undefined
   /** The file being rendered, so `[[#heading]]` and same-folder ties resolve. */
   path?: string | undefined
+  /**
+   * Whether a leading `---` block is metadata. True for a note; **false** for
+   * markdown that is not a file in a vault.
+   *
+   * It has to be an option rather than a rule, because the same three
+   * characters mean two different things depending on where the text came
+   * from. In a note, `---` on the first line opens frontmatter and belongs in
+   * the header chips rather than in the prose. In a pull request description it
+   * is a horizontal rule and nothing else, and treating it as frontmatter eats
+   * everything down to the next `---` - a whole section of somebody's
+   * description, silently.
+   */
+  frontmatter?: boolean | undefined
 }
 
 /**
@@ -428,7 +441,10 @@ export async function renderMarkdown(
   options: RenderMarkdownOptions = {}
 ): Promise<RenderedMarkdown> {
   const started = Date.now()
-  const front = parseNoteFrontmatter(source)
+  const front =
+    options.frontmatter === false
+      ? { present: false, raw: '', body: source, endLine: 0, fields: [], data: null, error: null }
+      : parseNoteFrontmatter(source)
   const counts = emptyCounts()
   const links: ContentWikilink[] = []
   const headings: ContentHeading[] = []

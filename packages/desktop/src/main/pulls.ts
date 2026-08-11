@@ -443,7 +443,10 @@ export function createPullsService({
    */
   async function render(markdown: string): Promise<string> {
     if (markdown.trim() === '') return ''
-    const rendered = await renderMarkdown(markdown)
+    // `frontmatter: false` because none of this is a note. A description that
+    // opens with `---` opens with a horizontal rule, and reading it as a
+    // metadata block would swallow everything down to the next one.
+    const rendered = await renderMarkdown(markdown, { frontmatter: false })
     return rendered.html
   }
 
