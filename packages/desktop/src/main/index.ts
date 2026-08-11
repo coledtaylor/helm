@@ -44,6 +44,7 @@ import { runM5Checks } from './m5check'
 import { runM6Checks } from './m6check'
 import { runUsageChecks } from './usagecheck'
 import { runSettingsChecks } from './settingscheck'
+import { runPrChecks } from './prcheck'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -81,6 +82,7 @@ type Mode =
   | 'usage-settings'
   | 'settings-check'
   | 'settings-restart'
+  | 'pr-check'
   | 'shim-sweep'
   | 'design-shot'
 
@@ -100,6 +102,7 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--usage-settings')) return 'usage-settings'
   if (process.argv.includes('--settings-check')) return 'settings-check'
   if (process.argv.includes('--settings-restart')) return 'settings-restart'
+  if (process.argv.includes('--pr-check')) return 'pr-check'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
   if (process.argv.includes('--claude')) return 'claude'
   if (process.argv.includes('--shell')) return 'shell'
@@ -120,6 +123,7 @@ const isSpikeMode =
   mode !== 'm7-firstrun' &&
   mode !== 'usage-check' &&
   mode !== 'settings-check' &&
+  mode !== 'pr-check' &&
   mode !== 'design-shot'
 
 initDataDir()
@@ -1175,6 +1179,58 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`settings-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  /**
+   * M12's pull-request surface, driven through the real window.
+   *
+   * Borrows the user's database and settings the way `--settings-check` does,
+   * and for the same reason - the claim is about the real ones. It adds a scan
+   * root of fixture repositories, aims the pulls service at a `gh` of its own
+   * making, spawns real `claude` sessions for the review phase and closes them,
+   * and puts everything back; `scripts/run-prcheck.mjs` restores the settings
+   * as well, for the run that dies before its own restore.
+   */
+  if (mode === 'pr-check') {
+    const collector = createCollector()
+    startApp({
+      observer: collector,
+      confirm: collector.confirm,
+      onReady: (ctx) => {
+        // Every session this driver started is one it closes on purpose.
+        collector.answerWith(true)
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runPrChecks(
+          ctx,
+          collector,
+          join(dataDir, 'screenshots'),
+          dataDir,
+          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
+        )
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('pr-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`pr-check report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`pr-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }
