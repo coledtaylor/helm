@@ -16,8 +16,12 @@ import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { isolate } from './isolate.mjs'
 
-const dataDir = join(process.env.APPDATA ?? process.env.HOME ?? '.', 'Helm')
+// Its own data directory, seeded from a consistent copy of the real one, so a
+// run cannot disturb the Helm the user is using. See scripts/isolate.mjs.
+const { dataDir, env, root } = isolate('m6')
+console.log(`m6-check is running against ${root}`)
 const reportPath = join(dataDir, 'm6-report.json')
 const backup = join(dataDir, 'm6-note.backup.md')
 const { default: electron } = await import('electron')
@@ -28,7 +32,8 @@ const sha256 = (file) =>
 rmSync(reportPath, { force: true })
 
 const { status } = spawnSync(electron, ['.', '--m6-check', ...process.argv.slice(2)], {
-  stdio: 'inherit'
+  stdio: 'inherit',
+  env
 })
 if (status !== 0) {
   console.log(`(m6-check exited with ${String(status)}; the report decides, not this)`)

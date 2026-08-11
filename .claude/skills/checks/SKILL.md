@@ -128,7 +128,8 @@ preceded by a **valid** write of the same key through the same channel, because
 "the row did not change" is also what a channel that writes nothing would
 report. Two phases: it parks every setting on a non-default value, and
 `run-settings.mjs` starts the app again to read them back - and to restore the
-originals, since this one borrows the real database.
+originals, since this one borrows a database (a *copy* of the real one; see
+"Where the output lands").
 
 Its `terminal` group (M9) is the one part that spawns a `claude`, because the
 claim is about terminals in **both** registries and only a session puts one in
@@ -157,8 +158,43 @@ column for an island's top and bottom edge.
 
 ## Where the output lands
 
-Reports and screenshots go to `dataDir`: `%APPDATA%\Helm` for dev and installed
-builds, `helm-data/` beside the exe in portable mode (`src/main/paths.ts`).
+Every check runs against a **data directory of its own**:
+`%LOCALAPPDATA%\Helm\checks\<name>\helm-data`, one per check so a failed run's
+database and screenshots survive for inspection. `scripts/isolate.mjs` makes it,
+and the app is told about it with `PORTABLE_EXECUTABLE_DIR` - the app's own
+portable-mode mechanism, the same one `run-m7.mjs` already used as isolation,
+rather than a hook that exists only for checks. `paths.ts` puts `helm-data`
+under it and calls `app.setPath('userData')`, so the database, the overlay
+shims, the reports and Chromium's own profile all move together.
+
+Not under `%TEMP%`, and that is not arbitrary: the directory holds `overlays/`,
+whose subdirectories are junctions into real repositories, and CLAUDE.md's rule
+about temp cleaners following reparse points is not relaxed by the directory
+being a check's.
+
+The database is **seeded with a copy of the real one** each run, taken with
+`VACUUM INTO` through a read-only connection - the only safe way to read a
+SQLite file another process holds open in WAL mode. So the checks still assert
+against the machine's actual projects, roots and history, which is what makes
+them worth running, while never writing to the file the user's Helm is using.
+This is why `run-settings.mjs` can go on parking settings and restoring them:
+what it parks is the copy.
+
+Helm is a desktop app somebody is using while its checks run, and the drivers
+used to point at `%APPDATA%\Helm` directly. Observed once: a run flipped the
+live app's theme, font and default shell underneath it, and the only reason they
+came back is that the run reached its restore. A run that dies leaves them
+parked. Do not point a new driver at the real directory.
+
+`run-m7.mjs` is the exception and stays one. Its phases are *about* where data
+lands - "beside the exe" for portable, `%APPDATA%\Helm` for installed - so an
+isolated data directory would erase the thing it measures.
+
+What is still shared, because it cannot be otherwise: `~/.claude`. Checks that
+spawn a real `claude` add to its history like any session, and `m5-check` edits
+the real user settings layer and puts it back. `CLAUDE_CONFIG_DIR` moves
+credentials too, so a session pointed at a fixture home cannot log in.
+
 Screenshots are under `screenshots/`, reports are `<name>-report.json` at the
 root. The multi-phase checks make the **report the verdict**, not the exit code,
 because node-pty's teardown loses it.

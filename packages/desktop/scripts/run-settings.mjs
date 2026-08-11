@@ -19,12 +19,18 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { isolate } from './isolate.mjs'
 
-const dataDir = join(process.env.APPDATA ?? process.env.HOME ?? '.', 'Helm')
+// Its own data directory, seeded from a consistent copy of the real one. The
+// app the user is using stays untouched - see scripts/isolate.mjs. Everything
+// below still says "the real database" where it means the claim, because the
+// copy is one: same schema, same rows, same migrations, a different file.
+const { dataDir, env, root } = isolate('settings')
 const reportPath = join(dataDir, 'settings-report.json')
 const restartPath = join(dataDir, 'settings-restart.json')
 const originalPath = join(dataDir, 'settings-original.json')
 const { default: electron } = await import('electron')
+console.log(`settings-check is running against ${root}`)
 
 const args = process.argv.slice(2)
 const only = args.find((a) => a.startsWith('--only='))
@@ -34,7 +40,7 @@ const groups = only ? only.slice('--only='.length).split(',') : null
 rmSync(reportPath, { force: true })
 rmSync(restartPath, { force: true })
 
-const { status } = spawnSync(electron, ['.', '--settings-check', ...args], { stdio: 'inherit' })
+const { status } = spawnSync(electron, ['.', '--settings-check', ...args], { stdio: 'inherit', env })
 if (status !== 0) {
   console.log(`(settings-check exited with ${String(status)}; the report decides, not this)`)
 }
@@ -45,7 +51,8 @@ if (!existsSync(reportPath)) {
   // been written before the crash - put them back if they were.
   if (existsSync(originalPath)) {
     spawnSync(electron, ['.', '--settings-restart', `--restore=${originalPath}`], {
-      stdio: 'inherit'
+      stdio: 'inherit',
+      env
     })
   }
   process.exit(1)
@@ -61,7 +68,7 @@ console.log('\n--- phase 2: a fresh app start, reading the persisted settings --
 spawnSync(
   electron,
   ['.', '--settings-restart', ...(existsSync(originalPath) ? [`--restore=${originalPath}`] : [])],
-  { stdio: 'inherit' }
+  { stdio: 'inherit', env }
 )
 
 const found = existsSync(restartPath) ? JSON.parse(readFileSync(restartPath, 'utf8')).settings : null

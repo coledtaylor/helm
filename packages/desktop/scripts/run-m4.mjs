@@ -11,8 +11,12 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { isolate } from './isolate.mjs'
 
-const dataDir = join(process.env.APPDATA ?? process.env.HOME ?? '.', 'Helm')
+// Its own data directory, seeded from a consistent copy of the real one, so a
+// run cannot disturb the Helm the user is using. See scripts/isolate.mjs.
+const { dataDir, env, root } = isolate('m4')
+console.log(`m4-check is running against ${root}`)
 const reportPath = join(dataDir, 'm4-report.json')
 // The `electron` package's main export is the path to the executable itself,
 // which resolves wherever pnpm actually put it and is spawnable without a
@@ -22,7 +26,8 @@ const { default: electron } = await import('electron')
 rmSync(reportPath, { force: true })
 
 const { status } = spawnSync(electron, ['.', '--m4-check', ...process.argv.slice(2)], {
-  stdio: 'inherit'
+  stdio: 'inherit',
+  env
 })
 if (status !== 0) {
   console.log(`(m4-check exited with ${String(status)}; the report decides, not this)`)

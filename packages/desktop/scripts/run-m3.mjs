@@ -14,8 +14,12 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { isolate } from './isolate.mjs'
 
-const dataDir = join(process.env.APPDATA ?? process.env.HOME ?? '.', 'Helm')
+// Its own data directory, seeded from a consistent copy of the real one, so a
+// run cannot disturb the Helm the user is using. See scripts/isolate.mjs.
+const { dataDir, env, root } = isolate('m3')
+console.log(`m3-check is running against ${root}`)
 const reportPath = join(dataDir, 'm3-report.json')
 const sweepPath = join(dataDir, 'shim-sweep.json')
 // The `electron` package's main export is the path to the executable itself,
@@ -31,7 +35,7 @@ const only = process.argv.slice(2).filter((a) => a.startsWith('--only='))
 
 function phase(label, args) {
   console.log(`\n--- ${label} ---`)
-  const { status } = spawnSync(electron, args, { stdio: 'inherit' })
+  const { status } = spawnSync(electron, args, { stdio: 'inherit', env })
   if (status !== 0) {
     console.log(`(${label} exited with ${String(status)}; the report decides, not this)`)
   }
@@ -42,7 +46,8 @@ phase('m3-check', ['.', '--m3-check', ...only])
 phase('shim-sweep', ['.', '--shim-sweep'])
 
 const verify = spawnSync(process.execPath, [join('scripts', 'verify-shims.mjs'), dataDir], {
-  stdio: 'inherit'
+  stdio: 'inherit',
+  env
 })
 
 if (!existsSync(reportPath)) {
