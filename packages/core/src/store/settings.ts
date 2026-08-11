@@ -373,7 +373,21 @@ export const SETTING_VALIDATORS: SettingValidators = {
     return null
   },
 
-  prReviewEffort: (value) => (value === null ? null : oneOf(EFFORT_LEVELS)(value))
+  prReviewEffort: (value) => (value === null ? null : oneOf(EFFORT_LEVELS)(value)),
+
+  updateCheck: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
+
+  /**
+   * An instant Helm wrote, checked anyway. This is the only defence against a
+   * throttle that never opens: a value `Date.parse` cannot read would make
+   * every comparison against it NaN, and NaN fails every `>` - so a single bad
+   * row would silently mean "never check again" rather than "check now".
+   */
+  lastUpdateCheckAt: (value) => {
+    if (value === null) return null
+    if (typeof value !== 'string') return 'must be an ISO 8601 string or null'
+    return Number.isFinite(Date.parse(value)) ? null : 'must be an ISO 8601 instant'
+  }
 }
 
 /** A write that was refused, with the key and the reason in the message. */

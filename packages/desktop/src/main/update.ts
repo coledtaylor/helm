@@ -1,4 +1,11 @@
-import { app, net } from 'electron'
+import { app, net, type BrowserWindow } from 'electron'
+import {
+  readSettings,
+  writeSettings,
+  UPDATE_CHECK_EVERY_MS,
+  type AppSettings,
+  type Store
+} from '@helm/core'
 import type { UpdateCheck } from '../shared/ipc'
 
 /**
@@ -89,6 +96,44 @@ function fetchLatestTag(): Promise<string> {
     })
     request.end()
   })
+}
+
+/**
+ * The launch check: ask, at most once a day, and only if the setting is on.
+ *
+ * Split from `checkForUpdate` rather than folded into it because they answer to
+ * different callers. The channel is a person pressing something and must always
+ * ask - a throttle there would make a deliberate act do nothing and say
+ * nothing. This one is the app deciding on its own, and the whole reason it is
+ * allowed to is that it is bounded.
+ *
+ * The timestamp is written **after** a successful answer, not before. Writing
+ * it first would turn a fortnight offline into a fortnight of throttle with no
+ * answer behind it; as written, a machine that could not reach GitHub asks
+ * again on its next launch.
+ */
+export async function maybeCheckForUpdate(
+  services: { settings: AppSettings; store: Store },
+  win: BrowserWindow | null
+): Promise<void> {
+  if (!services.settings.updateCheck) return
+
+  const last = services.settings.lastUpdateCheckAt
+  const lastMs = last === null ? null : Date.parse(last)
+  // `Number.isFinite` rather than trusting the row: the validator refuses an
+  // unparseable instant on the way in, but a row written by another build is a
+  // fact about the past, and NaN here would fail the comparison and mean
+  // "never ask again".
+  if (lastMs !== null && Number.isFinite(lastMs) && Date.now() - lastMs < UPDATE_CHECK_EVERY_MS) {
+    return
+  }
+
+  const result = await checkForUpdate()
+  if (result.error !== null) return
+
+  writeSettings(services.store, { lastUpdateCheckAt: result.checkedAt })
+  services.settings = readSettings(services.store)
+  if (win && !win.isDestroyed()) win.webContents.send('update:checked', result)
 }
 
 export async function checkForUpdate(): Promise<UpdateCheck> {

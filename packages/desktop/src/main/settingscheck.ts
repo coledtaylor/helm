@@ -1219,6 +1219,22 @@ export async function runSettingsChecks(
     const paneUsage = await attr(win, '[data-settings-usage][aria-checked="true"]', 'data-settings-usage')
     const usageRow = rowValue(dbFile, 'usageDisplay')
 
+    // The release check's tick, driven where it lives. Off and on again, so
+    // what is observed is the box changing the row in both directions rather
+    // than a default that happened to match.
+    const updateBefore = rowValue(dbFile, 'updateCheck')
+    const tickedOff = await click(win, '[data-settings-update-check] input')
+    await sleep(500)
+    const updateOffRow = rowValue(dbFile, 'updateCheck')
+    const tickedOn = await click(win, '[data-settings-update-check] input')
+    await sleep(500)
+    const updateOnRow = rowValue(dbFile, 'updateCheck')
+    // Booleans, not the strings they are stored as: `rowValue` parses the
+    // column, so `app_settings` holding the text `false` reads back here as
+    // `false`. Comparing against `'false'` failed on a row that was correct.
+    const updateTogglesBothWays =
+      tickedOff && tickedOn && updateOffRow === false && updateOnRow === true
+
     checks.push({
       id: 'S-6',
       criterion: 'The existing quick accessors keep working and stay in sync with the pane',
@@ -1231,7 +1247,8 @@ export async function runSettingsChecks(
         usageAfter !== null &&
         usageAfter !== usageBefore &&
         paneUsage === usageAfter &&
-        usageRow === usageAfter,
+        usageRow === usageAfter &&
+        updateTogglesBothWays,
       detail: {
         theme: { before, clicked: target, paneFollowed: paneFollowedTheme, databaseRow: themeRow },
         usage: {
@@ -1239,6 +1256,12 @@ export async function runSettingsChecks(
           segmentAfter: usageAfter,
           paneShows: paneUsage,
           databaseRow: usageRow
+        },
+        updateCheck: {
+          rowBefore: updateBefore,
+          afterUntick: updateOffRow,
+          afterRetick: updateOnRow,
+          bothClicksLanded: tickedOff && tickedOn
         }
       },
       notes: [
@@ -1246,7 +1269,14 @@ export async function runSettingsChecks(
         'status bar - with the settings pane open behind them, so "stays in sync"',
         'is observed rather than inferred from both writing the same channel.',
         'The segment is cycled rather than set, which is also what proves the',
-        'cycle still exists now that the setting has a home.'
+        'cycle still exists now that the setting has a home.',
+        'The release-check tick is driven off *and back on*, because a single',
+        'click landing on the value it already held would report a pass from a',
+        'control that does nothing.',
+        'What is asserted here is the setting, not the request. Whether a launch',
+        'actually asks GitHub is a claim about the network and about a throttle',
+        'measured in days, and a check that made it would be a check that fails',
+        'on an aeroplane.'
       ]
     })
   }
@@ -1374,6 +1404,18 @@ export async function runSettingsChecks(
         good: 'high',
         bad: 'maximum',
         why: 'the five levels are the CLI’s own, and a sixth would be rejected by it'
+      },
+      {
+        key: 'updateCheck',
+        good: false,
+        bad: 'false',
+        why: 'a string that reads as a boolean is the shape a hand-edited row arrives in'
+      },
+      {
+        key: 'lastUpdateCheckAt',
+        good: '2026-08-11T20:04:06.641Z',
+        bad: 'never',
+        why: 'an unparseable instant compares NaN against the throttle, so it would mean “never ask again” rather than “ask now”'
       }
     ]
 

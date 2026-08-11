@@ -147,9 +147,16 @@ it, and otherwise stays out of the way.
 ## Updates
 
 There is no auto-updater, on purpose - see
-[docs/PACKAGING.md](docs/PACKAGING.md) for the three reasons. Helm can ask
-GitHub whether a newer release exists when you ask it to; that is the only
-*direct* network request Helm makes, and it never happens on a timer.
+[docs/PACKAGING.md](docs/PACKAGING.md) for the three reasons. What Helm does
+instead is *tell* you: once per launch, and at most once a day, it asks GitHub
+whether a newer release exists and puts a line beside the version in the status
+bar when there is one. Clicking it opens the releases page. Helm downloads
+nothing, replaces nothing and restarts nothing - getting the new version is
+still something you do.
+
+That is the only *direct* network request Helm makes, and **Settings →
+Appearance → "Tell me about new releases"** turns it off, after which Helm's own
+process opens no connection at all.
 
 "Direct" earns its place there. The pull-request pane reaches GitHub too, and
 it does it by running **your own `gh` CLI** on a schedule you set - every five

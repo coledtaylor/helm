@@ -33,6 +33,7 @@ import {
 import { createHistoryService } from './history'
 import { createPullsService } from './pulls'
 import { createUsageService } from './usage'
+import { maybeCheckForUpdate } from './update'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
 import { createCollector, runM2Checks, type M2Context } from './m2check'
 import { TITLEBAR_OVERLAY } from './chrome'
@@ -395,6 +396,17 @@ function startApp(options: AppOptions = {}): void {
           console.warn(`pull requests could not be fetched: ${String(err)}`)
         })
         pulls.start()
+
+        // And the one request Helm's own process makes. Here rather than at
+        // startup for the reason everything else in this block is: it is worth
+        // nothing before the window has painted, and it must not be in front of
+        // anything that is.
+        //
+        // Failure is silent on purpose, unlike the two above. Offline is the
+        // ordinary case for this one, the answer is a line in the status bar
+        // that simply does not appear, and there is nothing a user would do
+        // with a warning that Helm could not reach GitHub while they work.
+        void maybeCheckForUpdate(services, win)
       })
 
       if (win) {

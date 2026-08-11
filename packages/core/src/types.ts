@@ -692,6 +692,37 @@ export interface AppSettings {
    * control than a text field for a closed set of five.
    */
   prReviewEffort: EffortLevel | null
+
+  /**
+   * Whether Helm asks GitHub, once per launch, if there is a newer release.
+   *
+   * A deliberate amendment to the network posture and the reason README, SPEC
+   * 5, PACKAGING and the `update:check` comment all moved together: until this,
+   * Helm's own process opened no connection at all unless somebody invoked the
+   * channel by hand. It now opens one, at most once a day, on a launch.
+   *
+   * The reasoning that made "only when asked" right is untouched, because it
+   * was never about the request - it was about the *download*. Helm still
+   * fetches nothing, replaces nothing and restarts nothing; the whole outcome
+   * is a version number, and a line in the status bar when it is higher. What
+   * "only when asked" actually cost was the person who would have to think to
+   * ask, which is nobody: an update you have to remember to look for is an
+   * update you run without for months.
+   *
+   * On by default and off in one tick, because a machine that must not talk to
+   * anything is a real requirement and not an exotic one.
+   */
+  updateCheck: boolean
+  /**
+   * When the last check actually reached GitHub, ISO 8601, or null.
+   *
+   * Internal state and deliberately not in the settings pane, the same as
+   * `windowBounds` and `firstRunCompletedAt`: it is something Helm remembers,
+   * not something anyone chose. It exists to throttle - `UPDATE_CHECK_EVERY_MS`
+   * - so that restarting the app twenty times in an afternoon, which is what
+   * developing it looks like, is still one request.
+   */
+  lastUpdateCheckAt: string | null
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -718,8 +749,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
   prReviewPrompt: DEFAULT_PR_REVIEW_PROMPT,
   prCheckout: 'none',
   prReviewModel: null,
-  prReviewEffort: null
+  prReviewEffort: null,
+  updateCheck: true,
+  lastUpdateCheckAt: null
 }
+
+/**
+ * How long a launch waits before asking about releases again.
+ *
+ * A day. The question changes about as often as a release happens, and the
+ * throttle is what keeps "once per launch" from meaning "once per restart" on
+ * the machine Helm is being written on.
+ */
+export const UPDATE_CHECK_EVERY_MS = 24 * 60 * 60 * 1000
 
 // ---------------------------------------------------------------------------
 // Config console (M5)
