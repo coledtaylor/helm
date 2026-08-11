@@ -28,22 +28,25 @@ That forces a choice at launch time, and both options lose something:
 | **Harness root** | cross-repo access, harness tools, 8 harness skills | ~43 project skills, project agents, project CLAUDE.md |
 | **A single repo** | that repo's skills, agents, CLAUDE.md | cross-repo access, harness tooling |
 
-Measured on this machine:
+Measured on this machine. The counts are the real census; the repository names
+are anonymised, because they are private work and none of the argument depends
+on what they are called. `atlas` and its siblings are one product's repositories,
+which is what makes them worth composing together:
 
 ```
 ~/.claude/skills      0      ← nothing user-level
 ~/.claude/commands    0
 ~/.claude/agents      0
 
-repos/atlas             skills:7  agents:16  commands:1  CLAUDE.md
-repos/atlas-reporting   skills:6  agents:12  commands:1  CLAUDE.md
+repos/atlas                 skills:7  agents:16  commands:1  CLAUDE.md
+repos/atlas-reporting       skills:6  agents:12  commands:1  CLAUDE.md
 repos/beacon                skills:6  agents:14  commands:1
-repos/Atlas-Builder     skills:5  agents:16  commands:1  CLAUDE.md
-repos/atlas-ui          skills:5  agents:12  commands:1  CLAUDE.md
-repos/voxelcraft          skills:5  agents:12  commands:1  CLAUDE.md
+repos/Atlas-Builder         skills:5  agents:16  commands:1  CLAUDE.md
+repos/atlas-ui              skills:5  agents:12  commands:1  CLAUDE.md
+repos/voxelcraft            skills:5  agents:12  commands:1  CLAUDE.md
 repos/orchard-sim              skills:4  agents:14  commands:1  CLAUDE.md
-repos/datapack           skills:4                          CLAUDE.md
-repos/atlas-mobile              skills:1
+repos/datapack              skills:4                          CLAUDE.md
+repos/atlas-mobile          skills:1
 harness root                skills:8  commands:1
 ```
 
@@ -136,7 +139,7 @@ rather than by shelling out to `mklink /J`. Copy as a fallback.
 Everything in Helm is organised around one saved, reusable thing.
 
 ```yaml
-name: "atlas cloud sync"
+name: "Atlas cloud sync"
 root: ~/.harness/dev              # cwd
 overlays:                         # composed via --plugin-dir
   - repos/atlas
@@ -186,7 +189,7 @@ Profiles live in SQLite, exportable to YAML so they travel with a harness.
 > - **A transcript cannot be found by deriving its path from the project.** The
 >   directory under `projects/` carries whatever casing the CLI was started
 >   with and `history.jsonl` records its own; two transcripts here live under
->   `...-repos-atlas-reporting` for sessions whose recorded project is
+>   `...-repos-Atlas-Reporting` for sessions whose recorded project is
 >   `...\repos\atlas-reporting`. The scan is by session id.
 > - **Retention is 13%, not 9%** - 106 of 799. Still the reason resumability is
 >   read off the disk on every pass rather than remembered.

@@ -391,7 +391,7 @@ function writeSkill(repo: string, name: string, token: string): void {
  * Against fixtures rather than the user's repositories, for the same reason
  * M3's skill-edit check is: composing an overlay builds a shim whose
  * subdirectories are junctions into the source, and a check that plants probe
- * files in `repos/atlas` - or that tears a shim down over it - is not
+ * files in one of the user's own repositories - or that tears a shim down over it - is not
  * something a check gets to do with somebody's real work.
  *
  * Both overlays define `think`, which is what makes the same-named-skill

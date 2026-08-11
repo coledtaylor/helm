@@ -7,3 +7,9 @@ reports/
 .env
 .cache/
 *.tsbuildinfo
+
+# Claude Code's per-machine state. `settings.local.json` records which MCP
+# servers this machine has switched off and nothing a contributor needs;
+# `.claude/skills/` is checked in, because CLAUDE.md points at it.
+.claude/settings.local.json
+.claude/*.local.json

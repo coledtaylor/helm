@@ -1,7 +1,7 @@
 {
   "startedAt": "2026-08-09T18:25:25.011Z",
   "mode": "dev",
-  "dataDir": "C:\\Users\\user\\AppData\\Roaming\\helm",
+  "dataDir": "%APPDATA%\\helm",
   "versions": {
     "node": "24.18.1",
     "acorn": "8.16.0",
@@ -73,7 +73,7 @@
           "jade": 1722,
           "amber": 1732
         },
-        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c1-truecolor.png"
+        "screenshot": "%APPDATA%\\helm\\screenshots\\c1-truecolor.png"
       },
       "notes": [
         "Exact RGB triples present in the composited frame - no palette quantisation."
@@ -100,7 +100,7 @@
           "emoji 🚀": 2,
           "block █": 1
         },
-        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c2-unicode.png"
+        "screenshot": "%APPDATA%\\helm\\screenshots\\c2-unicode.png"
       },
       "notes": [
         "Unicode width table in use: 11 (available: 6, 11)"
@@ -117,25 +117,25 @@
             "cols": 100,
             "intact": true,
             "wrappedRows": 3,
-            "shot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c3-reflow-100.png"
+            "shot": "%APPDATA%\\helm\\screenshots\\c3-reflow-100.png"
           },
           {
             "cols": 132,
             "intact": true,
             "wrappedRows": 3,
-            "shot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c3-reflow-132.png"
+            "shot": "%APPDATA%\\helm\\screenshots\\c3-reflow-132.png"
           },
           {
             "cols": 61,
             "intact": true,
             "wrappedRows": 5,
-            "shot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c3-reflow-61.png"
+            "shot": "%APPDATA%\\helm\\screenshots\\c3-reflow-61.png"
           },
           {
             "cols": 100,
             "intact": true,
             "wrappedRows": 3,
-            "shot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c3-reflow-100.png"
+            "shot": "%APPDATA%\\helm\\screenshots\\c3-reflow-100.png"
           }
         ]
       },
@@ -174,7 +174,7 @@
           "shiftEnter": "\"\\u001b\\r\"",
           "distinguishable": true
         },
-        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c4-keyboard.png"
+        "screenshot": "%APPDATA%\\helm\\screenshots\\c4-keyboard.png"
       },
       "notes": [
         "Shift+Enter produces a distinct sequence from Enter."
@@ -210,7 +210,7 @@
           "delivered": true,
           "lossless": true
         },
-        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c5-paste.png"
+        "screenshot": "%APPDATA%\\helm\\screenshots\\c5-paste.png"
       },
       "notes": [
         "100 KB paste delivered end-to-end in 64 ms with no truncation."
@@ -258,7 +258,7 @@
           "stream line 837"
         ],
         "scrollToBottomWorks": true,
-        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c6-scrollback.png"
+        "screenshot": "%APPDATA%\\helm\\screenshots\\c6-scrollback.png"
       },
       "notes": [
         "Viewport stayed parked at row 836 while the buffer grew from 1473 to 3043."
@@ -274,7 +274,7 @@
         "clipboard": "SELECTME-0123456789-ABCDEFGHIJ",
         "copyConsumedCtrlC": true,
         "interruptRestoredAfterCopy": true,
-        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\c7-selection.png"
+        "screenshot": "%APPDATA%\\helm\\screenshots\\c7-selection.png"
       },
       "notes": [
         "Ctrl-C copies only while a selection is live and reverts to interrupt immediately after, and any other keystroke drops the selection - the Windows Terminal contract."

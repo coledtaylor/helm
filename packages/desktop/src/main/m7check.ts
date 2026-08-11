@@ -9,7 +9,7 @@ import {
   statSync,
   writeFileSync
 } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { screenshot, sleep, stripAnsi, waitFor } from './bridge'
 import { answerStartupGates, atPrompt, type Collector, type M2Context } from './m2check'
@@ -237,20 +237,77 @@ function outsideRange(version: string, min: string, max: string): boolean {
 /**
  * What counts as a personal path or name.
  *
- * `drive` and `home` are the ones that actually break another machine; the
- * others are identity. They are separate patterns rather than one alternation
- * so the report can say *which* kind of thing was found, and so the planted
- * probe below can prove that two different patterns both fire.
+ * **Discovered, not written down.** A hardcoded list of names protects exactly
+ * one person - anybody else who clones this repository gets a check that looks
+ * thorough and tests nothing about them. And this file is public, so a literal
+ * list of "names that must never be published" would itself publish them.
+ *
+ * The first three are structural: a path shaped like that breaks another
+ * machine whoever it belongs to. The rest are found at runtime - the account
+ * this process runs as, and the repositories sitting beside this one, which is
+ * what somebody else's private work looks like from in here.
+ *
+ * They stay separate patterns rather than one alternation so the report can say
+ * *which* kind of thing was found, and so the planted probe can prove that more
+ * than one of them fires.
  */
-const PERSONAL: Array<{ id: string; re: RegExp }> = [
-  { id: 'windows-profile', re: /[A-Za-z]:[\\/]{1,2}Users[\\/]/i },
-  { id: 'posix-home', re: /\/home\/[a-z0-9_.-]+\//i },
-  { id: 'harness-path', re: /\.harness[\\/]/i },
-  { id: 'account', re: /\bcolet\b/i },
-  { id: 'person', re: /\bcole\b/i },
-  { id: 'identity', re: /col(e|ed)taylor/i },
-  { id: 'private-project', re: /atlas/i }
-]
+function escapeForRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function buildPersonal(root: string | null): Array<{ id: string; re: RegExp }> {
+  const patterns: Array<{ id: string; re: RegExp }> = [
+    { id: 'windows-profile', re: /[A-Za-z]:[\\/]{1,2}Users[\\/]/i },
+    { id: 'posix-home', re: /\/home\/[a-z0-9_.-]+\//i },
+    { id: 'harness-path', re: /\.harness[\\/]/i }
+  ]
+
+  // Short names are skipped: an account called `dev` would match half the tree,
+  // and a false positive that fails the build teaches people to ignore it.
+  let account: string
+  try {
+    account = userInfo().username
+  } catch {
+    account = ''
+  }
+  if (account.length >= 3) {
+    patterns.push({ id: 'account', re: new RegExp(`\\b${escapeForRegExp(account)}\\b`, 'i') })
+  }
+
+  // Anchored to `repos/<name>` rather than matched bare. The leak this exists
+  // to stop is a path or an inventory, and a bare name would fire on any repo
+  // that happens to be called something ordinary.
+  for (const name of neighbourRepoNames(root)) {
+    patterns.push({
+      id: 'neighbour-repo',
+      re: new RegExp(`repos[\\\\/]${escapeForRegExp(name)}\\b`, 'i')
+    })
+  }
+
+  return patterns
+}
+
+/** Sibling directories of `root`, which in a harness are the other repos. */
+function neighbourRepoNames(root: string | null): string[] {
+  if (root === null) return []
+  try {
+    const self = root.split(sep).filter(Boolean).at(-1)?.toLowerCase()
+    return readdirSync(dirname(root), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => entry.name)
+      .filter((name) => name.toLowerCase() !== self)
+  } catch {
+    return []
+  }
+}
+
+let personalCache: Array<{ id: string; re: RegExp }> | null = null
+
+/** Memoised: the sibling scan is a readdir, and the report prints the list. */
+function personal(): Array<{ id: string; re: RegExp }> {
+  personalCache ??= buildPersonal(repoRoot())
+  return personalCache
+}
 
 /**
  * Occurrences that are the project's own identity rather than an assumption
@@ -336,7 +393,7 @@ function auditTree(root: string): { shipped: AuditHit[]; harness: AuditHit[]; fi
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i] as string
         if (IDENTITY_ALLOWED.some((entry) => line.includes(entry.needle))) continue
-        for (const { id, re } of PERSONAL) {
+        for (const { id, re } of personal()) {
           if (!re.test(line)) continue
           const hit: AuditHit = { file: rel, line: i + 1, pattern: id, text: line.trim().slice(0, 160) }
           if (isHarnessFile(rel)) harness.push(hit)
@@ -480,6 +537,13 @@ function auditChecks(): Check[] {
 
   // The probe first: a scanner that finds nothing has to be shown finding
   // something before its clean answer means anything.
+  //
+  // The neighbour line is built from a repository actually found beside this
+  // one, so the probe exercises the *discovered* pattern rather than a literal
+  // written here - which is the whole point of discovering them. On a machine
+  // with no neighbours there is no such pattern to fire, so the probe asserts
+  // the two structural ones and the report says the third was unavailable.
+  const neighbour = neighbourRepoNames(root)[0] ?? null
   const probeFile = join(root, 'packages', 'core', 'src', '__m7-audit-probe.ts')
   let probeCaught: AuditHit[]
   let probeRemoved: boolean
@@ -490,7 +554,8 @@ function auditChecks(): Check[] {
         '// Planted by m7-check and removed in the same breath.',
         'export const PROBE = {',
         String.raw`  path: 'C:\Users\someone\projects',`,
-        "  repo: '~/.harness/dev/repos/atlas'",
+        `  harness: '~/.harness/dev'${neighbour === null ? '' : ','}`,
+        ...(neighbour === null ? [] : [`  repo: 'repos/${neighbour}'`]),
         '}',
         ''
       ].join('\n'),
@@ -505,9 +570,9 @@ function auditChecks(): Check[] {
   const probePatterns = [...new Set(probeCaught.map((h) => h.pattern))].sort()
   const probeOk =
     probeRemoved &&
+    (neighbour === null || probePatterns.includes('neighbour-repo')) &&
     probePatterns.includes('windows-profile') &&
-    probePatterns.includes('harness-path') &&
-    probePatterns.includes('private-project')
+    probePatterns.includes('harness-path')
 
   const { shipped, harness, files } = auditTree(root)
 
@@ -547,7 +612,7 @@ function auditChecks(): Check[] {
       detail: {
         root,
         filesScanned: files,
-        patterns: PERSONAL.map((p) => ({ id: p.id, re: p.re.source })),
+        patterns: personal().map((p) => ({ id: p.id, re: p.re.source })),
         shippedHits: shipped,
         harnessHits: harness.length,
         harnessFiles: [...new Set(harness.map((h) => h.file))].sort(),
@@ -992,11 +1057,11 @@ async function harnessGroup(
   const opinions = OPINION_WORDS.filter(
     (word) => word !== 'template:' && manifestLower.includes(word)
   )
-  const personal = PERSONAL.filter((p) => p.re.test(manifest?.raw ?? '')).map((p) => p.id)
+  const personalHits = personal().filter((p) => p.re.test(manifest?.raw ?? '')).map((p) => p.id)
 
   checks.push({
     id: 'M7-11',
-    criterion: 'The scaffold contains no Cole-specific or workflow-opinion content',
+    criterion: 'The scaffold contains no author-specific or workflow-opinion content',
     title: 'Three entries, four keys, and nothing that presumes how anyone works',
     ok:
       onDisk &&
@@ -1006,7 +1071,7 @@ async function harnessGroup(
       manifest.values['name'] === HARNESS_NAME &&
       manifest.values['template'] === 'minimal' &&
       opinions.length === 0 &&
-      personal.length === 0 &&
+      personalHits.length === 0 &&
       !manifest.raw.includes('#'),
     detail: {
       path: created,
@@ -1016,12 +1081,12 @@ async function harnessGroup(
       manifestValues: manifest?.values ?? {},
       manifest: manifest?.raw ?? null,
       opinionWordsFound: opinions,
-      personalPatternsFound: personal
+      personalPatternsFound: personalHits
     },
     notes: [
       'The tree is read by a plain recursion that knows nothing about harnesses, so it disagrees with the scaffolder if the scaffolder writes anything extra.',
       'The manifest is parsed line by line rather than with a YAML library, which is what makes "exactly four keys, in this order, no comments" checkable - a parser would forgive a repeat, a stray key or a comment.',
-      `Nothing in it matches any of ${String(OPINION_WORDS.length - 1)} workflow words or any of ${String(PERSONAL.length)} personal-path patterns. The whole scaffold is ${String(scaffoldBytes)} bytes.`
+      `Nothing in it matches any of ${String(OPINION_WORDS.length - 1)} workflow words or any of ${String(personal().length)} personal-path patterns. The whole scaffold is ${String(scaffoldBytes)} bytes.`
     ]
   })
 
