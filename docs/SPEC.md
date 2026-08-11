@@ -572,10 +572,22 @@ option open and is what makes the app genuinely portable.
 Amended by M10, deliberately and in the open, because until then the answer was
 "one request, only when asked" and that is no longer the whole of it.
 
-- **Helm's own process opens exactly one outbound connection**, and only when
-  `update:check` is invoked by hand: the GitHub releases API, for a version
-  number and a URL. It downloads nothing, executes nothing, and never runs on a
-  timer. See [PACKAGING.md](PACKAGING.md) for why there is no auto-updater.
+- **Helm's own process opens exactly one outbound connection**: the GitHub
+  releases API, for a version number and a URL. It downloads nothing and
+  executes nothing. See [PACKAGING.md](PACKAGING.md) for why there is no
+  auto-updater.
+  - Amended again after 0.2.1, in the open. It used to happen *only* when
+    `update:check` was invoked by hand, and the honest report of that is that it
+    never happened: the main-process half shipped and the UI half never did, so
+    the check had no call site at all and the app quietly had no way to tell
+    anyone a release existed. It now also runs once per launch, at most once a
+    day (`UPDATE_CHECK_EVERY_MS`), gated by `updateCheck` and off in one tick.
+  - What did **not** change is the part the "only when asked" rule was actually
+    protecting. That rule was about the *download*, not the request: an unsigned
+    replacement puts SmartScreen in front of every update, and a background
+    updater that restarts the app ends a live session. Helm still fetches no
+    artefact, replaces nothing and restarts nothing. The whole outcome is a
+    version number and a line in the status bar.
 - **The pull-request surface reaches GitHub through the user's own `gh` CLI**,
   on a schedule the user sets - `prPollMinutes`, five minutes by default, `0` to
   turn it off - plus a fetch when a pull request is opened and one when a review

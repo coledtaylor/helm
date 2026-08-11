@@ -69,6 +69,7 @@ import { usePulls } from './usePulls'
 import { useSessions } from './useSessions'
 import { useSetup } from './useSetup'
 import { useShells } from './useShells'
+import { useUpdate } from './useUpdate'
 import { useUsage } from './useUsage'
 
 const KIND_ICON = {
@@ -200,6 +201,20 @@ export function App(): JSX.Element {
   const configState = useConfig()
   const contentState = useContent()
   const usage = useUsage()
+  const check = useUpdate()
+  /**
+   * Narrowed here rather than in the status bar.
+   *
+   * `UpdateCheck` allows a null version and URL because a check that could not
+   * complete has neither, and `newer` is only ever true when both are there.
+   * Doing it at the seam means the bar takes a shape whose fields arrive
+   * together, instead of taking three nullable ones and restating the rule that
+   * connects them.
+   */
+  const update =
+    check !== null && check.newer && check.latest !== null && check.url !== null
+      ? { latest: check.latest, newer: true, url: check.url }
+      : null
   const setup = useSetup(settings, launcher.rescan)
   const shells = useShells()
 
@@ -998,6 +1013,8 @@ export function App(): JSX.Element {
           usage={usage}
           usageDisplay={settings?.usageDisplay ?? 'percent'}
           onUsageDisplayChange={launcher.setUsageDisplay}
+          update={update}
+          onOpenUpdate={(url) => void helmOpenExternal(url)}
           lastScan={
             discovery && discovery.durationMs > 0
               ? {
@@ -1268,6 +1285,8 @@ export function App(): JSX.Element {
               theme={settings?.theme ?? 'system'}
               onThemeChange={launcher.setTheme}
               usageDisplay={settings?.usageDisplay ?? 'percent'}
+              updateCheck={settings?.updateCheck ?? DEFAULT_SETTINGS.updateCheck}
+              onUpdateCheckChange={(updateCheck) => writeSettings({ updateCheck })}
               onUsageDisplayChange={launcher.setUsageDisplay}
               // The same fact the status bar's cycle turns on, from the same
               // snapshot, so the pane cannot offer a mode the segment skips.

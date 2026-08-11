@@ -153,6 +153,16 @@ configured to check one out. So bytes leave the machine without anybody invoking
 `update:check`, and a build that said otherwise would be lying about its network
 posture.
 
+Amended once more after 0.2.1: that one connection is no longer made only by
+hand. Helm asks on launch, at most once a day, and says so beside the version in
+the status bar when the answer is a newer release; `updateCheck` in Settings
+turns it off. The reason the manual rule went is that it was not working - the
+main-process half shipped without a UI half, so nothing ever invoked the channel
+and the app had no way to tell anyone a release existed. None of the three
+reasons above is weakened by the change, because all three are about replacing
+the installed app and Helm still does not: no artefact is fetched, nothing is
+unpacked, nothing restarts. The user goes to the releases page themselves.
+
 What has not changed is the part that matters for packaging and for trust. Helm
 opens no socket of its own for any of it: the only outbound connection Helm's
 own process makes is still this one. And Helm **stores no GitHub credential** -

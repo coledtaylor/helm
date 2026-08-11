@@ -16,6 +16,17 @@ export interface StatusBarProps {
   usage: UsageSnapshot | null
   usageDisplay: UsageDisplayMode
   onUsageDisplayChange: (mode: UsageDisplayMode) => void
+  /**
+   * What the launch's update check found, or null if it made none.
+   *
+   * Structural rather than the desktop package's `UpdateCheck`, which this
+   * package cannot import - the IPC contract belongs to the host. It is also
+   * the smaller half of that type on purpose: the bar renders a version and
+   * opens a URL, so it takes a version and a URL, and `current`, `error` and
+   * `checkedAt` stay where the decisions about them are made.
+   */
+  update: { latest: string; newer: boolean; url: string } | null
+  onOpenUpdate: (url: string) => void
 }
 
 /**
@@ -35,7 +46,9 @@ export function StatusBar({
   runningSessions,
   usage,
   usageDisplay,
-  onUsageDisplayChange
+  onUsageDisplayChange,
+  update,
+  onOpenUpdate
 }: StatusBarProps): JSX.Element {
   return (
     // No island and no border: the status bar is the one strip that sits
@@ -43,6 +56,29 @@ export function StatusBar({
     // than a panel of its own.
     <footer className="flex h-7 shrink-0 items-center gap-2.5 px-4 text-[10.5px] text-fg-subtle tabular-nums">
       <span className="shrink-0">Helm {build}</span>
+
+      {/* Beside the version, because that is the thing it is about: a person
+          reading "Helm 0.2.0" is already asking the question this answers.
+
+          The accent is used here as *text*, never as a fill (DESIGN.md par. 3).
+          A newer release is worth noticing and is not a warning - nothing is
+          wrong, nothing is degraded, and colouring it `warn` would put it in
+          the same language as "the claude CLI was not found", which is a thing
+          the user has to fix. This is an offer. */}
+      {update !== null && update.newer && (
+        <button
+          type="button"
+          data-update-available={update.latest}
+          title={`Helm ${update.latest} was released. Opens the releases page - Helm downloads and installs nothing.`}
+          onClick={() => onOpenUpdate(update.url)}
+          className={cn(
+            '-mx-1 shrink-0 rounded px-1 text-accent underline decoration-dotted',
+            'underline-offset-[3px] transition-colors hover:bg-hover'
+          )}
+        >
+          {update.latest} available
+        </button>
+      )}
 
       <Divider />
 

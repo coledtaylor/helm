@@ -79,6 +79,8 @@ export interface SettingsPaneProps {
   onThemeChange: (theme: ThemePreference) => void
 
   usageDisplay: UsageDisplayMode
+  updateCheck: boolean
+  onUpdateCheckChange: (next: boolean) => void
   onUsageDisplayChange: (mode: UsageDisplayMode) => void
   /**
    * Whether the transcript index has an estimate yet. `cost` is offered only
@@ -216,6 +218,8 @@ export function SettingsPane({
   theme,
   onThemeChange,
   usageDisplay,
+  updateCheck,
+  onUpdateCheckChange,
   onUsageDisplayChange,
   hasCostEstimate,
   terminal,
@@ -433,6 +437,26 @@ export function SettingsPane({
                 )
               })}
             </div>
+          </Row>
+
+          <Divider />
+
+          {/* Here rather than in a group of its own, because from the user's
+              side this is a line in the status bar - the same question the row
+              above it answers. The network posture is the hint's job, and it
+              says what Helm does and what it does not: an update Helm told you
+              about is still an update you go and get. */}
+          <Row
+            label="Tell me about new releases"
+            hint="Asks GitHub once a day, on launch, whether a newer Helm exists and says so in the status bar. Downloads nothing and installs nothing. This is the only request Helm's own process makes."
+          >
+            <span data-settings-update-check={String(updateCheck)}>
+              <Checkbox
+                checked={updateCheck}
+                onChange={() => onUpdateCheckChange(!updateCheck)}
+                label="Check for new releases on launch"
+              />
+            </span>
           </Row>
         </Group>
 

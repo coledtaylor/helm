@@ -417,7 +417,20 @@ export interface IpcRequests {
 
   /**
    * Ask GitHub whether there is a newer release. The only **direct** network
-   * request Helm makes, and it is made only when this channel is invoked.
+   * request Helm makes.
+   *
+   * No longer only when this channel is invoked, and that is an amendment made
+   * in the open rather than a drift: the app also asks once per launch, at most
+   * once a day, when `updateCheck` is on - see `maybeCheckForUpdate`. The
+   * reasoning that kept it manual was never about the request, it was about the
+   * download, and there still is none: no artefact is fetched, nothing is
+   * replaced, nothing restarts. What changed is that "only when asked" required
+   * somebody to think to ask, and an update you have to remember to look for is
+   * one you run without for months.
+   *
+   * This channel keeps no throttle of its own. It is a person pressing
+   * something, and a deliberate act that silently did nothing would be worse
+   * than no button.
    *
    * "Direct" is doing real work in that sentence and was added when the
    * pull-request surface landed. That surface reaches GitHub too, and it does
@@ -747,6 +760,21 @@ export interface IpcEvents {
   'usage:changed': UsageSnapshot
 
   /**
+   * A launch check found a release, and it is newer than this build.
+   *
+   * Pushed only when the check reached GitHub. It runs once per launch and at
+   * most once a day - `updateCheck` gates it, `UPDATE_CHECK_EVERY_MS` bounds
+   * it - and a failure to reach GitHub sends nothing at all: offline is the
+   * ordinary case here, and a status bar that reported it would be reporting
+   * the network rather than anything about Helm.
+   *
+   * `newer` is the field the window acts on. The payload is sent either way so
+   * a check that found nothing still updates "last checked", which is the one
+   * thing that distinguishes "you are current" from "nobody has looked".
+   */
+  'update:checked': UpdateCheck
+
+  /**
    * A fetch pass found something different, or one started.
    *
    * Pushed rather than polled for the reason every other event here is: the
@@ -945,6 +973,7 @@ export const EVENT_CHANNELS = Object.keys({
   'theme:changed': true,
   'history:changed': true,
   'usage:changed': true,
+  'update:checked': true,
   'pr:changed': true,
   'config:externalChange': true,
   'content:artifactConsole': true,

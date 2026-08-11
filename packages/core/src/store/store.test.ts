@@ -132,7 +132,9 @@ describe('settings', () => {
       prReviewPrompt: 'review {slug}#{number} on {branch}',
       prCheckout: 'checkout',
       prReviewModel: 'opus',
-      prReviewEffort: 'high'
+      prReviewEffort: 'high',
+      updateCheck: false,
+      lastUpdateCheckAt: '2026-08-11T20:04:06.641Z'
     } satisfies AppSettings
 
     writeSettings(store, written)
@@ -371,6 +373,20 @@ describe('settings validation', () => {
       key: 'prReviewEffort',
       good: [null, 'low', 'medium', 'high', 'xhigh', 'max'],
       bad: ['none', 'High', '', 'maximum', 3, true, ['high']]
+    },
+    {
+      key: 'updateCheck',
+      good: [true, false],
+      bad: ['true', 'false', 1, 0, null, {}, []]
+    },
+    {
+      // `'never'` and `'soon'` are the interesting rejections: an unparseable
+      // instant here would make every throttle comparison NaN, and NaN fails
+      // every `>`, so one bad row would mean "never check again" rather than
+      // "check now" - and it would do it silently.
+      key: 'lastUpdateCheckAt',
+      good: [null, '2026-08-11T20:04:06.641Z', '2026-08-11T14:04:06-06:00'],
+      bad: ['never', 'soon', '', 0, 1786478646641, true, {}]
     }
   ]
 
@@ -460,7 +476,9 @@ describe('settings validation', () => {
       prReviewPrompt: '/code-review {number}',
       prCheckout: 'none',
       prReviewModel: 'sonnet',
-      prReviewEffort: null
+      prReviewEffort: null,
+      updateCheck: true,
+      lastUpdateCheckAt: null
     })
 
     expect(() => writeSettings(store, readSettings(store))).not.toThrow()
@@ -489,7 +507,9 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   prReviewPrompt: '/code-review {number}',
   prCheckout: 'none',
   prReviewModel: 'sonnet',
-  prReviewEffort: null
+  prReviewEffort: null,
+  updateCheck: true,
+  lastUpdateCheckAt: null
 })
 
 describe('project cache', () => {
