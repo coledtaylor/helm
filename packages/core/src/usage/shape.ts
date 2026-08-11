@@ -313,9 +313,29 @@ export interface UsageView {
   problem: UsageProblem | null
   /** Age of the reading, for the tooltip. Null when there is no reading. */
   ageMs: number | null
+  /**
+   * The percentages are **lower bounds**, because the reading is older than
+   * `USAGE_STALE_AFTER_MS`.
+   *
+   * Blanking a stale reading outright was the original rule, and in practice it
+   * blanked the segment nearly always: measured on 2.1.228, Claude Code left
+   * `cachedUsageUtilization` untouched for an hour and three quarters of
+   * continuous use, and a `claude -p` session that ran to completion did not
+   * refresh it either. Thirty minutes is not a cadence the writer keeps, so the
+   * rule was not choosing between a good number and a bad one - it was
+   * discarding the only number there is.
+   *
+   * What makes a floor honest rather than a softened blank: a window's usage
+   * only accumulates until the window resets, so a reading taken inside the
+   * window that is still running can only *understate* it. That is a claim
+   * Helm can stand behind, which was the point of the original rule. It holds
+   * only because the rolled-over case is now settled first - a reading whose
+   * window has ended describes a different window, and bounds nothing.
+   */
+  atLeast: boolean
 }
 
-const EMPTY: UsageView = { buckets: [], problem: null, ageMs: null }
+const EMPTY: UsageView = { buckets: [], problem: null, ageMs: null, atLeast: false }
 
 /**
  * The binding limit of a group.
@@ -363,13 +383,14 @@ function toBucket(limit: UsageLimit): UsageBucket {
 export function usageView(snapshot: UsageSnapshot | null, nowMs: number): UsageView {
   if (snapshot === null) return EMPTY
   if (snapshot.problem !== null) {
-    return { buckets: [], problem: snapshot.problem, ageMs: null }
+    return { buckets: [], problem: snapshot.problem, ageMs: null, atLeast: false }
   }
   if (snapshot.fetchedAtMs === null) {
     return {
       buckets: [],
       problem: problem('unrecognised', 'The reading carries no timestamp, so its age is unknown.'),
-      ageMs: null
+      ageMs: null,
+      atLeast: false
     }
   }
 
@@ -381,22 +402,19 @@ export function usageView(snapshot: UsageSnapshot | null, nowMs: number): UsageV
         'unrecognised',
         'Claude Code dated its usage figures in the future; this machine and the server disagree about the time.'
       ),
-      ageMs
+      ageMs,
+      atLeast: false
     }
   }
-  if (ageMs > USAGE_STALE_AFTER_MS) {
-    return {
-      buckets: [],
-      problem: problem(
-        'stale',
-        `Claude Code last refreshed these figures ${describeAge(ageMs)} ago. Helm will not show a number it cannot stand behind - start a session and it updates.`
-      ),
-      ageMs
-    }
-  }
-
   // A window whose reset time has passed took its percentage with it: the
   // server has started a new window and this reading describes the old one.
+  //
+  // Judged *before* age, which is the other way round from how this was first
+  // written, and the ordering is the whole of the fix. Both questions used to
+  // be answered "paint nothing", so their order did not matter; now age has a
+  // milder answer and rollover keeps the strict one, so the strict test has to
+  // get there first. A rolled-over reading is not a floor - it describes a
+  // window that no longer exists - and must never be shown as one.
   const live = snapshot.limits.filter(
     (limit) => limit.resetsAtMs === null || limit.resetsAtMs > nowMs
   )
@@ -407,7 +425,8 @@ export function usageView(snapshot: UsageSnapshot | null, nowMs: number): UsageV
         'rolled-over',
         'Every usage window in this reading has already reset. The figures are from the window before it.'
       ),
-      ageMs
+      ageMs,
+      atLeast: false
     }
   }
 
@@ -421,11 +440,12 @@ export function usageView(snapshot: UsageSnapshot | null, nowMs: number): UsageV
     return {
       buckets: [],
       problem: problem('unrecognised', 'No limit in this reading belongs to a window Helm shows.'),
-      ageMs
+      ageMs,
+      atLeast: false
     }
   }
 
-  return { buckets, problem: null, ageMs }
+  return { buckets, problem: null, ageMs, atLeast: ageMs > USAGE_STALE_AFTER_MS }
 }
 
 /** `3h 12m`, for a sentence about how old something is. */

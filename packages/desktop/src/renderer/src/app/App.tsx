@@ -1335,18 +1335,28 @@ export function App(): JSX.Element {
                 }}
               />
             </div>
-            {/* The project's own shell, in the project's own directory. Hidden
-                while the session split is open - the space belongs to the
-                session then - but its process and scrollback live in pterms.ts
-                and survive the hiding. */}
-            {!showSessions && (
-              <ProjectShellPane
-                path={activeProject.path}
-                windowsBuild={info?.windowsBuild ?? null}
-                visible
-                shells={shells}
-              />
-            )}
+            {/* The project's own shell, in the project's own directory. Its
+                process and scrollback live in pterms.ts and outlive every
+                render of this.
+
+                It used to be dropped while the session split was open, on the
+                reasoning that the space belonged to the session then. The space
+                is not the session's - the session has its own column - so what
+                that actually did was take the shell away at the exact moment a
+                second terminal is most useful, and leave the project pane's own
+                column ending in dead space.
+
+                Keyed by path for the reason ProjectPane above it is: this is
+                one project's shell, and handing the same component a different
+                project made it re-mount someone else's terminal into a box that
+                still held the last one. */}
+            <ProjectShellPane
+              key={activeProject.path}
+              path={activeProject.path}
+              windowsBuild={info?.windowsBuild ?? null}
+              visible
+              shells={shells}
+            />
           </div>
         )}
 

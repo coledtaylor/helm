@@ -120,6 +120,22 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   | `pnpm pr-check` | the pull-request surface: fetch, cache, detail tab, the file diffs, review launch, degradation | `core/github/`, `main/pulls.ts`, `main/gh-cli.ts`, `PullsPane`, `PullRequestPane`, `SessionHost.review` |
   | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
 
+  Each of them runs against **its own data directory** under
+  `%LOCALAPPDATA%\Helm\checks\`, seeded every run with a `VACUUM INTO` copy of
+  the real `helm.db`, and is pointed at it with `PORTABLE_EXECUTABLE_DIR` -
+  Helm's own portable-mode mechanism rather than a hook that exists only for
+  checks. That is not tidiness. Helm is a desktop app somebody is *using* while
+  its checks run, and pointing a driver at `%APPDATA%\Helm` changes the live
+  app's settings underneath it: one run flipped its theme, font and default
+  shell, and settings-check only puts them back if it reaches its restore. A
+  copy keeps the assertions honest - real projects, real roots, real history -
+  without the writes landing on the file anybody is reading. `scripts/isolate.mjs`
+  is the whole of it; a new driver calls `isolate(name)` and threads its `env`
+  into every spawn. `run-m7.mjs` is the deliberate exception, because where the
+  data lands is the thing it measures. `~/.claude` stays shared and cannot not
+  be: `CLAUDE_CONFIG_DIR` moves credentials, so a session pointed at a fixture
+  home cannot log in.
+
   `terminal.ts` is under two of them and they answer different questions:
   fidelity says the baked configuration still renders a TUI correctly,
   `settings-check --only=terminal` says a preference reaches every live
@@ -191,14 +207,34 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
     The model is deliberately not validated against a list of names: the CLI's
     aliases and ids move faster than this app releases, so the validator checks
     only that the value can be one argv word.
-- Usage figures degrade to **nothing** rather than to a stale number. The
-  server's own answer in `cachedUsageUtilization` is authoritative but dated, so
-  a reading older than `USAGE_STALE_AFTER_MS`, one whose `resets_at` has already
-  passed, a missing key, or a reshaped object all paint no number and put the
-  reason in the tooltip. Measured on 2.1.225: the 5-hour window rolled over
-  between two reads and the cached figure went 51% to 21%. The binding limit of
-  a group is the one with the **highest percent**, not the one flagged
-  `is_active` - that was observed set on the lower of the two.
+- Usage figures degrade to **nothing** rather than to a wrong number: a missing
+  key, a reshaped object, a reading with no timestamp or one dated in the
+  future, and above all one whose windows have **already reset** - that last
+  describes a window which no longer exists, and its percentages are not merely
+  old, they are about something else. All paint no number and put the reason in
+  the tooltip.
+  - Age alone is the one case that does *not* blank, and it used to. A reading
+    older than `USAGE_STALE_AFTER_MS` whose windows are still running paints its
+    figures as **lower bounds** - `≥59%`, with the age beside it and the reason
+    in the tooltip - because a window only accumulates until it resets, so such
+    a reading can only understate. That is still a number Helm can stand behind,
+    which was always the actual rule. Blanking it was measured to be nearly
+    total: on 2.1.228 Claude Code left `cachedUsageUtilization` untouched for an
+    hour and three quarters of continuous use, and a `claude -p` run that
+    finished normally did not refresh it either, so a thirty-minute horizon was
+    not choosing between a good figure and a bad one - it was discarding the
+    only figure there is. `/usage` inside a real session is the only refresh
+    anyone has measured; **do not** put a remedy in that tooltip that has not
+    been.
+  - The ordering is load-bearing and is the whole reason the floor is honest:
+    rolled-over is judged **before** age, in `usageView` and again, separately,
+    in `usagecheck.ts`'s own restatement of the rule. Both questions used to
+    answer "paint nothing", so their order did not matter; now they differ.
+  - Measured on 2.1.225: the 5-hour window rolled over between two reads and the
+    cached figure went 51% to 21%. That is the rollover case, and it is exactly
+    what the strict branch still catches.
+  - The binding limit of a group is the one with the **highest percent**, not
+    the one flagged `is_active` - that was observed set on the lower of the two.
 - Dollar figures are **estimates and say so**, because `spend.enabled` is false
   on a subscription plan and every `*_dollars` the server sends is null. The
   price table's date lives in `PRICE_TABLE_DATE` and the UI reads it from there,

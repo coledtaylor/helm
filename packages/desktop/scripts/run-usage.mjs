@@ -16,8 +16,12 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { isolate } from './isolate.mjs'
 
-const dataDir = join(process.env.APPDATA ?? process.env.HOME ?? '.', 'Helm')
+// Its own data directory, seeded from a consistent copy of the real one, so a
+// run cannot disturb the Helm the user is using. See scripts/isolate.mjs.
+const { dataDir, env, root } = isolate('usage')
+console.log(`usage-check is running against ${root}`)
 const reportPath = join(dataDir, 'usage-report.json')
 const settingsPath = join(dataDir, 'usage-settings.json')
 const { default: electron } = await import('electron')
@@ -30,7 +34,7 @@ const ranSetting = groups === null || groups.includes('setting')
 rmSync(reportPath, { force: true })
 rmSync(settingsPath, { force: true })
 
-const { status } = spawnSync(electron, ['.', '--usage-check', ...args], { stdio: 'inherit' })
+const { status } = spawnSync(electron, ['.', '--usage-check', ...args], { stdio: 'inherit', env })
 if (status !== 0) {
   console.log(`(usage-check exited with ${String(status)}; the report decides, not this)`)
 }
@@ -46,7 +50,7 @@ const checks = report.checks ?? []
 // Phase two: a real restart, reading the setting the driver parked.
 if (ranSetting) {
   console.log('\n--- phase 2: a fresh app start, reading the persisted mode ---')
-  spawnSync(electron, ['.', '--usage-settings'], { stdio: 'inherit' })
+  spawnSync(electron, ['.', '--usage-settings'], { stdio: 'inherit', env })
 
   const found = existsSync(settingsPath)
     ? JSON.parse(readFileSync(settingsPath, 'utf8')).usageDisplay
@@ -67,7 +71,7 @@ if (ranSetting) {
 
   // The user's setting, put back. `--usage-settings` is a read; this is the
   // one write, and it happens after the assertion has been made.
-  spawnSync(electron, ['.', '--usage-settings', '--set=percent'], { stdio: 'inherit' })
+  spawnSync(electron, ['.', '--usage-settings', '--set=percent'], { stdio: 'inherit', env })
 }
 
 const failed = checks.filter((c) => !c.ok)

@@ -140,25 +140,38 @@ interface OwnExpectation {
   weeklyScope: string | null
   /** Why nothing may be shown. Null when something may. */
   silentBecause: string | null
+  /**
+   * The figures must be painted as lower bounds - a `≥` in front of each.
+   *
+   * This driver's own reading of the rule, not a flag copied off `UsageView`:
+   * a reading older than the horizon whose windows are still running bounds
+   * them from below, because usage accumulates until a window resets.
+   */
+  atLeast: boolean
 }
 
 /**
  * What ought to be on screen, decided from first principles.
  *
- * The rules restated rather than reused: too old is nothing at all; a window
- * whose reset time has passed is dropped; the binding limit of a group is the
- * one with the highest percentage.
+ * The rules restated rather than reused: a window whose reset time has passed
+ * is dropped; too old is a floor rather than nothing, but only once that
+ * dropping has happened; the binding limit of a group is the one with the
+ * highest percentage.
+ *
+ * The order of the first two is the part worth restating carefully, because it
+ * is where this went wrong. A reading can be both old and rolled over, and the
+ * two answers are no longer the same answer - a rolled-over reading describes a
+ * window that has ended and bounds nothing, so it has to be judged first.
  */
 function ownExpectation(reading: OwnReading, nowMs: number): OwnExpectation {
   if (reading.broken !== null) return silent(reading.broken)
   if (reading.fetchedAtMs === null) return silent('no fetchedAtMs')
-  if (nowMs - reading.fetchedAtMs > STALE_AFTER_MS) {
-    return silent(`reading is ${String(Math.round((nowMs - reading.fetchedAtMs) / 60_000))}m old`)
-  }
   if (reading.fetchedAtMs - nowMs > 60_000) return silent('reading is dated in the future')
 
   const live = reading.limits.filter((l) => l.resetsAtMs === null || l.resetsAtMs > nowMs)
   if (live.length === 0) return silent('every window in the reading has reset')
+
+  const atLeast = nowMs - reading.fetchedAtMs > STALE_AFTER_MS
 
   let session: OwnLimit | null = null
   let weekly: OwnLimit | null = null
@@ -176,7 +189,8 @@ function ownExpectation(reading: OwnReading, nowMs: number): OwnExpectation {
     session: session === null ? null : Math.round(session.percent),
     weekly: weekly === null ? null : Math.round(weekly.percent),
     weeklyScope: weekly?.scope ?? null,
-    silentBecause: null
+    silentBecause: null,
+    atLeast
   }
 }
 
@@ -184,7 +198,8 @@ const silent = (why: string): OwnExpectation => ({
   session: null,
   weekly: null,
   weeklyScope: null,
-  silentBecause: why
+  silentBecause: why,
+  atLeast: false
 })
 
 /**
@@ -194,19 +209,39 @@ const silent = (why: string): OwnExpectation => ({
  * so this is a regex over what a person reads. Reading a `data-percent` Helm
  * had written would only prove Helm agrees with itself.
  */
-function paintedPercents(text: string): { session: number | null; weekly: number | null; weeklyScope: string | null } {
-  const found = { session: null as number | null, weekly: null as number | null, weeklyScope: null as string | null }
-  const re = /(Session|Week)(?:\s*\(([^)]*)\))?\s*(\d+)%/g
+function paintedPercents(text: string): {
+  session: number | null
+  weekly: number | null
+  weeklyScope: string | null
+  /** Every percentage on screen carried a `≥`. False when none was painted. */
+  atLeast: boolean
+} {
+  const found = {
+    session: null as number | null,
+    weekly: null as number | null,
+    weeklyScope: null as string | null,
+    atLeast: false
+  }
+  // The `≥` is captured rather than skipped over. It is the difference between
+  // "the plan is 44% used" and "the plan is at least 44% used", and a build
+  // that dropped it would be making the stronger claim on stale figures - so a
+  // regex tolerant of it would pass for exactly the bug worth catching.
+  const re = /(Session|Week)(?:\s*\(([^)]*)\))?\s*(≥)?\s*(\d+)%/g
+  let seen = 0
+  let bounded = 0
   for (;;) {
     const match = re.exec(text)
     if (match === null) break
-    const percent = Number(match[3])
+    seen += 1
+    if (match[3] !== undefined) bounded += 1
+    const percent = Number(match[4])
     if (match[1] === 'Session') found.session = percent
     else {
       found.weekly = percent
       found.weeklyScope = match[2] ?? null
     }
   }
+  found.atLeast = seen > 0 && bounded === seen
   return found
 }
 
@@ -621,7 +656,11 @@ export async function runUsageChecks(
         ? !showsAnyNumber(text)
         : painted.session === expected.session &&
           painted.weekly === expected.weekly &&
-          painted.weeklyScope === expected.weeklyScope
+          painted.weeklyScope === expected.weeklyScope &&
+          // Asserted in both directions. A `≥` on a fresh reading understates
+          // what Helm knows; a bare figure on a stale one overstates it, and
+          // that second one is the whole reason the mark exists.
+          painted.atLeast === expected.atLeast
 
     checks.push({
       id: 'U-1',
@@ -833,13 +872,22 @@ export async function runUsageChecks(
         expectInTitle: 'has not cached'
       },
       {
-        name: 'stale reading',
-        file: fixture(fixtureDir, 'stale', {
+        // A stale reading on its own is no longer one of these: its windows are
+        // still running, so its figures bound them from below and the segment
+        // paints them with a `≥` (asserted separately, below). What still shows
+        // nothing is stale *and* rolled over - the reading describes a window
+        // that has ended, so it bounds nothing, and a floor drawn from it would
+        // be a claim about the wrong window.
+        name: 'stale reading whose window has also reset',
+        file: fixture(fixtureDir, 'stale-rolled', {
           fetchedAtMs: now - (STALE_AFTER_MS + 5 * 60_000),
-          limits: good
+          limits: [
+            { kind: 'session', group: 'session', percent: 44, resetsAtMs: now - 60_000 },
+            { kind: 'weekly_all', group: 'weekly', percent: 55, resetsAtMs: now - 60_000 }
+          ]
         }),
-        why: 'the figures are older than the horizon, so another client could have moved them',
-        expectInTitle: 'refreshed'
+        why: 'the figures are old and every window in them has already reset',
+        expectInTitle: 'already reset'
       },
       {
         name: 'reshaped limits',
@@ -888,7 +936,7 @@ export async function runUsageChecks(
       const silentHere = !showsAnyNumber(text)
       const explains = title.includes(testCase.expectInTitle)
       if (!silentHere || !explains) allSilent = false
-      if (testCase.name === 'stale reading') {
+      if (testCase.name === 'stale reading whose window has also reset') {
         await screenshot(win, shotDir, 'usage-5-degraded.png')
       }
       results.push({
@@ -910,20 +958,57 @@ export async function runUsageChecks(
     usage.pointAt(control)
     const controlText = await waitForText(win, (t) => paintedPercents(t).session === 44, 10_000)
     const controlPainted = paintedPercents(controlText)
-    const controlWorks = controlPainted.session === 44 && controlPainted.weekly === 55
+    const controlWorks =
+      controlPainted.session === 44 && controlPainted.weekly === 55 && !controlPainted.atLeast
+
+    // The case that moved out of the list above, asserted from the other side:
+    // the same figures, the same windows, only the reading's age changed - and
+    // that must turn an exact number into a bounded one rather than into
+    // nothing. Same fixture shape as the control, so the age is the only
+    // variable between them.
+    const floorFile = fixture(fixtureDir, 'stale-live', {
+      fetchedAtMs: Date.now() - (STALE_AFTER_MS + 5 * 60_000),
+      limits: good
+    })
+    usage.pointAt(floorFile)
+    const floorText = await waitForText(win, (t) => paintedPercents(t).session === 44, 10_000)
+    const floorPainted = paintedPercents(floorText)
+    const floorTitle = await segmentTitle(win)
+    const floorWorks =
+      floorPainted.session === 44 &&
+      floorPainted.weekly === 55 &&
+      floorPainted.atLeast &&
+      floorTitle.includes('lower bounds')
 
     checks.push({
       id: 'U-5',
       criterion: 'A missing, stale or reshaped reading shows nothing rather than a wrong number',
-      title: 'Six broken readings paint no percentage; a good one still does',
-      ok: allSilent && controlWorks,
-      detail: { cases: results, control: { file: control, text: controlText, painted: controlPainted } },
+      title:
+        'Six unusable readings paint no percentage, a merely old one paints a bounded figure, and a good one still paints an exact one',
+      ok: allSilent && controlWorks && floorWorks,
+      detail: {
+        cases: results,
+        control: { file: control, text: controlText, painted: controlPainted },
+        staleButLive: {
+          file: floorFile,
+          text: floorText,
+          painted: floorPainted,
+          tooltipSaysBounded: floorTitle.includes('lower bounds')
+        }
+      },
       notes: [
         'Each case is a fixture written by this driver, so what is in the file is',
         'known rather than inferred.',
         'The control is not optional. A check that can pass with no evidence behind',
         'it is worse than no check: without it, "no percentage appeared" is also',
-        'what a segment that never renders anything would report.'
+        'what a segment that never renders anything would report.',
+        'The control and the stale-but-live fixture differ only in `fetchedAtMs`,',
+        'so the exact figure and the bounded one are the same numbers judged by',
+        'age alone - which is what makes the `≥` the thing under test rather than',
+        'a side effect of a different reading.',
+        'Old and rolled-over is still silent, and that pair is the discriminating',
+        'one now: it is the case where a floor would be drawn from a window that',
+        'has already ended.'
       ]
     })
 
@@ -1400,10 +1485,24 @@ export async function runUsageChecks(
         answered &&
         tuiSession !== null &&
         tuiWeek !== null &&
-        painted.session === tuiSession &&
-        painted.weekly === tuiWeek &&
-        expected.session === tuiSession &&
-        expected.weekly === tuiWeek,
+        // Helm against the file is **exact**: the bar has one job, which is to
+        // paint what the cache says, and there is nothing in between them that
+        // could licence a difference.
+        painted.session === expected.session &&
+        painted.weekly === expected.weekly &&
+        painted.atLeast === expected.atLeast &&
+        // The TUI against the file gets a point of slack, and only that. The
+        // two are read at different moments while the session that is being
+        // asked is itself spending the plan: observed here at 12% in a cache
+        // written 220 seconds earlier and 13% in the panel rendered from a live
+        // request. Demanding equality is demanding that usage not move during
+        // the check, which is not something the check controls. More than a
+        // point apart is still a failure - that is a stale cache or the wrong
+        // window, which is what this is for.
+        expected.session !== null &&
+        expected.weekly !== null &&
+        Math.abs(tuiSession - expected.session) <= 1 &&
+        Math.abs(tuiWeek - expected.weekly) <= 1,
       detail: {
         cwd,
         reachedPrompt: ready,
@@ -1419,8 +1518,15 @@ export async function runUsageChecks(
         'Three readings compared, not two: what the session painted in its own',
         'TUI, what this driver parsed out of ~/.claude.json by hand, and what the',
         'status bar shows.',
+        'The two comparisons are held to different standards on purpose. Helm',
+        'against the file must be exact - painting the cache is the bar’s whole',
+        'job. The TUI against the file gets one point, because they are read',
+        'moments apart while the session being asked is itself spending the plan.',
         'Running /usage is also what refreshes the cache, so this doubles as proof',
-        'that the bar follows a session it is hosting without being told.'
+        'that the bar follows a session it is hosting without being told - and it',
+        'is the only refresh anyone has measured. A `claude -p` run that finished',
+        'normally left `fetchedAtMs` untouched, which is why the stale tooltip no',
+        'longer tells anyone to start a session.'
       ]
     })
   }

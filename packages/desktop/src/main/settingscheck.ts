@@ -1,7 +1,7 @@
 import { nativeTheme, type BrowserWindow } from 'electron'
 import Database from 'better-sqlite3'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readSettings, type AppSettings } from '@helm/core'
 import { screenshot, sendKey, sleep, typeText } from './bridge'
@@ -194,6 +194,64 @@ function whereIs(name: string): string[] {
 }
 
 const whereClaude = (): string[] => whereIs('claude')
+
+/**
+ * Where this driver looks for a shell that is not on `PATH`.
+ *
+ * Its own sweep of its own list of places, for the reason
+ * `EXPECTED_SHELL_ARGS` is its own table: importing `pwshLocations` would make
+ * S-12 assert that `pterm.ts` agrees with itself. Written from the same two
+ * facts and not from the same code - the Store's launcher lives under
+ * `%LOCALAPPDATA%\Microsoft\WindowsApps`, an MSI install under
+ * `%ProgramFiles%\PowerShell\<major>`, and Git for Windows keeps a bash in
+ * `bin\` while putting only `cmd\` on `PATH`.
+ *
+ * `lstat` rather than `existsSync`, and that is not a style choice: an
+ * app-execution alias is a reparse point `stat` cannot follow, so `existsSync`
+ * answers false for a launcher that plainly works. A driver using the obvious
+ * test here would have reported the shell as absent and agreed with the bug.
+ */
+function installedOffPath(name: string): string[] {
+  const found: string[] = []
+  const there = (path: string): boolean => {
+    try {
+      lstatSync(path)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const programFiles = [process.env['ProgramW6432'], process.env['ProgramFiles']].filter(
+    (base): base is string => base !== undefined && base !== ''
+  )
+  if (name === 'pwsh.exe') {
+    for (const base of programFiles) {
+      const root = join(base, 'PowerShell')
+      let majors: string[]
+      try {
+        majors = readdirSync(root).filter((entry) => /^\d+$/.test(entry))
+      } catch {
+        majors = []
+      }
+      for (const major of majors.sort((a, b) => Number(b) - Number(a))) {
+        const exe = join(root, major, 'pwsh.exe')
+        if (there(exe)) found.push(exe)
+      }
+    }
+    const local = process.env['LOCALAPPDATA']
+    if (local !== undefined && local !== '') {
+      const alias = join(local, 'Microsoft', 'WindowsApps', 'pwsh.exe')
+      if (there(alias)) found.push(alias)
+    }
+  }
+  if (name === 'bash.exe') {
+    for (const base of programFiles) {
+      const exe = join(base, 'Git', 'bin', 'bash.exe')
+      if (there(exe)) found.push(exe)
+    }
+  }
+  return found
+}
 
 /** What Windows says a live process actually is. */
 function imageNameOf(pid: number): string | null {
@@ -1516,8 +1574,48 @@ export async function runSettingsChecks(
       // S-10: a size change reaches every terminal, and only the visible pane's
       // pty is told - until the hidden one comes back
       // ---------------------------------------------------------------------
+
+      /**
+       * Take the project shell out of the document, leaving the session in it.
+       *
+       * The claim needs one terminal of each kind on opposite sides of the
+       * question at the same moment, and this is now the only thing that
+       * arranges that. It used to arrange itself: opening a session dropped the
+       * project shell, so by this line the shell was already gone. That was a
+       * bug - the session has its own column and takes nothing from the
+       * project's - and fixing it means the split shows both. Maximising the
+       * session is the honest replacement: the workspace column unmounts, its
+       * shell goes with it, and the session pane stays exactly where it was.
+       *
+       * `session` singular is the button's own `data-maximize` value, and the
+       * same button restores the split further down.
+       */
+      const shellHidden0 = await click(win, '[data-maximize="session"]')
+      const shellWentAway = await pollJs(
+        win,
+        `window.__helmTerminals().shells.every((t) => !t.attached)
+         && window.__helmTerminals().sessions.some((t) => t.attached)`,
+        15_000
+      )
+      await sleep(1200)
+
       const before = await terminalSnapshot(win)
-      const shellIdBefore = ctx.pterm.list()[0]?.id ?? -1
+      /**
+       * The shell for the project this group actually drove - not
+       * `list()[0]`, which is whichever shell was opened first.
+       *
+       * That was this check measuring something it never touched. A project
+       * tab restored at startup opens its shell before the driver clicks
+       * anything, so index 0 was the *restored* project's shell: detached from
+       * the moment the driver moved to its own fixture, therefore never
+       * refitted, therefore frozen. "The grid changed once the pane came back"
+       * was then being asked of a pane that never came back, and the answer
+       * depended on whether the user's last session happened to leave a project
+       * tab active - which is a fact about the machine, not about Helm.
+       */
+      const shellIdBefore =
+        ctx.pterm.list().find((entry) => entry.path.toLowerCase() === projectOne.toLowerCase())
+          ?.id ?? -1
       const sessionGridBefore = ctx.sessions.grid(sessionId)
       const shellGridBefore = ctx.pterm.grid(shellIdBefore)
       sessionResizes.length = 0
@@ -1570,11 +1668,12 @@ export async function runSettingsChecks(
       const cosmeticResizes = sessionResizes.length + shellResizes.length
       const cosmeticIsFree = cosmeticLanded && cosmeticResizes === 0
 
-      // The hidden pane comes back. Its terminal was reconfigured while it was
-      // out of the document, measured 0x0, and refused to act on that; showing
-      // it is the moment the pty is allowed to hear about the new cell size.
+      // The hidden pane comes back - the same button, which now restores the
+      // split. Its terminal was reconfigured while it was out of the document,
+      // measured 0x0, and refused to act on that; showing it is the moment the
+      // pty is allowed to hear about the new cell size.
       shellResizes.length = 0
-      await click(win, '[data-maximize="workspace"]')
+      await click(win, '[data-maximize="session"]')
       const shellVisible = await pollJs(
         win,
         `window.__helmTerminals().shells.every((t) => t.attached)`,
@@ -1636,6 +1735,49 @@ export async function runSettingsChecks(
         Math.abs(estimate.cols - settled.cols) <= 1 &&
         Math.abs(estimate.rows - settled.rows) <= 1
 
+      /**
+       * The pane that just changed project holds **one** terminal, and it is
+       * that project's.
+       *
+       * Two shells are running by now and only one project is on screen, which
+       * is the ordinary state and was also the state in which this went wrong.
+       * The pane's box used to be appended to rather than taken over, so the
+       * second project's terminal went in underneath the first: the island
+       * clips, so what was painted stayed the *previous* project's shell - a
+       * live prompt in the wrong directory, under a header naming the right
+       * one - with the rest spilling past the bottom edge, one more each time a
+       * project was opened.
+       *
+       * Counted in the DOM rather than in the registry, because the registry
+       * was never wrong: `pterms.ts` had two shells and two elements, and the
+       * bug was entirely in which box they were parented to. `attached` is
+       * xterm's own `isConnected`, so "the other one is detached" is the claim
+       * that it kept its process and its scrollback while off screen.
+       */
+      const paneHolds = await js<{ inBox: number; captioned: string | null }>(
+        win,
+        `(() => {
+          const cap = document.querySelector('[data-shell-running]');
+          const island = cap ? cap.closest('div.rounded-island') : null;
+          return {
+            inBox: island ? island.querySelectorAll('.xterm').length : -1,
+            captioned: cap ? cap.dataset.shellRunning : null
+          };
+        })()`
+      )
+      const shells = (await terminalSnapshot(win)).shells
+      const activeShell = shells.find(
+        (shell) => shell.path.toLowerCase() === projectTwo.toLowerCase()
+      )
+      const otherShell = shells.find(
+        (shell) => shell.path.toLowerCase() === projectOne.toLowerCase()
+      )
+      const onePaneOneTerminal =
+        paneHolds.inBox === 1 &&
+        paneHolds.captioned !== null &&
+        activeShell?.attached === true &&
+        otherShell?.attached === false
+
       const shot10 = await screenshot(win, shotDir, 'settings-10-terminal-size.png')
 
       const everyTerminalResized =
@@ -1661,6 +1803,8 @@ export async function runSettingsChecks(
           shellUp &&
           launched &&
           sessionUp &&
+          shellHidden0 &&
+          shellWentAway &&
           everyTerminalResized &&
           sizeLanded &&
           cosmeticIsFree &&
@@ -1683,6 +1827,7 @@ export async function runSettingsChecks(
           shellStarted: shellUp,
           shellNameInHeader,
           sessionStarted: sessionUp,
+          hidTheShellByMaximizingTheSession: { clicked: shellHidden0, detached: shellWentAway },
           sizeChangedFrom: DEFAULT_TERMINAL.fontSize,
           sizeChangedTo: bigger,
           reportedBefore: [...before.sessions, ...before.shells],
@@ -1727,6 +1872,14 @@ export async function runSettingsChecks(
           'its pty must NOT be resized while it is out of the document and must',
           'be as soon as it comes back. Both halves are asserted; only asserting',
           'the second would pass for a build that resized a hidden pane to 1x1.',
+          'The shell is hidden by maximising the session, which unmounts the',
+          'whole workspace column. Launching a session used to do it on its own',
+          'because the project shell was dropped whenever the split opened; that',
+          'was the bug, and a check written around it would now be asserting the',
+          'shell is gone at the moment it is supposed to be on screen.',
+          'That the shell detached and the session did not is asserted before',
+          'the write, so "the hidden one was not resized" cannot be satisfied by',
+          'a run in which nothing was hidden.',
           'The cell width xterm painted is compared with a measurement this',
           'driver made itself at the same size in the same stack.',
           'Cursor shape, blinking and scrollback are changed in a separate write',
@@ -1740,6 +1893,37 @@ export async function runSettingsChecks(
           'measured anything, recorded by the pty host at open. At 20px it can',
           'only land within a column of the fit if the estimate reads the',
           'setting rather than the built-in 14.'
+        ]
+      })
+
+      checks.push({
+        id: 'S-10b',
+        criterion:
+          'A project pane shows the shell of the project it is captioned with, and only that one',
+        title:
+          'After a switch the pane holds exactly one terminal, it is the active project’s, and the other keeps its process off screen',
+        ok: onePaneOneTerminal,
+        detail: {
+          activeProject: projectTwo,
+          terminalsInTheBox: paneHolds.inBox,
+          captionedShell: paneHolds.captioned,
+          activeProjectAttached: activeShell?.attached ?? null,
+          previousProjectAttached: otherShell?.attached ?? null,
+          shells: shells.map((shell) => ({ path: shell.path, attached: shell.attached }))
+        },
+        notes: [
+          'Counted in the DOM, not in the registry. The registry was never wrong',
+          'when this broke - two shells, two elements - and the whole of the bug',
+          'was that both elements were parented to the same box, the pane having',
+          'been appended to rather than taken over.',
+          'It did not look like two terminals. The island clips, so the pane went',
+          'on painting the *previous* project’s shell under a header naming the',
+          'current one, and each project opened added another below the edge.',
+          'So a count of one is the assertion and the caption is not: a build',
+          'that painted the wrong shell alone would still satisfy the caption.',
+          '`attached` is xterm’s own `isConnected`, so the second half - the',
+          'displaced shell is detached rather than disposed - is what says its',
+          'process and scrollback are waiting rather than gone.'
         ]
       })
 
@@ -1877,9 +2061,14 @@ export async function runSettingsChecks(
       // ---------------------------------------------------------------------
       // S-12: the shell a project pane opens
       // ---------------------------------------------------------------------
+      // `PATH` first, then the places an installer puts a shell without adding
+      // it to `PATH` - the same order the resolver uses, arrived at separately.
+      // A machine whose only PowerShell 7 is the Store build has none of it on
+      // `PATH`: `where.exe pwsh.exe` finds nothing, and a sweep that stopped
+      // there would confirm a Helm that had silently dropped to 5.1.
       const swept: Record<string, string | null> = {}
       for (const name of Object.keys(EXPECTED_SHELL_ARGS)) {
-        swept[name] = whereIs(name)[0] ?? null
+        swept[name] = whereIs(name)[0] ?? installedOffPath(name)[0] ?? null
       }
       const sweptNames = Object.entries(swept)
         .filter(([, path]) => path !== null)

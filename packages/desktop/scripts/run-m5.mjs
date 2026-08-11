@@ -19,8 +19,12 @@ import { copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { isolate } from './isolate.mjs'
 
-const dataDir = join(process.env.APPDATA ?? process.env.HOME ?? '.', 'Helm')
+// Its own data directory, seeded from a consistent copy of the real one, so a
+// run cannot disturb the Helm the user is using. See scripts/isolate.mjs.
+const { dataDir, env, root } = isolate('m5')
+console.log(`m5-check is running against ${root}`)
 const reportPath = join(dataDir, 'm5-report.json')
 const userSettings = join(homedir(), '.claude', 'settings.json')
 const backup = join(dataDir, 'm5-user-settings.backup.json')
@@ -33,7 +37,8 @@ rmSync(reportPath, { force: true })
 const settingsBefore = sha256(userSettings)
 
 const { status } = spawnSync(electron, ['.', '--m5-check', ...process.argv.slice(2)], {
-  stdio: 'inherit'
+  stdio: 'inherit',
+  env
 })
 if (status !== 0) {
   console.log(`(m5-check exited with ${String(status)}; the report decides, not this)`)

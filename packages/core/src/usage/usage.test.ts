@@ -237,14 +237,53 @@ describe('usageView', () => {
     expect(view.buckets.map((b) => b.percent)).toEqual([90])
   })
 
-  it('shows nothing once the reading is older than the staleness horizon', () => {
+  it('turns the figures into lower bounds once past the staleness horizon', () => {
+    // Blanking a stale reading outright is what this used to assert, and in
+    // practice it blanked the segment nearly always: Claude Code refreshes
+    // `cachedUsageUtilization` on its own schedule, measured at well over an
+    // hour between writes, so a thirty-minute horizon was not choosing between
+    // a good figure and a bad one - it was discarding the only figure there is.
+    // A window accumulates until it resets, so a reading taken inside a window
+    // that is still running can only understate it.
     const snapshot = parseUsage(claudeJson(), 'claude.json')
     const justInside = usageView(snapshot, FETCHED + USAGE_STALE_AFTER_MS - 1000)
     const justOutside = usageView(snapshot, FETCHED + USAGE_STALE_AFTER_MS + 1000)
 
     expect(justInside.buckets).toHaveLength(2)
-    expect(justOutside.buckets).toEqual([])
-    expect(justOutside.problem?.kind).toBe('stale')
+    expect(justInside.atLeast).toBe(false)
+
+    // Same numbers, now flagged as floors rather than withheld.
+    expect(justOutside.buckets.map((b) => b.percent)).toEqual(
+      justInside.buckets.map((b) => b.percent)
+    )
+    expect(justOutside.atLeast).toBe(true)
+    expect(justOutside.problem).toBeNull()
+    expect(justOutside.ageMs).toBe(USAGE_STALE_AFTER_MS + 1000)
+  })
+
+  it('still shows nothing when a stale reading has also rolled over', () => {
+    // The ordering that makes the floor honest. Age alone is survivable; a
+    // window that has ended is not, because that reading bounds a window which
+    // no longer exists. Both are true here, and rollover has to win.
+    const snapshot = parseUsage(
+      claudeJson({
+        fetchedAtMs: NOW - 6 * 60 * 60_000,
+        limits: [
+          {
+            kind: 'session',
+            group: 'session',
+            percent: 59,
+            resets_at: new Date(NOW - 60 * 60_000).toISOString()
+          }
+        ]
+      }),
+      'claude.json'
+    )
+    const view = usageView(snapshot, NOW)
+
+    expect(view.buckets).toEqual([])
+    expect(view.atLeast).toBe(false)
+    expect(view.problem?.kind).toBe('rolled-over')
   })
 
   it('drops a window that has already reset and keeps the one that has not', () => {

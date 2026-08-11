@@ -83,6 +83,31 @@ const described = (pane: ShellPane): MountedShell => ({
 })
 
 /**
+ * Park `element` in `container` as its **only** child, refitting if it moved.
+ *
+ * The word "only" is the whole of this function. A shell outlives every pane
+ * that shows it and gets re-parented from one box to the next, which the old
+ * `appendChild` did correctly - but a box can also be handed a *different*
+ * project, and then appending stacked the new project's terminal underneath the
+ * one already there. What that looked like was not two terminals: the island
+ * clips, so the pane painted the shell it was given first - a prompt sitting in
+ * some previously-visited directory, under a header naming the project on
+ * screen - with the rest spilling out of the bottom edge. Every project visited
+ * added one.
+ *
+ * So the eviction is keyed on the container, not on the path. A box holds one
+ * shell; whichever shell arrives is it, and the displaced element is left
+ * parentless rather than destroyed - its process is still running and its pane
+ * re-parents it back the next time that project is shown.
+ */
+function park(container: HTMLElement, pane: ShellPane): MountedShell {
+  const moved = pane.element.parentElement !== container
+  if (moved || container.childElementCount > 1) container.replaceChildren(pane.element)
+  if (moved) pane.host.refit()
+  return described(pane)
+}
+
+/**
  * The shell for `path`, created on first call, re-parented on later ones.
  * Async because the pty has to exist before there is an id to wire.
  */
@@ -92,13 +117,7 @@ export async function mountShell(
   opts: MountShellOptions
 ): Promise<MountedShell | null> {
   const existing = panes.get(path.toLowerCase())
-  if (existing) {
-    if (existing.element.parentElement !== container) {
-      container.appendChild(existing.element)
-      existing.host.refit()
-    }
-    return described(existing)
-  }
+  if (existing) return park(container, existing)
 
   const opened = await helm.invoke('pterm:open', {
     path,
@@ -106,22 +125,19 @@ export async function mountShell(
     rows: opts.rows,
     ...(opts.shell != null && opts.shell !== '' ? { shell: opts.shell } : {})
   })
+  // The pane that asked may be gone by now - a tab closed, or a project
+  // switched away from while the pty was opening. Parking into a box React has
+  // already dropped would take the shell out of whatever box is on screen.
+  if (!container.isConnected) return null
   // Two panes racing for one path (a fast tab close-and-reopen): the second
   // await lands after the first built the pane. Reattach rather than double up.
   const raced = panes.get(path.toLowerCase())
-  if (raced) {
-    if (raced.element.parentElement !== container) {
-      container.appendChild(raced.element)
-      raced.host.refit()
-    }
-    return described(raced)
-  }
-  if (!container.isConnected) return null
+  if (raced) return park(container, raced)
 
   const element = document.createElement('div')
   element.style.width = '100%'
   element.style.height = '100%'
-  container.appendChild(element)
+  container.replaceChildren(element)
 
   const id = opened.id
   const host = createTerminal(

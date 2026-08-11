@@ -17,8 +17,12 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { isolate } from './isolate.mjs'
 
-const dataDir = join(process.env.APPDATA ?? process.env.HOME ?? '.', 'Helm')
+// Its own data directory, seeded from a consistent copy of the real one, so a
+// run cannot disturb the Helm the user is using. See scripts/isolate.mjs.
+const { dataDir, env, root } = isolate('prcheck')
+console.log(`pr-check is running against ${root}`)
 const reportPath = join(dataDir, 'pr-report.json')
 const originalPath = join(dataDir, 'pr-original.json')
 const { default: electron } = await import('electron')
@@ -29,7 +33,7 @@ const groups = only ? only.slice('--only='.length).split(',') : null
 
 rmSync(reportPath, { force: true })
 
-const { status } = spawnSync(electron, ['.', '--pr-check', ...args], { stdio: 'inherit' })
+const { status } = spawnSync(electron, ['.', '--pr-check', ...args], { stdio: 'inherit', env })
 if (status !== 0) {
   console.log(`(pr-check exited with ${String(status)}; the report decides, not this)`)
 }
@@ -39,7 +43,8 @@ if (!existsSync(reportPath)) {
   if (existsSync(originalPath)) {
     console.log('restoring the settings the driver wrote down before it started')
     spawnSync(electron, ['.', '--settings-restart', `--restore=${originalPath}`], {
-      stdio: 'inherit'
+      stdio: 'inherit',
+      env
     })
   }
   process.exit(1)
