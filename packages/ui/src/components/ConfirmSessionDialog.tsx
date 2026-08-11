@@ -121,8 +121,10 @@ export function ConfirmSessionDialog({
               // by script when the dialog opens, and Chromium does not count
               // that as visible focus - so the ring the rest of the app gets
               // for free never paints, and the one button Enter would press
-              // looks no different from the one it would not.
-              'focus:outline-2 focus:outline-offset-2 focus:outline-accent'
+              // looks no different from the one it would not. The indication is
+              // the form-field one - border turns accent, no offset ring - and
+              // the global ring is suppressed so tabbing here matches opening.
+              'focus:border-accent focus:outline-none'
             )}
           >
             Cancel
