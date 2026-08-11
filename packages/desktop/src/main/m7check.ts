@@ -324,6 +324,117 @@ const IDENTITY_ALLOWED: Array<{ needle: string; why: string }> = [
   { needle: '"author": "Cole Taylor"', why: 'the authorship field in package.json' }
 ]
 
+/**
+ * Paths that are shaped like somebody's machine but belong to nobody.
+ *
+ * The structural patterns above cannot tell a Windows profile path whose
+ * account segment reads `user` - a captured terminal transcript, kept as
+ * evidence - from one naming a real account, which is a leak. Both are things
+ * this repository legitimately contains. The difference is the segment after
+ * the profile root, so it is enumerated here rather than inferred: short,
+ * countable, and each entry has to earn its line.
+ *
+ * The harness root is the suggested-roots convention the product itself ships,
+ * so its `~`-relative form is the project speaking. An *absolute* harness path
+ * is not covered and still fails: that one names a machine.
+ *
+ * Written to be unspellable by its own patterns, for the reason the probe's
+ * baits are assembled from pieces: the alternative is a driver that has to
+ * excuse itself, and an audit with one exemption for its author's convenience
+ * has already conceded the argument. Hence a lookahead rather than `\b` on the
+ * last one - `\b` puts a backslash directly after the directory name, which is
+ * the shape being forbidden.
+ */
+const PLACEHOLDER_ALLOWED: Array<{ id: string; re: RegExp; why: string }> = [
+  {
+    id: 'neutral-profile',
+    re: /[A-Za-z]:[\\/]{1,2}Users[\\/]{1,2}(?:user|x)\b/i,
+    why: 'a Windows profile path whose account segment is a placeholder'
+  },
+  {
+    id: 'neutral-posix-home',
+    re: /\/home\/x\//i,
+    why: 'a POSIX home whose account segment is a placeholder'
+  },
+  {
+    id: 'harness-convention',
+    re: /~[\\/]\.harness(?![A-Za-z0-9_])/i,
+    why: "the `~`-relative suggested-roots convention, which is the product's own"
+  }
+]
+
+/**
+ * The private names, read from a file that is not in the repository.
+ *
+ * The discovered patterns above catch a private repository written as a *path*
+ * - `repos/<name>` - because a bare name would fire on any repository called
+ * something ordinary. That anchor is right for a check that must not cry wolf,
+ * and it is also exactly the hole a name mentioned in prose goes through: a
+ * comment reading "every session in <a private project>" is not a path and no
+ * discovered pattern can see it.
+ *
+ * So the bare names live in `.audit-private.local`, which `.gitignore` covers,
+ * and the audit reads them at runtime. The list polices the repository without
+ * being published by it - which is the whole reason the audit stopped holding a
+ * hardcoded list in the first place. `.audit-private.local.example` documents
+ * the format.
+ *
+ * Absent, the check does not quietly pass as though it had one: it says the
+ * class went unexercised, and the probe reports the same.
+ */
+const PRIVATE_LOCAL_FILE = '.audit-private.local'
+
+/** Below this a name matches too much to be worth a build failure. */
+const PRIVATE_LOCAL_MIN_LENGTH = 4
+
+interface PrivateLocal {
+  present: boolean
+  patterns: Array<{ id: string; re: RegExp }>
+  /**
+   * The names as written. The probe plants one, and it has to plant the name
+   * rather than the pattern's `source` - those differ the moment a name
+   * contains a character `escapeForRegExp` escapes, and the bait would then be
+   * a string the pattern does not match.
+   */
+  names: string[]
+  /** Entries too short to be discriminating, reported rather than dropped. */
+  rejected: string[]
+}
+
+function readPrivateLocal(root: string | null): PrivateLocal {
+  const empty: PrivateLocal = { present: false, patterns: [], names: [], rejected: [] }
+  if (root === null) return empty
+  let raw: string
+  try {
+    raw = readFileSync(join(root, PRIVATE_LOCAL_FILE), 'utf8')
+  } catch {
+    return empty
+  }
+  const patterns: Array<{ id: string; re: RegExp }> = []
+  const names: string[] = []
+  const rejected: string[] = []
+  for (const line of raw.split('\n')) {
+    const name = line.trim()
+    if (name === '' || name.startsWith('#')) continue
+    if (name.length < PRIVATE_LOCAL_MIN_LENGTH) {
+      rejected.push(name)
+      continue
+    }
+    // No word boundaries. `\b<name>\b` cannot match inside `"running<name>"`,
+    // and a name concatenated into a string is still a published name.
+    patterns.push({ id: 'private-name', re: new RegExp(escapeForRegExp(name), 'i') })
+    names.push(name)
+  }
+  return { present: true, patterns, names, rejected }
+}
+
+let privateLocalCache: PrivateLocal | null = null
+
+function privateLocal(): PrivateLocal {
+  privateLocalCache ??= readPrivateLocal(repoRoot())
+  return privateLocalCache
+}
+
 /** Directories the audit never descends into. */
 const AUDIT_SKIP = new Set([
   'node_modules',
@@ -350,7 +461,11 @@ function isHarnessFile(rel: string): boolean {
     /\.test\.tsx?$/.test(rel) ||
     rel.startsWith('packages/desktop/scripts/') ||
     rel.startsWith('docs/') ||
-    rel === 'CLAUDE.md'
+    // Both halves of the agent instructions, for one reason: the local half is
+    // where a machine's paths are *supposed* to be written down, which is why
+    // it is gitignored. M7-4b, which asks what is publishable rather than what
+    // ships, does not see it at all.
+    /^CLAUDE(\.local)?\.md$/.test(rel)
   )
 }
 
@@ -405,6 +520,96 @@ function auditTree(root: string): { shipped: AuditHit[]; harness: AuditHit[]; fi
 
   visit(root)
   return { shipped, harness, files }
+}
+
+/**
+ * The files a push would publish: everything tracked, plus everything an
+ * ordinary `git add -A` would start tracking.
+ *
+ * Not a directory walk. The two questions differ in both directions, and each
+ * difference is a bug the other framing has:
+ *
+ * - A walk audits `out/`, `dist-app/` and `.audit-private.local` - build output
+ *   and the pattern file itself, none of which can ever reach the remote. An
+ *   audit that fails on those teaches people to ignore it.
+ * - A walk over *tracked files only* would miss the file sitting untracked in
+ *   somebody's working copy that the next `git add -A` sweeps up. That is not
+ *   hypothetical: a generated design artifact carrying a private repository
+ *   name sat untracked in this checkout, one careless `add` from being public.
+ *
+ * `--others --exclude-standard` is exactly the second set, so the audit sees
+ * what is publishable rather than what is published.
+ */
+function publishableFiles(root: string): string[] | null {
+  let out: string
+  try {
+    out = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
+      cwd: root,
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024
+    })
+  } catch {
+    return null
+  }
+  const files = out.split('\0').filter((rel) => rel !== '' && AUDIT_EXT.test(rel))
+  return files.length === 0 ? null : files
+}
+
+interface PublicationResult {
+  hits: AuditHit[]
+  files: number
+  allowed: Array<{ id: string; why: string; occurrences: number }>
+}
+
+/**
+ * The audit's other question. M7-4 asks whether a personal path reaches what
+ * *ships*, and deliberately excuses the development harness - the drivers, the
+ * unit tests, `docs/` and this repository's own instructions - because a
+ * fixture path there breaks nobody's machine.
+ *
+ * Publishing moved that boundary. Everything M7-4 excuses is world-readable,
+ * so this one excuses none of it: same patterns, every publishable file, plus
+ * the bare private names the discovered patterns cannot see.
+ */
+function publicationAudit(root: string, files: string[]): PublicationResult {
+  const patterns = [...personal(), ...privateLocal().patterns]
+  const allowedCounts = new Map<string, number>(PLACEHOLDER_ALLOWED.map((p) => [p.id, 0]))
+  const hits: AuditHit[] = []
+  let scanned = 0
+
+  for (const rel of files) {
+    let content: string
+    try {
+      content = readFileSync(join(root, rel), 'utf8')
+    } catch {
+      continue
+    }
+    scanned++
+    const lines = content.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] as string
+      if (IDENTITY_ALLOWED.some((entry) => line.includes(entry.needle))) continue
+      const excuse = PLACEHOLDER_ALLOWED.find((p) => p.re.test(line))
+      if (excuse !== undefined) {
+        allowedCounts.set(excuse.id, (allowedCounts.get(excuse.id) ?? 0) + 1)
+        continue
+      }
+      for (const { id, re } of patterns) {
+        if (!re.test(line)) continue
+        hits.push({ file: rel, line: i + 1, pattern: id, text: line.trim().slice(0, 160) })
+      }
+    }
+  }
+
+  return {
+    hits,
+    files: scanned,
+    allowed: PLACEHOLDER_ALLOWED.map((p) => ({
+      id: p.id,
+      why: p.why,
+      occurrences: allowedCounts.get(p.id) ?? 0
+    }))
+  }
 }
 
 /**
@@ -544,8 +749,23 @@ function auditChecks(): Check[] {
   // with no neighbours there is no such pattern to fire, so the probe asserts
   // the two structural ones and the report says the third was unavailable.
   const neighbour = neighbourRepoNames(root)[0] ?? null
-  const probeFile = join(root, 'packages', 'core', 'src', '__m7-audit-probe.ts')
+  const local = privateLocal()
+  const privateName = local.names[0] ?? null
+
+  // Every bait is assembled from pieces that match nothing on their own, so
+  // this file does not itself contain a line the audit would then have to be
+  // taught to excuse. A probe that forces an exemption has weakened the thing
+  // it was supposed to prove.
+  const bait = {
+    profile: ['C:', 'Users', 'someone', 'projects'].join('\\'),
+    harness: ['.harness', 'dev', 'repos'].join('\\')
+  }
+
+  const probeRel = 'packages/core/src/__m7-audit-probe.ts'
+  const probeFile = join(root, ...probeRel.split('/'))
   let probeCaught: AuditHit[]
+  let probePublication: AuditHit[]
+  let probeEnumerated: boolean
   let probeRemoved: boolean
   try {
     writeFileSync(
@@ -553,15 +773,24 @@ function auditChecks(): Check[] {
       [
         '// Planted by m7-check and removed in the same breath.',
         'export const PROBE = {',
-        String.raw`  path: 'C:\Users\someone\projects',`,
-        `  harness: '~/.harness/dev'${neighbour === null ? '' : ','}`,
-        ...(neighbour === null ? [] : [`  repo: 'repos/${neighbour}'`]),
+        `  path: '${bait.profile}',`,
+        `  harness: '${bait.harness}',`,
+        ...(neighbour === null ? [] : [`  repo: 'repos/${neighbour}',`]),
+        ...(privateName === null ? [] : [`  mention: 'every session in ${privateName}',`]),
         '}',
         ''
       ].join('\n'),
       'utf8'
     )
     probeCaught = auditTree(root).shipped.filter((hit) => hit.file.endsWith('__m7-audit-probe.ts'))
+    // The publication audit runs over its own enumeration, not over a path
+    // handed to it, because the enumeration is half of what is being proved:
+    // the probe is untracked, so only `--others` puts it in scope, and an
+    // enumeration that quietly stopped returning untracked files would leave a
+    // scanner that still passes and no longer looks where the risk is.
+    const publishable = publishableFiles(root) ?? []
+    probeEnumerated = publishable.includes(probeRel)
+    probePublication = publicationAudit(root, publishable).hits.filter((h) => h.file === probeRel)
   } finally {
     rmSync(probeFile, { force: true })
     probeRemoved = !existsSync(probeFile)
@@ -574,7 +803,18 @@ function auditChecks(): Check[] {
     probePatterns.includes('windows-profile') &&
     probePatterns.includes('harness-path')
 
+  const publicationProbePatterns = [...new Set(probePublication.map((h) => h.pattern))].sort()
+  const publicationProbeOk =
+    probeRemoved &&
+    probeEnumerated &&
+    publicationProbePatterns.includes('windows-profile') &&
+    publicationProbePatterns.includes('harness-path') &&
+    (neighbour === null || publicationProbePatterns.includes('neighbour-repo')) &&
+    (privateName === null || publicationProbePatterns.includes('private-name'))
+
   const { shipped, harness, files } = auditTree(root)
+  const publishable = publishableFiles(root)
+  const publication = publishable === null ? null : publicationAudit(root, publishable)
 
   // The allowlist is only defensible if it is short and enumerated. Count what
   // each of its three entries actually excuses, so a fourth cannot be smuggled
@@ -624,6 +864,47 @@ function auditChecks(): Check[] {
         `${String(shipped.length)} hits in what ships. ${String(harness.length)} in the development harness - the check drivers, the unit tests and the measured evidence - which is the "outside test fixtures" the criterion allows, and they are listed by file rather than waved at.`,
         'Three occurrences are identity rather than assumption and are allowlisted by their exact text: an application id, a release address, and an authorship field. None is read at runtime to find anything on disk.',
         'Two real portability bugs were found by this audit and fixed rather than excused: claudecheck.ts and selftest.ts each started their session in a literal path under one machine\'s home directory, and now derive the checkout from app.getAppPath().'
+      ]
+    },
+    {
+      id: 'M7-4b',
+      criterion:
+        'The same audit repo-wide: nothing publishable names a private repository, account or machine',
+      title:
+        publication === null
+          ? 'The publishable file set could not be enumerated, so nothing was audited'
+          : `${String(publication.files)} publishable files audited; ${String(publication.hits.length)} naming something private`,
+      ok: publication !== null && publicationProbeOk && publication.hits.length === 0,
+      detail: {
+        root,
+        filesAudited: publication?.files ?? 0,
+        scope: 'git ls-files --cached --others --exclude-standard',
+        patterns: [...personal(), ...privateLocal().patterns].map((p) => ({
+          id: p.id,
+          re: p.id === 'private-name' ? '(withheld - read from ' + PRIVATE_LOCAL_FILE + ')' : p.re.source
+        })),
+        hits: publication?.hits ?? [],
+        placeholderAllowlist: publication?.allowed ?? [],
+        privateNameFile: {
+          file: PRIVATE_LOCAL_FILE,
+          present: local.present,
+          patterns: local.names.length,
+          tooShortToUse: local.rejected.length
+        },
+        probe: {
+          enumerated: probeEnumerated,
+          caught: publicationProbePatterns,
+          removed: probeRemoved
+        }
+      },
+      notes: [
+        'M7-4 asks whether a personal path reaches what ships and excuses the development harness - the drivers, the unit tests, docs/ and CLAUDE.md - because a fixture path there breaks nobody. Publishing moved that boundary: all of it is world-readable, so this check excuses none of it.',
+        `Scope is what git would publish - everything tracked plus everything an ordinary \`git add -A\` would start tracking - rather than a directory walk. A walk would audit build output and the pattern file itself, and would miss the untracked file one careless \`add\` from being public. ${String(publication?.files ?? 0)} files.`,
+        local.present
+          ? `The bare private names come from \`${PRIVATE_LOCAL_FILE}\`, which .gitignore covers, so the audit never publishes the list it polices. ${String(local.names.length)} names loaded${local.rejected.length === 0 ? '' : `, ${String(local.rejected.length)} rejected as too short to discriminate`}. The discovered patterns anchor a repository name to \`repos/<name>\`, which is right for a path and blind to the same name in a sentence - this class is what closes that.`
+          : `\`${PRIVATE_LOCAL_FILE}\` is absent, so the bare-private-name class was not exercised. The structural and discovered patterns still ran. See ${PRIVATE_LOCAL_FILE}.example for the format.`,
+        `The auditor was made to fail first here too: the planted file was seen by the enumeration (${probeEnumerated ? 'yes' : 'no'}) and caught under ${String(publicationProbePatterns.length)} patterns - ${publicationProbePatterns.join(', ')} - before being deleted. Every bait is assembled at runtime from pieces that match nothing on their own, so this driver contains no line its own audit would have to excuse.`,
+        'The placeholder allowlist is counted rather than waved at, the same discipline as the identity allowlist: a path is excused only where the segment after `Users` is a placeholder, and `~/.harness` only in its `~`-relative form. An absolute harness path still fails.'
       ]
     }
   ]

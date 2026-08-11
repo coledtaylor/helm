@@ -1,0 +1,31 @@
+# Copy to `.audit-private.local` and fill in. That name is gitignored; this
+# example is committed and must never contain a real one.
+#
+# `pnpm m7-check --only=audit` reads it and fails M7-4b if any of these names
+# appears in a publishable file - tracked, or untracked and not ignored.
+#
+# Why the file exists at all. The audit discovers most of what it looks for:
+# the account the process runs as, and the repositories sitting beside this
+# one. But a discovered repository name is anchored to `repos/<name>`, because
+# a bare name would fire on any repository called something ordinary - and that
+# anchor is exactly the hole a name mentioned in prose goes through. A comment
+# reading "every session in <a private project>" is not a path, and no pattern
+# derived from the filesystem can see it. One did reach a public commit that
+# way.
+#
+# So the bare names are written down, and they are written down *here* rather
+# than in the driver, because a list of names that must never be published has
+# no business in a public repository.
+#
+# Format: one name per line. Blank lines and `#` comments ignored. Matched as a
+# case-insensitive substring with no word boundaries, deliberately - a name
+# concatenated into a larger string is still a published name. Anything shorter
+# than 4 characters is refused and reported rather than silently used.
+
+# a work project and everything named after it. Pick names that are not
+# already fixture names in this repo - `acme` is used as a neutral placeholder
+# throughout, so listing it would fire on sixteen innocent files.
+northwind
+# personal repositories
+weekend-game
+tiny-tool

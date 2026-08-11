@@ -29,8 +29,6 @@ Work is tracked in ClickUp: list **"Helm - Claude Code Shell"** (id `90111429189
 - Each task has checkbox acceptance criteria. A task is done when every box is
   checked, not before. Update the ClickUp task with findings and check the boxes
   as you go.
-- Findings worth keeping also get a reference note in the harness
-  (`../../notes/`) per harness convention.
 
 ## Layout
 
@@ -263,21 +261,22 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
 
 ## Environment notes
 
-This section describes **this development machine**, not the product. Everything
-named here is a fixture; nothing in `packages/` may assume any of it, and
-`pnpm m7-check --only=audit` fails the build if it starts to.
+Whatever is true of **one machine** - where its `claude` binary sits, what
+directory this checkout lives in, which repositories happen to be beside it -
+belongs in `CLAUDE.local.md`, which is gitignored and is not part of this
+repository. This file describes the project, and a contributor should be able
+to follow every rule in it without owning the machine it was written on.
 
-- `claude` CLI is at `~/.local/bin/claude`. The tested range is declared in
-  `CLAUDE_TESTED_RANGE` (`src/main/setup.ts`) and asserted at startup: warn,
-  don't block. Ask the binary what version it is rather than trusting a number
-  written down here; the "measured on 2.1.225" notes above date the evidence
-  and are not claims about what is installed now.
-- This repo lives inside a harness (`~/.harness/dev/repos/helm`). The harness
-  root and its sibling repositories are the primary test fixtures for overlay
-  composition - they have real `.claude/skills` to compose. Those repositories
-  are private work, so they are referred to by role rather than by name; the
-  drivers that need concrete paths find them by scanning `repos/`, not from a
-  list written down here.
-- Verify claims against the machine, not memory: plugin anatomy can be inspected
-  at `~/.claude/plugins/cache/claude-plugins-official/*/`, session history at
-  `~/.claude/history.jsonl`.
+Nothing in `packages/` may assume any of that either, and two checks say so
+rather than trusting it:
+
+- `pnpm m7-check --only=audit` fails if a personal path or name reaches what
+  ships, and
+- its publication audit fails if one reaches **anywhere in the repository** -
+  docs, this file, the scripts and the check drivers included. That one reads
+  the names it looks for from `.audit-private.local`, an uncommitted file, so
+  the audit never publishes the list it polices. `.audit-private.local.example`
+  says how to write one.
+
+Both derive what to look for at runtime. Do not answer a failure by adding an
+exemption: the hit is the finding.

@@ -13,3 +13,14 @@ reports/
 # `.claude/skills/` is checked in, because CLAUDE.md points at it.
 .claude/settings.local.json
 .claude/*.local.json
+
+# Agent instructions that are true of one machine rather than of the project.
+# CLAUDE.md is the committed half; this is the half nobody else can use.
+# `*.local` above already covers `.audit-private.local`, which carries the
+# private names the publication audit looks for - the one file in this list
+# that would do harm rather than noise if it were ever committed.
+CLAUDE.local.md
+
+# Generated design artifacts. Rendered from docs/DESIGN.md on demand and
+# regenerable, and the renderer inlines absolute paths from whoever ran it.
+docs/*.dc.html
