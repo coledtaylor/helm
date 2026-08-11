@@ -251,11 +251,12 @@ function buildFilters(query: HistoryQuery): Filters {
   const search = query.search?.trim() ?? ''
   if (search !== '') {
     params['like'] = likePattern(search)
-    // The project counts as well as the prompt. "Every session in the mobile
-    // app" is the same gesture as "the session where I asked about geofencing",
-    // and the project dropdown beside this box only answers the first when you
-    // already know which of 36 projects to pick. Matched against `project_key`,
-    // which is stored lower-cased, so the comparison does not depend on LIKE's
+    // The project counts as well as the prompt. "Every session in that
+    // repository" is the same gesture as "the session where I asked about X",
+    // and the project dropdown beside this box only answers the first once you
+    // already know which project you want - which a history spanning dozens of
+    // them is exactly the case you do not. Matched against `project_key`, which
+    // is stored lower-cased, so the comparison does not depend on LIKE's
     // ASCII-only case folding.
     params['likeKey'] = likePattern(search.toLowerCase())
     clauses.push(

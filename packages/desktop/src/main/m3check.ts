@@ -139,7 +139,7 @@ async function pollJs(win: BrowserWindow, expression: string, timeoutMs: number)
  * Two families, and the second is why this exists rather than M2's
  * startup-only version. Folder trust and MCP enablement happen once, at start.
  * **Skill consent happens every time a skill is invoked** - "Use skill
- * `atlas:think`? 1. Yes / 2. Yes, and don't ask again / 3. No" - which is
+ * `<overlay>:<skill>`? 1. Yes / 2. Yes, and don't ask again / 3. No" - which is
  * exactly what these checks do on purpose. Left unanswered it does not fail
  * loudly; the session simply sits on the prompt, and the answer to the probe
  * arrives minutes later, during some later probe's window, which reads as the

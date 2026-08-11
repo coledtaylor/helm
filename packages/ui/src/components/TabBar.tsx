@@ -184,7 +184,8 @@ export function TabBar({
                 // The state dot is drawn, not written, so the name it would
                 // otherwise be missing is spelled out here instead of hidden in
                 // a visually-hidden span - which would land inside the tab's
-                // own text and read as "runningorchard-sim".
+                // own text and glue itself to the title, reading as
+                // "runningapi-server" for a tab called "api-server".
                 aria-label={
                   tab.indicator === undefined
                     ? undefined
