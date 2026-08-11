@@ -262,7 +262,13 @@ function startApp(options: AppOptions = {}): void {
     confirm: options.confirm
   })
 
-  const pterm = createPtermHost(() => win)
+  // The setting is read through a function rather than passed by value: the
+  // default shell has to be able to change while the app is running, and a
+  // captured value would make it a property of when Helm started.
+  const pterm = createPtermHost({
+    window: () => win,
+    defaultShell: () => services.settings.terminalShell
+  })
 
   const history = createHistoryService({
     store: services.store,
@@ -346,7 +352,9 @@ function startApp(options: AppOptions = {}): void {
         usage.start()
       })
 
-      if (win) options.onReady?.({ win, services, sessions, history, usage, config, content })
+      if (win) {
+        options.onReady?.({ win, services, sessions, pterm, history, usage, config, content })
+      }
     }
   })
 

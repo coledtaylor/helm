@@ -284,6 +284,27 @@ export function registerIpc(ctx: IpcContext): void {
       return { path: result.canceled ? null : (result.filePaths[0] ?? null) }
     },
 
+    'path:chooseFile': async ({ title }) => {
+      const heading = title ?? 'Choose a program'
+      if (ctx.chooseFile) return { path: ctx.chooseFile(heading) }
+      const win = ctx.window()
+      const options: Electron.OpenDialogOptions = {
+        title: heading,
+        properties: ['openFile'],
+        filters:
+          process.platform === 'win32'
+            ? [
+                { name: 'Programs', extensions: ['exe', 'cmd', 'bat'] },
+                { name: 'All files', extensions: ['*'] }
+              ]
+            : [{ name: 'All files', extensions: ['*'] }]
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      return { path: result.canceled ? null : (result.filePaths[0] ?? null) }
+    },
+
     'harness:create': async (request) => {
       const result = await createHarness({
         mode: request.mode,
@@ -317,10 +338,11 @@ export function registerIpc(ctx: IpcContext): void {
     'session:close': (request) => ctx.sessions.close(request),
     'session:list': () => ctx.sessions.list(),
 
-    'pterm:open': ({ path, cols, rows }) => ctx.pterm.open(path, cols, rows),
+    'pterm:open': (request) => ctx.pterm.open(request),
     'pterm:close': ({ id }) => {
       ctx.pterm.close(id)
     },
+    'pterm:shells': () => ctx.pterm.detected(),
 
     'profile:list': () => profiles(services),
 

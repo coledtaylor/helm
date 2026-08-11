@@ -1,6 +1,13 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { HistorySession, Profile, ProfileDraft, Project, SessionRecord } from '@helm/core'
+import {
+  DEFAULT_SETTINGS,
+  type HistorySession,
+  type Profile,
+  type ProfileDraft,
+  type Project,
+  type SessionRecord
+} from '@helm/core/types'
 import {
   AppShell,
   BookIcon,
@@ -43,6 +50,7 @@ import { helm } from './bridge'
 import { ProjectShellPane } from './ProjectShellPane'
 import { disposeShell } from './pterms'
 import { TerminalPane } from './TerminalPane'
+import { terminalFontStack } from '../terminal'
 import { useConfig } from './useConfig'
 import { useContent } from './useContent'
 import { useHistory } from './useHistory'
@@ -50,6 +58,7 @@ import { useLauncher } from './useLauncher'
 import { useProfiles } from './useProfiles'
 import { useSessions } from './useSessions'
 import { useSetup } from './useSetup'
+import { useShells } from './useShells'
 import { useUsage } from './useUsage'
 
 const KIND_ICON = {
@@ -142,6 +151,35 @@ export function App(): JSX.Element {
   const contentState = useContent()
   const usage = useUsage()
   const setup = useSetup(settings, launcher.rescan)
+  const shells = useShells()
+
+  /**
+   * The six terminal settings, and one writer for them.
+   *
+   * Written through `settings:write` like everything else, which is also what
+   * pushes them to the terminals: the main process answers with the whole
+   * settings object, `useLauncher` adopts it, and the registries that own the
+   * live terminals are told from there (termprefs.ts). Nothing here reaches a
+   * terminal directly.
+   */
+  const terminalSettings = useMemo(
+    () => ({
+      terminalFontFamily: settings?.terminalFontFamily ?? null,
+      terminalFontSize: settings?.terminalFontSize ?? DEFAULT_SETTINGS.terminalFontSize,
+      terminalCursorStyle: settings?.terminalCursorStyle ?? DEFAULT_SETTINGS.terminalCursorStyle,
+      terminalCursorBlink: settings?.terminalCursorBlink ?? DEFAULT_SETTINGS.terminalCursorBlink,
+      terminalScrollback: settings?.terminalScrollback ?? DEFAULT_SETTINGS.terminalScrollback,
+      terminalShell: settings?.terminalShell ?? null
+    }),
+    [settings]
+  )
+
+  const { writeSettings } = launcher
+  const locateShell = useCallback(() => {
+    void helm.invoke('path:chooseFile', { title: 'Choose a shell' }).then(({ path }) => {
+      if (path !== null) writeSettings({ terminalShell: path })
+    })
+  }, [writeSettings])
 
   /** The profile being edited, `'new'` for one being created from scratch, or
    * a seeded draft from "save as profile". Null when the dialog is closed. */
@@ -368,7 +406,7 @@ export function App(): JSX.Element {
       if (!ref) return
       // The shell dies with its tab, not with a render: hiding the pane keeps
       // it, closing the project ends it.
-      if (ref.kind === 'project') disposeShell(ref.path)
+      if (ref.kind === 'project') void disposeShell(ref.path)
       setOrder(openPanes.filter((candidate) => tabId(candidate) !== id))
     },
     [openPanes]
@@ -984,6 +1022,13 @@ export function App(): JSX.Element {
               // The same fact the status bar's cycle turns on, from the same
               // snapshot, so the pane cannot offer a mode the segment skips.
               hasCostEstimate={usage?.spend != null}
+              terminal={terminalSettings}
+              onTerminalChange={launcher.writeSettings}
+              // The stack the terminals are actually running, so the preview
+              // well cannot show a font the panes are not using.
+              terminalFontStack={terminalFontStack(terminalSettings.terminalFontFamily)}
+              shells={shells}
+              onLocateShell={locateShell}
             />
           </div>
         )}
@@ -1019,6 +1064,7 @@ export function App(): JSX.Element {
                 path={activeProject.path}
                 windowsBuild={info?.windowsBuild ?? null}
                 visible
+                shells={shells}
               />
             )}
           </div>

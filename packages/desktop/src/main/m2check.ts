@@ -6,6 +6,7 @@ import type { ConfigService } from './config'
 import type { ContentService } from './content'
 import type { Check } from './fidelity'
 import type { HistoryService } from './history'
+import type { PtermHost } from './pterm'
 import type { Confirm, ConfirmRequest, SessionHost, SessionObserver } from './sessions'
 import type { Services } from './services'
 import type { UsageService } from './usage'
@@ -25,6 +26,12 @@ export interface M2Context {
   win: BrowserWindow
   services: Services
   sessions: SessionHost
+  /**
+   * The project shells. `settings-check`'s terminal group reads the grid each
+   * shell's pty is actually at through this, which is the main-process half of
+   * "the pane refit and the pty was told"; nothing else uses it.
+   */
+  pterm: PtermHost
   /** M4's driver reads and forces passes through this; M2's ignores it. */
   history: HistoryService
   /** M5's driver reads and writes config through this; nothing else uses it. */

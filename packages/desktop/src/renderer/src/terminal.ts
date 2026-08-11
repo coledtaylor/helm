@@ -46,6 +46,117 @@ export const TERMINAL_FONT = {
   lineHeight: 1.0
 } as const
 
+/**
+ * Everything about a terminal a person is allowed to change.
+ *
+ * Passed in rather than read from a module-level store, and that is the whole
+ * routing rule in one signature: the app hands its effective preferences down
+ * from `settings:changed`, and the spike page - which calls `createTerminal`
+ * with three arguments - gets `TERMINAL_DEFAULTS` and cannot be reached by a
+ * setting even by accident. `pnpm fidelity` and `pnpm claude-check` measure
+ * that page, so their numbers stay a statement about the proven configuration.
+ */
+export interface TerminalPrefs {
+  /** A resolved CSS font stack, not a single family. See `terminalFontStack`. */
+  fontFamily: string
+  fontSize: number
+  cursorStyle: 'block' | 'underline' | 'bar'
+  cursorBlink: boolean
+  scrollback: number
+}
+
+/** What a terminal is when nobody has changed anything. Spike C's values. */
+export const TERMINAL_DEFAULTS: TerminalPrefs = {
+  fontFamily: TERMINAL_FONT.family,
+  fontSize: TERMINAL_FONT.size,
+  cursorStyle: 'block',
+  cursorBlink: true,
+  scrollback: 10000
+}
+
+/**
+ * The user's family in front of the default stack, never instead of it.
+ *
+ * A stack is a per-glyph fallback chain, so keeping the default behind whatever
+ * was chosen is what makes a bad choice survivable: a font with no box-drawing
+ * characters loses its box-drawing characters to Cascadia Mono and keeps its
+ * letterforms, instead of turning Claude Code's whole interface into tofu.
+ * There is no way to express "replace the stack" from the settings pane, on
+ * purpose.
+ */
+export function terminalFontStack(family: string | null): string {
+  const chosen = family?.trim()
+  if (chosen === undefined || chosen === '') return TERMINAL_FONT.family
+  return `"${chosen}", ${TERMINAL_FONT.family}`
+}
+
+/**
+ * Push preferences onto a terminal that already exists, and re-measure it.
+ *
+ * The re-measure is the half that matters. A cell-size change makes the grid
+ * wrong for the pane it is in, and `refit` only tells the pty about it when the
+ * answer actually changed - which is the right semantics here, because a
+ * cursor-style change moves no cells and must not put a SIGWINCH through a
+ * running TUI.
+ */
+export function applyPrefs(host: TerminalHost, prefs: TerminalPrefs): void {
+  const options = host.term.options
+  options.fontFamily = prefs.fontFamily
+  options.fontSize = prefs.fontSize
+  options.cursorStyle = prefs.cursorStyle
+  // A terminal whose process has ended had its cursor stopped and its input
+  // disabled deliberately (TerminalPane, pterms.ts). A settings change must not
+  // make a dead pane start blinking again.
+  if (options.disableStdin !== true) options.cursorBlink = prefs.cursorBlink
+  options.scrollback = prefs.scrollback
+  host.refit()
+}
+
+/**
+ * One live terminal, described for a driver.
+ *
+ * A read-only tap, in the same spirit as `SessionObserver` in `main/sessions.ts`
+ * and the picker stand-ins `--m7-firstrun` passes: the app never calls it. It
+ * exists because the terminals live outside React in module registries, so a
+ * check driving the real window has no other route to them - and "the setting
+ * reached every open terminal" is the whole claim M9 makes.
+ *
+ * `screen` is the measured box of xterm's own screen element, so a driver can
+ * divide by `cols`/`rows` and compare the cell size against a measurement it
+ * made itself rather than against anything Helm computed.
+ */
+export interface TerminalReport {
+  key: string
+  fontFamily: string
+  fontSize: number
+  cursorStyle: string
+  cursorBlink: boolean
+  scrollback: number
+  cols: number
+  rows: number
+  screen: { width: number; height: number } | null
+  /** False for a pane React has taken out of the document; it keeps its state. */
+  attached: boolean
+}
+
+export function describeTerminal(key: string, host: TerminalHost): TerminalReport {
+  const options = host.term.options
+  const screen = host.element.querySelector('.xterm-screen')
+  const box = screen ? screen.getBoundingClientRect() : null
+  return {
+    key,
+    fontFamily: String(options.fontFamily ?? ''),
+    fontSize: Number(options.fontSize ?? 0),
+    cursorStyle: String(options.cursorStyle ?? ''),
+    cursorBlink: options.cursorBlink === true,
+    scrollback: Number(options.scrollback ?? 0),
+    cols: host.term.cols,
+    rows: host.term.rows,
+    screen: box ? { width: box.width, height: box.height } : null,
+    attached: host.element.isConnected
+  }
+}
+
 export interface WheelRecord {
   deltaY: number
   deltaMode: number
@@ -82,7 +193,8 @@ export interface TerminalHooks {
 export function createTerminal(
   container: HTMLElement,
   opts: TermCreateOptions,
-  hooks: TerminalHooks
+  hooks: TerminalHooks,
+  prefs: TerminalPrefs = TERMINAL_DEFAULTS
 ): TerminalHost {
   const term = new Terminal({
     cols: opts.cols,
@@ -90,19 +202,19 @@ export function createTerminal(
     // Unicode 11 widths are proposed API; without this the addon cannot load
     // and emoji fall back to Unicode 6 widths, which mis-measures most of them.
     allowProposedApi: true,
-    fontFamily: TERMINAL_FONT.family,
-    fontSize: TERMINAL_FONT.size,
+    fontFamily: prefs.fontFamily,
+    fontSize: prefs.fontSize,
     lineHeight: TERMINAL_FONT.lineHeight,
     letterSpacing: 0,
-    scrollback: 10000,
+    scrollback: prefs.scrollback,
     // Any value above 1 rewrites colours to hit a contrast target. A host that
     // claims to render the TUI faithfully must leave them alone.
     minimumContrastRatio: 1,
     // Likewise: do not promote bold text into the bright palette.
     drawBoldTextInBrightColors: false,
     rescaleOverlappingGlyphs: true,
-    cursorBlink: true,
-    cursorStyle: 'block',
+    cursorBlink: prefs.cursorBlink,
+    cursorStyle: prefs.cursorStyle,
     theme: THEME,
     // Spread rather than `windowsPty: cond ? {...} : undefined`. Same value
     // reaches xterm either way - it tests the property for truthiness - but

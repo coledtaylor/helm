@@ -34,7 +34,11 @@ export {
   type SetupClaudeStatus,
   type SetupPaneProps
 } from './components/SetupPane'
-export { SettingsPane, type SettingsPaneProps } from './components/SettingsPane'
+export {
+  SettingsPane,
+  type SettingsPaneProps,
+  type TerminalSettings
+} from './components/SettingsPane'
 export { VersionBanner, type VersionBannerProps } from './components/VersionBanner'
 export { GitChip, type GitChipProps } from './components/GitChip'
 export { InventoryChips, type InventoryChipsProps } from './components/InventoryChips'

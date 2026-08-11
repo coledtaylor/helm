@@ -9,6 +9,7 @@ import type {
 } from '@helm/core'
 import type { AppInfo, ResolvedTheme } from '../../../shared/ipc'
 import { helm } from './bridge'
+import { applyTerminalSettings } from './termprefs'
 
 /**
  * All of the launcher's state, in one hook.
@@ -36,6 +37,8 @@ export interface LauncherState {
   /** Forgets a hand-picked `claude`, back to whatever discovery finds. */
   clearClaudePath: () => void
   reveal: (path: string) => void
+  /** Any subset of the settings, for a pane that owns several of them. */
+  writeSettings: (patch: Partial<AppSettings>) => void
 }
 
 /** Turns cached rows into something the tree can render before a scan runs. */
@@ -72,6 +75,20 @@ export function useLauncher(): LauncherState {
   const [scanError, setScanError] = useState<string | undefined>(undefined)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
 
+  /**
+   * Every settings landing goes through here, because two things have to
+   * happen and only one of them is React's.
+   *
+   * The terminals live outside the component tree (terminals.ts, pterms.ts), so
+   * a font or cursor change cannot reach them as a prop. `applyTerminalSettings`
+   * is the other half of the push and is a no-op when nothing terminal-shaped
+   * moved, which is most writes.
+   */
+  const adopt = useCallback((next: AppSettings) => {
+    setSettings(next)
+    applyTerminalSettings(next)
+  }, [])
+
   useEffect(() => {
     const offs = [
       helm.on('discovery:updated', (result) => {
@@ -82,7 +99,7 @@ export function useLauncher(): LauncherState {
         setScanning(status.running)
         setScanError(status.error)
       }),
-      helm.on('settings:changed', setSettings),
+      helm.on('settings:changed', adopt),
       helm.on('theme:changed', ({ resolved }) => applyTheme(resolved))
     ]
 
@@ -93,7 +110,7 @@ export function useLauncher(): LauncherState {
         helm.invoke('theme:resolved')
       ])
       setInfo(appInfo)
-      setSettings(loaded)
+      adopt(loaded)
       applyTheme(resolved)
 
       const cached = await helm.invoke('discovery:cached')
@@ -109,7 +126,7 @@ export function useLauncher(): LauncherState {
     return () => {
       for (const off of offs) off()
     }
-  }, [])
+  }, [adopt])
 
   /**
    * Git state refreshed on window focus. The trigger lives in the main process
@@ -170,16 +187,32 @@ export function useLauncher(): LauncherState {
     [rescan]
   )
 
-  const setTheme = useCallback((theme: ThemePreference) => {
-    void helm.invoke('settings:write', { theme }).then(setSettings)
-  }, [])
+  /**
+   * One writer for every setting a pane owns.
+   *
+   * The answer is adopted rather than the patch: `settings:write` returns the
+   * whole object as the main process now holds it, and a surface that trusted
+   * its own patch would drift from a value a validator had rejected.
+   */
+  const writeSettings = useCallback(
+    (patch: Partial<AppSettings>) => {
+      void helm.invoke('settings:write', patch).then(adopt)
+    },
+    [adopt]
+  )
+
+  const setTheme = useCallback(
+    (theme: ThemePreference) => writeSettings({ theme }),
+    [writeSettings]
+  )
 
   // Persisted rather than held in the window, so the choice survives a restart
   // - and written through the same channel every other setting uses, so the
   // main process is the one that decides what the settings are.
-  const setUsageDisplay = useCallback((usageDisplay: UsageDisplayMode) => {
-    void helm.invoke('settings:write', { usageDisplay }).then(setSettings)
-  }, [])
+  const setUsageDisplay = useCallback(
+    (usageDisplay: UsageDisplayMode) => writeSettings({ usageDisplay }),
+    [writeSettings]
+  )
 
   /**
    * Written through `settings:write` rather than through a channel of its own,
@@ -187,9 +220,10 @@ export function useLauncher(): LauncherState {
    * path to the session host - a write that skipped it would leave sessions
    * launching from the executable the user just forgot.
    */
-  const clearClaudePath = useCallback(() => {
-    void helm.invoke('settings:write', { claudePath: null }).then(setSettings)
-  }, [])
+  const clearClaudePath = useCallback(
+    () => writeSettings({ claudePath: null }),
+    [writeSettings]
+  )
 
   const reveal = useCallback((path: string) => {
     void helm.invoke('shell:showItem', { path })
@@ -218,6 +252,7 @@ export function useLauncher(): LauncherState {
     setTheme,
     setUsageDisplay,
     clearClaudePath,
-    reveal
+    reveal,
+    writeSettings
   }
 }

@@ -9,6 +9,7 @@ import type {
   ContentScope,
   ContentSearchResult,
   ContentTree,
+  DetectedShell,
   DiscoveryResult,
   DoctorReport,
   EffectiveView,
@@ -361,6 +362,11 @@ export interface IpcRequests {
 
   /** A directory chosen by the user, without doing anything with it yet. */
   'path:chooseDirectory': { request: { title?: string }; response: { path: string | null } }
+  /**
+   * The same for a program. Used by the terminal settings' "Choose…" row, for
+   * a shell that is installed somewhere `where.exe` does not look.
+   */
+  'path:chooseFile': { request: { title?: string }; response: { path: string | null } }
 
   /**
    * Scaffold a harness, or turn a folder that already holds repositories into
@@ -404,11 +410,33 @@ export interface IpcRequests {
    * to the shell it has.
    */
   'pterm:open': {
-    request: { path: string; cols: number; rows: number }
-    response: { id: number; shell: string }
+    request: {
+      path: string
+      cols: number
+      rows: number
+      /**
+       * Open this pane under a specific executable. Absent means the
+       * `terminalShell` setting, and failing that whatever Helm detects.
+       */
+      shell?: string
+    }
+    response: {
+      id: number
+      /** The executable actually running, which the pane header shows. */
+      shell: string
+      /** What was asked for when that is not what runs; null when they agree. */
+      requested: string | null
+      problem: string | null
+    }
   }
   /** Kill the shell. Called when the project's tab closes, not when it hides. */
   'pterm:close': { request: { id: number }; response: void }
+  /**
+   * Shells this machine has, for the settings pane's default picker and the
+   * per-pane one in a project shell's header. Probed once per process - the
+   * answer is a property of the installation, not of Helm's state.
+   */
+  'pterm:shells': { request: void; response: DetectedShell[] }
 
   'profile:list': { request: void; response: Profile[] }
   /** Create or update. Returns the problems instead of throwing for a draft
@@ -732,6 +760,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'setup:locateClaude': true,
   'setup:complete': true,
   'path:chooseDirectory': true,
+  'path:chooseFile': true,
   'harness:create': true,
   'update:check': true,
   'theme:resolved': true,
@@ -741,6 +770,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'session:list': true,
   'pterm:open': true,
   'pterm:close': true,
+  'pterm:shells': true,
   'profile:list': true,
   'profile:save': true,
   'profile:delete': true,
