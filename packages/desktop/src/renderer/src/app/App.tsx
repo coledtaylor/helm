@@ -53,6 +53,7 @@ import { helm } from './bridge'
 import { ProjectShellPane } from './ProjectShellPane'
 import { PullRequestTab } from './PullRequestTab'
 import { disposeShell } from './pterms'
+import { estimateGrid } from './terminals'
 import { TerminalPane } from './TerminalPane'
 import { terminalFontStack } from '../terminal'
 import { useConfig } from './useConfig'
@@ -420,6 +421,32 @@ export function App(): JSX.Element {
       adoptIntoStrip(record.id)
     },
     [historyState, sessionState, adoptIntoStrip]
+  )
+
+  /**
+   * "Review with Claude", from a pull request tab.
+   *
+   * Lands in the strip exactly as a resume does, and for the same reason: what
+   * comes back is a session like any other, and nothing downstream of this line
+   * cares that a pull request is what started it.
+   *
+   * Note what is *not* here. The prompt is composed in the main process from
+   * the cached pull request and the stored template, so this sends a repository
+   * path, a number and the grid - the same three-field shape a profile launch
+   * has (`LaunchProfileRequest`), and for the same reason: argv assembled in a
+   * window is argv that can drift from what was saved. The rejection is
+   * re-thrown rather than swallowed because the pull request's own pane is
+   * where a dirty tree or a missing `gh` has to be read.
+   */
+  const reviewPull = useCallback(
+    async (repoPath: string, number: number) => {
+      const { cols, rows } = estimateGrid(paneRef.current)
+      const launched = await helm.invoke('pr:review', { repoPath, number, cols, rows })
+      sessionState.adopt(launched.session)
+      adoptIntoStrip(launched.session.id)
+      return launched
+    },
+    [sessionState, adoptIntoStrip]
   )
 
   const blankProfile = useCallback(
@@ -976,6 +1003,9 @@ export function App(): JSX.Element {
               key={tabId(activePane)}
               repoPath={activePane.repoPath}
               number={activePane.number}
+              reviewTemplate={settings?.prReviewPrompt ?? DEFAULT_SETTINGS.prReviewPrompt}
+              checkout={settings?.prCheckout ?? DEFAULT_SETTINGS.prCheckout}
+              onReview={reviewPull}
               onOpenExternal={(url) => void helmOpenExternal(url)}
               compact={showSessions}
             />
@@ -1166,6 +1196,15 @@ export function App(): JSX.Element {
               onClearGhOverride={() => writeSettings({ ghPath: null })}
               prPollMinutes={settings?.prPollMinutes ?? DEFAULT_SETTINGS.prPollMinutes}
               onPrPollMinutesChange={(prPollMinutes) => writeSettings({ prPollMinutes })}
+              // The review launch's two settings live here rather than in the
+              // Pulls pane's header: settings for Helm are in one place, and a
+              // disclosure strip inside a pane is a second place for one to
+              // hide. The pane shows the *result* of these - the exact command
+              // and prompt - which is disclosure, not configuration.
+              prReviewPrompt={settings?.prReviewPrompt ?? DEFAULT_SETTINGS.prReviewPrompt}
+              onPrReviewPromptChange={(prReviewPrompt) => writeSettings({ prReviewPrompt })}
+              prCheckout={settings?.prCheckout ?? DEFAULT_SETTINGS.prCheckout}
+              onPrCheckoutChange={(prCheckout) => writeSettings({ prCheckout })}
             />
           </div>
         )}

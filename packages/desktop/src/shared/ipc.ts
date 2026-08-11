@@ -246,6 +246,40 @@ export interface ResumedSession {
   history: HistorySession
 }
 
+/**
+ * Reviewing a pull request: which one, and how big the pane is.
+ *
+ * The same shape and the same reasoning as `LaunchProfileRequest` and
+ * `ResumeSessionRequest`. Everything else about the launch - the working
+ * directory, the session's name, whether the tree gets checked out, and the
+ * opening prompt itself - is decided in the main process from the cached pull
+ * request and the stored settings.
+ */
+export interface ReviewPullRequest {
+  /** The project directory whose origin remote the pull request belongs to. */
+  repoPath: string
+  number: number
+  /** Initial grid, from the pane that will host the session. */
+  cols: number
+  rows: number
+}
+
+/** What a review launch composed, for the pane to report before the TUI paints. */
+export interface LaunchedReview {
+  session: SessionRecord
+  /**
+   * The opening prompt the session was actually started with - the trailing
+   * positional argument in `session.argv`. Sent back so the pane reports what
+   * happened rather than re-rendering the template and reporting its own
+   * arithmetic.
+   */
+  prompt: string
+  /** The branch `gh pr checkout` moved the tree to, or null when it did not run. */
+  checkedOut: string | null
+  /** Non-fatal notes from the launch: a missing overlay, what the checkout said. */
+  warnings: string[]
+}
+
 export interface CloseSessionRequest {
   id: number
   /**
@@ -382,8 +416,16 @@ export interface IpcRequests {
   }
 
   /**
-   * Ask GitHub whether there is a newer release. The only outbound request the
-   * app makes, and it is made only when this channel is invoked.
+   * Ask GitHub whether there is a newer release. The only **direct** network
+   * request Helm makes, and it is made only when this channel is invoked.
+   *
+   * "Direct" is doing real work in that sentence and was added when the
+   * pull-request surface landed. That surface reaches GitHub too, and it does
+   * it by running the user's own `gh` CLI on a schedule the user sets (default
+   * every 5 minutes, and `0` turns it off) - so bytes leave the machine without
+   * anybody invoking this channel. What has not changed is the part that
+   * matters: Helm opens no socket of its own for it and stores no GitHub
+   * credential. See `pr:snapshot` and docs/PACKAGING.md.
    */
   'update:check': { request: void; response: UpdateCheck }
 
@@ -549,6 +591,24 @@ export interface IpcRequests {
     request: { repoPath: string; number: number; refresh?: boolean }
     response: PullDetailView
   }
+  /**
+   * Start a Claude Code session that reviews this pull request.
+   *
+   * Four fields, and the absence of a fifth is the point: **the prompt is not
+   * one of them**. Main looks the pull request up in its own cache, reads the
+   * template out of settings and renders it there, exactly as `profile:launch`
+   * sends an id rather than an argv. A window that composed the prompt would be
+   * a window whose idea of the template could drift from the stored one, and
+   * argv assembled in a renderer is argv nothing in the main process checked.
+   *
+   * Rejects with a whole sentence: no `gh`, not signed in, a pull request the
+   * list no longer has, a dirty tree in `checkout` mode, or no `claude` CLI.
+   * The pane shows it as it is.
+   *
+   * What comes back is a session like any other - it lands in the strip through
+   * the same adopt flow a resume uses, and Helm reads nothing it prints.
+   */
+  'pr:review': { request: ReviewPullRequest; response: LaunchedReview }
 
   /**
    * The content viewer (M6). Rendering happens here rather than in the window:
@@ -846,6 +906,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'pr:snapshot': true,
   'pr:refresh': true,
   'pr:detail': true,
+  'pr:review': true,
   'content:scopes': true,
   'content:tree': true,
   'content:document': true,

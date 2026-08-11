@@ -3,7 +3,10 @@ import { useState } from 'react'
 import {
   offerableUsageModes,
   COST_MODE_UNAVAILABLE,
+  DEFAULT_PR_REVIEW_PROMPT,
   PR_POLL_MINUTES,
+  PR_PROMPT_PLACEHOLDERS,
+  PR_REVIEW_PROMPT_MAX_LENGTH,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
@@ -11,6 +14,7 @@ import {
   type AppSettings,
   type DetectedShell,
   type GhStatus,
+  type PrCheckoutMode,
   type TerminalCursorStyle,
   type ThemePreference,
   type UsageDisplayMode
@@ -101,6 +105,11 @@ export interface SettingsPaneProps {
   onClearGhOverride: () => void
   prPollMinutes: number
   onPrPollMinutesChange: (minutes: number) => void
+  /** The template a "Review with Claude" launch composes its prompt from. */
+  prReviewPrompt: string
+  onPrReviewPromptChange: (template: string) => void
+  prCheckout: PrCheckoutMode
+  onPrCheckoutChange: (mode: PrCheckoutMode) => void
 }
 
 /** The six the Terminal group owns, named once so nothing has to list them twice. */
@@ -148,7 +157,11 @@ export function SettingsPane({
   onLocateGh,
   onClearGhOverride,
   prPollMinutes,
-  onPrPollMinutesChange
+  onPrPollMinutesChange,
+  prReviewPrompt,
+  onPrReviewPromptChange,
+  prCheckout,
+  onPrCheckoutChange
 }: SettingsPaneProps): JSX.Element {
   const found = status !== null && status.path !== null && status.version !== null
   const overridden = status?.source === 'setting'
@@ -361,6 +374,10 @@ export function SettingsPane({
           onClearOverride={onClearGhOverride}
           pollMinutes={prPollMinutes}
           onPollMinutesChange={onPrPollMinutesChange}
+          reviewPrompt={prReviewPrompt}
+          onReviewPromptChange={onPrReviewPromptChange}
+          checkout={prCheckout}
+          onCheckoutChange={onPrCheckoutChange}
         />
       </div>
     </div>
@@ -407,13 +424,21 @@ function GitHubGroup({
   onLocate,
   onClearOverride,
   pollMinutes,
-  onPollMinutesChange
+  onPollMinutesChange,
+  reviewPrompt,
+  onReviewPromptChange,
+  checkout,
+  onCheckoutChange
 }: {
   gh: GhStatus | null
   onLocate: () => void
   onClearOverride: () => void
   pollMinutes: number
   onPollMinutesChange: (minutes: number) => void
+  reviewPrompt: string
+  onReviewPromptChange: (template: string) => void
+  checkout: PrCheckoutMode
+  onCheckoutChange: (mode: PrCheckoutMode) => void
 }): JSX.Element {
   const found = gh !== null && gh.path !== null
   const overridden = gh?.source === 'setting'
@@ -491,7 +516,123 @@ function GitHubGroup({
           ))}
         </Select>
       </Row>
+
+      <Divider />
+
+      <ReviewPromptRow value={reviewPrompt} onChange={onReviewPromptChange} />
+
+      <Divider />
+
+      <Row
+        label="Check the branch out first"
+        hint={
+          checkout === 'checkout'
+            ? 'Runs gh pr checkout in the repository before the session starts, and refuses when the tree has uncommitted changes - Helm does not stash.'
+            : 'Off. Reviews run against the pull request on GitHub, so nothing in your working tree moves.'
+        }
+      >
+        <Select
+          value={checkout}
+          label="What a review does to the working tree"
+          data-settings-pr-checkout={checkout}
+          onChange={(value) => onCheckoutChange(value as PrCheckoutMode)}
+        >
+          <option value="none">Leave my tree alone</option>
+          <option value="checkout">Check the pull request out</option>
+        </Select>
+      </Row>
     </Group>
+  )
+}
+
+/**
+ * The review prompt template.
+ *
+ * A free text field rather than a picker, because what "review this" means is
+ * the user's and not Helm's: the default runs Claude Code's built-in
+ * `/code-review` skill, and a team with a review command of its own should be
+ * able to name it without a build.
+ *
+ * Committed on blur or Enter, like the terminal font field and for the same
+ * reason - typing `/code-review {number}` through a live write would save
+ * fourteen intermediate templates, three of which are a bare `/`.
+ *
+ * The placeholder list under it is not a nicety. `{branch}` in particular is a
+ * trap worth naming in the surface that offers it: it is GitHub's `headRefName`,
+ * and on a pull request opened from a fork that branch does not exist in the
+ * local checkout at all unless the checkout row below is on. The shipped default
+ * uses `{number}` alone for exactly that reason.
+ */
+function ReviewPromptRow({
+  value,
+  onChange
+}: {
+  value: string
+  onChange: (template: string) => void
+}): JSX.Element {
+  const [draft, setDraft, reset] = useDraft(value)
+
+  const commit = (): void => {
+    const next = draft.trim()
+    // Empty is not "no prompt" - the validator refuses it, and a blank template
+    // would silently make the review button start an ordinary session.
+    if (next === '' || next === value) {
+      reset()
+      return
+    }
+    onChange(next)
+  }
+
+  return (
+    <Row
+      label="Review prompt"
+      hint="The first message a “Review with Claude” session is started with. The pull request pane shows exactly what it will run before you press the button."
+    >
+      <div className="flex flex-col items-end gap-1.5">
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            data-settings-pr-prompt={value}
+            aria-label="Review prompt template"
+            placeholder={DEFAULT_PR_REVIEW_PROMPT}
+            spellCheck={false}
+            maxLength={PR_REVIEW_PROMPT_MAX_LENGTH}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commit()
+              if (e.key === 'Escape') reset()
+            }}
+            className={cn(
+              'h-[30px] w-[260px] rounded-well border border-border bg-surface-sunken px-2.5',
+              'font-mono text-[11.5px] text-fg placeholder:text-fg-subtle select-text',
+              'focus:border-accent focus:outline-none'
+            )}
+          />
+          <Action
+            data-settings-pr-prompt-reset
+            onClick={() => onChange(DEFAULT_PR_REVIEW_PROMPT)}
+            disabled={value === DEFAULT_PR_REVIEW_PROMPT}
+            title={
+              value === DEFAULT_PR_REVIEW_PROMPT
+                ? 'Nothing to reset - this is the built-in prompt'
+                : 'Back to the built-in code review'
+            }
+          >
+            Reset
+          </Action>
+        </div>
+        <p className="max-w-[320px] text-right text-[11px] leading-[1.55] text-fg-subtle">
+          {PR_PROMPT_PLACEHOLDERS.map((name) => `{${name}}`).join(' ')} are substituted; anything
+          else in braces is passed through as you wrote it.{' '}
+          <span className="text-fg-muted">
+            {'{branch}'} is the head branch on GitHub, which a fork&rsquo;s pull request does not
+            have locally unless the checkout below is on.
+          </span>
+        </p>
+      </div>
+    </Row>
   )
 }
 

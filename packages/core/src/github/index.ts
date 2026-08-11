@@ -16,6 +16,7 @@ export {
   type GhAuthReading
 } from './parse'
 export {
+  checkoutPull,
   fetchOpenPulls,
   fetchPullDetail,
   readGhAuth,

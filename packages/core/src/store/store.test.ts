@@ -113,7 +113,9 @@ describe('settings', () => {
       terminalScrollback: 2500,
       terminalShell: join(dir, 'pwsh.exe'),
       ghPath: join(dir, 'gh.exe'),
-      prPollMinutes: 15
+      prPollMinutes: 15,
+      prReviewPrompt: 'review {slug}#{number} on {branch}',
+      prCheckout: 'checkout'
     } satisfies AppSettings
 
     writeSettings(store, written)
@@ -259,6 +261,19 @@ describe('settings validation', () => {
       // pass is one `gh` per remote against the user's own rate limit.
       good: [0, 5, 60, 1440],
       bad: [1, 4, 1441, -5, 5.5, '5', null, Number.NaN]
+    },
+    {
+      key: 'prReviewPrompt',
+      // A placeholder this build does not know is deliberately valid: it
+      // survives into the prompt exactly as written, which is what makes a
+      // typo visible in the pane rather than a word missing from the argv.
+      good: ['/code-review {number}', 'look at {url}', 'review {whatever}', 'x'.repeat(2000)],
+      bad: ['', '   ', 'x'.repeat(2001), null, 42, {}, ['/code-review']]
+    },
+    {
+      key: 'prCheckout',
+      good: ['none', 'checkout'],
+      bad: ['worktree', 'None', '', true, null, 0]
     }
   ]
 
@@ -342,7 +357,9 @@ describe('settings validation', () => {
       terminalScrollback: 50_000,
       terminalShell: join(dir, 'cmd.exe'),
       ghPath: join(dir, 'gh.exe'),
-      prPollMinutes: 0
+      prPollMinutes: 0,
+      prReviewPrompt: '/code-review {number}',
+      prCheckout: 'none'
     })
 
     expect(() => writeSettings(store, readSettings(store))).not.toThrow()
@@ -365,7 +382,9 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   terminalScrollback: 50_000,
   terminalShell: join(dir, 'cmd.exe'),
   ghPath: join(dir, 'gh.exe'),
-  prPollMinutes: 0
+  prPollMinutes: 0,
+  prReviewPrompt: '/code-review {number}',
+  prCheckout: 'none'
 })
 
 describe('project cache', () => {

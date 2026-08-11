@@ -437,6 +437,32 @@ export function registerIpc(ctx: IpcContext): void {
     'pr:detail': ({ repoPath, number, refresh }) =>
       ctx.pulls.detail({ repoPath, number, ...(refresh === true ? { refresh: true } : {}) }),
 
+    /**
+     * The two halves of a review launch, in the order they have to happen.
+     *
+     * `prepareReview` is where the decisions are: it reads the pull request out
+     * of the cache, reads the template and the checkout mode out of settings,
+     * runs `gh pr checkout` if that is what was asked for, and renders the
+     * prompt. Only then does the session host spawn - so a checkout that was
+     * refused is a rejection with a sentence in it rather than a tab that
+     * opened onto the wrong revision.
+     *
+     * Awaited by the renderer for the same reason `session:start` is: the pane
+     * has nowhere else to learn that there is no `gh`, or that the tree is
+     * dirty, and a tab holding a terminal that never started is worse than no
+     * tab.
+     */
+    'pr:review': async ({ repoPath, number, cols, rows }) => {
+      const plan = await ctx.pulls.prepareReview({ repoPath, number })
+      const session = ctx.sessions.review(plan, { cols, rows })
+      return {
+        session,
+        prompt: plan.prompt,
+        checkedOut: plan.checkedOut,
+        warnings: plan.warnings
+      }
+    },
+
     'content:scopes': () => ctx.content.scopes(),
     'content:tree': ({ scopePath, refresh }) => ctx.content.tree(scopePath, refresh ?? false),
     'content:document': ({ scopePath, path }) => ctx.content.document(scopePath, path),

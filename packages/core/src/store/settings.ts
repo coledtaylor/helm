@@ -2,7 +2,9 @@ import { isAbsolute } from 'node:path'
 import { sql } from 'drizzle-orm'
 import {
   DEFAULT_SETTINGS,
+  PR_CHECKOUT_MODES,
   PR_POLL_MINUTES,
+  PR_REVIEW_PROMPT_MAX_LENGTH,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
@@ -232,7 +234,34 @@ export const SETTING_VALIDATORS: SettingValidators = {
     return problem === null
       ? null
       : `${problem} (or ${String(PR_POLL_MINUTES.off)} to poll not at all)`
-  }
+  },
+
+  /**
+   * A template with something in it.
+   *
+   * Empty is refused rather than treated as "no prompt": this value becomes the
+   * trailing positional argument of a launch, and `buildLaunchArgs` drops an
+   * empty one - so a blank template would silently start an ordinary session
+   * from a button labelled "Review with Claude". The remedy for not wanting a
+   * prompt is not to press it.
+   *
+   * The placeholders are deliberately *not* checked. An unknown one survives
+   * into the prompt as written (see `renderPullPrompt`), which is what makes a
+   * typo visible in the pane's disclosure sentence instead of invisible in the
+   * argv, and refusing the write would make a template naming a placeholder a
+   * later version adds unwritable.
+   */
+  prReviewPrompt: (value) => {
+    if (typeof value !== 'string' || value.trim() === '') {
+      return `expected a prompt template, got ${describe(value)}`
+    }
+    if (value.length > PR_REVIEW_PROMPT_MAX_LENGTH) {
+      return `expected at most ${String(PR_REVIEW_PROMPT_MAX_LENGTH)} characters, got ${String(value.length)}`
+    }
+    return null
+  },
+
+  prCheckout: oneOf(PR_CHECKOUT_MODES)
 }
 
 /** A write that was refused, with the key and the reason in the message. */

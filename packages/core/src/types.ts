@@ -14,7 +14,9 @@
 // re-export alone does not bring a name into this file's scope.
 import type { UsageDisplayMode } from './usage/shape'
 // The same, for a value: `DEFAULT_SETTINGS` reads the polling default off it.
-import { PR_POLL_MINUTES } from './github/types'
+import { PR_POLL_MINUTES, type PrCheckoutMode } from './github/types'
+// And for the review template's default, which is the prompt module's to state.
+import { DEFAULT_PR_REVIEW_PROMPT } from './github/prompt'
 
 export {
   frontmatterField,
@@ -74,10 +76,13 @@ export {
  * construction while the rest of `github/` spawns a subprocess.
  */
 export {
+  PR_CHECKOUT_MODES,
   PR_POLL_MINUTES,
   type GhProblem,
   type GhProblemKind,
   type GhStatus,
+  type LaunchedReviewPlan,
+  type PrCheckoutMode,
   type PullChecks,
   type PullComment,
   type PullCommit,
@@ -93,6 +98,21 @@ export {
   type RenderedPullEntry,
   type RepoRemote
 } from './github/types'
+/**
+ * The review prompt's template renderer, re-exported for the same reason again:
+ * the detail pane's disclosure sentence names the exact prompt the button will
+ * run, so it renders the template itself. The prompt that is actually launched
+ * is composed in the main process - see `desktop/src/main/pulls.ts` - and this
+ * side never sends one.
+ */
+export {
+  renderPullPrompt,
+  DEFAULT_PR_REVIEW_PROMPT,
+  PR_PROMPT_PLACEHOLDERS,
+  PR_REVIEW_PROMPT_MAX_LENGTH,
+  type PullPromptFacts,
+  type PullPromptPlaceholder
+} from './github/prompt'
 
 /** What a discovered directory turned out to be. */
 export type ProjectKind =
@@ -538,6 +558,28 @@ export interface AppSettings {
    * schedule. Bounded by `PR_POLL_MINUTES`.
    */
   prPollMinutes: number
+  /**
+   * The opening prompt a "Review with Claude" launch starts its session with.
+   *
+   * A template - `{number} {url} {branch} {title} {slug}` are substituted and
+   * anything else in braces is left as written. Rendered in the **main
+   * process** from the cached pull request; the window renders the same
+   * template only to show what the button will run.
+   *
+   * `{branch}` names `headRefName`, which on a pull request opened from a fork
+   * does not exist in the local checkout unless `prCheckout` is `'checkout'`.
+   * The default uses `{number}` alone for exactly that reason.
+   */
+  prReviewPrompt: string
+  /**
+   * Whether a review launch checks the pull request out first.
+   *
+   * `'none'` reviews from the pull request's refs and never touches the working
+   * tree. `'checkout'` runs `gh pr checkout <n>` in the repository before
+   * spawning, and is refused with a count of the changed files when the tree is
+   * dirty - Helm does not stash. See `PR_CHECKOUT_MODES`.
+   */
+  prCheckout: PrCheckoutMode
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -558,7 +600,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalScrollback: TERMINAL_SCROLLBACK.default,
   terminalShell: null,
   ghPath: null,
-  prPollMinutes: PR_POLL_MINUTES.default
+  prPollMinutes: PR_POLL_MINUTES.default,
+  prReviewPrompt: DEFAULT_PR_REVIEW_PROMPT,
+  prCheckout: 'none'
 }
 
 // ---------------------------------------------------------------------------

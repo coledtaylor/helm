@@ -9,6 +9,7 @@ import {
   PR_LIST_FIELDS,
   PR_VIEW_FIELDS
 } from './parse'
+import { renderPullPrompt, DEFAULT_PR_REVIEW_PROMPT, PR_PROMPT_PLACEHOLDERS } from './prompt'
 import { parseGitHubRemote } from './remote'
 
 describe('parseGitHubRemote', () => {
@@ -620,5 +621,57 @@ describe('parseGhVersion', () => {
   it('reports nothing for nothing', () => {
     expect(parseGhVersion('')).toBeNull()
     expect(parseGhVersion('\n\n')).toBeNull()
+  })
+})
+
+describe('renderPullPrompt', () => {
+  const facts = {
+    number: 42,
+    url: 'https://github.com/coledtaylor/helm/pull/42',
+    branch: 'feature/pulls',
+    title: 'A Pull requests pane',
+    slug: 'coledtaylor/helm'
+  }
+
+  it('substitutes every placeholder the setting documents', () => {
+    for (const name of PR_PROMPT_PLACEHOLDERS) {
+      expect(renderPullPrompt(`{${name}}`, facts)).not.toContain('{')
+    }
+
+    expect(renderPullPrompt('{slug}#{number} "{title}" {branch} {url}', facts)).toBe(
+      'coledtaylor/helm#42 "A Pull requests pane" feature/pulls https://github.com/coledtaylor/helm/pull/42'
+    )
+  })
+
+  it('renders the shipped default to the built-in skill invocation', () => {
+    expect(renderPullPrompt(DEFAULT_PR_REVIEW_PROMPT, facts)).toBe('/code-review 42')
+  })
+
+  it('leaves a placeholder it does not know exactly as written', () => {
+    // Not dropped: a misspelling has to be visible in the pane's disclosure
+    // sentence rather than becoming a word missing from the argv.
+    expect(renderPullPrompt('review {nubmer} and {author}', facts)).toBe(
+      'review {nubmer} and {author}'
+    )
+  })
+
+  it('does not rescan what it substituted', () => {
+    // A title is written by a stranger and a template by the user; one pass is
+    // what keeps the first from becoming the second.
+    expect(renderPullPrompt('{title}', { ...facts, title: 'fix {number} off-by-one' })).toBe(
+      'fix {number} off-by-one'
+    )
+  })
+
+  it('flattens a value onto one line', () => {
+    // The result is one positional argument, so a newline out of a title would
+    // put a line break into the opening message.
+    expect(renderPullPrompt('{title}', { ...facts, title: 'two\nlines\tand   spaces' })).toBe(
+      'two lines and spaces'
+    )
+  })
+
+  it('accepts a template with no placeholders at all', () => {
+    expect(renderPullPrompt('/security-review', facts)).toBe('/security-review')
   })
 })

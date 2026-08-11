@@ -55,6 +55,7 @@ export {
 export {
   PullRequestPane,
   pullState,
+  type LaunchedReviewNote,
   type PullRequestPaneProps,
   type PullView
 } from './components/PullRequestPane'

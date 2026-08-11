@@ -11,6 +11,7 @@ import {
   sanitizeSessionName,
   startSession,
   uniqueSessionName,
+  type LaunchedReviewPlan,
   type LaunchPlan,
   type SessionRecord
 } from '@helm/core'
@@ -176,6 +177,15 @@ export interface SessionHost {
   launchProfile: (req: LaunchProfileRequest) => LaunchedProfile
   /** Reopens a conversation from the history index in a new tab. */
   resume: (req: ResumeSessionRequest) => ResumedSession
+  /**
+   * Starts a session on a pull request, with a prompt composed by the caller.
+   *
+   * Takes the whole plan rather than a pull request number, because deciding
+   * what the prompt says needs the cache, the settings and possibly a `gh pr
+   * checkout` - all of which belong to `pulls.ts`. What this file owns is what
+   * it owns for every other launch: turning a plan into argv and a process.
+   */
+  review: (plan: LaunchedReviewPlan, grid: { cols: number; rows: number }) => SessionRecord
   close: (req: CloseSessionRequest) => Promise<CloseSessionResult>
   /** Sessions this process is hosting, running or exited-but-not-yet-closed. */
   list: () => SessionRecord[]
@@ -396,6 +406,36 @@ export function createSessionHost({
       )
 
       return { session, history }
+    },
+
+    /**
+     * A review is an ordinary session that happens to open with a prompt.
+     *
+     * Which is the whole design. There is no review mode, no second kind of
+     * pty and nothing watching what comes back: `prepareLaunch` puts the prompt
+     * where the CLI expects a bare positional (`core/launch/plan.ts` -
+     * `buildLaunchArgs`, last), the shared `spawn` starts it, and from that
+     * moment it is a tab like any other, which the user can talk to, interrupt
+     * or close. Helm never parses a line of it - see SPEC 4.4 and the hard rule
+     * in CLAUDE.md.
+     *
+     * `projectPath` is the repository, so the session appears against the
+     * project it reviewed rather than as an orphan.
+     */
+    review(plan, grid) {
+      const repo = plan.slug.split('/')[1] ?? basename(plan.repoPath)
+      const launch = prepareLaunch({
+        root: plan.repoPath,
+        // Named for what it is, and uniqued like every other launch: reviewing
+        // two pull requests at once is the normal case.
+        name: uniqueSessionName(
+          `PR #${String(plan.number)} review - ${repo}`,
+          runningSessionNames(services.store)
+        ),
+        shimRoot,
+        openingPrompt: plan.prompt
+      })
+      return spawn(launch, grid, { projectPath: plan.repoPath })
     },
 
     async close(req) {

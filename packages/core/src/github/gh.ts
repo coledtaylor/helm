@@ -196,6 +196,41 @@ export async function fetchPullDetail(
   return parsePullDetail(run.stdout)
 }
 
+/**
+ * `gh pr checkout`, the one call on this surface that changes something.
+ *
+ * Everything else here reads. This fetches the pull request's head into the
+ * checkout at `cwd` and moves it there, which is why `cwd` is required rather
+ * than optional: `--repo` names which repository the number belongs to, but the
+ * tree being moved is whichever one the process is standing in, and defaulting
+ * that to `process.cwd()` would be a working directory nobody chose.
+ *
+ * The dirty-tree guard is the **caller's**, deliberately: this is `core`, it
+ * has one job, and the guard needs `readGitState` plus a sentence to show. See
+ * `desktop/src/main/pulls.ts`.
+ *
+ * Rejects with gh's own first line of complaint - a fork whose head has been
+ * deleted, a branch name that collides with a local one, a repository mid-merge.
+ */
+export async function checkoutPull(
+  command: GhCommand,
+  slug: string,
+  number: number,
+  cwd: string,
+  options: { timeoutMs?: number } = {}
+): Promise<GhRun> {
+  const run = await runGh(command, ['pr', 'checkout', String(number), '--repo', slug], {
+    cwd,
+    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {})
+  })
+
+  if (!run.ok) {
+    const said = firstMeaningfulLine(run.stderr) ?? run.error ?? 'gh failed with no output'
+    throw new Error(said)
+  }
+  return run
+}
+
 function firstLine(text: string): string {
   return text.split('\n')[0]?.trim() ?? text
 }

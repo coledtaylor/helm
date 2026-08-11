@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import {
+  checkoutPull,
   fetchOpenPulls,
   fetchPullDetail,
   forgetPrRepos,
@@ -8,11 +9,13 @@ import {
   pullConversation,
   readGhAuth,
   readGhVersion,
+  readGitState,
   readPrRepos,
   readPull,
   readPullsBySlug,
   recordPrFetch,
   renderMarkdown,
+  renderPullPrompt,
   replaceRepoPulls,
   upsertPrRepo,
   writePullDetail,
@@ -20,6 +23,7 @@ import {
   type GhCommand,
   type GhProblem,
   type GhStatus,
+  type LaunchedReviewPlan,
   type PrRepoRow,
   type PullDetail,
   type PullDetailView,
@@ -111,6 +115,17 @@ export interface PullsService {
     number: number
     refresh?: boolean
   }) => Promise<PullDetailView>
+  /**
+   * Everything a review launch needs, decided here rather than in the window.
+   *
+   * Does the side effect too when `prCheckout` is on - `gh pr checkout` runs
+   * before this resolves - because a plan that promised a checkout and left it
+   * to the caller would be a plan that can be half-applied. The session host
+   * takes what comes back and spawns it.
+   *
+   * Rejects with a whole sentence, like `detail`.
+   */
+  prepareReview: (request: { repoPath: string; number: number }) => Promise<LaunchedReviewPlan>
   /**
    * The window came forward. Guarded rather than debounced, and additionally
    * rate-limited: returns false when it decided not to.
@@ -512,6 +527,113 @@ export function createPullsService({
   }
 
   // ---------------------------------------------------------------------
+  // Reviewing one
+  // ---------------------------------------------------------------------
+
+  /**
+   * How long `gh pr checkout` is given.
+   *
+   * Four times the ordinary budget, because this one is not an API call: it
+   * fetches the pull request's head into the repository, and on a large history
+   * over a slow link that is a real transfer. Still bounded - a checkout that
+   * has hung is a button that never comes back.
+   */
+  const CHECKOUT_TIMEOUT_MS = 120_000
+
+  /**
+   * The prompt, the working directory, and the checkout if one was asked for.
+   *
+   * Everything decided in this function is decided from the **cache and the
+   * settings**, never from anything the window sent - which is the whole of the
+   * "the renderer does not compose argv" rule (`LaunchProfileRequest` has the
+   * same shape and the same reason). The window sends a repository path and a
+   * number; a prompt that arrived over the wire would be a prompt no setting
+   * governs.
+   *
+   * The order matters and is not an accident. The checkout happens **before**
+   * the session is spawned, because a session started in a tree that is about
+   * to move underneath it would read one revision and be told about another.
+   */
+  async function prepareReview(request: {
+    repoPath: string
+    number: number
+  }): Promise<LaunchedReviewPlan> {
+    const row = repoRow(request.repoPath)
+    if (row === null || row.slug === null) {
+      throw new Error(`${request.repoPath} has no github.com origin remote.`)
+    }
+    const slug = row.slug
+
+    // The summary rather than the detail: a review needs the number, the branch
+    // and the title, all of which the list fetch already has - so reviewing a
+    // pull request never has to wait for a `pr view`.
+    const cached = readPull(store, slug, request.number)
+    if (cached === null) {
+      throw new Error(
+        `Pull request #${String(request.number)} is no longer in ${slug}'s open list.`
+      )
+    }
+
+    const settled = settings()
+    const warnings: string[] = []
+    let checkedOut: string | null = null
+
+    if (settled.prCheckout === 'checkout') {
+      const command = await ghForDetail()
+
+      // The guard, before anything is fetched. `readGitState` is the launcher's
+      // own reader, so the count in this sentence is the count the project row
+      // is showing - and Helm does not stash: moving somebody's uncommitted
+      // work is the kind of help nobody asks for twice.
+      const before = await readGitState(request.repoPath)
+      if (before === null) {
+        throw new Error(
+          `${request.repoPath} is not a git repository, so there is nothing to check out into. Set "Check out the branch" back to off in Settings to review from the pull request's refs instead.`
+        )
+      }
+      if (before.dirty > 0) {
+        throw new Error(
+          `${request.repoPath} has ${String(before.dirty)} uncommitted ${before.dirty === 1 ? 'change' : 'changes'}. Commit or stash them, or turn the checkout off in Settings to review without touching the tree.`
+        )
+      }
+
+      await checkoutPull(command, slug, request.number, request.repoPath, {
+        timeoutMs: CHECKOUT_TIMEOUT_MS
+      })
+
+      // Asked of git rather than assumed from `headRefName`, and the difference
+      // is real: `gh pr checkout` renames a fork's branch when the name is
+      // already taken locally, so the branch the tree is actually on is the
+      // only honest thing to report.
+      const after = await readGitState(request.repoPath)
+      checkedOut = after?.branch ?? null
+      if (checkedOut === null) {
+        warnings.push('gh checked the pull request out, but git did not report a branch name.')
+      } else if (checkedOut !== cached.summary.headRefName) {
+        warnings.push(
+          `The local branch is ${checkedOut}, not ${cached.summary.headRefName} - gh renamed it to avoid a collision.`
+        )
+      }
+    }
+
+    // Rendered here, in main, from the template as stored. The pane renders the
+    // same template for its disclosure sentence; that copy is a preview and
+    // never travels.
+    const prompt = renderPullPrompt(settled.prReviewPrompt, {
+      number: cached.summary.number,
+      url: cached.summary.url,
+      // The branch as GitHub names it, which is what the setting's help text
+      // says `{branch}` means - including the fork case where the tree does not
+      // have it unless the checkout above just fetched it.
+      branch: cached.summary.headRefName,
+      title: cached.summary.title,
+      slug
+    })
+
+    return { repoPath: row.path, slug, number: cached.summary.number, prompt, checkedOut, warnings }
+  }
+
+  // ---------------------------------------------------------------------
   // The snapshot
   // ---------------------------------------------------------------------
 
@@ -637,6 +759,7 @@ export function createPullsService({
     snapshot: () => build(),
     refresh,
     detail,
+    prepareReview,
 
     refreshOnFocus() {
       if (inFlight !== null) return false

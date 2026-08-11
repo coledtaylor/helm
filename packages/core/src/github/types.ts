@@ -320,3 +320,44 @@ export interface PullsSnapshot {
  * range rather than a magic small number inside it.
  */
 export const PR_POLL_MINUTES = { min: 5, max: 1440, default: 5, off: 0 } as const
+
+/**
+ * What a review launch does to the working tree, if anything.
+ *
+ * `none` is the default and reviews from the pull request's refs: `gh` reads
+ * the diff, the commits and the conversation over the network, so nothing has
+ * to be fetched into the checkout and nothing anybody is halfway through gets
+ * moved. `checkout` runs `gh pr checkout` first, for the review that wants to
+ * run the tests - and it is refused outright on a dirty tree rather than
+ * stashing, because a tool that moves somebody's uncommitted work is a tool
+ * they stop trusting.
+ *
+ * An enum of two rather than a boolean, because the third value is already
+ * known: a worktree mode would review a branch without disturbing the checkout
+ * at all. It is deferred - junctions, the shim sweep and worktrees interact -
+ * and this leaves the room for it.
+ */
+export const PR_CHECKOUT_MODES = ['none', 'checkout'] as const
+
+export type PrCheckoutMode = (typeof PR_CHECKOUT_MODES)[number]
+
+/**
+ * What a review launch composed, once it has.
+ *
+ * `prompt` travels back rather than being re-derived in the window: it is what
+ * the session was actually started with, and a pane that recomposed it from the
+ * template would be reporting its own arithmetic instead of the launch's.
+ */
+export interface LaunchedReviewPlan {
+  /** The repository directory the session runs in. */
+  repoPath: string
+  /** `owner/name`, for the tab's label. */
+  slug: string
+  number: number
+  /** The trailing positional argument, already rendered. */
+  prompt: string
+  /** The branch `gh pr checkout` moved the tree to, or null when it did not run. */
+  checkedOut: string | null
+  /** Non-fatal notes: an overlay that was not there, a checkout that reported. */
+  warnings: string[]
+}

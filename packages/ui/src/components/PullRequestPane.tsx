@@ -3,7 +3,15 @@ import { useEffect, useState } from 'react'
 import type { PullDetailView, RenderedPullEntry } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { formatAge, formatMoment } from '../lib/time'
-import { CheckIcon, LinkIcon, PullRequestIcon, RefreshIcon, WarnIcon } from './icons'
+import {
+  CheckIcon,
+  CloseIcon,
+  LinkIcon,
+  PullRequestIcon,
+  RefreshIcon,
+  TerminalIcon,
+  WarnIcon
+} from './icons'
 import { fetchedCaption } from './PullsPane'
 
 /**
@@ -40,6 +48,23 @@ const VIEWS: Array<{ id: PullView; label: string }> = [
   { id: 'files', label: 'Files' }
 ]
 
+/**
+ * What a review launch turned out to be, for the pane to report afterwards.
+ *
+ * The prompt in here is **main's**, out of the launch's answer, not the preview
+ * this pane rendered from the template - so the line under the button reports
+ * what actually happened rather than re-stating its own guess.
+ */
+export interface LaunchedReviewNote {
+  /** The session's name, as the tab strip labels it. */
+  session: string
+  /** The trailing positional the session was started with. */
+  prompt: string
+  /** The branch `gh pr checkout` moved the tree to, or null when it did not run. */
+  checkedOut: string | null
+  warnings: string[]
+}
+
 export interface PullRequestPaneProps {
   /** The pull request, rendered. Null until the first answer arrives. */
   view: PullDetailView | null
@@ -53,6 +78,27 @@ export interface PullRequestPaneProps {
   onOpenExternal: (url: string) => void
   /** Docked beside a session split: the same pane with fewer columns. */
   compact?: boolean | undefined
+
+  /**
+   * Starts the review. Takes nothing: which pull request and what prompt are
+   * both the main process's to decide (`pr:review`), and a pane that passed
+   * either of them would be a pane whose copy could disagree with the stored
+   * setting.
+   */
+  onReview: () => void
+  reviewing: boolean
+  /**
+   * The prompt the button would run, rendered here from the template purely to
+   * say so. A preview - it never travels anywhere.
+   */
+  reviewPrompt: string
+  /** Whether `prCheckout` is on, which the disclosure sentence has to admit. */
+  reviewCheckout: boolean
+  /** A rejected `pr:review` - no gh, a dirty tree, no CLI. Dismissible. */
+  reviewError?: string | null | undefined
+  onDismissReviewError: () => void
+  /** The last launch from this tab, or null if there has not been one. */
+  reviewed?: LaunchedReviewNote | null | undefined
 }
 
 /**
@@ -100,7 +146,14 @@ export function PullRequestPane({
   onRefresh,
   refreshing,
   onOpenExternal,
-  compact = false
+  compact = false,
+  onReview,
+  reviewing,
+  reviewPrompt,
+  reviewCheckout,
+  reviewError = null,
+  onDismissReviewError,
+  reviewed = null
 }: PullRequestPaneProps): JSX.Element {
   const [shown, setShown] = useState<PullView>('conversation')
   const now = useNow()
@@ -143,8 +196,178 @@ export function PullRequestPane({
           <Files view={view} compact={compact} onOpenExternal={onOpenExternal} />
         )}
       </div>
+
+      <ReviewIsland
+        cwd={view?.repoPath ?? null}
+        onReview={onReview}
+        reviewing={reviewing}
+        prompt={reviewPrompt}
+        checkout={reviewCheckout}
+        error={reviewError}
+        onDismissError={onDismissReviewError}
+        reviewed={reviewed}
+        compact={compact}
+      />
     </div>
   )
+}
+
+// ---------------------------------------------------------------------------
+// The review island
+// ---------------------------------------------------------------------------
+
+/**
+ * The one thing this pane does rather than shows.
+ *
+ * An island of its own at the foot of the tab, not a button in the header,
+ * because it is the only control here that starts a process - and a control
+ * that spends money and opens a terminal does not belong in a row of view
+ * switchers and refresh arrows.
+ *
+ * The sentence beside it is the house disclosure and it is not decoration. Helm
+ * launches a CLI with an argv the user did not type, so the pane says the
+ * program, the working directory and the exact opening prompt **before** the
+ * button is pressed - which is also the only place a mistyped `{plceholder}` in
+ * the template is visible, since `renderPullPrompt` deliberately leaves an
+ * unknown one as written.
+ *
+ * What it does not do is read anything back. The review is an ordinary session
+ * in an ordinary tab from the moment it starts; Helm parses none of its output,
+ * and this island's last word on the subject is the name of the tab it went to.
+ */
+function ReviewIsland({
+  cwd,
+  onReview,
+  reviewing,
+  prompt,
+  checkout,
+  error,
+  onDismissError,
+  reviewed,
+  compact
+}: {
+  cwd: string | null
+  onReview: () => void
+  reviewing: boolean
+  prompt: string
+  checkout: boolean
+  error: string | null | undefined
+  onDismissError: () => void
+  reviewed: LaunchedReviewNote | null | undefined
+  compact: boolean
+}): JSX.Element {
+  // Nothing to review until the pull request has arrived: the working directory
+  // and the prompt are both read off it, and a button that launched before then
+  // would launch on a guess.
+  const ready = cwd !== null && prompt !== ''
+
+  return (
+    <section
+      data-pr-review-island
+      className="shrink-0 rounded-island border border-border bg-surface px-4 py-3"
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <button
+          type="button"
+          data-pr-review
+          onClick={onReview}
+          disabled={!ready || reviewing}
+          className={cn(
+            // Outlined in the accent and tinted only on hover - the accent
+            // never floods a surface in this system (DESIGN.md 4).
+            'flex shrink-0 items-center gap-2 rounded-well border border-accent px-3.5 py-1.5',
+            'text-[12px] font-medium text-accent-text transition-colors',
+            !ready || reviewing
+              ? 'cursor-default opacity-60'
+              : 'hover:bg-accent-soft active:bg-active'
+          )}
+        >
+          <TerminalIcon width={14} height={14} />
+          {reviewing ? 'Starting…' : 'Review with Claude'}
+        </button>
+
+        <p
+          data-pr-review-disclosure
+          className="min-w-0 flex-1 text-[11px] leading-[1.6] text-fg-subtle"
+        >
+          {ready ? (
+            <>
+              Runs <Code>claude</Code> in <Code title={cwd}>{compact ? shortPath(cwd) : cwd}</Code>{' '}
+              with the opening prompt <Code>{prompt}</Code>.
+              {checkout && (
+                <>
+                  {' '}
+                  <span data-pr-review-checkout>
+                    Checks the branch out first with <Code>gh pr checkout</Code>, which is refused
+                    if the tree has uncommitted changes.
+                  </span>
+                </>
+              )}
+            </>
+          ) : (
+            'Reading the pull request…'
+          )}
+        </p>
+      </div>
+
+      {/* Dismissible, and it stays until it is: a launch that failed is the one
+          thing on this pane the user has to read, and a toast that faded would
+          take the sentence explaining a dirty tree with it. */}
+      {error !== null && error !== undefined && (
+        <p
+          data-pr-review-error
+          role="alert"
+          className="mt-2.5 flex items-start gap-2 rounded-raised border border-danger/30 bg-danger/10 px-3 py-2 text-[11.5px] leading-[1.55] text-danger"
+        >
+          <span className="min-w-0 flex-1">{error}</span>
+          <button
+            type="button"
+            data-pr-review-dismiss
+            onClick={onDismissError}
+            aria-label="Dismiss"
+            title="Dismiss"
+            className="-my-0.5 grid size-5 shrink-0 place-items-center rounded text-danger/70 transition-colors hover:bg-danger/10 hover:text-danger"
+          >
+            <CloseIcon width={9} height={9} />
+          </button>
+        </p>
+      )}
+
+      {reviewed !== null && reviewed !== undefined && (
+        <p data-pr-reviewed={reviewed.session} className="mt-2 text-[11px] leading-[1.6] text-fg-muted">
+          Started <Code>{reviewed.session}</Code>
+          {reviewed.checkedOut !== null && (
+            <span data-pr-reviewed-branch={reviewed.checkedOut}>
+              {' '}
+              on <Code>{reviewed.checkedOut}</Code>
+            </span>
+          )}
+          . It is a session tab like any other now - Helm does not read what it says.
+          {reviewed.warnings.map((warning) => (
+            <span key={warning} className="block text-warn">
+              {warning}
+            </span>
+          ))}
+        </p>
+      )}
+    </section>
+  )
+}
+
+/** Machine data inside a sentence: mono, and selectable so it can be copied. */
+function Code({ children, title }: { children: string; title?: string }): JSX.Element {
+  return (
+    <code title={title} className="font-mono text-[10.5px] break-all text-fg-muted select-text">
+      {children}
+    </code>
+  )
+}
+
+/** `…\repos\helm` - enough of a path to recognise, for a docked pane. */
+function shortPath(path: string): string {
+  const parts = path.split(/[\\/]/).filter((part) => part !== '')
+  if (parts.length <= 2) return path
+  return `…\\${parts.slice(-2).join('\\')}`
 }
 
 // ---------------------------------------------------------------------------
