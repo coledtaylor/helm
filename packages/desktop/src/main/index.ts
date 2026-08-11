@@ -15,7 +15,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { emit, registerIpc, resolvedTheme } from './ipc'
 import { appMode, dataDir, initDataDir, shimRoot } from './paths'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
-import { adoptExistingProfile, createServices, refreshGit, runScan, type Services } from './services'
+import {
+  adoptExistingProfile,
+  cachedProjects,
+  createServices,
+  refreshGit,
+  runScan,
+  type Services
+} from './services'
 import { createConfigService } from './config'
 import {
   attachArtifactConsole,
@@ -24,6 +31,7 @@ import {
   registerContentProtocol
 } from './content'
 import { createHistoryService } from './history'
+import { createPullsService } from './pulls'
 import { createUsageService } from './usage'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
 import { createCollector, runM2Checks, type M2Context } from './m2check'
@@ -40,6 +48,7 @@ import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
 import { findClaudeExecutable, setClaudeOverride } from './claude-cli'
+import { setGhOverride } from './gh-cli'
 import { pickerAnswer, runM7Checks } from './m7check'
 import { screenshot } from './bridge'
 
@@ -240,6 +249,9 @@ function startApp(options: AppOptions = {}): void {
   // over discovery in every caller, and the session host does not read
   // settings.
   setClaudeOverride(services.settings.claudePath)
+  // Same reason, same shape: the pull-request surface resolves `gh` through a
+  // module-level override, and it must be in place before the first pass.
+  setGhOverride(services.settings.ghPath)
   // Before the window exists: an install from before the setup pane has roots
   // and no completion stamp, and stamping it after the first paint would flash
   // a setup pane over a working launcher.
@@ -282,6 +294,25 @@ function startApp(options: AppOptions = {}): void {
     onChange: (snapshot) => emit(win, 'usage:changed', snapshot)
   })
 
+  /**
+   * The projects the PR sweep considers, read through a function.
+   *
+   * The last scan when there has been one, the cache before that - so a cold
+   * start sweeps the repositories the previous run knew about rather than
+   * waiting for discovery, and a rescan that adds a repository is picked up on
+   * the next pass without anything having to tell this service about it.
+   */
+  const pulls = createPullsService({
+    store: services.store,
+    settings: () => services.settings,
+    projects: () =>
+      (services.lastScan?.projects ?? cachedProjects(services)).map((project) => ({
+        path: project.path,
+        name: project.name
+      })),
+    onChange: (snapshot) => emit(win, 'pr:changed', snapshot)
+  })
+
   const config = createConfigService({
     services,
     ...(options.claudeHome !== undefined ? { userHome: options.claudeHome } : {}),
@@ -297,6 +328,7 @@ function startApp(options: AppOptions = {}): void {
     pterm,
     history,
     usage,
+    pulls,
     config,
     content,
     window: () => win,
@@ -350,10 +382,19 @@ function startApp(options: AppOptions = {}): void {
           console.warn(`usage figures could not be read: ${String(err)}`)
         }
         usage.start()
+
+        // Last, and deliberately: this one spawns `git` per repository and
+        // `gh` per remote, and the pane it feeds paints from SQLite in the
+        // meantime. The timer is armed either way - a fetch that fails is not a
+        // reason to stop trying every five minutes.
+        void pulls.refresh().catch((err: unknown) => {
+          console.warn(`pull requests could not be fetched: ${String(err)}`)
+        })
+        pulls.start()
       })
 
       if (win) {
-        options.onReady?.({ win, services, sessions, pterm, history, usage, config, content })
+        options.onReady?.({ win, services, sessions, pterm, history, usage, pulls, config, content })
       }
     }
   })
@@ -403,6 +444,11 @@ function startApp(options: AppOptions = {}): void {
    */
   let gitRefreshInFlight = false
   win.on('focus', () => {
+    // The PR sweep takes the same moment for the same reason, and guards itself
+    // harder: git is local and a fetch is not, so `refreshOnFocus` also refuses
+    // to run more than once every few minutes (see `pulls.ts`).
+    pulls.refreshOnFocus()
+
     if (gitRefreshInFlight || services.lastScan === null) return
     gitRefreshInFlight = true
     void refreshGit(services)
@@ -457,6 +503,7 @@ function startApp(options: AppOptions = {}): void {
     // firing after `will-quit`, would write to a closed connection.
     history.stop()
     usage.stop()
+    pulls.stop()
     config.stop()
     // Synchronously, because this is the last point the main process is
     // guaranteed a turn. Anything deferred here is a process left behind.

@@ -7,6 +7,7 @@ import type { ContentService } from './content'
 import type { Check } from './fidelity'
 import type { HistoryService } from './history'
 import type { PtermHost } from './pterm'
+import type { PullsService } from './pulls'
 import type { Confirm, ConfirmRequest, SessionHost, SessionObserver } from './sessions'
 import type { Services } from './services'
 import type { UsageService } from './usage'
@@ -44,6 +45,12 @@ export interface M2Context {
    * and it is deliberately not reachable from the window.
    */
   usage: UsageService
+  /**
+   * The pull-request sweep. Aimed at a fake `gh` and a fixed set of remotes
+   * through its own `point*` hooks, for the same reason `usage` is: which
+   * binary the pull requests come from is not the window's to choose.
+   */
+  pulls: PullsService
 }
 
 // ---------------------------------------------------------------------------

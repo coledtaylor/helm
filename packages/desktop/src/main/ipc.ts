@@ -10,10 +10,12 @@ import {
 import type { ConfigService } from './config'
 import type { ContentService } from './content'
 import type { HistoryService } from './history'
+import type { PullsService } from './pulls'
 import type { UsageService } from './usage'
 import { applyTitleBarOverlay } from './chrome'
 import type { PtermHost } from './pterm'
 import { readClaudeVersion, setClaudeOverride } from './claude-cli'
+import { setGhOverride } from './gh-cli'
 import { readClaudeStatus, verifyClaudeAt } from './setup'
 import { checkForUpdate } from './update'
 import { appMode, dataDir, dbFile } from './paths'
@@ -82,6 +84,8 @@ export interface IpcContext {
   history: HistoryService
   /** Mirrors Claude Code's cached plan-limit figures; see `usage.ts`. */
   usage: UsageService
+  /** Sweeps the discovered repositories for open pull requests; see `pulls.ts`. */
+  pulls: PullsService
   /** The one surface that writes to a `.claude` tree; see `config.ts`. */
   config: ConfigService
   /** Reads, renders and searches what Claude writes; see `content.ts`. */
@@ -168,6 +172,16 @@ export function registerIpc(ctx: IpcContext): void {
       // written through this channel has to reach it too - otherwise sessions
       // launch from one path and `claude mcp add` from another.
       if (patch.claudePath !== undefined) setClaudeOverride(next.claudePath)
+      // The pulls service resolves `gh` through the same module-level override,
+      // and holds its own cached answer about which one it is - so a new path
+      // has to reach both, and the poller has to be re-armed when the interval
+      // moves or a change to it would not take effect until the next restart.
+      if (patch.ghPath !== undefined) {
+        setGhOverride(next.ghPath)
+        ctx.pulls.rearm()
+        void ctx.pulls.refresh()
+      }
+      if (patch.prPollMinutes !== undefined) ctx.pulls.rearm()
       if (patch.theme !== undefined) {
         nativeTheme.themeSource = patch.theme
         applyTitleBarOverlay(ctx.window(), resolvedTheme())
@@ -412,6 +426,12 @@ export function registerIpc(ctx: IpcContext): void {
     // current, and a status bar that hit the disk every time it repainted
     // would be the one surface in the app that does.
     'usage:read': () => ctx.usage.snapshot(),
+
+    // The cache, deliberately: this runs no `gh`, so the pane paints on the
+    // first frame and whatever the fetch finds arrives as `pr:changed`.
+    'pr:snapshot': () => ctx.pulls.snapshot(),
+    'pr:refresh': (request) =>
+      ctx.pulls.refresh(request?.repoPath !== undefined ? { repoPath: request.repoPath } : {}),
 
     'content:scopes': () => ctx.content.scopes(),
     'content:tree': ({ scopePath, refresh }) => ctx.content.tree(scopePath, refresh ?? false),

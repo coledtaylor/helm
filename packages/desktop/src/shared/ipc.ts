@@ -26,6 +26,7 @@ import type {
   McpScope,
   Profile,
   ProfileDraft,
+  PullsSnapshot,
   RenderedMarkdown,
   SessionRecord,
   ThemePreference,
@@ -519,6 +520,20 @@ export interface IpcRequests {
   'usage:read': { request: void; response: UsageSnapshot }
 
   /**
+   * Open pull requests across the discovered repositories.
+   *
+   * `pr:snapshot` is the cache and nothing else - it runs no subprocess, so the
+   * pane paints from SQLite on the first frame and the fetch that follows
+   * arrives as `pr:changed`. `pr:refresh` is the button: it fetches now, for one
+   * repository or all of them, and resolves with what it found.
+   *
+   * Helm holds no GitHub credential on either path. Every fetch behind these two
+   * channels is the user's own `gh` CLI, run on the user's own token.
+   */
+  'pr:snapshot': { request: void; response: PullsSnapshot }
+  'pr:refresh': { request: { repoPath?: string }; response: PullsSnapshot }
+
+  /**
    * The content viewer (M6). Rendering happens here rather than in the window:
    * shiki's grammars are megabytes the browser bundle must not carry, and a
    * live preview that re-parsed a 21 KB note on the UI thread per keystroke
@@ -653,6 +668,17 @@ export interface IpcEvents {
    * and the refresh that matters is the one Helm did not cause.
    */
   'usage:changed': UsageSnapshot
+
+  /**
+   * A fetch pass found something different, or one started.
+   *
+   * Pushed rather than polled for the reason every other event here is: the
+   * timer that drives this lives in the main process, and the window would
+   * otherwise have to poll a service that is itself polling. Sent only when the
+   * snapshot's signature has changed - which includes the fetch age, because
+   * that is what the pane's caption is made of.
+   */
+  'pr:changed': PullsSnapshot
 
   /**
    * The file the config editor has open changed on disk, and Helm was not the
@@ -800,6 +826,8 @@ export const REQUEST_CHANNELS = Object.keys({
   'config:mcpList': true,
   'config:doctor': true,
   'usage:read': true,
+  'pr:snapshot': true,
+  'pr:refresh': true,
   'content:scopes': true,
   'content:tree': true,
   'content:document': true,
@@ -838,6 +866,7 @@ export const EVENT_CHANNELS = Object.keys({
   'theme:changed': true,
   'history:changed': true,
   'usage:changed': true,
+  'pr:changed': true,
   'config:externalChange': true,
   'content:artifactConsole': true,
   'term:create': true,
