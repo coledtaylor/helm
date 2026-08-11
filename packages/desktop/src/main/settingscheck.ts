@@ -670,10 +670,10 @@ export async function runSettingsChecks(
        })`
     )
     // Internal state is not a preference, and the pane must not have grown a
-    // row for either while nobody was looking.
+    // row for any of them while nobody was looking.
     const internalLeaked = await js<boolean>(
       win,
-      `/windowBounds|firstRunCompletedAt/.test(document.querySelector('[data-settings-pane]')?.textContent ?? '')`
+      `/windowBounds|firstRunCompletedAt|workspaceTabs/.test(document.querySelector('[data-settings-pane]')?.textContent ?? '')`
     )
 
     const shot = await screenshot(win, shotDir, 'settings-1-pane.png')
@@ -1221,6 +1221,12 @@ export async function runSettingsChecks(
         why: 'a width that is not a number reaches BrowserWindow'
       },
       {
+        key: 'workspaceTabs',
+        good: { panes: [{ kind: 'project', path: fixtures.rootA }], activeId: 'history' },
+        bad: { panes: [{ kind: 'project' }], activeId: null },
+        why: 'a project pane with no path is a tab that restores pointing nowhere'
+      },
+      {
         key: 'firstRunCompletedAt',
         good: '2026-08-11T00:00:00.000Z',
         bad: 'soon',
@@ -1285,6 +1291,18 @@ export async function runSettingsChecks(
         good: 'none',
         bad: 'worktree',
         why: 'a mode that is planned and not built would silently do nothing'
+      },
+      {
+        key: 'prReviewModel',
+        good: 'opus',
+        bad: '--model',
+        why: 'this becomes an argv word, and a flag written into it is a second flag'
+      },
+      {
+        key: 'prReviewEffort',
+        good: 'high',
+        bad: 'maximum',
+        why: 'the five levels are the CLI’s own, and a sixth would be rejected by it'
       }
     ]
 
@@ -2237,6 +2255,24 @@ export async function runSettingsChecks(
     await sleep(600)
     const rowWhenNone = rowValue(dbFile, 'prCheckout')
 
+    // The model and the effort. Both are set, read back, and then put *back* to
+    // the default - because null is the interesting value on these two: it is
+    // the state in which the launch passes no flag at all, and a select that
+    // can reach every named option but not the empty one would be a setting
+    // nobody could turn off again.
+    const pickedModel = await chooseOption(win, '[data-settings-pr-model]', 'opus')
+    await sleep(600)
+    const rowWhenOpus = rowValue(dbFile, 'prReviewModel')
+    const pickedEffort = await chooseOption(win, '[data-settings-pr-effort]', 'high')
+    await sleep(600)
+    const rowWhenHigh = rowValue(dbFile, 'prReviewEffort')
+    const clearedModel = await chooseOption(win, '[data-settings-pr-model]', '')
+    await sleep(600)
+    const rowWhenNoModel = rowValue(dbFile, 'prReviewModel')
+    const clearedEffort = await chooseOption(win, '[data-settings-pr-effort]', '')
+    await sleep(600)
+    const rowWhenNoEffort = rowValue(dbFile, 'prReviewEffort')
+
     checks.push({
       id: 'S-13',
       criterion:
@@ -2285,7 +2321,19 @@ export async function runSettingsChecks(
         rowWhenCheckout === 'checkout' &&
         pickedNone.offered &&
         pickedNone.set &&
-        rowWhenNone === 'none',
+        rowWhenNone === 'none' &&
+        pickedModel.offered &&
+        pickedModel.set &&
+        rowWhenOpus === 'opus' &&
+        pickedEffort.offered &&
+        pickedEffort.set &&
+        rowWhenHigh === 'high' &&
+        clearedModel.offered &&
+        clearedModel.set &&
+        rowWhenNoModel === null &&
+        clearedEffort.offered &&
+        clearedEffort.set &&
+        rowWhenNoEffort === null,
       detail: {
         discovered: { painted: { path: paintedPath, version: paintedVersion }, whereExeSays: onPath },
         askedTheExecutableDirectly: directVersion,
@@ -2321,6 +2369,14 @@ export async function runSettingsChecks(
           checkout: { picked: pickedCheckout, databaseRow: rowWhenCheckout },
           none: { picked: pickedNone, databaseRow: rowWhenNone }
         },
+        reviewModel: {
+          opus: { picked: pickedModel, databaseRow: rowWhenOpus },
+          cleared: { picked: clearedModel, databaseRow: rowWhenNoModel }
+        },
+        reviewEffort: {
+          high: { picked: pickedEffort, databaseRow: rowWhenHigh },
+          cleared: { picked: clearedEffort, databaseRow: rowWhenNoEffort }
+        },
         screenshot: shotGh.file
       },
       notes: [
@@ -2341,9 +2397,13 @@ export async function runSettingsChecks(
         'commits it, then put back with Reset - and Reset is checked for being',
         'disabled at the built-in prompt, because a Reset that stays live is one',
         'saying the setting is still custom when it is not.',
-        'What these two settings actually *do* is `pnpm pr-check`’s: this proves',
-        'they are reachable and persist, and that driver proves the template',
-        'reaches the argv and that checkout mode refuses a dirty tree.'
+        'The model and the effort are each set and then cleared again, because',
+        'the empty option is the load-bearing one: it is the state where the',
+        'launch passes no flag at all, and a picker that could reach every named',
+        'model but not "default" would be a setting nobody could turn back off.',
+        'What these settings actually *do* is `pnpm pr-check`’s: this proves they',
+        'are reachable and persist, and that driver proves the template and the',
+        'two flags reach the argv, and that checkout mode refuses a dirty tree.'
       ]
     })
   }

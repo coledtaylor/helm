@@ -117,7 +117,7 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   | `pnpm m7-check` | first run, packaging, personal-path audit | setup, portable mode, the installer |
   | `pnpm usage-check` | the status bar's usage figures | `core/usage/`, the status bar |
   | `pnpm settings-check` | the settings pane, every app setting, and the terminal/shell preferences | `core/store/settings.ts`, `SettingsPane`, `terminal.ts`, `estimateGrid`, `main/pterm.ts`, anything that writes a setting |
-  | `pnpm pr-check` | the pull-request surface: fetch, cache, detail tab, review launch, degradation | `core/github/`, `main/pulls.ts`, `main/gh-cli.ts`, `PullsPane`, `PullRequestPane`, `SessionHost.review` |
+  | `pnpm pr-check` | the pull-request surface: fetch, cache, detail tab, the file diffs, review launch, degradation | `core/github/`, `main/pulls.ts`, `main/gh-cli.ts`, `PullsPane`, `PullRequestPane`, `SessionHost.review` |
   | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
 
   `terminal.ts` is under two of them and they answer different questions:
@@ -152,13 +152,29 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
     schedule the user sets. README, [docs/PACKAGING.md](docs/PACKAGING.md), the
     `update:check` comment in `shared/ipc.ts` and SPEC 5 all say the same
     sentence; if that posture moves again, all four move together.
+  - The Files view paints the patch, which SPEC records as a **superseded**
+    decision rather than a quiet reversal: "no diff viewer" is struck through
+    and the note under it says what is still not done (syntax highlighting,
+    whitespace modes, side-by-side, review threads). Three rules hold it
+    together and are not negotiable without amending that note - GitHub's file
+    list is the spine and the patch is matched onto it by path, the cache holds
+    the **text** `gh pr diff` printed rather than the parse, and every ceiling
+    it hits (`MAX_DIFF_BYTES`, `MAX_FILE_LINES`, a file with no patch) is
+    counted and said on screen. A diff that quietly stopped halfway would read
+    as complete.
   - A review launch composes its prompt in **main** and the window never sends
     one: `pr:review` carries `{repoPath, number, cols, rows}`, the same shape
     `profile:launch` takes and for the same reason. The detail pane renders the
     template too, but only to say what the button will run - when the preview
     and the argv disagree, the argv is right and the preview is the bug.
     `prCheckout: 'checkout'` is refused on a dirty tree rather than stashing;
-    Helm does not move somebody's uncommitted work.
+    Helm does not move somebody's uncommitted work. `prReviewModel` and
+    `prReviewEffort` are composed in the same place and are **null by default**,
+    which passes no flag - a setting that defaulted to a model name would make
+    Helm's launches differ from the CLI's own for no reason the user asked for.
+    The model is deliberately not validated against a list of names: the CLI's
+    aliases and ids move faster than this app releases, so the validator checks
+    only that the value can be one argv word.
 - Usage figures degrade to **nothing** rather than to a stale number. The
   server's own answer in `cachedUsageUtilization` is authoritative but dated, so
   a reading older than `USAGE_STALE_AFTER_MS`, one whose `resets_at` has already

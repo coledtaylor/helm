@@ -433,7 +433,11 @@ export function createSessionHost({
           runningSessionNames(services.store)
         ),
         shimRoot,
-        openingPrompt: plan.prompt
+        openingPrompt: plan.prompt,
+        // Null for either of these passes no flag at all, which is what keeps a
+        // Helm nobody has configured launching exactly what `claude` would.
+        model: plan.model,
+        effort: plan.effort
       })
       return spawn(launch, grid, { projectPath: plan.repoPath })
     },

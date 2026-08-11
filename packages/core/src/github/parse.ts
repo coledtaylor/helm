@@ -26,7 +26,16 @@ import type {
  * it is the identity of the row, so an entry without one is dropped.
  */
 
-/** The fields `pr list` is asked for; the check drivers assert on this string. */
+/**
+ * The fields `pr list` is asked for; the check drivers assert on this string.
+ *
+ * `statusCheckRollup` is on the **list** and not only the detail, which is a
+ * deliberate cost: it is the field that turns a list of pull requests into a
+ * list you can triage, and asking for it per-row is what lets the pane say
+ * which branch is green without opening anything. It costs payload rather than
+ * requests - the rollups come back inside the one query the poll already makes -
+ * and it is reduced to three numbers here rather than carried whole.
+ */
 export const PR_LIST_FIELDS = [
   'number',
   'title',
@@ -42,6 +51,7 @@ export const PR_LIST_FIELDS = [
   'deletions',
   'changedFiles',
   'reviewDecision',
+  'statusCheckRollup',
   'labels'
 ].join(',')
 
@@ -123,6 +133,9 @@ function pullFrom(entry: unknown): PullSummary | null {
     deletions: asNumber(row['deletions']),
     changedFiles: asNumber(row['changedFiles']),
     reviewDecision: reviewDecision(row['reviewDecision']),
+    // The same reduction the detail makes, and null by the same rule: a list
+    // that could not read a rollup paints no tick rather than a green one.
+    checks: reduceChecks(row['statusCheckRollup']),
     labels
   }
 }
@@ -165,10 +178,13 @@ export function parsePullList(stdout: string): PullSummary[] {
 /**
  * The fields `pr view` is asked for; the check drivers assert on this string.
  *
- * `files` is paths and counts and nothing else - there is no diff in here,
- * deliberately. Helm is not a diff viewer in v1 and the Files view links out
- * for the patch, so asking for one would be megabytes of payload cached in
- * SQLite for a surface that never paints it.
+ * `files` is paths and counts and nothing else - there is no patch in here, and
+ * that is still deliberate now that the Files view paints one. The patch comes
+ * from `gh pr diff` instead, which is a separate call with a separate cache
+ * column and a byte ceiling on it: folding it in here would put megabytes of
+ * text inside the JSON payload that the header's counts and the whole
+ * conversation also arrive in, and cache the two together with no way to cap one
+ * without capping the other.
  */
 export const PR_VIEW_FIELDS = [
   'body',

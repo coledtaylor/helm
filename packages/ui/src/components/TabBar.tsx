@@ -122,6 +122,17 @@ export function TabBar({
         // pane (`-mb-px`) and spends that pixel as bottom padding (`pb-px`), so
         // the tab's overshoot lands inside the scroll container instead of past
         // it. `overflow-y-hidden` keeps it that way if a tab ever grows.
+        // The caret is cleared here and not on each tab. Leaving a tab for its
+        // neighbour fires that tab's `dragleave` *after* the neighbour's
+        // `dragover` has already set the insertion point, so a per-tab handler
+        // spends the drag erasing the mark the next tab just drew. Only leaving
+        // the strip altogether means there is no insertion point any more, and
+        // `relatedTarget` - the element being entered - is what says so.
+        onDragLeave={(event) => {
+          const entering = event.relatedTarget
+          if (entering instanceof Node && event.currentTarget.contains(entering)) return
+          setDropIndex(null)
+        }}
         className="-mb-px flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto overflow-y-hidden pb-px"
       >
         {tabs.map((tab, index) => {
@@ -149,11 +160,6 @@ export function TabBar({
                 const box = event.currentTarget.getBoundingClientRect()
                 setDropIndex(event.clientX < box.left + box.width / 2 ? index : index + 1)
               }}
-              onDragLeave={() =>
-                setDropIndex((current) =>
-                  current === index || current === index + 1 ? null : current
-                )
-              }
               onDrop={(event) => dropOn(dropIndex ?? index, event)}
               className={cn(
                 // A folder tab: the active one lifts into the pane island below
@@ -169,10 +175,16 @@ export function TabBar({
                 dragging === tab.id && 'opacity-40'
               )}
             >
+              {/* One caret per insertion point, and only one. An interior seam
+                  is describable twice - after tab k-1, before tab k - and
+                  drawing both put two 2px marks 4px apart on screen where the
+                  tab was going to land. The left edge is the general case; the
+                  right edge of the last tab is the only insertion point that
+                  has no tab to its right to carry it. */}
               {dropIndex === index && (
                 <span aria-hidden className="absolute inset-y-1 left-0 w-[2px] rounded bg-accent" />
               )}
-              {dropIndex === index + 1 && (
+              {dropIndex === tabs.length && index === tabs.length - 1 && (
                 <span aria-hidden className="absolute inset-y-1 right-0 w-[2px] rounded bg-accent" />
               )}
 

@@ -68,6 +68,14 @@ island - a surface with a 1px hairline edge - separated by 8px gutters
 (`gap-2` / `p-2` in the shell). Nothing sits bare on the canvas except the
 status bar and the tab strip.
 
+**One island per pane, and a pane with sections is still one island.** A header,
+a body and a footer that belong to the same subject are separated by
+`.island-rule`s inside a single surface, not floated as three islands with 8px
+gutters between them: the gutters buy nothing, cost two of them out of the
+reading width, and make the header read as a summary card sitting above some
+other pane's contents. The pull request tab is the worked example - header, view,
+review row - and it was three islands before this rule was written down.
+
 Three elevations, encoded as radius tokens:
 
 - `rounded-island` (10px) - panes on the canvas
@@ -121,6 +129,18 @@ Dividers inside an island fade to transparent at their ends - use the
   arrow is always replaced**: Chromium draws a heavy chevron in its own colour
   that reads as a control borrowed from another program, which is most obvious
   on a foreign-ground island where nothing else is system-drawn.
+
+  **A select always carries a real fill - never `bg-transparent`.** Its
+  dropped-open list is an OS window rather than part of the page, and the only
+  things CSS reaches into it are the control's own `background-color` and
+  `color`. A transparent control therefore drops the platform's white listbox
+  into a dark app, with the page's text colour still applied to the rows - the
+  shell picker shipped that way and its options were `#75798c` on white.
+  Measured on Electron 43: `color-scheme` on the element and `option` /
+  `option:checked` rules change nothing, so the fill is the whole lever. What
+  stays platform-drawn is the **highlighted row**, which keeps the Windows
+  selection colour; that is the accepted price of a native select, and the
+  alternative - a listbox of our own - is refused above for a better reason.
 - **Stepper**: a segmented-control shell holding − and + buttons either side of
   a tabular mono readout. For a small bounded integer someone nudges while
   watching the result - a terminal's point size, not a scrollback of 25,000.
@@ -159,6 +179,24 @@ Dividers inside an island fade to transparent at their ends - use the
   right. Selection is `bg-accent-soft` plus a 2px accent bar down the left
   edge (absolutely positioned, `rounded-full`), never a solid fill. Hover is
   `bg-hover`. Row radius is `rounded-well`.
+- **Source pills**: a list that draws rows from more than one place carries the
+  place on the row, as a hairline `border-strong` pill at the head of the second
+  line - the repository on a pull request row is the one so far. This is the one
+  outlined pill allowed at row density, and it earns the exception by not being
+  one of the row's facts: everything else on that line is *about* the pull
+  request, and this says which list it came out of. It appears only where the
+  rows have been flattened out of their groups; under a heading that already
+  names the source it would be the heading said twice.
+- **Diff rows**: two line-number gutters, a sign column, then the line. The left
+  gutter is where a line was and the right is where it is, so an added line has
+  no left number and a removed one has no right. The row carries the tone as an
+  8% tint (`bg-success/[.08]`, `bg-danger/[.08]`) and the sign carries it as
+  text; context rows have no tint at all and sit at `fg-muted`, so the eye counts
+  the tinted ones. Gutters and signs are `select-none` - a copied diff has to
+  come out as code. Hunk headers sit on `bg-surface-sunken` with the text
+  starting at the line column, which is what makes them read as a break in the
+  file rather than as another line of it. Lines **wrap**; a horizontal scrollbar
+  per file turns reading a diff into operating one.
 - **Folder tabs**: the active tab lifts into the pane island below it - same
   fill, hairline border on three sides, `rounded-t-[9px]`, `-mb-px` overlap,
   `z-10`. Inactive tabs are bare text (`fg-muted`). A session tab lifts into
@@ -177,7 +215,7 @@ Dividers inside an island fade to transparent at their ends - use the
   in mono - the program, the working directory, and the argv Helm supplies
   that the user did not type. `ProjectPane`'s "Runs `claude` with this folder
   as the working directory" is the short case; the pull request pane's review
-  island is the long one, and it names the exact opening prompt because there
+  row is the long one, and it names the exact opening prompt because there
   the argv is composed from a template the user can get wrong. Written down
   once there were two of them. The sentence is not a tooltip and not a
   confirmation: it is on screen *before* the button is pressed, which is also

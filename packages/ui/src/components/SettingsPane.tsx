@@ -4,6 +4,7 @@ import {
   offerableUsageModes,
   COST_MODE_UNAVAILABLE,
   DEFAULT_PR_REVIEW_PROMPT,
+  EFFORT_LEVELS,
   PR_POLL_MINUTES,
   PR_PROMPT_PLACEHOLDERS,
   PR_REVIEW_PROMPT_MAX_LENGTH,
@@ -13,6 +14,7 @@ import {
   USAGE_DISPLAY_MODES,
   type AppSettings,
   type DetectedShell,
+  type EffortLevel,
   type GhStatus,
   type PrCheckoutMode,
   type TerminalCursorStyle,
@@ -110,6 +112,11 @@ export interface SettingsPaneProps {
   onPrReviewPromptChange: (template: string) => void
   prCheckout: PrCheckoutMode
   onPrCheckoutChange: (mode: PrCheckoutMode) => void
+  /** Null for either of these is "pass no flag", not a model called null. */
+  prReviewModel: string | null
+  onPrReviewModelChange: (model: string | null) => void
+  prReviewEffort: EffortLevel | null
+  onPrReviewEffortChange: (effort: EffortLevel | null) => void
 }
 
 /** The six the Terminal group owns, named once so nothing has to list them twice. */
@@ -161,7 +168,11 @@ export function SettingsPane({
   prReviewPrompt,
   onPrReviewPromptChange,
   prCheckout,
-  onPrCheckoutChange
+  onPrCheckoutChange,
+  prReviewModel,
+  onPrReviewModelChange,
+  prReviewEffort,
+  onPrReviewEffortChange
 }: SettingsPaneProps): JSX.Element {
   const found = status !== null && status.path !== null && status.version !== null
   const overridden = status?.source === 'setting'
@@ -378,6 +389,10 @@ export function SettingsPane({
           onReviewPromptChange={onPrReviewPromptChange}
           checkout={prCheckout}
           onCheckoutChange={onPrCheckoutChange}
+          reviewModel={prReviewModel}
+          onReviewModelChange={onPrReviewModelChange}
+          reviewEffort={prReviewEffort}
+          onReviewEffortChange={onPrReviewEffortChange}
         />
       </div>
     </div>
@@ -428,7 +443,11 @@ function GitHubGroup({
   reviewPrompt,
   onReviewPromptChange,
   checkout,
-  onCheckoutChange
+  onCheckoutChange,
+  reviewModel,
+  onReviewModelChange,
+  reviewEffort,
+  onReviewEffortChange
 }: {
   gh: GhStatus | null
   onLocate: () => void
@@ -439,6 +458,10 @@ function GitHubGroup({
   onReviewPromptChange: (template: string) => void
   checkout: PrCheckoutMode
   onCheckoutChange: (mode: PrCheckoutMode) => void
+  reviewModel: string | null
+  onReviewModelChange: (model: string | null) => void
+  reviewEffort: EffortLevel | null
+  onReviewEffortChange: (effort: EffortLevel | null) => void
 }): JSX.Element {
   const found = gh !== null && gh.path !== null
   const overridden = gh?.source === 'setting'
@@ -541,8 +564,80 @@ function GitHubGroup({
           <option value="checkout">Check the pull request out</option>
         </Select>
       </Row>
+
+      <Divider />
+
+      {/* Two rows rather than one, because they are two flags and either can be
+          set without the other: an effort with no model named is a perfectly
+          ordinary thing to want, and a combined control would have to invent a
+          meaning for half of itself. */}
+      <Row
+        label="Review model"
+        hint={
+          reviewModel === null
+            ? 'Whatever claude starts with. Helm passes no --model at all.'
+            : `Adds --model ${reviewModel} to the review launch, and to nothing else.`
+        }
+      >
+        <Select
+          value={reviewModel ?? ''}
+          label="The model a review session runs on"
+          data-settings-pr-model={reviewModel ?? ''}
+          onChange={(value) => onReviewModelChange(value === '' ? null : value)}
+        >
+          <option value="">Claude Code&rsquo;s default</option>
+          {/* A value written by hand or by an older build stays selectable, for
+              the reason the poll interval's list does the same: a picker that
+              silently shows something other than what is in force is worse than
+              one with an unfamiliar row in it. */}
+          {reviewModels(reviewModel).map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </Select>
+      </Row>
+
+      <Divider />
+
+      <Row
+        label="Review effort"
+        hint={
+          reviewEffort === null
+            ? 'Whatever claude starts with. Helm passes no --effort at all.'
+            : `Adds --effort ${reviewEffort} to the review launch, and to nothing else.`
+        }
+      >
+        <Select
+          value={reviewEffort ?? ''}
+          label="The reasoning effort a review session runs at"
+          data-settings-pr-effort={reviewEffort ?? ''}
+          onChange={(value) => onReviewEffortChange(value === '' ? null : (value as EffortLevel))}
+        >
+          <option value="">Claude Code&rsquo;s default</option>
+          {EFFORT_LEVELS.map((level) => (
+            <option key={level} value={level}>
+              {level}
+            </option>
+          ))}
+        </Select>
+      </Row>
     </Group>
   )
+}
+
+/**
+ * The model names offered, plus whatever is already set.
+ *
+ * The shortlist is the CLI's aliases rather than full model ids, because those
+ * are what a person types and they outlive any one release. The setting itself
+ * is not validated against this list (see `SETTING_VALIDATORS.prReviewModel`) -
+ * so a full id written into the database by hand is honoured, and appears here
+ * so the picker can show it.
+ */
+function reviewModels(current: string | null): string[] {
+  const known = ['opus', 'sonnet', 'haiku', 'fable']
+  return current === null || known.includes(current) ? known : [...known, current]
 }
 
 /**

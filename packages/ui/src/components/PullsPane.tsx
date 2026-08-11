@@ -1,26 +1,31 @@
-import type { JSX } from 'react'
-import { Fragment, useEffect, useState } from 'react'
-import type { PullRepo, PullsSnapshot, PullSummary } from '@helm/core/types'
+import type { JSX, ReactNode } from 'react'
+import { useEffect, useState } from 'react'
+import type { PullChecks, PullRepo, PullsSnapshot, PullSummary } from '@helm/core/types'
 import { Chip, type ChipTone } from './Chip'
 import { cn } from '../lib/cn'
 import { formatAge, formatMoment } from '../lib/time'
-import { PullRequestIcon, RefreshIcon } from './icons'
+import { CheckIcon, PullRequestIcon, RefreshIcon, WarnIcon } from './icons'
 
 /**
  * Every open pull request across the repositories Helm scans.
  *
- * The shape is `SessionHistory`'s - island header, bounded list, sticky caps
- * headers over grouped rows - because it answers the same kind of question and a
- * second list idiom would be a second thing to learn.
+ * Grouped by **state of play** rather than by repository, which is the whole
+ * shape of this pane. A developer with a dozen checkouts has open pull requests
+ * in one or two of them; a list with a heading per repository spends most of its
+ * height printing the names of repositories with nothing in them, and the two
+ * rows that matter arrive below the fold. So the pull requests come first, each
+ * carrying the repository it belongs to as a pill, and the repositories with
+ * nothing open are named at the bottom as chips - present, checked, and taking
+ * one line instead of eleven.
  *
- * What is different is the honesty. This list is a mirror of something on a
- * server, so it is **always** old, and the header says how old in the same
- * breath as it says how many: a count with no age is a claim about right now
- * that nothing here can make. When a fetch fails the rows stay and the reason
- * goes beside the repository that failed - a captioned stale list is worth more
- * than an empty one, which is the opposite of the call the usage figures make
- * and for the opposite reason (a stale percentage is wrong; a stale pull request
- * merely happened a while ago).
+ * What is different from every other list in Helm is the honesty. This one is a
+ * mirror of something on a server, so it is **always** old, and the header says
+ * how old in the same breath as it says how many: a count with no age is a claim
+ * about right now that nothing here can make. When a fetch fails the rows stay
+ * and the repository that failed is named with its reason - a captioned stale
+ * list is worth more than an empty one, which is the opposite of the call the
+ * usage figures make and for the opposite reason (a stale percentage is wrong; a
+ * stale pull request merely happened a while ago).
  *
  * There is no detail beside the list and therefore no `PaneBack`: a pull request
  * opens in its own workspace tab rather than in a panel here.
@@ -65,8 +70,10 @@ function useNow(everyMs = 30_000): number {
 
 const DECISION: Record<string, { label: string; tone: ChipTone }> = {
   APPROVED: { label: 'approved', tone: 'success' },
-  CHANGES_REQUESTED: { label: 'changes requested', tone: 'danger' },
-  REVIEW_REQUIRED: { label: 'review required', tone: 'neutral' }
+  CHANGES_REQUESTED: { label: 'changes requested', tone: 'danger' }
+  // REVIEW_REQUIRED is deliberately absent. It is the state nearly every open
+  // pull request is in, so a chip for it is a chip on every row saying nothing;
+  // the detail header has the room to spell it out and does.
 }
 
 /** "fetched 4m ago", or the sentence for a list nothing has ever filled. */
@@ -101,6 +108,12 @@ export function pullsSummaryLine(snapshot: PullsSnapshot | null): string {
   return `${String(snapshot.open)} open · ${String(repos)} ${repos === 1 ? 'repo' : 'repos'}`
 }
 
+/** One row's worth: the pull request, and which repository it came from. */
+interface OpenPull {
+  repo: PullRepo
+  pull: PullSummary
+}
+
 export function PullsPane({
   snapshot,
   onRefresh,
@@ -112,6 +125,19 @@ export function PullsPane({
   const now = useNow()
   const repos = snapshot?.repos ?? []
   const problem = snapshot?.gh.problem ?? null
+
+  // Three buckets, and the middle one is why they are three rather than two: a
+  // repository that could not be fetched is *not* a repository with nothing
+  // open, and filing it under "quiet" would report a failure as good news.
+  const open: OpenPull[] = repos.flatMap((repo) => repo.pulls.map((pull) => ({ repo, pull })))
+  const failed = repos.filter((repo) => repo.error !== null)
+  const quiet = repos.filter((repo) => repo.error === null && repo.pulls.length === 0)
+
+  // Most recently touched first, across every repository at once - which is the
+  // ordering the flattening exists for. `repos` arrives busiest-first and each
+  // repo's pulls are already sorted, but neither of those orders one repo's
+  // pull requests against another's.
+  open.sort((a, b) => (b.pull.updatedAt ?? 0) - (a.pull.updatedAt ?? 0))
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
@@ -171,60 +197,87 @@ export function PullsPane({
         <div
           role="group"
           aria-label="Open pull requests"
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2"
         >
           {repos.length === 0 ? (
             <Empty snapshot={snapshot} />
           ) : (
-            repos.map((repo) => (
-              <Fragment key={repo.path}>
-                <button
-                  type="button"
-                  data-pulls-repo={repo.slug ?? ''}
-                  onClick={() => onRefresh(repo.path)}
-                  title={`Check ${repo.slug ?? repo.name} for pull requests now - ${repo.path}`}
-                  className={cn(
-                    'sticky top-0 z-10 mt-3 flex w-full items-baseline gap-2 bg-surface px-2 py-1',
-                    'text-left text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase',
-                    'first:mt-0 hover:text-fg'
-                  )}
-                >
-                  <span className="min-w-0 truncate">{repo.name}</span>
-                  {!compact && repo.slug !== null && (
-                    <span className="min-w-0 truncate font-mono text-[10px] tracking-normal normal-case">
-                      {repo.slug}
-                    </span>
-                  )}
-                  <span className="flex-1" />
-                  <span className="tabular-nums">{repo.pulls.length}</span>
-                </button>
+            <>
+              {failed.length > 0 && (
+                <Section label="Could not fetch" count={failed.length}>
+                  <div className="mt-1 flex flex-col gap-1">
+                    {failed.map((repo) => (
+                      <button
+                        key={repo.path}
+                        type="button"
+                        data-pulls-repo-error={repo.slug ?? ''}
+                        onClick={() => onRefresh(repo.path)}
+                        title={`Try ${repo.slug ?? repo.name} again - ${repo.path}`}
+                        className="flex w-full items-baseline gap-2 rounded-well px-2 py-1 text-left transition-colors hover:bg-hover"
+                      >
+                        <WarnIcon width={11} height={11} className="shrink-0 text-danger" />
+                        <span className="shrink-0 text-[11.5px] text-fg">{repo.name}</span>
+                        <span className="min-w-0 flex-1 truncate text-[10.5px] text-danger">
+                          {repo.error}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </Section>
+              )}
 
-                {repo.error !== null && (
-                  <p
-                    data-pulls-repo-error={repo.slug ?? ''}
-                    className="mx-2 mb-1 truncate text-[10.5px] text-danger"
-                    title={repo.error}
-                  >
-                    {repo.error}
+              <Section label="Open" count={open.length}>
+                {open.length === 0 ? (
+                  <p className="px-2 py-1.5 text-[11.5px] text-fg-subtle">
+                    Nothing open in {repos.length === 1 ? 'this repository' : 'any of them'}.
                   </p>
-                )}
-
-                {repo.pulls.length === 0 ? (
-                  <p className="px-3 py-1.5 text-[11.5px] text-fg-subtle">Nothing open.</p>
                 ) : (
-                  repo.pulls.map((pull) => (
-                    <Row
-                      key={`${repo.path}#${String(pull.number)}`}
-                      repo={repo}
-                      pull={pull}
-                      now={now}
-                      compact={compact}
-                      {...(onOpenPull ? { onOpen: onOpenPull } : {})}
-                    />
-                  ))
+                  <div className="mt-0.5">
+                    {open.map(({ repo, pull }) => (
+                      <Row
+                        key={`${repo.path}#${String(pull.number)}`}
+                        repo={repo}
+                        pull={pull}
+                        now={now}
+                        compact={compact}
+                        {...(onOpenPull ? { onOpen: onOpenPull } : {})}
+                      />
+                    ))}
+                  </div>
                 )}
-              </Fragment>
-            ))
+              </Section>
+
+              {quiet.length > 0 && (
+                <Section
+                  label="Quiet repos"
+                  count={quiet.length}
+                  caption="Checked, nothing open."
+                >
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {quiet.map((repo) => (
+                      <button
+                        key={repo.path}
+                        type="button"
+                        data-pulls-repo={repo.slug ?? ''}
+                        onClick={() => onRefresh(repo.path)}
+                        title={`Check ${repo.slug ?? repo.name} for pull requests now - ${repo.path}`}
+                        className={cn(
+                          'flex max-w-full items-baseline gap-1.5 rounded-well border border-border px-2 py-1',
+                          'text-[11.5px] text-fg-muted transition-colors hover:border-border-strong hover:bg-hover hover:text-fg'
+                        )}
+                      >
+                        <span className="min-w-0 truncate">{repo.name}</span>
+                        {!compact && repo.slug !== null && (
+                          <span className="min-w-0 truncate font-mono text-[10px] text-fg-subtle">
+                            {repo.slug}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </Section>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -233,11 +286,47 @@ export function PullsPane({
 }
 
 /**
- * One pull request. Two lines: what it is, then the machine data under it.
+ * A named division of the list: the caps label, a count, and an optional
+ * sentence that says what the section means.
  *
- * Everything on the second line is mono because everything on it is machine
- * data - a branch pair and a diff size are not prose (DESIGN.md par. 2). The
- * author is not, so it is not.
+ * The count sits in the label rather than pinned right, because these sections
+ * are read as headings of a page rather than as rows of a table - and a number
+ * at the far end of an empty 1200px line belongs to nothing.
+ */
+function Section({
+  label,
+  count,
+  caption,
+  children
+}: {
+  label: string
+  count: number
+  caption?: string
+  children: ReactNode
+}): JSX.Element {
+  return (
+    <section className="mb-3 last:mb-0">
+      <h2 className="flex items-baseline gap-2 px-2">
+        <span className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
+          {label}
+        </span>
+        <span className="text-[10px] tabular-nums text-fg-subtle/70">{count}</span>
+        {caption !== undefined && (
+          <span className="min-w-0 truncate text-[11px] text-fg-subtle">{caption}</span>
+        )}
+      </h2>
+      {children}
+    </section>
+  )
+}
+
+/**
+ * One pull request. Two lines: what it is, then where it is and how it is doing.
+ *
+ * Everything on the second line that is machine data is mono - a branch pair, a
+ * check tally (DESIGN.md 2). The repository and the author are names, so they
+ * are not, and the repository is a pill rather than a plain word because it is
+ * the one fact on the row that is *about* the row rather than in it.
  */
 function Row({
   repo,
@@ -273,10 +362,21 @@ function Row({
       )}
     >
       <span className="flex w-full items-baseline gap-2">
+        {/* The state, as a 5px mark rather than a word: on this list every row
+            is open or draft, so the *word* would be the same on all of them and
+            the distinction is the only thing worth a glyph. */}
+        <span
+          aria-hidden
+          data-pull-state={pull.isDraft ? 'draft' : 'open'}
+          className={cn(
+            'size-[5px] shrink-0 translate-y-[-1px] rounded-full',
+            pull.isDraft ? 'bg-fg-subtle/60' : 'bg-success'
+          )}
+        />
         <span className="shrink-0 font-mono text-[11px] tabular-nums text-fg-subtle">
           #{pull.number}
         </span>
-        <span className="min-w-0 flex-1 truncate text-[12px] text-fg">{pull.title}</span>
+        <span className="min-w-0 flex-1 truncate text-[12.5px] text-fg">{pull.title}</span>
         {pull.isDraft && (
           <Chip dense tone="neutral">
             draft
@@ -287,24 +387,73 @@ function Row({
             {compact && decision.label === 'changes requested' ? 'changes' : decision.label}
           </Chip>
         )}
-      </span>
-
-      <span className="flex w-full items-baseline gap-1.5 text-[10px] text-fg-subtle">
-        <span className="min-w-0 max-w-[40%] truncate">{author}</span>
-        {pull.authorIsBot && <span className="shrink-0 opacity-70">bot</span>}
-        {age !== null && <span className="shrink-0 tabular-nums">{age}</span>}
-        {!compact && (
-          <span className="min-w-0 truncate font-mono">
-            {pull.headRefName}&#8594;{pull.baseRefName}
-          </span>
-        )}
-        <span className="flex-1" />
-        <span className="shrink-0 font-mono tabular-nums text-success">+{pull.additions}</span>
-        <span className="shrink-0 font-mono tabular-nums text-danger">
+        <span className="shrink-0 font-mono text-[11px] tabular-nums text-success">
+          +{pull.additions}
+        </span>
+        <span className="shrink-0 font-mono text-[11px] tabular-nums text-danger">
           &#8722;{pull.deletions}
         </span>
       </span>
+
+      {/* Indented past the state mark, so the two lines read as one block and
+          the repository pill starts under the number rather than under the dot. */}
+      <span className="flex w-full items-baseline gap-1.5 pl-[13px] text-[10.5px] text-fg-subtle">
+        <span
+          data-pull-repo={repo.slug ?? ''}
+          title={repo.slug ?? repo.path}
+          className="max-w-[30%] shrink-0 truncate rounded-full border border-border-strong px-1.5 py-px leading-[14px] text-fg-muted"
+        >
+          {repo.name}
+        </span>
+        <span className="min-w-0 max-w-[30%] truncate">{author}</span>
+        {pull.authorIsBot && <span className="shrink-0 opacity-70">bot</span>}
+        {age !== null && (
+          <>
+            <span aria-hidden className="shrink-0 text-fg-subtle/50">
+              ·
+            </span>
+            <span className="shrink-0 tabular-nums">{age}</span>
+          </>
+        )}
+        {!compact && (
+          <span className="ml-1 min-w-0 truncate font-mono">
+            {pull.headRefName} &#8594; {pull.baseRefName}
+          </span>
+        )}
+        <span className="flex-1" />
+        {pull.checks !== null && pull.checks.total > 0 && <Checks checks={pull.checks} />}
+      </span>
     </button>
+  )
+}
+
+/**
+ * The check tally, as a tick and a fraction.
+ *
+ * The fraction and not a word, because the useful question on a list is "how
+ * many of them" - and it is the same reduction the detail header paints, out of
+ * the same three numbers, so a row and the tab it opens cannot disagree.
+ */
+function Checks({ checks }: { checks: PullChecks }): JSX.Element {
+  const failing = checks.failing > 0
+  const pending = !failing && checks.pending > 0
+  const passed = checks.total - checks.failing - checks.pending
+  return (
+    <span
+      data-pull-checks={`${String(checks.total)}/${String(checks.failing)}/${String(checks.pending)}`}
+      title={`${String(checks.total)} checks, ${String(checks.failing)} failing, ${String(checks.pending)} pending`}
+      className={cn(
+        'flex shrink-0 items-center gap-1 font-mono tabular-nums',
+        failing ? 'text-danger' : pending ? 'text-warn' : 'text-success'
+      )}
+    >
+      {failing ? <WarnIcon width={10} height={10} /> : <CheckIcon width={10} height={10} />}
+      {failing
+        ? `${String(checks.failing)}/${String(checks.total)}`
+        : pending
+          ? `${String(checks.pending)}/${String(checks.total)}`
+          : `${String(passed)}/${String(checks.total)}`}
+    </span>
   )
 }
 
@@ -322,11 +471,7 @@ function Empty({ snapshot }: { snapshot: PullsSnapshot | null }): JSX.Element {
   if (snapshot.gh.problem !== null) {
     // The sentence is already above the list; repeating it here would say the
     // same thing twice on one screen.
-    return (
-      <p className="px-3 py-6 text-center text-[12px] text-fg-subtle">
-        Nothing has been fetched.
-      </p>
-    )
+    return <p className="px-3 py-6 text-center text-[12px] text-fg-subtle">Nothing has been fetched.</p>
   }
   return (
     <div className="px-6 py-8 text-center">

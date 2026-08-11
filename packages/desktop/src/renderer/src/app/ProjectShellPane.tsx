@@ -109,7 +109,22 @@ export function ProjectShellPane({
         {/* `appearance-none` plus the app's own caret, the same shape every
             other picker in Helm takes (DESIGN.md par. 4): the platform arrow is
             a chunky white chevron that reads as a control from a different
-            program, which is precisely wrong on a foreign-ground island. */}
+            program, which is precisely wrong on a foreign-ground island.
+
+            The fill is not decoration and must not go back to `bg-transparent`.
+            A `<select>`'s dropped-open list is an OS window rather than part of
+            the page, and Chromium paints it from the control's own
+            `background-color`: a transparent one leaves the platform's white
+            listbox, which is what this pane shipped with - `color-scheme: dark`
+            is inherited correctly here and does not override it. The text
+            colour *was* being applied, so the options were `#75798c` on white
+            and near unreadable.
+
+            Hard-coded to the dark ramp's sunken value rather than
+            `bg-surface-sunken`, for the same reason the executable beside it is
+            `#9397ab`: this island's ground is fixed in both themes, so a themed
+            token here would drop a light control onto a dark pane in light mode
+            (DESIGN.md par. 6, the foreign-ground hex exception). */}
         <span className="relative shrink-0">
           <select
             data-shell-picker
@@ -119,7 +134,7 @@ export function ProjectShellPane({
             value={override}
             onChange={(e) => swap(e.target.value)}
             className={cn(
-              'h-[22px] appearance-none rounded-[5px] border border-border bg-transparent',
+              'h-[22px] appearance-none rounded-[5px] border border-border bg-[#0d0e17]',
               'pr-5 pl-1.5 text-[11px] text-fg-subtle transition-colors',
               'hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none',
               'disabled:cursor-default disabled:opacity-50'

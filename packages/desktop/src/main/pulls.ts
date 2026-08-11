@@ -4,8 +4,11 @@ import {
   checkoutPull,
   fetchOpenPulls,
   fetchPullDetail,
+  fetchPullDiff,
   forgetPrRepos,
+  indexDiffByPath,
   parseGitHubRemote,
+  parseUnifiedDiff,
   pullConversation,
   readGhAuth,
   readGhVersion,
@@ -19,6 +22,7 @@ import {
   replaceRepoPulls,
   upsertPrRepo,
   writePullDetail,
+  MAX_DIFF_BYTES,
   type AppSettings,
   type GhCommand,
   type GhProblem,
@@ -27,6 +31,8 @@ import {
   type PrRepoRow,
   type PullDetail,
   type PullDetailView,
+  type PullFileView,
+  type PullPatch,
   type PullRepo,
   type PullsSnapshot,
   type PullSummary,
@@ -215,7 +221,10 @@ function signature(snapshot: PullsSnapshot): string {
         pull.isDraft,
         pull.reviewDecision,
         pull.additions,
-        pull.deletions
+        pull.deletions,
+        // A run going green moves nothing else on the row, so without this the
+        // list would keep painting the tally from the pass before it.
+        pull.checks
       ])
     ])
   ])
@@ -497,25 +506,50 @@ export function createPullsService({
     }
 
     let held: PullDetail | null = cached.detail
+    let patch: PullPatch | null = cached.diff
+    /** Why there is no patch, when the fetch is the reason. */
+    let patchProblem: string | null = null
     let fetchedAt = cached.detailFetchedAt
     let fromCache = true
 
     if (held === null || request.refresh === true) {
       const command = await ghForDetail()
-      let fetched: PullDetail
-      try {
-        fetched = await fetchPullDetail(command, slug, request.number)
-      } catch (err) {
+
+      // Both at once. They are one act to whoever opened the tab, they are
+      // independent calls to gh, and running them in series would make the
+      // conversation wait on a patch it does not need - or the other way round.
+      const [detailAttempt, diffAttempt] = await Promise.allSettled([
+        fetchPullDetail(command, slug, request.number),
+        fetchPullDiff(command, slug, request.number)
+      ])
+
+      if (detailAttempt.status === 'rejected') {
         // Re-asked for the same reason the list pass re-asks: a fetch that
         // failed is usually a token that expired, and "run gh auth login" is a
         // better sentence than whatever the API said.
         const rechecked = await ensureGh(true)
+        const err: unknown = detailAttempt.reason
         const said = err instanceof Error ? err.message : String(err)
         throw new Error(rechecked.problem?.message ?? said, { cause: err })
       }
+
+      // A patch that would not fetch is **not** fatal and is not survivable
+      // either: the conversation, the commits and the file list are all still
+      // worth the tab, so the view is built without hunks and says why. What it
+      // must not do is keep the patch it had - that one describes the file list
+      // from the last fetch, and this one has a new file list.
+      patch = diffAttempt.status === 'fulfilled' ? diffAttempt.value : null
+      if (diffAttempt.status === 'rejected') {
+        const err: unknown = diffAttempt.reason
+        patchProblem = err instanceof Error ? err.message : String(err)
+      }
+
       const at = new Date().toISOString()
-      writePullDetail(store, slug, request.number, fetched, at)
-      held = fetched
+      writePullDetail(store, slug, request.number, detailAttempt.value, {
+        diff: patch,
+        detailFetchedAt: at
+      })
+      held = detailAttempt.value
       fetchedAt = at
       fromCache = false
     }
@@ -531,9 +565,61 @@ export function createPullsService({
       detail: held,
       bodyHtml: await render(held.body),
       conversation,
+      ...filesOf(held, patch, patchProblem),
       fetchedAtMs: msOf(fetchedAt),
       cached: fromCache
     }
+  }
+
+  /**
+   * GitHub's file list, with the patch laid over it.
+   *
+   * The list is the spine and the patch is what hangs off it, never the other
+   * way round: `pr view --json files` is the same fetch the header's file count
+   * and diff size come from, so a Files view built from the patch instead would
+   * disagree with the header on exactly the pull requests whose patch was capped.
+   * A file the patch does not describe still gets its row, its counts and its
+   * badge - it simply has nothing to expand.
+   */
+  function filesOf(
+    detail: PullDetail,
+    patch: PullPatch | null,
+    problem: string | null
+  ): Pick<PullDetailView, 'files' | 'diffNote'> {
+    const parsed = patch === null ? null : parseUnifiedDiff(patch.text, { truncated: patch.truncated })
+    const byPath = parsed === null ? null : indexDiffByPath(parsed)
+
+    const files: PullFileView[] = detail.files.map((file) => {
+      const found = byPath?.get(file.path) ?? null
+      return {
+        ...file,
+        status: found?.status ?? 'modified',
+        oldPath: found?.oldPath ?? null,
+        hunks: found?.hunks ?? [],
+        binary: found?.binary ?? false,
+        droppedLines: found?.droppedLines ?? 0
+      }
+    })
+
+    return { files, diffNote: diffNote(patch, parsed?.truncated ?? false, problem, files) }
+  }
+
+  function diffNote(
+    patch: PullPatch | null,
+    truncated: boolean,
+    problem: string | null,
+    files: PullFileView[]
+  ): string | null {
+    if (problem !== null) return `The patch could not be fetched - ${problem}`
+    if (patch === null) {
+      // Not an error: a pull request cached by a Helm that never fetched
+      // patches, opened again before anything refreshed it.
+      return files.length === 0 ? null : 'No patch has been fetched for this pull request yet.'
+    }
+    if (truncated) {
+      return `The patch is larger than the ${String(Math.round(MAX_DIFF_BYTES / (1024 * 1024)))}MB Helm fetches, so the files below it are listed without one.`
+    }
+    return null
   }
 
   // ---------------------------------------------------------------------
@@ -630,7 +716,18 @@ export function createPullsService({
       slug
     })
 
-    return { repoPath: row.path, slug, number: cached.summary.number, prompt, checkedOut, warnings }
+    return {
+      repoPath: row.path,
+      slug,
+      number: cached.summary.number,
+      prompt,
+      // Read here with everything else the launch is composed from, so the
+      // window cannot send a model any more than it can send a prompt.
+      model: settled.prReviewModel,
+      effort: settled.prReviewEffort,
+      checkedOut,
+      warnings
+    }
   }
 
   // ---------------------------------------------------------------------

@@ -58,5 +58,11 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "CREATE TABLE `pr_repos` (\n\t`path` text PRIMARY KEY NOT NULL,\n\t`url` text,\n\t`slug` text,\n\t`checked_at` text,\n\t`fetched_at` text,\n\t`error` text\n);",
       "CREATE TABLE `pull_requests` (\n\t`slug` text NOT NULL,\n\t`number` integer NOT NULL,\n\t`summary` text NOT NULL,\n\t`detail` text,\n\t`fetched_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL,\n\t`detail_fetched_at` text,\n\tPRIMARY KEY(`slug`, `number`)\n);"
     ]
+  },
+  {
+    "tag": "0006_perfect_pestilence",
+    "statements": [
+      "ALTER TABLE `pull_requests` ADD `diff` text;"
+    ]
   }
 ]

@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm'
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
-import type { PullDetail, PullSummary } from '../github/types'
+import type { PullDetail, PullPatch, PullSummary } from '../github/types'
 
 /**
  * `profiles` and `config_snapshots` are not read by any surface yet - they exist
@@ -292,6 +292,18 @@ export const pullRequests = sqliteTable(
     summary: text('summary', { mode: 'json' }).$type<PullSummary>().notNull(),
     /** JSON `PullDetail`, or null until the pull request has been opened. */
     detail: text('detail', { mode: 'json' }).$type<PullDetail>(),
+    /**
+     * JSON `PullPatch`: `gh pr diff`, capped at `MAX_DIFF_BYTES`.
+     *
+     * The patch and not the parse, which is the call the rendered markdown makes
+     * and for the same reason: what git said is a fact that keeps, and a column
+     * of parsed hunks would be this month's shape of `PullDiffLine` frozen into
+     * a database that outlives it. Null means no patch has been fetched - a pull
+     * request cached before Helm fetched patches at all, or one whose `pr diff`
+     * failed - and is a different fact from an empty `text`, which is a pull
+     * request that genuinely changed nothing.
+     */
+    diff: text('diff', { mode: 'json' }).$type<PullPatch>(),
     fetchedAt: text('fetched_at').notNull().default(now),
     detailFetchedAt: text('detail_fetched_at')
   },

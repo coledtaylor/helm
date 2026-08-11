@@ -24,6 +24,7 @@
 //     behaviour.json   what to do this time; re-read per invocation
 //     list/<owner>__<name>.json          `gh pr list --json ...` output
 //     view/<owner>__<name>__<n>.json     `gh pr view <n> --json ...` output
+//     diff/<owner>__<name>__<n>.patch    `gh pr diff <n>` output
 //     invocations.jsonl                  every call: argv, cwd, exit code
 
 import { spawnSync } from 'node:child_process'
@@ -113,6 +114,19 @@ if (args[0] === 'pr' && args[1] === 'view') {
   if (how.view === 'error') fail(how.viewError ?? 'HTTP 503: the fixture is unwell')
 
   const file = slugFile('view', slug, `__${number}`)
+  if (!existsSync(file)) fail(`no pull requests found for ${slug}#${number}`)
+  out(readFileSync(file, 'utf8'))
+}
+
+if (args[0] === 'pr' && args[1] === 'diff') {
+  const slug = flag('--repo')
+  const number = args[2] ?? ''
+  if (how.diff === 'error') fail(how.diffError ?? 'HTTP 503: the fixture is unwell')
+
+  // A `.patch` and not a `.json`: what gh prints here is the text git wrote,
+  // and a fixture that stored it as anything else would be proving the parser
+  // against a shape the real command never emits.
+  const file = join(home, 'diff', `${slug.replace('/', '__')}__${number}.patch`)
   if (!existsSync(file)) fail(`no pull requests found for ${slug}#${number}`)
   out(readFileSync(file, 'utf8'))
 }
