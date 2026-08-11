@@ -664,6 +664,10 @@ export async function runSettingsChecks(
          ghLocate: Boolean(document.querySelector('[data-settings-gh-locate]')),
          ghClear: Boolean(document.querySelector('[data-settings-clear-gh]')),
          prPoll: Boolean(document.querySelector('[data-settings-pr-poll]')),
+         // The block, not the count beside it: the count is only there when a
+         // github.com repository has been found, and this check runs on
+         // whatever machine it runs on.
+         prRepos: Boolean(document.querySelector('[data-settings-pr-repos]')),
          prPrompt: Boolean(document.querySelector('[data-settings-pr-prompt]')),
          prPromptReset: Boolean(document.querySelector('[data-settings-pr-prompt-reset]')),
          prCheckout: Boolean(document.querySelector('[data-settings-pr-checkout]'))
@@ -1279,6 +1283,15 @@ export async function runSettingsChecks(
         good: 15,
         bad: 1,
         why: 'a one-minute sweep is one gh per remote against the user’s own rate limit'
+      },
+      {
+        key: 'prIgnoredRepos',
+        good: ['acme/widget'],
+        // Two spellings of one repository. The matcher is case-insensitive, so
+        // this would behave as one entry while presenting as two rows - a tick
+        // that cannot be cleared because clearing one leaves the other.
+        bad: ['acme/widget', 'ACME/Widget'],
+        why: 'one repository under two spellings is a checkbox that will not stay unticked'
       },
       {
         key: 'prReviewPrompt',
@@ -2437,6 +2450,11 @@ export async function runSettingsChecks(
     // pointed at a working program, not at a stub that refuses to sign in.
     ...(whereIs('gh.exe')[0] !== undefined ? { ghPath: whereIs('gh.exe')[0] } : {}),
     prPollMinutes: 30,
+    // A repository nobody has, on purpose. The setting is a list rather than a
+    // scalar and JSON round-tripping an array through one `app_settings` row is
+    // the half of it worth restarting for; naming a repository that exists
+    // would also stop this run fetching it.
+    prIgnoredRepos: ['helm-parked/never-fetched'],
     // Both off their defaults, like everything else here. The template is one
     // no default could produce and the checkout mode is the non-default half of
     // a two-value enum, which is the strongest either can be parked on.

@@ -152,6 +152,22 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
     schedule the user sets. README, [docs/PACKAGING.md](docs/PACKAGING.md), the
     `update:check` comment in `shared/ipc.ts` and SPEC 5 all say the same
     sentence; if that posture moves again, all four move together.
+  - `prIgnoredRepos` is applied **before the fetch**, in `pass()`, and not as a
+    filter over the snapshot. The point of the setting is the `gh` that never
+    runs; a version of it that hid rows from an answer already paid for would
+    look identical on screen and be the opposite of what it is for. Three
+    consequences hold it together: it is keyed by **slug**, so one entry covers
+    every checkout and survives a re-clone, and matching is case-insensitive
+    because GitHub's names are (`isRepoIgnored`); an ignored repository is
+    **structurally absent** from `PullsSnapshot.repos` and present in
+    `ignored`, so no count can include one by forgetting a filter; and its
+    cached rows are **left in the database**, so ticking it back on paints what
+    it had with its age on it rather than an empty list. The pane says what it
+    is hiding - an "Ignored" section, and the empty state and the sidebar line
+    both distinguish "everything is ignored" from "nothing here is on GitHub",
+    which would otherwise report a setting as a fact about the user's disk. The
+    tick is in Settings with the other settings; the pane carries only the
+    untick's undo.
   - The Files view paints the patch, which SPEC records as a **superseded**
     decision rather than a quiet reversal: "no diff viewer" is struck through
     and the note under it says what is still not done (syntax highlighting,

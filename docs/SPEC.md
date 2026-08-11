@@ -402,8 +402,9 @@ advance would be wrong about all three.
   open pull request across every repository comes first, most recently touched
   first, each row carrying the repository it belongs to as a pill; then the
   repositories that could not be fetched, with their reasons; then the ones with
-  nothing open, as chips ("Checked, nothing open."). A row is a state mark, `#42`
-  and a title with `+a −d` pinned right, then the repository, author, age,
+  nothing open, as chips ("Checked, nothing open."); then the ones being
+  ignored, as dashed chips that tick themselves back on. A row is a state mark,
+  `#42` and a title with `+a −d` pinned right, then the repository, author, age,
   `head → base` and the check tally underneath. Grouping by repository instead
   spends most of the pane printing the names of repositories with nothing in
   them, and puts the two rows that matter below the fold. No buttons on a row
@@ -433,6 +434,26 @@ repository that failed, and the age caption is **mandatory rather than
 decorative**: `PullsSnapshot.fetchedAtMs` exists so that no surface can paint
 the list without saying how old it is. No `gh` at all gets a sentence naming
 where to get one; an unauthenticated one gets `gh auth login`.
+
+**A repository can be ignored, and ignoring it is not a filter.**
+`prIgnoredRepos` is a list of `owner/name` slugs, and it is applied *before* the
+fetch: an ignored repository is a `gh` process that never starts, not a row
+dropped from an answer already paid for. A denylist rather than an allowlist,
+because appearing here is what discovery already means - a fresh clone shows up
+without being enrolled, and going quiet takes a deliberate act. Keyed by slug
+rather than by directory for the same reason the fetch is: one call covers every
+checkout of a repository, and a slug survives being re-cloned somewhere else.
+Matching is case-insensitive, because GitHub's names are.
+
+Two things follow from the honesty rule above. The pane **names what it is not
+showing** - an "Ignored" section beside "Quiet repos", because a repository
+nobody looked at is not a repository with nothing open, and a list that silently
+dropped one would read as a complete list. And the cached rows are **kept**:
+they are true facts about the last time anybody looked, so ticking a repository
+back on paints what it had with its age on it rather than an empty list, which
+is stale-with-age applied to the user's own setting. The tick itself lives in
+Settings → GitHub with the other settings; the pane carries only the untick's
+undo, standing beside the thing it undoes.
 
 **The review launch composes its prompt in main**, never in the window.
 `pr:review` carries `{repoPath, number, cols, rows}` and nothing else - the
@@ -481,7 +502,7 @@ session is a feature that belongs somewhere else.
 > read. Null and `{total: 0}` are different facts and only one of them is safe
 > to show as a green tick.
 >
-> `pnpm pr-check` is the regression test: 13 checks in five phases, four of them
+> `pnpm pr-check` is the regression test: 16 checks in five phases, four of them
 > against a `gh` the repository wrote and one against the real one.
 
 > [!note] The Files view shows the patch (2026-08-11)

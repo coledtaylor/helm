@@ -389,6 +389,29 @@ export interface GhStatus {
   problem: GhProblem | null
 }
 
+/**
+ * A repository the ignore list is keeping off the surface.
+ *
+ * Keyed by **slug** rather than by path, like the setting itself, so one entry
+ * covers every checkout of the same repository - and the fetch, which is one
+ * `gh` per distinct slug, is skipped once rather than per directory.
+ */
+export interface IgnoredRepo {
+  /** `owner/name`, as `prIgnoredRepos` holds it. */
+  slug: string
+  /** A discovered checkout's folder name, or the slug's own half when none. */
+  name: string
+  /**
+   * Whether a scanned project actually maps to this slug right now.
+   *
+   * The pane lists only the present ones - an ignored slug with no checkout on
+   * this machine is hiding nothing, so naming it there would be noise. Settings
+   * lists all of them, because an entry nothing maps to still has to be
+   * removable.
+   */
+  present: boolean
+}
+
 /** One discovered project, and the pull requests its origin remote has. */
 export interface PullRepo {
   /** The project directory. The identity of a row, as everywhere else. */
@@ -418,8 +441,18 @@ export interface PullRepo {
  * on the snapshot precisely so no surface can paint the list without it.
  */
 export interface PullsSnapshot {
-  /** Repos with a github.com origin. Repos without one are counted, not listed. */
+  /**
+   * Repos with a github.com origin. Repos without one are counted, not listed,
+   * and ignored ones are in `ignored` rather than here.
+   *
+   * Structurally absent rather than flagged, deliberately: `open`,
+   * `fetchedAtMs` and every count a surface derives are computed off this
+   * array, so an ignored repository carried here behind a boolean would be one
+   * forgotten filter away from being counted in a total it is not shown in.
+   */
   repos: PullRepo[]
+  /** What `prIgnoredRepos` is keeping off `repos`, so a pane can say so. */
+  ignored: IgnoredRepo[]
   /** Open pull requests across every repo. */
   open: number
   /** Discovered projects considered, whether or not they turned out to be GitHub. */
@@ -446,6 +479,63 @@ export interface PullsSnapshot {
  * range rather than a magic small number inside it.
  */
 export const PR_POLL_MINUTES = { min: 5, max: 1440, default: 5, off: 0 } as const
+
+/**
+ * How many repositories the ignore list may name.
+ *
+ * A ceiling on a setting that is written whole on every toggle rather than a
+ * statement about how many anybody has. It exists because the value is JSON in
+ * one row and an unbounded array there is an unbounded write.
+ */
+export const PR_IGNORED_REPOS_MAX = 500
+
+/**
+ * `owner/name`, the only shape the ignore list holds.
+ *
+ * Anchored and deliberately narrow: this is compared against
+ * `parseGitHubRemote`'s output, which is exactly two segments with no slashes,
+ * no whitespace and no trailing `.git` in either of them.
+ */
+const SLUG_PATTERN = /^[^/\s]+\/[^/\s]+$/
+
+export function isRepoSlug(value: string): boolean {
+  return SLUG_PATTERN.test(value)
+}
+
+/**
+ * Whether this repository's pull requests are being skipped.
+ *
+ * Case-insensitive, because GitHub's own names are: a remote written
+ * `github.com/Owner/Repo` and one written `github.com/owner/repo` are the same
+ * repository, and an ignore list that only matched the casing the user happened
+ * to click would come back on after somebody re-cloned. Null - a directory with
+ * no github.com origin - is never ignored: it is not on this surface anyway.
+ */
+export function isRepoIgnored(ignored: readonly string[], slug: string | null): boolean {
+  if (slug === null) return false
+  const wanted = slug.toLowerCase()
+  return ignored.some((entry) => entry.toLowerCase() === wanted)
+}
+
+/**
+ * The ignore list with one repository switched on or off.
+ *
+ * The whole list every time, because that is how the setting is written, and
+ * the matching is the case-insensitive one above - so toggling `Owner/Repo`
+ * when the list holds `owner/repo` removes the entry rather than adding a
+ * second spelling of it. Sorted, so two machines that ignored the same
+ * repositories in a different order hold the same value.
+ */
+export function withRepoIgnored(
+  ignored: readonly string[],
+  slug: string,
+  on: boolean
+): string[] {
+  const wanted = slug.toLowerCase()
+  const without = ignored.filter((entry) => entry.toLowerCase() !== wanted)
+  const next = on ? [...without, slug] : without
+  return next.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+}
 
 /**
  * What a review launch does to the working tree, if anything.

@@ -2,6 +2,7 @@ import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_SETTINGS,
+  withRepoIgnored,
   type HistorySession,
   type Profile,
   type ProfileDraft,
@@ -33,6 +34,7 @@ import {
   ProjectPane,
   PullRequestIcon,
   PullsPane,
+  pullRepoChoices,
   pullsSummaryLine,
   RepoIcon,
   SessionHistory,
@@ -242,6 +244,23 @@ export function App(): JSX.Element {
         if (path !== null) writeSettings({ ghPath: path })
       })
   }, [writeSettings])
+
+  /**
+   * Puts one repository back on the pull-request surface.
+   *
+   * The whole list is written, because that is the setting - and it is composed
+   * from `settings`, not from the snapshot, so a chip clicked while a fetch is
+   * in flight cannot write a list assembled from a half-built view. The ladder
+   * behind `settings:write` republishes the snapshot and starts a pass, so the
+   * repository comes back with whatever it had and then with what it has.
+   */
+  const unignoreRepo = useCallback(
+    (slug: string) => {
+      const held = settings?.prIgnoredRepos ?? DEFAULT_SETTINGS.prIgnoredRepos
+      writeSettings({ prIgnoredRepos: withRepoIgnored(held, slug, false) })
+    },
+    [settings, writeSettings]
+  )
 
   /** The profile being edited, `'new'` for one being created from scratch, or
    * a seeded draft from "save as profile". Null when the dialog is closed. */
@@ -1055,6 +1074,10 @@ export function App(): JSX.Element {
               refreshing={pullsState.refreshing}
               error={pullsState.error}
               onOpenPull={openPull}
+              // The reveal direction only. Ignoring is done in Settings, where
+              // the setting lives; this is the undo standing beside the thing
+              // it undoes.
+              onUnignoreRepo={unignoreRepo}
               compact={showSessions}
             />
           </div>
@@ -1264,6 +1287,15 @@ export function App(): JSX.Element {
               onClearGhOverride={() => writeSettings({ ghPath: null })}
               prPollMinutes={settings?.prPollMinutes ?? DEFAULT_SETTINGS.prPollMinutes}
               onPrPollMinutesChange={(prPollMinutes) => writeSettings({ prPollMinutes })}
+              // Built from the snapshot rather than from the setting, because
+              // the choices are the repositories discovery found - and it is
+              // the same snapshot the Pulls pane paints, so the two surfaces
+              // cannot disagree about which repositories exist.
+              prRepos={pullRepoChoices(
+                pullsState.snapshot?.repos ?? [],
+                pullsState.snapshot?.ignored ?? []
+              )}
+              onPrIgnoredReposChange={(prIgnoredRepos) => writeSettings({ prIgnoredRepos })}
               // The review launch's two settings live here rather than in the
               // Pulls pane's header: settings for Helm are in one place, and a
               // disclosure strip inside a pane is a second place for one to

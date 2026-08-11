@@ -7,6 +7,7 @@ import {
   fetchPullDiff,
   forgetPrRepos,
   indexDiffByPath,
+  isRepoIgnored,
   parseGitHubRemote,
   parseUnifiedDiff,
   pullConversation,
@@ -27,6 +28,7 @@ import {
   type GhCommand,
   type GhProblem,
   type GhStatus,
+  type IgnoredRepo,
   type LaunchedReviewPlan,
   type PrRepoRow,
   type PullDetail,
@@ -147,6 +149,16 @@ export interface PullsService {
    * rate-limited: returns false when it decided not to.
    */
   refreshOnFocus: () => boolean
+  /**
+   * Rebuilds the snapshot from the cache and pushes it if it moved.
+   *
+   * For a setting that changes what the snapshot *says* without changing
+   * anything GitHub knows - the ignore list is the only one so far. `refresh`
+   * would do this too, but only on the path where no pass is already in
+   * flight, so a toggle during a sweep would not reach the pane until the
+   * sweep ended.
+   */
+  republish: () => PullsSnapshot
   /** Re-reads the interval and the gh override out of settings. */
   rearm: () => void
   start: () => void
@@ -209,6 +221,10 @@ function signature(snapshot: PullsSnapshot): string {
     snapshot.open,
     snapshot.checked,
     snapshot.fetchedAtMs,
+    // Ignoring a repository that had nothing open moves no other field in here
+    // - the same reason `pull.checks` is in the row tuple below - so without
+    // this the pane would keep painting the list from before the toggle.
+    snapshot.ignored.map((repo) => [repo.slug, repo.name, repo.present]),
     snapshot.repos.map((repo) => [
       repo.path,
       repo.slug,
@@ -378,8 +394,16 @@ export function createPullsService({
 
     // One fetch per distinct remote, not per directory: two checkouts of the
     // same repository are two rows in the pane and one call to GitHub.
+    //
+    // The ignore list is applied *here*, before any of it, which is the whole
+    // point of the setting: an ignored repository is a `gh` process that never
+    // starts, not a row filtered out of an answer already paid for. It is
+    // checked even when `only` names one repository - a manual refresh of an
+    // ignored repository is a refresh of something the pane is not showing.
+    const ignoredRepos = settings().prIgnoredRepos
     const wanted = readPrRepos(store).filter((row) => {
       if (row.slug === null) return false
+      if (isRepoIgnored(ignoredRepos, row.slug)) return false
       return only === null || row.path.toLowerCase() === only.toLowerCase()
     })
     const bySlug = new Map<string, string[]>()
@@ -738,6 +762,10 @@ export function createPullsService({
     const rows = new Map(readPrRepos(store).map((row) => [row.path.toLowerCase(), row]))
     const pullsBySlug = readPullsBySlug(store)
     const known = projects()
+    const ignoredRepos = settings().prIgnoredRepos
+
+    /** Ignored slugs a scanned project maps to, and the folder to call them. */
+    const ignoredPresent = new Map<string, string>()
 
     const repos: PullRepo[] = []
     for (const project of known) {
@@ -746,6 +774,15 @@ export function createPullsService({
       // counted - `checked` is what lets the pane say "nothing here is on
       // GitHub" rather than showing an empty list with no explanation.
       if (row === undefined || row.slug === null) continue
+      if (isRepoIgnored(ignoredRepos, row.slug)) {
+        // First checkout wins the name. Two directories for one slug are one
+        // entry, because the setting is one entry - and a list that named the
+        // same repository twice would offer two ticks for one fact.
+        if (!ignoredPresent.has(row.slug.toLowerCase())) {
+          ignoredPresent.set(row.slug.toLowerCase(), project.name)
+        }
+        continue
+      }
       repos.push({
         path: project.path,
         name: project.name,
@@ -776,8 +813,25 @@ export function createPullsService({
       .map((repo) => repo.fetchedAtMs)
       .filter((at): at is number => at !== null)
 
+    // Every entry of the setting, not only the ones a project maps to: a slug
+    // whose checkout has been deleted or renamed still occupies the list and
+    // still has to be removable, and a settings row that vanished with the
+    // directory would leave a repository ignored for ever with nothing on
+    // screen saying so.
+    const ignored: IgnoredRepo[] = ignoredRepos
+      .map((slug) => {
+        const name = ignoredPresent.get(slug.toLowerCase())
+        return {
+          slug,
+          name: name ?? (slug.split('/')[1] ?? slug),
+          present: name !== undefined
+        }
+      })
+      .sort((a, b) => a.slug.toLowerCase().localeCompare(b.slug.toLowerCase()))
+
     return {
       repos,
+      ignored,
       open: distinct.size,
       checked: known.length,
       gh: ghStatus ?? {
@@ -855,6 +909,7 @@ export function createPullsService({
   return {
     snapshot: () => build(),
     refresh,
+    republish: publish,
     detail,
     prepareReview,
 

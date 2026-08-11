@@ -3,7 +3,9 @@ import { sql } from 'drizzle-orm'
 import {
   DEFAULT_SETTINGS,
   EFFORT_LEVELS,
+  isRepoSlug,
   PR_CHECKOUT_MODES,
+  PR_IGNORED_REPOS_MAX,
   PR_POLL_MINUTES,
   PR_REVIEW_PROMPT_MAX_LENGTH,
   TERMINAL_CURSOR_STYLES,
@@ -312,6 +314,38 @@ export const SETTING_VALIDATORS: SettingValidators = {
     }
     if (value.length > PR_REVIEW_PROMPT_MAX_LENGTH) {
       return `expected at most ${String(PR_REVIEW_PROMPT_MAX_LENGTH)} characters, got ${String(value.length)}`
+    }
+    return null
+  },
+
+  /**
+   * A set of `owner/name` slugs, and validated as a *set*.
+   *
+   * The duplicate check is case-insensitive and it is the interesting half. The
+   * matcher this list is read through is case-insensitive too, so
+   * `["Owner/Repo", "owner/repo"]` would behave as one entry while presenting
+   * as two - a settings row that could not be un-ticked because removing one
+   * spelling leaves the other. Refusing the write is what keeps the list and
+   * its meaning the same length.
+   */
+  prIgnoredRepos: (value) => {
+    if (!Array.isArray(value)) {
+      return `expected an array of owner/name slugs, got ${describe(value)}`
+    }
+    if (value.length > PR_IGNORED_REPOS_MAX) {
+      return `expected at most ${String(PR_IGNORED_REPOS_MAX)} repositories, got ${String(value.length)}`
+    }
+    const seen = new Set<string>()
+    for (const entry of value) {
+      if (typeof entry !== 'string' || entry.trim() === '') {
+        return `expected an owner/name slug, got ${describe(entry)}`
+      }
+      if (!isRepoSlug(entry)) {
+        return `expected an owner/name slug, got ${JSON.stringify(entry)}`
+      }
+      const key = entry.toLowerCase()
+      if (seen.has(key)) return `expected each repository once, got ${JSON.stringify(entry)} twice`
+      seen.add(key)
     }
     return null
   },

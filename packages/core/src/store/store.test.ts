@@ -128,6 +128,7 @@ describe('settings', () => {
       terminalShell: join(dir, 'pwsh.exe'),
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 15,
+      prIgnoredRepos: ['acme/noisy', 'other/quiet'],
       prReviewPrompt: 'review {slug}#{number} on {branch}',
       prCheckout: 'checkout',
       prReviewModel: 'opus',
@@ -322,6 +323,30 @@ describe('settings validation', () => {
       bad: [1, 4, 1441, -5, 5.5, '5', null, Number.NaN]
     },
     {
+      key: 'prIgnoredRepos',
+      // A set of `owner/name`. The duplicate cases are the interesting ones:
+      // the matcher is case-insensitive, so two spellings of one repository
+      // would present as two rows that cannot be unticked independently.
+      good: [[], ['acme/widget'], ['acme/widget', 'Acme/Other'], ['a.b/c-d_e']],
+      bad: [
+        ['acme/widget', 'ACME/Widget'],
+        ['acme/widget', 'acme/widget'],
+        ['acme'],
+        ['acme/widget/extra'],
+        ['/widget'],
+        ['acme/'],
+        ['acme widget/x'],
+        [' acme/widget'],
+        ['https://github.com/acme/widget'],
+        [''],
+        [42],
+        [null],
+        'acme/widget',
+        null,
+        {}
+      ]
+    },
+    {
       key: 'prReviewPrompt',
       // A placeholder this build does not know is deliberately valid: it
       // survives into the prompt exactly as written, which is what makes a
@@ -431,6 +456,7 @@ describe('settings validation', () => {
       terminalShell: join(dir, 'cmd.exe'),
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 0,
+      prIgnoredRepos: ['acme/noisy'],
       prReviewPrompt: '/code-review {number}',
       prCheckout: 'none',
       prReviewModel: 'sonnet',
@@ -459,6 +485,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   terminalShell: join(dir, 'cmd.exe'),
   ghPath: join(dir, 'gh.exe'),
   prPollMinutes: 0,
+  prIgnoredRepos: ['acme/noisy'],
   prReviewPrompt: '/code-review {number}',
   prCheckout: 'none',
   prReviewModel: 'sonnet',

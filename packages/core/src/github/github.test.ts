@@ -12,6 +12,7 @@ import {
 import { renderPullPrompt, DEFAULT_PR_REVIEW_PROMPT, PR_PROMPT_PLACEHOLDERS } from './prompt'
 import { parseGitHubRemote } from './remote'
 import { indexDiffByPath, parseUnifiedDiff } from './diff'
+import { isRepoIgnored, isRepoSlug, withRepoIgnored } from './types'
 
 describe('parseGitHubRemote', () => {
   const accepted: Array<{ remote: string; why: string }> = [
@@ -915,5 +916,74 @@ describe('parseUnifiedDiff', () => {
   it('carries the truncation flag it was handed', () => {
     expect(parseUnifiedDiff('', { truncated: true }).truncated).toBe(true)
     expect(parseUnifiedDiff('').files).toEqual([])
+  })
+})
+
+describe('the ignore list', () => {
+  describe('isRepoSlug', () => {
+    it('takes exactly two non-empty segments', () => {
+      expect(isRepoSlug('acme/widget')).toBe(true)
+      expect(isRepoSlug('a.b-c_d/E1')).toBe(true)
+    })
+
+    it('refuses anything a parsed remote would never produce', () => {
+      for (const value of [
+        'acme',
+        'acme/',
+        '/widget',
+        'acme/widget/extra',
+        'github.com/acme/widget',
+        'https://github.com/acme/widget',
+        'acme widget/x',
+        ' acme/widget',
+        'acme/widget ',
+        ''
+      ]) {
+        expect(isRepoSlug(value)).toBe(false)
+      }
+    })
+  })
+
+  describe('isRepoIgnored', () => {
+    it('matches whatever casing the remote was written in', () => {
+      // The case that makes this worth a function: GitHub's own names are
+      // case-insensitive, so a remote cloned as `Acme/Widget` and one cloned as
+      // `acme/widget` are one repository - and an ignore list that only matched
+      // the spelling the user happened to click would come back on after a
+      // re-clone.
+      expect(isRepoIgnored(['acme/widget'], 'Acme/Widget')).toBe(true)
+      expect(isRepoIgnored(['Acme/Widget'], 'acme/widget')).toBe(true)
+    })
+
+    it('does not match a different repository or a directory with no origin', () => {
+      expect(isRepoIgnored(['acme/widget'], 'acme/widget-two')).toBe(false)
+      expect(isRepoIgnored(['acme/widget'], 'other/widget')).toBe(false)
+      expect(isRepoIgnored([], 'acme/widget')).toBe(false)
+      expect(isRepoIgnored(['acme/widget'], null)).toBe(false)
+    })
+  })
+
+  describe('withRepoIgnored', () => {
+    it('adds and removes, sorted, so the value does not depend on click order', () => {
+      expect(withRepoIgnored([], 'b/two', true)).toEqual(['b/two'])
+      expect(withRepoIgnored(['b/two'], 'a/one', true)).toEqual(['a/one', 'b/two'])
+      expect(withRepoIgnored(['a/one', 'b/two'], 'a/one', false)).toEqual(['b/two'])
+    })
+
+    it('never leaves a second spelling of the same repository behind', () => {
+      // Untick a row the list holds under another casing and the entry has to
+      // go, or the box springs back on the next snapshot with nothing on screen
+      // explaining why.
+      expect(withRepoIgnored(['Acme/Widget'], 'acme/widget', false)).toEqual([])
+      // And ticking one already held replaces it rather than adding a twin -
+      // two entries for one repository is a value the validator refuses.
+      expect(withRepoIgnored(['Acme/Widget'], 'acme/widget', true)).toEqual(['acme/widget'])
+    })
+
+    it('leaves the list it was given alone', () => {
+      const held = ['a/one']
+      expect(withRepoIgnored(held, 'b/two', true)).toEqual(['a/one', 'b/two'])
+      expect(held).toEqual(['a/one'])
+    })
   })
 })

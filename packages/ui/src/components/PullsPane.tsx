@@ -18,6 +18,15 @@ import { CheckIcon, PullRequestIcon, RefreshIcon, WarnIcon } from './icons'
  * nothing open are named at the bottom as chips - present, checked, and taking
  * one line instead of eleven.
  *
+ * Below those sit the repositories being ignored, as dashed chips. They are
+ * there because the setting that hides them is not allowed to hide *itself*: a
+ * pane that quietly showed eight repositories out of eleven would read as a
+ * complete list, and the difference between "nothing is open" and "nobody
+ * looked" is the whole of what this surface reports. Clicking one ticks it back
+ * on. Only that direction - ignoring is a setting and lives in Settings with the
+ * rest of them, and what belongs here is the undo, standing beside the thing it
+ * undoes.
+ *
  * What is different from every other list in Helm is the honesty. This one is a
  * mirror of something on a server, so it is **always** old, and the header says
  * how old in the same breath as it says how many: a count with no age is a claim
@@ -44,6 +53,15 @@ export interface PullsPaneProps {
   error?: string | null | undefined
   /** Opens the pull request. Absent leaves the rows inert rather than lying. */
   onOpenPull?: ((repo: PullRepo, pull: PullSummary) => void) | undefined
+  /**
+   * Takes one repository back off the ignore list.
+   *
+   * Only this direction. Ignoring is a setting and lives in Settings → GitHub
+   * with the rest of them; what belongs here is the *reveal*, because this is
+   * the surface where the consequence of the setting is visible and a pane that
+   * can only hide things is a pane you have to leave to undo them.
+   */
+  onUnignoreRepo?: ((slug: string) => void) | undefined
   /**
    * Docked beside a session split. The list is the whole pane either way; this
    * only drops the columns there is no longer room for.
@@ -103,7 +121,14 @@ export function pullsSummaryLine(snapshot: PullsSnapshot | null): string {
     default:
       break
   }
-  if (snapshot.repos.length === 0) return 'No github.com repositories'
+  if (snapshot.repos.length === 0) {
+    // The same distinction the pane's empty state draws, in four words: an
+    // ignore list emptying this rail is not the machine having no GitHub
+    // repositories on it.
+    return snapshot.ignored.some((repo) => repo.present)
+      ? 'All repositories ignored'
+      : 'No github.com repositories'
+  }
   const repos = snapshot.repos.length
   return `${String(snapshot.open)} open · ${String(repos)} ${repos === 1 ? 'repo' : 'repos'}`
 }
@@ -120,11 +145,18 @@ export function PullsPane({
   refreshing,
   error = null,
   onOpenPull,
+  onUnignoreRepo,
   compact = false
 }: PullsPaneProps): JSX.Element {
   const now = useNow()
   const repos = snapshot?.repos ?? []
   const problem = snapshot?.gh.problem ?? null
+
+  // Only the ones a scanned project maps to. An ignored slug with no checkout
+  // on this machine is hiding nothing from this list, so naming it here would
+  // be a line about a repository the user cannot see either way; the settings
+  // list carries those, because that is where they get removed.
+  const ignored = (snapshot?.ignored ?? []).filter((repo) => repo.present)
 
   // Three buckets, and the middle one is why they are three rather than two: a
   // repository that could not be fetched is *not* a repository with nothing
@@ -200,7 +232,7 @@ export function PullsPane({
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2"
         >
           {repos.length === 0 ? (
-            <Empty snapshot={snapshot} />
+            <Empty snapshot={snapshot} ignored={ignored.length} />
           ) : (
             <>
               {failed.length > 0 && (
@@ -278,6 +310,49 @@ export function PullsPane({
                 </Section>
               )}
             </>
+          )}
+
+          {/* Outside the ternary above, deliberately: a machine where every
+              github.com repository is ignored has an empty `repos` and still
+              has to show what it is ignoring - otherwise the pane explains its
+              own emptiness with a list of the reasons for it missing. */}
+          {ignored.length > 0 && (
+            <Section
+              label="Ignored"
+              count={ignored.length}
+              caption={
+                onUnignoreRepo === undefined
+                  ? 'Not fetched.'
+                  : 'Not fetched. Click one to start again.'
+              }
+            >
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {ignored.map((repo) => (
+                  <button
+                    key={repo.slug}
+                    type="button"
+                    data-pulls-ignored={repo.slug}
+                    disabled={onUnignoreRepo === undefined}
+                    onClick={() => onUnignoreRepo?.(repo.slug)}
+                    title={`Fetch pull requests from ${repo.slug} again`}
+                    className={cn(
+                      'flex max-w-full items-baseline gap-1.5 rounded-well border border-dashed border-border-strong px-2 py-1',
+                      'text-[11.5px] text-fg-subtle transition-colors',
+                      onUnignoreRepo === undefined
+                        ? 'cursor-default'
+                        : 'hover:border-solid hover:bg-hover hover:text-fg'
+                    )}
+                  >
+                    <span className="min-w-0 truncate">{repo.name}</span>
+                    {!compact && (
+                      <span className="min-w-0 truncate font-mono text-[10px] text-fg-subtle/70">
+                        {repo.slug}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </Section>
           )}
         </div>
       </div>
@@ -458,13 +533,23 @@ function Checks({ checks }: { checks: PullChecks }): JSX.Element {
 }
 
 /**
- * Why the list is empty, which is four different facts.
+ * Why the list is empty, which is five different facts.
  *
- * "No pull requests", "no GitHub repositories", "no gh" and "not signed in" are
- * not the same situation, and a single empty state would make the first three
- * look like the fourth.
+ * "No pull requests", "no GitHub repositories", "everything is ignored", "no
+ * gh" and "not signed in" are not the same situation, and a single empty state
+ * would make the first four look like the last. The ignored case is the one
+ * that would otherwise be an outright lie: a machine whose only github.com
+ * repository is ignored would be told none of its folders has a github.com
+ * origin, which is a fact about the user's own setting reported as a fact about
+ * their disk.
  */
-function Empty({ snapshot }: { snapshot: PullsSnapshot | null }): JSX.Element {
+function Empty({
+  snapshot,
+  ignored
+}: {
+  snapshot: PullsSnapshot | null
+  ignored: number
+}): JSX.Element {
   if (snapshot === null) {
     return <p className="px-3 py-6 text-center text-[12px] text-fg-subtle">Reading&hellip;</p>
   }
@@ -472,6 +557,17 @@ function Empty({ snapshot }: { snapshot: PullsSnapshot | null }): JSX.Element {
     // The sentence is already above the list; repeating it here would say the
     // same thing twice on one screen.
     return <p className="px-3 py-6 text-center text-[12px] text-fg-subtle">Nothing has been fetched.</p>
+  }
+  if (ignored > 0) {
+    // Short, and with no icon: the chips saying which ones are directly below
+    // this, so the remedy is already on screen and does not need spelling out.
+    return (
+      <p className="px-3 py-6 text-center text-[12px] text-fg-muted">
+        {ignored === 1
+          ? 'The only github.com repository Helm scans is ignored.'
+          : `All ${String(ignored)} github.com repositories Helm scans are ignored.`}
+      </p>
+    )
   }
   return (
     <div className="px-6 py-8 text-center">

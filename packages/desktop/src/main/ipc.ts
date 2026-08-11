@@ -182,6 +182,15 @@ export function registerIpc(ctx: IpcContext): void {
         void ctx.pulls.refresh()
       }
       if (patch.prPollMinutes !== undefined) ctx.pulls.rearm()
+      // The snapshot is built in main, so the pane cannot hide or reveal a
+      // repository on its own: `republish` repaints from the cache at once, and
+      // the fetch behind it is for whatever was just un-ignored - a repository
+      // Helm has been skipping has no rows, or has rows from before it was
+      // ignored, and either way the sweep is what makes it current.
+      if (patch.prIgnoredRepos !== undefined) {
+        ctx.pulls.republish()
+        void ctx.pulls.refresh()
+      }
       if (patch.theme !== undefined) {
         nativeTheme.themeSource = patch.theme
         applyTitleBarOverlay(ctx.window(), resolvedTheme())

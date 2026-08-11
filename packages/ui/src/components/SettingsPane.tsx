@@ -14,9 +14,12 @@ import {
   USAGE_DISPLAY_MODES,
   type AppSettings,
   type DetectedShell,
+  withRepoIgnored,
   type EffortLevel,
   type GhStatus,
+  type IgnoredRepo,
   type PrCheckoutMode,
+  type PullRepo,
   type TerminalCursorStyle,
   type ThemePreference,
   type UsageDisplayMode
@@ -107,6 +110,18 @@ export interface SettingsPaneProps {
   onClearGhOverride: () => void
   prPollMinutes: number
   onPrPollMinutesChange: (minutes: number) => void
+  /**
+   * Every github.com repository Helm knows of and whether each is ignored, out
+   * of the same snapshot the Pulls pane paints.
+   *
+   * Derived from the snapshot rather than from `prIgnoredRepos` alone, because
+   * a list of slugs is not a list of choices: the repositories that can be
+   * ignored are the ones discovery actually found, and they only exist in the
+   * snapshot.
+   */
+  prRepos: PrRepoChoice[]
+  /** Takes the whole list, because that is how the setting is written. */
+  onPrIgnoredReposChange: (slugs: string[]) => void
   /** The template a "Review with Claude" launch composes its prompt from. */
   prReviewPrompt: string
   onPrReviewPromptChange: (template: string) => void
@@ -117,6 +132,54 @@ export interface SettingsPaneProps {
   onPrReviewModelChange: (model: string | null) => void
   prReviewEffort: EffortLevel | null
   onPrReviewEffortChange: (effort: EffortLevel | null) => void
+}
+
+/** One tickable repository in the GitHub group's list. */
+export interface PrRepoChoice {
+  /** `owner/name`. The identity, and what the setting stores. */
+  slug: string
+  /** A folder name to read it by, since a slug is not what anybody calls it. */
+  name: string
+  ignored: boolean
+  /** Whether a scanned project maps to it. False ones are still removable. */
+  present: boolean
+}
+
+/**
+ * The snapshot's two repository lists, merged into one set of choices.
+ *
+ * Deduplicated **by slug**, because that is the granularity of the setting: two
+ * checkouts of one repository are two rows in the Pulls pane and one tick here,
+ * and offering two ticks for one value would let a user untick a box and watch
+ * the other one stay ticked.
+ *
+ * `snapshot.ignored` carries entries no project maps to - a repository that has
+ * been deleted or moved since it was ignored - and they are kept rather than
+ * filtered, because an entry that vanished from this list would be a repository
+ * ignored for ever with no way left to say otherwise.
+ */
+export function pullRepoChoices(
+  repos: readonly PullRepo[],
+  ignored: readonly IgnoredRepo[]
+): PrRepoChoice[] {
+  const choices = new Map<string, PrRepoChoice>()
+  for (const repo of repos) {
+    if (repo.slug === null) continue
+    const key = repo.slug.toLowerCase()
+    if (choices.has(key)) continue
+    choices.set(key, { slug: repo.slug, name: repo.name, ignored: false, present: true })
+  }
+  for (const repo of ignored) {
+    choices.set(repo.slug.toLowerCase(), {
+      slug: repo.slug,
+      name: repo.name,
+      ignored: true,
+      present: repo.present
+    })
+  }
+  return [...choices.values()].sort((a, b) =>
+    a.slug.toLowerCase().localeCompare(b.slug.toLowerCase())
+  )
 }
 
 /** The six the Terminal group owns, named once so nothing has to list them twice. */
@@ -165,6 +228,8 @@ export function SettingsPane({
   onClearGhOverride,
   prPollMinutes,
   onPrPollMinutesChange,
+  prRepos,
+  onPrIgnoredReposChange,
   prReviewPrompt,
   onPrReviewPromptChange,
   prCheckout,
@@ -385,6 +450,8 @@ export function SettingsPane({
           onClearOverride={onClearGhOverride}
           pollMinutes={prPollMinutes}
           onPollMinutesChange={onPrPollMinutesChange}
+          repos={prRepos}
+          onIgnoredChange={onPrIgnoredReposChange}
           reviewPrompt={prReviewPrompt}
           onReviewPromptChange={onPrReviewPromptChange}
           checkout={prCheckout}
@@ -440,6 +507,8 @@ function GitHubGroup({
   onClearOverride,
   pollMinutes,
   onPollMinutesChange,
+  repos,
+  onIgnoredChange,
   reviewPrompt,
   onReviewPromptChange,
   checkout,
@@ -454,6 +523,8 @@ function GitHubGroup({
   onClearOverride: () => void
   pollMinutes: number
   onPollMinutesChange: (minutes: number) => void
+  repos: PrRepoChoice[]
+  onIgnoredChange: (slugs: string[]) => void
   reviewPrompt: string
   onReviewPromptChange: (template: string) => void
   checkout: PrCheckoutMode
@@ -539,6 +610,10 @@ function GitHubGroup({
           ))}
         </Select>
       </Row>
+
+      <Divider />
+
+      <RepositoriesRow repos={repos} onChange={onIgnoredChange} />
 
       <Divider />
 
@@ -638,6 +713,117 @@ function GitHubGroup({
 function reviewModels(current: string | null): string[] {
   const known = ['opus', 'sonnet', 'haiku', 'fable']
   return current === null || known.includes(current) ? known : [...known, current]
+}
+
+/**
+ * Which repositories the pull-request surface pays attention to.
+ *
+ * A tick per repository rather than a text field of slugs, because the useful
+ * question is "which of the ones I have" and the answer is a set the app
+ * already knows. Ticked is fetched: the list reads as what Helm is doing rather
+ * than as what it is not, so the default state of everything is on and nobody
+ * has to enrol a repository they just cloned.
+ *
+ * The full-width list rather than a `Row`, for the same reason the scan roots
+ * are one: a control with an unbounded number of lines in it cannot sit in the
+ * right-hand column of a label-and-control row.
+ *
+ * Unticking here is the only place a repository can be ignored. The Pulls pane
+ * shows what is ignored and can tick one back on, which is disclosure and the
+ * undo of it; the setting itself lives with the other settings.
+ */
+/**
+ * The folder a repository is checked out into, when that is worth a word.
+ *
+ * Which is rarely: a clone is nearly always in a directory named after the
+ * repository, so printing it beside every slug would be the same string twice
+ * on most rows. Case is not a difference - `WidgetKit` cloned into `widgetkit`
+ * is the same name - so only a genuinely different folder gets named.
+ */
+function folderNote(repo: PrRepoChoice): string | null {
+  const name = repo.slug.split('/')[1] ?? ''
+  return repo.name.toLowerCase() === name.toLowerCase() ? null : repo.name
+}
+
+function RepositoriesRow({
+  repos,
+  onChange
+}: {
+  repos: PrRepoChoice[]
+  onChange: (slugs: string[]) => void
+}): JSX.Element {
+  const ignored = repos.filter((repo) => repo.ignored).map((repo) => repo.slug)
+  const fetched = repos.length - ignored.length
+
+  return (
+    <div data-settings-pr-repos={String(repos.length)} className="py-1.5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <p className="text-[12.5px] text-fg">Repositories</p>
+        {repos.length > 0 && (
+          <p data-settings-pr-repo-count className="text-[11px] tabular-nums text-fg-subtle">
+            {String(fetched)} of {String(repos.length)} fetched
+          </p>
+        )}
+      </div>
+      <p className="mt-0.5 text-[11px] leading-[1.5] text-fg-subtle">
+        Untick one and Helm stops checking it - no <code className="font-mono">gh</code> call, and
+        no rows in the Pulls pane, which names it at the bottom so nothing goes missing quietly.
+        Whatever it already fetched is kept for when you tick it back on.
+      </p>
+
+      {repos.length === 0 ? (
+        <p className="mt-2 text-[12px] text-fg-subtle">
+          Nothing with a github.com <code className="font-mono">origin</code> has been found yet.
+        </p>
+      ) : (
+        <ul className="mt-2.5 overflow-hidden rounded-well border border-border bg-surface-sunken">
+          {repos.map((repo) => (
+            <li
+              key={repo.slug}
+              data-settings-pr-repo={repo.slug}
+              data-settings-pr-repo-ignored={String(repo.ignored)}
+              className="flex items-center gap-2.5 border-b border-border px-3 py-1.5 last:border-b-0"
+            >
+              <Checkbox
+                checked={!repo.ignored}
+                onChange={() => onChange(withRepoIgnored(ignored, repo.slug, !repo.ignored))}
+                label={`Fetch pull requests from ${repo.slug}`}
+              />
+              {/* The slug leads, so the mono column has one left edge to read
+                  down. The folder name would put a ragged word in front of
+                  every one of them for a string that is usually the second
+                  half of the slug again. */}
+              <span
+                className={cn(
+                  'min-w-0 flex-1 truncate font-mono text-[11px]',
+                  repo.ignored ? 'text-fg-subtle' : 'text-fg-muted'
+                )}
+                title={repo.slug}
+              >
+                {repo.slug}
+              </span>
+              {folderNote(repo) !== null && (
+                <span
+                  className="min-w-0 max-w-[35%] shrink-0 truncate text-[11px] text-fg-subtle"
+                  title={`The folder Helm scans is called ${String(folderNote(repo))}`}
+                >
+                  {folderNote(repo)}
+                </span>
+              )}
+              {!repo.present && (
+                <span
+                  className="shrink-0 text-[10.5px] text-fg-subtle"
+                  title="Ignored, but no folder Helm scans has this origin any more. Tick it to forget the entry."
+                >
+                  not scanned
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
 }
 
 /**

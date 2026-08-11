@@ -36,6 +36,8 @@ export {
 } from './components/SetupPane'
 export {
   SettingsPane,
+  pullRepoChoices,
+  type PrRepoChoice,
   type SettingsPaneProps,
   type TerminalSettings
 } from './components/SettingsPane'

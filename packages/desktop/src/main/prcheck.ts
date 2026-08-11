@@ -365,6 +365,14 @@ interface Fixtures {
   beta: string
   /** A real git repository with a real `origin`, in a path with a space. */
   real: string
+  /**
+   * The two remotes `pointRemotes` stands in for, written once.
+   *
+   * `real` is deliberately not in here: it has an origin of its own and PR-3
+   * turns the hook off to make git answer for it. Anything that wants all three
+   * spreads this and adds it.
+   */
+  hookedRemotes: Record<string, string>
 }
 
 /** One pull request, as `gh pr list --json` prints it. */
@@ -725,7 +733,19 @@ function buildFixtures(dataDir: string): Fixtures {
   git(real, ['remote', 'add', 'origin', `https://github.com/${SLUG_REAL}.git`])
 
   const shim = writeShim(dir, home)
-  return { dir, home, shim, scanRoot, alpha, beta, real }
+  return {
+    dir,
+    home,
+    shim,
+    scanRoot,
+    alpha,
+    beta,
+    real,
+    hookedRemotes: {
+      [alpha]: `https://github.com/${SLUG_A}.git`,
+      [beta]: `git@github.com:${SLUG_B}.git`
+    }
+  }
 }
 
 /** What the fake gh should do next time. Re-read by it per invocation. */
@@ -916,10 +936,7 @@ export async function runPrChecks(
     pulls.pointPollMs(0)
     // Two of the three remotes come from the hook and the third does not - see
     // the F-4 check, which turns the hook off and makes git answer for itself.
-    pulls.pointRemotes({
-      [fixtures.alpha]: `https://github.com/${SLUG_A}.git`,
-      [fixtures.beta]: `git@github.com:${SLUG_B}.git`
-    })
+    pulls.pointRemotes(fixtures.hookedRemotes)
 
     if (run('fixture')) {
       checks.push(...(await fixtureChecks({ win, pulls, dbFile, fixtures, shotDir })))
@@ -928,8 +945,7 @@ export async function runPrChecks(
     // From here on every repository is mapped, the real one included, so a
     // whole-machine refresh keeps all three.
     pulls.pointRemotes({
-      [fixtures.alpha]: `https://github.com/${SLUG_A}.git`,
-      [fixtures.beta]: `git@github.com:${SLUG_B}.git`,
+      ...fixtures.hookedRemotes,
       [fixtures.real]: `https://github.com/${SLUG_REAL}.git`
     })
     await refreshNow(pulls)
@@ -1180,6 +1196,170 @@ async function fixtureChecks({
       'The parse is checked against this driver\'s own `parseGitHubRemote` of the same string',
       'as well as against the stored row, because a row that agrees with itself proves only',
       'that something was written.'
+    ]
+  })
+
+  // -----------------------------------------------------------------------
+  // PR-18: an ignored repository is a `gh` that never runs
+  // -----------------------------------------------------------------------
+  //
+  // The hook goes back on first: PR-3 turned it off to map a real remote, and
+  // everything below wants all three fixture repositories mapped again.
+  pulls.pointRemotes(fixtures.hookedRemotes)
+  await refreshNow(pulls)
+  await sleep(300)
+
+  const beforeIgnore = await dataValues(win, 'pull')
+  const cachedBefore = pullRowsFor(dbFile, SLUG_B)
+
+  // The setting written through the real channel, exactly as the checkbox in
+  // the settings pane writes it.
+  const ignoreWritten = await sendWrite(win, { prIgnoredRepos: [SLUG_B] })
+  // `settings:write` republishes and starts a pass of its own; joining it
+  // rather than racing it is what makes the invocation count below mean
+  // something.
+  await refreshNow(pulls)
+  await sleep(400)
+
+  // From here on, only calls made *after* the repository was ignored count.
+  forgetInvocations(fixtures.home)
+  await refreshNow(pulls)
+  await sleep(400)
+
+  const whileIgnored = {
+    rows: await dataValues(win, 'pull'),
+    chips: await dataValues(win, 'pulls-ignored'),
+    quiet: await dataValues(win, 'pulls-repo'),
+    calls: invocations(fixtures.home)
+      .filter((call) => call.argv[0] === 'pr' && call.argv[1] === 'list')
+      .map((call) => call.argv[call.argv.indexOf('--repo') + 1] ?? '')
+  }
+  // Still in the database, untouched. Ignoring is not deleting: the rows are
+  // true facts about the last time anybody looked, and throwing them away would
+  // make un-ignoring paint an empty list rather than a stale one with its age
+  // on it - the opposite of how the whole surface degrades.
+  const cachedWhileIgnored = pullRowsFor(dbFile, SLUG_B)
+  const ignoredShot = await screenshot(win, shotDir, 'pr-ignored-pane.png')
+
+  // The settings list in the same state, because that is where the tick lives
+  // and a pane that hides a repository is only half the surface. Read back as
+  // well as photographed: the row has to exist and has to be the unticked one.
+  await click(win, '[data-open-settings]')
+  await pollJs(win, `document.querySelector('[data-settings-pane]')`, 10_000)
+  await js(
+    win,
+    `(() => { const el = document.querySelector('[data-settings-pane]')
+       if (el) el.scrollTop = el.scrollHeight })()`
+  )
+  await sleep(500)
+  const settingsList = await js<{ rows: string[]; unticked: string[]; count: string }>(
+    win,
+    `(() => {
+       const rows = [...document.querySelectorAll('[data-settings-pr-repo]')]
+       return {
+         rows: rows.map((el) => el.getAttribute('data-settings-pr-repo') ?? ''),
+         unticked: rows
+           .filter((el) => el.getAttribute('data-settings-pr-repo-ignored') === 'true')
+           .map((el) => el.getAttribute('data-settings-pr-repo') ?? ''),
+         count: (document.querySelector('[data-settings-pr-repo-count]')?.textContent ?? '').trim()
+       } })()`
+  )
+  const settingsShot = await screenshot(win, shotDir, 'pr-ignored-settings.png')
+  await click(win, '[data-open-pulls]')
+  await pollJs(win, `document.querySelector('[data-pulls-caption]')`, 10_000)
+  await sleep(300)
+
+  // And back on, through the pane's own chip rather than through the settings
+  // channel - the reveal path is the one the user has in front of them when
+  // they notice a repository is missing.
+  forgetInvocations(fixtures.home)
+  const chipClicked = await click(win, `[data-pulls-ignored="${SLUG_B}"]`)
+  await refreshNow(pulls)
+  await sleep(600)
+
+  const afterUnignore = {
+    rows: await dataValues(win, 'pull'),
+    chips: await dataValues(win, 'pulls-ignored'),
+    setting: await js<string[]>(
+      win,
+      `window.helm.invoke('settings:read').then((s) => s.prIgnoredRepos)`
+    ),
+    calls: invocations(fixtures.home)
+      .filter((call) => call.argv[0] === 'pr' && call.argv[1] === 'list')
+      .map((call) => call.argv[call.argv.indexOf('--repo') + 1] ?? '')
+  }
+
+  const rowsOf = (values: string[], slug: string): string[] =>
+    values.filter((value) => value.startsWith(`${slug}#`))
+
+  checks.push({
+    id: 'PR-18',
+    criterion: 'An ignored repository is skipped before the fetch, said out loud, and reversible',
+    title: `${SLUG_B} left the pane, ran no gh, kept ${String(cachedWhileIgnored.length)} cached rows and came back`,
+    ok:
+      ignoreWritten.accepted &&
+      // It was there to begin with, or none of the rest is evidence of
+      // anything. The fixture-discriminates rule, applied to a disappearance.
+      rowsOf(beforeIgnore, SLUG_B).length > 0 &&
+      cachedBefore.length > 0 &&
+      // Gone from the list, and the repository that was not ignored stayed.
+      rowsOf(whileIgnored.rows, SLUG_B).length === 0 &&
+      rowsOf(whileIgnored.rows, SLUG_A).length > 0 &&
+      // Not filed under "quiet", which would report a repository nobody looked
+      // at as a repository with nothing open.
+      !whileIgnored.quiet.includes(SLUG_B) &&
+      whileIgnored.chips.includes(SLUG_B) &&
+      // The point of the setting: no `gh pr list` for it at all, while the
+      // other fixture repository still got one on the same pass.
+      !whileIgnored.calls.includes(SLUG_B) &&
+      whileIgnored.calls.includes(SLUG_A) &&
+      cachedWhileIgnored.length === cachedBefore.length &&
+      // The settings list still offers it, unticked - a repository that fell
+      // off the list Helm knows about would be one nobody can turn back on.
+      settingsList.rows.includes(SLUG_B) &&
+      settingsList.rows.includes(SLUG_A) &&
+      settingsList.unticked.length === 1 &&
+      settingsList.unticked[0] === SLUG_B &&
+      // Reversible from the pane, and the setting is what actually moved.
+      chipClicked &&
+      afterUnignore.setting.length === 0 &&
+      afterUnignore.chips.length === 0 &&
+      afterUnignore.calls.includes(SLUG_B) &&
+      rowsOf(afterUnignore.rows, SLUG_B).length === rowsOf(beforeIgnore, SLUG_B).length,
+    detail: {
+      ignored: SLUG_B,
+      writeAccepted: ignoreWritten.accepted,
+      writeError: ignoreWritten.error,
+      rowsBefore: rowsOf(beforeIgnore, SLUG_B),
+      rowsWhileIgnored: rowsOf(whileIgnored.rows, SLUG_B),
+      rowsAfterUnignore: rowsOf(afterUnignore.rows, SLUG_B),
+      otherRepoRowsWhileIgnored: rowsOf(whileIgnored.rows, SLUG_A).length,
+      chipsWhileIgnored: whileIgnored.chips,
+      quietWhileIgnored: whileIgnored.quiet,
+      listCallsWhileIgnored: whileIgnored.calls,
+      listCallsAfterUnignore: afterUnignore.calls,
+      cachedRowsBefore: cachedBefore.length,
+      cachedRowsWhileIgnored: cachedWhileIgnored.length,
+      settingAfterUnignore: afterUnignore.setting,
+      settingsRows: settingsList.rows,
+      settingsUnticked: settingsList.unticked,
+      settingsCount: settingsList.count,
+      screenshot: ignoredShot.file,
+      settingsScreenshot: settingsShot.file
+    },
+    notes: [
+      'The claim is not "the rows are filtered out" - it is that no request was made.',
+      'So the invocation log is cleared *after* the repository is ignored and a whole',
+      'fresh pass is run, and what is asserted is the absence of a `pr list --repo` for it',
+      'while the other fixture repository got one on the same pass. A filter over an',
+      'answer already paid for would pass a DOM assertion and fail this one.',
+      'The disappearance is checked against a state where the rows were present, for the',
+      'same reason PR-1 mutates its fixture: a pane that painted nothing at all would',
+      'satisfy "no rows for this slug" without the setting doing anything.',
+      'The un-ignore goes through the pane chip rather than through `settings:write`,',
+      'because that is the control a user has in front of them at the moment they notice',
+      'a repository is missing - and the setting is read back afterwards to prove the',
+      'chip wrote the setting rather than only repainting the list.'
     ]
   })
 
