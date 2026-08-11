@@ -238,6 +238,47 @@ export function SlidersIcon(props: IconProps): JSX.Element {
   )
 }
 
+/**
+ * Helm's own settings: a gear, which is the one glyph nobody has to learn.
+ *
+ * Not `SlidersIcon` - that belongs to the config console, which edits Claude's
+ * `.claude` trees, and the whole point of this pane is that the two are
+ * different things. Eight teeth drawn as a stroked ring with radial ticks
+ * rather than a filled cog: at 14px a cog outline turns to mush, and this sits
+ * at the same optical weight as its neighbours in the title bar.
+ */
+export function GearIcon(props: IconProps): JSX.Element {
+  const teeth = Array.from({ length: 6 }, (_, i) => {
+    const a = (i * 2 * Math.PI) / 6 + Math.PI / 6
+    return {
+      x1: 8 + 5.1 * Math.cos(a),
+      y1: 8 + 5.1 * Math.sin(a),
+      x2: 8 + 6.9 * Math.cos(a),
+      y2: 8 + 6.9 * Math.sin(a)
+    }
+  })
+  return (
+    <Icon {...props}>
+      {/* Six teeth rather than eight, a wide ring, and a filled hub rather than
+          a stroked one. At 14px on a 1x display the 1.5 stroke is a fixed
+          budget, so the only way to keep air inside the glyph is to spend it
+          further out: a small stroked circle closes to a blob, and eight teeth
+          on a tight ring read as the sun two buttons along. */}
+      <circle cx="8" cy="8" r="1.25" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="8" r="5.1" />
+      {teeth.map((t, i) => (
+        <line
+          key={i}
+          x1={t.x1.toFixed(2)}
+          y1={t.y1.toFixed(2)}
+          x2={t.x2.toFixed(2)}
+          y2={t.y2.toFixed(2)}
+        />
+      ))}
+    </Icon>
+  )
+}
+
 /** A plain document, for CLAUDE.md and anything else read as prose. */
 export function DocIcon(props: IconProps): JSX.Element {
   return (

@@ -14,6 +14,7 @@ import {
   ContentViewer,
   EffectiveViewPane,
   FolderIcon,
+  GearIcon,
   HarnessIcon,
   HealthPanel,
   HistoryIcon,
@@ -24,6 +25,7 @@ import {
   ProjectPane,
   RepoIcon,
   SessionHistory,
+  SettingsPane,
   SetupPane,
   Sidebar,
   SlidersIcon,
@@ -74,6 +76,7 @@ type PaneRef =
   | { kind: 'history' }
   | { kind: 'config' }
   | { kind: 'content' }
+  | { kind: 'settings' }
 
 /**
  * A link in a rendered note, handed to the OS browser.
@@ -88,11 +91,13 @@ const helmOpenExternal = (url: string): Promise<{ opened: boolean }> =>
 const HISTORY_TAB = 'history'
 const CONFIG_TAB = 'config'
 const CONTENT_TAB = 'content'
+const SETTINGS_TAB = 'settings'
 
 const tabId = (ref: PaneRef): string => {
   if (ref.kind === 'project') return `project:${ref.path}`
   if (ref.kind === 'config') return CONFIG_TAB
   if (ref.kind === 'content') return CONTENT_TAB
+  if (ref.kind === 'settings') return SETTINGS_TAB
   return HISTORY_TAB
 }
 
@@ -257,6 +262,15 @@ export function App(): JSX.Element {
    */
   const openConfig = useCallback(() => openPane({ kind: 'config' }), [openPane])
   const openContent = useCallback(() => openPane({ kind: 'content' }), [openPane])
+
+  /**
+   * Settings is a workspace pane like any other rather than a modal: it is a
+   * place, it is worth leaving open beside a session, and a dialog over the
+   * window would be one more thing to dismiss before looking at what a setting
+   * changed. Its entry point is in the title bar because what it configures is
+   * the app, not whatever project happens to be selected.
+   */
+  const openSettings = useCallback(() => openPane({ kind: 'settings' }), [openPane])
 
   /** A launched session lands in the session strip and takes the front. */
   const adoptIntoStrip = useCallback((id: number) => {
@@ -459,6 +473,17 @@ export function App(): JSX.Element {
           hint: contentState.selected?.path ?? 'Notes, docs, skills and artifacts',
           ...(contentState.scope ? { subtitle: contentState.scope.label } : {}),
           icon: <BookIcon width={13} height={13} />
+        }
+      ]
+    }
+
+    if (ref.kind === 'settings') {
+      return [
+        {
+          id: SETTINGS_TAB,
+          title: 'Settings',
+          hint: "Helm's own settings",
+          icon: <GearIcon width={13} height={13} />
         }
       ]
     }
@@ -674,7 +699,29 @@ export function App(): JSX.Element {
         )
       }
       titleActions={
-        <ThemeToggle value={settings?.theme ?? 'system'} onChange={launcher.setTheme} />
+        <>
+          <ThemeToggle value={settings?.theme ?? 'system'} onChange={launcher.setTheme} />
+          {/* Beside the toggle, because both are window-level: one is a setting
+              with a shortcut in the chrome, the other is where every setting
+              lives. A ghost button (DESIGN.md) - the segmented control next to
+              it already carries an outline, and two bordered controls in a 36px
+              strip read as a toolbar. */}
+          <button
+            type="button"
+            data-open-settings
+            onClick={openSettings}
+            aria-label="Settings"
+            title="Settings"
+            className={cn(
+              'grid size-7 shrink-0 place-items-center rounded-well transition-colors',
+              activePane?.kind === 'settings'
+                ? 'bg-hover text-fg'
+                : 'text-fg-subtle hover:bg-hover hover:text-fg'
+            )}
+          >
+            <GearIcon width={14} height={14} />
+          </button>
+        </>
       }
       statusBar={
         <StatusBar
@@ -914,6 +961,30 @@ export function App(): JSX.Element {
                 />
               )}
             </ContentViewer>
+          </div>
+        )}
+
+        {activePane?.kind === 'settings' && (
+          <div className="absolute inset-0">
+            <SettingsPane
+              status={setup.status}
+              checking={setup.checking}
+              onRecheck={setup.recheck}
+              onLocateClaude={setup.locateClaude}
+              onClearClaudeOverride={launcher.clearClaudePath}
+              roots={settings?.scanRoots ?? []}
+              projectCount={discovery?.projects.length ?? 0}
+              scanning={launcher.scanning}
+              onAddRoot={launcher.addRoot}
+              onRemoveRoot={launcher.removeRoot}
+              theme={settings?.theme ?? 'system'}
+              onThemeChange={launcher.setTheme}
+              usageDisplay={settings?.usageDisplay ?? 'percent'}
+              onUsageDisplayChange={launcher.setUsageDisplay}
+              // The same fact the status bar's cycle turns on, from the same
+              // snapshot, so the pane cannot offer a mode the segment skips.
+              hasCostEstimate={usage?.spend != null}
+            />
           </div>
         )}
 

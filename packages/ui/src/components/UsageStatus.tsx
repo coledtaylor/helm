@@ -3,8 +3,10 @@ import { useEffect, useState } from 'react'
 import {
   describeAge,
   nextUsageMode,
+  offerableUsageModes,
   priceTableAgeDays,
   usageView,
+  COST_MODE_UNAVAILABLE,
   PRICE_TABLE_FRESH_FOR_DAYS,
   type UsageBucket,
   type UsageDisplayMode,
@@ -218,9 +220,9 @@ export function UsageStatus({ snapshot, mode, onModeChange }: UsageStatusProps):
   const view = usageView(snapshot, now)
 
   // `cost` is only in the cycle once the index has produced an estimate.
-  // Offering a mode that would paint nothing is offering a broken setting.
-  const offerable: UsageDisplayMode[] =
-    snapshot?.spend != null ? ['percent', 'cost', 'off'] : ['percent', 'off']
+  // Offering a mode that would paint nothing is offering a broken setting -
+  // the same rule the settings pane's control follows, from the same function.
+  const offerable: UsageDisplayMode[] = offerableUsageModes(snapshot?.spend != null)
 
   const showing = mode === 'percent' ? view.buckets : []
   const spend = mode === 'cost' ? (snapshot?.spend ?? null) : null
@@ -287,7 +289,7 @@ function tooltip(
   if (mode === 'cost') {
     const spend = snapshot?.spend ?? null
     if (spend === null) {
-      lines.push('Reading the transcripts. The estimate appears when the index has caught up.')
+      lines.push(COST_MODE_UNAVAILABLE)
     } else {
       lines.push(
         'Estimated, not billed. This plan is not charged per token, so these are Helm’s own',
@@ -331,6 +333,8 @@ function tooltip(
   }
 
   if (snapshot !== null && snapshot.file !== '') lines.push(snapshot.file)
-  lines.push('Click to change what this shows.')
+  // Still the quick accessor it always was; it just is not the only way in any
+  // more, and a control that is also a setting should say where the setting is.
+  lines.push('Click to change what this shows, or set it in Settings > Appearance.')
   return lines.join('\n')
 }

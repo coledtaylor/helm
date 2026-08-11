@@ -30,8 +30,11 @@ export interface LauncherState {
   select: (project: Project | null) => void
   rescan: () => void
   addRoot: () => void
+  removeRoot: (path: string) => void
   setTheme: (theme: ThemePreference) => void
   setUsageDisplay: (mode: UsageDisplayMode) => void
+  /** Forgets a hand-picked `claude`, back to whatever discovery finds. */
+  clearClaudePath: () => void
   reveal: (path: string) => void
 }
 
@@ -150,6 +153,23 @@ export function useLauncher(): LauncherState {
     })
   }, [rescan])
 
+  /**
+   * The other half of `addRoot`, and the reason the channel exists: a root
+   * added by mistake, or a folder that has moved on, was until now a row in a
+   * table with no way out of it. A rescan follows for the same reason it
+   * follows an addition - the tree is a view of the roots, so it has to stop
+   * showing what is no longer scanned.
+   */
+  const removeRoot = useCallback(
+    (path: string) => {
+      void helm.invoke('roots:remove', { path }).then((roots) => {
+        setSettings((current) => (current ? { ...current, scanRoots: roots } : current))
+        rescan()
+      })
+    },
+    [rescan]
+  )
+
   const setTheme = useCallback((theme: ThemePreference) => {
     void helm.invoke('settings:write', { theme }).then(setSettings)
   }, [])
@@ -159,6 +179,16 @@ export function useLauncher(): LauncherState {
   // main process is the one that decides what the settings are.
   const setUsageDisplay = useCallback((usageDisplay: UsageDisplayMode) => {
     void helm.invoke('settings:write', { usageDisplay }).then(setSettings)
+  }, [])
+
+  /**
+   * Written through `settings:write` rather than through a channel of its own,
+   * because the main process's side-effect ladder is what hands the cleared
+   * path to the session host - a write that skipped it would leave sessions
+   * launching from the executable the user just forgot.
+   */
+  const clearClaudePath = useCallback(() => {
+    void helm.invoke('settings:write', { claudePath: null }).then(setSettings)
   }, [])
 
   const reveal = useCallback((path: string) => {
@@ -184,8 +214,10 @@ export function useLauncher(): LauncherState {
     select,
     rescan,
     addRoot,
+    removeRoot,
     setTheme,
     setUsageDisplay,
+    clearClaudePath,
     reveal
   }
 }
