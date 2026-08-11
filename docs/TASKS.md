@@ -1,6 +1,6 @@
 # Work Plan
 
-Tracked in ClickUp: list **Helm - Claude Code Shell** (`901114291892`), space "the author's workspace".
+Tracked in ClickUp: list **Helm - Claude Code Shell** (`901114291892`).
 Priority-ordered; work top-down. Full descriptions and acceptance criteria live on the tasks.
 
 | ClickUp | Task | Gate |

@@ -441,7 +441,7 @@ export async function runM4Checks(
   // -------------------------------------------------------------------------
   // M4-4: search, and what it costs
   // -------------------------------------------------------------------------
-  const TERMS = ['the', 'geofenc', 'resume', 'atlas', 'spec', 'test', 'fix', 'claude']
+  const TERMS = ['the', 'schema', 'resume', 'release', 'spec', 'test', 'fix', 'claude']
   const timings: Array<{ term: string; tookMs: number; total: number }> = []
   for (const term of TERMS) {
     for (let run = 0; run < 5; run++) {

@@ -10,7 +10,7 @@ const sample: ProfileDraft = {
   name: 'Acme cloud sync',
   root: harness,
   overlays: [join(harness, 'repos', 'acme'), join(harness, 'repos', 'acme-reporting')],
-  access: [join(harness, 'repos', 'acme'), join(harness, 'repos', 'atlas-mobile')],
+  access: [join(harness, 'repos', 'acme'), join(harness, 'repos', 'other-repo')],
   model: 'opus',
   effort: 'high',
   permissionMode: 'auto',

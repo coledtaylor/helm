@@ -1564,13 +1564,13 @@ async function searchChecks(ctx: M2Context, harnessPath: string): Promise<Check[
    * that is the slow case the budget has to cover.
    */
   const terms = [
-    'geofenc',
+    'schema',
     'snapshot',
     'the',
     'claude',
     'wikilink',
-    'accrual',
-    'atlas',
+    'migration',
+    'release',
     'session',
     'overlay',
     'harness',
@@ -1863,7 +1863,7 @@ async function editChecks(
       title: 'The write path refuses a path outside the scope, inside repos/, and with a non-content extension',
       ok: await (async () => {
         const refusals = [
-          join(harnessPath, 'repos', 'atlas', 'notes', 'x.md'),
+          join(harnessPath, 'repos', 'any-repo', 'notes', 'x.md'),
           join(harnessPath, 'notes', 'x.exe'),
           join(dataDir, 'outside-every-scope.md')
         ]
@@ -1966,10 +1966,16 @@ async function scrollChecks(
 
   const results: Array<Record<string, unknown>> = []
 
-  // ---- the note the criterion names --------------------------------------
+  // ---- the largest real note in the vault ---------------------------------
+  // Picked by size rather than by filename. A filename written down here is
+  // one machine's, and `if (named)` means the day that note is renamed this
+  // measurement silently stops happening - the check would keep passing with
+  // one fewer piece of evidence behind it. The largest note is always there
+  // and is the harder render besides.
   const named = content
     .tree(harnessPath, true)
-    .files.find((file) => file.relPath.toLowerCase().endsWith('2026-07-20-atlas-report-center-redesign.md'))
+    .files.filter((file) => file.relPath.toLowerCase().endsWith('.md'))
+    .sort((a, b) => b.size - a.size)[0]
 
   if (named) {
     await selectScope(win, harnessPath)
@@ -1979,7 +1985,7 @@ async function scrollChecks(
           .find((el) => el.dataset.contentFile === ${JSON.stringify(named.relPath)});
         if (!row) return false; row.click(); return true })()`
     )
-    results.push({ ...(await measure(named.path)), which: 'the note the criterion names', bytes: named.size })
+    results.push({ ...(await measure(named.path)), which: 'the largest note in the vault', bytes: named.size })
   }
 
   // ---- and one that is actually 20,000 words ------------------------------

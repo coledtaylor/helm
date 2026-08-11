@@ -10,7 +10,7 @@
       "detail": {
         "gatesDismissed": [],
         "bytes": 1314,
-        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d0-claude-start.png"
+        "screenshot": "%APPDATA%\\helm\\screenshots\\d0-claude-start.png"
       },
       "notes": [
         "Startup gates auto-answered: none."
@@ -31,7 +31,7 @@
           "fg:888888"
         ],
         "distinctPaletteValues": 0,
-        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d2-claude-color.png"
+        "screenshot": "%APPDATA%\\helm\\screenshots\\d2-claude-color.png"
       },
       "notes": [
         "Claude used 5 distinct 24-bit colours on the first screen, so COLORTERM=truecolor was honoured."
@@ -55,7 +55,7 @@
             ],
             "consistent": true,
             "withinGrid": true,
-            "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d1-claude-100.png"
+            "screenshot": "%APPDATA%\\helm\\screenshots\\d1-claude-100.png"
           },
           {
             "cols": 132,
@@ -68,7 +68,7 @@
             ],
             "consistent": true,
             "withinGrid": true,
-            "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d1-claude-132.png"
+            "screenshot": "%APPDATA%\\helm\\screenshots\\d1-claude-132.png"
           },
           {
             "cols": 72,
@@ -81,7 +81,7 @@
             ],
             "consistent": true,
             "withinGrid": true,
-            "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d1-claude-72.png"
+            "screenshot": "%APPDATA%\\helm\\screenshots\\d1-claude-72.png"
           },
           {
             "cols": 100,
@@ -94,7 +94,7 @@
             ],
             "consistent": true,
             "withinGrid": true,
-            "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d1-claude-100.png"
+            "screenshot": "%APPDATA%\\helm\\screenshots\\d1-claude-100.png"
           }
         ]
       },
@@ -147,7 +147,7 @@
             "insertsNewline": true
           }
         ],
-        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d7-newline-encoding.png"
+        "screenshot": "%APPDATA%\\helm\\screenshots\\d7-newline-encoding.png"
       },
       "notes": [
         "The composer accepts ESC CR (meta-enter) as an inline newline, so a host binding can make Shift+Enter work."
@@ -179,8 +179,8 @@
           "aliveAfterInterrupt": true
         },
         "screenshots": [
-          "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d3-composer-typed.png",
-          "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d3-composer-multiline.png"
+          "%APPDATA%\\helm\\screenshots\\d3-composer-typed.png",
+          "%APPDATA%\\helm\\screenshots\\d3-composer-multiline.png"
         ]
       },
       "notes": [
@@ -200,7 +200,7 @@
         ],
         "firstLineStillInComposer": true,
         "composerWentMultiline": true,
-        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d3-composer-multiline.png"
+        "screenshot": "%APPDATA%\\helm\\screenshots\\d3-composer-multiline.png"
       },
       "notes": [
         "Shift+Enter inserted a newline in the composer."
@@ -221,7 +221,7 @@
             "/statusline",
             "/init"
           ],
-          "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d4-slash-menu.png"
+          "screenshot": "%APPDATA%\\helm\\screenshots\\d4-slash-menu.png"
         },
         "slashArrows": {
           "moved": true,
@@ -243,13 +243,13 @@
         },
         "help": {
           "rendered": true,
-          "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d4-help.png"
+          "screenshot": "%APPDATA%\\helm\\screenshots\\d4-help.png"
         },
         "resume": {
           "rendered": true,
           "bufferType": "alternate",
           "arrowMovedSelection": true,
-          "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d4-resume.png"
+          "screenshot": "%APPDATA%\\helm\\screenshots\\d4-resume.png"
         }
       },
       "notes": [
@@ -279,7 +279,7 @@
           "3. No",
           "Esc to cancel · Tab to amend · ctrl+e to explain"
         ],
-        "screenshot": "C:\\Users\\user\\AppData\\Roaming\\helm\\screenshots\\d5-permission.png"
+        "screenshot": "%APPDATA%\\helm\\screenshots\\d5-permission.png"
       },
       "notes": [
         "The tool-permission dialog rendered, moved with arrow keys, and cancelled on Escape."

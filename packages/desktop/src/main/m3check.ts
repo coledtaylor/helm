@@ -266,7 +266,7 @@ const tail = (collector: Collector, id: number, n = 900): string =>
 /**
  * A harness the driver owns, with two overlay repos under it.
  *
- * This used to compose `repos/atlas` and `repos/atlas-reporting` - the
+ * This used to compose two of the user's own private repositories - the
  * user's own repositories - and that was a mistake twice over.
  *
  * It was fragile. Those directories are mutable and their `.claude/` contents
@@ -438,7 +438,7 @@ async function restoreScanRoots(
  * A throwaway repo with one skill in it.
  *
  * The criterion is about editing a source repo's skill, and the source repos on
- * this machine are the user's real ones. Writing a probe into `repos/atlas`
+ * this machine are the user's real ones. Writing a probe into one of the user's own repositories
  * to prove a point about cache invalidation is not a thing a test gets to do,
  * so this criterion gets a repo the driver owns.
  */
@@ -792,7 +792,7 @@ async function runComposeChecks(
    * A reader that returns `''` for a missing file turns the expected token into
    * `SKILL1=` - a substring of any answer using the requested format - and the
    * check reports PASS having proved nothing. That is not hypothetical: this
-   * check composed the user's own `repos/atlas` and `repos/atlas-reporting`
+   * check composed two of the user's own private repositories
    * until 2026-08-10, both lost their `.claude/skills` to an early version of
    * the shim teardown, and it went on reporting green afterwards.
    *
@@ -954,7 +954,7 @@ async function runComposeChecks(
  *
  * Against a fixture repo rather than the user's. The criterion requires editing
  * a source repo's skill, and the source repos on this machine are real ones -
- * writing a probe into `repos/atlas` to make a point about cache
+ * writing a probe into a real repository to make a point about cache
  * invalidation is not something a check gets to do.
  */
 async function runFixtureCheck(
@@ -1001,7 +1001,7 @@ async function runFixtureCheck(
     },
     notes: [
       'Against a fixture repo, not the user’s: the criterion requires editing a source repo,',
-      'and writing a probe into repos/atlas to prove it is not something a check may do.',
+      'and writing a probe into a real repository to prove it is not something a check may do.',
       'The shim links rather than copies, so the second session sees the edit through the junction.',
       '`skillOnDisk` is read back *through* the shim, so a failure says whether it was the',
       'fixture or the link that was wrong.'

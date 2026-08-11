@@ -7,7 +7,7 @@ re-litigate decisions recorded there without new evidence.
 ## Work tracking
 
 Work is tracked in ClickUp: list **"Helm - Claude Code Shell"** (id `901114291892`)
-in the "the author's workspace" space. [docs/TASKS.md](docs/TASKS.md) maps task IDs to scope.
+[docs/TASKS.md](docs/TASKS.md) maps task IDs to scope.
 
 - Pick tasks in priority order. **Spike A gates everything** - if it has no
   recorded verdict yet, it is the only valid task to start.
@@ -210,8 +210,11 @@ named here is a fixture; nothing in `packages/` may assume any of it, and
   declared in `CLAUDE_TESTED_RANGE` (`src/main/setup.ts`) and asserted at
   startup: warn, don't block.
 - This repo lives inside a harness (`~/.harness/dev/repos/helm`). The harness
-  root and sibling repos (atlas, atlas-reporting) are the primary test
-  fixtures for overlay composition - they have real `.claude/skills` to compose.
+  root and its sibling repositories are the primary test fixtures for overlay
+  composition - they have real `.claude/skills` to compose. Those repositories
+  are private work, so they are referred to by role rather than by name; the
+  drivers that need concrete paths find them by scanning `repos/`, not from a
+  list written down here.
 - Verify claims against the machine, not memory: plugin anatomy can be inspected
   at `~/.claude/plugins/cache/claude-plugins-official/*/`, session history at
   `~/.claude/history.jsonl`.
