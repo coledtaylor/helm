@@ -132,12 +132,36 @@ enough:
 
 So `update:check` asks the GitHub releases API for the newest tag, compares it
 to `app.getVersion()`, and returns a URL. It downloads nothing and executes
-nothing. It is **the only outbound request the app makes**, and it is made only
-when the channel is invoked - never on a timer, at startup, or in the
+nothing. It is **the only *direct* network request the app makes**, and it is
+made only when the channel is invoked - never on a timer, at startup, or in the
 background. Offline is an expected answer, reported as "could not ask" rather
 than silently as "up to date".
 
 Revisit if the build ever gets code-signed: reason 1 disappears, 2 and 3 do not.
+
+### What "direct" is doing in that sentence
+
+The word was added when the pull-request surface landed, and it was added rather
+than deleting the claim because the claim is still true and the qualification is
+the honest part.
+
+That surface reaches GitHub as well, and it does it by **shelling out to the
+user's own `gh` CLI** - `gh pr list` per repository on a schedule the user sets
+(`prPollMinutes`, five minutes by default, `0` to turn it off), plus a `gh pr
+view` when a pull request is opened and a `gh pr checkout` if a review is
+configured to check one out. So bytes leave the machine without anybody invoking
+`update:check`, and a build that said otherwise would be lying about its network
+posture.
+
+What has not changed is the part that matters for packaging and for trust. Helm
+opens no socket of its own for any of it: the only outbound connection Helm's
+own process makes is still this one. And Helm **stores no GitHub credential** -
+`gh` owns the token, every fetch runs on it, and a sign-in is detected only from
+the exit code of `gh auth status`. Nothing in the app opens `hosts.yml`, the
+keyring, or `GH_TOKEN`; a remote URL carrying an embedded token is a credential
+too, and `parseGitHubRemote` strips the userinfo before anything reaches the
+database. A machine with no `gh` gets a sentence naming where to get one, and
+everything else in Helm works exactly as before.
 
 ### The check needs the repository to be public
 

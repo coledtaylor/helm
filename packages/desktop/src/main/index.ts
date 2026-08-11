@@ -1,12 +1,28 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, nativeTheme, protocol } from 'electron'
-import { writeSetting, type AppSettings } from '@helm/core'
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  ipcMain,
+  Menu,
+  nativeTheme,
+  protocol,
+  shell
+} from 'electron'
+import { writeSetting, writeSettings, type AppSettings } from '@helm/core'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { emit, registerIpc, resolvedTheme } from './ipc'
 import { appMode, dataDir, initDataDir, shimRoot } from './paths'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
-import { adoptExistingProfile, createServices, refreshGit, runScan, type Services } from './services'
+import {
+  adoptExistingProfile,
+  cachedProjects,
+  createServices,
+  refreshGit,
+  runScan,
+  type Services
+} from './services'
 import { createConfigService } from './config'
 import {
   attachArtifactConsole,
@@ -15,18 +31,25 @@ import {
   registerContentProtocol
 } from './content'
 import { createHistoryService } from './history'
+import { createPullsService } from './pulls'
 import { createUsageService } from './usage'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
 import { createCollector, runM2Checks, type M2Context } from './m2check'
+import { TITLEBAR_OVERLAY } from './chrome'
+import { createPtermHost } from './pterm'
+import { runDesignShot } from './designshot'
 import { runM3Checks } from './m3check'
 import { runM4Checks } from './m4check'
 import { runM5Checks } from './m5check'
 import { runM6Checks } from './m6check'
 import { runUsageChecks } from './usagecheck'
+import { runSettingsChecks } from './settingscheck'
+import { runPrChecks } from './prcheck'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
 import { findClaudeExecutable, setClaudeOverride } from './claude-cli'
+import { setGhOverride } from './gh-cli'
 import { pickerAnswer, runM7Checks } from './m7check'
 import { screenshot } from './bridge'
 
@@ -57,9 +80,14 @@ type Mode =
   | 'm7-firstrun'
   | 'usage-check'
   | 'usage-settings'
+  | 'settings-check'
+  | 'settings-restart'
+  | 'pr-check'
   | 'shim-sweep'
+  | 'design-shot'
 
 function modeFromArgv(): Mode {
+  if (process.argv.includes('--design-shot')) return 'design-shot'
   if (process.argv.includes('--selftest')) return 'selftest'
   if (process.argv.includes('--fidelity')) return 'fidelity'
   if (process.argv.includes('--claude-check')) return 'claude-check'
@@ -72,6 +100,9 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--m7-firstrun')) return 'm7-firstrun'
   if (process.argv.includes('--usage-check')) return 'usage-check'
   if (process.argv.includes('--usage-settings')) return 'usage-settings'
+  if (process.argv.includes('--settings-check')) return 'settings-check'
+  if (process.argv.includes('--settings-restart')) return 'settings-restart'
+  if (process.argv.includes('--pr-check')) return 'pr-check'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
   if (process.argv.includes('--claude')) return 'claude'
   if (process.argv.includes('--shell')) return 'shell'
@@ -90,7 +121,10 @@ const isSpikeMode =
   mode !== 'm6-check' &&
   mode !== 'm7-check' &&
   mode !== 'm7-firstrun' &&
-  mode !== 'usage-check'
+  mode !== 'usage-check' &&
+  mode !== 'settings-check' &&
+  mode !== 'pr-check' &&
+  mode !== 'design-shot'
 
 initDataDir()
 
@@ -131,9 +165,21 @@ function createWindow(
     minHeight: 560,
     // Painted before the renderer's first frame, so a cold start does not flash
     // white on a dark desktop.
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0e0f16' : '#f7f7f9',
+    // The canvas tokens from theme.css - a mismatch here flashes the old
+    // colour for a frame on every cold start.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#12131f' : '#eceef4',
     show: true,
     autoHideMenuBar: true,
+    // The app window replaces the OS-accent title bar with its own brand
+    // strip plus the Window Controls Overlay (see chrome.ts). The spike pages
+    // keep the native frame: their drivers predate the strip and measure a
+    // page, not the chrome.
+    ...(page === 'index' && process.platform === 'win32'
+      ? {
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: TITLEBAR_OVERLAY[nativeTheme.shouldUseDarkColors ? 'dark' : 'light']
+        }
+      : {}),
     // A packaged Electron window does NOT inherit the exe's icon: given no
     // `icon` it uses Electron's own, which is what the taskbar showed on
     // 2026-08-10 while the exe itself was correctly stamped.
@@ -207,6 +253,9 @@ function startApp(options: AppOptions = {}): void {
   // over discovery in every caller, and the session host does not read
   // settings.
   setClaudeOverride(services.settings.claudePath)
+  // Same reason, same shape: the pull-request surface resolves `gh` through a
+  // module-level override, and it must be in place before the first pass.
+  setGhOverride(services.settings.ghPath)
   // Before the window exists: an install from before the setup pane has roots
   // and no completion stamp, and stamping it after the first paint would flash
   // a setup pane over a working launcher.
@@ -229,6 +278,14 @@ function startApp(options: AppOptions = {}): void {
     confirm: options.confirm
   })
 
+  // The setting is read through a function rather than passed by value: the
+  // default shell has to be able to change while the app is running, and a
+  // captured value would make it a property of when Helm started.
+  const pterm = createPtermHost({
+    window: () => win,
+    defaultShell: () => services.settings.terminalShell
+  })
+
   const history = createHistoryService({
     store: services.store,
     home: options.claudeHome,
@@ -239,6 +296,25 @@ function startApp(options: AppOptions = {}): void {
     store: services.store,
     ...(options.claudeHome !== undefined ? { home: options.claudeHome } : {}),
     onChange: (snapshot) => emit(win, 'usage:changed', snapshot)
+  })
+
+  /**
+   * The projects the PR sweep considers, read through a function.
+   *
+   * The last scan when there has been one, the cache before that - so a cold
+   * start sweeps the repositories the previous run knew about rather than
+   * waiting for discovery, and a rescan that adds a repository is picked up on
+   * the next pass without anything having to tell this service about it.
+   */
+  const pulls = createPullsService({
+    store: services.store,
+    settings: () => services.settings,
+    projects: () =>
+      (services.lastScan?.projects ?? cachedProjects(services)).map((project) => ({
+        path: project.path,
+        name: project.name
+      })),
+    onChange: (snapshot) => emit(win, 'pr:changed', snapshot)
   })
 
   const config = createConfigService({
@@ -253,8 +329,10 @@ function startApp(options: AppOptions = {}): void {
   registerIpc({
     services,
     sessions,
+    pterm,
     history,
     usage,
+    pulls,
     config,
     content,
     window: () => win,
@@ -308,9 +386,20 @@ function startApp(options: AppOptions = {}): void {
           console.warn(`usage figures could not be read: ${String(err)}`)
         }
         usage.start()
+
+        // Last, and deliberately: this one spawns `git` per repository and
+        // `gh` per remote, and the pane it feeds paints from SQLite in the
+        // meantime. The timer is armed either way - a fetch that fails is not a
+        // reason to stop trying every five minutes.
+        void pulls.refresh().catch((err: unknown) => {
+          console.warn(`pull requests could not be fetched: ${String(err)}`)
+        })
+        pulls.start()
       })
 
-      if (win) options.onReady?.({ win, services, sessions, history, usage, config, content })
+      if (win) {
+        options.onReady?.({ win, services, sessions, pterm, history, usage, pulls, config, content })
+      }
     }
   })
 
@@ -359,6 +448,11 @@ function startApp(options: AppOptions = {}): void {
    */
   let gitRefreshInFlight = false
   win.on('focus', () => {
+    // The PR sweep takes the same moment for the same reason, and guards itself
+    // harder: git is local and a fetch is not, so `refreshOnFocus` also refuses
+    // to run more than once every few minutes (see `pulls.ts`).
+    pulls.refreshOnFocus()
+
     if (gitRefreshInFlight || services.lastScan === null) return
     gitRefreshInFlight = true
     void refreshGit(services)
@@ -413,6 +507,7 @@ function startApp(options: AppOptions = {}): void {
     // firing after `will-quit`, would write to a closed connection.
     history.stop()
     usage.stop()
+    pulls.stop()
     config.stop()
     // Synchronously, because this is the last point the main process is
     // guaranteed a turn. Anything deferred here is a process left behind.
@@ -528,6 +623,49 @@ function startSpike(): void {
   ipcMain.handle('clipboard:write', (_e, text: string) => clipboard.writeText(text))
 }
 
+/**
+ * Gives the dev app id a Start Menu shortcut of Helm's own, so the dev window's
+ * taskbar button carries the ship's wheel rather than Electron's atom.
+ *
+ * A taskbar button's icon comes from the shortcut that declares its app id, not
+ * from the window. Electron writes that shortcut itself the first time a toast
+ * fires - pointing at `node_modules/electron/dist/electron.exe`, whose icon is
+ * the atom - and then skips the write because one already exists. Writing it
+ * first is therefore the whole fix: same id, same target, Helm's `.ico`.
+ *
+ * Dev only, Windows only, and never fatal. `Electron.lnk` is removed only when
+ * it points at *this* checkout's electron.exe, because that one is an artefact
+ * of running this app and a second shortcut declaring the same id is what put
+ * the atom on the packaged app's button on 2026-08-10.
+ */
+function claimDevShortcut(): void {
+  if (process.platform !== 'win32' || app.isPackaged) return
+  try {
+    const programs = join(app.getPath('appData'), 'Microsoft/Windows/Start Menu/Programs')
+    const icon = join(__dirname, '../../build', 'icon.ico')
+    if (!existsSync(icon)) return
+
+    const stale = join(programs, 'Electron.lnk')
+    if (existsSync(stale)) {
+      const target = shell.readShortcutLink(stale).target.toLowerCase()
+      if (target === process.execPath.toLowerCase()) rmSync(stale, { force: true })
+    }
+
+    // `create`, not `update`: `update` only edits a shortcut that is already
+    // there and fails on the first run, which is the only run that matters.
+    shell.writeShortcutLink(join(programs, 'Helm (dev).lnk'), 'create', {
+      target: process.execPath,
+      args: `"${app.getAppPath()}"`,
+      appUserModelId: 'dev.coletaylor.helm.dev',
+      description: 'Helm, run from source',
+      icon,
+      iconIndex: 0
+    })
+  } catch {
+    // A shortcut is cosmetic. Nothing here is worth failing a start over.
+  }
+}
+
 app.whenReady().then(() => {
   // The default application menu binds Ctrl-C to the Edit>Copy role, which
   // swallows the interrupt before xterm ever sees the keydown. A terminal host
@@ -551,6 +689,7 @@ app.whenReady().then(() => {
   // uncached path, nor purging the icon cache touched it - the stale
   // `Electron.lnk` had to go. Keeping the ids apart is what stops it returning.
   app.setAppUserModelId(app.isPackaged ? 'dev.coletaylor.helm' : 'dev.coletaylor.helm.dev')
+  claimDevShortcut()
 
   // The artifact scheme's handler. Registered for every mode that opens a
   // window, because the spike pages share this process and a scheme with no
@@ -615,8 +754,63 @@ app.whenReady().then(() => {
     return
   }
 
+  /**
+   * The second phase of `settings-check`, and the whole of it.
+   *
+   * Same shape as `--usage-settings` and for the same reason: the process that
+   * wrote a setting cannot prove a restart finds it. This one starts through
+   * the ordinary path, reports every setting it read, and - given
+   * `--restore=<file>` - puts back the settings the driver wrote down before it
+   * borrowed the real database.
+   */
+  if (mode === 'settings-restart') {
+    const services = createServices()
+    const found = services.settings
+    const file = writeReport('settings-restart.json', {
+      startedAt: new Date().toISOString(),
+      settings: found,
+      dbFile: services.store.file
+    })
+    console.log(`settings after restart: ${JSON.stringify(found)}\nreport: ${file}`)
+
+    const restoreArg = process.argv.find((a) => a.startsWith('--restore='))
+    if (restoreArg) {
+      const from = restoreArg.slice('--restore='.length)
+      try {
+        const saved = JSON.parse(readFileSync(from, 'utf8')) as Partial<AppSettings>
+        // Through the ordinary write path, validators included: whatever is put
+        // back has to be something the app would have accepted anyway.
+        writeSettings(services.store, saved)
+        console.log(`settings restored from ${from}`)
+      } catch (err) {
+        console.error(`could not restore settings from ${from}: ${String(err)}`)
+      }
+    }
+
+    services.store.close()
+    app.exit(0)
+    return
+  }
+
   if (isSpikeMode) {
     startSpike()
+    return
+  }
+
+  if (mode === 'design-shot') {
+    startApp({
+      onReady: (ctx) => {
+        void runDesignShot(ctx, join(dataDir, 'screenshots', 'design'))
+          .then((files) => {
+            for (const file of files) console.log(`design-shot: ${file}`)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`design-shot crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
     return
   }
 
@@ -934,6 +1128,109 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`usage-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  /**
+   * M8's settings pane, driven through the real window.
+   *
+   * The pickers are answered by the driver for the same reason `--m7-firstrun`
+   * answers them: "add a folder" and "locate the CLI" both open a native dialog
+   * that has no automation surface, and everything either one does afterwards -
+   * the handler, the settings write, the rescan - is the real thing.
+   *
+   * It borrows the user's own database, because the claim is about the real
+   * one. `scripts/run-settings.mjs` restarts the app to read what this left and
+   * then puts the originals back.
+   */
+  if (mode === 'settings-check') {
+    startApp({
+      chooseDirectory: (title: string) => pickerAnswer('directory', title),
+      chooseFile: (title: string) => pickerAnswer('file', title),
+      onReady: (ctx) => {
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runSettingsChecks(
+          ctx,
+          join(dataDir, 'screenshots'),
+          dataDir,
+          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
+        )
+          .then(({ checks, parked }) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('settings-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              parked,
+              checks
+            })
+            console.log(`settings-check report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`settings-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  /**
+   * M12's pull-request surface, driven through the real window.
+   *
+   * Borrows the user's database and settings the way `--settings-check` does,
+   * and for the same reason - the claim is about the real ones. It adds a scan
+   * root of fixture repositories, aims the pulls service at a `gh` of its own
+   * making, spawns real `claude` sessions for the review phase and closes them,
+   * and puts everything back; `scripts/run-prcheck.mjs` restores the settings
+   * as well, for the run that dies before its own restore.
+   */
+  if (mode === 'pr-check') {
+    const collector = createCollector()
+    startApp({
+      observer: collector,
+      confirm: collector.confirm,
+      onReady: (ctx) => {
+        // Every session this driver started is one it closes on purpose.
+        collector.answerWith(true)
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runPrChecks(
+          ctx,
+          collector,
+          join(dataDir, 'screenshots'),
+          dataDir,
+          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
+        )
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('pr-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`pr-check report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`pr-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

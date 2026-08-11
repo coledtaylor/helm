@@ -20,6 +20,18 @@ export {
 export { knownMigrations, migrate, type MigrationOutcome } from './migrate'
 export { cacheProjects, readCachedProjects, type CachedProject } from './projects'
 export {
+  forgetPrRepos,
+  readPrRepos,
+  readPull,
+  readPullsBySlug,
+  recordPrFetch,
+  replaceRepoPulls,
+  upsertPrRepo,
+  writePullDetail,
+  type PrRepoRow,
+  type PullRow
+} from './pulls'
+export {
   createProfile,
   deleteProfile,
   findProfileByName,
@@ -38,7 +50,14 @@ export {
   type NewSession,
   type SessionQuery
 } from './sessions'
-export { readSettings, writeSetting, writeSettings } from './settings'
+export {
+  readSettings,
+  validateSetting,
+  writeSetting,
+  writeSettings,
+  SettingsValidationError,
+  SETTING_VALIDATORS
+} from './settings'
 export {
   countUsageMessages,
   forgetUsageFiles,

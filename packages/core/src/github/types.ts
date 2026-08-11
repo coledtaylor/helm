@@ -1,0 +1,363 @@
+/**
+ * The shapes the pull-request surface is made of.
+ *
+ * GitHub.com only, deliberately: there is no provider abstraction here and no
+ * room reserved for one. A second forge would need a different fetch mechanism
+ * (this one is `gh`), a different auth story and a different set of fields, and
+ * an interface guessed in advance would be wrong about all three.
+ *
+ * Pure by construction, like the rest of what `core/src/types.ts` re-exports:
+ * the renderer imports these, so nothing here may reach `node:`.
+ */
+
+/** A `github.com` remote, resolved to what `gh --repo` takes. */
+export interface RepoRemote {
+  /** The remote URL exactly as git reported it. */
+  url: string
+  owner: string
+  name: string
+  /** `owner/name`. */
+  slug: string
+}
+
+/**
+ * GitHub's answer to "has this been reviewed", as `gh pr list` reports it.
+ *
+ * Null is a real value and not a missing one: a repository with no review
+ * requirement returns null for every PR, which is a different fact from
+ * "review required and nobody has looked yet".
+ */
+export type PullReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null
+
+/** One open pull request, as the list view needs it. */
+export interface PullSummary {
+  number: number
+  title: string
+  url: string
+  /** Login, because that is what identifies a person on a PR list. */
+  author: string
+  /** Bots open a lot of pull requests, and a list that cannot say so reads wrong. */
+  authorIsBot: boolean
+  /** `OPEN`, `MERGED`, `CLOSED` - upper case, as GitHub spells it. */
+  state: string
+  isDraft: boolean
+  headRefName: string
+  baseRefName: string
+  /**
+   * Epoch milliseconds, or null when the timestamp could not be parsed.
+   *
+   * Nullable rather than zero-defaulted: an age caption computed from the epoch
+   * would read "56y" and look like data rather than like a gap.
+   */
+  createdAt: number | null
+  updatedAt: number | null
+  additions: number
+  deletions: number
+  changedFiles: number
+  reviewDecision: PullReviewDecision
+  /** Label names only. Colours are GitHub's palette and this one is Helm's. */
+  labels: string[]
+}
+
+/**
+ * One issue-level comment on a pull request.
+ *
+ * Issue-level is the whole of what `gh --json comments` can see: the comments
+ * written in the conversation tab. Comments attached to a line of the diff live
+ * on a review thread, which the JSON surface does not expose at all, and a
+ * `gh api` GraphQL query is what would be needed to reach them. That is a known
+ * and accepted v1 limitation rather than an oversight, and it is recorded here
+ * because a conversation missing half its replies with no explanation reads as
+ * a bug.
+ */
+export interface PullComment {
+  /** GitHub's node id. Identity for a list key, never parsed. */
+  id: string
+  author: string
+  authorIsBot: boolean
+  /**
+   * `MEMBER`, `CONTRIBUTOR`, `OWNER`, `NONE`, ... - how GitHub relates the
+   * author to the repository, which is the one thing a reader wants beside a
+   * name they do not recognise.
+   */
+  association: string
+  /** Markdown as written. Rendering happens in the host, never here. */
+  body: string
+  createdAt: number | null
+  url: string
+}
+
+/**
+ * One review, meaning its **summary** body and verdict.
+ *
+ * The same limitation as `PullComment` and from the same cause: a review's
+ * inline notes are diff-thread comments, and what arrives here is only the text
+ * written in the box above them. A review that was nothing but inline notes
+ * therefore has an empty body, which is why an entry with no body is still
+ * shown - the verdict is the information.
+ */
+export interface PullReview {
+  id: string
+  author: string
+  authorIsBot: boolean
+  association: string
+  /** `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED`, `PENDING`. */
+  state: string
+  body: string
+  submittedAt: number | null
+}
+
+/** One commit on the branch, as the Commits view lists it. */
+export interface PullCommit {
+  /** The full sha. Abbreviated where it is painted, never stored short. */
+  oid: string
+  messageHeadline: string
+  /**
+   * The first author's login, falling back to the name git recorded. A commit
+   * can have several - a co-authored one does - and the list has room for the
+   * one that identifies it.
+   */
+  author: string
+  /** Extra authors beyond the first, so a co-authored commit can say so. */
+  coAuthors: number
+  committedAt: number | null
+}
+
+/** One changed file: what it is and how much of it moved. */
+export interface PullFile {
+  path: string
+  additions: number
+  deletions: number
+}
+
+/**
+ * The check runs, reduced to three numbers.
+ *
+ * Three numbers and not the list, because `statusCheckRollup` is a
+ * heterogeneous GraphQL union - a `CheckRun` has `status`/`conclusion`, a
+ * legacy `StatusContext` has `state`, and GitHub adds members to unions - and a
+ * surface that rendered each entry would have to be right about every shape.
+ * Counting is a claim this can actually keep.
+ */
+export interface PullChecks {
+  total: number
+  failing: number
+  pending: number
+}
+
+/**
+ * Everything behind a pull request, as one fetch of `gh pr view` returns it.
+ *
+ * Cached whole in `pull_requests.detail` and re-fetched only when asked, which
+ * is why nothing rendered is in here: HTML belongs to the version of the
+ * renderer that made it, and a cache holding it would paint last month's
+ * markdown pipeline for as long as the pull request stayed open.
+ */
+export interface PullDetail {
+  /** The description, as markdown. Empty is a real answer - many PRs have none. */
+  body: string
+  comments: PullComment[]
+  reviews: PullReview[]
+  commits: PullCommit[]
+  files: PullFile[]
+  /**
+   * Null when the rollup could not be read at all.
+   *
+   * Null rather than zeroes, and the distinction is the point: `{total: 0}`
+   * means GitHub reported no checks, and null means Helm could not tell. A
+   * surface paints nothing for null, because a wrong checks summary is worse
+   * than an absent one.
+   */
+  checks: PullChecks | null
+  /** `CLEAN`, `BLOCKED`, `DIRTY`, `BEHIND`, ... or '' when it was not reported. */
+  mergeStateStatus: string
+}
+
+/**
+ * A comment and a review, flattened into the one thing they are on screen.
+ *
+ * GitHub returns two lists and shows one conversation, and the merge is by
+ * time: a review left between two comments happened between them, and three
+ * separate stacks sorted only within themselves would be three chronologies
+ * that disagree. `kind` survives the merge because a review carries a verdict
+ * and a comment does not.
+ */
+export interface PullConversationEntry {
+  kind: 'comment' | 'review'
+  id: string
+  author: string
+  authorIsBot: boolean
+  association: string
+  /** A review's verdict; `''` for a comment. */
+  state: string
+  /** Epoch ms, or null when the timestamp would not parse. */
+  at: number | null
+  body: string
+  /** The comment's permalink; `''` for a review, which gh does not give one. */
+  url: string
+}
+
+/** A conversation entry whose markdown the host has already rendered. */
+export interface RenderedPullEntry extends PullConversationEntry {
+  /** Sanitised HTML, or `''` when the entry had no body. */
+  html: string
+}
+
+/**
+ * What the detail tab is painted from.
+ *
+ * The summary travels with it rather than being looked up beside it: the header
+ * shows both - a title and a state from the list fetch, a file count and a
+ * checks roll-up from the detail one - and a tab that assembled them from two
+ * sources could show a title for a pull request whose detail had moved on.
+ */
+export interface PullDetailView {
+  /** `owner/name`, so the pane can link out and name where this came from. */
+  slug: string
+  /** The project directory the tab was opened from. Identity of the tab. */
+  repoPath: string
+  summary: PullSummary
+  detail: PullDetail
+  /** The description rendered; `''` when there is none to render. */
+  bodyHtml: string
+  /** Reviews and comments in one time order. */
+  conversation: RenderedPullEntry[]
+  /** When the **detail** was fetched. Epoch ms; null when it is not known. */
+  fetchedAtMs: number | null
+  /** True when this answer came out of the cache and ran no `gh` at all. */
+  cached: boolean
+}
+
+/** Why the PR surface cannot fetch anything right now. */
+export type GhProblemKind =
+  /** No `gh` on this machine. */
+  | 'missing'
+  /** There is a `gh`, and it is not signed in. */
+  | 'unauthenticated'
+  /** It is there and signed in, and the last pass still failed. */
+  | 'failed'
+
+export interface GhProblem {
+  kind: GhProblemKind
+  /** A whole sentence, shown to the user as it is. */
+  message: string
+}
+
+/**
+ * What Helm found out about the `gh` CLI.
+ *
+ * Carries no credential and never will - the same rule the Claude CLI follows.
+ * `authenticated` is decided from `gh auth status`'s **exit code**, and nothing
+ * here opens gh's token store, its hosts file or the keyring behind it. The
+ * whole remedy for `unauthenticated` is a sentence telling the user to run
+ * `gh auth login` themselves.
+ */
+export interface GhStatus {
+  /** The executable, or null when there is not one. */
+  path: string | null
+  /** `setting` when the user picked it, `discovered` when Helm found it. */
+  source: 'setting' | 'discovered' | null
+  /** First line of `gh --version`. */
+  version: string | null
+  authenticated: boolean
+  problem: GhProblem | null
+}
+
+/** One discovered project, and the pull requests its origin remote has. */
+export interface PullRepo {
+  /** The project directory. The identity of a row, as everywhere else. */
+  path: string
+  /** Last path segment, for a list with no room for the rest. */
+  name: string
+  /** `git remote get-url origin`, or null when there is no origin. */
+  url: string | null
+  /** `owner/name`, or null when the origin is not a github.com remote. */
+  slug: string | null
+  /** When the last **successful** fetch landed. Epoch ms; null means never. */
+  fetchedAtMs: number | null
+  /** What went wrong on the last attempt, or null. Cached rows survive it. */
+  error: string | null
+  /** Open pull requests, most recently updated first. */
+  pulls: PullSummary[]
+}
+
+/**
+ * Everything the Pulls pane paints, cache included.
+ *
+ * Degradation here is **stale-with-age**, not degrade-to-nothing - which is the
+ * opposite of the usage figures, and the difference is what the number means. A
+ * plan-limit percentage from two hours ago is a wrong number; a pull request
+ * that was open two hours ago is a fact about two hours ago, and captioning it
+ * with its age is honest. So the age caption is not optional: `fetchedAtMs` is
+ * on the snapshot precisely so no surface can paint the list without it.
+ */
+export interface PullsSnapshot {
+  /** Repos with a github.com origin. Repos without one are counted, not listed. */
+  repos: PullRepo[]
+  /** Open pull requests across every repo. */
+  open: number
+  /** Discovered projects considered, whether or not they turned out to be GitHub. */
+  checked: number
+  gh: GhStatus
+  /**
+   * The **oldest** successful fetch among the repos on screen, which is what
+   * the age caption reports. The oldest rather than the newest: a caption has
+   * to describe the staleness of the whole list, and one repo refreshed a
+   * moment ago does not make the other eleven current.
+   */
+  fetchedAtMs: number | null
+  /** True while a pass is in flight, so the refresh control can say so. */
+  fetching: boolean
+}
+
+/**
+ * The polling interval, in minutes.
+ *
+ * The floor is not taste. Every pass is one `gh` process per distinct remote
+ * against GitHub's API on the user's own token, and a one-minute sweep over a
+ * dozen repositories is a rate limit waiting to happen. Zero is off entirely -
+ * manual and focus refreshes still work - and it is deliberately outside the
+ * range rather than a magic small number inside it.
+ */
+export const PR_POLL_MINUTES = { min: 5, max: 1440, default: 5, off: 0 } as const
+
+/**
+ * What a review launch does to the working tree, if anything.
+ *
+ * `none` is the default and reviews from the pull request's refs: `gh` reads
+ * the diff, the commits and the conversation over the network, so nothing has
+ * to be fetched into the checkout and nothing anybody is halfway through gets
+ * moved. `checkout` runs `gh pr checkout` first, for the review that wants to
+ * run the tests - and it is refused outright on a dirty tree rather than
+ * stashing, because a tool that moves somebody's uncommitted work is a tool
+ * they stop trusting.
+ *
+ * An enum of two rather than a boolean, because the third value is already
+ * known: a worktree mode would review a branch without disturbing the checkout
+ * at all. It is deferred - junctions, the shim sweep and worktrees interact -
+ * and this leaves the room for it.
+ */
+export const PR_CHECKOUT_MODES = ['none', 'checkout'] as const
+
+export type PrCheckoutMode = (typeof PR_CHECKOUT_MODES)[number]
+
+/**
+ * What a review launch composed, once it has.
+ *
+ * `prompt` travels back rather than being re-derived in the window: it is what
+ * the session was actually started with, and a pane that recomposed it from the
+ * template would be reporting its own arithmetic instead of the launch's.
+ */
+export interface LaunchedReviewPlan {
+  /** The repository directory the session runs in. */
+  repoPath: string
+  /** `owner/name`, for the tab's label. */
+  slug: string
+  number: number
+  /** The trailing positional argument, already rendered. */
+  prompt: string
+  /** The branch `gh pr checkout` moved the tree to, or null when it did not run. */
+  checkedOut: string | null
+  /** Non-fatal notes: an overlay that was not there, a checkout that reported. */
+  warnings: string[]
+}

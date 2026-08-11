@@ -13,6 +13,10 @@
 // Imported as well as re-exported: `AppSettings` below names it, and a
 // re-export alone does not bring a name into this file's scope.
 import type { UsageDisplayMode } from './usage/shape'
+// The same, for a value: `DEFAULT_SETTINGS` reads the polling default off it.
+import { PR_POLL_MINUTES, type PrCheckoutMode } from './github/types'
+// And for the review template's default, which is the prompt module's to state.
+import { DEFAULT_PR_REVIEW_PROMPT } from './github/prompt'
 
 export {
   frontmatterField,
@@ -36,9 +40,11 @@ export {
 export {
   describeAge,
   nextUsageMode,
+  offerableUsageModes,
   parseUsage,
   usageProblem,
   usageView,
+  COST_MODE_UNAVAILABLE,
   USAGE_DISPLAY_MODES,
   USAGE_STALE_AFTER_MS,
   type UsageBucket,
@@ -64,6 +70,49 @@ export {
   type ModelPrice,
   type TokenPrice
 } from './usage/prices'
+/**
+ * The pull-request vocabulary, re-exported for the same reason: the Pulls pane
+ * and the sidebar are renderer code, and `github/types.ts` is pure by
+ * construction while the rest of `github/` spawns a subprocess.
+ */
+export {
+  PR_CHECKOUT_MODES,
+  PR_POLL_MINUTES,
+  type GhProblem,
+  type GhProblemKind,
+  type GhStatus,
+  type LaunchedReviewPlan,
+  type PrCheckoutMode,
+  type PullChecks,
+  type PullComment,
+  type PullCommit,
+  type PullConversationEntry,
+  type PullDetail,
+  type PullDetailView,
+  type PullFile,
+  type PullRepo,
+  type PullReview,
+  type PullReviewDecision,
+  type PullSummary,
+  type PullsSnapshot,
+  type RenderedPullEntry,
+  type RepoRemote
+} from './github/types'
+/**
+ * The review prompt's template renderer, re-exported for the same reason again:
+ * the detail pane's disclosure sentence names the exact prompt the button will
+ * run, so it renders the template itself. The prompt that is actually launched
+ * is composed in the main process - see `desktop/src/main/pulls.ts` - and this
+ * side never sends one.
+ */
+export {
+  renderPullPrompt,
+  DEFAULT_PR_REVIEW_PROMPT,
+  PR_PROMPT_PLACEHOLDERS,
+  PR_REVIEW_PROMPT_MAX_LENGTH,
+  type PullPromptFacts,
+  type PullPromptPlaceholder
+} from './github/prompt'
 
 /** What a discovered directory turned out to be. */
 export type ProjectKind =
@@ -390,6 +439,49 @@ export interface LaunchPlan {
 
 export type ThemePreference = 'system' | 'light' | 'dark'
 
+/** The three, as a value, so a validator and a control can share one list. */
+export const THEME_PREFERENCES: readonly ThemePreference[] = ['system', 'light', 'dark']
+
+/** xterm's three cursor shapes, restated here so a validator and a control can
+ * share one list without either of them importing xterm. */
+export const TERMINAL_CURSOR_STYLES = ['block', 'underline', 'bar'] as const
+export type TerminalCursorStyle = (typeof TERMINAL_CURSOR_STYLES)[number]
+
+/**
+ * The bounds on the two numeric terminal settings.
+ *
+ * The font size ceiling is not taste. A pane is a few hundred pixels wide, and
+ * a grid narrow enough stops being a terminal: Claude Code's composer and
+ * status line assume they have columns to lay out in, and every check that
+ * asserts a pane came back with a usable grid is only loose because this is
+ * tight. The floor is the point below which the glyphs stop being legible on a
+ * 100% display.
+ */
+export const TERMINAL_FONT_SIZE = { min: 8, max: 32, default: 14 } as const
+
+/** Lines of history a terminal keeps. The ceiling is memory: a line is roughly
+ * a kilobyte of cell data, so a million of them per pane is not a setting. */
+export const TERMINAL_SCROLLBACK = { min: 500, max: 200_000, default: 10_000 } as const
+
+/**
+ * A shell Helm found on this machine, offered in the shell pickers.
+ *
+ * `path` is what gets launched and what gets stored, and it is absolute for the
+ * same reason `claudePath` is: a bare `pwsh.exe` means whatever the process's
+ * PATH happened to resolve it to, which is not necessarily what the user saw in
+ * the picker.
+ */
+export interface DetectedShell {
+  /** Absolute path to the executable. */
+  path: string
+  /** The file name - `pwsh.exe`. What the picker shows as machine data. */
+  name: string
+  /** A human label - "PowerShell 7". */
+  label: string
+  /** The arguments Helm would launch it with, from the per-shell table. */
+  args: string[]
+}
+
 /**
  * Persisted application settings. Keys are the column names in `app_settings`;
  * every value is JSON-encoded on the way in, so adding a key here is the only
@@ -415,10 +507,79 @@ export interface AppSettings {
    */
   claudePath: string | null
   /**
-   * What the status bar's usage segment shows. Cycled by clicking it until M7
-   * builds somewhere for a setting to live.
+   * What the status bar's usage segment shows. Set in the settings pane's
+   * Appearance group; clicking the segment itself still cycles it, because a
+   * quick accessor beside the thing it changes is worth keeping.
    */
   usageDisplay: UsageDisplayMode
+
+  /**
+   * A font family for the terminal panes, or null for the built-in stack.
+   *
+   * Whatever is named here is **prepended** to the default stack, never
+   * substituted for it. A monospace font chosen for its letterforms is rarely
+   * chosen for its box-drawing, CJK or emoji coverage, and Claude Code's TUI is
+   * made of box-drawing characters - so a font with holes in it has to degrade
+   * one glyph at a time rather than take the whole interface down with it.
+   */
+  terminalFontFamily: string | null
+  /** Point size for the terminal panes. Bounded by `TERMINAL_FONT_SIZE`. */
+  terminalFontSize: number
+  /** Cursor shape in the terminal panes. */
+  terminalCursorStyle: TerminalCursorStyle
+  terminalCursorBlink: boolean
+  /** Lines of history a terminal pane keeps. Bounded by `TERMINAL_SCROLLBACK`. */
+  terminalScrollback: number
+  /**
+   * The executable new project shells are opened with, or null to let Helm
+   * detect one. An absolute path, for the reason `DetectedShell.path` gives.
+   *
+   * Project shells only. A Claude session is not a shell - Helm hands the
+   * `claude` executable its own pty and this setting never reaches it.
+   */
+  terminalShell: string | null
+
+  /**
+   * A `gh` executable the user picked by hand, for the machine where it is not
+   * on PATH and not in the usual install directory. Null means "find it".
+   *
+   * A path, never a credential - the exact parity with `claudePath`, and the
+   * same hard rule behind it: Helm locates the CLI and runs it, and the GitHub
+   * sign-in stays entirely between the user and `gh auth login`.
+   */
+  ghPath: string | null
+  /**
+   * How often Helm sweeps the discovered repositories for open pull requests,
+   * in minutes. `0` is off - manual and focus refreshes still work.
+   *
+   * On by default, which is a deliberate change to Helm's network posture and
+   * not an oversight: periodic scanning is what the surface is for. Helm itself
+   * still makes no direct request; `gh` does, on the user's own token, on this
+   * schedule. Bounded by `PR_POLL_MINUTES`.
+   */
+  prPollMinutes: number
+  /**
+   * The opening prompt a "Review with Claude" launch starts its session with.
+   *
+   * A template - `{number} {url} {branch} {title} {slug}` are substituted and
+   * anything else in braces is left as written. Rendered in the **main
+   * process** from the cached pull request; the window renders the same
+   * template only to show what the button will run.
+   *
+   * `{branch}` names `headRefName`, which on a pull request opened from a fork
+   * does not exist in the local checkout unless `prCheckout` is `'checkout'`.
+   * The default uses `{number}` alone for exactly that reason.
+   */
+  prReviewPrompt: string
+  /**
+   * Whether a review launch checks the pull request out first.
+   *
+   * `'none'` reviews from the pull request's refs and never touches the working
+   * tree. `'checkout'` runs `gh pr checkout <n>` in the repository before
+   * spawning, and is refused with a count of the changed files when the tree is
+   * dirty - Helm does not stash. See `PR_CHECKOUT_MODES`.
+   */
+  prCheckout: PrCheckoutMode
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -427,7 +588,21 @@ export const DEFAULT_SETTINGS: AppSettings = {
   windowBounds: null,
   firstRunCompletedAt: null,
   claudePath: null,
-  usageDisplay: 'percent'
+  usageDisplay: 'percent',
+  // The four defaults below are the values Spike C measured and `terminal.ts`
+  // was built around. They are the documented baseline, not a starting point
+  // someone picked: a setting left alone must produce the configuration the
+  // fidelity checks measure.
+  terminalFontFamily: null,
+  terminalFontSize: TERMINAL_FONT_SIZE.default,
+  terminalCursorStyle: 'block',
+  terminalCursorBlink: true,
+  terminalScrollback: TERMINAL_SCROLLBACK.default,
+  terminalShell: null,
+  ghPath: null,
+  prPollMinutes: PR_POLL_MINUTES.default,
+  prReviewPrompt: DEFAULT_PR_REVIEW_PROMPT,
+  prCheckout: 'none'
 }
 
 // ---------------------------------------------------------------------------

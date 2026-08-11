@@ -1,6 +1,6 @@
 ---
 name: checks
-description: How Helm's real-window checks work - m2-check through m7-check, usage-check, fidelity, claude-check, design-shot. Use when running one, narrowing a re-run with --only, reading a report, diagnosing a failure, or writing a new check.
+description: How Helm's real-window checks work - m2-check through m7-check, usage-check, settings-check, fidelity, claude-check, design-shot. Use when running one, narrowing a re-run with --only, reading a report, diagnosing a failure, or writing a new check.
 ---
 
 ## Helm's checks
@@ -112,6 +112,37 @@ fixture's window is set to expire ten seconds out so a rollover happens
 *underneath* the segment, and the full parse the index avoids is measured rather
 than quoted. Two phases, because "the mode survives a restart" cannot be
 asserted by the process that set it.
+
+**`settings-check`** - the settings pane, every app setting, and the terminal
+preferences. The second
+reader is this driver's **own read-only connection to `helm.db`**, opened beside
+each UI assertion: reading through `services.store` would be reading the handle
+the app just wrote through, which passes whether or not anything was committed.
+Three things it does not settle by agreement - the removal of a scan root is
+checked against the *next scan's* project set rather than against the list of
+roots, the theme against the colour Electron was handed for the window controls
+(captured by wrapping `setTitleBarOverlay` on the window itself) compared with
+the `--helm-bg` token as CSS resolved it, and the CLI override against a stub
+program on disk that answers `--version` with 9.9.9. Every rejection case is
+preceded by a **valid** write of the same key through the same channel, because
+"the row did not change" is also what a channel that writes nothing would
+report. Two phases: it parks every setting on a non-default value, and
+`run-settings.mjs` starts the app again to read them back - and to restore the
+originals, since this one borrows the real database.
+
+Its `terminal` group (M9) is the one part that spawns a `claude`, because the
+claim is about terminals in **both** registries and only a session puts one in
+the session registry. Three things there are worth knowing before touching it.
+Live terminals are reached through `window.__helmTerminals()` - a read-only tap
+in `app/inspect.ts`, since they live outside React and `executeJavaScript` has
+no other route to them - but it is never the only witness: cell geometry is
+checked against a measurement the driver makes itself, and every pty resize is
+counted by wrapping `sessions.resize` and `pterm.resize` on the host objects.
+The group **writes its own baseline first**, because the validation group parks
+each terminal setting on a value of its own on the way past. And a `<select>`
+is checked for having taken the value **before** the change event is dispatched:
+React flushes a discrete event synchronously and re-renders from props the write
+has not come back and changed yet, which puts the old value back.
 
 **`fidelity` and `claude-check`** - TUI fidelity inside xterm. These render
 `spike.html`, a separate page from the app, so app layout changes cannot move

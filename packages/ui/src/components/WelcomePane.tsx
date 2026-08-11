@@ -18,9 +18,9 @@ export function WelcomePane({
   onCreateHarness
 }: WelcomePaneProps): JSX.Element {
   return (
-    <div className="grid h-full place-items-center px-8">
+    <div className="grid h-full place-items-center rounded-island border border-border bg-surface px-8">
       <div className="max-w-md text-center">
-        <h1 className="text-[17px] font-semibold tracking-tight text-fg">Helm</h1>
+        <h1 className="text-[17px] font-medium tracking-tight text-fg">Helm</h1>
         <p className="mt-1.5 text-[13px] text-fg-muted">
           {projectCount > 0
             ? 'Pick a project on the left.'
@@ -29,10 +29,10 @@ export function WelcomePane({
 
         {roots.length > 0 && (
           <div className="mt-6 text-left">
-            <p className="mb-1.5 text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+            <p className="mb-1.5 text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
               Scanning
             </p>
-            <ul className="rounded-lg border border-border bg-surface">
+            <ul className="rounded-raised border border-border bg-surface-raised">
               {roots.map((root) => (
                 <li
                   key={root}
@@ -53,7 +53,7 @@ export function WelcomePane({
           <button
             type="button"
             onClick={onAddRoot}
-            className="rounded-md border border-border bg-surface px-3 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
+            className="rounded-well border border-border-strong px-3 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
           >
             Add a folder
           </button>
@@ -62,7 +62,7 @@ export function WelcomePane({
               type="button"
               data-welcome-create-harness
               onClick={onCreateHarness}
-              className="rounded-md border border-border bg-surface px-3 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
+              className="rounded-well border border-border-strong px-3 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
             >
               Create a harness
             </button>

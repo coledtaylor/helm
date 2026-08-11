@@ -92,7 +92,7 @@ export function McpPanel({
       <div className="mx-auto max-w-3xl px-8 py-7">
         <header className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="text-[17px] leading-snug font-semibold tracking-tight text-fg">
+            <h2 className="text-[17px] leading-snug font-medium tracking-tight text-fg">
               MCP servers
             </h2>
             <p className="mt-1.5 text-[12px] leading-relaxed text-fg-muted">
@@ -109,7 +109,7 @@ export function McpPanel({
             disabled={listing_busy}
             title="Runs `claude mcp list`, which connects to every server"
             className={cn(
-              'flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1',
+              'flex shrink-0 items-center gap-1.5 rounded-well border border-border-strong px-2.5 py-1',
               'text-[11px] text-fg transition-colors hover:bg-hover disabled:opacity-50'
             )}
           >
@@ -137,11 +137,11 @@ export function McpPanel({
         {/* Configured                                                     */}
         {/* ------------------------------------------------------------- */}
         <section className="mt-6">
-          <h3 className="mb-2 text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+          <h3 className="mb-2 text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
             Configured
           </h3>
           {servers.length === 0 ? (
-            <p className="rounded-lg border border-border bg-surface px-3 py-6 text-center text-[12px] text-fg-subtle">
+            <p className="rounded-raised border border-border bg-surface-raised px-3 py-6 text-center text-[12px] text-fg-subtle">
               No MCP server is configured for this directory at any scope.
             </p>
           ) : (
@@ -151,7 +151,7 @@ export function McpPanel({
                   key={`${server.scope}:${server.name}`}
                   data-mcp-server={server.name}
                   data-mcp-scope={server.scope}
-                  className="overflow-hidden rounded-lg border border-border bg-surface"
+                  className="overflow-hidden rounded-raised border border-border bg-surface-raised"
                 >
                   <div className="flex items-center gap-2.5 px-3 py-2">
                     <PlugIcon
@@ -218,7 +218,7 @@ export function McpPanel({
                   <button
                     type="button"
                     onClick={() => onOpenFile(server.file)}
-                    className="block w-full truncate border-t border-border px-3 py-1 text-left font-mono text-[10px] text-fg-subtle transition-colors hover:text-accent"
+                    className="block w-full truncate border-t border-border px-3 py-1 text-left font-mono text-[10px] text-fg-subtle transition-colors hover:text-accent-text"
                   >
                     {server.file}
                   </button>
@@ -233,7 +233,7 @@ export function McpPanel({
         {/* ------------------------------------------------------------- */}
         <section className="mt-7">
           <div className="mb-2 flex items-baseline gap-3">
-            <h3 className="text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+            <h3 className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
               Add a server
             </h3>
             {!adding && (
@@ -249,7 +249,7 @@ export function McpPanel({
           </div>
 
           {adding && (
-            <div className="rounded-lg border border-border bg-surface p-4">
+            <div className="rounded-raised border border-border bg-surface-raised p-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block">
                   <span className="mb-1 block text-[10px] font-medium tracking-wide text-fg-subtle uppercase">
@@ -302,7 +302,7 @@ export function McpPanel({
                   rows={5}
                   placeholder={'{ "command": "node", "args": ["server.mjs"] }'}
                   className={cn(
-                    'w-full resize-y rounded-md border bg-surface-sunken p-2',
+                    'w-full resize-y rounded-raised border bg-surface-sunken p-2',
                     'font-mono text-[11px] leading-[1.55] text-fg select-text placeholder:text-fg-subtle',
                     'focus:outline-none',
                     jsonProblem !== null ? 'border-danger/50' : 'border-border focus:border-accent'
@@ -322,10 +322,10 @@ export function McpPanel({
                   onClick={onPreview}
                   disabled={!canPreview}
                   className={cn(
-                    'rounded-md px-2.5 py-1 text-[11px] font-medium transition',
+                    'rounded-well border px-2.5 py-1 text-[11px] font-medium transition-colors',
                     canPreview
-                      ? 'bg-accent text-accent-fg hover:brightness-110'
-                      : 'cursor-default bg-accent/40 text-accent-fg/70'
+                      ? 'border-accent text-accent-text hover:bg-accent-soft'
+                      : 'cursor-default border-border text-fg-subtle opacity-60'
                   )}
                 >
                   Show what would change
@@ -336,7 +336,7 @@ export function McpPanel({
                     setAdding(false)
                     onCancelPreview()
                   }}
-                  className="rounded-md border border-border px-2.5 py-1 text-[11px] text-fg transition-colors hover:bg-hover"
+                  className="rounded-well border border-border-strong px-2.5 py-1 text-[11px] text-fg transition-colors hover:bg-hover"
                 >
                   Cancel
                 </button>
@@ -351,7 +351,7 @@ export function McpPanel({
         {preview !== null && (
           <section className="mt-5" data-mcp-diff>
             <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <h3 className="text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+              <h3 className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
                 Predicted change
               </h3>
               <p className="min-w-0 flex-1 truncate font-mono text-[10px] text-fg-subtle">
@@ -364,12 +364,12 @@ export function McpPanel({
             ) : (
               <>
                 {preview.replaces !== null && (
-                  <p className="mb-2 rounded-md border border-warn/30 bg-warn/10 px-3 py-1.5 text-[11px] text-fg-muted">
+                  <p className="mb-2 rounded-raised border border-warn/30 bg-warn/10 px-3 py-1.5 text-[11px] text-fg-muted">
                     A server called <code className="font-mono">{draft.name}</code> is already
                     configured in this scope and would be replaced.
                   </p>
                 )}
-                <pre className="max-h-72 overflow-auto rounded-lg border border-border bg-surface-sunken py-2 font-mono text-[10px] leading-[1.55] select-text">
+                <pre className="max-h-72 overflow-auto rounded-raised border border-border bg-surface-sunken py-2 font-mono text-[10px] leading-[1.55] select-text">
                   {preview.diff.map((line, index) => (
                     <div
                       key={index}
@@ -394,8 +394,8 @@ export function McpPanel({
                     onClick={onApply}
                     disabled={applying}
                     className={cn(
-                      'rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-accent-fg transition',
-                      applying ? 'cursor-default opacity-70' : 'hover:brightness-110'
+                      'rounded-well border border-accent px-2.5 py-1 text-[11px] font-medium text-accent-text transition-colors',
+                      applying ? 'cursor-default opacity-60' : 'hover:bg-accent-soft'
                     )}
                   >
                     {applying ? 'Running the CLI…' : 'Run claude mcp add-json'}
@@ -403,7 +403,7 @@ export function McpPanel({
                   <button
                     type="button"
                     onClick={onCancelPreview}
-                    className="rounded-md border border-border px-2.5 py-1 text-[11px] text-fg transition-colors hover:bg-hover"
+                    className="rounded-well border border-border-strong px-2.5 py-1 text-[11px] text-fg transition-colors hover:bg-hover"
                   >
                     Not now
                   </button>
@@ -421,12 +421,12 @@ export function McpPanel({
         {/* ------------------------------------------------------------- */}
         {listing !== null && (
           <section className="mt-7">
-            <h3 className="mb-2 text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
+            <h3 className="mb-2 text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
               claude mcp list
             </h3>
             <pre
               data-mcp-listing
-              className="max-h-64 overflow-auto rounded-lg border border-border bg-surface-sunken px-3 py-2 font-mono text-[11px] leading-[1.55] text-fg-muted select-text"
+              className="max-h-64 overflow-auto rounded-raised border border-border bg-surface-sunken px-3 py-2 font-mono text-[11px] leading-[1.55] text-fg-muted select-text"
             >
               {listing.output || 'No output.'}
             </pre>
@@ -438,7 +438,7 @@ export function McpPanel({
 }
 
 const fieldClass = cn(
-  'h-7 w-full rounded-md border border-border bg-surface-sunken px-2 text-[12px]',
+  'h-7 w-full rounded-well border border-border bg-surface-sunken px-2 text-[12px]',
   'text-fg placeholder:text-fg-subtle select-text',
   'focus:border-accent focus:outline-none'
 )

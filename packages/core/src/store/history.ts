@@ -225,7 +225,7 @@ function toSession(row: SessionRow): HistorySession {
 }
 
 /**
- * A substring of a prompt, as a LIKE pattern.
+ * A substring of a prompt or a project path, as a LIKE pattern.
  *
  * FTS5 was the other option and is the wrong one here. This box filters a list
  * while you type, so `geofenc` has to match `geofencing` and `--resume` has to
@@ -251,8 +251,16 @@ function buildFilters(query: HistoryQuery): Filters {
   const search = query.search?.trim() ?? ''
   if (search !== '') {
     params['like'] = likePattern(search)
+    // The project counts as well as the prompt. "Every session in product-mobile" is
+    // the same gesture as "the session where I asked about geofencing", and the
+    // project dropdown beside this box only answers the first when you already
+    // know which of 36 projects to pick. Matched against `project_key`, which
+    // is stored lower-cased, so the comparison does not depend on LIKE's
+    // ASCII-only case folding.
+    params['likeKey'] = likePattern(search.toLowerCase())
     clauses.push(
-      `s.session_id IN (SELECT session_id FROM history_prompts WHERE text LIKE @like ESCAPE '\\')`
+      `(s.session_id IN (SELECT session_id FROM history_prompts WHERE text LIKE @like ESCAPE '\\')
+        OR s.project_key LIKE @likeKey ESCAPE '\\')`
     )
   }
 

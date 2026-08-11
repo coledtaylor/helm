@@ -4,18 +4,33 @@ Desktop shell on top of Claude Code. Read [docs/SPEC.md](docs/SPEC.md) before
 doing anything - it contains the measured evidence and design decisions. Do not
 re-litigate decisions recorded there without new evidence.
 
+**All UI work follows [docs/DESIGN.md](docs/DESIGN.md)** - the "Nocturne
+Islands" design system. Read it before touching anything a user sees. The
+short version: semantic tokens only (no raw hex in components), islands with
+hairline edges on a sunken canvas, the accent never solid-fills anything, no
+shadows outside modals, no text weight past 500, mono for machine data. If a
+change cannot be expressed in the system's tokens and rules, amend DESIGN.md
+deliberately or reconsider the change.
+
+Look at the app, not at the class names. `pnpm design-shot` opens the real
+window, walks every main view in both themes and writes PNGs to
+`%APPDATA%\Helm\screenshots\design`. A UI change is not done until you have
+looked at one, and measuring a suspect edge in the PNG beats eyeballing it.
+
 ## Work tracking
 
 Work is tracked in ClickUp: list **"Helm - Claude Code Shell"** (id `901114291892`)
 [docs/TASKS.md](docs/TASKS.md) maps task IDs to scope.
 
-- Pick tasks in priority order. **Spike A gates everything** - if it has no
-  recorded verdict yet, it is the only valid task to start.
+- Pick tasks in priority order. The three spikes and M1-M6 are closed with
+  recorded verdicts; M7 is built with one criterion that needs a second machine,
+  and the transcript archive is deferred to v1.1. TASKS.md has the verdicts -
+  read it there rather than assuming from this list.
 - Each task has checkbox acceptance criteria. A task is done when every box is
   checked, not before. Update the ClickUp task with findings and check the boxes
   as you go.
-- Spike findings also get a reference note in the harness (`../../notes/`) per
-  harness convention.
+- Findings worth keeping also get a reference note in the harness
+  (`../../notes/`) per harness convention.
 
 ## Layout
 
@@ -56,61 +71,63 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   and `ptyEnv` in `packages/desktop/src/main/pty.ts` is load-bearing for TUI
   fidelity, and every line of it is there because Spike C measured the failure
   it prevents. Do not "simplify" it without reading
-  [docs/SPIKE-C.md](docs/SPIKE-C.md); `pnpm fidelity` and `pnpm claude-check`
-  are the regression tests. They render `spike.html`, a separate page from the
-  app, so app layout changes cannot move the terminal under them.
-- `pnpm m2-check` is the same idea for the app itself: it drives the real
-  window - clicking sidebar rows, the launch button, tabs and their close
-  buttons - and asserts on processes, grids and database rows. Run it after
-  touching session lifecycle, the tab strip, or shutdown.
-- `pnpm m3-check` does it for composition: it builds a profile through the real
-  form, launches it, and asks the live session whether the overlays' skills and
-  instructions actually arrived. Run it after touching `core/launch/`, the
-  profile UI, or the argv builder. It spawns real `claude` sessions on haiku and
-  takes minutes. It runs in three phases - the driver, a second real app start
-  (`--shim-sweep`), then `scripts/verify-shims.mjs` - because "stale shims are
-  cleaned at startup" cannot be asserted by the process that already started.
-- `pnpm m4-check` covers the session index. It drives the history pane through
-  the real window and checks every count against its own independent read of
-  `~/.claude/history.jsonl` - a parser agreeing with itself proves nothing. It
-  spawns two real `claude` sessions (one resumed through the app, one on its own
-  pty to prove the watcher notices a session Helm did not start), so it takes
-  minutes; `--only=list,search,resume,reaped,outside` narrows a re-run.
-- `pnpm m5-check` covers the config console. Same discipline: the tree is
-  checked against its own `readdirSync` walk, restores against its own
-  `sha256`, and predicted overlay namespaces against a hand-built
-  `basename(overlay):skill` list. The effective view is then checked against a
-  **live session** - three predicted skills invoked, and the settings winner
-  read back out of `env` - because a prediction about a session is only worth
-  what a session says about it. Spawns one `claude` on haiku;
-  `--only=browse,edit,snapshot,json,external,mcp,effective,doctor` narrows it.
-- `pnpm usage-check` covers the status bar's usage figures. Same discipline: a
-  plain `JSON.parse` beside `parseUsage`, a hand-written "which of these may be
-  shown" beside `usageView`, a hand-computed weekday beside `formatResetsIn`, a
-  hand-written parse of all 163 transcripts beside the incremental index, and a
-  regex over the rendered text beside the component. Three of the criteria could
-  not be settled by agreement and are not: a live `claude` is asked for `/usage`
-  and its own panel compared to the bar, a fixture's window is set to expire ten
-  seconds out so a rollover happens *underneath* the segment, and the full parse
-  the index avoids is measured rather than quoted. Two phases, because "the mode
-  survives a restart" cannot be asserted by the process that set it. Spawns one
-  `claude` session and runs no inference;
-  `--only=read,watch,resets,degrade,setting,width,cost,dollars,live` narrows it.
-- `pnpm m7-check` covers first run and the built artefacts, in three phases.
-  Two of its shapes are worth knowing before touching it. **First run is a
-  second process**: "a fresh `~/.claude` and no harness at all" is not a state
-  the developer's profile can enter, so `run-m7.mjs` starts the app again with
-  `PORTABLE_EXECUTABLE_DIR` pointed at a temporary directory - the app's own
-  portable-mode mechanism, not a test hook - and `--claude-home=` pointed away
-  from the real one. Nothing of the user's is backed up because nothing of the
-  user's is opened. And **the grep audit is made to fail first**: a file
-  carrying a Windows profile path, a harness path and a private project name is
-  planted, caught, and deleted before its clean result is believed, because a
-  grep that finds nothing is indistinguishable from a grep looking for nothing.
-  The packaging phase installs the NSIS package for real and uninstalls it;
-  `--only=audit|cli|firstrun|harness|scan|version|package` narrows a re-run, and
-  `--sandbox=` puts the throwaway profile somewhere with no account name in the
-  path, which is how the README's screenshots were taken.
+  [docs/SPIKE-C.md](docs/SPIKE-C.md). Its two checks render `spike.html`, a
+  separate page from the app, so app layout changes cannot move the terminal
+  under them.
+  - Five of those values are now **settings** (M9): font family, font size,
+    cursor style, cursor blink, scrollback. `TERMINAL_DEFAULTS` in the same
+    file is what they default to, and it is exactly what was baked in before,
+    so the documented baseline is unchanged - a setting nobody has touched
+    produces the configuration Spike C proved. They reach a terminal by being
+    **passed in**: `createTerminal(container, opts, hooks, prefs)`. The app
+    hands down its effective preferences from `settings:changed` through
+    `app/termprefs.ts`, and `spike.ts` calls the same function with three
+    arguments and gets the defaults - which is why `pnpm fidelity` and
+    `pnpm claude-check` still measure the proven configuration and why a
+    setting must never be routed through the `term:*` channels to reach them.
+  - Everything else in that file stays fixed and is not a setting:
+    `minimumContrastRatio: 1`, `drawBoldTextInBrightColors: false`,
+    `allowProposedApi` / Unicode 11, `lineHeight`, and the whole 24-bit
+    `THEME`. The palette in particular is asserted pixel-for-pixel by fidelity
+    C1; making colours settable is a deliberate DESIGN.md amendment, not a row
+    in the settings pane.
+  - `estimateGrid` (`app/terminals.ts`) reads the same preferences and must
+    keep measuring the way xterm does: a **DOM span**, not a canvas - the two
+    resolve a font stack by different rules and disagreed by 6% on this machine
+    - then the WebGL renderer's device-pixel flooring across and rounding-up
+    down, then FitAddon's flat 14px overview-ruler reserve. Each of those three
+    is worth a column or more; without them the pty opens at a grid the pane
+    does not have.
+- The checks below are the same idea for the app itself: they drive the **real
+  window** and most of them spawn real `claude` sessions. They are the only
+  coverage `packages/ui` and `packages/desktop` have - all 270 unit tests live
+  in `packages/core` - so a change to a surface named here is not done until its
+  check is green. They sit outside `pnpm check` deliberately: that stays fast
+  and hermetic, these take minutes and cost tokens. The `mN` names are the
+  ClickUp milestones whose acceptance criteria they encode, which is what
+  TASKS.md maps. What each one actually does - its phases, why it is shaped the
+  way it is, and its `--only` groups - is in the **`checks` skill**; the
+  authority for the groups is the driver's own `GROUPS`, never prose.
+
+  | check | covers | run after touching |
+  |---|---|---|
+  | `pnpm m2-check` | sessions, tabs, teardown | session lifecycle, the tab strip, shutdown |
+  | `pnpm m3-check` | profiles, overlay shims, argv | `core/launch/`, the profile UI, the argv builder |
+  | `pnpm m4-check` | session index, resume | history parsing, the history pane, resume |
+  | `pnpm m5-check` | config console, effective view, MCP | `core/config/`, anything that writes into a `.claude` tree |
+  | `pnpm m6-check` | markdown, artifacts, wikilinks, editor | `core/content/`, the content viewer |
+  | `pnpm m7-check` | first run, packaging, personal-path audit | setup, portable mode, the installer |
+  | `pnpm usage-check` | the status bar's usage figures | `core/usage/`, the status bar |
+  | `pnpm settings-check` | the settings pane, every app setting, and the terminal/shell preferences | `core/store/settings.ts`, `SettingsPane`, `terminal.ts`, `estimateGrid`, `main/pterm.ts`, anything that writes a setting |
+  | `pnpm pr-check` | the pull-request surface: fetch, cache, detail tab, review launch, degradation | `core/github/`, `main/pulls.ts`, `main/gh-cli.ts`, `PullsPane`, `PullRequestPane`, `SessionHost.review` |
+  | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
+
+  `terminal.ts` is under two of them and they answer different questions:
+  fidelity says the baked configuration still renders a TUI correctly,
+  `settings-check --only=terminal` says a preference reaches every live
+  terminal without disturbing that. A change there is not done until both are
+  green and fidelity's numbers have not moved.
+
 - `dist:win` goes through `scripts/dist-win.mjs`, not straight to
   electron-builder. electron-builder resolves the package manager with `which`,
   which prefers `pnpm.EXE` over `pnpm.CMD` on Windows, and a stale standalone
@@ -123,6 +140,27 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   *existence* of one - `.credentials.json`, `ANTHROPIC_API_KEY`, or an
   onboarding record in `.claude.json`. Nothing opens any of them. The whole
   remedy for "not signed in" is a sentence telling the user to run `claude`.
+- The same rule for GitHub, and it is the reason the pull-request surface shells
+  out to `gh` rather than calling the API. Helm never receives, stores or reads
+  a GitHub token: `gh` owns it, every fetch runs on it, and a sign-in is
+  detected **only from the exit code of `gh auth status`** - nothing opens
+  `hosts.yml`, the keyring, or `GH_TOKEN`. The whole remedy for "not signed in"
+  is a sentence telling the user to run `gh auth login`. A remote URL carrying
+  an embedded token is a credential too, so `parseGitHubRemote` strips the
+  userinfo before anything is written to the database.
+  - This changed Helm's documented network posture and the change was made in
+    the open rather than quietly: the update check is now the only **direct**
+    request Helm makes, and `gh` makes others on the user's own token on a
+    schedule the user sets. README, [docs/PACKAGING.md](docs/PACKAGING.md), the
+    `update:check` comment in `shared/ipc.ts` and SPEC 5 all say the same
+    sentence; if that posture moves again, all four move together.
+  - A review launch composes its prompt in **main** and the window never sends
+    one: `pr:review` carries `{repoPath, number, cols, rows}`, the same shape
+    `profile:launch` takes and for the same reason. The detail pane renders the
+    template too, but only to say what the button will run - when the preview
+    and the argv disagree, the argv is right and the preview is the bug.
+    `prCheckout: 'checkout'` is refused on a dirty tree rather than stashing;
+    Helm does not move somebody's uncommitted work.
 - Usage figures degrade to **nothing** rather than to a stale number. The
   server's own answer in `cachedUsageUtilization` is authoritative but dated, so
   a reading older than `USAGE_STALE_AFTER_MS`, one whose `resets_at` has already
@@ -191,6 +229,29 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
 - Schema changes: edit `packages/core/src/store/schema.ts`, then
   `pnpm db:generate`. The generated SQL is embedded into the bundle, so a
   packaged exe carries its migrations rather than needing files beside it.
+- **Adding an app setting** is four edits and no migration, because
+  `app_settings` is JSON-per-key:
+  1. the key and its default in `AppSettings` / `DEFAULT_SETTINGS`
+     (`core/src/types.ts`) - that is the whole of the persistence step;
+  2. a validator in `SETTING_VALIDATORS` (`core/src/store/settings.ts`). The map
+     is `Record<keyof AppSettings, ...>`, so a key with no validator does not
+     compile, and a value that fails one writes nothing and throws. Add its
+     valid *and* invalid cases to the table in `store.test.ts`;
+  3. a row in the matching group of `ui/src/components/SettingsPane.tsx`, with a
+     `data-settings-*` hook so the driver can drive it;
+  4. only if the value drives something outside the database, a branch in the
+     `settings:write` ladder in `main/ipc.ts` - that ladder is the entire
+     side-effect dispatch (theme retints the overlay, `claudePath` reaches the
+     session host).
+
+  Then extend `pnpm settings-check`: a setting with no assertion in it is a
+  setting nothing proves round-trips. Reads stay tolerant (unknown keys ignored,
+  bad JSON falls back per key) and writes stay strict - a row from another build
+  is a fact about the past, a malformed write is a bug happening now. Internal
+  state (`windowBounds`, `firstRunCompletedAt`) lives in the same table and is
+  deliberately *not* in the pane: those are things Helm remembers, not things
+  anyone chose. Settings for Helm go here; anything that edits a `.claude` tree
+  is the config console's, and the two are not the same surface.
 - Do not use `@anthropic-ai/claude-agent-sdk`. Helm shells out to the `claude`
   CLI. This is a deliberate architectural decision (see SPEC "Supersedes the SDK
   draft") - the app hosts the TUI, it does not reimplement the client.
@@ -206,9 +267,11 @@ This section describes **this development machine**, not the product. Everything
 named here is a fixture; nothing in `packages/` may assume any of it, and
 `pnpm m7-check --only=audit` fails the build if it starts to.
 
-- `claude` CLI is at `~/.local/bin/claude` (2.1.225). The tested range is
-  declared in `CLAUDE_TESTED_RANGE` (`src/main/setup.ts`) and asserted at
-  startup: warn, don't block.
+- `claude` CLI is at `~/.local/bin/claude`. The tested range is declared in
+  `CLAUDE_TESTED_RANGE` (`src/main/setup.ts`) and asserted at startup: warn,
+  don't block. Ask the binary what version it is rather than trusting a number
+  written down here; the "measured on 2.1.225" notes above date the evidence
+  and are not claims about what is installed now.
 - This repo lives inside a harness (`~/.harness/dev/repos/helm`). The harness
   root and its sibling repositories are the primary test fixtures for overlay
   composition - they have real `.claude/skills` to compose. Those repositories

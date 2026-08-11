@@ -238,6 +238,47 @@ export function SlidersIcon(props: IconProps): JSX.Element {
   )
 }
 
+/**
+ * Helm's own settings: a gear, which is the one glyph nobody has to learn.
+ *
+ * Not `SlidersIcon` - that belongs to the config console, which edits Claude's
+ * `.claude` trees, and the whole point of this pane is that the two are
+ * different things. Eight teeth drawn as a stroked ring with radial ticks
+ * rather than a filled cog: at 14px a cog outline turns to mush, and this sits
+ * at the same optical weight as its neighbours in the title bar.
+ */
+export function GearIcon(props: IconProps): JSX.Element {
+  const teeth = Array.from({ length: 6 }, (_, i) => {
+    const a = (i * 2 * Math.PI) / 6 + Math.PI / 6
+    return {
+      x1: 8 + 5.1 * Math.cos(a),
+      y1: 8 + 5.1 * Math.sin(a),
+      x2: 8 + 6.9 * Math.cos(a),
+      y2: 8 + 6.9 * Math.sin(a)
+    }
+  })
+  return (
+    <Icon {...props}>
+      {/* Six teeth rather than eight, a wide ring, and a filled hub rather than
+          a stroked one. At 14px on a 1x display the 1.5 stroke is a fixed
+          budget, so the only way to keep air inside the glyph is to spend it
+          further out: a small stroked circle closes to a blob, and eight teeth
+          on a tight ring read as the sun two buttons along. */}
+      <circle cx="8" cy="8" r="1.25" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="8" r="5.1" />
+      {teeth.map((t, i) => (
+        <line
+          key={i}
+          x1={t.x1.toFixed(2)}
+          y1={t.y1.toFixed(2)}
+          x2={t.x2.toFixed(2)}
+          y2={t.y2.toFixed(2)}
+        />
+      ))}
+    </Icon>
+  )
+}
+
 /** A plain document, for CLAUDE.md and anything else read as prose. */
 export function DocIcon(props: IconProps): JSX.Element {
   return (
@@ -423,6 +464,92 @@ export function ListIcon(props: IconProps): JSX.Element {
     <Icon {...props}>
       <path d="M5.75 4.25h7.5M5.75 8h7.5M5.75 11.75h7.5" />
       <path d="M2.9 4.25h.01M2.9 8h.01M2.9 11.75h.01" />
+    </Icon>
+  )
+}
+
+/**
+ * A pull request: one branch with two ends, another rising into an arrow.
+ *
+ * Drawn here rather than borrowed from GitHub's set, like every other glyph in
+ * this file - and for one extra reason: a mark taken from the service would be
+ * the only thing in the shell claiming to be somebody's brand.
+ */
+export function PullRequestIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <circle cx="4.5" cy="3.5" r="1.75" />
+      <circle cx="4.5" cy="12.5" r="1.75" />
+      <path d="M4.5 5.25v5.5" />
+      <circle cx="11.5" cy="12.5" r="1.75" />
+      <path d="M11.5 10.75V5.25" />
+      <path d="m9.6 7.15 1.9-1.9 1.9 1.9" />
+    </Icon>
+  )
+}
+
+/**
+ * The brand mark: the ship's wheel the app icon is drawn from.
+ *
+ * Same proportions as `scripts/make-icon.mjs`, converted from its 256 grid to
+ * this 16 one (rim 62, spokes 101, knobs 13, hub 21, all x 16/256) - so the
+ * mark in the window and the icon on the taskbar are the same drawing, not two
+ * that resemble each other.
+ *
+ * Vector rather than the .ico the window itself is given: this renders at
+ * whatever the display's pixel ratio is, and a 16px bitmap on a 150% monitor is
+ * the one place that artwork visibly softens.
+ *
+ * Filled, not stroked, because it inherits `currentColor` and sits at 13-15px:
+ * a 0.8-wide stroke at that size lands under one device pixel on a 1x display
+ * and drops out.
+ */
+export function HelmMarkIcon(props: IconProps): JSX.Element {
+  const spokes = Array.from({ length: 8 }, (_, i) => {
+    const a = (i * 2 * Math.PI) / 8
+    return { x: 8 + 6.31 * Math.cos(a), y: 8 + 6.31 * Math.sin(a) }
+  })
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      aria-hidden="true"
+      focusable="false"
+      {...props}
+    >
+      {/* Spokes first, so the rim and hub paint over their inner ends. */}
+      {spokes.map((p, i) => (
+        <line
+          key={i}
+          x1="8"
+          y1="8"
+          x2={p.x.toFixed(2)}
+          y2={p.y.toFixed(2)}
+          strokeWidth="0.85"
+          strokeLinecap="round"
+        />
+      ))}
+      {spokes.map((p, i) => (
+        <circle key={`k${String(i)}`} cx={p.x.toFixed(2)} cy={p.y.toFixed(2)} r="0.95" fill="currentColor" stroke="none" />
+      ))}
+      <circle cx="8" cy="8" r="3.88" strokeWidth="1" />
+      <circle cx="8" cy="8" r="1.31" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+/**
+ * The disclosure caret on a collapsible section. Points right; the caller
+ * rotates it 90deg when the section is open, so the two states are one glyph
+ * turning rather than two glyphs swapping.
+ */
+export function CaretIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon strokeWidth="2" {...props}>
+      <path d="M6.25 3.5 10.75 8l-4.5 4.5" />
     </Icon>
   )
 }

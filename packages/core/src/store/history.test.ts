@@ -254,6 +254,28 @@ describe('readHistorySessions', () => {
     expect(readHistorySessions(store, { project: BETA.toUpperCase() }).total).toBe(1)
   })
 
+  it('searches the project path as well as the prompts', () => {
+    // No prompt in the fixture says "beta"; the only thing that does is the
+    // directory session b ran in.
+    const { sessions, total } = readHistorySessions(store, { search: 'beta' })
+    expect(total).toBe(1)
+    expect(sessions[0]?.sessionId).toBe('b')
+  })
+
+  it('matches a project whatever case the search box was typed in', () => {
+    expect(readHistorySessions(store, { search: 'BETA' }).total).toBe(1)
+    expect(readHistorySessions(store, { search: 'repos\\beta' }).total).toBe(1)
+  })
+
+  it('counts a session once when the search matches its project and a prompt', () => {
+    // `a` matches by prompt only, `b` by both. A join instead of the IN/OR
+    // would return `b` twice and report three matches for two sessions.
+    expect(readHistorySessions(store, { search: 'geofenc' }).total).toBe(2)
+    const { sessions, total } = readHistorySessions(store, { search: 'e' })
+    expect(total).toBe(sessions.length)
+    expect(new Set(sessions.map((s) => s.sessionId)).size).toBe(sessions.length)
+  })
+
   it('filters to what can actually be resumed', () => {
     const { sessions, total } = readHistorySessions(store, { resumableOnly: true })
     expect(total).toBe(1)

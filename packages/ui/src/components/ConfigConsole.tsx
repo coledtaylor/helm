@@ -8,8 +8,10 @@ import type {
 } from '@helm/core'
 import { cn } from '../lib/cn'
 import { formatAge, formatBytes } from '../lib/time'
+import { PaneBack } from './PaneBack'
 import {
   AgentIcon,
+  CaretIcon,
   CommandIcon,
   DocIcon,
   FolderIcon,
@@ -39,6 +41,15 @@ export interface ConfigConsoleProps {
   dirty?: boolean | undefined
   onRefresh: () => void
   refreshing: boolean
+
+  /**
+   * Docked beside a session split, where the list and the editor cannot both be
+   * readable. The pane then shows one at a time: the list until a file is
+   * picked, then the editor with a way back.
+   */
+  compact?: boolean | undefined
+  /** Clears the selection, which is what puts the list back. */
+  onBack?: (() => void) | undefined
 
   /** The editor, the effective view, the MCP panel or the health panel. */
   children: ReactNode
@@ -106,9 +117,15 @@ export function ConfigConsole({
   dirty = false,
   onRefresh,
   refreshing,
+  compact = false,
+  onBack,
   children
 }: ConfigConsoleProps): JSX.Element {
   const [filter, setFilter] = useState('')
+  // One at a time, and only when narrow: at full width both fit and swapping
+  // them would cost a click for nothing.
+  const showList = !compact || selected === null
+  const showDetail = !compact || selected !== null
 
   const scope = scopes.find((s) => s.path.toLowerCase() === scopePath.toLowerCase()) ?? null
 
@@ -136,6 +153,20 @@ export function ConfigConsole({
   const shown = groups.reduce((n, [, files]) => n + files.length, 0)
   const total = tree?.files.length ?? 0
 
+  // Only the sections someone has deliberately shut are in here, so a kind that
+  // appears in a scope opened later starts expanded rather than hidden behind a
+  // key nothing has written. Same rule the sidebar's harness groups follow.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+  const toggleSection = (key: string): void =>
+    setCollapsed((current) => {
+      const next = new Set(current)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
+  // A filter that hides its own matches is a filter that looks broken, so
+  // filtering opens every section it matched.
+  const isExpanded = (key: string): boolean => filter.trim() !== '' || !collapsed.has(key)
+
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     const step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0
     if (step === 0) return
@@ -149,10 +180,13 @@ export function ConfigConsole({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg">
-      <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-surface px-4">
+    // A column of islands with 8px of canvas between them: the header strip,
+    // then the file list beside the editor. The header is the island the
+    // active folder tab lifts into.
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <header className="flex h-11 shrink-0 items-center gap-3 rounded-island border border-border bg-surface px-4">
         <SlidersIcon width={15} height={15} className="shrink-0 text-accent" />
-        <h1 className="shrink-0 text-[13px] font-semibold tracking-tight text-fg">Config</h1>
+        <h1 className="shrink-0 text-[13px] font-medium tracking-tight text-fg">Config</h1>
 
         <label className="flex min-w-0 items-center gap-2">
           <span className="sr-only">Scope</span>
@@ -162,7 +196,7 @@ export function ConfigConsole({
             value={scopePath}
             onChange={(event) => onScopeChange(event.target.value)}
             className={cn(
-              'h-7 max-w-64 min-w-40 rounded-md border border-border bg-surface-sunken px-2',
+              'h-7 max-w-64 min-w-40 rounded-well border border-border bg-surface-sunken px-2',
               'text-[12px] text-fg focus:border-accent focus:outline-none'
             )}
           >
@@ -194,7 +228,13 @@ export function ConfigConsole({
 
         <span className="flex-1" />
 
-        <div role="group" aria-label="View" className="flex overflow-hidden rounded-md border border-border">
+        <div
+          role="group"
+          aria-label="View"
+          // A segmented control (DESIGN.md): sunken well, and the chosen
+          // segment lifts to the raised surface with a hairline ring.
+          className="flex gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
+        >
           {VIEWS.map((option) => (
             <button
               key={option.id}
@@ -203,10 +243,10 @@ export function ConfigConsole({
               aria-pressed={view === option.id}
               onClick={() => onViewChange(option.id)}
               className={cn(
-                'px-2.5 py-0.5 text-[11px] transition-colors',
+                'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
                 view === option.id
-                  ? 'bg-accent-soft text-fg'
-                  : 'text-fg-subtle hover:bg-hover hover:text-fg'
+                  ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                  : 'text-fg-muted hover:text-fg'
               )}
             >
               {option.label}
@@ -231,20 +271,23 @@ export function ConfigConsole({
       </header>
 
       {view !== 'files' ? (
-        <div className="min-h-0 flex-1">{children}</div>
+        <div className="min-h-0 flex-1 overflow-hidden rounded-island border border-border bg-surface">
+          {children}
+        </div>
       ) : (
-        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 flex-1 gap-2">
           {/* Proportional and bounded, the same way the history list is: the
               rows carry a skill's description, which is what makes one worth
               opening, and a fixed width either truncates it or wastes half a
               wide monitor on a list of short names. */}
+          {showList && (
           <div
             className={cn(
-              'flex w-[34%] max-w-[480px] min-w-[300px] shrink-0 flex-col',
-              'border-r border-border bg-surface'
+              'flex flex-col overflow-hidden rounded-island border border-border bg-surface',
+              compact ? 'min-w-0 flex-1' : 'w-[34%] max-w-[480px] min-w-[300px] shrink-0'
             )}
           >
-            <div className="shrink-0 border-b border-border p-2">
+            <div className="shrink-0 p-2">
               <div className="relative">
                 <SearchIcon
                   width={13}
@@ -259,7 +302,7 @@ export function ConfigConsole({
                   spellCheck={false}
                   aria-label="Filter this scope"
                   className={cn(
-                    'h-7 w-full rounded-md border border-border bg-surface-sunken pr-2 pl-7',
+                    'h-[26px] w-full rounded-well border border-border bg-surface-sunken pr-2 pl-7',
                     'text-[12px] text-fg select-text placeholder:text-fg-subtle',
                     'focus:border-accent focus:outline-none'
                   )}
@@ -293,33 +336,55 @@ export function ConfigConsole({
               ) : groups.length === 0 ? (
                 <Empty scope={scope} filtering={filter !== '' && total > 0} />
               ) : (
-                groups.map(([label, files]) => (
-                  <Fragment key={label}>
-                    <p
-                      className={cn(
-                        'sticky top-0 z-10 mt-3 flex items-baseline gap-2 bg-surface px-2 py-1',
-                        'text-[11px] font-medium tracking-wide text-fg-subtle uppercase first:mt-0'
-                      )}
-                    >
-                      <span className="min-w-0 truncate">{label}</span>
-                      <span className="tabular-nums">{files.length}</span>
-                    </p>
-                    {files.map((file) => (
-                      <Row
-                        key={file.path}
-                        file={file}
-                        selected={selected?.path === file.path}
-                        dirty={dirty && selected?.path === file.path}
-                        onSelect={onSelect}
-                      />
-                    ))}
-                  </Fragment>
-                ))
+                groups.map(([label, files]) => {
+                  const expanded = isExpanded(label)
+                  return (
+                    <Fragment key={label}>
+                      <button
+                        type="button"
+                        onClick={() => toggleSection(label)}
+                        aria-expanded={expanded}
+                        data-config-section={label}
+                        className={cn(
+                          'sticky top-0 z-10 mt-3 flex w-full items-center gap-1.5 bg-surface px-2 py-1',
+                          'text-left text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase',
+                          'transition-colors first:mt-0 hover:text-fg'
+                        )}
+                      >
+                        <CaretIcon
+                          width={8}
+                          height={8}
+                          className={cn('shrink-0 transition-transform', expanded && 'rotate-90')}
+                        />
+                        <span className="min-w-0 truncate">{label}</span>
+                        <span className="tabular-nums">{files.length}</span>
+                      </button>
+                      {expanded &&
+                        files.map((file) => (
+                          <Row
+                            key={file.path}
+                            file={file}
+                            selected={selected?.path === file.path}
+                            dirty={dirty && selected?.path === file.path}
+                            onSelect={onSelect}
+                          />
+                        ))}
+                    </Fragment>
+                  )
+                })
               )}
             </div>
           </div>
+          )}
 
-          <div className="min-w-0 flex-1">{children}</div>
+          {showDetail && (
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-island border border-border bg-surface">
+              {compact && selected !== null && onBack && (
+                <PaneBack label="All files" onBack={onBack} />
+              )}
+              <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -348,10 +413,16 @@ function Row({
       onClick={() => onSelect(file)}
       title={file.path}
       className={cn(
-        'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+        'relative flex w-full items-start gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
         selected ? 'bg-accent-soft' : 'hover:bg-hover'
       )}
     >
+      {selected && (
+        <span
+          aria-hidden
+          className="absolute top-1.5 bottom-1.5 left-0 w-[2px] rounded-full bg-accent"
+        />
+      )}
       <Icon
         width={13}
         height={13}

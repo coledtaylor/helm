@@ -1,6 +1,13 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { HistorySession, Profile, ProfileDraft, Project, SessionRecord } from '@helm/core'
+import {
+  DEFAULT_SETTINGS,
+  type HistorySession,
+  type Profile,
+  type ProfileDraft,
+  type Project,
+  type SessionRecord
+} from '@helm/core/types'
 import {
   AppShell,
   BookIcon,
@@ -8,11 +15,13 @@ import {
   ConfigConsole,
   ConfigEditor,
   ConfigNothingSelected,
+  ConfirmSessionDialog,
   ContentDocumentPane,
   ContentNothingSelected,
   ContentViewer,
   EffectiveViewPane,
   FolderIcon,
+  GearIcon,
   HarnessIcon,
   HealthPanel,
   HistoryIcon,
@@ -21,28 +30,42 @@ import {
   ProfileEditor,
   ProfileList,
   ProjectPane,
+  PullRequestIcon,
+  PullsPane,
+  pullsSummaryLine,
   RepoIcon,
   SessionHistory,
+  SettingsPane,
   SetupPane,
   Sidebar,
   SlidersIcon,
   StatusBar,
   TabBar,
   ThemeToggle,
+  TitleBar,
   VersionBanner,
   WelcomePane,
   type Tab,
   type TabIndicator
 } from '@helm/ui'
+import type { SessionConfirmRequest } from '../../../shared/ipc'
 import { helm } from './bridge'
+import { ProjectShellPane } from './ProjectShellPane'
+import { PullRequestTab } from './PullRequestTab'
+import { disposeShell } from './pterms'
+import { estimateGrid } from './terminals'
 import { TerminalPane } from './TerminalPane'
+import { terminalFontStack } from '../terminal'
 import { useConfig } from './useConfig'
 import { useContent } from './useContent'
 import { useHistory } from './useHistory'
 import { useLauncher } from './useLauncher'
 import { useProfiles } from './useProfiles'
+import { forgetPullDetail } from './usePullDetail'
+import { usePulls } from './usePulls'
 import { useSessions } from './useSessions'
 import { useSetup } from './useSetup'
+import { useShells } from './useShells'
 import { useUsage } from './useUsage'
 
 const KIND_ICON = {
@@ -52,22 +75,31 @@ const KIND_ICON = {
 } as const
 
 /**
- * Three kinds of tab, one strip.
+ * Two surfaces, two strips (DESIGN.md, mockup direction 2a).
  *
- * A project tab is a view of discovery's data and can be thrown away and
- * rebuilt at will, and so can the history tab - there is only ever one of it,
- * and every piece of state it has lives in `useHistory` rather than in the
- * component, so closing and reopening it does not lose a search. A session tab
- * has a process behind it, so it is closed by asking the main process, and its
- * pane stays mounted even while another tab is on screen - unmounting it would
- * drop the scrollback of a live session.
+ * The workspace holds panes that are views of data - projects, history,
+ * config, content - and can be thrown away and rebuilt at will; every piece
+ * of state they carry lives in a hook rather than in the component. Sessions
+ * are different in kind: each has a process behind it, so they dock as a
+ * resizable split on the right with their own tab row, are closed by asking
+ * the main process, and their panes stay mounted even while another session
+ * is in front - unmounting one would drop the scrollback of a live session.
+ * The split is what lets a session keep running in view while the workspace
+ * is browsed.
  */
 type PaneRef =
   | { kind: 'project'; path: string }
-  | { kind: 'session'; id: number }
   | { kind: 'history' }
+  | { kind: 'pulls' }
+  /**
+   * One pull request, opened from the list. Identified by the project it was
+   * opened from and not by the repository slug: two checkouts of one repository
+   * are two projects, and closing one must not close the other's tabs.
+   */
+  | { kind: 'pr'; repoPath: string; number: number }
   | { kind: 'config' }
   | { kind: 'content' }
+  | { kind: 'settings' }
 
 /**
  * A link in a rendered note, handed to the OS browser.
@@ -80,16 +112,39 @@ const helmOpenExternal = (url: string): Promise<{ opened: boolean }> =>
   helm.invoke('shell:openExternal', { url })
 
 const HISTORY_TAB = 'history'
+const PULLS_TAB = 'pulls'
 const CONFIG_TAB = 'config'
 const CONTENT_TAB = 'content'
+const SETTINGS_TAB = 'settings'
 
 const tabId = (ref: PaneRef): string => {
   if (ref.kind === 'project') return `project:${ref.path}`
-  if (ref.kind === 'session') return `session:${String(ref.id)}`
+  if (ref.kind === 'pulls') return PULLS_TAB
+  // Compared, never taken apart again: a Windows path can contain a `#` and a
+  // `:`, so this string is an identity and not a record. Whatever needs the
+  // path or the number reads them off the `PaneRef`.
+  if (ref.kind === 'pr') return `pr:${ref.repoPath}#${String(ref.number)}`
   if (ref.kind === 'config') return CONFIG_TAB
   if (ref.kind === 'content') return CONTENT_TAB
+  if (ref.kind === 'settings') return SETTINGS_TAB
   return HISTORY_TAB
 }
+
+/**
+ * A tab label, cut to what a 240px folder tab can hold.
+ *
+ * Cut here rather than left to `text-overflow`, because the label is a number
+ * and a title glued together and the number is the half that identifies it: CSS
+ * would ellipsise the whole string and a long title would be indistinguishable
+ * from the next long title.
+ */
+const truncate = (text: string, max: number): string =>
+  text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`
+
+/** The session strip's tab ids - `session:12` - kept in the exact shape the
+ * single-strip era used, because `m2-check` locates tabs by them. */
+const sessionTabId = (id: number): string => `session:${String(id)}`
+const sessionIdFromTab = (tab: string): number => Number(tab.slice('session:'.length))
 
 export function App(): JSX.Element {
   const launcher = useLauncher()
@@ -99,22 +154,78 @@ export function App(): JSX.Element {
   /** What the user last asked for. The tab that is actually active is derived
    * from it, because the requested one can stop existing. */
   const [requestedId, setRequestedId] = useState<string | null>(null)
+  /** Placement of the session strip; membership is derived from `sessions`. */
+  const [sessionOrder, setSessionOrder] = useState<number[]>([])
+  const [requestedSession, setRequestedSession] = useState<number | null>(null)
+  /** null = split; one side can take the whole row. */
+  const [maximize, setMaximize] = useState<'workspace' | 'sessions' | null>(null)
+  /** Fraction of the row the session pane takes, drag-bounded 0.2-0.8. */
+  const [split, setSplit] = useState(0.45)
+  const splitRowRef = useRef<HTMLDivElement>(null)
+  const draggingSplit = useRef(false)
   const [launching, setLaunching] = useState(false)
   /** The pane box, measured to open a pty at roughly the right grid. */
   const paneRef = useRef<HTMLDivElement>(null)
 
   const activateSession = useCallback((id: number) => {
-    setRequestedId(tabId({ kind: 'session', id }))
+    setRequestedSession(id)
+    // A notification click must actually reveal the session, so a maximized
+    // workspace gives the split back.
+    setMaximize((current) => (current === 'workspace' ? null : current))
   }, [])
 
   const sessionState = useSessions(activateSession)
   const { sessions } = sessionState
   const profileState = useProfiles()
   const historyState = useHistory()
+  const pullsState = usePulls()
   const configState = useConfig()
   const contentState = useContent()
   const usage = useUsage()
   const setup = useSetup(settings, launcher.rescan)
+  const shells = useShells()
+
+  /**
+   * The six terminal settings, and one writer for them.
+   *
+   * Written through `settings:write` like everything else, which is also what
+   * pushes them to the terminals: the main process answers with the whole
+   * settings object, `useLauncher` adopts it, and the registries that own the
+   * live terminals are told from there (termprefs.ts). Nothing here reaches a
+   * terminal directly.
+   */
+  const terminalSettings = useMemo(
+    () => ({
+      terminalFontFamily: settings?.terminalFontFamily ?? null,
+      terminalFontSize: settings?.terminalFontSize ?? DEFAULT_SETTINGS.terminalFontSize,
+      terminalCursorStyle: settings?.terminalCursorStyle ?? DEFAULT_SETTINGS.terminalCursorStyle,
+      terminalCursorBlink: settings?.terminalCursorBlink ?? DEFAULT_SETTINGS.terminalCursorBlink,
+      terminalScrollback: settings?.terminalScrollback ?? DEFAULT_SETTINGS.terminalScrollback,
+      terminalShell: settings?.terminalShell ?? null
+    }),
+    [settings]
+  )
+
+  const { writeSettings } = launcher
+  const locateShell = useCallback(() => {
+    void helm.invoke('path:chooseFile', { title: 'Choose a shell' }).then(({ path }) => {
+      if (path !== null) writeSettings({ terminalShell: path })
+    })
+  }, [writeSettings])
+
+  /**
+   * Point Helm at a `gh` it did not find. Written straight through
+   * `settings:write`, whose ladder re-resolves the binary and re-arms the
+   * poller - so what the GitHub group reports afterwards is the executable
+   * actually in force rather than the file that was picked.
+   */
+  const locateGh = useCallback(() => {
+    void helm
+      .invoke('path:chooseFile', { title: 'Locate the gh executable' })
+      .then(({ path }) => {
+        if (path !== null) writeSettings({ ghPath: path })
+      })
+  }, [writeSettings])
 
   /** The profile being edited, `'new'` for one being created from scratch, or
    * a seeded draft from "save as profile". Null when the dialog is closed. */
@@ -135,31 +246,36 @@ export function App(): JSX.Element {
   }, [sessions])
 
   /**
-   * The tab strip, derived rather than synced in an effect.
+   * Both strips, derived rather than synced in an effect.
    *
    * A rescan that no longer sees a project should close its tab, and every
    * session main is hosting should have one - including sessions this renderer
    * did not launch, which is the case after a reload (dev HMR, or a crashed
-   * render process) where the processes outlive the tab strip that was showing
+   * render process) where the processes outlive the strip that was showing
    * them. Writing either as `useEffect` + `setState` renders once with the
    * wrong tabs and then again with the right ones, for a value that is a pure
    * function of what we already have.
    *
-   * `order` therefore holds placement, not membership: a session that has never
-   * been moved or closed is simply appended.
+   * The order arrays therefore hold placement, not membership: a session that
+   * has never been moved or closed is simply appended.
    */
   const openPanes = useMemo(() => {
-    const placed = order.filter((ref) => {
+    return order.filter((ref) => {
       if (ref.kind === 'project') return !discovery || projectsByPath.has(ref.path)
-      if (ref.kind === 'session') return sessionsById.has(ref.id)
+      // A pull request tab follows its project, by the same rule: the project
+      // is where it was opened from and where a review would run, so a rescan
+      // that no longer sees the directory closes the tab with it.
+      if (ref.kind === 'pr') return !discovery || projectsByPath.has(ref.repoPath)
       return true
     })
-    const known = new Set(placed.filter((ref) => ref.kind === 'session').map((ref) => ref.id))
-    const appended = sessions
-      .filter((session) => !known.has(session.id))
-      .map((session): PaneRef => ({ kind: 'session', id: session.id }))
+  }, [order, discovery, projectsByPath])
+
+  const sessionIds = useMemo(() => {
+    const placed = sessionOrder.filter((id) => sessionsById.has(id))
+    const known = new Set(placed)
+    const appended = sessions.filter((s) => !known.has(s.id)).map((s) => s.id)
     return [...placed, ...appended]
-  }, [order, discovery, projectsByPath, sessions, sessionsById])
+  }, [sessionOrder, sessions, sessionsById])
 
   const activeId =
     requestedId !== null && openPanes.some((ref) => tabId(ref) === requestedId)
@@ -167,12 +283,47 @@ export function App(): JSX.Element {
       : (openPanes.map(tabId).at(-1) ?? null)
   const activePane = openPanes.find((ref) => tabId(ref) === activeId) ?? null
 
+  const activeSessionId =
+    requestedSession !== null && sessionIds.includes(requestedSession)
+      ? requestedSession
+      : (sessionIds.at(-1) ?? null)
+
+  const hasSessions = sessionIds.length > 0
+  // Derived rather than reset in an effect: with no sessions there is no
+  // split, so a held maximize simply stops meaning anything until the next
+  // launch gives it a pane to apply to.
+  const effectiveMaximize = hasSessions ? maximize : null
+  const showSessions = hasSessions && effectiveMaximize !== 'workspace'
+  const showWorkspace = !showSessions || effectiveMaximize !== 'sessions'
+
   // Main decides whether an exiting session is worth a notification, and that
-  // turns on which pane is in front - which only this side knows.
+  // turns on which session is actually in view - which only this side knows.
   const { reportFocus } = sessionState
   useEffect(() => {
-    reportFocus(activePane?.kind === 'session' ? activePane.id : null)
-  }, [activePane, reportFocus])
+    reportFocus(showSessions ? activeSessionId : null)
+  }, [showSessions, activeSessionId, reportFocus])
+
+  // The split divider: a plain mouse drag, bounded so neither side can be
+  // dragged out of usefulness.
+  useEffect(() => {
+    const onMove = (event: MouseEvent): void => {
+      if (!draggingSplit.current || !splitRowRef.current) return
+      const box = splitRowRef.current.getBoundingClientRect()
+      if (box.width < 1) return
+      const fraction = 1 - (event.clientX - box.left) / box.width
+      setSplit(Math.min(0.8, Math.max(0.2, fraction)))
+    }
+    const onUp = (): void => {
+      draggingSplit.current = false
+      document.body.style.userSelect = ''
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [])
 
   const openPane = useCallback((ref: PaneRef) => {
     setOrder((current) =>
@@ -190,8 +341,44 @@ export function App(): JSX.Element {
   )
 
   const openHistory = useCallback(() => openPane({ kind: 'history' }), [openPane])
+  const openPulls = useCallback(() => openPane({ kind: 'pulls' }), [openPane])
+
+  /**
+   * A row in the Pulls pane opens the pull request in a tab of its own.
+   *
+   * `openPane` already focuses a tab that is open rather than opening a second
+   * one, so clicking the same row twice is a way back to it.
+   */
+  const openPull = useCallback(
+    (repo: { path: string }, pull: { number: number }) =>
+      openPane({ kind: 'pr', repoPath: repo.path, number: pull.number }),
+    [openPane]
+  )
+
+  /**
+   * Config and Content open on the scope they already had. They used to be
+   * per-harness links that carried a scope in, which meant the only way to
+   * reach either pane was through a harness that happened to be expanded.
+   * Both panes own a scope switcher, so the entry point does not need to.
+   */
   const openConfig = useCallback(() => openPane({ kind: 'config' }), [openPane])
   const openContent = useCallback(() => openPane({ kind: 'content' }), [openPane])
+
+  /**
+   * Settings is a workspace pane like any other rather than a modal: it is a
+   * place, it is worth leaving open beside a session, and a dialog over the
+   * window would be one more thing to dismiss before looking at what a setting
+   * changed. Its entry point is in the title bar because what it configures is
+   * the app, not whatever project happens to be selected.
+   */
+  const openSettings = useCallback(() => openPane({ kind: 'settings' }), [openPane])
+
+  /** A launched session lands in the session strip and takes the front. */
+  const adoptIntoStrip = useCallback((id: number) => {
+    setSessionOrder((current) => (current.includes(id) ? current : [...current, id]))
+    setRequestedSession(id)
+    setMaximize((current) => (current === 'workspace' ? null : current))
+  }, [])
 
   const launch = useCallback(
     async (project: Project) => {
@@ -199,32 +386,26 @@ export function App(): JSX.Element {
       try {
         const id = await sessionState.launch(project, paneRef.current)
         if (id === null) return
-        // Placed on launch so the strip reads in the order it was built, rather
-        // than every terminal collecting at the end behind every project tab.
-        // The append in `openPanes` is then only for sessions this renderer did
-        // not launch.
-        setOrder((current) => [...current, { kind: 'session', id }])
-        setRequestedId(tabId({ kind: 'session', id }))
+        adoptIntoStrip(id)
       } finally {
         setLaunching(false)
       }
     },
-    [sessionState]
+    [sessionState, adoptIntoStrip]
   )
 
   /**
-   * A profile launch lands in a tab exactly the way a project launch does - the
-   * strip does not care which produced the session, only that one exists.
+   * A profile launch lands in the strip exactly the way a project launch does
+   * - it does not care which produced the session, only that one exists.
    */
   const launchProfile = useCallback(
     async (profile: Profile) => {
       const session = await profileState.launch(profile, paneRef.current)
       if (!session) return
       sessionState.adopt(session)
-      setOrder((current) => [...current, { kind: 'session', id: session.id }])
-      setRequestedId(tabId({ kind: 'session', id: session.id }))
+      adoptIntoStrip(session.id)
     },
-    [profileState, sessionState]
+    [profileState, sessionState, adoptIntoStrip]
   )
 
   /**
@@ -237,10 +418,35 @@ export function App(): JSX.Element {
       const record = await historyState.resume(session, paneRef.current)
       if (!record) return
       sessionState.adopt(record)
-      setOrder((current) => [...current, { kind: 'session', id: record.id }])
-      setRequestedId(tabId({ kind: 'session', id: record.id }))
+      adoptIntoStrip(record.id)
     },
-    [historyState, sessionState]
+    [historyState, sessionState, adoptIntoStrip]
+  )
+
+  /**
+   * "Review with Claude", from a pull request tab.
+   *
+   * Lands in the strip exactly as a resume does, and for the same reason: what
+   * comes back is a session like any other, and nothing downstream of this line
+   * cares that a pull request is what started it.
+   *
+   * Note what is *not* here. The prompt is composed in the main process from
+   * the cached pull request and the stored template, so this sends a repository
+   * path, a number and the grid - the same three-field shape a profile launch
+   * has (`LaunchProfileRequest`), and for the same reason: argv assembled in a
+   * window is argv that can drift from what was saved. The rejection is
+   * re-thrown rather than swallowed because the pull request's own pane is
+   * where a dirty tree or a missing `gh` has to be read.
+   */
+  const reviewPull = useCallback(
+    async (repoPath: string, number: number) => {
+      const { cols, rows } = estimateGrid(paneRef.current)
+      const launched = await helm.invoke('pr:review', { repoPath, number, cols, rows })
+      sessionState.adopt(launched.session)
+      adoptIntoStrip(launched.session.id)
+      return launched
+    },
+    [sessionState, adoptIntoStrip]
   )
 
   const blankProfile = useCallback(
@@ -287,19 +493,28 @@ export function App(): JSX.Element {
     (id: string) => {
       const ref = openPanes.find((candidate) => tabId(candidate) === id)
       if (!ref) return
+      // The shell dies with its tab, not with a render: hiding the pane keeps
+      // it, closing the project ends it.
+      if (ref.kind === 'project') void disposeShell(ref.path)
+      // Same idea, one layer down: what the pane last painted outlives an
+      // unmount so a tab switch does not flash, and a *closed* tab is the point
+      // at which nobody is coming back to it.
+      if (ref.kind === 'pr') forgetPullDetail(ref.repoPath, ref.number)
+      setOrder(openPanes.filter((candidate) => tabId(candidate) !== id))
+    },
+    [openPanes]
+  )
 
-      if (ref.kind !== 'session') {
-        setOrder(openPanes.filter((candidate) => tabId(candidate) !== id))
-        return
-      }
+  const closeSession = useCallback(
+    (id: number) => {
       // The process gets a say: main confirms before ending a live session, and
       // the tab stays if the answer is no. A closed session drops out of
       // `sessions`, so the strip loses it whether or not it was ever placed.
-      void sessionState.close(ref.id).then((closed) => {
-        if (closed) setOrder(openPanes.filter((candidate) => tabId(candidate) !== id))
+      void sessionState.close(id).then((closed) => {
+        if (closed) setSessionOrder((current) => current.filter((held) => held !== id))
       })
     },
-    [openPanes, sessionState]
+    [sessionState]
   )
 
   // Written back as the whole strip, so a tab that had only been appended is
@@ -317,23 +532,45 @@ export function App(): JSX.Element {
     [openPanes]
   )
 
-  // Ctrl+Tab cycles, in capture so it never reaches the focused terminal.
-  // Ctrl+Shift+Tab is not bound by Claude Code either; Shift+Tab alone is (it
-  // cycles permission modes) and is deliberately left alone.
+  const reorderSessions = useCallback(
+    (id: string, toIndex: number) => {
+      const sessionId = sessionIdFromTab(id)
+      const from = sessionIds.indexOf(sessionId)
+      if (from < 0 || from === toIndex) return
+      const next = [...sessionIds]
+      next.splice(from, 1)
+      next.splice(Math.max(0, Math.min(toIndex, next.length)), 0, sessionId)
+      setSessionOrder(next)
+    },
+    [sessionIds]
+  )
+
+  // Ctrl+Tab cycles both strips as one ring, in capture so it never reaches
+  // the focused terminal. Ctrl+Shift+Tab is not bound by Claude Code either;
+  // Shift+Tab alone is (it cycles permission modes) and is deliberately left
+  // alone.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Tab' || !event.ctrlKey || event.altKey) return
-      const ids = openPanes.map(tabId)
-      if (ids.length < 2) return
+      const workspaceIds = openPanes.map(tabId)
+      const ring = [...workspaceIds, ...sessionIds.map(sessionTabId)]
+      if (ring.length < 2) return
       event.preventDefault()
       event.stopPropagation()
-      const at = activeId === null ? -1 : ids.indexOf(activeId)
+      const current =
+        showSessions && activeSessionId !== null && document.activeElement?.closest('.xterm')
+          ? sessionTabId(activeSessionId)
+          : (activeId ?? '')
+      const at = ring.indexOf(current)
       const step = event.shiftKey ? -1 : 1
-      setRequestedId(ids[(at + step + ids.length) % ids.length] ?? null)
+      const next = ring[(at + step + ring.length) % ring.length]
+      if (next === undefined) return
+      if (next.startsWith('session:')) setRequestedSession(sessionIdFromTab(next))
+      else setRequestedId(next)
     }
     window.addEventListener('keydown', onKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
-  }, [openPanes, activeId])
+  }, [openPanes, sessionIds, activeId, activeSessionId, showSessions])
 
   const tabs: Tab[] = openPanes.flatMap((ref): Tab[] => {
     if (ref.kind === 'history') {
@@ -343,6 +580,38 @@ export function App(): JSX.Element {
           title: 'Session history',
           hint: historyState.summary?.historyFile ?? 'Every session on this machine',
           icon: <HistoryIcon width={13} height={13} />
+        }
+      ]
+    }
+
+    if (ref.kind === 'pulls') {
+      return [
+        {
+          id: PULLS_TAB,
+          title: 'Pull requests',
+          hint: pullsSummaryLine(pullsState.snapshot),
+          icon: <PullRequestIcon width={13} height={13} />
+        }
+      ]
+    }
+
+    if (ref.kind === 'pr') {
+      // The title comes from the list snapshot, which is the same row the tab
+      // was opened from. A pull request that has closed since drops out of the
+      // snapshot and the tab keeps its number - which is the honest label for a
+      // tab whose pane is about to say the same thing.
+      const repo = pullsState.snapshot?.repos.find(
+        (candidate) => candidate.path.toLowerCase() === ref.repoPath.toLowerCase()
+      )
+      const pull = repo?.pulls.find((candidate) => candidate.number === ref.number)
+      const label = `#${String(ref.number)}`
+      return [
+        {
+          id: tabId(ref),
+          title: pull ? `${label} ${truncate(pull.title, 34)}` : label,
+          hint: pull ? `${pull.title} - ${ref.repoPath}` : ref.repoPath,
+          ...(repo ? { subtitle: repo.name } : {}),
+          icon: <PullRequestIcon width={13} height={13} />
         }
       ]
     }
@@ -371,46 +640,105 @@ export function App(): JSX.Element {
       ]
     }
 
-    if (ref.kind === 'project') {
-      const project = projectsByPath.get(ref.path)
-      if (!project) return []
-      const Icon = KIND_ICON[project.kind]
+    if (ref.kind === 'settings') {
       return [
         {
-          id: tabId(ref),
-          title: project.name,
-          hint: project.path,
-          icon: <Icon width={13} height={13} />
+          id: SETTINGS_TAB,
+          title: 'Settings',
+          hint: "Helm's own settings",
+          icon: <GearIcon width={13} height={13} />
         }
       ]
     }
 
-    const session = sessionsById.get(ref.id)
+    const project = projectsByPath.get(ref.path)
+    if (!project) return []
+    const Icon = KIND_ICON[project.kind]
+    return [
+      {
+        id: tabId(ref),
+        title: project.name,
+        hint: project.path,
+        icon: <Icon width={13} height={13} />
+      }
+    ]
+  })
+
+  const sessionTabs: Tab[] = sessionIds.flatMap((id): Tab[] => {
+    const session = sessionsById.get(id)
     if (!session) return []
     const indicator: TabIndicator =
       session.status === 'running' ? 'running' : session.exitCode ? 'failed' : 'ended'
     const project = session.projectPath ? projectsByPath.get(session.projectPath) : undefined
     return [
       {
-        id: tabId(ref),
+        id: sessionTabId(id),
         title: session.name,
         hint: `${session.name} · ${session.cwd}`,
         ...(project && project.name !== session.name ? { subtitle: project.name } : {}),
-        indicator
+        indicator,
+        // A session tab lifts into the terminal's fixed ground, not the
+        // island's - see Tab.ground.
+        ground: 'terminal' as const
       }
     ]
   })
 
   const activeProject =
     activePane?.kind === 'project' ? (projectsByPath.get(activePane.path) ?? null) : null
-  // A session tab still points at a project, so the tree keeps showing where
-  // the thing on screen came from rather than clearing its selection.
-  const selectedPath =
-    activePane?.kind === 'session'
-      ? (sessionsById.get(activePane.id)?.projectPath ?? null)
-      : (activeProject?.path ?? null)
-  const sessionPanes = openPanes.filter((ref) => ref.kind === 'session')
+  const selectedPath = activeProject?.path ?? null
   const runningSessions = sessions.filter((session) => session.status === 'running').length
+  // Which sidebar rows get a live dot: the projects with a running session.
+  const livePaths = useMemo(() => {
+    const paths = new Set<string>()
+    for (const session of sessions) {
+      if (session.status === 'running' && session.projectPath !== null) {
+        paths.add(session.projectPath.toLowerCase())
+      }
+    }
+    return paths
+  }, [sessions])
+
+  /**
+   * "This session is still running", asked by the main process and answered
+   * here. Main owns process lifetime, so it owns the question; the renderer
+   * owns everything the user looks at, so it draws it.
+   *
+   * The answer is sent before the state clears, and only when a request is
+   * actually pending: main matches replies by id, and a second reply to an id
+   * it has already resolved is a reply for a decision that has been taken.
+   */
+  const [confirmRequest, setConfirmRequest] = useState<SessionConfirmRequest | null>(null)
+
+  useEffect(() => helm.on('session:confirm', setConfirmRequest), [])
+
+  const answerConfirm = useCallback(
+    (agreed: boolean) => {
+      if (confirmRequest === null) return
+      helm.send('session:confirmed', { id: confirmRequest.id, agreed })
+      setConfirmRequest(null)
+    },
+    [confirmRequest]
+  )
+
+  /**
+   * Rendered by both branches below, for the same reason `harnessDialog` is -
+   * and one more: main holds the window's `close` open on this promise, so a
+   * branch that did not draw the dialog would be a branch Helm could not quit
+   * from until the fallback timer ran out.
+   */
+  const confirmDialog =
+    confirmRequest === null ? null : (
+      <ConfirmSessionDialog
+        kind={confirmRequest.kind}
+        message={confirmRequest.message}
+        detail={confirmRequest.detail}
+        confirmLabel={confirmRequest.confirmLabel}
+        sessionNames={confirmRequest.sessionNames}
+        onConfirm={() => answerConfirm(true)}
+        onCancel={() => answerConfirm(false)}
+      />
+    )
 
   /**
    * Rendered by both branches below. Creating a harness is a first-run action
@@ -439,23 +767,27 @@ export function App(): JSX.Element {
    */
   if (setup.needed) {
     return (
-      <div className="h-full w-full bg-bg text-fg">
-        <SetupPane
-          status={setup.status}
-          roots={settings?.scanRoots ?? []}
-          suggestions={setup.suggestions}
-          projectCount={discovery?.projects.length ?? 0}
-          scanning={launcher.scanning}
-          checking={setup.checking}
-          onRecheck={setup.recheck}
-          onLocateClaude={setup.locateClaude}
-          onAddFolder={launcher.addRoot}
-          onAcceptSuggestion={setup.acceptSuggestion}
-          onCreateHarness={() => setup.openDialog('new')}
-          onConvertFolder={() => setup.openDialog('convert')}
-          onFinish={setup.finish}
-        />
+      <div className="flex h-full w-full flex-col bg-bg text-fg">
+        <TitleBar />
+        <div className="min-h-0 flex-1">
+          <SetupPane
+            status={setup.status}
+            roots={settings?.scanRoots ?? []}
+            suggestions={setup.suggestions}
+            projectCount={discovery?.projects.length ?? 0}
+            scanning={launcher.scanning}
+            checking={setup.checking}
+            onRecheck={setup.recheck}
+            onLocateClaude={setup.locateClaude}
+            onAddFolder={launcher.addRoot}
+            onAcceptSuggestion={setup.acceptSuggestion}
+            onCreateHarness={() => setup.openDialog('new')}
+            onConvertFolder={() => setup.openDialog('convert')}
+            onFinish={setup.finish}
+          />
+        </div>
         {harnessDialog}
+        {confirmDialog}
       </div>
     )
   }
@@ -482,10 +814,13 @@ export function App(): JSX.Element {
         ) : null
       }
       sidebar={
+        !showWorkspace ? null : (
         <Sidebar
+          livePaths={livePaths}
           profiles={
             <ProfileList
               profiles={profileState.profiles}
+              harnesses={discovery?.harnesses ?? []}
               launchingIds={profileState.launching}
               onLaunch={(profile) => void launchProfile(profile)}
               onCreate={() => {
@@ -511,13 +846,13 @@ export function App(): JSX.Element {
               }
             : {})}
           historyActive={activePane?.kind === 'history'}
+          onOpenPulls={openPulls}
+          pullsDetail={pullsSummaryLine(pullsState.snapshot)}
+          pullsActive={activePane?.kind === 'pulls'}
           onOpenConfig={openConfig}
           configActive={activePane?.kind === 'config'}
-          configScopes={configState.scopes.length}
           onOpenContent={openContent}
           contentActive={activePane?.kind === 'content'}
-          contentFiles={contentState.tree?.files.length ?? 0}
-          {...(contentState.scope ? { contentScopeLabel: contentState.scope.label } : {})}
           discovery={discovery}
           scanning={launcher.scanning}
           scanError={launcher.scanError}
@@ -527,24 +862,47 @@ export function App(): JSX.Element {
           onAddRoot={launcher.addRoot}
           onCreateHarness={() => setup.openDialog('new')}
         />
+        )
       }
-      tabBar={
-        <TabBar
-          tabs={tabs}
-          activeId={activeId}
-          onActivate={setRequestedId}
-          onClose={closeTab}
-          onReorder={reorderTabs}
-          actions={
-            <ThemeToggle value={settings?.theme ?? 'system'} onChange={launcher.setTheme} />
-          }
-        />
+      titleActions={
+        <>
+          <ThemeToggle value={settings?.theme ?? 'system'} onChange={launcher.setTheme} />
+          {/* Beside the toggle, because both are window-level: one is a setting
+              with a shortcut in the chrome, the other is where every setting
+              lives. A ghost button (DESIGN.md) - the segmented control next to
+              it already carries an outline, and two bordered controls in a 36px
+              strip read as a toolbar. */}
+          <button
+            type="button"
+            data-open-settings
+            onClick={openSettings}
+            aria-label="Settings"
+            title="Settings"
+            className={cn(
+              'grid size-7 shrink-0 place-items-center rounded-well transition-colors',
+              activePane?.kind === 'settings'
+                ? 'bg-hover text-fg'
+                : 'text-fg-subtle hover:bg-hover hover:text-fg'
+            )}
+          >
+            <GearIcon width={14} height={14} />
+          </button>
+        </>
       }
       statusBar={
         <StatusBar
-          build={info ? `${info.version} · ${info.mode}` : '…'}
-          dbFile={info?.dbFile ?? ''}
-          migrations={info?.migrations ?? []}
+          // The mode is shown only when this copy is not an ordinary install.
+          // `dev` and `portable` both change what the binary is and where the
+          // data lives, so they are worth a word; an installed build is the
+          // case that needs none, and labelling it only adds a segment every
+          // user reads once.
+          build={
+            info === null
+              ? '…'
+              : info.mode === 'installed'
+                ? info.version
+                : `${info.version} · ${info.mode}`
+          }
           // From the setup status, not from `app:info`. `app:info` is read once
           // at startup, so after the CLI is relocated the strip would keep
           // naming the old version while the banner above it names the new one
@@ -564,35 +922,34 @@ export function App(): JSX.Element {
                 }
               : null
           }
-          onRevealDb={() => info && launcher.reveal(info.dbFile)}
         />
       }
     >
-      <div ref={paneRef} className="relative h-full w-full">
-        {/* Every terminal stays mounted and only the active one is shown.
-            Unmounting a pane to switch tabs would take the session's scrollback
-            with it, and re-attaching a live pty to a fresh terminal cannot
-            recover what has already scrolled past. */}
-        {sessionPanes.map((ref) => {
-          const session = sessionsById.get(ref.id)
-          if (!session) return null
-          const visible = tabId(ref) === activeId
-          return (
-            <div
-              key={ref.id}
-              className={cn('absolute inset-0', visible ? 'block' : 'hidden')}
-              aria-hidden={!visible}
-            >
-              <TerminalPane
-                session={session}
-                active={visible}
-                windowsBuild={info?.windowsBuild ?? null}
-                onClose={(id) => closeTab(tabId({ kind: 'session', id }))}
-              />
-            </div>
-          )
-        })}
-
+      <div ref={splitRowRef} className="relative flex h-full w-full">
+        {showWorkspace && (
+          <div
+            className="flex min-w-0 flex-col"
+            style={{ flex: showSessions ? `${String(1 - split)} 1 0%` : '1 1 0%' }}
+          >
+            <TabBar
+              tabs={tabs}
+              activeId={activeId}
+              onActivate={setRequestedId}
+              onClose={closeTab}
+              onReorder={reorderTabs}
+              actions={
+                hasSessions ? (
+                  <PaneMaxButton
+                    maximized={effectiveMaximize === 'workspace'}
+                    what="workspace"
+                    onToggle={() =>
+                      setMaximize((current) => (current === 'workspace' ? null : 'workspace'))
+                    }
+                  />
+                ) : undefined
+              }
+            />
+            <div ref={paneRef} className="relative min-h-0 flex-1 overflow-hidden">
         {activePane?.kind === 'history' && (
           <div className="absolute inset-0">
             <SessionHistory
@@ -619,6 +976,38 @@ export function App(): JSX.Element {
               resumeError={historyState.resumeError}
               onDismissResumeError={historyState.dismissResumeError}
               onReveal={launcher.reveal}
+              compact={showSessions}
+            />
+          </div>
+        )}
+
+        {activePane?.kind === 'pulls' && (
+          <div className="absolute inset-0">
+            <PullsPane
+              snapshot={pullsState.snapshot}
+              onRefresh={pullsState.refresh}
+              refreshing={pullsState.refreshing}
+              error={pullsState.error}
+              onOpenPull={openPull}
+              compact={showSessions}
+            />
+          </div>
+        )}
+
+        {activePane?.kind === 'pr' && (
+          <div className="absolute inset-0">
+            <PullRequestTab
+              // Keyed on the tab, so switching between two pull request tabs
+              // rebuilds the pane rather than leaving one PR's view selected
+              // over another's conversation.
+              key={tabId(activePane)}
+              repoPath={activePane.repoPath}
+              number={activePane.number}
+              reviewTemplate={settings?.prReviewPrompt ?? DEFAULT_SETTINGS.prReviewPrompt}
+              checkout={settings?.prCheckout ?? DEFAULT_SETTINGS.prCheckout}
+              onReview={reviewPull}
+              onOpenExternal={(url) => void helmOpenExternal(url)}
+              compact={showSessions}
             />
           </div>
         )}
@@ -638,6 +1027,8 @@ export function App(): JSX.Element {
               dirty={configState.dirty}
               onRefresh={configState.refresh}
               refreshing={configState.refreshing}
+              compact={showSessions}
+              onBack={() => configState.select(null)}
             >
               {configState.view === 'files' ? (
                 configState.selected === null ? (
@@ -729,6 +1120,8 @@ export function App(): JSX.Element {
               dirty={contentState.dirty}
               onRefresh={contentState.refresh}
               refreshing={contentState.refreshing}
+              compact={showSessions}
+              onBack={() => contentState.select(null)}
             >
               {contentState.selected === null ? (
                 <ContentNothingSelected
@@ -768,26 +1161,88 @@ export function App(): JSX.Element {
           </div>
         )}
 
-        {activeProject && (
+        {activePane?.kind === 'settings' && (
           <div className="absolute inset-0">
-            <ProjectPane
-              key={activeProject.path}
-              project={activeProject}
-              onReveal={launcher.reveal}
-              onLaunch={(project) => void launch(project)}
-              launching={launching}
-              launchError={sessionState.launchError}
-              onSaveAsProfile={(project) => {
-                setSaveProblems([])
-                // Seeded with what is on screen: this project as the root, and
-                // itself composed, which is the launch the button is beside.
-                setEditing({
-                  ...blankProfile(project.path, project.name),
-                  overlays: [project.path],
-                  access: [project.path]
-                })
-              }}
+            <SettingsPane
+              status={setup.status}
+              checking={setup.checking}
+              onRecheck={setup.recheck}
+              onLocateClaude={setup.locateClaude}
+              onClearClaudeOverride={launcher.clearClaudePath}
+              roots={settings?.scanRoots ?? []}
+              projectCount={discovery?.projects.length ?? 0}
+              scanning={launcher.scanning}
+              onAddRoot={launcher.addRoot}
+              onRemoveRoot={launcher.removeRoot}
+              theme={settings?.theme ?? 'system'}
+              onThemeChange={launcher.setTheme}
+              usageDisplay={settings?.usageDisplay ?? 'percent'}
+              onUsageDisplayChange={launcher.setUsageDisplay}
+              // The same fact the status bar's cycle turns on, from the same
+              // snapshot, so the pane cannot offer a mode the segment skips.
+              hasCostEstimate={usage?.spend != null}
+              terminal={terminalSettings}
+              onTerminalChange={launcher.writeSettings}
+              // The stack the terminals are actually running, so the preview
+              // well cannot show a font the panes are not using.
+              terminalFontStack={terminalFontStack(terminalSettings.terminalFontFamily)}
+              shells={shells}
+              onLocateShell={locateShell}
+              // What `gh` actually resolved to, out of the same snapshot the
+              // Pulls pane paints - so the pane cannot report one executable
+              // while the fetches use another.
+              gh={pullsState.snapshot?.gh ?? null}
+              onLocateGh={locateGh}
+              onClearGhOverride={() => writeSettings({ ghPath: null })}
+              prPollMinutes={settings?.prPollMinutes ?? DEFAULT_SETTINGS.prPollMinutes}
+              onPrPollMinutesChange={(prPollMinutes) => writeSettings({ prPollMinutes })}
+              // The review launch's two settings live here rather than in the
+              // Pulls pane's header: settings for Helm are in one place, and a
+              // disclosure strip inside a pane is a second place for one to
+              // hide. The pane shows the *result* of these - the exact command
+              // and prompt - which is disclosure, not configuration.
+              prReviewPrompt={settings?.prReviewPrompt ?? DEFAULT_SETTINGS.prReviewPrompt}
+              onPrReviewPromptChange={(prReviewPrompt) => writeSettings({ prReviewPrompt })}
+              prCheckout={settings?.prCheckout ?? DEFAULT_SETTINGS.prCheckout}
+              onPrCheckoutChange={(prCheckout) => writeSettings({ prCheckout })}
             />
+          </div>
+        )}
+
+        {activeProject && (
+          <div className="absolute inset-0 flex flex-col gap-2">
+            <div className="min-h-0 flex-1">
+              <ProjectPane
+                key={activeProject.path}
+                project={activeProject}
+                onReveal={launcher.reveal}
+                onLaunch={(project) => void launch(project)}
+                launching={launching}
+                launchError={sessionState.launchError}
+                onSaveAsProfile={(project) => {
+                  setSaveProblems([])
+                  // Seeded with what is on screen: this project as the root, and
+                  // itself composed, which is the launch the button is beside.
+                  setEditing({
+                    ...blankProfile(project.path, project.name),
+                    overlays: [project.path],
+                    access: [project.path]
+                  })
+                }}
+              />
+            </div>
+            {/* The project's own shell, in the project's own directory. Hidden
+                while the session split is open - the space belongs to the
+                session then - but its process and scrollback live in pterms.ts
+                and survive the hiding. */}
+            {!showSessions && (
+              <ProjectShellPane
+                path={activeProject.path}
+                windowsBuild={info?.windowsBuild ?? null}
+                visible
+                shells={shells}
+              />
+            )}
           </div>
         )}
 
@@ -801,8 +1256,77 @@ export function App(): JSX.Element {
             />
           </div>
         )}
+            </div>
+          </div>
+        )}
+
+        {showWorkspace && showSessions && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            title="Drag to resize"
+            onMouseDown={(event) => {
+              event.preventDefault()
+              draggingSplit.current = true
+              document.body.style.userSelect = 'none'
+            }}
+            className="group flex w-2 shrink-0 cursor-col-resize items-center justify-center"
+          >
+            <span className="h-10 w-[3px] rounded-full bg-border-strong transition-colors group-hover:bg-accent" />
+          </div>
+        )}
+
+        {showSessions && (
+          <div
+            className="flex min-w-0 flex-col"
+            style={{ flex: showWorkspace ? `${String(split)} 1 0%` : '1 1 0%' }}
+          >
+            <TabBar
+              tabs={sessionTabs}
+              activeId={activeSessionId === null ? null : sessionTabId(activeSessionId)}
+              onActivate={(id) => setRequestedSession(sessionIdFromTab(id))}
+              onClose={(id) => closeSession(sessionIdFromTab(id))}
+              onReorder={reorderSessions}
+              actions={
+                <PaneMaxButton
+                  maximized={effectiveMaximize === 'sessions'}
+                  what="session"
+                  onToggle={() =>
+                    setMaximize((current) => (current === 'sessions' ? null : 'sessions'))
+                  }
+                />
+              }
+            />
+            <div className="relative min-h-0 flex-1 overflow-hidden">
+              {/* Every terminal stays mounted and only the active one is shown.
+                  Unmounting a pane to switch tabs would take the session's
+                  scrollback with it, and re-attaching a live pty to a fresh
+                  terminal cannot recover what has already scrolled past. */}
+              {sessionIds.map((id) => {
+                const session = sessionsById.get(id)
+                if (!session) return null
+                const visible = id === activeSessionId
+                return (
+                  <div
+                    key={id}
+                    className={cn('absolute inset-0', visible ? 'block' : 'hidden')}
+                    aria-hidden={!visible}
+                  >
+                    <TerminalPane
+                      session={session}
+                      active={visible}
+                      windowsBuild={info?.windowsBuild ?? null}
+                      onClose={closeSession}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {harnessDialog}
+        {confirmDialog}
 
         {/* What a launch composed, and anything that went wrong doing it.
             Over the pane rather than in it, because a profile is launched from
@@ -817,7 +1341,7 @@ export function App(): JSX.Element {
             <div
               role="status"
               className={cn(
-                'pointer-events-auto flex max-w-2xl items-start gap-3 rounded-md border px-3 py-2',
+                'pointer-events-auto flex max-w-2xl items-start gap-3 rounded-raised border px-3 py-2',
                 'text-[12px] shadow-panel',
                 profileState.error !== null
                   ? 'border-danger/30 bg-danger/10 text-danger'
@@ -849,9 +1373,44 @@ export function App(): JSX.Element {
             saving={saving}
             onSave={(draft) => void saveProfile(draft)}
             onCancel={() => setEditing(null)}
+            // Only for a profile that exists. The same call the list's trash
+            // icon makes; the editor closes because the row it edits is gone.
+            {...('id' in editing
+              ? {
+                  onDelete: () => {
+                    deleteProfile(editing)
+                    setEditing(null)
+                  }
+                }
+              : {})}
           />
         )}
       </div>
     </AppShell>
+  )
+}
+
+/** The ⤢ / ⇱ at the end of each strip: give this pane the whole row, or give
+ * the split back. */
+function PaneMaxButton({
+  maximized,
+  what,
+  onToggle
+}: {
+  maximized: boolean
+  what: 'workspace' | 'session'
+  onToggle: () => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      data-maximize={what}
+      title={maximized ? 'Restore the split' : `Maximize the ${what} pane`}
+      aria-label={maximized ? 'Restore the split' : `Maximize the ${what} pane`}
+      onClick={onToggle}
+      className="grid size-6 place-items-center rounded text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+    >
+      {maximized ? '⇱' : '⤢'}
+    </button>
   )
 }

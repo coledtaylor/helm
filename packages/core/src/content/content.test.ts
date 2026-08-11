@@ -91,6 +91,24 @@ describe('renderMarkdown', () => {
     expect(out.frontmatter.fields[0]).toEqual({ key: 'type', value: 'journal', values: ['journal'] })
   })
 
+  it('reads a leading --- as a rule, not as metadata, when it is not a note', async () => {
+    // A pull request description is not a file in a vault: three dashes at the
+    // top of one are a horizontal rule, and reading them as frontmatter eats
+    // everything down to the next set.
+    const source = '---\nA section somebody wrote.\n---\n\nAnd the rest.\n'
+
+    const asNote = await renderMarkdown(source)
+    const asProse = await renderMarkdown(source, { frontmatter: false })
+
+    expect(asNote.frontmatter.present).toBe(true)
+    expect(asNote.html).not.toContain('A section somebody wrote.')
+
+    expect(asProse.frontmatter.present).toBe(false)
+    expect(asProse.html).toContain('A section somebody wrote.')
+    expect(asProse.html).toContain('And the rest.')
+    expect(asProse.html).toContain('<hr>')
+  })
+
   it('renders GFM tables and keeps task list state', async () => {
     const out = await renderMarkdown(
       ['| a | b |', '| --- | --- |', '| 1 | 2 |', '', '- [x] done', '- [ ] not done', ''].join('\n')
@@ -189,6 +207,29 @@ describe('search', () => {
       const result = searchCorpus(corpus, 'geofenc', true)
       expect(result.totalMatches).toBe(1)
       expect(result.hits[0]?.lines[0]?.text).toContain('geofencing')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('finds a non-markdown file by name without reading its contents', () => {
+    const root = fixture()
+    try {
+      mkdirSync(join(root, 'notes'), { recursive: true })
+      writeFileSync(join(root, 'notes', 'dashboard.html'), '<style>notes { color: red }</style>')
+
+      const tree = readContentTree(contentScope(root))
+      const corpus = buildCorpus(root, tree.files)
+
+      // Found by what it is called...
+      const byName = searchCorpus(corpus, 'dashboard', true)
+      expect(byName.hits.map((hit) => hit.relPath)).toContain('notes/dashboard.html')
+      expect(byName.hits.find((hit) => hit.relPath.endsWith('.html'))?.nameMatch).toBe(true)
+
+      // ...and never by what is inside it. `notes` appears in that stylesheet
+      // and must not put the file in the results on those grounds.
+      const byBody = searchCorpus(corpus, 'color: red', true)
+      expect(byBody.hits.map((hit) => hit.relPath)).not.toContain('notes/dashboard.html')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

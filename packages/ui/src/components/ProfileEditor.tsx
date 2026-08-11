@@ -14,7 +14,7 @@ import {
   type Project
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
-import { CloseIcon, LayersIcon } from './icons'
+import { CaretIcon, CheckIcon, CloseIcon, HelmMarkIcon } from './icons'
 
 export interface ProfileEditorProps {
   /** The profile being edited, or a draft to seed a new one. */
@@ -26,6 +26,8 @@ export interface ProfileEditorProps {
   saving?: boolean | undefined
   onSave: (draft: ProfileDraft) => void
   onCancel: () => void
+  /** Deleting an existing profile. Absent on a new one, which has nothing to delete. */
+  onDelete?: (() => void) | undefined
 }
 
 const MODELS = ['opus', 'sonnet', 'haiku', 'fable'] as const
@@ -50,7 +52,8 @@ export function ProfileEditor({
   problems = [],
   saving = false,
   onSave,
-  onCancel
+  onCancel,
+  onDelete
 }: ProfileEditorProps): JSX.Element {
   const [name, setName] = useState(initial.name)
   const [root, setRoot] = useState(initial.root)
@@ -141,7 +144,7 @@ export function ProfileEditor({
     // backdrop would dim the pane while leaving the sidebar lit and clickable -
     // which is not what `aria-modal` promises.
     <div
-      className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-6"
+      className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-6"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onCancel()
       }}
@@ -151,13 +154,15 @@ export function ProfileEditor({
         aria-modal="true"
         aria-label={'id' in initial ? `Edit ${initial.name}` : 'New profile'}
         className={cn(
-          'flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-lg',
-          'border border-border bg-surface shadow-panel'
+          // A modal is the one surface that gets a shadow (DESIGN.md): a 12px
+          // island lifted off a dimmed canvas, with the stronger hairline.
+          'flex max-h-full w-full max-w-[620px] flex-col overflow-hidden rounded-xl',
+          'border border-border-strong bg-surface shadow-panel'
         )}
       >
-        <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-4">
-          <LayersIcon width={14} height={14} className="text-accent" />
-          <h2 className="text-[13px] font-semibold tracking-tight text-fg">
+        <header className="flex shrink-0 items-center gap-[9px] px-[22px] pt-[18px]">
+          <HelmMarkIcon width={13} height={13} className="shrink-0 text-accent" />
+          <h2 className="text-[15px] font-medium tracking-tight text-fg">
             {'id' in initial ? 'Edit profile' : 'New profile'}
           </h2>
           <span className="flex-1" />
@@ -166,17 +171,17 @@ export function ProfileEditor({
             onClick={onCancel}
             aria-label="Close"
             title="Close"
-            className="grid size-6 place-items-center rounded text-fg-subtle hover:bg-hover hover:text-fg"
+            className="grid size-6 shrink-0 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
           >
-            <CloseIcon />
+            <CloseIcon width={12} height={12} />
           </button>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-4 pb-1">
           {problems.length > 0 && (
             <ul
               role="alert"
-              className="mb-4 rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
+              className="mb-4 rounded-raised border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
             >
               {problems.map((problem) => (
                 <li key={problem}>{problem}</li>
@@ -184,7 +189,7 @@ export function ProfileEditor({
             </ul>
           )}
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-[14px] sm:grid-cols-2">
             <Field label="Name" hint="Shown in the launcher and used as the session name.">
               <input
                 ref={nameRef}
@@ -201,16 +206,14 @@ export function ProfileEditor({
                 aria-label="Root directory"
                 onChange={(e) => setRoot(e.target.value)}
                 spellCheck={false}
-                className={cn(inputClass, 'font-mono text-[11px]')}
+                className={cn(inputClass, 'font-mono text-[11px] text-fg-muted')}
               />
             </Field>
           </div>
 
           <fieldset className="mt-4">
-            <legend className="text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
-              Composition
-            </legend>
-            <p className="mt-1 text-[11px] text-fg-muted">
+            <legend className={labelClass}>Composition</legend>
+            <p className="mt-1.5 mb-2 text-[11px] leading-[1.55] text-fg-muted">
               <strong className="font-medium text-fg">Compose</strong> loads a project&rsquo;s
               skills, agents and commands under its own namespace.{' '}
               <strong className="font-medium text-fg">Access</strong> lets the session read and
@@ -223,105 +226,92 @@ export function ProfileEditor({
               placeholder="Filter projects"
               spellCheck={false}
               aria-label="Filter projects"
-              className={cn(inputClass, 'mt-2')}
+              className={cn(inputClass, 'h-[26px] text-[11.5px]')}
             />
 
-            <div className="mt-2 max-h-56 overflow-y-auto rounded-md border border-border">
-              <table className="w-full border-collapse text-[12px]">
-                <thead className="sticky top-0 bg-surface-sunken">
-                  <tr className="text-[10px] tracking-wide text-fg-subtle uppercase">
-                    <th className="px-2 py-1.5 text-left font-medium">Project</th>
-                    <th className="w-20 px-2 py-1.5 text-center font-medium">Compose</th>
-                    <th className="w-20 px-2 py-1.5 text-center font-medium">Access</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.length === 0 ? (
-                    <tr>
-                      <td colSpan={3} className="px-2 py-6 text-center text-[12px] text-fg-subtle">
-                        No projects match.
-                      </td>
-                    </tr>
-                  ) : (
-                    visible.map((project) => (
-                      <tr key={project.path} className="border-t border-border hover:bg-hover">
-                        <td className="min-w-0 px-2 py-1.5">
-                          <span className="block truncate text-fg">{project.name}</span>
-                          <span className="block truncate font-mono text-[10px] text-fg-subtle">
-                            {project.path}
+            <div className="mt-2 overflow-hidden rounded-raised border border-border">
+              <div className="flex items-center bg-surface-raised px-3 py-1.5">
+                <span className={cn(labelClass, 'flex-1 text-[9px]')}>Project</span>
+                <span className={cn(labelClass, 'w-[70px] text-center text-[9px]')}>Compose</span>
+                <span className={cn(labelClass, 'w-[70px] text-center text-[9px]')}>Access</span>
+              </div>
+              <div className="max-h-56 overflow-y-auto">
+                {visible.length === 0 ? (
+                  <p className="border-t border-border px-3 py-6 text-center text-[12px] text-fg-subtle">
+                    No projects match.
+                  </p>
+                ) : (
+                  visible.map((project) => (
+                    <div
+                      key={project.path}
+                      className="flex items-center border-t border-border px-3 py-[7px] transition-colors hover:bg-hover"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-[7px]">
+                          <span className="min-w-0 truncate text-[12px] text-fg">
+                            {project.name}
                           </span>
-                        </td>
-                        <td className="px-2 py-1.5 text-center">
-                          <input
-                            type="checkbox"
-                            checked={has(overlays, project.path)}
-                            onChange={() => toggleOverlay(project.path)}
-                            aria-label={`Compose ${project.name}`}
-                            className="accent-accent"
-                          />
-                        </td>
-                        <td className="px-2 py-1.5 text-center">
-                          <input
-                            type="checkbox"
-                            checked={has(access, project.path)}
-                            onChange={() => toggleAccess(project.path)}
-                            aria-label={`Grant access to ${project.name}`}
-                            className="accent-accent"
-                          />
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                          {project.kind === 'harness' && (
+                            <span className="shrink-0 rounded-full bg-accent-soft px-[7px] py-px text-[8.5px] tracking-[.05em] text-accent-text uppercase">
+                              harness root
+                            </span>
+                          )}
+                        </span>
+                        <span className="block truncate font-mono text-[9.5px] text-fg-subtle">
+                          {project.path}
+                        </span>
+                      </span>
+                      <span className="flex w-[70px] justify-center">
+                        <Checkbox
+                          checked={has(overlays, project.path)}
+                          onChange={() => toggleOverlay(project.path)}
+                          label={`Compose ${project.name}`}
+                        />
+                      </span>
+                      <span className="flex w-[70px] justify-center">
+                        <Checkbox
+                          checked={has(access, project.path)}
+                          onChange={() => toggleAccess(project.path)}
+                          label={`Grant access to ${project.name}`}
+                        />
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </fieldset>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="mt-4 grid gap-[14px] sm:grid-cols-2">
             <Field label="Model">
-              <select
-                value={model}
-                aria-label="Model"
-                onChange={(e) => setModel(e.target.value)}
-                className={inputClass}
-              >
+              <Select value={model} onChange={setModel} label="Model">
                 <option value="">Default</option>
                 {MODELS.map((option) => (
                   <option key={option} value={option}>
                     {option}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
             <Field label="Effort">
-              <select
-                value={effort}
-                aria-label="Effort"
-                onChange={(e) => setEffort(e.target.value)}
-                className={inputClass}
-              >
+              <Select value={effort} onChange={setEffort} label="Effort">
                 <option value="">Default</option>
                 {EFFORT_LEVELS.map((option) => (
                   <option key={option} value={option}>
                     {option}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
             <Field label="Permission mode">
-              <select
-                value={permissionMode}
-                aria-label="Permission mode"
-                onChange={(e) => setPermissionMode(e.target.value)}
-                className={inputClass}
-              >
+              <Select value={permissionMode} onChange={setPermissionMode} label="Permission mode">
                 <option value="">Default</option>
                 {PERMISSION_MODES.map((option) => (
                   <option key={option} value={option}>
                     {option}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
             <Field label="Agent" hint="Optional. Overrides the session's agent.">
               <input
@@ -347,17 +337,28 @@ export function ProfileEditor({
                 aria-label="Opening prompt"
                 onChange={(e) => setOpeningPrompt(e.target.value)}
                 spellCheck={false}
+                placeholder="e.g. /recap"
                 className={inputClass}
               />
             </Field>
           </div>
         </div>
 
-        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-4 py-3">
+        <footer className="mx-[22px] flex shrink-0 items-center gap-2 border-t border-border py-3.5">
+          {onDelete && (
+            <button
+              type="button"
+              onClick={onDelete}
+              className="rounded-well border border-border-strong px-3 py-1.5 text-[12px] text-warn transition-colors hover:bg-hover"
+            >
+              Delete profile
+            </button>
+          )}
+          <span className="flex-1" />
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-md border border-border px-3 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
+            className="rounded-well border border-border-strong px-3.5 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
           >
             Cancel
           </button>
@@ -366,11 +367,11 @@ export function ProfileEditor({
             onClick={submit}
             disabled={saving}
             className={cn(
-              'rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-accent-fg transition',
-              saving ? 'cursor-default opacity-70' : 'hover:brightness-110 active:brightness-95'
+              'rounded-well border border-accent px-3.5 py-1.5 text-[12px] font-medium text-accent-text transition-colors',
+              saving ? 'cursor-default opacity-60' : 'hover:bg-accent-soft active:bg-active'
             )}
           >
-            {saving ? 'Saving…' : 'Save profile'}
+            {saving ? 'Saving…' : 'id' in initial ? 'Save changes' : 'Save profile'}
           </button>
         </footer>
       </div>
@@ -379,10 +380,13 @@ export function ProfileEditor({
 }
 
 const inputClass = cn(
-  'h-7 w-full rounded-md border border-border bg-surface-sunken px-2 text-[12px]',
+  'h-[30px] w-full rounded-well border border-border bg-surface-sunken px-2.5 text-[12.5px]',
   'text-fg placeholder:text-fg-subtle select-text',
   'focus:border-accent focus:outline-none'
 )
+
+const labelClass =
+  'block text-[9.5px] font-semibold tracking-[.08em] text-fg-subtle uppercase'
 
 function Field({
   label,
@@ -395,11 +399,85 @@ function Field({
 }): JSX.Element {
   return (
     <label className="block">
-      <span className="mb-1 block text-[11px] font-medium tracking-wide text-fg-subtle uppercase">
-        {label}
-      </span>
+      <span className={cn(labelClass, 'mb-1.5')}>{label}</span>
       {children}
-      {hint !== undefined && <span className="mt-1 block text-[10px] text-fg-subtle">{hint}</span>}
+      {hint !== undefined && (
+        <span className="mt-[5px] block text-[10px] text-fg-subtle">{hint}</span>
+      )}
     </label>
+  )
+}
+
+/**
+ * A native `<select>` in the sunken-well shape, with the platform arrow
+ * replaced by the system's own caret. Native and not a listbox of our own: the
+ * drivers set it through `HTMLSelectElement.prototype.value`, and a div cannot
+ * be set that way.
+ */
+function Select({
+  value,
+  onChange,
+  label,
+  children
+}: {
+  value: string
+  onChange: (value: string) => void
+  label: string
+  children: ReactNode
+}): JSX.Element {
+  return (
+    <span className="relative block">
+      <select
+        value={value}
+        aria-label={label}
+        onChange={(e) => onChange(e.target.value)}
+        className={cn(inputClass, 'appearance-none pr-7')}
+      >
+        {children}
+      </select>
+      <CaretIcon
+        width={9}
+        height={9}
+        className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 rotate-90 text-fg-subtle"
+      />
+    </span>
+  )
+}
+
+/**
+ * The one control the system allows a solid accent fill (DESIGN.md §4).
+ *
+ * A real `<input type="checkbox">` under an overlaid tick rather than a styled
+ * button: it keeps the label association, the space key, and `el.checked` -
+ * which is what the M3 driver reads to prove composing a repo also granted it
+ * access.
+ */
+function Checkbox({
+  checked,
+  onChange,
+  label
+}: {
+  checked: boolean
+  onChange: () => void
+  label: string
+}): JSX.Element {
+  return (
+    <span className="relative grid size-4 place-items-center">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        aria-label={label}
+        className={cn(
+          'peer size-4 cursor-pointer appearance-none rounded-[5px] border-[1.5px] border-fg-subtle',
+          'transition-colors checked:border-accent checked:bg-accent hover:border-fg-muted'
+        )}
+      />
+      <CheckIcon
+        width={10}
+        height={10}
+        className="pointer-events-none absolute text-accent-fg opacity-0 peer-checked:opacity-100"
+      />
+    </span>
   )
 }

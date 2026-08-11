@@ -51,5 +51,12 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "CREATE TABLE `usage_messages` (\n\t`uuid` text PRIMARY KEY NOT NULL,\n\t`at` integer NOT NULL,\n\t`model` text NOT NULL,\n\t`input_tokens` integer DEFAULT 0 NOT NULL,\n\t`output_tokens` integer DEFAULT 0 NOT NULL,\n\t`cache_write_5m_tokens` integer DEFAULT 0 NOT NULL,\n\t`cache_write_1h_tokens` integer DEFAULT 0 NOT NULL,\n\t`cache_read_tokens` integer DEFAULT 0 NOT NULL\n);",
       "CREATE INDEX `usage_messages_at_idx` ON `usage_messages` (`at`,`model`);"
     ]
+  },
+  {
+    "tag": "0005_puzzling_pete_wisdom",
+    "statements": [
+      "CREATE TABLE `pr_repos` (\n\t`path` text PRIMARY KEY NOT NULL,\n\t`url` text,\n\t`slug` text,\n\t`checked_at` text,\n\t`fetched_at` text,\n\t`error` text\n);",
+      "CREATE TABLE `pull_requests` (\n\t`slug` text NOT NULL,\n\t`number` integer NOT NULL,\n\t`summary` text NOT NULL,\n\t`detail` text,\n\t`fetched_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL,\n\t`detail_fetched_at` text,\n\tPRIMARY KEY(`slug`, `number`)\n);"
+    ]
   }
 ]

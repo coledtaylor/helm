@@ -6,6 +6,8 @@ import { cn } from '../lib/cn'
 
 export interface GitChipProps {
   git: GitState | null
+  /** The sidebar's tighter line box and smaller glyphs. See `Chip`. */
+  dense?: boolean | undefined
   className?: string | undefined
 }
 
@@ -19,12 +21,20 @@ export interface GitChipProps {
  * narrow sidebar ellipsises `feature/normalize-…` rather than pushing the
  * counts off the right edge.
  */
-export function GitChip({ git, className }: GitChipProps): JSX.Element | null {
+export function GitChip({ git, dense = false, className }: GitChipProps): JSX.Element | null {
   if (!git) return null
+
+  const glyph = dense ? 11 : 14
 
   if (git.error !== undefined) {
     return (
-      <Chip tone="danger" icon={<BranchIcon />} title={git.error} className={className}>
+      <Chip
+        tone="danger"
+        icon={<BranchIcon width={glyph} height={glyph} />}
+        title={git.error}
+        dense={dense}
+        className={className}
+      >
         git error
       </Chip>
     )
@@ -35,10 +45,18 @@ export function GitChip({ git, className }: GitChipProps): JSX.Element | null {
   return (
     <span className={cn('flex min-w-0 items-center gap-2', className)}>
       <Chip
-        icon={<BranchIcon />}
+        icon={<BranchIcon width={glyph} height={glyph} />}
         tone={git.detached ? 'warn' : 'neutral'}
         title={git.detached ? 'HEAD is detached' : `On branch ${label}`}
         truncate
+        dense={dense}
+        // Machine data reads in mono (DESIGN.md): branches sit beside counts,
+        // and the two typefaces are what separates a name from a number.
+        //
+        // The size is only re-stated when the chip is not already dense: a
+        // trailing `text-*` makes tailwind-merge drop the `leading-*` that came
+        // with it, and the row then pays 3px for a class that changed nothing.
+        className={cn('font-mono', !dense && 'text-[10.5px]')}
       >
         {label}
       </Chip>
@@ -46,6 +64,7 @@ export function GitChip({ git, className }: GitChipProps): JSX.Element | null {
         <Chip
           tone="warn"
           icon={<DirtyIcon width={8} height={8} />}
+          dense={dense}
           title={`${git.dirty} changed file${git.dirty === 1 ? '' : 's'}`}
         >
           {git.dirty}
@@ -54,7 +73,8 @@ export function GitChip({ git, className }: GitChipProps): JSX.Element | null {
       {git.ahead > 0 && (
         <Chip
           tone="success"
-          icon={<AheadIcon width={11} height={11} />}
+          icon={<AheadIcon width={dense ? 10 : 11} height={dense ? 10 : 11} />}
+          dense={dense}
           title={`${git.ahead} commit${git.ahead === 1 ? '' : 's'} ahead of upstream`}
         >
           {git.ahead}
@@ -63,7 +83,8 @@ export function GitChip({ git, className }: GitChipProps): JSX.Element | null {
       {git.behind > 0 && (
         <Chip
           tone="accent"
-          icon={<BehindIcon width={11} height={11} />}
+          icon={<BehindIcon width={dense ? 10 : 11} height={dense ? 10 : 11} />}
+          dense={dense}
           title={`${git.behind} commit${git.behind === 1 ? '' : 's'} behind upstream`}
         >
           {git.behind}

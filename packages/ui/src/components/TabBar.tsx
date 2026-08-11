@@ -18,6 +18,14 @@ export interface Tab {
   hint?: string | undefined
   /** Tabs are only reorderable among tabs that agree they are. */
   draggable?: boolean | undefined
+  /**
+   * What the active tab lifts into. A folder tab reads as part of the pane
+   * below it, so its fill must match that pane's ground: `island` for every
+   * ordinary view, `terminal` for a session tab - the terminal keeps its own
+   * fixed #11121A in both modes (DESIGN.md "foreign-ground islands"), and an
+   * island-coloured tab on top of it would show a seam.
+   */
+  ground?: 'island' | 'terminal' | undefined
 }
 
 export interface TabBarProps {
@@ -34,7 +42,9 @@ export interface TabBarProps {
 
 const INDICATOR_CLASS: Record<TabIndicator, string> = {
   running: 'bg-success',
-  ended: 'bg-border-strong',
+  // Not border-strong: that token became a 16% alpha hairline, and a dot
+  // filled with it disappears into whatever it sits on.
+  ended: 'bg-fg-subtle',
   failed: 'bg-danger'
 }
 
@@ -53,6 +63,11 @@ const INDICATOR_LABEL: Record<TabIndicator, string> = {
  * alone. Ctrl+Shift+Arrow moves the focused tab, because a tab strip that can
  * only be arranged with a mouse is a tab strip half the ways into this app
  * cannot reach - and it costs one key handler.
+ *
+ * With nothing to hang off it - no tabs and no actions - the strip is not
+ * drawn at all rather than drawn empty. Its 40px are reserved for tabs, and
+ * holding them open on the welcome screen would drop the pane island 40px
+ * below the sidebar island beside it, two edges that should line up.
  */
 export function TabBar({
   tabs,
@@ -61,7 +76,7 @@ export function TabBar({
   onClose,
   onReorder,
   actions
-}: TabBarProps): JSX.Element {
+}: TabBarProps): JSX.Element | null {
   const [dragging, setDragging] = useState<string | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
 
@@ -93,16 +108,26 @@ export function TabBar({
     onReorder?.(tabs[index]!.id, target)
   }
 
+  if (tabs.length === 0 && !actions) return null
+
   return (
-    <div className="flex h-11 shrink-0 items-stretch border-b border-border bg-surface">
+    <div className="flex h-10 shrink-0 items-end px-1.5">
       <div
         role="tablist"
         aria-label="Open tabs"
-        className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
+        // `overflow-x-auto` promotes the other axis from `visible` to `auto`,
+        // so the active tab's 1px overlap into the pane below counted as
+        // scrollable overflow and Chromium painted a vertical scrollbar over
+        // the strip. The overlap is unchanged - the strip reaches 1px into the
+        // pane (`-mb-px`) and spends that pixel as bottom padding (`pb-px`), so
+        // the tab's overshoot lands inside the scroll container instead of past
+        // it. `overflow-y-hidden` keeps it that way if a tab ever grows.
+        className="-mb-px flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto overflow-y-hidden pb-px"
       >
         {tabs.map((tab, index) => {
           const active = tab.id === activeId
           const reorderable = canReorder && tab.draggable !== false
+          const terminalGround = tab.ground === 'terminal'
           return (
             <div
               key={tab.id}
@@ -131,13 +156,19 @@ export function TabBar({
               }
               onDrop={(event) => dropOn(dropIndex ?? index, event)}
               className={cn(
-                'group relative flex min-w-0 shrink-0 items-center',
-                'border-r border-border',
-                active ? 'bg-bg' : 'hover:bg-hover',
+                // A folder tab: the active one lifts into the pane island below
+                // it - same fill, hairline edge on three sides, and a 1px
+                // overlap that erases the island's top border under it. The
+                // z-index is what makes the overlap paint over the pane, which
+                // is later in the DOM.
+                'group relative flex h-[34px] min-w-0 shrink-0 items-center',
+                'rounded-t-[9px] border border-b-0 border-transparent',
+                active
+                  ? cn('z-10 -mb-px border-border', terminalGround ? 'bg-terminal' : 'bg-surface')
+                  : 'hover:bg-hover/60',
                 dragging === tab.id && 'opacity-40'
               )}
             >
-              {active && <span aria-hidden className="absolute inset-x-0 top-0 h-[2px] bg-accent" />}
               {dropIndex === index && (
                 <span aria-hidden className="absolute inset-y-1 left-0 w-[2px] rounded bg-accent" />
               )}
@@ -163,9 +194,16 @@ export function TabBar({
                 onClick={() => onActivate(tab.id)}
                 onKeyDown={(event) => moveWithKeyboard(event, index)}
                 className={cn(
-                  'flex min-w-0 max-w-[240px] items-center gap-2 py-0 pl-3 text-[12px]',
+                  'flex min-w-0 max-w-[240px] items-center gap-1.5 py-0 pl-3 text-[12px]',
                   tab.closable === false ? 'pr-3' : 'pr-1',
-                  active ? 'text-fg' : 'text-fg-muted group-hover:text-fg'
+                  active
+                    ? // The terminal's ground is fixed in both modes, so the
+                      // text on it is too - fg would go near-black in light
+                      // mode on a surface that stayed dark.
+                      terminalGround
+                      ? 'text-[#dde1ea]'
+                      : 'text-fg'
+                    : 'text-fg-muted group-hover:text-fg'
                 )}
               >
                 {tab.indicator !== undefined ? (
@@ -182,7 +220,12 @@ export function TabBar({
                 )}
                 <span className="min-w-0 truncate">{tab.title}</span>
                 {tab.subtitle !== undefined && (
-                  <span className="min-w-0 shrink truncate text-[11px] text-fg-subtle">
+                  <span
+                    className={cn(
+                      'min-w-0 shrink truncate text-[10px]',
+                      active && !terminalGround ? 'text-accent-text' : 'text-fg-subtle'
+                    )}
+                  >
                     {tab.subtitle}
                   </span>
                 )}
@@ -196,7 +239,7 @@ export function TabBar({
                   title={`Close ${tab.title}`}
                   className={cn(
                     'mr-1.5 grid size-5 shrink-0 place-items-center rounded',
-                    'text-fg-subtle opacity-0 transition hover:bg-active hover:text-fg',
+                    'text-fg-subtle opacity-0 transition hover:bg-hover hover:text-fg',
                     'group-hover:opacity-100 focus-visible:opacity-100',
                     active && 'opacity-60'
                   )}
@@ -209,9 +252,7 @@ export function TabBar({
         })}
       </div>
 
-      {actions && (
-        <div className="flex shrink-0 items-center gap-1 border-l border-border px-2">{actions}</div>
-      )}
+      {actions && <div className="mb-1 flex shrink-0 items-center gap-1 self-center px-2">{actions}</div>}
     </div>
   )
 }

@@ -39,7 +39,9 @@ export function VersionBanner({
       role="status"
       data-version-banner
       className={cn(
-        'flex shrink-0 items-center gap-2.5 border-b border-warn/30 bg-warn/10 px-3 py-1.5',
+        // Its own small island above the tabs, not a strip fused to them: the
+        // canvas shows through around it like everywhere else.
+        'flex shrink-0 items-center gap-2.5 rounded-raised border border-warn/30 bg-warn/10 px-3 py-1.5',
         'text-[12px] text-warn'
       )}
     >

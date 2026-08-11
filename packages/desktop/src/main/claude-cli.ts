@@ -58,8 +58,12 @@ export function claudeOverride(): string | null {
  * failure as a generic error with no indication that the *executable* was the
  * problem. Resolving first means a missing CLI is a sentence in the UI instead
  * of a pty that opens and immediately closes.
+ *
+ * Takes the program name because `gh-cli.ts` needs exactly this walk for
+ * exactly this reason, and two copies of a PATHEXT loop would be two places for
+ * a machine's `.cmd` shim to stop being found.
  */
-function searchPath(): string | null {
+export function searchPath(name: string): string | null {
   const path = process.env['PATH'] ?? process.env['Path']
   if (!path) return null
 
@@ -71,7 +75,7 @@ function searchPath(): string | null {
   for (const dir of path.split(delimiter)) {
     if (!dir) continue
     for (const ext of exts) {
-      const candidate = join(dir, `claude${ext}`)
+      const candidate = join(dir, `${name}${ext}`)
       if (isExecutableFile(candidate)) return candidate
     }
   }
@@ -84,7 +88,7 @@ export function findClaudeExecutable(): string | null {
   for (const candidate of INSTALL_CANDIDATES) {
     if (isExecutableFile(candidate)) return candidate
   }
-  return searchPath()
+  return searchPath('claude')
 }
 
 export interface ClaudeCommand {

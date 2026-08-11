@@ -236,8 +236,37 @@ async function typeSearch(win: BrowserWindow, term: string): Promise<string> {
   )
   await sendKey(win, 'Backspace')
   if (typeable !== '') await typeText(win, typeable, 8)
-  // The box debounces, and the query itself lands a frame later.
-  await sleep(450)
+
+  /*
+   * Wait for the painted list to be the answer to the text now in the box.
+   *
+   * Clearing the box and typing are two edits, so two queries are in flight and
+   * the pane shows the whole index until the second lands. This was a flat
+   * 450 ms sleep, which is a guess, and the guess lost often enough to matter:
+   * the reader arrived early and counted all 886 sessions as the answer to a
+   * search for `geofenc`, then reported the pane as broken.
+   *
+   * Waiting for the count to *stop changing* does not fix it either, and that
+   * is the part worth remembering - the count is unchanging on both sides of
+   * the update, so stability cannot tell "not yet" from "final". The signal has
+   * to be positive, so the DOM is compared against what the query for that
+   * exact text returns. What the answer should *be* is still settled against
+   * `history.jsonl` by the caller; this only decides when to look.
+   */
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const agreed = await js<boolean>(
+      win,
+      `(async () => {
+        const box = document.querySelector('input[data-history-search]');
+        const page = await window.helm.invoke('history:sessions', { search: box.value });
+        return page.sessions.length === document.querySelectorAll('button[data-session]').length;
+      })()`
+    ).catch(() => false)
+    if (agreed) return typeable
+    await sleep(50)
+  }
+  // Fell through: let the caller's assertion fail on the numbers rather than
+  // hang here. Other filters being on is the honest reason this can happen.
   return typeable
 }
 
@@ -457,12 +486,48 @@ export async function runM4Checks(
   const TYPED = 'geofenc'
   await typeSearch(win, TYPED)
   const searched = await paintedRows(win)
-  const expectedIds = new Set(
-    truth.prompts
-      .filter((p) => p.display.toLowerCase().includes(TYPED))
-      .map((p) => p.sessionId)
-  )
+  // The box searches prompts *and* project paths, so the independent count has
+  // to do both. Prompt-only was right until it wasn't, and it kept passing on
+  // this machine for the uninteresting reason that no directory here is called
+  // anything like `geofenc`.
+  const matchesTyped = (needle: string) => (p: Truth['prompts'][number]): boolean =>
+    p.display.toLowerCase().includes(needle) || p.project.toLowerCase().includes(needle)
+  const expectedIds = new Set(truth.prompts.filter(matchesTyped(TYPED)).map((p) => p.sessionId))
   const shotSearch = await screenshot(win, shotDir, 'm4-search.png')
+
+  /**
+   * A term that appears in a project path and in no prompt, so that the project
+   * half of the search is actually exercised rather than merely allowed for.
+   *
+   * Derived from what this machine has rather than written down - which
+   * directories exist here is not this file's business - and null when nothing
+   * discriminating turns up, in which case the criterion says so instead of
+   * quietly claiming coverage it did not get.
+   */
+  const projectTerm = (() => {
+    for (const project of truth.projects) {
+      const segment = project.split(/[\\/]/).filter(Boolean).at(-1)?.toLowerCase()
+      if (segment === undefined || segment.length < 4) continue
+      if (truth.prompts.some((p) => p.display.toLowerCase().includes(segment))) continue
+      return segment
+    }
+    return null
+  })()
+
+  let projectSearchOk = true
+  let projectSearch: Record<string, unknown> = { term: null, note: 'no discriminating term here' }
+  if (projectTerm !== null) {
+    await typeSearch(win, projectTerm)
+    const rows = await paintedRows(win)
+    const expected = new Set(truth.prompts.filter(matchesTyped(projectTerm)).map((p) => p.sessionId))
+    projectSearchOk =
+      expected.size > 0 &&
+      rows.length === expected.size &&
+      rows.every((row) => expected.has(row.sessionId))
+    projectSearch = { term: projectTerm, painted: rows.length, expected: expected.size }
+    await typeSearch(win, TYPED)
+    await sleep(300)
+  }
 
   if (running('search')) checks.push({
     id: 'M4-4',
@@ -472,9 +537,11 @@ export async function runM4Checks(
       truth.prompts.length >= 3000 &&
       p95 < SEARCH_BUDGET_MS &&
       searched.length === expectedIds.size &&
-      searched.every((row) => expectedIds.has(row.sessionId)),
+      searched.every((row) => expectedIds.has(row.sessionId)) &&
+      projectSearchOk,
     detail: {
       promptsIndexed: truth.prompts.length,
+      projectSearch,
       budgetMs: SEARCH_BUDGET_MS,
       p95Ms: Math.round(p95 * 1000) / 1000,
       slowestMs: Math.round((sorted.at(-1) ?? 0) * 1000) / 1000,

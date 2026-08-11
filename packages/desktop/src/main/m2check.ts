@@ -6,6 +6,8 @@ import type { ConfigService } from './config'
 import type { ContentService } from './content'
 import type { Check } from './fidelity'
 import type { HistoryService } from './history'
+import type { PtermHost } from './pterm'
+import type { PullsService } from './pulls'
 import type { Confirm, ConfirmRequest, SessionHost, SessionObserver } from './sessions'
 import type { Services } from './services'
 import type { UsageService } from './usage'
@@ -25,6 +27,12 @@ export interface M2Context {
   win: BrowserWindow
   services: Services
   sessions: SessionHost
+  /**
+   * The project shells. `settings-check`'s terminal group reads the grid each
+   * shell's pty is actually at through this, which is the main-process half of
+   * "the pane refit and the pty was told"; nothing else uses it.
+   */
+  pterm: PtermHost
   /** M4's driver reads and forces passes through this; M2's ignores it. */
   history: HistoryService
   /** M5's driver reads and writes config through this; nothing else uses it. */
@@ -37,6 +45,12 @@ export interface M2Context {
    * and it is deliberately not reachable from the window.
    */
   usage: UsageService
+  /**
+   * The pull-request sweep. Aimed at a fake `gh` and a fixed set of remotes
+   * through its own `point*` hooks, for the same reason `usage` is: which
+   * binary the pull requests come from is not the window's to choose.
+   */
+  pulls: PullsService
 }
 
 // ---------------------------------------------------------------------------
@@ -108,9 +122,12 @@ async function tabOrder(win: BrowserWindow): Promise<string[]> {
 }
 
 async function activeTab(win: BrowserWindow): Promise<string | null> {
+  // Scoped to session tabs: the split view keeps a workspace strip and a
+  // session strip, each with its own active tab, and the check that calls
+  // this is asking which *session* is in front.
   return js<string | null>(
     win,
-    `(() => { const el = document.querySelector('[role="tab"][aria-selected="true"]');
+    `(() => { const el = document.querySelector('[role="tab"][data-tab^="session:"][aria-selected="true"]');
       return el ? (el.dataset.tab ?? '') : null })()`
   )
 }
@@ -201,8 +218,32 @@ export function answerStartupGates(
   return () => clearInterval(timer)
 }
 
+/**
+ * Whether a hosted session has reached its own input prompt.
+ *
+ * The signal is the composer's hint line, which the TUI paints only once it is
+ * accepting input, and which has two forms: `? for shortcuts` when no
+ * permission mode is on, and `(shift+tab to cycle)` when one is - the CLI now
+ * starts in auto mode on this machine, so the second is the common case.
+ *
+ * Measured on 2.1.227, in both of the welcome layouts the CLI picks between:
+ *
+ *   Wide (a full window):   Claude Code v2.1.227
+ *                           Fable 5 with high effort · Claude Max
+ *
+ *   Narrow (a docked pane): ┌ Claude Code ──────────┐
+ *                           │  Welcome back Cole!   │
+ *
+ * The narrow one carries **no version at all**, which is why matching the
+ * banner is no longer enough on its own: a session in the session split reached
+ * its prompt and `Claude Code v\d` never appeared. That pattern stays as a
+ * fallback for a CLI whose hint line reads differently again, and because it
+ * costs nothing - but the hint line is the one that means what this is asked.
+ */
 export const atPrompt = (text: string): boolean =>
-  /\?\s*for\s*shortcuts/.test(text) || /Claude\s*Code\s*v\d/.test(text)
+  /\?\s*for\s*shortcuts/.test(text) ||
+  /shift\s*\+?\s*tab\s*to\s*cycle/i.test(text) ||
+  /Claude\s*Code\s*v\d/.test(text)
 
 export function processAlive(pid: number): boolean {
   if (pid <= 0) return false

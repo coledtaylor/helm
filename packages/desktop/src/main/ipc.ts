@@ -10,8 +10,12 @@ import {
 import type { ConfigService } from './config'
 import type { ContentService } from './content'
 import type { HistoryService } from './history'
+import type { PullsService } from './pulls'
 import type { UsageService } from './usage'
+import { applyTitleBarOverlay } from './chrome'
+import type { PtermHost } from './pterm'
 import { readClaudeVersion, setClaudeOverride } from './claude-cli'
+import { setGhOverride } from './gh-cli'
 import { readClaudeStatus, verifyClaudeAt } from './setup'
 import { checkForUpdate } from './update'
 import { appMode, dataDir, dbFile } from './paths'
@@ -74,10 +78,14 @@ export interface IpcContext {
   window: () => BrowserWindow | null
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
   sessions: SessionHost
+  /** Owns the project shells; see `pterm.ts`. */
+  pterm: PtermHost
   /** Keeps the index over `~/.claude/history.jsonl` current; see `history.ts`. */
   history: HistoryService
   /** Mirrors Claude Code's cached plan-limit figures; see `usage.ts`. */
   usage: UsageService
+  /** Sweeps the discovered repositories for open pull requests; see `pulls.ts`. */
+  pulls: PullsService
   /** The one surface that writes to a `.claude` tree; see `config.ts`. */
   config: ConfigService
   /** Reads, renders and searches what Claude writes; see `content.ts`. */
@@ -164,8 +172,19 @@ export function registerIpc(ctx: IpcContext): void {
       // written through this channel has to reach it too - otherwise sessions
       // launch from one path and `claude mcp add` from another.
       if (patch.claudePath !== undefined) setClaudeOverride(next.claudePath)
+      // The pulls service resolves `gh` through the same module-level override,
+      // and holds its own cached answer about which one it is - so a new path
+      // has to reach both, and the poller has to be re-armed when the interval
+      // moves or a change to it would not take effect until the next restart.
+      if (patch.ghPath !== undefined) {
+        setGhOverride(next.ghPath)
+        ctx.pulls.rearm()
+        void ctx.pulls.refresh()
+      }
+      if (patch.prPollMinutes !== undefined) ctx.pulls.rearm()
       if (patch.theme !== undefined) {
         nativeTheme.themeSource = patch.theme
+        applyTitleBarOverlay(ctx.window(), resolvedTheme())
         emit(ctx.window(), 'theme:changed', {
           preference: next.theme,
           resolved: resolvedTheme()
@@ -279,6 +298,27 @@ export function registerIpc(ctx: IpcContext): void {
       return { path: result.canceled ? null : (result.filePaths[0] ?? null) }
     },
 
+    'path:chooseFile': async ({ title }) => {
+      const heading = title ?? 'Choose a program'
+      if (ctx.chooseFile) return { path: ctx.chooseFile(heading) }
+      const win = ctx.window()
+      const options: Electron.OpenDialogOptions = {
+        title: heading,
+        properties: ['openFile'],
+        filters:
+          process.platform === 'win32'
+            ? [
+                { name: 'Programs', extensions: ['exe', 'cmd', 'bat'] },
+                { name: 'All files', extensions: ['*'] }
+              ]
+            : [{ name: 'All files', extensions: ['*'] }]
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      return { path: result.canceled ? null : (result.filePaths[0] ?? null) }
+    },
+
     'harness:create': async (request) => {
       const result = await createHarness({
         mode: request.mode,
@@ -311,6 +351,12 @@ export function registerIpc(ctx: IpcContext): void {
     'session:start': (request) => ctx.sessions.start(request),
     'session:close': (request) => ctx.sessions.close(request),
     'session:list': () => ctx.sessions.list(),
+
+    'pterm:open': (request) => ctx.pterm.open(request),
+    'pterm:close': ({ id }) => {
+      ctx.pterm.close(id)
+    },
+    'pterm:shells': () => ctx.pterm.detected(),
 
     'profile:list': () => profiles(services),
 
@@ -381,6 +427,42 @@ export function registerIpc(ctx: IpcContext): void {
     // would be the one surface in the app that does.
     'usage:read': () => ctx.usage.snapshot(),
 
+    // The cache, deliberately: this runs no `gh`, so the pane paints on the
+    // first frame and whatever the fetch finds arrives as `pr:changed`.
+    'pr:snapshot': () => ctx.pulls.snapshot(),
+    'pr:refresh': (request) =>
+      ctx.pulls.refresh(request?.repoPath !== undefined ? { repoPath: request.repoPath } : {}),
+    // Cached unless asked otherwise, and the markdown comes back rendered - the
+    // window has no pipeline of its own to run it through.
+    'pr:detail': ({ repoPath, number, refresh }) =>
+      ctx.pulls.detail({ repoPath, number, ...(refresh === true ? { refresh: true } : {}) }),
+
+    /**
+     * The two halves of a review launch, in the order they have to happen.
+     *
+     * `prepareReview` is where the decisions are: it reads the pull request out
+     * of the cache, reads the template and the checkout mode out of settings,
+     * runs `gh pr checkout` if that is what was asked for, and renders the
+     * prompt. Only then does the session host spawn - so a checkout that was
+     * refused is a rejection with a sentence in it rather than a tab that
+     * opened onto the wrong revision.
+     *
+     * Awaited by the renderer for the same reason `session:start` is: the pane
+     * has nowhere else to learn that there is no `gh`, or that the tree is
+     * dirty, and a tab holding a terminal that never started is worse than no
+     * tab.
+     */
+    'pr:review': async ({ repoPath, number, cols, rows }) => {
+      const plan = await ctx.pulls.prepareReview({ repoPath, number })
+      const session = ctx.sessions.review(plan, { cols, rows })
+      return {
+        session,
+        prompt: plan.prompt,
+        checkedOut: plan.checkedOut,
+        warnings: plan.warnings
+      }
+    },
+
     'content:scopes': () => ctx.content.scopes(),
     'content:tree': ({ scopePath, refresh }) => ctx.content.tree(scopePath, refresh ?? false),
     'content:document': ({ scopePath, path }) => ctx.content.document(scopePath, path),
@@ -432,12 +514,18 @@ export function registerIpc(ctx: IpcContext): void {
     'session:resize': ({ id, cols, rows }) => ctx.sessions.resize(id, cols, rows),
     'session:focus': ({ id }) => ctx.sessions.setFocus(id),
 
+    'pterm:input': ({ id, data }) => ctx.pterm.input(id, data),
+    'pterm:resize': ({ id, cols, rows }) => ctx.pterm.resize(id, cols, rows),
+
     // Consumed by one-shot `ipcMain.once` listeners in the spike drivers, which
     // register alongside these. A no-op here keeps the contract exhaustive
     // without stealing the event.
     'term:created': () => undefined,
     'term:resized': () => undefined,
-    'probe:res': () => undefined
+    'probe:res': () => undefined,
+    // Same shape: the real listener is the one `sessions.ts` registers at
+    // module scope, which is the side holding the promise this answers.
+    'session:confirmed': () => undefined
   }
 
   // The maps above are where the types are checked. Registration itself is
@@ -457,6 +545,9 @@ export function registerIpc(ctx: IpcContext): void {
 
   nativeTheme.themeSource = services.settings.theme
   nativeTheme.on('updated', () => {
+    // The overlay buttons are native chrome, so the theme swap has to be told
+    // to them separately - they do not follow the renderer's class.
+    applyTitleBarOverlay(ctx.window(), resolvedTheme())
     emit(ctx.window(), 'theme:changed', {
       preference: services.settings.theme,
       resolved: resolvedTheme()

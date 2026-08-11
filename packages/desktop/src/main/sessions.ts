@@ -1,4 +1,4 @@
-import { type BrowserWindow, dialog, Notification } from 'electron'
+import { type BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import { basename } from 'node:path'
 import {
   buildResumeArgs,
@@ -11,6 +11,7 @@ import {
   sanitizeSessionName,
   startSession,
   uniqueSessionName,
+  type LaunchedReviewPlan,
   type LaunchPlan,
   type SessionRecord
 } from '@helm/core'
@@ -73,6 +74,12 @@ export interface ConfirmRequest {
   kind: 'close-session' | 'quit'
   message: string
   detail: string
+  /**
+   * What the agreeing button says. Carried on the request rather than derived
+   * by each implementation, so the Helm dialog and the native fallback cannot
+   * word the same decision two different ways.
+   */
+  confirmLabel: string
   /** The sessions the answer decides the fate of. */
   sessions: SessionRecord[]
 }
@@ -84,15 +91,73 @@ export interface ConfirmRequest {
  */
 export type Confirm = (request: ConfirmRequest) => Promise<boolean>
 
+/**
+ * How long main will wait for the renderer to answer before asking the old way.
+ *
+ * This is not a "the user is taking too long" timer - it is set well past any
+ * real reading time, because the only thing it exists to catch is a renderer
+ * that will never answer at all. `before-quit` holds the window open on this
+ * promise, so without a ceiling a wedged renderer makes Helm unquittable, and
+ * an ugly dialog beats an app that cannot be closed. If it does fire while a
+ * Helm dialog is still on screen, the native box is what decides; the stale
+ * answer arrives later and finds nothing waiting for it.
+ */
+const CONFIRM_TIMEOUT_MS = 120_000
+
+let nextConfirmId = 1
+const pendingConfirms = new Map<number, (agreed: boolean) => void>()
+
+// Module scope, not per host: a second `createSessionHost` in the same process
+// would otherwise stack a listener per call. Registered alongside the no-op in
+// `ipc.ts`, which keeps the send contract exhaustive without stealing the event.
+ipcMain.on('session:confirmed', (_e, { id, agreed }: { id: number; agreed: boolean }) => {
+  pendingConfirms.get(id)?.(agreed)
+  pendingConfirms.delete(id)
+})
+
+/**
+ * Ask the renderer, so the question is a Helm island rather than a Win32 box.
+ *
+ * Falls back to `native` whenever there is no live window to ask - during
+ * shutdown, before the first window, or after a renderer has gone. That path is
+ * the reason this indirection is allowed to exist at all: main owns process
+ * lifetime, and it must never be unable to ask its question.
+ */
+function rendererConfirm(window: () => BrowserWindow | null, native: Confirm): Confirm {
+  return async (request) => {
+    const win = window()
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return native(request)
+
+    const id = nextConfirmId++
+    const answered = await new Promise<boolean | null>((resolve) => {
+      const timer = setTimeout(() => {
+        pendingConfirms.delete(id)
+        resolve(null)
+      }, CONFIRM_TIMEOUT_MS)
+      pendingConfirms.set(id, (agreed) => {
+        clearTimeout(timer)
+        resolve(agreed)
+      })
+      emit(win, 'session:confirm', {
+        id,
+        kind: request.kind,
+        message: request.message,
+        detail: request.detail,
+        confirmLabel: request.confirmLabel,
+        sessionNames: request.sessions.map((record) => record.name)
+      })
+    })
+
+    return answered ?? native(request)
+  }
+}
+
 function nativeConfirm(window: () => BrowserWindow | null): Confirm {
-  return async ({ kind, message, detail, sessions }) => {
+  return async ({ message, detail, confirmLabel }) => {
     const win = window()
     const options: Electron.MessageBoxOptions = {
       type: 'question',
-      buttons: [
-        kind === 'quit' && sessions.length > 1 ? `End ${String(sessions.length)} sessions` : 'End session',
-        'Cancel'
-      ],
+      buttons: [confirmLabel, 'Cancel'],
       defaultId: 0,
       cancelId: 1,
       message,
@@ -112,6 +177,15 @@ export interface SessionHost {
   launchProfile: (req: LaunchProfileRequest) => LaunchedProfile
   /** Reopens a conversation from the history index in a new tab. */
   resume: (req: ResumeSessionRequest) => ResumedSession
+  /**
+   * Starts a session on a pull request, with a prompt composed by the caller.
+   *
+   * Takes the whole plan rather than a pull request number, because deciding
+   * what the prompt says needs the cache, the settings and possibly a `gh pr
+   * checkout` - all of which belong to `pulls.ts`. What this file owns is what
+   * it owns for every other launch: turning a plan into argv and a process.
+   */
+  review: (plan: LaunchedReviewPlan, grid: { cols: number; rows: number }) => SessionRecord
   close: (req: CloseSessionRequest) => Promise<CloseSessionResult>
   /** Sessions this process is hosting, running or exited-but-not-yet-closed. */
   list: () => SessionRecord[]
@@ -134,7 +208,7 @@ export interface SessionHostDeps {
   services: Services
   window: () => BrowserWindow | null
   observer?: SessionObserver | undefined
-  /** Defaults to a native message box on the app window. */
+  /** Defaults to asking the renderer, with the native box behind it. */
   confirm?: Confirm | undefined
 }
 
@@ -142,7 +216,7 @@ export function createSessionHost({
   services,
   window,
   observer,
-  confirm = nativeConfirm(window)
+  confirm = rendererConfirm(window, nativeConfirm(window))
 }: SessionHostDeps): SessionHost {
   const hosted = new Map<number, Hosted>()
   const grids = new Map<number, { cols: number; rows: number }>()
@@ -334,6 +408,36 @@ export function createSessionHost({
       return { session, history }
     },
 
+    /**
+     * A review is an ordinary session that happens to open with a prompt.
+     *
+     * Which is the whole design. There is no review mode, no second kind of
+     * pty and nothing watching what comes back: `prepareLaunch` puts the prompt
+     * where the CLI expects a bare positional (`core/launch/plan.ts` -
+     * `buildLaunchArgs`, last), the shared `spawn` starts it, and from that
+     * moment it is a tab like any other, which the user can talk to, interrupt
+     * or close. Helm never parses a line of it - see SPEC 4.4 and the hard rule
+     * in CLAUDE.md.
+     *
+     * `projectPath` is the repository, so the session appears against the
+     * project it reviewed rather than as an orphan.
+     */
+    review(plan, grid) {
+      const repo = plan.slug.split('/')[1] ?? basename(plan.repoPath)
+      const launch = prepareLaunch({
+        root: plan.repoPath,
+        // Named for what it is, and uniqued like every other launch: reviewing
+        // two pull requests at once is the normal case.
+        name: uniqueSessionName(
+          `PR #${String(plan.number)} review - ${repo}`,
+          runningSessionNames(services.store)
+        ),
+        shimRoot,
+        openingPrompt: plan.prompt
+      })
+      return spawn(launch, grid, { projectPath: plan.repoPath })
+    },
+
     async close(req) {
       const entry = hosted.get(req.id)
       if (!entry) return { closed: true }
@@ -343,6 +447,7 @@ export function createSessionHost({
           kind: 'close-session',
           message: `“${entry.record.name}” is still running.`,
           detail: `Closing the tab ends the Claude Code session in ${entry.record.cwd}.`,
+          confirmLabel: 'End session',
           sessions: [entry.record]
         })
         if (!agreed) return { closed: false }
@@ -392,6 +497,7 @@ export function createSessionHost({
             ? `“${live[0]?.record.name ?? ''}” is still running.`
             : `${String(live.length)} Claude Code sessions are still running.`,
         detail: 'Quitting Helm ends them.',
+        confirmLabel: live.length > 1 ? `End ${String(live.length)} sessions` : 'End session',
         sessions: live.map((entry) => entry.record)
       })
     },

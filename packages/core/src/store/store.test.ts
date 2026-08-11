@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, EMPTY_INVENTORY, type Project } from '../types'
+import { DEFAULT_SETTINGS, EMPTY_INVENTORY, type AppSettings, type Project } from '../types'
 import { openStore, type Store } from './db'
 import { knownMigrations } from './migrate'
 import { cacheProjects, readCachedProjects } from './projects'
@@ -14,7 +14,13 @@ import {
   runningSessionNames,
   startSession
 } from './sessions'
-import { readSettings, writeSetting, writeSettings } from './settings'
+import {
+  readSettings,
+  validateSetting,
+  writeSetting,
+  writeSettings,
+  SettingsValidationError
+} from './settings'
 
 let dir: string
 let store: Store
@@ -93,23 +99,31 @@ describe('settings', () => {
   })
 
   it('round-trips every value type in AppSettings', () => {
-    writeSettings(store, {
+    const written = {
       theme: 'light',
       scanRoots: [dir, join(dir, 'other')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
       firstRunCompletedAt: '2026-08-09T12:00:00.000Z',
       claudePath: join(dir, 'claude.exe'),
-      usageDisplay: 'cost'
-    })
+      usageDisplay: 'cost',
+      terminalFontFamily: 'Consolas',
+      terminalFontSize: 17,
+      terminalCursorStyle: 'bar',
+      terminalCursorBlink: false,
+      terminalScrollback: 2500,
+      terminalShell: join(dir, 'pwsh.exe'),
+      ghPath: join(dir, 'gh.exe'),
+      prPollMinutes: 15,
+      prReviewPrompt: 'review {slug}#{number} on {branch}',
+      prCheckout: 'checkout'
+    } satisfies AppSettings
 
-    expect(readSettings(store)).toEqual({
-      theme: 'light',
-      scanRoots: [dir, join(dir, 'other')],
-      windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
-      firstRunCompletedAt: '2026-08-09T12:00:00.000Z',
-      claudePath: join(dir, 'claude.exe'),
-      usageDisplay: 'cost'
-    })
+    writeSettings(store, written)
+
+    expect(readSettings(store)).toEqual(written)
+    // Every key of the interface, not merely the ones this test remembered to
+    // list: a key added without a line here would otherwise round-trip untested.
+    expect(Object.keys(written).sort()).toEqual(Object.keys(DEFAULT_SETTINGS).sort())
   })
 
   it('survives a restart', () => {
@@ -139,6 +153,238 @@ describe('settings', () => {
 
     expect(readSettings(store).theme).toBe(DEFAULT_SETTINGS.theme)
   })
+})
+
+describe('settings validation', () => {
+  /**
+   * Every key, with a value that fits and one that does not.
+   *
+   * The good column is not decoration: a rejection test whose valid case is
+   * never exercised cannot tell "the validator is right" from "the validator
+   * refuses everything", which is the same trap CLAUDE.md's fixture rule
+   * describes. Both columns run against the same key.
+   */
+  const cases: Array<{
+    key: keyof typeof DEFAULT_SETTINGS
+    good: unknown[]
+    bad: unknown[]
+  }> = [
+    {
+      key: 'theme',
+      good: ['system', 'light', 'dark'],
+      bad: ['purple', 'Dark', '', null, 1, ['dark'], { theme: 'dark' }]
+    },
+    {
+      key: 'usageDisplay',
+      good: ['percent', 'cost', 'off'],
+      bad: ['dollars', 'PERCENT', null, 0, ['off']]
+    },
+    {
+      key: 'scanRoots',
+      good: [[], [join(tmpdir(), 'a')], [join(tmpdir(), 'a'), join(tmpdir(), 'b')]],
+      bad: [null, 'C:\\work', ['repos/helm'], ['../up'], [''], [17], [null]]
+    },
+    {
+      key: 'claudePath',
+      good: [null, join(tmpdir(), 'claude.exe')],
+      bad: ['claude', 'bin\\claude.exe', '', 42, {}]
+    },
+    {
+      key: 'windowBounds',
+      good: [null, { width: 1280, height: 820 }, { width: 1280, height: 820, x: 40, y: 60 }],
+      bad: [
+        { width: 0, height: 820 },
+        { width: -1280, height: 820 },
+        { width: 1280 },
+        { width: '1280', height: '820' },
+        { width: 1280, height: 820, x: 'left', y: 60 },
+        { width: Number.NaN, height: 820 },
+        [1280, 820],
+        'maximized'
+      ]
+    },
+    {
+      key: 'firstRunCompletedAt',
+      good: [null, '2026-08-11T09:00:00.000Z'],
+      bad: ['soon', '', 1786353684315, {}]
+    },
+    {
+      key: 'terminalFontFamily',
+      good: [null, 'Consolas', 'Cascadia Mono', 'MesloLGS NF'],
+      bad: [
+        '',
+        '   ',
+        // A stack, which would read as though it replaced the default one.
+        'Fira Code, monospace',
+        // Everything below ends a `font-family` declaration and starts
+        // something else, inside an inline style xterm writes for us.
+        'x; color: red',
+        'x">',
+        'x/*',
+        42,
+        ['Consolas']
+      ]
+    },
+    {
+      key: 'terminalFontSize',
+      good: [8, 14, 32],
+      bad: [7, 33, 0, -14, 14.5, '14', null, Number.NaN, Number.POSITIVE_INFINITY]
+    },
+    {
+      key: 'terminalCursorStyle',
+      good: ['block', 'underline', 'bar'],
+      bad: ['beam', 'BLOCK', '', null, 0]
+    },
+    {
+      key: 'terminalCursorBlink',
+      good: [true, false],
+      bad: ['true', 1, 0, null, {}]
+    },
+    {
+      key: 'terminalScrollback',
+      good: [500, 10_000, 200_000],
+      bad: [499, 200_001, 0, -1, 1000.5, '10000', null]
+    },
+    {
+      key: 'terminalShell',
+      good: [null, join(tmpdir(), 'pwsh.exe'), join(tmpdir(), 'bin', 'bash')],
+      bad: ['pwsh.exe', 'bin\\pwsh.exe', '', 42, {}]
+    },
+    {
+      key: 'ghPath',
+      good: [null, join(tmpdir(), 'gh.exe')],
+      bad: ['gh', 'bin\\gh.exe', '', 42, {}]
+    },
+    {
+      key: 'prPollMinutes',
+      // 0 is off; everything else is at least five minutes apart, because a
+      // pass is one `gh` per remote against the user's own rate limit.
+      good: [0, 5, 60, 1440],
+      bad: [1, 4, 1441, -5, 5.5, '5', null, Number.NaN]
+    },
+    {
+      key: 'prReviewPrompt',
+      // A placeholder this build does not know is deliberately valid: it
+      // survives into the prompt exactly as written, which is what makes a
+      // typo visible in the pane rather than a word missing from the argv.
+      good: ['/code-review {number}', 'look at {url}', 'review {whatever}', 'x'.repeat(2000)],
+      bad: ['', '   ', 'x'.repeat(2001), null, 42, {}, ['/code-review']]
+    },
+    {
+      key: 'prCheckout',
+      good: ['none', 'checkout'],
+      bad: ['worktree', 'None', '', true, null, 0]
+    }
+  ]
+
+  for (const { key, good, bad } of cases) {
+    it(`accepts every valid ${key} and rejects the rest`, () => {
+      for (const value of good) {
+        expect(validateSetting(key, value)).toBeNull()
+        expect(() => writeSetting(store, key, value as never)).not.toThrow()
+        expect(readSettings(store)[key]).toEqual(value)
+      }
+
+      for (const value of bad) {
+        expect(validateSetting(key, value)).toContain(key)
+        expect(() => writeSetting(store, key, value as never)).toThrow(SettingsValidationError)
+      }
+    })
+  }
+
+  it('leaves the stored value untouched when a write is rejected', () => {
+    writeSetting(store, 'theme', 'dark')
+
+    expect(() => writeSetting(store, 'theme', 'purple' as never)).toThrow(SettingsValidationError)
+    expect(readSettings(store).theme).toBe('dark')
+
+    const row = store.raw.prepare("SELECT value FROM app_settings WHERE key = 'theme'").get()
+    expect((row as { value: string }).value).toBe('"dark"')
+  })
+
+  it('applies a patch as one edit: one bad key writes none of them', () => {
+    writeSettings(store, { theme: 'dark', usageDisplay: 'cost' })
+
+    expect(() =>
+      writeSettings(store, { theme: 'light', usageDisplay: 'dollars' as never })
+    ).toThrow(SettingsValidationError)
+
+    expect(readSettings(store)).toMatchObject({ theme: 'dark', usageDisplay: 'cost' })
+  })
+
+  it('names every problem in the patch, not just the first', () => {
+    let thrown: SettingsValidationError | null = null
+    try {
+      writeSettings(store, { theme: 'purple' as never, claudePath: 'claude' })
+    } catch (err) {
+      thrown = err as SettingsValidationError
+    }
+
+    expect(thrown?.problems).toHaveLength(2)
+    expect(thrown?.message).toContain('theme')
+    expect(thrown?.message).toContain('claudePath')
+  })
+
+  it('still ignores keys it does not recognise rather than rejecting the patch', () => {
+    const after = writeSettings(store, {
+      theme: 'light',
+      // A key from a build that is not this one. Tolerated on the way in for
+      // the same reason `readSettings` tolerates it on the way out.
+      somethingLater: 'whatever'
+    } as never)
+
+    expect(after.theme).toBe('light')
+    expect(store.raw.prepare("SELECT * FROM app_settings WHERE key = 'somethingLater'").get()).toBe(
+      undefined
+    )
+  })
+
+  it('accepts a settings object read straight back out of the database', () => {
+    // The round trip that matters: whatever `readSettings` returns has to be
+    // writable again, or a surface that reads, edits one field and writes the
+    // whole object back would be rejected for values it never touched.
+    writeSettings(store, {
+      theme: 'dark',
+      scanRoots: [dir],
+      windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
+      firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
+      claudePath: join(dir, 'claude.exe'),
+      usageDisplay: 'off',
+      terminalFontFamily: 'Cascadia Mono',
+      terminalFontSize: 12,
+      terminalCursorStyle: 'underline',
+      terminalCursorBlink: false,
+      terminalScrollback: 50_000,
+      terminalShell: join(dir, 'cmd.exe'),
+      ghPath: join(dir, 'gh.exe'),
+      prPollMinutes: 0,
+      prReviewPrompt: '/code-review {number}',
+      prCheckout: 'none'
+    })
+
+    expect(() => writeSettings(store, readSettings(store))).not.toThrow()
+    expect(readSettings(store)).toEqual(DEFAULT_SETTINGS_SHAPE(dir))
+  })
+})
+
+/** What the round-trip test above expects, spelled out away from the writer. */
+const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
+  theme: 'dark',
+  scanRoots: [dir],
+  windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
+  firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
+  claudePath: join(dir, 'claude.exe'),
+  usageDisplay: 'off',
+  terminalFontFamily: 'Cascadia Mono',
+  terminalFontSize: 12,
+  terminalCursorStyle: 'underline',
+  terminalCursorBlink: false,
+  terminalScrollback: 50_000,
+  terminalShell: join(dir, 'cmd.exe'),
+  ghPath: join(dir, 'gh.exe'),
+  prPollMinutes: 0,
+  prReviewPrompt: '/code-review {number}',
+  prCheckout: 'none'
 })
 
 describe('project cache', () => {

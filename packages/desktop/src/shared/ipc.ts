@@ -9,6 +9,7 @@ import type {
   ContentScope,
   ContentSearchResult,
   ContentTree,
+  DetectedShell,
   DiscoveryResult,
   DoctorReport,
   EffectiveView,
@@ -25,6 +26,8 @@ import type {
   McpScope,
   Profile,
   ProfileDraft,
+  PullDetailView,
+  PullsSnapshot,
   RenderedMarkdown,
   SessionRecord,
   ThemePreference,
@@ -243,6 +246,40 @@ export interface ResumedSession {
   history: HistorySession
 }
 
+/**
+ * Reviewing a pull request: which one, and how big the pane is.
+ *
+ * The same shape and the same reasoning as `LaunchProfileRequest` and
+ * `ResumeSessionRequest`. Everything else about the launch - the working
+ * directory, the session's name, whether the tree gets checked out, and the
+ * opening prompt itself - is decided in the main process from the cached pull
+ * request and the stored settings.
+ */
+export interface ReviewPullRequest {
+  /** The project directory whose origin remote the pull request belongs to. */
+  repoPath: string
+  number: number
+  /** Initial grid, from the pane that will host the session. */
+  cols: number
+  rows: number
+}
+
+/** What a review launch composed, for the pane to report before the TUI paints. */
+export interface LaunchedReview {
+  session: SessionRecord
+  /**
+   * The opening prompt the session was actually started with - the trailing
+   * positional argument in `session.argv`. Sent back so the pane reports what
+   * happened rather than re-rendering the template and reporting its own
+   * arithmetic.
+   */
+  prompt: string
+  /** The branch `gh pr checkout` moved the tree to, or null when it did not run. */
+  checkedOut: string | null
+  /** Non-fatal notes from the launch: a missing overlay, what the checkout said. */
+  warnings: string[]
+}
+
 export interface CloseSessionRequest {
   id: number
   /**
@@ -301,6 +338,25 @@ export interface McpApproveRequest {
   approved: boolean
 }
 
+/**
+ * A live session is about to be ended, and the user has to agree first.
+ *
+ * Main asks and the *renderer* answers, so the question is a Helm island
+ * rather than a Win32 message box - see `IpcEvents['session:confirm']` for why
+ * the direction is what it is.
+ */
+export interface SessionConfirmRequest {
+  /** Correlates the answer with the question; see `session:confirmed`. */
+  id: number
+  kind: 'close-session' | 'quit'
+  message: string
+  detail: string
+  /** What the agreeing button says. Plural when quitting ends several. */
+  confirmLabel: string
+  /** Names of the sessions this ends, for the dialog to list. */
+  sessionNames: string[]
+}
+
 // ---------------------------------------------------------------------------
 // Renderer -> main, with a response
 // ---------------------------------------------------------------------------
@@ -342,6 +398,11 @@ export interface IpcRequests {
 
   /** A directory chosen by the user, without doing anything with it yet. */
   'path:chooseDirectory': { request: { title?: string }; response: { path: string | null } }
+  /**
+   * The same for a program. Used by the terminal settings' "Choose…" row, for
+   * a shell that is installed somewhere `where.exe` does not look.
+   */
+  'path:chooseFile': { request: { title?: string }; response: { path: string | null } }
 
   /**
    * Scaffold a harness, or turn a folder that already holds repositories into
@@ -355,8 +416,16 @@ export interface IpcRequests {
   }
 
   /**
-   * Ask GitHub whether there is a newer release. The only outbound request the
-   * app makes, and it is made only when this channel is invoked.
+   * Ask GitHub whether there is a newer release. The only **direct** network
+   * request Helm makes, and it is made only when this channel is invoked.
+   *
+   * "Direct" is doing real work in that sentence and was added when the
+   * pull-request surface landed. That surface reaches GitHub too, and it does
+   * it by running the user's own `gh` CLI on a schedule the user sets (default
+   * every 5 minutes, and `0` turns it off) - so bytes leave the machine without
+   * anybody invoking this channel. What has not changed is the part that
+   * matters: Helm opens no socket of its own for it and stores no GitHub
+   * credential. See `pr:snapshot` and docs/PACKAGING.md.
    */
   'update:check': { request: void; response: UpdateCheck }
 
@@ -377,6 +446,41 @@ export interface IpcRequests {
   'session:close': { request: CloseSessionRequest; response: CloseSessionResult }
   /** Sessions this main process is currently hosting, for a renderer reload. */
   'session:list': { request: void; response: SessionRecord[] }
+
+  /**
+   * The project shell - a plain terminal under the project pane, opened in
+   * that project's directory. Not a session: no row, no history, no
+   * notification (see main/pterm.ts). Opening an already-open path reattaches
+   * to the shell it has.
+   */
+  'pterm:open': {
+    request: {
+      path: string
+      cols: number
+      rows: number
+      /**
+       * Open this pane under a specific executable. Absent means the
+       * `terminalShell` setting, and failing that whatever Helm detects.
+       */
+      shell?: string
+    }
+    response: {
+      id: number
+      /** The executable actually running, which the pane header shows. */
+      shell: string
+      /** What was asked for when that is not what runs; null when they agree. */
+      requested: string | null
+      problem: string | null
+    }
+  }
+  /** Kill the shell. Called when the project's tab closes, not when it hides. */
+  'pterm:close': { request: { id: number }; response: void }
+  /**
+   * Shells this machine has, for the settings pane's default picker and the
+   * per-pane one in a project shell's header. Probed once per process - the
+   * answer is a property of the installation, not of Helm's state.
+   */
+  'pterm:shells': { request: void; response: DetectedShell[] }
 
   'profile:list': { request: void; response: Profile[] }
   /** Create or update. Returns the problems instead of throwing for a draft
@@ -459,6 +563,54 @@ export interface IpcRequests {
   'usage:read': { request: void; response: UsageSnapshot }
 
   /**
+   * Open pull requests across the discovered repositories.
+   *
+   * `pr:snapshot` is the cache and nothing else - it runs no subprocess, so the
+   * pane paints from SQLite on the first frame and the fetch that follows
+   * arrives as `pr:changed`. `pr:refresh` is the button: it fetches now, for one
+   * repository or all of them, and resolves with what it found.
+   *
+   * Helm holds no GitHub credential on either path. Every fetch behind these two
+   * channels is the user's own `gh` CLI, run on the user's own token.
+   */
+  'pr:snapshot': { request: void; response: PullsSnapshot }
+  'pr:refresh': { request: { repoPath?: string }; response: PullsSnapshot }
+  /**
+   * One pull request, for its own tab.
+   *
+   * Answers from the cached detail when there is one, running no `gh` at all in
+   * that case - which is what makes reopening a tab instant. `refresh` is the
+   * button: it fetches again and rewrites the cache.
+   *
+   * The markdown - the description, every comment, every review body - is
+   * rendered **here**, in main, through the same sanitising pipeline the
+   * content viewer uses. The window receives HTML it never evaluates, and
+   * shiki's grammars stay out of the browser bundle.
+   */
+  'pr:detail': {
+    request: { repoPath: string; number: number; refresh?: boolean }
+    response: PullDetailView
+  }
+  /**
+   * Start a Claude Code session that reviews this pull request.
+   *
+   * Four fields, and the absence of a fifth is the point: **the prompt is not
+   * one of them**. Main looks the pull request up in its own cache, reads the
+   * template out of settings and renders it there, exactly as `profile:launch`
+   * sends an id rather than an argv. A window that composed the prompt would be
+   * a window whose idea of the template could drift from the stored one, and
+   * argv assembled in a renderer is argv nothing in the main process checked.
+   *
+   * Rejects with a whole sentence: no `gh`, not signed in, a pull request the
+   * list no longer has, a dirty tree in `checkout` mode, or no `claude` CLI.
+   * The pane shows it as it is.
+   *
+   * What comes back is a session like any other - it lands in the strip through
+   * the same adopt flow a resume uses, and Helm reads nothing it prints.
+   */
+  'pr:review': { request: ReviewPullRequest; response: LaunchedReview }
+
+  /**
    * The content viewer (M6). Rendering happens here rather than in the window:
    * shiki's grammars are megabytes the browser bundle must not carry, and a
    * live preview that re-parsed a 21 KB note on the UI thread per keystroke
@@ -539,12 +691,23 @@ export interface IpcSends {
   /** The app's equivalents, addressed to one session. Same reasoning. */
   'session:input': { id: number; data: string }
   'session:resize': { id: number; cols: number; rows: number }
+
+  /** The project shell's wire, one-way for the same echo-path reason. */
+  'pterm:input': { id: number; data: string }
+  'pterm:resize': { id: number; cols: number; rows: number }
   /**
    * Which session the user is actually looking at, or null for a non-terminal
    * tab. Only the renderer knows this, and the main process needs it to decide
    * whether an exit is worth a notification.
    */
   'session:focus': { id: number | null }
+
+  /**
+   * The answer to a `session:confirm`. One-way rather than a request, because
+   * the question travelled the other way: main is the side waiting, and it
+   * matches the reply to the question by `id`.
+   */
+  'session:confirmed': { id: number; agreed: boolean }
 
   /** Spike harness: the renderer's answer to a `probe:req`. */
   'probe:res': { id: number; value: unknown }
@@ -584,12 +747,38 @@ export interface IpcEvents {
   'usage:changed': UsageSnapshot
 
   /**
+   * A fetch pass found something different, or one started.
+   *
+   * Pushed rather than polled for the reason every other event here is: the
+   * timer that drives this lives in the main process, and the window would
+   * otherwise have to poll a service that is itself polling. Sent only when the
+   * snapshot's signature has changed - which includes the fetch age, because
+   * that is what the pane's caption is made of.
+   */
+  'pr:changed': PullsSnapshot
+
+  /**
    * The file the config editor has open changed on disk, and Helm was not the
    * one who changed it. Pushed rather than discovered at save time: by then the
    * user has typed a screen of text they are about to lose, and the point of
    * the warning is to arrive before that.
    */
   'config:externalChange': ConfigExternalChange
+
+  /**
+   * "This session is still running" - asked by main, answered by the renderer
+   * on `session:confirmed`.
+   *
+   * The question belongs to main: it owns process lifetime, and `before-quit`
+   * is raised there with no renderer involvement. But a `dialog.showMessageBox`
+   * is a Win32 window with no styling surface at all - wrong typeface, wrong
+   * ground, wrong everything - so the *asking* is delegated to the renderer and
+   * main waits for the reply. `nativeConfirm` remains the fallback for when
+   * there is no window to ask, which is the case this indirection has to keep
+   * working: a Helm that cannot be quit because its renderer is wedged is worse
+   * than an ugly dialog.
+   */
+  'session:confirm': SessionConfirmRequest
 
   /**
    * A line an HTML artifact wrote to its console. Pushed from main because the
@@ -609,6 +798,9 @@ export interface IpcEvents {
 
   /** Process output, addressed to the pane hosting that session. */
   'session:data': { id: number; data: string }
+  /** Project-shell output and death, addressed to the pane hosting it. */
+  'pterm:data': { id: number; data: string }
+  'pterm:exit': { id: number; exitCode: number }
   /** The finished row, exit code and measured duration included. */
   'session:exit': SessionRecord
   /** Bring a session's tab forward - sent when its exit notification is clicked. */
@@ -671,6 +863,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'setup:locateClaude': true,
   'setup:complete': true,
   'path:chooseDirectory': true,
+  'path:chooseFile': true,
   'harness:create': true,
   'update:check': true,
   'theme:resolved': true,
@@ -678,6 +871,9 @@ export const REQUEST_CHANNELS = Object.keys({
   'session:start': true,
   'session:close': true,
   'session:list': true,
+  'pterm:open': true,
+  'pterm:close': true,
+  'pterm:shells': true,
   'profile:list': true,
   'profile:save': true,
   'profile:delete': true,
@@ -707,6 +903,10 @@ export const REQUEST_CHANNELS = Object.keys({
   'config:mcpList': true,
   'config:doctor': true,
   'usage:read': true,
+  'pr:snapshot': true,
+  'pr:refresh': true,
+  'pr:detail': true,
+  'pr:review': true,
   'content:scopes': true,
   'content:tree': true,
   'content:document': true,
@@ -730,6 +930,9 @@ export const SEND_CHANNELS = Object.keys({
   'session:input': true,
   'session:resize': true,
   'session:focus': true,
+  'pterm:input': true,
+  'pterm:resize': true,
+  'session:confirmed': true,
   'probe:res': true
 } satisfies Record<SendChannel, true>) as SendChannel[]
 
@@ -742,6 +945,7 @@ export const EVENT_CHANNELS = Object.keys({
   'theme:changed': true,
   'history:changed': true,
   'usage:changed': true,
+  'pr:changed': true,
   'config:externalChange': true,
   'content:artifactConsole': true,
   'term:create': true,
@@ -750,5 +954,8 @@ export const EVENT_CHANNELS = Object.keys({
   'session:data': true,
   'session:exit': true,
   'session:activate': true,
+  'session:confirm': true,
+  'pterm:data': true,
+  'pterm:exit': true,
   'probe:req': true
 } satisfies Record<EventChannel, true>) as EventChannel[]
