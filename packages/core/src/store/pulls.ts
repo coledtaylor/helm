@@ -1,5 +1,5 @@
 import { and, eq, inArray, notInArray, sql } from 'drizzle-orm'
-import type { PullDetail, PullSummary } from '../github/types'
+import type { PullDetail, PullPatch, PullSummary } from '../github/types'
 import type { Store } from './db'
 import { prRepos, pullRequests } from './schema'
 
@@ -149,6 +149,8 @@ export interface PullRow {
   summary: PullSummary
   /** Null until the pull request has been opened at least once. */
   detail: PullDetail | null
+  /** The patch as fetched, or null when none was. See `schema.ts`. */
+  diff: PullPatch | null
   fetchedAt: string
   detailFetchedAt: string | null
 }
@@ -163,6 +165,7 @@ export function readPull(store: Store, slug: string, number: number): PullRow | 
   return {
     summary: row.summary,
     detail: row.detail ?? null,
+    diff: row.diff ?? null,
     fetchedAt: row.fetchedAt,
     detailFetchedAt: row.detailFetchedAt
   }
@@ -183,11 +186,21 @@ export function writePullDetail(
   slug: string,
   number: number,
   detail: PullDetail,
-  detailFetchedAt: string = new Date().toISOString()
+  options: { diff?: PullPatch | null; detailFetchedAt?: string } = {}
 ): boolean {
   const result = store.db
     .update(pullRequests)
-    .set({ detail, detailFetchedAt })
+    .set({
+      detail,
+      // Written in the same statement as the detail because they were fetched
+      // together: a row holding this pass's file list beside the last pass's
+      // patch would paint hunks under paths that no longer have them. Absent
+      // rather than null-by-default, so a caller that has no patch to offer -
+      // gh refused, the fetch was for something else - leaves whatever is
+      // cached alone instead of erasing it.
+      ...(options.diff !== undefined ? { diff: options.diff } : {}),
+      detailFetchedAt: options.detailFetchedAt ?? new Date().toISOString()
+    })
     .where(and(eq(pullRequests.slug, slug), eq(pullRequests.number, number)))
     .run()
   return result.changes > 0

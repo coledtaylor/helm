@@ -10,6 +10,12 @@
  * the renderer imports these, so nothing here may reach `node:`.
  */
 
+// A type-only import of a name this module's own re-exporter also owns. It is
+// erased before anything runs, so the cycle exists for the typechecker alone -
+// and the alternative, spelling a review launch's effort as a bare `string`,
+// would be a field that no longer agrees with the flag it becomes.
+import type { EffortLevel } from '../types'
+
 /** A `github.com` remote, resolved to what `gh --repo` takes. */
 export interface RepoRemote {
   /** The remote URL exactly as git reported it. */
@@ -55,6 +61,16 @@ export interface PullSummary {
   deletions: number
   changedFiles: number
   reviewDecision: PullReviewDecision
+  /**
+   * The check runs, reduced - or null when the rollup could not be read.
+   *
+   * On the summary and not only on the detail because "is this one green" is
+   * the question a list of pull requests is read to answer. Null and zeroes
+   * mean different things here exactly as they do on `PullDetail`: no checks
+   * configured is `{total: 0}`, and a rollup Helm could not make sense of is
+   * null and paints nothing.
+   */
+  checks: PullChecks | null
   /** Label names only. Colours are GitHub's palette and this one is Helm's. */
   labels: string[]
 }
@@ -131,6 +147,82 @@ export interface PullFile {
 }
 
 /**
+ * What happened to a file, as the patch's own headers say it.
+ *
+ * Read from the diff rather than inferred from the counts, and the difference
+ * is real: a file whose every line changed has no deletions of its own in
+ * GitHub's JSON when it was added, and a rename with no edits has neither. The
+ * headers say `new file mode`, `deleted file mode` and `rename from` outright.
+ */
+export type PullFileStatus = 'added' | 'removed' | 'modified' | 'renamed'
+
+/** One line of a hunk, with the two line numbers it sits at. */
+export interface PullDiffLine {
+  kind: 'add' | 'del' | 'context'
+  /** Its number in the base file; null on an added line. */
+  oldLine: number | null
+  /** Its number in the head file; null on a removed line. */
+  newLine: number | null
+  /** The text with the leading sign removed - the gutter paints that. */
+  text: string
+}
+
+/** One `@@` run of changes, header included. */
+export interface PullDiffHunk {
+  /**
+   * The `@@ -0,0 +1,3 @@` line as git wrote it, trailing section heading and
+   * all. Kept verbatim rather than recomposed from the numbers: git puts the
+   * enclosing function on the end of it, which is the most useful thing on the
+   * row and nothing here could reconstruct.
+   */
+  header: string
+  lines: PullDiffLine[]
+}
+
+/** One file's patch. */
+export interface PullFileDiff {
+  /** The head-side path; for a delete, the path it had. */
+  path: string
+  /** Where a rename came from, or null. */
+  oldPath: string | null
+  status: PullFileStatus
+  /** Counted from the lines actually parsed, not from GitHub's JSON. */
+  additions: number
+  deletions: number
+  hunks: PullDiffHunk[]
+  /** True when git said the two sides differ and declined to say how. */
+  binary: boolean
+  /**
+   * Lines dropped to keep one file's payload bounded; 0 when the whole patch
+   * is here. Counted rather than merely flagged, so the pane can say how much
+   * it is not showing instead of hinting that something is missing.
+   */
+  droppedLines: number
+}
+
+/** A whole `gh pr diff`, parsed. */
+export interface PullDiff {
+  files: PullFileDiff[]
+  /** True when the patch was cut short before it reached the parser. */
+  truncated: boolean
+}
+
+/**
+ * A patch as fetched, and whether it is the whole of one.
+ *
+ * Two fields rather than a bare string because the second one cannot be
+ * recovered later: a patch cut at the byte ceiling is a perfectly well-formed
+ * diff, and nothing about the text that reaches the cache says it used to be
+ * longer. This is the shape the cache holds, so a pull request opened from the
+ * cache a week later still knows to say so.
+ */
+export interface PullPatch {
+  /** The patch as git wrote it, possibly cut at a line boundary. */
+  text: string
+  truncated: boolean
+}
+
+/**
  * The check runs, reduced to three numbers.
  *
  * Three numbers and not the list, because `statusCheckRollup` is a
@@ -204,6 +296,27 @@ export interface RenderedPullEntry extends PullConversationEntry {
 }
 
 /**
+ * A changed file with its patch attached, as the Files view paints it.
+ *
+ * The counts are **GitHub's**, out of `pr view --json files`, and the hunks are
+ * the patch's - which is deliberate rather than redundant. The two can disagree:
+ * a patch capped at `MAX_DIFF_BYTES` or a file git declined to describe still
+ * has honest counts on its header row, and a Files view that added up its own
+ * visible lines instead would quietly under-report the size of exactly the pull
+ * requests too big to show.
+ */
+export interface PullFileView extends PullFile {
+  /** `modified` when there was no patch to read a header out of. */
+  status: PullFileStatus
+  /** Where a rename came from, or null. */
+  oldPath: string | null
+  /** Empty when the patch is missing, binary, or was never fetched. */
+  hunks: PullDiffHunk[]
+  binary: boolean
+  droppedLines: number
+}
+
+/**
  * What the detail tab is painted from.
  *
  * The summary travels with it rather than being looked up beside it: the header
@@ -222,6 +335,19 @@ export interface PullDetailView {
   bodyHtml: string
   /** Reviews and comments in one time order. */
   conversation: RenderedPullEntry[]
+  /** The changed files, each carrying whatever patch was fetched for it. */
+  files: PullFileView[]
+  /**
+   * Why the Files view is showing less than the whole patch, as a sentence, or
+   * null when it is showing all of it.
+   *
+   * A sentence rather than a flag because the reasons are not the same shape -
+   * a patch capped at a byte ceiling, a `gh pr diff` that failed, a pull request
+   * cached by a Helm that never fetched one - and a Files view that silently
+   * listed paths with no diffs under them would look like a pull request that
+   * changed nothing.
+   */
+  diffNote: string | null
   /** When the **detail** was fetched. Epoch ms; null when it is not known. */
   fetchedAtMs: number | null
   /** True when this answer came out of the cache and ran no `gh` at all. */
@@ -263,6 +389,29 @@ export interface GhStatus {
   problem: GhProblem | null
 }
 
+/**
+ * A repository the ignore list is keeping off the surface.
+ *
+ * Keyed by **slug** rather than by path, like the setting itself, so one entry
+ * covers every checkout of the same repository - and the fetch, which is one
+ * `gh` per distinct slug, is skipped once rather than per directory.
+ */
+export interface IgnoredRepo {
+  /** `owner/name`, as `prIgnoredRepos` holds it. */
+  slug: string
+  /** A discovered checkout's folder name, or the slug's own half when none. */
+  name: string
+  /**
+   * Whether a scanned project actually maps to this slug right now.
+   *
+   * The pane lists only the present ones - an ignored slug with no checkout on
+   * this machine is hiding nothing, so naming it there would be noise. Settings
+   * lists all of them, because an entry nothing maps to still has to be
+   * removable.
+   */
+  present: boolean
+}
+
 /** One discovered project, and the pull requests its origin remote has. */
 export interface PullRepo {
   /** The project directory. The identity of a row, as everywhere else. */
@@ -292,8 +441,18 @@ export interface PullRepo {
  * on the snapshot precisely so no surface can paint the list without it.
  */
 export interface PullsSnapshot {
-  /** Repos with a github.com origin. Repos without one are counted, not listed. */
+  /**
+   * Repos with a github.com origin. Repos without one are counted, not listed,
+   * and ignored ones are in `ignored` rather than here.
+   *
+   * Structurally absent rather than flagged, deliberately: `open`,
+   * `fetchedAtMs` and every count a surface derives are computed off this
+   * array, so an ignored repository carried here behind a boolean would be one
+   * forgotten filter away from being counted in a total it is not shown in.
+   */
   repos: PullRepo[]
+  /** What `prIgnoredRepos` is keeping off `repos`, so a pane can say so. */
+  ignored: IgnoredRepo[]
   /** Open pull requests across every repo. */
   open: number
   /** Discovered projects considered, whether or not they turned out to be GitHub. */
@@ -320,6 +479,63 @@ export interface PullsSnapshot {
  * range rather than a magic small number inside it.
  */
 export const PR_POLL_MINUTES = { min: 5, max: 1440, default: 5, off: 0 } as const
+
+/**
+ * How many repositories the ignore list may name.
+ *
+ * A ceiling on a setting that is written whole on every toggle rather than a
+ * statement about how many anybody has. It exists because the value is JSON in
+ * one row and an unbounded array there is an unbounded write.
+ */
+export const PR_IGNORED_REPOS_MAX = 500
+
+/**
+ * `owner/name`, the only shape the ignore list holds.
+ *
+ * Anchored and deliberately narrow: this is compared against
+ * `parseGitHubRemote`'s output, which is exactly two segments with no slashes,
+ * no whitespace and no trailing `.git` in either of them.
+ */
+const SLUG_PATTERN = /^[^/\s]+\/[^/\s]+$/
+
+export function isRepoSlug(value: string): boolean {
+  return SLUG_PATTERN.test(value)
+}
+
+/**
+ * Whether this repository's pull requests are being skipped.
+ *
+ * Case-insensitive, because GitHub's own names are: a remote written
+ * `github.com/Owner/Repo` and one written `github.com/owner/repo` are the same
+ * repository, and an ignore list that only matched the casing the user happened
+ * to click would come back on after somebody re-cloned. Null - a directory with
+ * no github.com origin - is never ignored: it is not on this surface anyway.
+ */
+export function isRepoIgnored(ignored: readonly string[], slug: string | null): boolean {
+  if (slug === null) return false
+  const wanted = slug.toLowerCase()
+  return ignored.some((entry) => entry.toLowerCase() === wanted)
+}
+
+/**
+ * The ignore list with one repository switched on or off.
+ *
+ * The whole list every time, because that is how the setting is written, and
+ * the matching is the case-insensitive one above - so toggling `Owner/Repo`
+ * when the list holds `owner/repo` removes the entry rather than adding a
+ * second spelling of it. Sorted, so two machines that ignored the same
+ * repositories in a different order hold the same value.
+ */
+export function withRepoIgnored(
+  ignored: readonly string[],
+  slug: string,
+  on: boolean
+): string[] {
+  const wanted = slug.toLowerCase()
+  const without = ignored.filter((entry) => entry.toLowerCase() !== wanted)
+  const next = on ? [...without, slug] : without
+  return next.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+}
 
 /**
  * What a review launch does to the working tree, if anything.
@@ -356,6 +572,14 @@ export interface LaunchedReviewPlan {
   number: number
   /** The trailing positional argument, already rendered. */
   prompt: string
+  /**
+   * The model and effort the session was started with, or null for the CLI's
+   * own default. Out of settings, read in main at launch time - here so the
+   * pane can report what actually ran rather than re-reading the settings it
+   * previewed from, which is the same reason `prompt` travels back.
+   */
+  model: string | null
+  effort: EffortLevel | null
   /** The branch `gh pr checkout` moved the tree to, or null when it did not run. */
   checkedOut: string | null
   /** Non-fatal notes: an overlay that was not there, a checkout that reported. */

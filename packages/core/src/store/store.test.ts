@@ -103,6 +103,20 @@ describe('settings', () => {
       theme: 'light',
       scanRoots: [dir, join(dir, 'other')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
+      // Every pane kind, because the validator checks each one's own fields and
+      // a strip of only the field-less kinds would not exercise them.
+      workspaceTabs: {
+        panes: [
+          { kind: 'project', path: dir },
+          { kind: 'history' },
+          { kind: 'pulls' },
+          { kind: 'pr', repoPath: dir, number: 42 },
+          { kind: 'config' },
+          { kind: 'content' },
+          { kind: 'settings' }
+        ],
+        activeId: `project:${dir}`
+      },
       firstRunCompletedAt: '2026-08-09T12:00:00.000Z',
       claudePath: join(dir, 'claude.exe'),
       usageDisplay: 'cost',
@@ -114,8 +128,11 @@ describe('settings', () => {
       terminalShell: join(dir, 'pwsh.exe'),
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 15,
+      prIgnoredRepos: ['acme/noisy', 'other/quiet'],
       prReviewPrompt: 'review {slug}#{number} on {branch}',
-      prCheckout: 'checkout'
+      prCheckout: 'checkout',
+      prReviewModel: 'opus',
+      prReviewEffort: 'high'
     } satisfies AppSettings
 
     writeSettings(store, written)
@@ -204,6 +221,49 @@ describe('settings validation', () => {
       ]
     },
     {
+      key: 'workspaceTabs',
+      good: [
+        null,
+        { panes: [], activeId: null },
+        { panes: [{ kind: 'history' }], activeId: 'history' },
+        {
+          panes: [
+            { kind: 'project', path: 'C:\\work\\helm' },
+            { kind: 'pr', repoPath: 'C:\\work\\helm', number: 7 },
+            { kind: 'pulls' },
+            { kind: 'config' },
+            { kind: 'content' },
+            { kind: 'settings' }
+          ],
+          activeId: 'pr:C:\\work\\helm#7'
+        }
+      ],
+      bad: [
+        // Not a strip at all.
+        [],
+        'history',
+        42,
+        { activeId: null },
+        { panes: {}, activeId: null },
+        // A kind this build does not have, which is the shape a renamed pane
+        // would arrive in.
+        { panes: [{ kind: 'terminal' }], activeId: null },
+        { panes: [{ kind: 'project' }], activeId: null },
+        { panes: [{ kind: 'project', path: '' }], activeId: null },
+        { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm' }], activeId: null },
+        { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm', number: 0 }], activeId: null },
+        { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm', number: 1.5 }], activeId: null },
+        { panes: [{ kind: 'pr', repoPath: '', number: 7 }], activeId: null },
+        { panes: ['history'], activeId: null },
+        { panes: [null], activeId: null },
+        // An id is compared against tabs, never parsed, so anything that is not
+        // a string cannot match one.
+        { panes: [], activeId: 7 },
+        // Longer than any workspace: a runaway list is a bug, not an arrangement.
+        { panes: Array.from({ length: 101 }, () => ({ kind: 'history' })), activeId: null }
+      ]
+    },
+    {
       key: 'firstRunCompletedAt',
       good: [null, '2026-08-11T09:00:00.000Z'],
       bad: ['soon', '', 1786353684315, {}]
@@ -263,6 +323,30 @@ describe('settings validation', () => {
       bad: [1, 4, 1441, -5, 5.5, '5', null, Number.NaN]
     },
     {
+      key: 'prIgnoredRepos',
+      // A set of `owner/name`. The duplicate cases are the interesting ones:
+      // the matcher is case-insensitive, so two spellings of one repository
+      // would present as two rows that cannot be unticked independently.
+      good: [[], ['acme/widget'], ['acme/widget', 'Acme/Other'], ['a.b/c-d_e']],
+      bad: [
+        ['acme/widget', 'ACME/Widget'],
+        ['acme/widget', 'acme/widget'],
+        ['acme'],
+        ['acme/widget/extra'],
+        ['/widget'],
+        ['acme/'],
+        ['acme widget/x'],
+        [' acme/widget'],
+        ['https://github.com/acme/widget'],
+        [''],
+        [42],
+        [null],
+        'acme/widget',
+        null,
+        {}
+      ]
+    },
+    {
       key: 'prReviewPrompt',
       // A placeholder this build does not know is deliberately valid: it
       // survives into the prompt exactly as written, which is what makes a
@@ -274,6 +358,19 @@ describe('settings validation', () => {
       key: 'prCheckout',
       good: ['none', 'checkout'],
       bad: ['worktree', 'None', '', true, null, 0]
+    },
+    {
+      key: 'prReviewModel',
+      // Null is "pass no --model", and a full model id is as valid as an alias:
+      // this deliberately does not police the CLI's naming, only the shape of
+      // an argv word (see the validator).
+      good: [null, 'opus', 'sonnet', 'fable', 'claude-opus-5', 'claude-haiku-4-5-20251001'],
+      bad: ['', '   ', ' opus', 'opus ', 'claude opus', '--model', '-o', 'x'.repeat(101), 42, {}]
+    },
+    {
+      key: 'prReviewEffort',
+      good: [null, 'low', 'medium', 'high', 'xhigh', 'max'],
+      bad: ['none', 'High', '', 'maximum', 3, true, ['high']]
     }
   ]
 
@@ -347,6 +444,7 @@ describe('settings validation', () => {
       theme: 'dark',
       scanRoots: [dir],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
+      workspaceTabs: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
       firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
       claudePath: join(dir, 'claude.exe'),
       usageDisplay: 'off',
@@ -358,8 +456,11 @@ describe('settings validation', () => {
       terminalShell: join(dir, 'cmd.exe'),
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 0,
+      prIgnoredRepos: ['acme/noisy'],
       prReviewPrompt: '/code-review {number}',
-      prCheckout: 'none'
+      prCheckout: 'none',
+      prReviewModel: 'sonnet',
+      prReviewEffort: null
     })
 
     expect(() => writeSettings(store, readSettings(store))).not.toThrow()
@@ -372,6 +473,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   theme: 'dark',
   scanRoots: [dir],
   windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
+  workspaceTabs: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
   firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
   claudePath: join(dir, 'claude.exe'),
   usageDisplay: 'off',
@@ -383,8 +485,11 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   terminalShell: join(dir, 'cmd.exe'),
   ghPath: join(dir, 'gh.exe'),
   prPollMinutes: 0,
+  prIgnoredRepos: ['acme/noisy'],
   prReviewPrompt: '/code-review {number}',
-  prCheckout: 'none'
+  prCheckout: 'none',
+  prReviewModel: 'sonnet',
+  prReviewEffort: null
 })
 
 describe('project cache', () => {

@@ -71,6 +71,46 @@ const THEME_LABEL = {
   dark: 'Dark theme'
 } as const
 
+/** The ignore list, written the way the settings pane writes it. */
+async function writeIgnored(win: BrowserWindow, slugs: string[]): Promise<void> {
+  await js<void>(
+    win,
+    `window.helm.invoke('settings:write', { prIgnoredRepos: ${JSON.stringify(slugs)} }).then(() => undefined)`
+  ).catch(() => undefined)
+}
+
+/**
+ * The Pulls pane with something ignored, then put back.
+ *
+ * Ignores whichever repository the snapshot happens to have first, because the
+ * shot is of the *state* and not of any particular repository - and returns
+ * null rather than an empty pane when there is nothing to ignore, which is the
+ * honest answer on a machine with no github.com remotes on it.
+ *
+ * A machine that already ignores something needs none of this: the plain
+ * `pulls-*` shot above is already carrying the state.
+ */
+async function shootIgnored(
+  win: BrowserWindow,
+  outDir: string,
+  theme: string,
+  found: string[]
+): Promise<string | null> {
+  if (found.length > 0) return null
+  const slug = await js<string | null>(
+    win,
+    `window.helm.invoke('pr:snapshot').then((s) => s.repos[0] ? s.repos[0].slug : null)`
+  ).catch(() => null)
+  if (slug === null) return null
+
+  await writeIgnored(win, [slug])
+  await sleep(700)
+  const shot = await screenshot(win, outDir, `pulls-ignored-${theme}.png`)
+  await writeIgnored(win, found)
+  await sleep(400)
+  return shot.file
+}
+
 export async function runDesignShot(ctx: M2Context, outDir: string): Promise<string[]> {
   const { win } = ctx
   const files: string[] = []
@@ -84,8 +124,10 @@ export async function runDesignShot(ctx: M2Context, outDir: string): Promise<str
   await pollJs(win, `document.querySelector('aside nav button[title]')`, 20_000)
 
   // Driving the real toggle persists the preference, so remember what it was
-  // and put it back - a screenshot run must not repaint the user's app.
+  // and put it back - a screenshot run must not repaint the user's app. The
+  // ignore list is remembered for the same reason and restored beside it.
   const before = ctx.services.settings.theme
+  const ignoredBefore = [...ctx.services.settings.prIgnoredRepos]
 
   for (const theme of ['dark', 'light'] as const) {
     // Through the real toggle, so the shot proves the control too.
@@ -105,6 +147,15 @@ export async function runDesignShot(ctx: M2Context, outDir: string): Promise<str
       }
       const shot = await screenshot(win, outDir, `${view.name}-${theme}.png`)
       files.push(shot.file)
+
+      // The Pulls pane again with a repository ignored. A design state nothing
+      // else photographs: a section that only exists when the setting is not
+      // empty, and the app's only dashed border - which is exactly the kind of
+      // hairline that can read as a tone in one theme and as a gap in the other.
+      if (view.name === 'pulls') {
+        const ignored = await shootIgnored(win, outDir, theme, ignoredBefore)
+        if (ignored !== null) files.push(ignored)
+      }
     }
 
     // The settings pane scrolled to the end, because the Terminal group sits
@@ -124,6 +175,7 @@ export async function runDesignShot(ctx: M2Context, outDir: string): Promise<str
 
   await click(win, `button[aria-label="${THEME_LABEL[before]}"]`)
   await sleep(200)
+  await writeIgnored(win, ignoredBefore)
 
   // A collapsed section is a design state as much as an open one, and the
   // headers are `sticky` inside a scroll container - a place where "it renders"

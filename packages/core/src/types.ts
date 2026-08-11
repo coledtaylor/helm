@@ -76,11 +76,16 @@ export {
  * construction while the rest of `github/` spawns a subprocess.
  */
 export {
+  isRepoIgnored,
+  isRepoSlug,
+  withRepoIgnored,
   PR_CHECKOUT_MODES,
+  PR_IGNORED_REPOS_MAX,
   PR_POLL_MINUTES,
   type GhProblem,
   type GhProblemKind,
   type GhStatus,
+  type IgnoredRepo,
   type LaunchedReviewPlan,
   type PrCheckoutMode,
   type PullChecks,
@@ -89,7 +94,14 @@ export {
   type PullConversationEntry,
   type PullDetail,
   type PullDetailView,
+  type PullDiff,
+  type PullDiffHunk,
+  type PullDiffLine,
   type PullFile,
+  type PullFileDiff,
+  type PullFileStatus,
+  type PullFileView,
+  type PullPatch,
   type PullRepo,
   type PullReview,
   type PullReviewDecision,
@@ -98,6 +110,14 @@ export {
   type RenderedPullEntry,
   type RepoRemote
 } from './github/types'
+/**
+ * The per-file line ceiling, re-exported because the pane that stops painting
+ * at it is the pane that has to name it: the sentence under a cut-short file
+ * says how many lines it kept, and a renderer holding its own copy of the
+ * number would eventually say a number the parser does not use. Pure - `diff.ts`
+ * imports nothing but types.
+ */
+export { MAX_FILE_LINES } from './github/diff'
 /**
  * The review prompt's template renderer, re-exported for the same reason again:
  * the detail pane's disclosure sentence names the exact prompt the button will
@@ -483,6 +503,31 @@ export interface DetectedShell {
 }
 
 /**
+ * One pane on the workspace tab strip, in the form it is written down in.
+ *
+ * A record and not the strip's `project:C:\...` id string, deliberately: a
+ * Windows path can contain a `#` and a `:`, so a tab id is an identity to
+ * compare and never a thing to take apart again. Restoring the strip needs the
+ * path and the number back, so what is persisted is the fields rather than the
+ * id built from them.
+ *
+ * The renderer's `PaneRef` is this type - one definition, because the shape a
+ * pane has and the shape it is stored in must not be free to drift apart.
+ */
+export type WorkspaceTab =
+  | { kind: 'project'; path: string }
+  | { kind: 'history' }
+  | { kind: 'pulls' }
+  | { kind: 'pr'; repoPath: string; number: number }
+  | { kind: 'config' }
+  | { kind: 'content' }
+  | { kind: 'settings' }
+
+/** How many tabs are worth writing down. Past this the list is a bug, not a
+ * workspace, and a settings row nobody can shrink is worse than a truncation. */
+export const WORKSPACE_TABS_MAX = 100
+
+/**
  * Persisted application settings. Keys are the column names in `app_settings`;
  * every value is JSON-encoded on the way in, so adding a key here is the only
  * step needed to persist it.
@@ -493,6 +538,25 @@ export interface AppSettings {
   scanRoots: string[]
   /** Window geometry, restored on next launch. */
   windowBounds: { width: number; height: number; x?: number; y?: number } | null
+  /**
+   * The workspace tab strip, restored on next launch: which panes are open, in
+   * the order they were arranged, and which one was in front.
+   *
+   * State rather than a preference, so it sits beside `windowBounds` and not in
+   * the settings pane - it is something Helm remembers, not something anyone
+   * chose. Null means nothing has been written yet, which is not the same as an
+   * empty strip: a user who closed every tab gets an empty strip back.
+   *
+   * The **session** strip is deliberately not here. `before-quit` calls
+   * `sessions.shutdown()`, so no session survives a restart, and a strip of
+   * tabs pointing at processes that no longer exist is not a workspace
+   * restored - it is a strip of dead tabs to close.
+   *
+   * `activeId` is a tab id, which is only ever compared: a saved id that no
+   * longer matches an open pane falls back to the last tab, the same rule that
+   * governs `requestedId` while the app is running.
+   */
+  workspaceTabs: { panes: WorkspaceTab[]; activeId: string | null } | null
   /**
    * When the first-run flow was finished. Null means it has not been, which is
    * what puts the setup pane on screen instead of the launcher.
@@ -559,6 +623,28 @@ export interface AppSettings {
    */
   prPollMinutes: number
   /**
+   * Repositories whose pull requests Helm does not fetch or show, as
+   * `owner/name` slugs.
+   *
+   * A denylist rather than an allowlist, because a repository appearing on this
+   * surface is what discovery already means - a new clone should show up
+   * without anybody enrolling it, and going quiet should take a deliberate act.
+   *
+   * Keyed by **slug**, not by directory. The slug is what the surface fetches
+   * by (one `gh` per distinct remote, however many checkouts of it are on the
+   * machine), it is what the user is actually choosing about, and it survives a
+   * repository being re-cloned somewhere else. Matching is case-insensitive -
+   * see `isRepoIgnored`.
+   *
+   * An ignored repository is skipped **before the fetch**, so this is a smaller
+   * network posture rather than a filter over the same calls. Its cached rows
+   * are left in the database untouched: they are true facts about the last time
+   * anybody looked, and deleting them would make un-ignoring a repository show
+   * an empty list rather than a stale one with its age on it - which is the
+   * opposite of how the rest of this surface degrades.
+   */
+  prIgnoredRepos: string[]
+  /**
    * The opening prompt a "Review with Claude" launch starts its session with.
    *
    * A template - `{number} {url} {branch} {title} {slug}` are substituted and
@@ -580,12 +666,39 @@ export interface AppSettings {
    * dirty - Helm does not stash. See `PR_CHECKOUT_MODES`.
    */
   prCheckout: PrCheckoutMode
+  /**
+   * The model a review launch runs on; null is the CLI's own default.
+   *
+   * A setting rather than a fixed choice because a review is the one launch
+   * Helm composes on the user's behalf, and reading a diff is not the task they
+   * necessarily want their default model spent on - in either direction. Null
+   * passes **no** `--model` at all rather than passing a name Helm decided,
+   * which keeps a Helm nobody has configured launching exactly what `claude`
+   * would have launched.
+   *
+   * Not validated against a list of names. The CLI's aliases and its full model
+   * ids both move faster than a desktop app's release does, and a setting that
+   * refused `claude-opus-5` on the day it shipped would be a setting the user
+   * cannot use for exactly as long as it takes Helm to catch up. What is
+   * enforced is the shape - one bare token, no spaces or dashes to lead with -
+   * because this becomes an argv word.
+   */
+  prReviewModel: string | null
+  /**
+   * The reasoning effort a review launch runs at; null is the CLI's default.
+   *
+   * Bounded by `EFFORT_LEVELS`, unlike the model: these five are the CLI's own
+   * flag values rather than a naming scheme that moves, and a select is a better
+   * control than a text field for a closed set of five.
+   */
+  prReviewEffort: EffortLevel | null
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   scanRoots: [],
   windowBounds: null,
+  workspaceTabs: null,
   firstRunCompletedAt: null,
   claudePath: null,
   usageDisplay: 'percent',
@@ -601,8 +714,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalShell: null,
   ghPath: null,
   prPollMinutes: PR_POLL_MINUTES.default,
+  prIgnoredRepos: [],
   prReviewPrompt: DEFAULT_PR_REVIEW_PROMPT,
-  prCheckout: 'none'
+  prCheckout: 'none',
+  prReviewModel: null,
+  prReviewEffort: null
 }
 
 // ---------------------------------------------------------------------------

@@ -61,7 +61,7 @@ type Group = (typeof GROUPS)[number]
  * the failure this string is here to catch.
  */
 const EXPECTED_LIST_FIELDS =
-  'number,title,url,author,state,isDraft,headRefName,baseRefName,createdAt,updatedAt,additions,deletions,changedFiles,reviewDecision,labels'
+  'number,title,url,author,state,isDraft,headRefName,baseRefName,createdAt,updatedAt,additions,deletions,changedFiles,reviewDecision,statusCheckRollup,labels'
 
 const EXPECTED_VIEW_FIELDS = 'body,comments,reviews,commits,files,statusCheckRollup,mergeStateStatus'
 
@@ -365,6 +365,14 @@ interface Fixtures {
   beta: string
   /** A real git repository with a real `origin`, in a path with a space. */
   real: string
+  /**
+   * The two remotes `pointRemotes` stands in for, written once.
+   *
+   * `real` is deliberately not in here: it has an origin of its own and PR-3
+   * turns the hook off to make git answer for it. Anything that wants all three
+   * spreads this and adds it.
+   */
+  hookedRemotes: Record<string, string>
 }
 
 /** One pull request, as `gh pr list --json` prints it. */
@@ -380,7 +388,10 @@ function listEntry(options: {
   deletions: number
   changedFiles: number
   reviewDecision?: string
+  /** `[passed, failing, pending]`, expanded into a rollup below. */
+  rollup?: [number, number, number]
 }): Record<string, unknown> {
+  const [passed, failing, pending] = options.rollup ?? [0, 0, 0]
   return {
     number: options.number,
     title: options.title,
@@ -396,6 +407,27 @@ function listEntry(options: {
     deletions: options.deletions,
     changedFiles: options.changedFiles,
     reviewDecision: options.reviewDecision ?? '',
+    // The list asks for the rollup too, so a row can say which branch is green
+    // without opening it. Three CheckRun shapes rather than a count, because a
+    // count is what Helm derives and a fixture that handed one over would be
+    // proving the reduction against itself.
+    statusCheckRollup: [
+      ...Array.from({ length: passed }, () => ({
+        __typename: 'CheckRun',
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS'
+      })),
+      ...Array.from({ length: failing }, () => ({
+        __typename: 'CheckRun',
+        status: 'COMPLETED',
+        conclusion: 'FAILURE'
+      })),
+      ...Array.from({ length: pending }, () => ({
+        __typename: 'CheckRun',
+        status: 'IN_PROGRESS',
+        conclusion: ''
+      }))
+    ],
     labels: [{ name: 'fixture' }]
   }
 }
@@ -429,6 +461,7 @@ function buildFixtures(dataDir: string): Fixtures {
   const home = join(dir, 'gh-home')
   mkdirSync(join(home, 'list'), { recursive: true })
   mkdirSync(join(home, 'view'), { recursive: true })
+  mkdirSync(join(home, 'diff'), { recursive: true })
 
   // Spaces on purpose, in the scan root and in a project under it: Windows
   // first, and every path Helm stores has to survive one.
@@ -451,7 +484,8 @@ function buildFixtures(dataDir: string): Fixtures {
           additions: 412,
           deletions: 96,
           changedFiles: 7,
-          reviewDecision: 'CHANGES_REQUESTED'
+          reviewDecision: 'CHANGES_REQUESTED',
+          rollup: [2, 1, 0]
         }),
         listEntry({
           number: 41,
@@ -494,7 +528,8 @@ function buildFixtures(dataDir: string): Fixtures {
           updatedAt: '2026-08-07T08:00:00Z',
           additions: 30,
           deletions: 1,
-          changedFiles: 3
+          changedFiles: 3,
+          rollup: [4, 0, 0]
         })
       ],
       null,
@@ -584,8 +619,73 @@ function buildFixtures(dataDir: string): Fixtures {
     )
   )
 
+  // The patch behind that detail, as `gh pr diff` prints it: the text git
+  // wrote, in the file order the JSON above lists. It is deliberately a real
+  // patch rather than three plausible-looking lines - the parser's whole job is
+  // the headers, and a fixture with no `new file mode` in it would let a parser
+  // that ignored them pass.
+  writeFileSync(
+    join(home, 'diff', `${SLUG_A.replace('/', '__')}__${String(PR_A)}.patch`),
+    [
+      'diff --git a/packages/core/src/github/remote.ts b/packages/core/src/github/remote.ts',
+      'index 1111111..2222222 100644',
+      '--- a/packages/core/src/github/remote.ts',
+      '+++ b/packages/core/src/github/remote.ts',
+      '@@ -12,5 +12,7 @@ export function parseGitHubRemote(url: string): RepoRemote | null {',
+      '   const trimmed = url.trim()',
+      "   if (trimmed === '') return null",
+      '-  const forks = false',
+      '+  const forks = true',
+      '+',
+      '+  // A fork sweeps the same way its upstream does.',
+      '   return { url: trimmed, owner, name, slug }',
+      ' }',
+      'diff --git a/packages/core/src/github/parse.ts b/packages/core/src/github/parse.ts',
+      'index 3333333..4444444 100644',
+      '--- a/packages/core/src/github/parse.ts',
+      '+++ b/packages/core/src/github/parse.ts',
+      '@@ -30,4 +30,5 @@ export const PR_LIST_FIELDS = [',
+      "   'changedFiles',",
+      "   'reviewDecision',",
+      "+  'statusCheckRollup',",
+      "   'labels'",
+      "-].join(',')",
+      "+].join(',') // and a trailing note",
+      'diff --git a/README.md b/README.md',
+      'new file mode 100644',
+      'index 0000000..5555555',
+      '--- /dev/null',
+      '+++ b/README.md',
+      '@@ -0,0 +1,3 @@',
+      '+# alpha one',
+      '+',
+      '+A fixture repository, with a fixture patch.',
+      ''
+    ].join('\n')
+  )
+
+  writeFileSync(
+    join(home, 'diff', `${SLUG_REAL.replace('/', '__')}__9.patch`),
+    [
+      'diff --git a/README.md b/README.md',
+      'index 6666666..7777777 100644',
+      '--- a/README.md',
+      '+++ b/README.md',
+      '@@ -1,3 +1,8 @@',
+      ' # carto graph',
+      ' ',
+      ' A fixture repository.',
+      '+',
+      '+## Something to check out',
+      '+',
+      '+Five added lines, which is what the list fixture says.',
+      '+',
+      ''
+    ].join('\n')
+  )
+
   // The checkout repository's detail. Thin on purpose - the detail phase does
-  // its assertions against alpha, and this exists so the review island's button
+  // its assertions against alpha, and this exists so the review row's button
   // can become enabled, which it only does once the pull request has arrived.
   writeFileSync(
     join(home, 'view', `${SLUG_REAL.replace('/', '__')}__9.json`),
@@ -633,7 +733,19 @@ function buildFixtures(dataDir: string): Fixtures {
   git(real, ['remote', 'add', 'origin', `https://github.com/${SLUG_REAL}.git`])
 
   const shim = writeShim(dir, home)
-  return { dir, home, shim, scanRoot, alpha, beta, real }
+  return {
+    dir,
+    home,
+    shim,
+    scanRoot,
+    alpha,
+    beta,
+    real,
+    hookedRemotes: {
+      [alpha]: `https://github.com/${SLUG_A}.git`,
+      [beta]: `git@github.com:${SLUG_B}.git`
+    }
+  }
 }
 
 /** What the fake gh should do next time. Re-read by it per invocation. */
@@ -824,10 +936,7 @@ export async function runPrChecks(
     pulls.pointPollMs(0)
     // Two of the three remotes come from the hook and the third does not - see
     // the F-4 check, which turns the hook off and makes git answer for itself.
-    pulls.pointRemotes({
-      [fixtures.alpha]: `https://github.com/${SLUG_A}.git`,
-      [fixtures.beta]: `git@github.com:${SLUG_B}.git`
-    })
+    pulls.pointRemotes(fixtures.hookedRemotes)
 
     if (run('fixture')) {
       checks.push(...(await fixtureChecks({ win, pulls, dbFile, fixtures, shotDir })))
@@ -836,8 +945,7 @@ export async function runPrChecks(
     // From here on every repository is mapped, the real one included, so a
     // whole-machine refresh keeps all three.
     pulls.pointRemotes({
-      [fixtures.alpha]: `https://github.com/${SLUG_A}.git`,
-      [fixtures.beta]: `git@github.com:${SLUG_B}.git`,
+      ...fixtures.hookedRemotes,
       [fixtures.real]: `https://github.com/${SLUG_REAL}.git`
     })
     await refreshNow(pulls)
@@ -1091,6 +1199,170 @@ async function fixtureChecks({
     ]
   })
 
+  // -----------------------------------------------------------------------
+  // PR-18: an ignored repository is a `gh` that never runs
+  // -----------------------------------------------------------------------
+  //
+  // The hook goes back on first: PR-3 turned it off to map a real remote, and
+  // everything below wants all three fixture repositories mapped again.
+  pulls.pointRemotes(fixtures.hookedRemotes)
+  await refreshNow(pulls)
+  await sleep(300)
+
+  const beforeIgnore = await dataValues(win, 'pull')
+  const cachedBefore = pullRowsFor(dbFile, SLUG_B)
+
+  // The setting written through the real channel, exactly as the checkbox in
+  // the settings pane writes it.
+  const ignoreWritten = await sendWrite(win, { prIgnoredRepos: [SLUG_B] })
+  // `settings:write` republishes and starts a pass of its own; joining it
+  // rather than racing it is what makes the invocation count below mean
+  // something.
+  await refreshNow(pulls)
+  await sleep(400)
+
+  // From here on, only calls made *after* the repository was ignored count.
+  forgetInvocations(fixtures.home)
+  await refreshNow(pulls)
+  await sleep(400)
+
+  const whileIgnored = {
+    rows: await dataValues(win, 'pull'),
+    chips: await dataValues(win, 'pulls-ignored'),
+    quiet: await dataValues(win, 'pulls-repo'),
+    calls: invocations(fixtures.home)
+      .filter((call) => call.argv[0] === 'pr' && call.argv[1] === 'list')
+      .map((call) => call.argv[call.argv.indexOf('--repo') + 1] ?? '')
+  }
+  // Still in the database, untouched. Ignoring is not deleting: the rows are
+  // true facts about the last time anybody looked, and throwing them away would
+  // make un-ignoring paint an empty list rather than a stale one with its age
+  // on it - the opposite of how the whole surface degrades.
+  const cachedWhileIgnored = pullRowsFor(dbFile, SLUG_B)
+  const ignoredShot = await screenshot(win, shotDir, 'pr-ignored-pane.png')
+
+  // The settings list in the same state, because that is where the tick lives
+  // and a pane that hides a repository is only half the surface. Read back as
+  // well as photographed: the row has to exist and has to be the unticked one.
+  await click(win, '[data-open-settings]')
+  await pollJs(win, `document.querySelector('[data-settings-pane]')`, 10_000)
+  await js(
+    win,
+    `(() => { const el = document.querySelector('[data-settings-pane]')
+       if (el) el.scrollTop = el.scrollHeight })()`
+  )
+  await sleep(500)
+  const settingsList = await js<{ rows: string[]; unticked: string[]; count: string }>(
+    win,
+    `(() => {
+       const rows = [...document.querySelectorAll('[data-settings-pr-repo]')]
+       return {
+         rows: rows.map((el) => el.getAttribute('data-settings-pr-repo') ?? ''),
+         unticked: rows
+           .filter((el) => el.getAttribute('data-settings-pr-repo-ignored') === 'true')
+           .map((el) => el.getAttribute('data-settings-pr-repo') ?? ''),
+         count: (document.querySelector('[data-settings-pr-repo-count]')?.textContent ?? '').trim()
+       } })()`
+  )
+  const settingsShot = await screenshot(win, shotDir, 'pr-ignored-settings.png')
+  await click(win, '[data-open-pulls]')
+  await pollJs(win, `document.querySelector('[data-pulls-caption]')`, 10_000)
+  await sleep(300)
+
+  // And back on, through the pane's own chip rather than through the settings
+  // channel - the reveal path is the one the user has in front of them when
+  // they notice a repository is missing.
+  forgetInvocations(fixtures.home)
+  const chipClicked = await click(win, `[data-pulls-ignored="${SLUG_B}"]`)
+  await refreshNow(pulls)
+  await sleep(600)
+
+  const afterUnignore = {
+    rows: await dataValues(win, 'pull'),
+    chips: await dataValues(win, 'pulls-ignored'),
+    setting: await js<string[]>(
+      win,
+      `window.helm.invoke('settings:read').then((s) => s.prIgnoredRepos)`
+    ),
+    calls: invocations(fixtures.home)
+      .filter((call) => call.argv[0] === 'pr' && call.argv[1] === 'list')
+      .map((call) => call.argv[call.argv.indexOf('--repo') + 1] ?? '')
+  }
+
+  const rowsOf = (values: string[], slug: string): string[] =>
+    values.filter((value) => value.startsWith(`${slug}#`))
+
+  checks.push({
+    id: 'PR-18',
+    criterion: 'An ignored repository is skipped before the fetch, said out loud, and reversible',
+    title: `${SLUG_B} left the pane, ran no gh, kept ${String(cachedWhileIgnored.length)} cached rows and came back`,
+    ok:
+      ignoreWritten.accepted &&
+      // It was there to begin with, or none of the rest is evidence of
+      // anything. The fixture-discriminates rule, applied to a disappearance.
+      rowsOf(beforeIgnore, SLUG_B).length > 0 &&
+      cachedBefore.length > 0 &&
+      // Gone from the list, and the repository that was not ignored stayed.
+      rowsOf(whileIgnored.rows, SLUG_B).length === 0 &&
+      rowsOf(whileIgnored.rows, SLUG_A).length > 0 &&
+      // Not filed under "quiet", which would report a repository nobody looked
+      // at as a repository with nothing open.
+      !whileIgnored.quiet.includes(SLUG_B) &&
+      whileIgnored.chips.includes(SLUG_B) &&
+      // The point of the setting: no `gh pr list` for it at all, while the
+      // other fixture repository still got one on the same pass.
+      !whileIgnored.calls.includes(SLUG_B) &&
+      whileIgnored.calls.includes(SLUG_A) &&
+      cachedWhileIgnored.length === cachedBefore.length &&
+      // The settings list still offers it, unticked - a repository that fell
+      // off the list Helm knows about would be one nobody can turn back on.
+      settingsList.rows.includes(SLUG_B) &&
+      settingsList.rows.includes(SLUG_A) &&
+      settingsList.unticked.length === 1 &&
+      settingsList.unticked[0] === SLUG_B &&
+      // Reversible from the pane, and the setting is what actually moved.
+      chipClicked &&
+      afterUnignore.setting.length === 0 &&
+      afterUnignore.chips.length === 0 &&
+      afterUnignore.calls.includes(SLUG_B) &&
+      rowsOf(afterUnignore.rows, SLUG_B).length === rowsOf(beforeIgnore, SLUG_B).length,
+    detail: {
+      ignored: SLUG_B,
+      writeAccepted: ignoreWritten.accepted,
+      writeError: ignoreWritten.error,
+      rowsBefore: rowsOf(beforeIgnore, SLUG_B),
+      rowsWhileIgnored: rowsOf(whileIgnored.rows, SLUG_B),
+      rowsAfterUnignore: rowsOf(afterUnignore.rows, SLUG_B),
+      otherRepoRowsWhileIgnored: rowsOf(whileIgnored.rows, SLUG_A).length,
+      chipsWhileIgnored: whileIgnored.chips,
+      quietWhileIgnored: whileIgnored.quiet,
+      listCallsWhileIgnored: whileIgnored.calls,
+      listCallsAfterUnignore: afterUnignore.calls,
+      cachedRowsBefore: cachedBefore.length,
+      cachedRowsWhileIgnored: cachedWhileIgnored.length,
+      settingAfterUnignore: afterUnignore.setting,
+      settingsRows: settingsList.rows,
+      settingsUnticked: settingsList.unticked,
+      settingsCount: settingsList.count,
+      screenshot: ignoredShot.file,
+      settingsScreenshot: settingsShot.file
+    },
+    notes: [
+      'The claim is not "the rows are filtered out" - it is that no request was made.',
+      'So the invocation log is cleared *after* the repository is ignored and a whole',
+      'fresh pass is run, and what is asserted is the absence of a `pr list --repo` for it',
+      'while the other fixture repository got one on the same pass. A filter over an',
+      'answer already paid for would pass a DOM assertion and fail this one.',
+      'The disappearance is checked against a state where the rows were present, for the',
+      'same reason PR-1 mutates its fixture: a pane that painted nothing at all would',
+      'satisfy "no rows for this slug" without the setting doing anything.',
+      'The un-ignore goes through the pane chip rather than through `settings:write`,',
+      'because that is the control a user has in front of them at the moment they notice',
+      'a repository is missing - and the setting is read back afterwards to prove the',
+      'chip wrote the setting rather than only repainting the list.'
+    ]
+  })
+
   // Everything after this phase wants the hook back; the caller re-points it.
   return checks
 }
@@ -1154,6 +1426,54 @@ async function detailChecks({
   const filesInDom = await dataValues(win, 'pr-file')
   const totals = await text(win, '[data-pr-file-total]')
 
+  // The patch, as the Files view painted it. Read per file and per line kind
+  // rather than as a blob of text: the claim being checked is that the rows
+  // are the *patch's* rows, and a substring match on the whole pane would pass
+  // on a view that printed the diff into one paragraph.
+  const DIFF_PROBE = `(path) => {
+    const card = document.querySelector('[data-pr-file="' + path + '"]')
+    if (card === null) return null
+    const kinds = (kind) => card.querySelectorAll('[data-pr-diff-line="' + kind + '"]').length
+    const first = card.querySelector('[data-pr-diff-line="add"]')
+    return {
+      open: card.hasAttribute('data-pr-file-open'),
+      status: card.querySelector('[data-pr-file-status]')?.getAttribute('data-pr-file-status') ?? null,
+      hunks: [...card.querySelectorAll('[data-pr-hunk]')].map((el) => (el.textContent ?? '').trim()),
+      add: kinds('add'),
+      del: kinds('del'),
+      context: kinds('context'),
+      firstAdd: (first?.lastElementChild?.textContent ?? null)
+    }
+  }`
+
+  const diffPainted = await js<Record<string, unknown>>(
+    win,
+    `(() => { const probe = ${DIFF_PROBE}; return {
+       remote: probe('packages/core/src/github/remote.ts'),
+       parse: probe('packages/core/src/github/parse.ts'),
+       readme: probe('README.md')
+     } })()`
+  )
+
+  // Collapse one file. The rows have to leave the DOM rather than merely be
+  // hidden - a Files view of forty files pays for every row it keeps.
+  await click(win, `[data-pr-file-toggle="README.md"]`)
+  await sleep(200)
+  const collapsed = await js<{ open: boolean; lines: number; stillListed: boolean }>(
+    win,
+    `(() => { const card = document.querySelector('[data-pr-file="README.md"]')
+       return { open: card?.hasAttribute('data-pr-file-open') ?? false,
+                lines: card?.querySelectorAll('[data-pr-diff-line]').length ?? -1,
+                stillListed: card !== null } })()`
+  )
+  const filesShot = await screenshot(win, shotDir, 'pr-files.png')
+  await click(win, `[data-pr-file-toggle="README.md"]`)
+  await sleep(200)
+  const reopened = await js<number>(
+    win,
+    `document.querySelector('[data-pr-file="README.md"]')?.querySelectorAll('[data-pr-diff-line]').length ?? -1`
+  )
+
   await click(win, '[data-pr-view="conversation"]')
   await sleep(400)
 
@@ -1169,7 +1489,7 @@ async function detailChecks({
 
   const expectedAdds = `+${String(summary['additions'] ?? '')}`
   const expectedDels = `−${String(summary['deletions'] ?? '')}`
-  const expectedBranch = `${String(summary['headRefName'] ?? '')}→${String(summary['baseRefName'] ?? '')}`
+  const expectedBranch = `${String(summary['headRefName'] ?? '')} → ${String(summary['baseRefName'] ?? '')}`
 
   checks.push({
     id: 'PR-4',
@@ -1219,6 +1539,72 @@ async function detailChecks({
       'members disagree about everything, and the fixture holds one CheckRun that passed, one',
       'still running and one legacy StatusContext that failed. 3/1/1 is the only claim that',
       'can be made about all three.'
+    ]
+  })
+
+  const remote = diffPainted['remote'] as Record<string, unknown> | null
+  const parsed = diffPainted['parse'] as Record<string, unknown> | null
+  const readme = diffPainted['readme'] as Record<string, unknown> | null
+
+  checks.push({
+    id: 'PR-16',
+    criterion: 'The Files view paints the patch, and a file collapses to its header',
+    title:
+      remote === null
+        ? 'no diff rows were painted at all'
+        : `${String(remote['add'])} added and ${String(remote['del'])} removed rows on the first file; README collapsed to ${String(collapsed.lines)}`,
+    ok:
+      // Every count is what the fixture patch contains, counted by hand from
+      // the text written above rather than derived from anything Helm parsed.
+      remote !== null &&
+      remote['status'] === 'modified' &&
+      remote['add'] === 3 &&
+      remote['del'] === 1 &&
+      remote['context'] === 4 &&
+      JSON.stringify(remote['hunks']) ===
+        JSON.stringify([
+          '@@ -12,5 +12,7 @@ export function parseGitHubRemote(url: string): RepoRemote | null {'
+        ]) &&
+      remote['firstAdd'] === '  const forks = true' &&
+      parsed !== null &&
+      parsed['add'] === 2 &&
+      parsed['del'] === 1 &&
+      // `new file mode` in the patch, not a guess from "no deletions": the
+      // header is the only thing that can tell an added file from a rewritten
+      // one, and the badge says which.
+      readme !== null &&
+      readme['status'] === 'added' &&
+      readme['add'] === 3 &&
+      readme['del'] === 0 &&
+      // Collapsed: rows gone from the DOM, the file still listed, and a second
+      // click brings exactly the same rows back.
+      !collapsed.open &&
+      collapsed.lines === 0 &&
+      collapsed.stillListed &&
+      reopened === 3,
+    detail: {
+      painted: diffPainted,
+      collapsed,
+      reopenedLines: reopened,
+      expected: {
+        remote: { status: 'modified', add: 3, del: 1, context: 4 },
+        parse: { add: 2, del: 1 },
+        readme: { status: 'added', add: 3, del: 0 },
+        collapsedLines: 0,
+        reopenedLines: 3
+      },
+      screenshot: filesShot.file
+    },
+    notes: [
+      'The patch is a third `gh` call - `pr diff` - fetched beside `pr view` and cached as the',
+      'text git wrote. It is parsed on every read rather than stored parsed, for the reason the',
+      'rendered markdown is not cached either: a parse belongs to the version of the code that',
+      'made it.',
+      'The line kinds are counted separately because that is what the two gutters are for. An',
+      'added line has no old number and a removed line has no new one, and a parser that got',
+      'that wrong would still produce the right *number* of rows.',
+      'Collapsing removes the rows rather than hiding them, which is checked by counting the',
+      'elements rather than by looking at a class.'
     ]
   })
 
@@ -1432,6 +1818,101 @@ async function reviewChecks({
       'template that changed nothing cannot pass.'
     ]
   })
+
+  // -----------------------------------------------------------------------
+  // PR-17: the review's model and effort reach the argv
+  // -----------------------------------------------------------------------
+  await click(win, '[data-open-settings]')
+  await pollJs(win, `document.querySelector('[data-settings-pr-model]')`, 10_000)
+  // The template back to the built-in one first, exactly as PR-8 does: the
+  // check before this left a custom one in place, and a check that asserted on
+  // the trailing positional without owning it would be asserting on the last
+  // check's leftovers.
+  await typeInto(win, '[data-settings-pr-prompt]', '/code-review {number}')
+  await sleep(400)
+  // The cheapest pair that is still not the default, which is the whole
+  // requirement: this check proves two flags reach an argv, and a session
+  // spawned to prove it should be the smallest one that can.
+  const pickedModel = await chooseOption(win, '[data-settings-pr-model]', 'haiku')
+  await sleep(400)
+  const pickedEffort = await chooseOption(win, '[data-settings-pr-effort]', 'low')
+  await sleep(600)
+  const storedModel = readSettings(ctx.services.store).prReviewModel
+  const storedEffort = readSettings(ctx.services.store).prReviewEffort
+
+  const beforeFlags = sessionRows(dbFile).map((row) => row.id)
+  await openTab(SLUG_A, PR_A)
+  await sleep(400)
+  const flagDisclosure = await text(win, '[data-pr-review-disclosure]')
+  const flagRow = await clickReview(beforeFlags)
+  await sleep(1200)
+
+  const argv = flagRow?.argv ?? []
+  const modelAt = argv.indexOf('--model')
+  const effortAt = argv.indexOf('--effort')
+
+  checks.push({
+    id: 'PR-17',
+    criterion: '`prReviewModel` and `prReviewEffort` reach the review launch, and only when set',
+    title:
+      flagRow === null
+        ? 'no session was started'
+        : `The launch carried ${argv.slice(modelAt, modelAt + 2).join(' ')} and ${argv.slice(effortAt, effortAt + 2).join(' ')}`,
+    ok:
+      pickedModel.found &&
+      pickedModel.offered &&
+      pickedEffort.found &&
+      pickedEffort.offered &&
+      storedModel === 'haiku' &&
+      storedEffort === 'low' &&
+      flagRow !== null &&
+      modelAt >= 0 &&
+      argv[modelAt + 1] === 'haiku' &&
+      effortAt >= 0 &&
+      argv[effortAt + 1] === 'low' &&
+      // Both flags before the trailing positional, or the CLI reads the prompt
+      // as a flag's value and the review starts with no prompt at all.
+      modelAt < argv.length - 1 &&
+      effortAt < argv.length - 1 &&
+      argv.at(-1) === renderHere('/code-review {number}', factsA) &&
+      // The default launch, three checks ago, carried neither - which is what
+      // makes "only when set" a claim rather than an assumption.
+      !(defaultRow?.argv ?? []).includes('--model') &&
+      !(defaultRow?.argv ?? []).includes('--effort') &&
+      // Said before the button was pressed, per the launch-disclosure rule.
+      flagDisclosure.includes('--model haiku') &&
+      flagDisclosure.includes('--effort low'),
+    detail: {
+      pickedInPane: { model: pickedModel, effort: pickedEffort },
+      stored: { model: storedModel, effort: storedEffort },
+      argv,
+      flagPositions: { model: modelAt, effort: effortAt },
+      disclosureSentence: flagDisclosure,
+      defaultLaunchArgv: defaultRow?.argv ?? null,
+      row: flagRow
+    },
+    notes: [
+      'Set through the pane’s own selects, then read out of the `sessions` table through this',
+      'driver’s separate read-only connection - so the assertion is about the argv a restart',
+      'would find rather than about the launch’s own answer.',
+      'The default launch in PR-6 is the control: it carried neither flag, so a Helm that',
+      'always passed `--model` could not pass both checks.',
+      'The flags have to sit before the trailing positional. `--model` takes a value, so a',
+      'prompt that ended up after a flag with no value would be consumed as one, and the',
+      'review would start with no prompt at all.',
+      'haiku and low deliberately - the check needs a value that is not the default, and a',
+      'session spawned to prove an argv should be the cheapest one that can.'
+    ]
+  })
+
+  // Back to the default, so the launches after this one are the launches they
+  // were before it: this check owns these two settings and nothing else does.
+  await click(win, '[data-open-settings]')
+  await pollJs(win, `document.querySelector('[data-settings-pr-model]')`, 10_000)
+  await chooseOption(win, '[data-settings-pr-model]', '')
+  await sleep(300)
+  await chooseOption(win, '[data-settings-pr-effort]', '')
+  await sleep(400)
 
   // -----------------------------------------------------------------------
   // PR-8: checkout mode - refused dirty, and the log ordered before the spawn

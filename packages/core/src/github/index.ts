@@ -19,9 +19,12 @@ export {
   checkoutPull,
   fetchOpenPulls,
   fetchPullDetail,
+  fetchPullDiff,
   readGhAuth,
   readGhVersion,
   runGh,
+  MAX_DIFF_BYTES,
   type GhCommand,
   type GhRun
 } from './gh'
+export { indexDiffByPath, parseUnifiedDiff, MAX_FILE_LINES } from './diff'

@@ -9,7 +9,7 @@ import {
   parsePullList
 } from './parse'
 import type { GhAuthReading } from './parse'
-import type { PullDetail, PullSummary } from './types'
+import type { PullDetail, PullPatch, PullSummary } from './types'
 
 /**
  * Running the user's own `gh`.
@@ -81,7 +81,7 @@ function ghEnv(): NodeJS.ProcessEnv {
 export async function runGh(
   command: GhCommand,
   args: string[],
-  options: { cwd?: string; timeoutMs?: number } = {}
+  options: { cwd?: string; timeoutMs?: number; maxBuffer?: number } = {}
 ): Promise<GhRun> {
   const started = Date.now()
   return new Promise<GhRun>((resolve) => {
@@ -92,7 +92,7 @@ export async function runGh(
         ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
         timeout: options.timeoutMs ?? TIMEOUT_MS,
         windowsHide: true,
-        maxBuffer: MAX_BUFFER,
+        maxBuffer: options.maxBuffer ?? MAX_BUFFER,
         env: ghEnv()
       },
       (err, stdout, stderr) => {
@@ -194,6 +194,66 @@ export async function fetchPullDetail(
     throw new Error(said)
   }
   return parsePullDetail(run.stdout)
+}
+
+/**
+ * How much of one pull request's patch is kept.
+ *
+ * A ceiling rather than a page size, because `gh pr diff` has no paging: the
+ * whole patch arrives on stdout or none of it does. Two megabytes is far past
+ * any diff a person reads and far short of what a generated-file pull request
+ * can be, and what goes over it is cut at a line boundary and **said so** - the
+ * view carries a sentence and the Files footer prints it. Silently keeping the
+ * first two megabytes would be a diff that reads as complete.
+ */
+export const MAX_DIFF_BYTES = 2 * 1024 * 1024
+
+/**
+ * The patch behind one pull request.
+ *
+ * A third call, kept apart from `fetchPullDetail` for the reason that one is
+ * kept apart from the list: they cost different amounts and go stale at
+ * different rates. This is also the only fetch on the surface with no useful
+ * degraded form - half a patch is a patch that lies about what changed - so the
+ * caller gets a rejection and the pane says the Files view has nothing rather
+ * than painting a diff missing its last file.
+ *
+ * `--repo <slug>` again, so nothing depends on the working directory.
+ */
+export async function fetchPullDiff(
+  command: GhCommand,
+  slug: string,
+  number: number,
+  options: { timeoutMs?: number; maxBytes?: number } = {}
+): Promise<PullPatch> {
+  const limit = options.maxBytes ?? MAX_DIFF_BYTES
+  const run = await runGh(command, ['pr', 'diff', String(number), '--repo', slug], {
+    // Room to notice the ceiling has been passed without holding a great deal
+    // more than it: the process is killed the moment stdout goes over this, and
+    // a buffer exactly at the limit could not tell "just fits" from "way over".
+    maxBuffer: limit + 1024 * 1024,
+    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {})
+  })
+
+  if (!run.ok) {
+    // Node kills the child and reports this when the buffer fills, which on
+    // this call means one thing worth saying plainly rather than passing on.
+    if ((run.error ?? '').includes('maxBuffer')) {
+      throw new Error(
+        `The patch for #${String(number)} is larger than the ${String(Math.round(limit / (1024 * 1024)))}MB Helm fetches.`
+      )
+    }
+    const said = firstMeaningfulLine(run.stderr) ?? run.error ?? 'gh failed with no output'
+    throw new Error(said)
+  }
+
+  if (run.stdout.length <= limit) return { text: run.stdout, truncated: false }
+
+  // Cut back to the last complete line: half a line of somebody's source
+  // rendered as a diff row is a row that says something the file does not.
+  const cut = run.stdout.slice(0, limit)
+  const lastBreak = cut.lastIndexOf('\n')
+  return { text: lastBreak < 0 ? '' : cut.slice(0, lastBreak + 1), truncated: true }
 }
 
 /**

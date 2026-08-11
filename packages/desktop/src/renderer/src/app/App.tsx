@@ -2,11 +2,13 @@ import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_SETTINGS,
+  withRepoIgnored,
   type HistorySession,
   type Profile,
   type ProfileDraft,
   type Project,
-  type SessionRecord
+  type SessionRecord,
+  type WorkspaceTab
 } from '@helm/core/types'
 import {
   AppShell,
@@ -32,6 +34,7 @@ import {
   ProjectPane,
   PullRequestIcon,
   PullsPane,
+  pullRepoChoices,
   pullsSummaryLine,
   RepoIcon,
   SessionHistory,
@@ -86,20 +89,15 @@ const KIND_ICON = {
  * is in front - unmounting one would drop the scrollback of a live session.
  * The split is what lets a session keep running in view while the workspace
  * is browsed.
+ *
+ * `WorkspaceTab` is `@helm/core`'s, because the strip is persisted across
+ * launches (`AppSettings.workspaceTabs`) and a pane shape that drifted from
+ * the shape it is stored in would restore a strip nobody arranged. A `pr` pane
+ * is identified by the project it was opened from and not by the repository
+ * slug: two checkouts of one repository are two projects, and closing one must
+ * not close the other's tabs.
  */
-type PaneRef =
-  | { kind: 'project'; path: string }
-  | { kind: 'history' }
-  | { kind: 'pulls' }
-  /**
-   * One pull request, opened from the list. Identified by the project it was
-   * opened from and not by the repository slug: two checkouts of one repository
-   * are two projects, and closing one must not close the other's tabs.
-   */
-  | { kind: 'pr'; repoPath: string; number: number }
-  | { kind: 'config' }
-  | { kind: 'content' }
-  | { kind: 'settings' }
+type PaneRef = WorkspaceTab
 
 /**
  * A link in a rendered note, handed to the OS browser.
@@ -141,6 +139,10 @@ const tabId = (ref: PaneRef): string => {
 const truncate = (text: string, max: number): string =>
   text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`
 
+/** A stable identity for "no strip at all", so the fallback in `placedOrder`
+ * does not hand `openPanes` a fresh array to memoise against on every render. */
+const EMPTY_STRIP: PaneRef[] = []
+
 /** The session strip's tab ids - `session:12` - kept in the exact shape the
  * single-strip era used, because `m2-check` locates tabs by them. */
 const sessionTabId = (id: number): string => `session:${String(id)}`
@@ -150,7 +152,23 @@ export function App(): JSX.Element {
   const launcher = useLauncher()
   const { discovery, settings, info } = launcher
 
-  const [order, setOrder] = useState<PaneRef[]>([])
+  /**
+   * Placement of the workspace strip, or null while it is still the saved one.
+   *
+   * Null and not `[]` because the two are different states: nothing has been
+   * arranged this run, versus every tab has been closed. Only the first of them
+   * should fall back to what the last launch left behind, and an empty strip a
+   * user made has to survive being looked at.
+   *
+   * Restoring is therefore a *derivation* (`placedOrder`) rather than an effect
+   * that copies the setting into state once it lands. The settings arrive over
+   * IPC a moment after the first paint, so a sync would render the empty strip
+   * first and the real one after - and `settings:changed` fires on every write,
+   * including this strip's own, so a one-shot latch would be load-bearing.
+   * Derived, none of that arises. It is the same rule `openPanes` follows
+   * below, and for the same reason.
+   */
+  const [order, setOrder] = useState<PaneRef[] | null>(null)
   /** What the user last asked for. The tab that is actually active is derived
    * from it, because the requested one can stop existing. */
   const [requestedId, setRequestedId] = useState<string | null>(null)
@@ -227,6 +245,23 @@ export function App(): JSX.Element {
       })
   }, [writeSettings])
 
+  /**
+   * Puts one repository back on the pull-request surface.
+   *
+   * The whole list is written, because that is the setting - and it is composed
+   * from `settings`, not from the snapshot, so a chip clicked while a fetch is
+   * in flight cannot write a list assembled from a half-built view. The ladder
+   * behind `settings:write` republishes the snapshot and starts a pass, so the
+   * repository comes back with whatever it had and then with what it has.
+   */
+  const unignoreRepo = useCallback(
+    (slug: string) => {
+      const held = settings?.prIgnoredRepos ?? DEFAULT_SETTINGS.prIgnoredRepos
+      writeSettings({ prIgnoredRepos: withRepoIgnored(held, slug, false) })
+    },
+    [settings, writeSettings]
+  )
+
   /** The profile being edited, `'new'` for one being created from scratch, or
    * a seeded draft from "save as profile". Null when the dialog is closed. */
   const [editing, setEditing] = useState<Profile | ProfileDraft | null>(null)
@@ -259,8 +294,20 @@ export function App(): JSX.Element {
    * The order arrays therefore hold placement, not membership: a session that
    * has never been moved or closed is simply appended.
    */
+  /**
+   * The strip as arranged: this run's placement, or the saved one until
+   * something has been opened, closed or moved.
+   *
+   * Unfiltered on purpose - a project the scan has not reached yet is dropped
+   * by `openPanes` below and stays here, so a slow discovery hides a restored
+   * tab for a moment rather than losing it.
+   */
+  const savedStrip = settings?.workspaceTabs ?? null
+  const placedOrder = order ?? savedStrip?.panes ?? EMPTY_STRIP
+  const settingsLoaded = settings !== null
+
   const openPanes = useMemo(() => {
-    return order.filter((ref) => {
+    return placedOrder.filter((ref) => {
       if (ref.kind === 'project') return !discovery || projectsByPath.has(ref.path)
       // A pull request tab follows its project, by the same rule: the project
       // is where it was opened from and where a review would run, so a rescan
@@ -268,7 +315,7 @@ export function App(): JSX.Element {
       if (ref.kind === 'pr') return !discovery || projectsByPath.has(ref.repoPath)
       return true
     })
-  }, [order, discovery, projectsByPath])
+  }, [placedOrder, discovery, projectsByPath])
 
   const sessionIds = useMemo(() => {
     const placed = sessionOrder.filter((id) => sessionsById.has(id))
@@ -277,9 +324,14 @@ export function App(): JSX.Element {
     return [...placed, ...appended]
   }, [sessionOrder, sessions, sessionsById])
 
+  // The saved active tab stands in until something is asked for, by the same
+  // rule `placedOrder` follows. It is only ever compared against the ids on the
+  // strip, so an id whose pane is gone falls through to the last tab exactly as
+  // a stale `requestedId` does.
+  const requested = requestedId ?? savedStrip?.activeId ?? null
   const activeId =
-    requestedId !== null && openPanes.some((ref) => tabId(ref) === requestedId)
-      ? requestedId
+    requested !== null && openPanes.some((ref) => tabId(ref) === requested)
+      ? requested
       : (openPanes.map(tabId).at(-1) ?? null)
   const activePane = openPanes.find((ref) => tabId(ref) === activeId) ?? null
 
@@ -287,6 +339,32 @@ export function App(): JSX.Element {
     requestedSession !== null && sessionIds.includes(requestedSession)
       ? requestedSession
       : (sessionIds.at(-1) ?? null)
+
+  /**
+   * The saved strip, written back whenever the arrangement changes.
+   *
+   * Debounced because a drag moves a tab at a time and every write is a
+   * settings round trip that comes back as a `settings:changed` broadcast.
+   * `activeId` travels with it, so which tab was in front is restored with the
+   * arrangement rather than falling to the last one.
+   *
+   * Gated on a boolean rather than on `settings` itself, and that is the whole
+   * reason `settingsLoaded` exists: `settings` is a new object after every
+   * write, so depending on it here would make this effect re-arm its own timer
+   * and write forever at 500ms.
+   *
+   * What is saved is `openPanes` - the strip on screen - even though `order`
+   * is what a restore is folded into. A tab whose project the scan no longer
+   * finds is gone from the strip the user is looking at, and writing it down
+   * again would resurrect it on the next launch.
+   */
+  useEffect(() => {
+    if (!settingsLoaded) return
+    const timer = setTimeout(() => {
+      writeSettings({ workspaceTabs: { panes: openPanes, activeId } })
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [settingsLoaded, openPanes, activeId, writeSettings])
 
   const hasSessions = sessionIds.length > 0
   // Derived rather than reset in an effect: with no sessions there is no
@@ -325,12 +403,19 @@ export function App(): JSX.Element {
     }
   }, [])
 
-  const openPane = useCallback((ref: PaneRef) => {
-    setOrder((current) =>
-      current.some((r) => tabId(r) === tabId(ref)) ? current : [...current, ref]
-    )
-    setRequestedId(tabId(ref))
-  }, [])
+  // `placedOrder` and not the raw `order`, so the first tab opened in a window
+  // whose strip came from the last launch is appended to that strip rather than
+  // replacing it.
+  const openPane = useCallback(
+    (ref: PaneRef) => {
+      setOrder((current) => {
+        const strip = current ?? placedOrder
+        return strip.some((r) => tabId(r) === tabId(ref)) ? strip : [...strip, ref]
+      })
+      setRequestedId(tabId(ref))
+    },
+    [placedOrder]
+  )
 
   const openProject = useCallback(
     (project: Project | null) => {
@@ -989,6 +1074,10 @@ export function App(): JSX.Element {
               refreshing={pullsState.refreshing}
               error={pullsState.error}
               onOpenPull={openPull}
+              // The reveal direction only. Ignoring is done in Settings, where
+              // the setting lives; this is the undo standing beside the thing
+              // it undoes.
+              onUnignoreRepo={unignoreRepo}
               compact={showSessions}
             />
           </div>
@@ -1005,6 +1094,8 @@ export function App(): JSX.Element {
               number={activePane.number}
               reviewTemplate={settings?.prReviewPrompt ?? DEFAULT_SETTINGS.prReviewPrompt}
               checkout={settings?.prCheckout ?? DEFAULT_SETTINGS.prCheckout}
+              reviewModel={settings?.prReviewModel ?? DEFAULT_SETTINGS.prReviewModel}
+              reviewEffort={settings?.prReviewEffort ?? DEFAULT_SETTINGS.prReviewEffort}
               onReview={reviewPull}
               onOpenExternal={(url) => void helmOpenExternal(url)}
               compact={showSessions}
@@ -1196,6 +1287,15 @@ export function App(): JSX.Element {
               onClearGhOverride={() => writeSettings({ ghPath: null })}
               prPollMinutes={settings?.prPollMinutes ?? DEFAULT_SETTINGS.prPollMinutes}
               onPrPollMinutesChange={(prPollMinutes) => writeSettings({ prPollMinutes })}
+              // Built from the snapshot rather than from the setting, because
+              // the choices are the repositories discovery found - and it is
+              // the same snapshot the Pulls pane paints, so the two surfaces
+              // cannot disagree about which repositories exist.
+              prRepos={pullRepoChoices(
+                pullsState.snapshot?.repos ?? [],
+                pullsState.snapshot?.ignored ?? []
+              )}
+              onPrIgnoredReposChange={(prIgnoredRepos) => writeSettings({ prIgnoredRepos })}
               // The review launch's two settings live here rather than in the
               // Pulls pane's header: settings for Helm are in one place, and a
               // disclosure strip inside a pane is a second place for one to
@@ -1205,6 +1305,10 @@ export function App(): JSX.Element {
               onPrReviewPromptChange={(prReviewPrompt) => writeSettings({ prReviewPrompt })}
               prCheckout={settings?.prCheckout ?? DEFAULT_SETTINGS.prCheckout}
               onPrCheckoutChange={(prCheckout) => writeSettings({ prCheckout })}
+              prReviewModel={settings?.prReviewModel ?? DEFAULT_SETTINGS.prReviewModel}
+              onPrReviewModelChange={(prReviewModel) => writeSettings({ prReviewModel })}
+              prReviewEffort={settings?.prReviewEffort ?? DEFAULT_SETTINGS.prReviewEffort}
+              onPrReviewEffortChange={(prReviewEffort) => writeSettings({ prReviewEffort })}
             />
           </div>
         )}

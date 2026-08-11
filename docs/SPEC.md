@@ -359,6 +359,31 @@ the theme toggle, laid out as one scrolling page of titled groups:
 > Internal state (`windowBounds`, `firstRunCompletedAt`) is deliberately not
 > shown. Those are things Helm remembers, not things anyone chose.
 
+> [!note] The workspace strip is remembered too (2026-08-11)
+> `workspaceTabs` joins that internal group: which panes are open, the order
+> they were arranged in, and which one was in front. Reordering a tab strip
+> that forgets itself at every launch is arranging deck chairs, so the two
+> belong together.
+>
+> Restoring is a **derivation, not a sync**. The saved strip stands in until
+> something is opened, closed or moved, which is why the renderer holds
+> `PaneRef[] | null` rather than `PaneRef[]`: "nothing arranged yet" and "every
+> tab closed" are different states, and only the first should fall back to the
+> last launch. An effect that copied the setting into state when it landed
+> would paint an empty strip first and the real one after, and would need a
+> latch to survive `settings:changed` firing on its own writes.
+>
+> The **session** strip is deliberately not saved. `before-quit` calls
+> `sessions.shutdown()`, so no session outlives the app, and tabs pointing at
+> processes that no longer exist are not a workspace restored - they are a row
+> of dead tabs to close.
+>
+> A pane is written down as its fields, never as its tab id: a Windows path can
+> contain a `#` and a `:`, so `pr:C:\work\helm#7` is an identity to compare and
+> not a record to take apart. What is saved is the strip **on screen**
+> (`openPanes`), so a tab whose project a rescan no longer finds does not come
+> back on the next launch.
+
 ### 4.6 Pull requests
 
 The first surface whose subject is not on this machine: the open pull requests
@@ -373,17 +398,25 @@ advance would be wrong about all three.
 
 - **Sidebar** - a second global row under Session history, with the count on its
   second line (`12 open · 5 repos`) or the reason there is not one.
-- **Pulls pane** - repository-grouped rows under sticky headers. A row is
-  `#42` and a title, then author, age, `head→base` and `+a −d` in mono, with
-  chips for draft and review decision. No buttons on a row (house rule); the row
-  itself opens the pull request.
-- **Pull request tab** - Conversation, Commits and Files behind a segmented
-  control, laid out as GitHub's own page is because that is the shape anybody
-  opening it already knows. Header facts, a state chip in hairline tones, and
-  "Open on GitHub".
-- **Review** - a bottom island: one primary button, and a sentence naming the
-  program, the working directory and the exact opening prompt *before* it is
-  pressed.
+- **Pulls pane** - grouped by state of play rather than by repository. Every
+  open pull request across every repository comes first, most recently touched
+  first, each row carrying the repository it belongs to as a pill; then the
+  repositories that could not be fetched, with their reasons; then the ones with
+  nothing open, as chips ("Checked, nothing open."); then the ones being
+  ignored, as dashed chips that tick themselves back on. A row is a state mark,
+  `#42` and a title with `+a −d` pinned right, then the repository, author, age,
+  `head → base` and the check tally underneath. Grouping by repository instead
+  spends most of the pane printing the names of repositories with nothing in
+  them, and puts the two rows that matter below the fold. No buttons on a row
+  (house rule); the row itself opens the pull request.
+- **Pull request tab** - one island: header facts, then Conversation, Commits
+  and Files behind a segmented control, then the review row, separated by
+  `.island-rule`s. Laid out as GitHub's own page is because that is the shape
+  anybody opening it already knows. A state chip in hairline tones, the review
+  decision in words beside the check tally, and "Open on GitHub".
+- **Review** - the island's last section: one primary button, and a sentence
+  naming the program, the working directory, the exact opening prompt and any
+  model or effort flag *before* it is pressed.
 
 **Everything goes through the user's own `gh`.** Helm never receives, stores or
 reads a GitHub token: `gh` owns it, every fetch runs on it, and a sign-in is
@@ -402,6 +435,26 @@ decorative**: `PullsSnapshot.fetchedAtMs` exists so that no surface can paint
 the list without saying how old it is. No `gh` at all gets a sentence naming
 where to get one; an unauthenticated one gets `gh auth login`.
 
+**A repository can be ignored, and ignoring it is not a filter.**
+`prIgnoredRepos` is a list of `owner/name` slugs, and it is applied *before* the
+fetch: an ignored repository is a `gh` process that never starts, not a row
+dropped from an answer already paid for. A denylist rather than an allowlist,
+because appearing here is what discovery already means - a fresh clone shows up
+without being enrolled, and going quiet takes a deliberate act. Keyed by slug
+rather than by directory for the same reason the fetch is: one call covers every
+checkout of a repository, and a slug survives being re-cloned somewhere else.
+Matching is case-insensitive, because GitHub's names are.
+
+Two things follow from the honesty rule above. The pane **names what it is not
+showing** - an "Ignored" section beside "Quiet repos", because a repository
+nobody looked at is not a repository with nothing open, and a list that silently
+dropped one would read as a complete list. And the cached rows are **kept**:
+they are true facts about the last time anybody looked, so ticking a repository
+back on paints what it had with its age on it rather than an empty list, which
+is stale-with-age applied to the user's own setting. The tick itself lives in
+Settings → GitHub with the other settings; the pane carries only the untick's
+undo, standing beside the thing it undoes.
+
 **The review launch composes its prompt in main**, never in the window.
 `pr:review` carries `{repoPath, number, cols, rows}` and nothing else - the
 same shape `profile:launch` takes, and for the same reason: argv assembled in a
@@ -410,7 +463,11 @@ up in its own cache, reads `prReviewPrompt` (default `/code-review {number}`,
 the built-in skill) and `prCheckout` out of settings, optionally runs `gh pr
 checkout` - refused outright on a dirty tree, because a tool that moves
 somebody's uncommitted work is a tool they stop trusting - and passes the
-rendered prompt as the trailing positional of an ordinary launch. From the
+rendered prompt as the trailing positional of an ordinary launch. `prReviewModel`
+and `prReviewEffort` ride along the same way: read in main, emitted as `--model`
+and `--effort` before the positional, and **null passes no flag at all** - a Helm
+nobody has configured launches exactly what `claude` would have launched, and the
+disclosure sentence names a flag only when there is one to name. From the
 moment it starts it is a session tab like any other, and **Helm never reads the
 review's output back**: 6 still applies, and a feature that needed to parse a
 session is a feature that belongs somewhere else.
@@ -428,9 +485,10 @@ session is a feature that belongs somewhere else.
 > **`origin` only.** `upstream` and renamed remotes are unmapped - a cheap later
 > extension, and one nobody has asked for yet.
 >
-> **No diff viewer.** The Files view lists paths and line counts and hands the
-> patch to the browser. A diff needs syntax, wrapping, whitespace modes and
-> review threads, and half of one is worse than a link.
+> **~~No diff viewer.~~** *Superseded 2026-08-11 - see "The Files view shows the
+> patch" below.* The Files view listed paths and line counts and handed the patch
+> to the browser, on the grounds that a diff needs syntax, wrapping, whitespace
+> modes and review threads, and half of one is worse than a link.
 >
 > **`{branch}` names `headRefName`**, which on a pull request opened from a fork
 > does not exist in the local checkout unless checkout mode is on. The default
@@ -444,8 +502,41 @@ session is a feature that belongs somewhere else.
 > read. Null and `{total: 0}` are different facts and only one of them is safe
 > to show as a green tick.
 >
-> `pnpm pr-check` is the regression test: 13 checks in five phases, four of them
+> `pnpm pr-check` is the regression test: 16 checks in five phases, four of them
 > against a `gh` the repository wrote and one against the real one.
+
+> [!note] The Files view shows the patch (2026-08-11)
+> Supersedes "No diff viewer" above, which was right about the reason and wrong
+> about the size of what was missing.
+>
+> The four things that made a diff viewer hard are still not being done. There is
+> **no syntax highlighting** - a diff row is plain mono text with a tint, which
+> also keeps the tint the loudest thing in the row; **no whitespace modes**; **no
+> side-by-side**; and **no review threads**, which is the `gh --json` limit above
+> and is why the Files view still ends in a link to GitHub. What is left after
+> those is a patch, which is text: `gh pr diff` prints the whole of one, and
+> turning it into rows is a parser with a test suite rather than a subsystem.
+>
+> Three decisions the shape rests on:
+>
+> - **The file list is the spine, the patch hangs off it.** `pr view --json
+>   files` is the same fetch the header's counts come from, so the Files view is
+>   built from that list and each file is *matched* to a patch by path. A view
+>   built from the patch instead would disagree with its own header on exactly
+>   the pull requests whose patch was capped.
+> - **The cache holds the text, not the parse.** `pull_requests.diff` is what git
+>   printed. A column of parsed hunks would be one version of `PullDiffLine`
+>   frozen into a database that outlives it - the same call the rendered markdown
+>   makes, and for the same reason.
+> - **Every limit is counted and said.** A patch over `MAX_DIFF_BYTES` (2MB) is
+>   cut at a line boundary and the view carries a sentence about it; a file past
+>   `MAX_FILE_LINES` (1200) rows says how many it is not showing; a file the
+>   patch does not describe keeps its row, its counts and its badge and says it
+>   has no patch. A diff that quietly stopped halfway would read as complete.
+>
+> `statusCheckRollup` moved onto the **list** fetch in the same change, so a row
+> can say which branch is green without being opened. It costs payload rather
+> than requests - the rollups come back inside the query the poll already makes.
 
 ---
 

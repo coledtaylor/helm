@@ -44,6 +44,7 @@ const pull = (overrides: Partial<PullSummary> = {}): PullSummary => ({
   deletions: 37,
   changedFiles: 14,
   reviewDecision: 'REVIEW_REQUIRED',
+  checks: { total: 2, failing: 0, pending: 0 },
   labels: ['enhancement'],
   ...overrides
 })
@@ -204,7 +205,7 @@ describe('replaceRepoPulls', () => {
     replaceRepoPulls(store, 'acme/web', [pull({ number: 42 }), pull({ number: 43 })])
     // What opening a pull request caches: the summary is refetched every five
     // minutes and the conversation behind it is not.
-    writePullDetail(store, 'acme/web', 42, detail(), '2026-08-11T10:00:00.000Z')
+    writePullDetail(store, 'acme/web', 42, detail(), { detailFetchedAt: '2026-08-11T10:00:00.000Z' })
 
     replaceRepoPulls(store, 'acme/web', [pull({ number: 42, title: 'Renamed' })])
 
@@ -245,20 +246,41 @@ describe('replaceRepoPulls', () => {
 
   it('replaces the detail a refresh refetched', () => {
     replaceRepoPulls(store, 'acme/web', [pull({ number: 42 })])
-    writePullDetail(store, 'acme/web', 42, detail(), '2026-08-11T10:00:00.000Z')
+    writePullDetail(store, 'acme/web', 42, detail(), { detailFetchedAt: '2026-08-11T10:00:00.000Z' })
 
-    writePullDetail(
-      store,
-      'acme/web',
-      42,
-      detail({ body: 'Rewritten description.', comments: [] }),
-      '2026-08-11T11:00:00.000Z'
-    )
+    writePullDetail(store, 'acme/web', 42, detail({ body: 'Rewritten description.', comments: [] }), {
+      detailFetchedAt: '2026-08-11T11:00:00.000Z'
+    })
 
     const read = readPull(store, 'acme/web', 42)
     expect(read?.detail?.body).toBe('Rewritten description.')
     expect(read?.detail?.comments).toEqual([])
     expect(read?.detailFetchedAt).toBe('2026-08-11T11:00:00.000Z')
+  })
+
+  it('caches the patch beside the detail, and leaves it alone when none is offered', () => {
+    replaceRepoPulls(store, 'acme/web', [pull({ number: 42 })])
+
+    const patch = { text: 'diff --git a/x b/x\n', truncated: false }
+    writePullDetail(store, 'acme/web', 42, detail(), { diff: patch })
+    expect(readPull(store, 'acme/web', 42)?.diff).toEqual(patch)
+
+    // A second write with no patch to offer is a refetch that could not get
+    // one; erasing the cached patch would take the Files view down with it.
+    writePullDetail(store, 'acme/web', 42, detail())
+    expect(readPull(store, 'acme/web', 42)?.diff).toEqual(patch)
+
+    // Explicit null is the other thing entirely, and does erase it.
+    writePullDetail(store, 'acme/web', 42, detail(), { diff: null })
+    expect(readPull(store, 'acme/web', 42)?.diff).toBeNull()
+  })
+
+  it('has no patch until one has been fetched', () => {
+    replaceRepoPulls(store, 'acme/web', [pull({ number: 42 })])
+
+    // Null and not `''`: a pull request nobody has opened has an unknown patch,
+    // and a pull request that changed nothing has an empty one.
+    expect(readPull(store, 'acme/web', 42)?.diff).toBeNull()
   })
 
   it('orders by most recent activity when read back', () => {

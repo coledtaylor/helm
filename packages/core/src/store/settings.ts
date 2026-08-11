@@ -2,7 +2,10 @@ import { isAbsolute } from 'node:path'
 import { sql } from 'drizzle-orm'
 import {
   DEFAULT_SETTINGS,
+  EFFORT_LEVELS,
+  isRepoSlug,
   PR_CHECKOUT_MODES,
+  PR_IGNORED_REPOS_MAX,
   PR_POLL_MINUTES,
   PR_REVIEW_PROMPT_MAX_LENGTH,
   TERMINAL_CURSOR_STYLES,
@@ -10,6 +13,7 @@ import {
   TERMINAL_SCROLLBACK,
   THEME_PREFERENCES,
   USAGE_DISPLAY_MODES,
+  WORKSPACE_TABS_MAX,
   type AppSettings
 } from '../types'
 import type { Store } from './db'
@@ -157,6 +161,59 @@ export const SETTING_VALIDATORS: SettingValidators = {
     return null
   },
 
+  /**
+   * The workspace strip. State like `windowBounds`, and validated like it:
+   * written by the window on every tab change, so a malformed value here is a
+   * strip that cannot be restored on the next launch.
+   *
+   * Every `kind` is checked against the union and every kind's own fields with
+   * it, because this is read back and rendered as panes - a `project` with no
+   * path is a tab pointing nowhere, and it would fail at the pane rather than
+   * at the write. The whole value is rejected rather than the offending entry
+   * filtered out: a partly-written strip restored as if it were whole is a
+   * worse answer than the previous strip.
+   */
+  workspaceTabs: (value) => {
+    if (value === null) return null
+    if (typeof value !== 'object' || Array.isArray(value)) {
+      return `expected a workspace strip or null, got ${describe(value)}`
+    }
+    const strip = value as Record<string, unknown>
+    const { panes, activeId } = strip
+    if (!Array.isArray(panes)) return `expected an array of panes, got ${describe(panes)}`
+    if (panes.length > WORKSPACE_TABS_MAX) {
+      return `expected at most ${String(WORKSPACE_TABS_MAX)} panes, got ${String(panes.length)}`
+    }
+    if (activeId !== null && typeof activeId !== 'string') {
+      return `expected a tab id or null, got ${describe(activeId)}`
+    }
+    for (const pane of panes) {
+      if (typeof pane !== 'object' || pane === null || Array.isArray(pane)) {
+        return `expected a pane, got ${describe(pane)}`
+      }
+      const { kind, path, repoPath, number } = pane as Record<string, unknown>
+      if (kind === 'history' || kind === 'pulls' || kind === 'config') continue
+      if (kind === 'content' || kind === 'settings') continue
+      if (kind === 'project') {
+        if (typeof path !== 'string' || path.trim() === '') {
+          return `expected a project path, got ${describe(path)}`
+        }
+        continue
+      }
+      if (kind === 'pr') {
+        if (typeof repoPath !== 'string' || repoPath.trim() === '') {
+          return `expected a repository path, got ${describe(repoPath)}`
+        }
+        if (!isFiniteNumber(number) || !Number.isInteger(number) || number <= 0) {
+          return `expected a pull request number, got ${describe(number)}`
+        }
+        continue
+      }
+      return `expected a pane kind, got ${describe(kind)}`
+    }
+    return null
+  },
+
   /** A timestamp, or null for "has not happened". Parsed, not pattern-matched. */
   firstRunCompletedAt: (value) => {
     if (value === null) return null
@@ -261,7 +318,62 @@ export const SETTING_VALIDATORS: SettingValidators = {
     return null
   },
 
-  prCheckout: oneOf(PR_CHECKOUT_MODES)
+  /**
+   * A set of `owner/name` slugs, and validated as a *set*.
+   *
+   * The duplicate check is case-insensitive and it is the interesting half. The
+   * matcher this list is read through is case-insensitive too, so
+   * `["Owner/Repo", "owner/repo"]` would behave as one entry while presenting
+   * as two - a settings row that could not be un-ticked because removing one
+   * spelling leaves the other. Refusing the write is what keeps the list and
+   * its meaning the same length.
+   */
+  prIgnoredRepos: (value) => {
+    if (!Array.isArray(value)) {
+      return `expected an array of owner/name slugs, got ${describe(value)}`
+    }
+    if (value.length > PR_IGNORED_REPOS_MAX) {
+      return `expected at most ${String(PR_IGNORED_REPOS_MAX)} repositories, got ${String(value.length)}`
+    }
+    const seen = new Set<string>()
+    for (const entry of value) {
+      if (typeof entry !== 'string' || entry.trim() === '') {
+        return `expected an owner/name slug, got ${describe(entry)}`
+      }
+      if (!isRepoSlug(entry)) {
+        return `expected an owner/name slug, got ${JSON.stringify(entry)}`
+      }
+      const key = entry.toLowerCase()
+      if (seen.has(key)) return `expected each repository once, got ${JSON.stringify(entry)} twice`
+      seen.add(key)
+    }
+    return null
+  },
+
+  prCheckout: oneOf(PR_CHECKOUT_MODES),
+
+  /**
+   * One argv word, or null for the CLI's own default.
+   *
+   * Deliberately **not** checked against a list of model names - see the field's
+   * comment in `types.ts`. What is checked is that the value can be an argument:
+   * a leading dash would arrive at the CLI as another flag, whitespace would
+   * split into two words at the point where nothing is looking, and a hundred
+   * characters is not a model name whatever else it is.
+   */
+  prReviewModel: (value) => {
+    if (value === null) return null
+    if (typeof value !== 'string' || value.trim() === '') {
+      return `expected a model name or null, got ${describe(value)}`
+    }
+    if (value !== value.trim()) return `expected no surrounding whitespace, got ${JSON.stringify(value)}`
+    if (/\s/.test(value)) return `expected one word, got ${JSON.stringify(value)}`
+    if (value.startsWith('-')) return `expected a model name, got the flag ${JSON.stringify(value)}`
+    if (value.length > 100) return `expected a model name, got ${String(value.length)} characters`
+    return null
+  },
+
+  prReviewEffort: (value) => (value === null ? null : oneOf(EFFORT_LEVELS)(value))
 }
 
 /** A write that was refused, with the key and the reason in the message. */

@@ -1,7 +1,7 @@
 import type { JSX } from 'react'
 import { useCallback, useState } from 'react'
 import { PullRequestPane, type LaunchedReviewNote } from '@helm/ui'
-import { renderPullPrompt, type PrCheckoutMode } from '@helm/core/types'
+import { renderPullPrompt, type EffortLevel, type PrCheckoutMode } from '@helm/core/types'
 import type { LaunchedReview } from '../../../shared/ipc'
 import { usePullDetail } from './usePullDetail'
 
@@ -27,6 +27,8 @@ export function PullRequestTab({
   number,
   reviewTemplate,
   checkout,
+  reviewModel,
+  reviewEffort,
   onReview,
   onOpenExternal,
   compact
@@ -37,6 +39,13 @@ export function PullRequestTab({
   reviewTemplate: string
   /** `prCheckout`, for the same sentence. */
   checkout: PrCheckoutMode
+  /**
+   * `prReviewModel` and `prReviewEffort`, for the same sentence again. Null for
+   * either means the launch passes no flag, so the sentence says nothing about
+   * it rather than naming a default Helm did not choose.
+   */
+  reviewModel: string | null
+  reviewEffort: EffortLevel | null
   /**
    * Invokes `pr:review` and puts the session in the strip. `App`'s, not this
    * component's, because it is the pane element there that decides the grid and
@@ -107,6 +116,8 @@ export function PullRequestTab({
       reviewing={reviewing}
       reviewPrompt={preview}
       reviewCheckout={checkout === 'checkout'}
+      reviewModel={reviewModel}
+      reviewEffort={reviewEffort}
       reviewError={reviewError}
       onDismissReviewError={() => setReviewError(null)}
       reviewed={reviewed}

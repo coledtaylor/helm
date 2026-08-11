@@ -11,6 +11,8 @@ import {
 } from './parse'
 import { renderPullPrompt, DEFAULT_PR_REVIEW_PROMPT, PR_PROMPT_PLACEHOLDERS } from './prompt'
 import { parseGitHubRemote } from './remote'
+import { indexDiffByPath, parseUnifiedDiff } from './diff'
+import { isRepoIgnored, isRepoSlug, withRepoIgnored } from './types'
 
 describe('parseGitHubRemote', () => {
   const accepted: Array<{ remote: string; why: string }> = [
@@ -124,6 +126,7 @@ describe('parsePullList', () => {
       'deletions',
       'changedFiles',
       'reviewDecision',
+      'statusCheckRollup',
       'labels'
     ]) {
       expect(PR_LIST_FIELDS.split(',')).toContain(field)
@@ -149,8 +152,31 @@ describe('parsePullList', () => {
       deletions: 254,
       changedFiles: 86,
       reviewDecision: 'REVIEW_REQUIRED',
+      // The capture predates Helm asking for `statusCheckRollup`, so this entry
+      // genuinely has no rollup on it - and an absent one reduces to null,
+      // which is the value that paints no tick rather than a green one.
+      checks: null,
       labels: []
     })
+  })
+
+  it('reduces the rollup a list entry now carries', () => {
+    const [pull] = parsePullList(
+      JSON.stringify([
+        {
+          ...LIVE_ENTRY,
+          statusCheckRollup: [
+            { __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'SUCCESS' },
+            { __typename: 'CheckRun', status: 'IN_PROGRESS', conclusion: '' },
+            { __typename: 'StatusContext', state: 'FAILURE' }
+          ]
+        }
+      ])
+    )
+
+    // The same three numbers the detail reduces to, from the same function: a
+    // row and the tab it opens must not disagree about what is green.
+    expect(pull?.checks).toEqual({ total: 3, failing: 1, pending: 1 })
   })
 
   it('takes label names and leaves GitHub’s colours behind', () => {
@@ -673,5 +699,291 @@ describe('renderPullPrompt', () => {
 
   it('accepts a template with no placeholders at all', () => {
     expect(renderPullPrompt('/security-review', facts)).toBe('/security-review')
+  })
+})
+
+describe('parseUnifiedDiff', () => {
+  it('reads an added file, its hunk header and its line numbers', () => {
+    const { files, truncated } = parseUnifiedDiff(
+      [
+        'diff --git a/docs/helm-demo.md b/docs/helm-demo.md',
+        'new file mode 100644',
+        'index 0000000..2a0d3f1',
+        '--- /dev/null',
+        '+++ b/docs/helm-demo.md',
+        '@@ -0,0 +1,3 @@',
+        '+# Helm demo page',
+        '+',
+        '+A tiny file so the pull-request pane has a diff to show.',
+        ''
+      ].join('\n')
+    )
+
+    expect(truncated).toBe(false)
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatchObject({
+      path: 'docs/helm-demo.md',
+      status: 'added',
+      additions: 3,
+      deletions: 0
+    })
+    expect(files[0]?.hunks[0]?.header).toBe('@@ -0,0 +1,3 @@')
+    expect(files[0]?.hunks[0]?.lines).toEqual([
+      { kind: 'add', oldLine: null, newLine: 1, text: '# Helm demo page' },
+      // An added line that is empty is a `+` on its own, and is still a line.
+      { kind: 'add', oldLine: null, newLine: 2, text: '' },
+      {
+        kind: 'add',
+        oldLine: null,
+        newLine: 3,
+        text: 'A tiny file so the pull-request pane has a diff to show.'
+      }
+    ])
+  })
+
+  it('walks both gutters through a mixed hunk', () => {
+    const { files } = parseUnifiedDiff(
+      [
+        'diff --git a/src/wheel.lua b/src/wheel.lua',
+        '--- a/src/wheel.lua',
+        '+++ b/src/wheel.lua',
+        '@@ -10,4 +10,5 @@ function wheel.new()',
+        ' local wheel = {}',
+        '-wheel.spokes = 6',
+        '+wheel.spokes = 8',
+        '+wheel.rim = true',
+        ' return wheel',
+        ''
+      ].join('\n')
+    )
+
+    expect(files[0]).toMatchObject({ status: 'modified', additions: 2, deletions: 1 })
+    // The old side skips the additions and the new side skips the deletion,
+    // which is the whole job of having two columns.
+    expect(files[0]?.hunks[0]?.lines.map((line) => [line.kind, line.oldLine, line.newLine])).toEqual([
+      ['context', 10, 10],
+      ['del', 11, null],
+      ['add', null, 11],
+      ['add', null, 12],
+      ['context', 12, 13]
+    ])
+    // The enclosing function is on the header, and is kept verbatim.
+    expect(files[0]?.hunks[0]?.header).toBe('@@ -10,4 +10,5 @@ function wheel.new()')
+  })
+
+  it('keeps a deleted file under the name it had', () => {
+    const { files } = parseUnifiedDiff(
+      [
+        'diff --git a/old/gone.txt b/old/gone.txt',
+        'deleted file mode 100644',
+        '--- a/old/gone.txt',
+        '+++ /dev/null',
+        '@@ -1,2 +0,0 @@',
+        '-first',
+        '-second',
+        ''
+      ].join('\n')
+    )
+
+    // `/dev/null` is not a path, so the head side never names this file.
+    expect(files[0]).toMatchObject({ status: 'removed', path: 'old/gone.txt', deletions: 2 })
+  })
+
+  it('reads a rename, and finds the file under both of its names', () => {
+    const { files } = parseUnifiedDiff(
+      [
+        'diff --git a/docs/old.md b/docs/new.md',
+        'similarity index 94%',
+        'rename from docs/old.md',
+        'rename to docs/new.md',
+        '--- a/docs/old.md',
+        '+++ b/docs/new.md',
+        '@@ -1 +1 @@',
+        '-# Old',
+        '+# New',
+        ''
+      ].join('\n')
+    )
+
+    expect(files[0]).toMatchObject({
+      status: 'renamed',
+      path: 'docs/new.md',
+      oldPath: 'docs/old.md'
+    })
+    // GitHub's JSON reports one path for a rename and it is not always this
+    // one, so the index has to answer to both.
+    expect(indexDiffByPath({ files, truncated: false }).get('docs/old.md')).toBe(files[0])
+  })
+
+  it('carries no lines for a binary file', () => {
+    const { files } = parseUnifiedDiff(
+      [
+        'diff --git a/logo.png b/logo.png',
+        'index 1234567..89abcde 100644',
+        'Binary files a/logo.png and b/logo.png differ',
+        ''
+      ].join('\n')
+    )
+
+    // The path comes off the `diff --git` line here: a binary file has no
+    // `---`/`+++` pair to take one from.
+    expect(files[0]).toMatchObject({ path: 'logo.png', binary: true, hunks: [] })
+  })
+
+  it('does not mistake diff syntax inside a hunk for the next file', () => {
+    const { files } = parseUnifiedDiff(
+      [
+        'diff --git a/notes.md b/notes.md',
+        '--- a/notes.md',
+        '+++ b/notes.md',
+        '@@ -1,3 +1,4 @@',
+        '+diff --git a/fake b/fake',
+        '+--- a/fake',
+        '+++++ b/fake',
+        '+@@ -1 +1 @@',
+        ''
+      ].join('\n')
+    )
+
+    // Every one of those lines is signed, so every one of them is content. A
+    // parser that matched on the text rather than on the sign would report
+    // five files here and paint none of them right.
+    expect(files).toHaveLength(1)
+    expect(files[0]?.hunks[0]?.lines.map((line) => line.text)).toEqual([
+      'diff --git a/fake b/fake',
+      '--- a/fake',
+      '++++ b/fake',
+      '@@ -1 +1 @@'
+    ])
+  })
+
+  it('unquotes the C-quoted path git writes for a non-ASCII name', () => {
+    const { files } = parseUnifiedDiff(
+      [
+        'diff --git "a/docs/\\303\\251clair.md" "b/docs/\\303\\251clair.md"',
+        'new file mode 100644',
+        '--- /dev/null',
+        '+++ "b/docs/\\303\\251clair.md"',
+        '@@ -0,0 +1 @@',
+        '+one',
+        ''
+      ].join('\n')
+    )
+
+    // Octal escapes over the UTF-8 bytes, decoded together rather than one at
+    // a time: those two escapes are one character.
+    expect(files[0]?.path).toBe('docs/éclair.md')
+  })
+
+  it('counts every line but keeps only as many as it was asked to', () => {
+    const body = Array.from({ length: 10 }, (_, at) => `+line ${String(at + 1)}`)
+    const { files } = parseUnifiedDiff(
+      [
+        'diff --git a/big.txt b/big.txt',
+        '--- a/big.txt',
+        '+++ b/big.txt',
+        '@@ -0,0 +1,10 @@',
+        ...body,
+        ''
+      ].join('\n'),
+      { maxLinesPerFile: 4 }
+    )
+
+    expect(files[0]?.hunks[0]?.lines).toHaveLength(4)
+    expect(files[0]?.droppedLines).toBe(6)
+    // The counts are of the whole patch and not of what survived the cap: a
+    // file that says +4 where GitHub says +10 is a file lying about its size.
+    expect(files[0]?.additions).toBe(10)
+  })
+
+  it('reports a merge diff as a file with no patch rather than a shifted one', () => {
+    const { files } = parseUnifiedDiff(
+      [
+        'diff --git a/merged.txt b/merged.txt',
+        '--- a/merged.txt',
+        '+++ b/merged.txt',
+        '@@@ -1,2 -1,2 +1,3 @@@',
+        '++both sides changed this',
+        ''
+      ].join('\n')
+    )
+
+    // Two sign columns, so every line is offset by one character from what an
+    // ordinary hunk would read. Showing nothing is the honest answer.
+    expect(files[0]?.hunks).toEqual([])
+  })
+
+  it('carries the truncation flag it was handed', () => {
+    expect(parseUnifiedDiff('', { truncated: true }).truncated).toBe(true)
+    expect(parseUnifiedDiff('').files).toEqual([])
+  })
+})
+
+describe('the ignore list', () => {
+  describe('isRepoSlug', () => {
+    it('takes exactly two non-empty segments', () => {
+      expect(isRepoSlug('acme/widget')).toBe(true)
+      expect(isRepoSlug('a.b-c_d/E1')).toBe(true)
+    })
+
+    it('refuses anything a parsed remote would never produce', () => {
+      for (const value of [
+        'acme',
+        'acme/',
+        '/widget',
+        'acme/widget/extra',
+        'github.com/acme/widget',
+        'https://github.com/acme/widget',
+        'acme widget/x',
+        ' acme/widget',
+        'acme/widget ',
+        ''
+      ]) {
+        expect(isRepoSlug(value)).toBe(false)
+      }
+    })
+  })
+
+  describe('isRepoIgnored', () => {
+    it('matches whatever casing the remote was written in', () => {
+      // The case that makes this worth a function: GitHub's own names are
+      // case-insensitive, so a remote cloned as `Acme/Widget` and one cloned as
+      // `acme/widget` are one repository - and an ignore list that only matched
+      // the spelling the user happened to click would come back on after a
+      // re-clone.
+      expect(isRepoIgnored(['acme/widget'], 'Acme/Widget')).toBe(true)
+      expect(isRepoIgnored(['Acme/Widget'], 'acme/widget')).toBe(true)
+    })
+
+    it('does not match a different repository or a directory with no origin', () => {
+      expect(isRepoIgnored(['acme/widget'], 'acme/widget-two')).toBe(false)
+      expect(isRepoIgnored(['acme/widget'], 'other/widget')).toBe(false)
+      expect(isRepoIgnored([], 'acme/widget')).toBe(false)
+      expect(isRepoIgnored(['acme/widget'], null)).toBe(false)
+    })
+  })
+
+  describe('withRepoIgnored', () => {
+    it('adds and removes, sorted, so the value does not depend on click order', () => {
+      expect(withRepoIgnored([], 'b/two', true)).toEqual(['b/two'])
+      expect(withRepoIgnored(['b/two'], 'a/one', true)).toEqual(['a/one', 'b/two'])
+      expect(withRepoIgnored(['a/one', 'b/two'], 'a/one', false)).toEqual(['b/two'])
+    })
+
+    it('never leaves a second spelling of the same repository behind', () => {
+      // Untick a row the list holds under another casing and the entry has to
+      // go, or the box springs back on the next snapshot with nothing on screen
+      // explaining why.
+      expect(withRepoIgnored(['Acme/Widget'], 'acme/widget', false)).toEqual([])
+      // And ticking one already held replaces it rather than adding a twin -
+      // two entries for one repository is a value the validator refuses.
+      expect(withRepoIgnored(['Acme/Widget'], 'acme/widget', true)).toEqual(['acme/widget'])
+    })
+
+    it('leaves the list it was given alone', () => {
+      const held = ['a/one']
+      expect(withRepoIgnored(held, 'b/two', true)).toEqual(['a/one', 'b/two'])
+      expect(held).toEqual(['a/one'])
+    })
   })
 })

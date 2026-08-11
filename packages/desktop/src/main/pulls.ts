@@ -4,8 +4,12 @@ import {
   checkoutPull,
   fetchOpenPulls,
   fetchPullDetail,
+  fetchPullDiff,
   forgetPrRepos,
+  indexDiffByPath,
+  isRepoIgnored,
   parseGitHubRemote,
+  parseUnifiedDiff,
   pullConversation,
   readGhAuth,
   readGhVersion,
@@ -19,14 +23,18 @@ import {
   replaceRepoPulls,
   upsertPrRepo,
   writePullDetail,
+  MAX_DIFF_BYTES,
   type AppSettings,
   type GhCommand,
   type GhProblem,
   type GhStatus,
+  type IgnoredRepo,
   type LaunchedReviewPlan,
   type PrRepoRow,
   type PullDetail,
   type PullDetailView,
+  type PullFileView,
+  type PullPatch,
   type PullRepo,
   type PullsSnapshot,
   type PullSummary,
@@ -141,6 +149,16 @@ export interface PullsService {
    * rate-limited: returns false when it decided not to.
    */
   refreshOnFocus: () => boolean
+  /**
+   * Rebuilds the snapshot from the cache and pushes it if it moved.
+   *
+   * For a setting that changes what the snapshot *says* without changing
+   * anything GitHub knows - the ignore list is the only one so far. `refresh`
+   * would do this too, but only on the path where no pass is already in
+   * flight, so a toggle during a sweep would not reach the pane until the
+   * sweep ended.
+   */
+  republish: () => PullsSnapshot
   /** Re-reads the interval and the gh override out of settings. */
   rearm: () => void
   start: () => void
@@ -203,6 +221,10 @@ function signature(snapshot: PullsSnapshot): string {
     snapshot.open,
     snapshot.checked,
     snapshot.fetchedAtMs,
+    // Ignoring a repository that had nothing open moves no other field in here
+    // - the same reason `pull.checks` is in the row tuple below - so without
+    // this the pane would keep painting the list from before the toggle.
+    snapshot.ignored.map((repo) => [repo.slug, repo.name, repo.present]),
     snapshot.repos.map((repo) => [
       repo.path,
       repo.slug,
@@ -215,7 +237,10 @@ function signature(snapshot: PullsSnapshot): string {
         pull.isDraft,
         pull.reviewDecision,
         pull.additions,
-        pull.deletions
+        pull.deletions,
+        // A run going green moves nothing else on the row, so without this the
+        // list would keep painting the tally from the pass before it.
+        pull.checks
       ])
     ])
   ])
@@ -369,8 +394,16 @@ export function createPullsService({
 
     // One fetch per distinct remote, not per directory: two checkouts of the
     // same repository are two rows in the pane and one call to GitHub.
+    //
+    // The ignore list is applied *here*, before any of it, which is the whole
+    // point of the setting: an ignored repository is a `gh` process that never
+    // starts, not a row filtered out of an answer already paid for. It is
+    // checked even when `only` names one repository - a manual refresh of an
+    // ignored repository is a refresh of something the pane is not showing.
+    const ignoredRepos = settings().prIgnoredRepos
     const wanted = readPrRepos(store).filter((row) => {
       if (row.slug === null) return false
+      if (isRepoIgnored(ignoredRepos, row.slug)) return false
       return only === null || row.path.toLowerCase() === only.toLowerCase()
     })
     const bySlug = new Map<string, string[]>()
@@ -497,25 +530,50 @@ export function createPullsService({
     }
 
     let held: PullDetail | null = cached.detail
+    let patch: PullPatch | null = cached.diff
+    /** Why there is no patch, when the fetch is the reason. */
+    let patchProblem: string | null = null
     let fetchedAt = cached.detailFetchedAt
     let fromCache = true
 
     if (held === null || request.refresh === true) {
       const command = await ghForDetail()
-      let fetched: PullDetail
-      try {
-        fetched = await fetchPullDetail(command, slug, request.number)
-      } catch (err) {
+
+      // Both at once. They are one act to whoever opened the tab, they are
+      // independent calls to gh, and running them in series would make the
+      // conversation wait on a patch it does not need - or the other way round.
+      const [detailAttempt, diffAttempt] = await Promise.allSettled([
+        fetchPullDetail(command, slug, request.number),
+        fetchPullDiff(command, slug, request.number)
+      ])
+
+      if (detailAttempt.status === 'rejected') {
         // Re-asked for the same reason the list pass re-asks: a fetch that
         // failed is usually a token that expired, and "run gh auth login" is a
         // better sentence than whatever the API said.
         const rechecked = await ensureGh(true)
+        const err: unknown = detailAttempt.reason
         const said = err instanceof Error ? err.message : String(err)
         throw new Error(rechecked.problem?.message ?? said, { cause: err })
       }
+
+      // A patch that would not fetch is **not** fatal and is not survivable
+      // either: the conversation, the commits and the file list are all still
+      // worth the tab, so the view is built without hunks and says why. What it
+      // must not do is keep the patch it had - that one describes the file list
+      // from the last fetch, and this one has a new file list.
+      patch = diffAttempt.status === 'fulfilled' ? diffAttempt.value : null
+      if (diffAttempt.status === 'rejected') {
+        const err: unknown = diffAttempt.reason
+        patchProblem = err instanceof Error ? err.message : String(err)
+      }
+
       const at = new Date().toISOString()
-      writePullDetail(store, slug, request.number, fetched, at)
-      held = fetched
+      writePullDetail(store, slug, request.number, detailAttempt.value, {
+        diff: patch,
+        detailFetchedAt: at
+      })
+      held = detailAttempt.value
       fetchedAt = at
       fromCache = false
     }
@@ -531,9 +589,61 @@ export function createPullsService({
       detail: held,
       bodyHtml: await render(held.body),
       conversation,
+      ...filesOf(held, patch, patchProblem),
       fetchedAtMs: msOf(fetchedAt),
       cached: fromCache
     }
+  }
+
+  /**
+   * GitHub's file list, with the patch laid over it.
+   *
+   * The list is the spine and the patch is what hangs off it, never the other
+   * way round: `pr view --json files` is the same fetch the header's file count
+   * and diff size come from, so a Files view built from the patch instead would
+   * disagree with the header on exactly the pull requests whose patch was capped.
+   * A file the patch does not describe still gets its row, its counts and its
+   * badge - it simply has nothing to expand.
+   */
+  function filesOf(
+    detail: PullDetail,
+    patch: PullPatch | null,
+    problem: string | null
+  ): Pick<PullDetailView, 'files' | 'diffNote'> {
+    const parsed = patch === null ? null : parseUnifiedDiff(patch.text, { truncated: patch.truncated })
+    const byPath = parsed === null ? null : indexDiffByPath(parsed)
+
+    const files: PullFileView[] = detail.files.map((file) => {
+      const found = byPath?.get(file.path) ?? null
+      return {
+        ...file,
+        status: found?.status ?? 'modified',
+        oldPath: found?.oldPath ?? null,
+        hunks: found?.hunks ?? [],
+        binary: found?.binary ?? false,
+        droppedLines: found?.droppedLines ?? 0
+      }
+    })
+
+    return { files, diffNote: diffNote(patch, parsed?.truncated ?? false, problem, files) }
+  }
+
+  function diffNote(
+    patch: PullPatch | null,
+    truncated: boolean,
+    problem: string | null,
+    files: PullFileView[]
+  ): string | null {
+    if (problem !== null) return `The patch could not be fetched - ${problem}`
+    if (patch === null) {
+      // Not an error: a pull request cached by a Helm that never fetched
+      // patches, opened again before anything refreshed it.
+      return files.length === 0 ? null : 'No patch has been fetched for this pull request yet.'
+    }
+    if (truncated) {
+      return `The patch is larger than the ${String(Math.round(MAX_DIFF_BYTES / (1024 * 1024)))}MB Helm fetches, so the files below it are listed without one.`
+    }
+    return null
   }
 
   // ---------------------------------------------------------------------
@@ -630,7 +740,18 @@ export function createPullsService({
       slug
     })
 
-    return { repoPath: row.path, slug, number: cached.summary.number, prompt, checkedOut, warnings }
+    return {
+      repoPath: row.path,
+      slug,
+      number: cached.summary.number,
+      prompt,
+      // Read here with everything else the launch is composed from, so the
+      // window cannot send a model any more than it can send a prompt.
+      model: settled.prReviewModel,
+      effort: settled.prReviewEffort,
+      checkedOut,
+      warnings
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -641,6 +762,10 @@ export function createPullsService({
     const rows = new Map(readPrRepos(store).map((row) => [row.path.toLowerCase(), row]))
     const pullsBySlug = readPullsBySlug(store)
     const known = projects()
+    const ignoredRepos = settings().prIgnoredRepos
+
+    /** Ignored slugs a scanned project maps to, and the folder to call them. */
+    const ignoredPresent = new Map<string, string>()
 
     const repos: PullRepo[] = []
     for (const project of known) {
@@ -649,6 +774,15 @@ export function createPullsService({
       // counted - `checked` is what lets the pane say "nothing here is on
       // GitHub" rather than showing an empty list with no explanation.
       if (row === undefined || row.slug === null) continue
+      if (isRepoIgnored(ignoredRepos, row.slug)) {
+        // First checkout wins the name. Two directories for one slug are one
+        // entry, because the setting is one entry - and a list that named the
+        // same repository twice would offer two ticks for one fact.
+        if (!ignoredPresent.has(row.slug.toLowerCase())) {
+          ignoredPresent.set(row.slug.toLowerCase(), project.name)
+        }
+        continue
+      }
       repos.push({
         path: project.path,
         name: project.name,
@@ -679,8 +813,25 @@ export function createPullsService({
       .map((repo) => repo.fetchedAtMs)
       .filter((at): at is number => at !== null)
 
+    // Every entry of the setting, not only the ones a project maps to: a slug
+    // whose checkout has been deleted or renamed still occupies the list and
+    // still has to be removable, and a settings row that vanished with the
+    // directory would leave a repository ignored for ever with nothing on
+    // screen saying so.
+    const ignored: IgnoredRepo[] = ignoredRepos
+      .map((slug) => {
+        const name = ignoredPresent.get(slug.toLowerCase())
+        return {
+          slug,
+          name: name ?? (slug.split('/')[1] ?? slug),
+          present: name !== undefined
+        }
+      })
+      .sort((a, b) => a.slug.toLowerCase().localeCompare(b.slug.toLowerCase()))
+
     return {
       repos,
+      ignored,
       open: distinct.size,
       checked: known.length,
       gh: ghStatus ?? {
@@ -758,6 +909,7 @@ export function createPullsService({
   return {
     snapshot: () => build(),
     refresh,
+    republish: publish,
     detail,
     prepareReview,
 

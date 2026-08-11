@@ -43,6 +43,13 @@
       "when": 1786440984172,
       "tag": "0005_puzzling_pete_wisdom",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786473337270,
+      "tag": "0006_perfect_pestilence",
+      "breakpoints": true
     }
   ]
 }
