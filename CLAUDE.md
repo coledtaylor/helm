@@ -139,6 +139,14 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   *existence* of one - `.credentials.json`, `ANTHROPIC_API_KEY`, or an
   onboarding record in `.claude.json`. Nothing opens any of them. The whole
   remedy for "not signed in" is a sentence telling the user to run `claude`.
+- The same rule for GitHub, and it is the reason the pull-request surface shells
+  out to `gh` rather than calling the API. Helm never receives, stores or reads
+  a GitHub token: `gh` owns it, every fetch runs on it, and a sign-in is
+  detected **only from the exit code of `gh auth status`** - nothing opens
+  `hosts.yml`, the keyring, or `GH_TOKEN`. The whole remedy for "not signed in"
+  is a sentence telling the user to run `gh auth login`. A remote URL carrying
+  an embedded token is a credential too, so `parseGitHubRemote` strips the
+  userinfo before anything is written to the database.
 - Usage figures degrade to **nothing** rather than to a stale number. The
   server's own answer in `cachedUsageUtilization` is authoritative but dated, so
   a reading older than `USAGE_STALE_AFTER_MS`, one whose `resets_at` has already

@@ -13,6 +13,8 @@
 // Imported as well as re-exported: `AppSettings` below names it, and a
 // re-export alone does not bring a name into this file's scope.
 import type { UsageDisplayMode } from './usage/shape'
+// The same, for a value: `DEFAULT_SETTINGS` reads the polling default off it.
+import { PR_POLL_MINUTES } from './github/types'
 
 export {
   frontmatterField,
@@ -66,6 +68,22 @@ export {
   type ModelPrice,
   type TokenPrice
 } from './usage/prices'
+/**
+ * The pull-request vocabulary, re-exported for the same reason: the Pulls pane
+ * and the sidebar are renderer code, and `github/types.ts` is pure by
+ * construction while the rest of `github/` spawns a subprocess.
+ */
+export {
+  PR_POLL_MINUTES,
+  type GhProblem,
+  type GhProblemKind,
+  type GhStatus,
+  type PullRepo,
+  type PullReviewDecision,
+  type PullSummary,
+  type PullsSnapshot,
+  type RepoRemote
+} from './github/types'
 
 /** What a discovered directory turned out to be. */
 export type ProjectKind =
@@ -491,6 +509,26 @@ export interface AppSettings {
    * `claude` executable its own pty and this setting never reaches it.
    */
   terminalShell: string | null
+
+  /**
+   * A `gh` executable the user picked by hand, for the machine where it is not
+   * on PATH and not in the usual install directory. Null means "find it".
+   *
+   * A path, never a credential - the exact parity with `claudePath`, and the
+   * same hard rule behind it: Helm locates the CLI and runs it, and the GitHub
+   * sign-in stays entirely between the user and `gh auth login`.
+   */
+  ghPath: string | null
+  /**
+   * How often Helm sweeps the discovered repositories for open pull requests,
+   * in minutes. `0` is off - manual and focus refreshes still work.
+   *
+   * On by default, which is a deliberate change to Helm's network posture and
+   * not an oversight: periodic scanning is what the surface is for. Helm itself
+   * still makes no direct request; `gh` does, on the user's own token, on this
+   * schedule. Bounded by `PR_POLL_MINUTES`.
+   */
+  prPollMinutes: number
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -509,7 +547,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalCursorStyle: 'block',
   terminalCursorBlink: true,
   terminalScrollback: TERMINAL_SCROLLBACK.default,
-  terminalShell: null
+  terminalShell: null,
+  ghPath: null,
+  prPollMinutes: PR_POLL_MINUTES.default
 }
 
 // ---------------------------------------------------------------------------

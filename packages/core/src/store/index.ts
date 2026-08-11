@@ -20,6 +20,16 @@ export {
 export { knownMigrations, migrate, type MigrationOutcome } from './migrate'
 export { cacheProjects, readCachedProjects, type CachedProject } from './projects'
 export {
+  forgetPrRepos,
+  readPrRepos,
+  readPull,
+  readPullsBySlug,
+  recordPrFetch,
+  replaceRepoPulls,
+  upsertPrRepo,
+  type PrRepoRow
+} from './pulls'
+export {
   createProfile,
   deleteProfile,
   findProfileByName,

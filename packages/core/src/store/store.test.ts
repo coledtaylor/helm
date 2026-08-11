@@ -111,7 +111,9 @@ describe('settings', () => {
       terminalCursorStyle: 'bar',
       terminalCursorBlink: false,
       terminalScrollback: 2500,
-      terminalShell: join(dir, 'pwsh.exe')
+      terminalShell: join(dir, 'pwsh.exe'),
+      ghPath: join(dir, 'gh.exe'),
+      prPollMinutes: 15
     } satisfies AppSettings
 
     writeSettings(store, written)
@@ -245,6 +247,18 @@ describe('settings validation', () => {
       key: 'terminalShell',
       good: [null, join(tmpdir(), 'pwsh.exe'), join(tmpdir(), 'bin', 'bash')],
       bad: ['pwsh.exe', 'bin\\pwsh.exe', '', 42, {}]
+    },
+    {
+      key: 'ghPath',
+      good: [null, join(tmpdir(), 'gh.exe')],
+      bad: ['gh', 'bin\\gh.exe', '', 42, {}]
+    },
+    {
+      key: 'prPollMinutes',
+      // 0 is off; everything else is at least five minutes apart, because a
+      // pass is one `gh` per remote against the user's own rate limit.
+      good: [0, 5, 60, 1440],
+      bad: [1, 4, 1441, -5, 5.5, '5', null, Number.NaN]
     }
   ]
 
@@ -326,7 +340,9 @@ describe('settings validation', () => {
       terminalCursorStyle: 'underline',
       terminalCursorBlink: false,
       terminalScrollback: 50_000,
-      terminalShell: join(dir, 'cmd.exe')
+      terminalShell: join(dir, 'cmd.exe'),
+      ghPath: join(dir, 'gh.exe'),
+      prPollMinutes: 0
     })
 
     expect(() => writeSettings(store, readSettings(store))).not.toThrow()
@@ -347,7 +363,9 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   terminalCursorStyle: 'underline',
   terminalCursorBlink: false,
   terminalScrollback: 50_000,
-  terminalShell: join(dir, 'cmd.exe')
+  terminalShell: join(dir, 'cmd.exe'),
+  ghPath: join(dir, 'gh.exe'),
+  prPollMinutes: 0
 })
 
 describe('project cache', () => {

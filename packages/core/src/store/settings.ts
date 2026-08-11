@@ -2,6 +2,7 @@ import { isAbsolute } from 'node:path'
 import { sql } from 'drizzle-orm'
 import {
   DEFAULT_SETTINGS,
+  PR_POLL_MINUTES,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
@@ -204,6 +205,33 @@ export const SETTING_VALIDATORS: SettingValidators = {
     }
     if (!isAbsolute(value)) return `expected an absolute path, got ${JSON.stringify(value)}`
     return null
+  },
+
+  /** Null means "find it"; anything else is absolute, exactly as `claudePath`. */
+  ghPath: (value) => {
+    if (value === null) return null
+    if (typeof value !== 'string' || value.trim() === '') {
+      return `expected an absolute path or null, got ${describe(value)}`
+    }
+    if (!isAbsolute(value)) return `expected an absolute path, got ${JSON.stringify(value)}`
+    return null
+  },
+
+  /**
+   * Minutes, or zero for off.
+   *
+   * Zero is deliberately outside the range rather than the bottom of it: the
+   * interval and "no interval at all" are different states, and a validator
+   * that accepted 1 through 1440 plus 0 as a special case would let a
+   * one-minute sweep over a dozen repositories through as well. Off is off, and
+   * anything on is at least `PR_POLL_MINUTES.min` apart.
+   */
+  prPollMinutes: (value) => {
+    if (value === PR_POLL_MINUTES.off) return null
+    const problem = boundedInteger(PR_POLL_MINUTES)(value)
+    return problem === null
+      ? null
+      : `${problem} (or ${String(PR_POLL_MINUTES.off)} to poll not at all)`
   }
 }
 
