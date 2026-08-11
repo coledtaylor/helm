@@ -1,12 +1,20 @@
 name: CI
 
 on:
+  # `main` is deliberately absent. Every push to `main` runs `Release`, which
+  # calls this workflow as its gate - so `main` is checked exactly once per
+  # push rather than twice. Windows minutes bill at 2x on a private repo, and
+  # two identical 8-minute runs of the same commit buy nothing.
   push:
-    branches: ['**']
+    branches-ignore: [main]
   pull_request:
+  workflow_call:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Scoped by workflow as well as ref. Called from `Release`, this workflow
+  # sees the *caller's* `github.workflow`, so the release gate does not share a
+  # cancellation group with anything else that might run on the same ref.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -20,8 +28,10 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10.28.0
+        # No `version:` - the action reads `packageManager` from package.json.
+        # A number written here is a second place for the pinned pnpm to live,
+        # and the two drifting is exactly the class of toolchain mismatch
+        # scripts/dist-win.mjs exists to catch.
 
       - uses: actions/setup-node@v6
         with:

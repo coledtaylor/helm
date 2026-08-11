@@ -32,6 +32,7 @@
     "m7-check": "pnpm --filter @helm/desktop m7-check",
     "usage-check": "pnpm --filter @helm/desktop usage-check",
     "dist:win": "pnpm --filter @helm/desktop dist:win",
+    "verify:artifact": "pnpm --filter @helm/desktop verify:artifact",
     "db:generate": "pnpm --filter @helm/core db:generate",
     "icon": "pnpm --filter @helm/desktop icon"
   },

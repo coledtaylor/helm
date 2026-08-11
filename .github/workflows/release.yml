@@ -1,0 +1,239 @@
+name: Release
+
+# Cutting a release is bumping the version in packages/desktop/package.json and
+# merging it to main. Nothing else - no tag to push by hand, no button.
+#
+# Why the trigger is a version bump and not every merge (decided 2026-08-10):
+# releasing on every merge burns a release on a typo fix in a doc and makes two
+# merges in a row collide on the same tag. Why it is not a manual dispatch: the
+# step a person can skip is the step that gets skipped, which is what put a
+# hand-built exe from a dirty tree in front of people once already.
+#
+# The gate is "does this tag exist yet", not "did this commit change the
+# version". Diffing against the parent commit is a different answer after a
+# squash, a rebase, a revert or a re-run of this workflow; asking whether v1.2.3
+# is already tagged is the same answer every time and is the question that
+# actually matters.
+
+on:
+  push:
+    branches: [main]
+
+# Never cancel a release that is already uploading. `main` moving on is not a
+# reason to abandon a tag halfway.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Cheap, and on Linux: reading one JSON field and asking the remote for a tag
+  # does not need a Windows runner, and Windows minutes bill at 2x.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.gate.outputs.version }}
+      tag: ${{ steps.gate.outputs.tag }}
+      release: ${{ steps.gate.outputs.release }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version=$(jq -er .version packages/desktop/package.json)
+
+          # src/main/update.ts reads the tag, strips a leading v, and compares
+          # it to app.getVersion() with /(\d+)\.(\d+)\.(\d+)/. A version that
+          # regex cannot read is a version the in-app check silently never
+          # fires for, so refuse it here rather than ship it.
+          if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error file=packages/desktop/package.json::version '$version' is not <major>.<minor>.<patch>"
+            exit 1
+          fi
+
+          tag="v$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "release=false" >>"$GITHUB_OUTPUT"
+            echo "**No release.** \`$tag\` is already tagged; bump the version to cut a new one." >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "release=true" >>"$GITHUB_OUTPUT"
+            echo "**Releasing \`$tag\`.**" >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+  # Runs on every push to main, released or not - this is `main`'s only CI, by
+  # design. ci.yml skips pushes to main precisely so this is not a second copy
+  # of the same eight minutes.
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: [version, check]
+    # No always()/!cancelled() here, deliberately: a failed `check` must skip
+    # this job, and the default `needs` behaviour is what does that. A failing
+    # `pnpm check` on main therefore produces no tag and no release.
+    if: needs.version.outputs.release == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ needs.version.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Release notes are a git log range against the previous tag, and the
+          # default shallow checkout has neither the history nor the tags.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        # Version comes from `packageManager` in package.json; see ci.yml.
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Which pnpm will electron-builder find
+        shell: bash
+        run: |
+          # scripts/dist-win.mjs guards against a stale standalone pnpm.exe
+          # shadowing the managed shim, because electron-builder resolves the
+          # command with which() and PATHEXT prefers .EXE over .CMD. That guard
+          # was written for one broken machine and has never run on a clean
+          # runner. Print what it will see, so the log carries the evidence
+          # instead of the assumption - and so the day it *does* fire here,
+          # this step is the thing that already told you why.
+          where.exe pnpm || echo '(no pnpm on PATH - dist-win.mjs will say so)'
+          pnpm --version
+
+      - name: Build artefacts
+        run: pnpm dist:win
+
+      - name: Verify the artefacts carry their unpacked native modules
+        shell: bash
+        run: |
+          node packages/desktop/scripts/verify-artifact.mjs \
+            "packages/desktop/dist-app/Helm-$VERSION-portable.exe" \
+            "packages/desktop/dist-app/Helm-$VERSION-setup.exe"
+
+      - name: Compose the release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Notes come from git log, not GitHub's generate_release_notes.
+          # generate_release_notes lists *merged pull requests*; this repo's
+          # history is branches merged locally, so it would produce a release
+          # body that is a "Full Changelog" link and nothing else. The commit
+          # subjects here are already written as one-line statements of what
+          # landed, which is exactly what a changelog entry is.
+          previous=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+
+          sed "s/\${VERSION}/$VERSION/g" .github/release-body.md >notes.md
+          {
+            echo
+            if [[ -n $previous ]]; then
+              echo "## Changes since $previous"
+            else
+              echo "## Changes"
+              echo
+              echo "First release."
+            fi
+            echo
+            # --no-merges: a merge subject and the commits it brings in are both
+            # in the range, and listing both says everything twice.
+            # --reverse: oldest first, so it reads as a history.
+            git log --no-merges --reverse --format='- %s' ${previous:+"$previous..HEAD"}
+            echo
+            if [[ -n $previous ]]; then
+              echo "**Full changelog:** https://github.com/$GITHUB_REPOSITORY/compare/$previous...$TAG"
+            fi
+          } >>notes.md
+
+          count=$(git log --no-merges --oneline ${previous:+"$previous..HEAD"} | wc -l)
+          if [[ $count -eq 0 ]]; then
+            echo "::error::no commits since $previous, so there is nothing to release"
+            exit 1
+          fi
+          echo "$count commit(s) since ${previous:-the beginning}."
+
+      - name: Publish
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # A run cancelled or failed partway can leave a draft behind. A draft
+          # holds the tag *name* without creating the ref, so the version gate -
+          # which asks git for the tag - would not have seen it, and `gh release
+          # create` would then fail on the name collision. The gate has already
+          # established that no real release owns this tag, so clearing a draft
+          # here is safe and makes a half-finished run self-healing.
+          if gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null | grep -qx true; then
+            echo "Deleting a leftover draft for $TAG from an earlier run."
+            gh release delete "$TAG" --yes
+          fi
+
+          # Created as a draft and then flipped - deliberately, and NOT a human
+          # approval gate. /releases/latest ignores drafts, so a release that
+          # waits for someone to press publish is a release the in-app check
+          # cannot see. The draft here lives for as long as the upload takes:
+          # publishing it is what creates the tag, so the ref and ~200 MB of
+          # assets become visible in the same instant. `gh release create` with
+          # assets does it the other way round - tag first, upload after - which
+          # leaves a window where the app announces an update whose download
+          # page is empty.
+          gh release create "$TAG" \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "Helm $VERSION" \
+            --notes-file notes.md \
+            "packages/desktop/dist-app/Helm-$VERSION-portable.exe" \
+            "packages/desktop/dist-app/Helm-$VERSION-setup.exe"
+
+          gh release edit "$TAG" --draft=false --latest
+
+      - name: Confirm /releases/latest answers with it
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The exact endpoint src/main/update.ts asks. Asserting on it closes
+          # the loop that the rest of this workflow only sets up: a release that
+          # is published but not `latest`, or latest but missing an asset, is
+          # one the app reports and the user cannot act on.
+          #
+          # This call is authenticated, because a workflow's always is. While
+          # the repository is private that is the *only* way it answers 200 -
+          # the app's unauthenticated request gets a 404 no matter what this
+          # step says. Public visibility is what makes the two agree; until
+          # then, treat a green tick here as "the release is correct", not as
+          # "the update check works".
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest")
+
+          tag=$(jq -r .tag_name <<<"$latest")
+          draft=$(jq -r .draft <<<"$latest")
+          assets=$(jq -r '[.assets[].name] | sort | join(", ")' <<<"$latest")
+          expected="Helm-$VERSION-portable.exe, Helm-$VERSION-setup.exe"
+
+          [[ $tag == "$TAG" ]]        || { echo "::error::/releases/latest says $tag, expected $TAG"; exit 1; }
+          [[ $draft == false ]]       || { echo "::error::$TAG is still a draft"; exit 1; }
+          [[ $assets == "$expected" ]] || { echo "::error::assets are [$assets], expected [$expected]"; exit 1; }
+
+          {
+            echo "**Released [\`$TAG\`](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)**"
+            echo
+            echo "- \`/releases/latest\` -> \`$tag\`, published, $assets"
+          } >>"$GITHUB_STEP_SUMMARY"
