@@ -1,6 +1,7 @@
 import type { BrowserWindow } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { basename } from 'node:path'
+import { lstatSync, readdirSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import type { DetectedShell } from '@helm/core'
 import { getSession, killSession, spawnSession } from './pty'
 
@@ -95,18 +96,116 @@ export interface PtermHost {
  * `CHERE_INVOKING` is set - which would defeat the one thing a project shell is
  * for.
  */
-const KNOWN_SHELLS: Array<{ file: string; label: string; args: string[] }> = [
+const KNOWN_SHELLS: Array<{
+  file: string
+  label: string
+  args: string[]
+  /**
+   * Absolute locations to look in as well as `PATH`. See `pwshLocations` below
+   * for why `where.exe` alone is not enough to conclude a shell is absent.
+   */
+  installed?: () => string[]
+}> = [
   // The banner is three lines of chrome in a pane that is deliberately short.
-  { file: 'pwsh.exe', label: 'PowerShell 7', args: ['-NoLogo'] },
+  { file: 'pwsh.exe', label: 'PowerShell 7', args: ['-NoLogo'], installed: pwshLocations },
   { file: 'powershell.exe', label: 'Windows PowerShell', args: ['-NoLogo'] },
   { file: 'cmd.exe', label: 'Command Prompt', args: [] },
   { file: 'wsl.exe', label: 'WSL', args: [] },
-  { file: 'bash.exe', label: 'Bash', args: [] },
+  { file: 'bash.exe', label: 'Bash', args: [], installed: gitBashLocations },
   { file: 'bash', label: 'Bash', args: [] },
   { file: 'zsh', label: 'Zsh', args: [] },
   { file: 'fish', label: 'Fish', args: [] },
   { file: 'sh', label: 'Shell', args: [] }
 ]
+
+/**
+ * `existsSync`, for a path that may be a Windows **app-execution alias**.
+ *
+ * `existsSync` is a `stat`, and `stat` follows reparse points. The launcher
+ * stubs the Store installs under `%LOCALAPPDATA%\Microsoft\WindowsApps` are a
+ * reparse point of a kind it cannot follow: Windows answers **EACCES**, and
+ * `existsSync` turns that into `false`. Measured here - `statSync` throws
+ * EACCES on the pwsh stub, `lstatSync` reports an 85-byte link, `accessSync`
+ * succeeds, and `node-pty` spawns it and gets PowerShell 7.6.4 - so the file is
+ * present, launchable, and invisible to the obvious test.
+ *
+ * `lstat` does not follow the reparse point, which makes it the right question
+ * anyway: this asks whether the entry is there, not what is on the other end.
+ */
+function present(path: string): boolean {
+  try {
+    lstatSync(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * PowerShell 7 installations, wherever this machine put one.
+ *
+ * Measured on the machine this was reported from: PowerShell 7.6.4 was
+ * installed from the Store, `where.exe pwsh.exe` found nothing, and Helm
+ * concluded the machine had no PowerShell 7 and opened Windows PowerShell 5.1
+ * instead. Two things have to be true at once for that, and both are ordinary:
+ * the Store build puts its launcher in `%LOCALAPPDATA%\Microsoft\WindowsApps`,
+ * which was not on `PATH` at all, and an *older* package directory left behind
+ * by a previous version still was - pointing at a directory that no longer
+ * exists. So `PATH` carried a dead pwsh entry and no live one.
+ *
+ * The visible symptom is not "the picker is missing a row". 5.1 and 7 read
+ * *different* profiles - `Documents\WindowsPowerShell\` against
+ * `Documents\PowerShell\` - so a user whose prompt, aliases and functions are
+ * set up in the 7 profile gets a shell with none of them and no indication why.
+ *
+ * MSI installs first and newest major first, because that is the one a person
+ * who has both would mean; the Store launcher last, as it is a stub that
+ * resolves to whatever package is currently registered.
+ */
+function pwshLocations(): string[] {
+  const found: string[] = []
+  const bases = [
+    process.env['ProgramW6432'],
+    process.env['ProgramFiles'],
+    process.env['ProgramFiles(x86)']
+  ]
+  for (const base of bases) {
+    if (base === undefined || base === '') continue
+    const root = join(base, 'PowerShell')
+    let entries: string[]
+    try {
+      entries = readdirSync(root)
+    } catch {
+      continue
+    }
+    const majors = entries.filter((e) => /^\d+$/.test(e)).sort((a, b) => Number(b) - Number(a))
+    for (const major of majors) {
+      const exe = join(root, major, 'pwsh.exe')
+      if (present(exe)) found.push(exe)
+    }
+  }
+  const local = process.env['LOCALAPPDATA']
+  if (local !== undefined && local !== '') {
+    const alias = join(local, 'Microsoft', 'WindowsApps', 'pwsh.exe')
+    if (present(alias)) found.push(alias)
+  }
+  return found
+}
+
+/**
+ * Git for Windows' bash, which is what `bash.exe` means on a Windows machine
+ * that has one. Git puts `cmd\` on `PATH` and not `bin\`, so `where.exe
+ * bash.exe` misses it on a default install unless something else added it.
+ */
+function gitBashLocations(): string[] {
+  const found: string[] = []
+  for (const base of [process.env['ProgramW6432'], process.env['ProgramFiles']]) {
+    if (base === undefined || base === '') continue
+    const exe = join(base, 'Git', 'bin', 'bash.exe')
+    if (present(exe)) found.push(exe)
+  }
+  return found
+}
 
 function known(file: string): { file: string; label: string; args: string[] } | undefined {
   const name = basename(file).toLowerCase()
@@ -141,6 +240,13 @@ let detectedShells: DetectedShell[] | null = null
 /**
  * Every known shell this machine actually has.
  *
+ * `PATH` first, then the locations an installer is known to use. `where.exe` is
+ * the better answer when it has one - it is what the user's own terminal would
+ * resolve - but a miss from it is not evidence of absence: it answers about
+ * `PATH`, and `PATH` is a list somebody's installers have been appending to for
+ * years. See `pwshLocations` for the install this got wrong, and for why the
+ * consequence was a shell with the wrong profile rather than a missing row.
+ *
  * Memoised: `where.exe` five times is a hundred milliseconds, and the answer is
  * a property of the installation rather than of the app's state. Nothing a user
  * can change in Helm changes it.
@@ -152,7 +258,12 @@ export function detectShells(): DetectedShell[] {
   if (process.platform === 'win32') {
     for (const entry of KNOWN_SHELLS) {
       if (!entry.file.endsWith('.exe')) continue
-      const path = whereIs(entry.file)
+      const onPath = whereIs(entry.file)
+      // One row per shell: the picker names executables, and two rows reading
+      // `pwsh.exe` differing only in a path the header truncates is a choice
+      // nobody can make. `PATH` wins because it is what `pwsh` already means in
+      // this user's own terminal.
+      const path = onPath ?? entry.installed?.()[0] ?? null
       if (path === null) continue
       found.push({ path, name: basename(path), label: entry.label, args: entry.args })
     }
@@ -183,6 +294,19 @@ function autoShell(): string {
   // Nothing was found, which on Windows means `where.exe` itself failed. The
   // guaranteed-present fallbacks are better than refusing to open a shell.
   return process.platform === 'win32' ? 'powershell.exe' : (process.env['SHELL'] ?? 'bash')
+}
+
+/** Every other shell to try, in detection order, when `wanted` will not start. */
+function alternativesTo(wanted: string): string[] {
+  const seen = new Set([wanted.toLowerCase()])
+  const out: string[] = []
+  for (const candidate of [...detectShells().map((entry) => entry.path), autoShell()]) {
+    const key = candidate.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(candidate)
+  }
+  return out
 }
 
 export interface PtermDeps {
@@ -245,12 +369,24 @@ export function createPtermHost(deps: PtermDeps): PtermHost {
       } catch (err) {
         // A shell that will not spawn - uninstalled since it was picked, or
         // renamed - must not leave the project pane with an empty box and no
-        // explanation. Fall back to what Helm would have found on its own and
-        // say what happened.
-        const fallback = autoShell()
-        if (fallback.toLowerCase() === wanted.toLowerCase()) throw err
-        start(id, fallback, request)
-        shell = fallback
+        // explanation. Fall through the other shells this machine has and say
+        // what happened.
+        //
+        // The whole list rather than `autoShell()` alone, because the one that
+        // just failed can *be* what `autoShell()` answers: detection is
+        // memoised at first use, so a shell that goes away while Helm is open
+        // is still in it. Trying it again and rethrowing left the pane with the
+        // empty box this branch exists to prevent.
+        const started = alternativesTo(wanted).find((candidate) => {
+          try {
+            start(id, candidate, request)
+            return true
+          } catch {
+            return false
+          }
+        })
+        if (started === undefined) throw err
+        shell = started
         requested = wanted
         problem = err instanceof Error ? err.message : String(err)
       }
