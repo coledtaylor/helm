@@ -3,12 +3,14 @@ import { useState } from 'react'
 import {
   offerableUsageModes,
   COST_MODE_UNAVAILABLE,
+  PR_POLL_MINUTES,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
   USAGE_DISPLAY_MODES,
   type AppSettings,
   type DetectedShell,
+  type GhStatus,
   type TerminalCursorStyle,
   type ThemePreference,
   type UsageDisplayMode
@@ -27,8 +29,8 @@ import { ThemeToggle } from './ThemeToggle'
  * permanent home for it - every setting a later feature adds lands here as
  * another row in an existing group or another group at the end.
  *
- * One scrolling page of grouped cards rather than sub-views. Four groups and
- * fourteen controls; a segmented navigator over that many rows is furniture
+ * One scrolling page of grouped cards rather than sub-views. Five groups and
+ * seventeen controls; a segmented navigator over that many rows is furniture
  * standing in for content. When a group outgrows the page, it earns its own
  * view then.
  *
@@ -87,6 +89,18 @@ export interface SettingsPaneProps {
   shells: DetectedShell[]
   /** Native file picker, for a shell installed somewhere `where.exe` misses. */
   onLocateShell: () => void
+
+  /**
+   * What Helm found out about `gh`, out of the pull-request snapshot. Null
+   * until the first pass has resolved it.
+   */
+  gh: GhStatus | null
+  /** Native file picker, the same shape the Claude CLI row uses. */
+  onLocateGh: () => void
+  /** Writes `ghPath: null` - back to whatever discovery finds. */
+  onClearGhOverride: () => void
+  prPollMinutes: number
+  onPrPollMinutesChange: (minutes: number) => void
 }
 
 /** The six the Terminal group owns, named once so nothing has to list them twice. */
@@ -129,7 +143,12 @@ export function SettingsPane({
   onTerminalChange,
   terminalFontStack,
   shells,
-  onLocateShell
+  onLocateShell,
+  gh,
+  onLocateGh,
+  onClearGhOverride,
+  prPollMinutes,
+  onPrPollMinutesChange
 }: SettingsPaneProps): JSX.Element {
   const found = status !== null && status.path !== null && status.version !== null
   const overridden = status?.source === 'setting'
@@ -335,8 +354,144 @@ export function SettingsPane({
           shells={shells}
           onLocateShell={onLocateShell}
         />
+
+        <GitHubGroup
+          gh={gh}
+          onLocate={onLocateGh}
+          onClearOverride={onClearGhOverride}
+          pollMinutes={prPollMinutes}
+          onPollMinutesChange={onPrPollMinutesChange}
+        />
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// GitHub
+// ---------------------------------------------------------------------------
+
+/**
+ * The intervals offered, and what each one is for.
+ *
+ * A select rather than a stepper: the useful values are decades apart, and
+ * nobody nudges a polling interval while watching the result. `0` is off and is
+ * first, because turning it off is the one choice somebody comes here
+ * specifically to make.
+ */
+const POLL_CHOICES: Array<{ minutes: number; label: string }> = [
+  { minutes: 0, label: 'Off - only when I ask' },
+  { minutes: 5, label: 'Every 5 minutes' },
+  { minutes: 15, label: 'Every 15 minutes' },
+  { minutes: 30, label: 'Every 30 minutes' },
+  { minutes: 60, label: 'Hourly' },
+  { minutes: 240, label: 'Every 4 hours' },
+  { minutes: 1440, label: 'Daily' }
+]
+
+/**
+ * The GitHub CLI, and how often Helm asks it anything.
+ *
+ * Two rows and a status, and it is the *status* that carries the rule: Helm
+ * holds no GitHub credential, so everything on this surface happens through the
+ * `gh` on this machine, signed in by the user, in a terminal Helm has nothing to
+ * do with. The remedy for "not signed in" is therefore a sentence rather than a
+ * button - the same shape the Claude CLI group takes, for the same reason.
+ *
+ * The interval is here rather than in the Pulls pane's own header on purpose:
+ * settings for Helm live in one place, and a disclosure strip inside a pane is
+ * a second place for a setting to hide.
+ */
+function GitHubGroup({
+  gh,
+  onLocate,
+  onClearOverride,
+  pollMinutes,
+  onPollMinutesChange
+}: {
+  gh: GhStatus | null
+  onLocate: () => void
+  onClearOverride: () => void
+  pollMinutes: number
+  onPollMinutesChange: (minutes: number) => void
+}): JSX.Element {
+  const found = gh !== null && gh.path !== null
+  const overridden = gh?.source === 'setting'
+  // A value written by hand or by an older build still has to be selectable, or
+  // the picker would silently show something other than what is in force.
+  const choices = POLL_CHOICES.some((choice) => choice.minutes === pollMinutes)
+    ? POLL_CHOICES
+    : [...POLL_CHOICES, { minutes: pollMinutes, label: `Every ${String(pollMinutes)} minutes` }]
+
+  return (
+    <Group
+      name="github"
+      title="GitHub"
+      hint="Pull requests are fetched by running your own gh CLI. Helm stores no GitHub credential and never sees your token."
+    >
+      <div className="pb-1">
+        <Verdict
+          tone={gh === null ? 'todo' : found && gh.authenticated ? 'ok' : 'warn'}
+          text={
+            gh === null
+              ? 'Looking…'
+              : (gh.problem?.message ?? (overridden ? 'Set by you' : 'Found and signed in'))
+          }
+        />
+        <dl className="mt-2.5 space-y-1.5">
+          <Fact label="Path">
+            <span data-settings-gh-path title={gh?.path ?? ''}>
+              {gh?.path ?? NOTHING}
+            </span>
+          </Fact>
+          <Fact label="Version">
+            <span data-settings-gh-version>{gh?.version ?? NOTHING}</span>
+          </Fact>
+        </dl>
+      </div>
+
+      <Actions>
+        <Action data-settings-gh-locate onClick={onLocate}>
+          Locate manually…
+        </Action>
+        <Action
+          data-settings-clear-gh
+          onClick={onClearOverride}
+          disabled={!overridden}
+          title={
+            overridden
+              ? 'Forget the executable you picked and use whatever Helm finds'
+              : 'Nothing to clear - Helm found this one itself'
+          }
+        >
+          Clear override
+        </Action>
+      </Actions>
+
+      <Divider />
+
+      <Row
+        label="Check for pull requests"
+        hint={
+          pollMinutes === PR_POLL_MINUTES.off
+            ? 'Off. The pane still refreshes when you ask it to and when Helm comes back to the front.'
+            : 'A gh call per repository on this schedule, plus whenever you ask and when Helm comes back to the front.'
+        }
+      >
+        <Select
+          value={String(pollMinutes)}
+          label="How often to check for pull requests"
+          data-settings-pr-poll={String(pollMinutes)}
+          onChange={(value) => onPollMinutesChange(Number(value))}
+        >
+          {choices.map((choice) => (
+            <option key={choice.minutes} value={String(choice.minutes)}>
+              {choice.label}
+            </option>
+          ))}
+        </Select>
+      </Row>
+    </Group>
   )
 }
 

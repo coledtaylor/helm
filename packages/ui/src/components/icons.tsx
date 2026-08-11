@@ -469,6 +469,26 @@ export function ListIcon(props: IconProps): JSX.Element {
 }
 
 /**
+ * A pull request: one branch with two ends, another rising into an arrow.
+ *
+ * Drawn here rather than borrowed from GitHub's set, like every other glyph in
+ * this file - and for one extra reason: a mark taken from the service would be
+ * the only thing in the shell claiming to be somebody's brand.
+ */
+export function PullRequestIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <circle cx="4.5" cy="3.5" r="1.75" />
+      <circle cx="4.5" cy="12.5" r="1.75" />
+      <path d="M4.5 5.25v5.5" />
+      <circle cx="11.5" cy="12.5" r="1.75" />
+      <path d="M11.5 10.75V5.25" />
+      <path d="m9.6 7.15 1.9-1.9 1.9 1.9" />
+    </Icon>
+  )
+}
+
+/**
  * The brand mark: the ship's wheel the app icon is drawn from.
  *
  * Same proportions as `scripts/make-icon.mjs`, converted from its 256 grid to

@@ -47,6 +47,12 @@ export { ProfileList, type ProfileListProps } from './components/ProfileList'
 export { ProjectPane, type ProjectPaneProps } from './components/ProjectPane'
 export { ProjectRow, type ProjectRowProps } from './components/ProjectRow'
 export {
+  PullsPane,
+  fetchedCaption,
+  pullsSummaryLine,
+  type PullsPaneProps
+} from './components/PullsPane'
+export {
   SessionEndedBar,
   formatDuration,
   type SessionEndedBarProps

@@ -55,6 +55,10 @@ const VIEWS: Array<{ name: string; selector: string | null }> = [
   { name: 'config', selector: '[data-open-config]' },
   { name: 'content', selector: '[data-open-content]' },
   { name: 'history', selector: '[data-open-history]' },
+  // Painted from the cache, so it has rows whether or not a fetch has happened
+  // on this run - and it is the one list in the app whose rows are almost all
+  // chips and mono, which is where a tone that only works in one theme shows.
+  { name: 'pulls', selector: '[data-open-pulls]' },
   // The gear, not a sidebar row: settings is a window-level place. It is the
   // longest page in the app and the one most likely to grow a control that
   // does not match the others, which is exactly what a shot is for.

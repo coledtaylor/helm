@@ -30,6 +30,9 @@ import {
   ProfileEditor,
   ProfileList,
   ProjectPane,
+  PullRequestIcon,
+  PullsPane,
+  pullsSummaryLine,
   RepoIcon,
   SessionHistory,
   SettingsPane,
@@ -56,6 +59,7 @@ import { useContent } from './useContent'
 import { useHistory } from './useHistory'
 import { useLauncher } from './useLauncher'
 import { useProfiles } from './useProfiles'
+import { usePulls } from './usePulls'
 import { useSessions } from './useSessions'
 import { useSetup } from './useSetup'
 import { useShells } from './useShells'
@@ -83,6 +87,7 @@ const KIND_ICON = {
 type PaneRef =
   | { kind: 'project'; path: string }
   | { kind: 'history' }
+  | { kind: 'pulls' }
   | { kind: 'config' }
   | { kind: 'content' }
   | { kind: 'settings' }
@@ -98,12 +103,14 @@ const helmOpenExternal = (url: string): Promise<{ opened: boolean }> =>
   helm.invoke('shell:openExternal', { url })
 
 const HISTORY_TAB = 'history'
+const PULLS_TAB = 'pulls'
 const CONFIG_TAB = 'config'
 const CONTENT_TAB = 'content'
 const SETTINGS_TAB = 'settings'
 
 const tabId = (ref: PaneRef): string => {
   if (ref.kind === 'project') return `project:${ref.path}`
+  if (ref.kind === 'pulls') return PULLS_TAB
   if (ref.kind === 'config') return CONFIG_TAB
   if (ref.kind === 'content') return CONTENT_TAB
   if (ref.kind === 'settings') return SETTINGS_TAB
@@ -147,6 +154,7 @@ export function App(): JSX.Element {
   const { sessions } = sessionState
   const profileState = useProfiles()
   const historyState = useHistory()
+  const pullsState = usePulls()
   const configState = useConfig()
   const contentState = useContent()
   const usage = useUsage()
@@ -179,6 +187,20 @@ export function App(): JSX.Element {
     void helm.invoke('path:chooseFile', { title: 'Choose a shell' }).then(({ path }) => {
       if (path !== null) writeSettings({ terminalShell: path })
     })
+  }, [writeSettings])
+
+  /**
+   * Point Helm at a `gh` it did not find. Written straight through
+   * `settings:write`, whose ladder re-resolves the binary and re-arms the
+   * poller - so what the GitHub group reports afterwards is the executable
+   * actually in force rather than the file that was picked.
+   */
+  const locateGh = useCallback(() => {
+    void helm
+      .invoke('path:chooseFile', { title: 'Locate the gh executable' })
+      .then(({ path }) => {
+        if (path !== null) writeSettings({ ghPath: path })
+      })
   }, [writeSettings])
 
   /** The profile being edited, `'new'` for one being created from scratch, or
@@ -291,6 +313,7 @@ export function App(): JSX.Element {
   )
 
   const openHistory = useCallback(() => openPane({ kind: 'history' }), [openPane])
+  const openPulls = useCallback(() => openPane({ kind: 'pulls' }), [openPane])
 
   /**
    * Config and Content open on the scope they already had. They used to be
@@ -487,6 +510,17 @@ export function App(): JSX.Element {
           title: 'Session history',
           hint: historyState.summary?.historyFile ?? 'Every session on this machine',
           icon: <HistoryIcon width={13} height={13} />
+        }
+      ]
+    }
+
+    if (ref.kind === 'pulls') {
+      return [
+        {
+          id: PULLS_TAB,
+          title: 'Pull requests',
+          hint: pullsSummaryLine(pullsState.snapshot),
+          icon: <PullRequestIcon width={13} height={13} />
         }
       ]
     }
@@ -721,6 +755,9 @@ export function App(): JSX.Element {
               }
             : {})}
           historyActive={activePane?.kind === 'history'}
+          onOpenPulls={openPulls}
+          pullsDetail={pullsSummaryLine(pullsState.snapshot)}
+          pullsActive={activePane?.kind === 'pulls'}
           onOpenConfig={openConfig}
           configActive={activePane?.kind === 'config'}
           onOpenContent={openContent}
@@ -848,6 +885,21 @@ export function App(): JSX.Element {
               resumeError={historyState.resumeError}
               onDismissResumeError={historyState.dismissResumeError}
               onReveal={launcher.reveal}
+              compact={showSessions}
+            />
+          </div>
+        )}
+
+        {activePane?.kind === 'pulls' && (
+          <div className="absolute inset-0">
+            <PullsPane
+              snapshot={pullsState.snapshot}
+              onRefresh={pullsState.refresh}
+              refreshing={pullsState.refreshing}
+              error={pullsState.error}
+              // Until the PR tab exists, a row's job is to take you to the
+              // thing it describes. The browser is where a pull request lives.
+              onOpenPull={(_repo, pull) => void helmOpenExternal(pull.url)}
               compact={showSessions}
             />
           </div>
@@ -1029,6 +1081,14 @@ export function App(): JSX.Element {
               terminalFontStack={terminalFontStack(terminalSettings.terminalFontFamily)}
               shells={shells}
               onLocateShell={locateShell}
+              // What `gh` actually resolved to, out of the same snapshot the
+              // Pulls pane paints - so the pane cannot report one executable
+              // while the fetches use another.
+              gh={pullsState.snapshot?.gh ?? null}
+              onLocateGh={locateGh}
+              onClearGhOverride={() => writeSettings({ ghPath: null })}
+              prPollMinutes={settings?.prPollMinutes ?? DEFAULT_SETTINGS.prPollMinutes}
+              onPrPollMinutesChange={(prPollMinutes) => writeSettings({ prPollMinutes })}
             />
           </div>
         )}

@@ -175,14 +175,19 @@ Dividers inside an island fade to transparent at their ends - use the
   Clearing the selection is what puts the list back, so the back row and the
   pane's own empty state stay the same thing. At full width both show and
   nothing swaps - a click saved is not worth a layout that moves.
-- **Sidebar**: three global rows (session history, Config, Content), then
-  profiles, then the harness tree. A harness is a collapsible group - caret,
-  name in the caps label style but at `fg`, project count, and a
+- **Sidebar**: four global rows (session history, pull requests, Config,
+  Content), then profiles, then the harness tree. A harness is a collapsible
+  group - caret, name in the caps label style but at `fg`, project count, and a
   running-session count at the right in `accent-text`. Groups are separated by
   an `.island-rule`, never a border. The global rows share one shape - icon,
-  name, optional second line - and only session history has a fact worth
-  putting on that second line, so the other two are single-line and the group
-  still reads as one list. **Config and Content are global, not scoped**: each
+  name, optional second line - and two of them have a fact worth putting on
+  that second line: session history's counts, and how many pull requests are
+  open. The pull-request row's second line is also where its **degradation**
+  goes, in a short form ("Run gh auth login") rather than the pane's full
+  sentence - a 280px rail truncates an instruction into nonsense, and a label
+  that sends you to the pane to read it does not. Config and Content stay
+  single-line and the group still reads as one list. **Config and Content are
+  global, not scoped**: each
   pane owns a scope switcher, so its entry point does not need to carry one.
   They were per-harness links, which made a pane reachable only through a
   harness that happened to be expanded and forced a second unscoped copy to

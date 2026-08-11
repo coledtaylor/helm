@@ -9,6 +9,7 @@ import {
   HarnessIcon,
   HistoryIcon,
   PlusIcon,
+  PullRequestIcon,
   RefreshIcon,
   SlidersIcon,
   TerminalIcon
@@ -29,6 +30,15 @@ export interface SidebarProps {
   historyResumable?: number | undefined
   /** True while the history pane is the tab on screen. */
   historyActive?: boolean | undefined
+  /** Opens the pull-request pane. */
+  onOpenPulls?: (() => void) | undefined
+  /**
+   * Its second line, composed by the caller: a count when there is one and a
+   * short reason when there is not (`pullsSummaryLine`). Composed there rather
+   * than here because it is a fact about a fetch, not about the tree.
+   */
+  pullsDetail?: string | undefined
+  pullsActive?: boolean | undefined
   /** Opens the config console. The pane keeps its own scope. */
   onOpenConfig?: (() => void) | undefined
   configActive?: boolean | undefined
@@ -107,6 +117,9 @@ export function Sidebar({
   historyCount,
   historyResumable,
   historyActive = false,
+  onOpenPulls,
+  pullsDetail,
+  pullsActive = false,
   onOpenConfig,
   configActive = false,
   onOpenContent,
@@ -179,6 +192,20 @@ export function Sidebar({
             active={historyActive}
             onClick={onOpenHistory}
             data-open-history
+          />
+        )}
+        {/* Under Session history, and the second row with a fact worth a
+            second line: how many pull requests are waiting is the whole reason
+            to come here, and when there are none it says why not. */}
+        {onOpenPulls && (
+          <GlobalLink
+            icon={<PullRequestIcon width={13} height={13} />}
+            label="Pull requests"
+            detail={pullsDetail ?? 'Reading…'}
+            title="Open pull requests across every repository Helm scans"
+            active={pullsActive}
+            onClick={onOpenPulls}
+            data-open-pulls
           />
         )}
         {onOpenConfig && (
