@@ -28,27 +28,31 @@ That forces a choice at launch time, and both options lose something:
 | **Harness root** | cross-repo access, harness tools, 8 harness skills | ~43 project skills, project agents, project CLAUDE.md |
 | **A single repo** | that repo's skills, agents, CLAUDE.md | cross-repo access, harness tooling |
 
-Measured on this machine. The counts are the real census; the repository names
-are anonymised, because they are private work and none of the argument depends
-on what they are called. `atlas` and its siblings are one product's repositories,
-which is what makes them worth composing together:
+Measured on one working machine. The counts are the real census. The
+repositories are labelled by the role they play rather than named, because the
+argument depends on the shape - several repositories of one product, plus
+unrelated ones, all with project-local skills - and not on what any of them is
+called:
 
 ```
 ~/.claude/skills      0      ← nothing user-level
 ~/.claude/commands    0
 ~/.claude/agents      0
 
-repos/atlas                 skills:7  agents:16  commands:1  CLAUDE.md
-repos/atlas-reporting       skills:6  agents:12  commands:1  CLAUDE.md
-repos/beacon                skills:6  agents:14  commands:1
-repos/Atlas-Builder         skills:5  agents:16  commands:1  CLAUDE.md
-repos/atlas-ui              skills:5  agents:12  commands:1  CLAUDE.md
-repos/voxelcraft            skills:5  agents:12  commands:1  CLAUDE.md
-repos/orchard-sim              skills:4  agents:14  commands:1  CLAUDE.md
-repos/datapack              skills:4                          CLAUDE.md
-repos/atlas-mobile          skills:1
+repos/product-core          skills:7  agents:16  commands:1  CLAUDE.md
+repos/product-reporting     skills:6  agents:12  commands:1  CLAUDE.md
+repos/product-builder       skills:5  agents:16  commands:1  CLAUDE.md
+repos/product-ui            skills:5  agents:12  commands:1  CLAUDE.md
+repos/product-mobile        skills:1
+repos/unrelated-1           skills:6  agents:14  commands:1
+repos/unrelated-2           skills:5  agents:12  commands:1  CLAUDE.md
+repos/unrelated-3           skills:4  agents:14  commands:1  CLAUDE.md
+repos/unrelated-4           skills:4                          CLAUDE.md
 harness root                skills:8  commands:1
 ```
+
+The five `product-*` repositories are one product, which is what makes them
+worth composing together into a single session.
 
 **Every skill on this machine is project-local. None are user-level.** So working
 from the harness root - which is the right call at work, where the product is many
@@ -83,22 +87,22 @@ A repo's `.claude/` directory is *already almost that shape* - it just lacks the
 manifest. So Helm synthesises a shim per project:
 
 ```
-%TEMP%/helm/overlay-atlas/
+%TEMP%/helm/overlay-product-core/
 ├── .claude-plugin/plugin.json      generated
-├── skills/     ──junction──▶  repos/atlas/.claude/skills
-├── commands/   ──junction──▶  repos/atlas/.claude/commands
-└── agents/     ──junction──▶  repos/atlas/.claude/agents
+├── skills/     ──junction──▶  repos/product-core/.claude/skills
+├── commands/   ──junction──▶  repos/product-core/.claude/commands
+└── agents/     ──junction──▶  repos/product-core/.claude/agents
 ```
 
 and launches:
 
 ```bash
 claude \
-  --add-dir     repos/atlas repos/atlas-reporting \
-  -n "accruals" \
-  --plugin-dir  <data>/overlays/overlay-atlas \
-  --plugin-dir  <data>/overlays/overlay-atlas-reporting \
-  --append-system-prompt-file <data>/overlays/memory-accruals.md \
+  --add-dir     repos/product-core repos/product-reporting \
+  -n "refactor" \
+  --plugin-dir  <data>/overlays/overlay-product-core \
+  --plugin-dir  <data>/overlays/overlay-product-reporting \
+  --append-system-prompt-file <data>/overlays/memory-refactor.md \
   --model opus --effort high --permission-mode auto \
   "/recap"
 # cwd = harness root
@@ -130,7 +134,7 @@ rather than by shelling out to `mklink /J`. Copy as a fallback.
 > One caveat: **plugins do not carry the overlaid repo's CLAUDE.md** - and
 > neither does `--add-dir`, which M3 measured and found wanting. Helm composes
 > them into `--append-system-prompt-file` instead.
-> See [SPIKE-A findings](../../../notes/reference-helm-spike-a-overlay-composition.md).
+> Measured by Spike A; the composition it settled on is what M3 implements.
 
 ---
 
@@ -139,15 +143,15 @@ rather than by shelling out to `mklink /J`. Copy as a fallback.
 Everything in Helm is organised around one saved, reusable thing.
 
 ```yaml
-name: "Atlas cloud sync"
+name: "Product core + reporting"
 root: ~/.harness/dev              # cwd
 overlays:                         # composed via --plugin-dir
-  - repos/atlas
-  - repos/atlas-reporting
+  - repos/product-core
+  - repos/product-reporting
 access:                           # --add-dir
-  - repos/atlas
-  - repos/atlas-reporting
-  - repos/atlas-mobile
+  - repos/product-core
+  - repos/product-reporting
+  - repos/product-mobile
 model: opus
 effort: high
 permission_mode: auto
@@ -194,9 +198,9 @@ that shows something that is not on this machine.
 >   reaped transcript - the launcher distinguishes the two.
 > - **A transcript cannot be found by deriving its path from the project.** The
 >   directory under `projects/` carries whatever casing the CLI was started
->   with and `history.jsonl` records its own; two transcripts here live under
->   `...-repos-Atlas-Reporting` for sessions whose recorded project is
->   `...\repos\atlas-reporting`. The scan is by session id.
+>   with and `history.jsonl` records its own; two transcripts in the measured
+>   set live under a `...-repos-Product-Reporting` directory for sessions whose
+>   recorded project is `...\repos\product-reporting`. The scan is by session id.
 > - **Retention is 13%, not 9%** - 106 of 799. Still the reason resumability is
 >   read off the disk on every pass rather than remembered.
 >
@@ -564,13 +568,13 @@ actually expose project skills, the premise is wrong and it is cheap to learn th
 
 ## 9. Spikes
 
-- [x] **Spike A - Composition.** Synthesise an overlay plugin for
-      `repos/atlas/.claude`, launch `claude` from the harness root with
+- [x] **Spike A - Composition.** Synthesise an overlay plugin for a project's
+      `.claude` directory, launch `claude` from the harness root with
       `--plugin-dir`, confirm a project skill resolves. *Everything depends on this.*
       **GO** - automatic namespacing makes cross-overlay collisions impossible;
       CLAUDE.md is not carried by plugins (M3 verifies `--add-dir` covers it).
       Headless (`-p`) only; M3's first profile launch doubles as the interactive
-      proof. See `notes/reference-helm-spike-a-overlay-composition.md`.
+      proof.
 - [x] **Spike B - Packaging.** Electron + `node-pty` + `better-sqlite3` built as a
       portable exe. **GO** - see [SPIKE-B.md](SPIKE-B.md).
 - [x] **Spike C - Terminal fidelity.** Real `claude` TUI in xterm.js: resize,

@@ -161,9 +161,9 @@ interface PaintedRow {
    * The meta line's fields, one per element.
    *
    * Read separately rather than sliced out of `text`, because `textContent`
-   * concatenates adjacent elements with no separator - the row renders
-   * "datapack 25m 11 prompts" with flex gaps and reads back as
-   * "datapack25m11 prompts". Asserting on the fields is also the stronger
+   * concatenates adjacent elements with no separator - a row rendering
+   * "<project> 25m 11 prompts" with flex gaps reads back as
+   * "<project>25m11 prompts". Asserting on the fields is also the stronger
    * claim: that the row *has* a project and an age, not that its text happens
    * to contain something shaped like one.
    */
