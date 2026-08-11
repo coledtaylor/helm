@@ -1,4 +1,14 @@
-import type { PullReviewDecision, PullSummary } from './types'
+import type {
+  PullChecks,
+  PullComment,
+  PullCommit,
+  PullConversationEntry,
+  PullDetail,
+  PullFile,
+  PullReview,
+  PullReviewDecision,
+  PullSummary
+} from './types'
 
 /**
  * Turning what `gh` printed into what Helm holds.
@@ -69,6 +79,19 @@ function reviewDecision(value: unknown): PullReviewDecision {
   return found ?? null
 }
 
+/**
+ * Who wrote something, and whether "who" is a program.
+ *
+ * Two signals because gh reports the flag only for some accounts: the app
+ * installations it lists as `app/dependabot` carry `is_bot: true`, and the
+ * prefix is what identifies them when it does not.
+ */
+function personFrom(value: unknown): { login: string; isBot: boolean } {
+  const author = asRecord(value)
+  const login = asString(author?.['login'])
+  return { login, isBot: author?.['is_bot'] === true || login.startsWith('app/') }
+}
+
 /** One entry of the `pr list` array, or null when it has no number. */
 function pullFrom(entry: unknown): PullSummary | null {
   const row = asRecord(entry)
@@ -76,8 +99,8 @@ function pullFrom(entry: unknown): PullSummary | null {
   const number = row['number']
   if (typeof number !== 'number' || !Number.isInteger(number)) return null
 
-  const author = asRecord(row['author'])
-  const login = asString(author?.['login'])
+  const author = personFrom(row['author'])
+  const login = author.login
   const labels = Array.isArray(row['labels'])
     ? row['labels']
         .map((label) => asString(asRecord(label)?.['name']))
@@ -89,10 +112,7 @@ function pullFrom(entry: unknown): PullSummary | null {
     title: asString(row['title']),
     url: asString(row['url']),
     author: login,
-    // Two signals because gh reports the flag only for some accounts: the app
-    // installations it lists as `app/dependabot` carry `is_bot: true`, and the
-    // prefix is what identifies them when it does not.
-    authorIsBot: author?.['is_bot'] === true || login.startsWith('app/'),
+    authorIsBot: author.isBot,
     state: asString(row['state']),
     isDraft: row['isDraft'] === true,
     headRefName: asString(row['headRefName']),
@@ -136,6 +156,257 @@ export function parsePullList(stdout: string): PullSummary[] {
   }
   pulls.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
   return pulls
+}
+
+// ---------------------------------------------------------------------------
+// The detail
+// ---------------------------------------------------------------------------
+
+/**
+ * The fields `pr view` is asked for; the check drivers assert on this string.
+ *
+ * `files` is paths and counts and nothing else - there is no diff in here,
+ * deliberately. Helm is not a diff viewer in v1 and the Files view links out
+ * for the patch, so asking for one would be megabytes of payload cached in
+ * SQLite for a surface that never paints it.
+ */
+export const PR_VIEW_FIELDS = [
+  'body',
+  'comments',
+  'reviews',
+  'commits',
+  'files',
+  'statusCheckRollup',
+  'mergeStateStatus'
+].join(',')
+
+/** `COMPLETED` runs whose conclusion is one of these have failed. */
+const FAILED_CONCLUSIONS = new Set([
+  'FAILURE',
+  'TIMED_OUT',
+  'CANCELLED',
+  'ACTION_REQUIRED',
+  'STARTUP_FAILURE',
+  'STALE'
+])
+
+/** Legacy commit-status states, which are a different vocabulary entirely. */
+const FAILED_STATES = new Set(['FAILURE', 'ERROR'])
+const PENDING_STATES = new Set(['PENDING', 'EXPECTED'])
+
+/**
+ * `statusCheckRollup`, reduced to a count that can be believed.
+ *
+ * The array is a GraphQL union and its members do not agree on anything. A
+ * `CheckRun` is finished when `status` is `COMPLETED` and its verdict is in
+ * `conclusion`; a `StatusContext` has no status at all and its verdict is in
+ * `state`, spelled differently. So each entry is read for whichever of the two
+ * vocabularies it turns out to speak, and an entry that speaks neither is
+ * counted in `total` and left out of both verdicts - present, and not claimed
+ * to have passed.
+ *
+ * Returns **null** rather than zeroes when the payload is not an array at all.
+ * That is the whole degradation rule for this figure: the pane paints no checks
+ * summary for null, because "0 checks" and "Helm could not read the checks" are
+ * different facts and only one of them is safe to show as a green tick.
+ */
+export function reduceChecks(value: unknown): PullChecks | null {
+  if (!Array.isArray(value)) return null
+
+  let total = 0
+  let failing = 0
+  let pending = 0
+  for (const entry of value) {
+    const check = asRecord(entry)
+    if (check === null) continue
+    total += 1
+
+    const status = asString(check['status']).toUpperCase()
+    const conclusion = asString(check['conclusion']).toUpperCase()
+    const state = asString(check['state']).toUpperCase()
+
+    if (status !== '') {
+      // A check run. `COMPLETED` is the only status with a verdict; everything
+      // else - QUEUED, IN_PROGRESS, WAITING, REQUESTED, PENDING - is still to
+      // come, and listing them exhaustively would be a list GitHub can extend.
+      if (status === 'COMPLETED') {
+        if (FAILED_CONCLUSIONS.has(conclusion)) failing += 1
+      } else {
+        pending += 1
+      }
+      continue
+    }
+    if (state !== '') {
+      if (FAILED_STATES.has(state)) failing += 1
+      else if (PENDING_STATES.has(state)) pending += 1
+      continue
+    }
+    // Neither vocabulary. Counted, and claimed nothing about.
+  }
+  return { total, failing, pending }
+}
+
+function commentFrom(entry: unknown): PullComment | null {
+  const row = asRecord(entry)
+  if (row === null) return null
+  const author = personFrom(row['author'])
+  return {
+    id: asString(row['id']),
+    author: author.login,
+    authorIsBot: author.isBot,
+    association: asString(row['authorAssociation']),
+    body: asString(row['body']),
+    createdAt: asMoment(row['createdAt']),
+    url: asString(row['url'])
+  }
+}
+
+function reviewFrom(entry: unknown): PullReview | null {
+  const row = asRecord(entry)
+  if (row === null) return null
+  const author = personFrom(row['author'])
+  return {
+    id: asString(row['id']),
+    author: author.login,
+    authorIsBot: author.isBot,
+    association: asString(row['authorAssociation']),
+    state: asString(row['state']).toUpperCase(),
+    body: asString(row['body']),
+    submittedAt: asMoment(row['submittedAt'])
+  }
+}
+
+/**
+ * One commit. A co-authored commit has several authors and one identity.
+ *
+ * The login is preferred over the name because it is what the rest of this
+ * surface identifies people by, and the name is the fallback for a commit whose
+ * email GitHub could not tie to an account - which is normal for a mirrored or
+ * imported history and must not leave the column blank.
+ */
+function commitFrom(entry: unknown): PullCommit | null {
+  const row = asRecord(entry)
+  if (row === null) return null
+  const oid = asString(row['oid'])
+  // The sha is the identity of a commit row, so an entry without one is not a
+  // commit this can show - same call `pullFrom` makes about `number`.
+  if (oid === '') return null
+
+  const authors = Array.isArray(row['authors']) ? row['authors'] : []
+  const first = asRecord(authors[0])
+  const login = asString(first?.['login'])
+  const name = asString(first?.['name'])
+
+  return {
+    oid,
+    messageHeadline: asString(row['messageHeadline']),
+    author: login !== '' ? login : name,
+    coAuthors: Math.max(0, authors.length - 1),
+    committedAt: asMoment(row['committedDate']) ?? asMoment(row['authoredDate'])
+  }
+}
+
+function fileFrom(entry: unknown): PullFile | null {
+  const row = asRecord(entry)
+  if (row === null) return null
+  const path = asString(row['path'])
+  if (path === '') return null
+  return {
+    path,
+    additions: asNumber(row['additions']),
+    deletions: asNumber(row['deletions'])
+  }
+}
+
+/**
+ * `gh pr view --json ...` output, as a detail.
+ *
+ * Lopsided the same way `parsePullList` is, and for the same reason: a payload
+ * that is not a JSON object means gh printed something other than the answer
+ * and must be reported, while a missing *field* inside it is tolerated. The
+ * lists are the fields most likely to be absent - a repository with checks
+ * disabled has no `statusCheckRollup` at all - and each one absent means an
+ * empty view rather than an empty pull request.
+ */
+export function parsePullDetail(stdout: string): PullDetail {
+  const trimmed = stdout.trim()
+  if (trimmed === '') throw new Error('gh printed nothing where a pull request was expected')
+
+  let payload: unknown
+  try {
+    payload = JSON.parse(trimmed)
+  } catch {
+    throw new Error(`gh printed something that is not JSON: ${preview(trimmed)}`)
+  }
+  const row = asRecord(payload)
+  if (row === null) {
+    throw new Error(`gh printed ${describe(payload)} where a pull request was expected`)
+  }
+
+  const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
+
+  return {
+    body: asString(row['body']),
+    comments: list(row['comments'])
+      .map(commentFrom)
+      .filter((comment): comment is PullComment => comment !== null),
+    reviews: list(row['reviews'])
+      .map(reviewFrom)
+      .filter((review): review is PullReview => review !== null),
+    commits: list(row['commits'])
+      .map(commitFrom)
+      .filter((commit): commit is PullCommit => commit !== null),
+    files: list(row['files'])
+      .map(fileFrom)
+      .filter((file): file is PullFile => file !== null),
+    checks: reduceChecks(row['statusCheckRollup']),
+    mergeStateStatus: asString(row['mergeStateStatus']).toUpperCase()
+  }
+}
+
+/**
+ * Reviews and comments, in the order they happened.
+ *
+ * A stable sort with an explicit tie-break rather than a bare subtraction on
+ * the timestamps: a review submitted in the same second as the comment that
+ * triggered it is common, and an order that depended on the sort's internals
+ * would put them either way round between two identical fetches. Entries with
+ * no timestamp sink to the end, where they cannot claim a position in a
+ * chronology they are not part of.
+ */
+export function pullConversation(detail: PullDetail): PullConversationEntry[] {
+  const entries: PullConversationEntry[] = [
+    ...detail.comments.map((comment) => ({
+      kind: 'comment' as const,
+      id: comment.id,
+      author: comment.author,
+      authorIsBot: comment.authorIsBot,
+      association: comment.association,
+      state: '',
+      at: comment.createdAt,
+      body: comment.body,
+      url: comment.url
+    })),
+    ...detail.reviews.map((review) => ({
+      kind: 'review' as const,
+      id: review.id,
+      author: review.author,
+      authorIsBot: review.authorIsBot,
+      association: review.association,
+      state: review.state,
+      at: review.submittedAt,
+      body: review.body,
+      url: ''
+    }))
+  ]
+
+  return entries.sort((a, b) => {
+    if (a.at === null || b.at === null) {
+      if (a.at === b.at) return a.id.localeCompare(b.id)
+      return a.at === null ? 1 : -1
+    }
+    return a.at - b.at || a.id.localeCompare(b.id)
+  })
 }
 
 /** First line of `gh --version`, which is the one carrying the number. */

@@ -6,13 +6,18 @@ export { parseGitHubRemote } from './remote'
 export {
   parseGhAuth,
   parseGhVersion,
+  parsePullDetail,
   parsePullList,
+  pullConversation,
+  reduceChecks,
   PR_LIST_FIELDS,
   PR_LIST_LIMIT,
+  PR_VIEW_FIELDS,
   type GhAuthReading
 } from './parse'
 export {
   fetchOpenPulls,
+  fetchPullDetail,
   readGhAuth,
   readGhVersion,
   runGh,

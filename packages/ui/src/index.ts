@@ -53,6 +53,12 @@ export {
   type PullsPaneProps
 } from './components/PullsPane'
 export {
+  PullRequestPane,
+  pullState,
+  type PullRequestPaneProps,
+  type PullView
+} from './components/PullRequestPane'
+export {
   SessionEndedBar,
   formatDuration,
   type SessionEndedBarProps

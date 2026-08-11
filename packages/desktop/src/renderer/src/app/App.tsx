@@ -51,6 +51,7 @@ import {
 import type { SessionConfirmRequest } from '../../../shared/ipc'
 import { helm } from './bridge'
 import { ProjectShellPane } from './ProjectShellPane'
+import { PullRequestTab } from './PullRequestTab'
 import { disposeShell } from './pterms'
 import { TerminalPane } from './TerminalPane'
 import { terminalFontStack } from '../terminal'
@@ -59,6 +60,7 @@ import { useContent } from './useContent'
 import { useHistory } from './useHistory'
 import { useLauncher } from './useLauncher'
 import { useProfiles } from './useProfiles'
+import { forgetPullDetail } from './usePullDetail'
 import { usePulls } from './usePulls'
 import { useSessions } from './useSessions'
 import { useSetup } from './useSetup'
@@ -88,6 +90,12 @@ type PaneRef =
   | { kind: 'project'; path: string }
   | { kind: 'history' }
   | { kind: 'pulls' }
+  /**
+   * One pull request, opened from the list. Identified by the project it was
+   * opened from and not by the repository slug: two checkouts of one repository
+   * are two projects, and closing one must not close the other's tabs.
+   */
+  | { kind: 'pr'; repoPath: string; number: number }
   | { kind: 'config' }
   | { kind: 'content' }
   | { kind: 'settings' }
@@ -111,11 +119,26 @@ const SETTINGS_TAB = 'settings'
 const tabId = (ref: PaneRef): string => {
   if (ref.kind === 'project') return `project:${ref.path}`
   if (ref.kind === 'pulls') return PULLS_TAB
+  // Compared, never taken apart again: a Windows path can contain a `#` and a
+  // `:`, so this string is an identity and not a record. Whatever needs the
+  // path or the number reads them off the `PaneRef`.
+  if (ref.kind === 'pr') return `pr:${ref.repoPath}#${String(ref.number)}`
   if (ref.kind === 'config') return CONFIG_TAB
   if (ref.kind === 'content') return CONTENT_TAB
   if (ref.kind === 'settings') return SETTINGS_TAB
   return HISTORY_TAB
 }
+
+/**
+ * A tab label, cut to what a 240px folder tab can hold.
+ *
+ * Cut here rather than left to `text-overflow`, because the label is a number
+ * and a title glued together and the number is the half that identifies it: CSS
+ * would ellipsise the whole string and a long title would be indistinguishable
+ * from the next long title.
+ */
+const truncate = (text: string, max: number): string =>
+  text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`
 
 /** The session strip's tab ids - `session:12` - kept in the exact shape the
  * single-strip era used, because `m2-check` locates tabs by them. */
@@ -238,6 +261,10 @@ export function App(): JSX.Element {
   const openPanes = useMemo(() => {
     return order.filter((ref) => {
       if (ref.kind === 'project') return !discovery || projectsByPath.has(ref.path)
+      // A pull request tab follows its project, by the same rule: the project
+      // is where it was opened from and where a review would run, so a rescan
+      // that no longer sees the directory closes the tab with it.
+      if (ref.kind === 'pr') return !discovery || projectsByPath.has(ref.repoPath)
       return true
     })
   }, [order, discovery, projectsByPath])
@@ -314,6 +341,18 @@ export function App(): JSX.Element {
 
   const openHistory = useCallback(() => openPane({ kind: 'history' }), [openPane])
   const openPulls = useCallback(() => openPane({ kind: 'pulls' }), [openPane])
+
+  /**
+   * A row in the Pulls pane opens the pull request in a tab of its own.
+   *
+   * `openPane` already focuses a tab that is open rather than opening a second
+   * one, so clicking the same row twice is a way back to it.
+   */
+  const openPull = useCallback(
+    (repo: { path: string }, pull: { number: number }) =>
+      openPane({ kind: 'pr', repoPath: repo.path, number: pull.number }),
+    [openPane]
+  )
 
   /**
    * Config and Content open on the scope they already had. They used to be
@@ -430,6 +469,10 @@ export function App(): JSX.Element {
       // The shell dies with its tab, not with a render: hiding the pane keeps
       // it, closing the project ends it.
       if (ref.kind === 'project') void disposeShell(ref.path)
+      // Same idea, one layer down: what the pane last painted outlives an
+      // unmount so a tab switch does not flash, and a *closed* tab is the point
+      // at which nobody is coming back to it.
+      if (ref.kind === 'pr') forgetPullDetail(ref.repoPath, ref.number)
       setOrder(openPanes.filter((candidate) => tabId(candidate) !== id))
     },
     [openPanes]
@@ -520,6 +563,27 @@ export function App(): JSX.Element {
           id: PULLS_TAB,
           title: 'Pull requests',
           hint: pullsSummaryLine(pullsState.snapshot),
+          icon: <PullRequestIcon width={13} height={13} />
+        }
+      ]
+    }
+
+    if (ref.kind === 'pr') {
+      // The title comes from the list snapshot, which is the same row the tab
+      // was opened from. A pull request that has closed since drops out of the
+      // snapshot and the tab keeps its number - which is the honest label for a
+      // tab whose pane is about to say the same thing.
+      const repo = pullsState.snapshot?.repos.find(
+        (candidate) => candidate.path.toLowerCase() === ref.repoPath.toLowerCase()
+      )
+      const pull = repo?.pulls.find((candidate) => candidate.number === ref.number)
+      const label = `#${String(ref.number)}`
+      return [
+        {
+          id: tabId(ref),
+          title: pull ? `${label} ${truncate(pull.title, 34)}` : label,
+          hint: pull ? `${pull.title} - ${ref.repoPath}` : ref.repoPath,
+          ...(repo ? { subtitle: repo.name } : {}),
           icon: <PullRequestIcon width={13} height={13} />
         }
       ]
@@ -897,9 +961,22 @@ export function App(): JSX.Element {
               onRefresh={pullsState.refresh}
               refreshing={pullsState.refreshing}
               error={pullsState.error}
-              // Until the PR tab exists, a row's job is to take you to the
-              // thing it describes. The browser is where a pull request lives.
-              onOpenPull={(_repo, pull) => void helmOpenExternal(pull.url)}
+              onOpenPull={openPull}
+              compact={showSessions}
+            />
+          </div>
+        )}
+
+        {activePane?.kind === 'pr' && (
+          <div className="absolute inset-0">
+            <PullRequestTab
+              // Keyed on the tab, so switching between two pull request tabs
+              // rebuilds the pane rather than leaving one PR's view selected
+              // over another's conversation.
+              key={tabId(activePane)}
+              repoPath={activePane.repoPath}
+              number={activePane.number}
+              onOpenExternal={(url) => void helmOpenExternal(url)}
               compact={showSessions}
             />
           </div>

@@ -2,22 +2,31 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import {
   fetchOpenPulls,
+  fetchPullDetail,
   forgetPrRepos,
   parseGitHubRemote,
+  pullConversation,
   readGhAuth,
   readGhVersion,
   readPrRepos,
+  readPull,
   readPullsBySlug,
   recordPrFetch,
+  renderMarkdown,
   replaceRepoPulls,
   upsertPrRepo,
+  writePullDetail,
   type AppSettings,
   type GhCommand,
   type GhProblem,
   type GhStatus,
+  type PrRepoRow,
+  type PullDetail,
+  type PullDetailView,
   type PullRepo,
   type PullsSnapshot,
   type PullSummary,
+  type RenderedPullEntry,
   type Store
 } from '@helm/core'
 import {
@@ -92,6 +101,16 @@ export interface PullsService {
   snapshot: () => PullsSnapshot
   /** Fetches now - one repository, or all of them. */
   refresh: (request?: { repoPath?: string }) => Promise<PullsSnapshot>
+  /**
+   * One pull request, with its markdown rendered. Cached unless `refresh`.
+   *
+   * Rejects with a whole sentence - the tab shows it as it is.
+   */
+  detail: (request: {
+    repoPath: string
+    number: number
+    refresh?: boolean
+  }) => Promise<PullDetailView>
   /**
    * The window came forward. Guarded rather than debounced, and additionally
    * rate-limited: returns false when it decided not to.
@@ -380,6 +399,116 @@ export function createPullsService({
   }
 
   // ---------------------------------------------------------------------
+  // One pull request
+  // ---------------------------------------------------------------------
+
+  function repoRow(path: string): PrRepoRow | null {
+    const wanted = path.toLowerCase()
+    return readPrRepos(store).find((row) => row.path.toLowerCase() === wanted) ?? null
+  }
+
+  /**
+   * The `gh` to fetch a detail with, or the sentence explaining why there
+   * is not one.
+   *
+   * Thrown rather than returned as a degraded view, which is the opposite of
+   * what the list does and deliberately so: a stale *list* is a true statement
+   * about a moment in the past, but a tab opened on a pull request nobody can
+   * fetch has nothing to show at all, and an empty conversation would read as a
+   * pull request with no comments.
+   */
+  async function ghForDetail(): Promise<GhCommand> {
+    const status = await ensureGh()
+    const command = ghCommand()
+    if (command === null || status.problem !== null) {
+      throw new Error(status.problem?.message ?? GH_MISSING_SENTENCE)
+    }
+    return command
+  }
+
+  /**
+   * Markdown to HTML, in the main process.
+   *
+   * Here and not in the window for the reason the content viewer gives: the
+   * pipeline is remark plus rehype plus shiki's grammars, which are megabytes
+   * the renderer bundle must not carry, and the sanitiser is the only thing
+   * standing between a stranger's pull-request comment and `innerHTML`. Running
+   * it here means the window receives HTML that has already been through
+   * GitHub's own sanitize schema and never evaluates any of it.
+   *
+   * Rendered per request rather than cached beside the JSON: HTML belongs to
+   * the version of the pipeline that produced it, and a cache holding it would
+   * keep painting an old renderer's output for as long as the pull request
+   * stayed open.
+   */
+  async function render(markdown: string): Promise<string> {
+    if (markdown.trim() === '') return ''
+    const rendered = await renderMarkdown(markdown)
+    return rendered.html
+  }
+
+  async function detail(request: {
+    repoPath: string
+    number: number
+    refresh?: boolean
+  }): Promise<PullDetailView> {
+    const row = repoRow(request.repoPath)
+    if (row === null || row.slug === null) {
+      throw new Error(`${request.repoPath} has no github.com origin remote.`)
+    }
+    const slug = row.slug
+
+    const cached = readPull(store, slug, request.number)
+    if (cached === null) {
+      // The summary is what the header is painted from, so a pull request the
+      // list has never seen is not one this can open. It happens when a tab is
+      // restored for a pull request that has since been merged or closed.
+      throw new Error(
+        `Pull request #${String(request.number)} is no longer in ${slug}'s open list.`
+      )
+    }
+
+    let held: PullDetail | null = cached.detail
+    let fetchedAt = cached.detailFetchedAt
+    let fromCache = true
+
+    if (held === null || request.refresh === true) {
+      const command = await ghForDetail()
+      let fetched: PullDetail
+      try {
+        fetched = await fetchPullDetail(command, slug, request.number)
+      } catch (err) {
+        // Re-asked for the same reason the list pass re-asks: a fetch that
+        // failed is usually a token that expired, and "run gh auth login" is a
+        // better sentence than whatever the API said.
+        const rechecked = await ensureGh(true)
+        const said = err instanceof Error ? err.message : String(err)
+        throw new Error(rechecked.problem?.message ?? said, { cause: err })
+      }
+      const at = new Date().toISOString()
+      writePullDetail(store, slug, request.number, fetched, at)
+      held = fetched
+      fetchedAt = at
+      fromCache = false
+    }
+
+    const conversation: RenderedPullEntry[] = await Promise.all(
+      pullConversation(held).map(async (entry) => ({ ...entry, html: await render(entry.body) }))
+    )
+
+    return {
+      slug,
+      repoPath: row.path,
+      summary: cached.summary,
+      detail: held,
+      bodyHtml: await render(held.body),
+      conversation,
+      fetchedAtMs: msOf(fetchedAt),
+      cached: fromCache
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // The snapshot
   // ---------------------------------------------------------------------
 
@@ -504,6 +633,7 @@ export function createPullsService({
   return {
     snapshot: () => build(),
     refresh,
+    detail,
 
     refreshOnFocus() {
       if (inFlight !== null) return false

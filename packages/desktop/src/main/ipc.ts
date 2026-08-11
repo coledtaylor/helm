@@ -432,6 +432,10 @@ export function registerIpc(ctx: IpcContext): void {
     'pr:snapshot': () => ctx.pulls.snapshot(),
     'pr:refresh': (request) =>
       ctx.pulls.refresh(request?.repoPath !== undefined ? { repoPath: request.repoPath } : {}),
+    // Cached unless asked otherwise, and the markdown comes back rendered - the
+    // window has no pipeline of its own to run it through.
+    'pr:detail': ({ repoPath, number, refresh }) =>
+      ctx.pulls.detail({ repoPath, number, ...(refresh === true ? { refresh: true } : {}) }),
 
     'content:scopes': () => ctx.content.scopes(),
     'content:tree': ({ scopePath, refresh }) => ctx.content.tree(scopePath, refresh ?? false),

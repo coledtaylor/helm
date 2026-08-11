@@ -26,6 +26,7 @@ import type {
   McpScope,
   Profile,
   ProfileDraft,
+  PullDetailView,
   PullsSnapshot,
   RenderedMarkdown,
   SessionRecord,
@@ -532,6 +533,22 @@ export interface IpcRequests {
    */
   'pr:snapshot': { request: void; response: PullsSnapshot }
   'pr:refresh': { request: { repoPath?: string }; response: PullsSnapshot }
+  /**
+   * One pull request, for its own tab.
+   *
+   * Answers from the cached detail when there is one, running no `gh` at all in
+   * that case - which is what makes reopening a tab instant. `refresh` is the
+   * button: it fetches again and rewrites the cache.
+   *
+   * The markdown - the description, every comment, every review body - is
+   * rendered **here**, in main, through the same sanitising pipeline the
+   * content viewer uses. The window receives HTML it never evaluates, and
+   * shiki's grammars stay out of the browser bundle.
+   */
+  'pr:detail': {
+    request: { repoPath: string; number: number; refresh?: boolean }
+    response: PullDetailView
+  }
 
   /**
    * The content viewer (M6). Rendering happens here rather than in the window:
@@ -828,6 +845,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'usage:read': true,
   'pr:snapshot': true,
   'pr:refresh': true,
+  'pr:detail': true,
   'content:scopes': true,
   'content:tree': true,
   'content:document': true,

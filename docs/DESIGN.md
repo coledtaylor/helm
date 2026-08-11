@@ -131,6 +131,27 @@ Dividers inside an island fade to transparent at their ends - use the
 - **Tags / badges**: pills - hairline `border-strong` outline for neutral
   ones, `bg-accent-soft text-accent-text` for scope/kind badges. No borders on
   chips at row density; tone carries them (see `Chip`).
+- **State chip**: one pill saying what something *is* rather than what it has -
+  a pull request's open/draft/merged/closed. A hairline outline in a semantic
+  tone at 40% alpha with the tone's own text colour, never a fill. This is the
+  one pill that is allowed a coloured border, because it is the only place a
+  single word carries the whole status of the thing on screen; everything else
+  at that density stays borderless.
+
+  GitHub paints these as solid green, grey, purple and red badges, and Helm
+  does not, for the reason the accent never floods: a filled badge is the
+  loudest object on the pane and a pull request's state is not the loudest fact
+  about it. The mapping, which `PullRequestPane` is the only user of so far:
+
+  | state | tone | why |
+  | --- | --- | --- |
+  | open | `success` | the live one - the state anything can still be done to |
+  | draft | `border-strong` / `fg-muted` | not yet a claim about anything, so no tone at all |
+  | merged | `accent` (`accent-text`) | the outcome the app treats as the accent moment |
+  | closed | `danger` | the one negative outcome, and the only one |
+
+  Draft is checked *after* the closed states: a draft that was closed is
+  closed, and GitHub leaves the draft flag set on it.
 
 ## 5. Patterns
 
@@ -242,5 +263,7 @@ Don't:
 - No pure black or white; every value from the ramps
 - No text weight past 500 (600 only on ≤11px caps labels)
 - No borders on chips at row density - tone carries them
+- No solid status badges - a state chip is a hairline outline in its tone, not
+  GitHub's filled green and purple
 - No theming foreign grounds - terminal and embedded documents keep their own
 - No raw hex in components; tokens only

@@ -1,5 +1,5 @@
 import { and, eq, inArray, notInArray, sql } from 'drizzle-orm'
-import type { PullSummary } from '../github/types'
+import type { PullDetail, PullSummary } from '../github/types'
 import type { Store } from './db'
 import { prRepos, pullRequests } from './schema'
 
@@ -145,11 +145,15 @@ export function readPullsBySlug(store: Store): Map<string, PullSummary[]> {
 }
 
 /** One cached pull request, with whatever detail has been fetched for it. */
-export function readPull(
-  store: Store,
-  slug: string,
-  number: number
-): { summary: PullSummary; detail: unknown; fetchedAt: string; detailFetchedAt: string | null } | null {
+export interface PullRow {
+  summary: PullSummary
+  /** Null until the pull request has been opened at least once. */
+  detail: PullDetail | null
+  fetchedAt: string
+  detailFetchedAt: string | null
+}
+
+export function readPull(store: Store, slug: string, number: number): PullRow | null {
   const row = store.db
     .select()
     .from(pullRequests)
@@ -158,8 +162,33 @@ export function readPull(
   if (row === undefined) return null
   return {
     summary: row.summary,
-    detail: row.detail,
+    detail: row.detail ?? null,
     fetchedAt: row.fetchedAt,
     detailFetchedAt: row.detailFetchedAt
   }
+}
+
+/**
+ * Caches what one pull request turned out to contain.
+ *
+ * An update and never an insert: a detail belongs to a pull request the list
+ * fetch already found, and a row written here for a number no list returned
+ * would be a pull request the pane can never show and the next
+ * `replaceRepoPulls` would delete anyway. So a detail for an unknown pull
+ * request changes nothing and says so, rather than half-creating a row with no
+ * summary in it.
+ */
+export function writePullDetail(
+  store: Store,
+  slug: string,
+  number: number,
+  detail: PullDetail,
+  detailFetchedAt: string = new Date().toISOString()
+): boolean {
+  const result = store.db
+    .update(pullRequests)
+    .set({ detail, detailFetchedAt })
+    .where(and(eq(pullRequests.slug, slug), eq(pullRequests.number, number)))
+    .run()
+  return result.changes > 0
 }

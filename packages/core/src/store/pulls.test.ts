@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { PullSummary } from '../github/types'
+import type { PullDetail, PullSummary } from '../github/types'
 import { openStore, type Store } from './db'
 import {
   forgetPrRepos,
@@ -11,9 +11,9 @@ import {
   readPullsBySlug,
   recordPrFetch,
   replaceRepoPulls,
-  upsertPrRepo
+  upsertPrRepo,
+  writePullDetail
 } from './pulls'
-import { pullRequests } from './schema'
 
 let dir: string
 let store: Store
@@ -45,6 +45,35 @@ const pull = (overrides: Partial<PullSummary> = {}): PullSummary => ({
   changedFiles: 14,
   reviewDecision: 'REVIEW_REQUIRED',
   labels: ['enhancement'],
+  ...overrides
+})
+
+const detail = (overrides: Partial<PullDetail> = {}): PullDetail => ({
+  body: 'Adds the pane.',
+  comments: [
+    {
+      id: 'IC_1',
+      author: 'reviewer',
+      authorIsBot: false,
+      association: 'MEMBER',
+      body: 'Looks right.',
+      createdAt: Date.parse('2026-08-10T12:00:00Z'),
+      url: 'https://github.com/acme/web/pull/42#issuecomment-1'
+    }
+  ],
+  reviews: [],
+  commits: [
+    {
+      oid: 'a'.repeat(40),
+      messageHeadline: 'Add the pane',
+      author: 'coledtaylor',
+      coAuthors: 0,
+      committedAt: Date.parse('2026-08-09T12:00:00Z')
+    }
+  ],
+  files: [{ path: 'packages/ui/src/components/PullsPane.tsx', additions: 812, deletions: 37 }],
+  checks: { total: 3, failing: 0, pending: 1 },
+  mergeStateStatus: 'CLEAN',
   ...overrides
 })
 
@@ -173,20 +202,63 @@ describe('replaceRepoPulls', () => {
 
   it('keeps cached detail across a poll, and takes it away with the pull request', () => {
     replaceRepoPulls(store, 'acme/web', [pull({ number: 42 }), pull({ number: 43 })])
-    // Stands in for what opening a pull request will cache (M11): the summary
-    // is refetched every five minutes and the conversation behind it is not.
-    store.db
-      .update(pullRequests)
-      .set({ detail: { body: 'the conversation' }, detailFetchedAt: '2026-08-11T10:00:00.000Z' })
-      .run()
+    // What opening a pull request caches: the summary is refetched every five
+    // minutes and the conversation behind it is not.
+    writePullDetail(store, 'acme/web', 42, detail(), '2026-08-11T10:00:00.000Z')
 
     replaceRepoPulls(store, 'acme/web', [pull({ number: 42, title: 'Renamed' })])
 
     const kept = readPull(store, 'acme/web', 42)
     expect(kept?.summary.title).toBe('Renamed')
-    expect(kept?.detail).toEqual({ body: 'the conversation' })
+    expect(kept?.detail).toEqual(detail())
     expect(kept?.detailFetchedAt).toBe('2026-08-11T10:00:00.000Z')
     expect(readPull(store, 'acme/web', 43)).toBeNull()
+  })
+
+  it('round-trips a detail through JSON, structures and all', () => {
+    replaceRepoPulls(store, 'acme/web', [pull({ number: 42 })])
+    writePullDetail(store, 'acme/web', 42, detail())
+
+    const read = readPull(store, 'acme/web', 42)
+    expect(read?.detail?.comments[0]?.body).toBe('Looks right.')
+    expect(read?.detail?.commits[0]?.oid).toHaveLength(40)
+    expect(read?.detail?.checks).toEqual({ total: 3, failing: 0, pending: 1 })
+    // Written at all, which is what tells "never opened" from "opened and it
+    // had nothing in it".
+    expect(read?.detailFetchedAt).not.toBeNull()
+  })
+
+  it('has no detail at all until the pull request has been opened', () => {
+    replaceRepoPulls(store, 'acme/web', [pull({ number: 42 })])
+
+    const read = readPull(store, 'acme/web', 42)
+    expect(read?.detail).toBeNull()
+    expect(read?.detailFetchedAt).toBeNull()
+  })
+
+  it('writes no detail for a pull request no list has returned', () => {
+    // Half a row - a detail with no summary beside it - is a pull request the
+    // pane could never paint, so the write reports that it changed nothing.
+    expect(writePullDetail(store, 'acme/web', 999, detail())).toBe(false)
+    expect(readPull(store, 'acme/web', 999)).toBeNull()
+  })
+
+  it('replaces the detail a refresh refetched', () => {
+    replaceRepoPulls(store, 'acme/web', [pull({ number: 42 })])
+    writePullDetail(store, 'acme/web', 42, detail(), '2026-08-11T10:00:00.000Z')
+
+    writePullDetail(
+      store,
+      'acme/web',
+      42,
+      detail({ body: 'Rewritten description.', comments: [] }),
+      '2026-08-11T11:00:00.000Z'
+    )
+
+    const read = readPull(store, 'acme/web', 42)
+    expect(read?.detail?.body).toBe('Rewritten description.')
+    expect(read?.detail?.comments).toEqual([])
+    expect(read?.detailFetchedAt).toBe('2026-08-11T11:00:00.000Z')
   })
 
   it('orders by most recent activity when read back', () => {

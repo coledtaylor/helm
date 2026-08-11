@@ -1,7 +1,15 @@
 import { execFile } from 'node:child_process'
-import { PR_LIST_FIELDS, PR_LIST_LIMIT, parseGhAuth, parseGhVersion, parsePullList } from './parse'
+import {
+  PR_LIST_FIELDS,
+  PR_LIST_LIMIT,
+  PR_VIEW_FIELDS,
+  parseGhAuth,
+  parseGhVersion,
+  parsePullDetail,
+  parsePullList
+} from './parse'
 import type { GhAuthReading } from './parse'
-import type { PullSummary } from './types'
+import type { PullDetail, PullSummary } from './types'
 
 /**
  * Running the user's own `gh`.
@@ -154,6 +162,38 @@ export async function fetchOpenPulls(
     throw new Error(said)
   }
   return parsePullList(run.stdout)
+}
+
+/**
+ * Everything behind one pull request.
+ *
+ * A second call and a second cache column rather than more fields on the list
+ * fetch, because the two cost very different things: a list is one request per
+ * repository on a five-minute timer, and this is the conversation, the commits
+ * and the file list of a single pull request, asked for once when somebody
+ * opens it. Folding them together would make the poll pay for detail nobody has
+ * looked at.
+ *
+ * `--repo <slug>` again, so the answer does not depend on the working
+ * directory - see `fetchOpenPulls`.
+ */
+export async function fetchPullDetail(
+  command: GhCommand,
+  slug: string,
+  number: number,
+  options: { timeoutMs?: number } = {}
+): Promise<PullDetail> {
+  const run = await runGh(
+    command,
+    ['pr', 'view', String(number), '--repo', slug, '--json', PR_VIEW_FIELDS],
+    options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}
+  )
+
+  if (!run.ok) {
+    const said = firstMeaningfulLine(run.stderr) ?? run.error ?? 'gh failed with no output'
+    throw new Error(said)
+  }
+  return parsePullDetail(run.stdout)
 }
 
 function firstLine(text: string): string {

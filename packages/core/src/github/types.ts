@@ -59,6 +59,175 @@ export interface PullSummary {
   labels: string[]
 }
 
+/**
+ * One issue-level comment on a pull request.
+ *
+ * Issue-level is the whole of what `gh --json comments` can see: the comments
+ * written in the conversation tab. Comments attached to a line of the diff live
+ * on a review thread, which the JSON surface does not expose at all, and a
+ * `gh api` GraphQL query is what would be needed to reach them. That is a known
+ * and accepted v1 limitation rather than an oversight, and it is recorded here
+ * because a conversation missing half its replies with no explanation reads as
+ * a bug.
+ */
+export interface PullComment {
+  /** GitHub's node id. Identity for a list key, never parsed. */
+  id: string
+  author: string
+  authorIsBot: boolean
+  /**
+   * `MEMBER`, `CONTRIBUTOR`, `OWNER`, `NONE`, ... - how GitHub relates the
+   * author to the repository, which is the one thing a reader wants beside a
+   * name they do not recognise.
+   */
+  association: string
+  /** Markdown as written. Rendering happens in the host, never here. */
+  body: string
+  createdAt: number | null
+  url: string
+}
+
+/**
+ * One review, meaning its **summary** body and verdict.
+ *
+ * The same limitation as `PullComment` and from the same cause: a review's
+ * inline notes are diff-thread comments, and what arrives here is only the text
+ * written in the box above them. A review that was nothing but inline notes
+ * therefore has an empty body, which is why an entry with no body is still
+ * shown - the verdict is the information.
+ */
+export interface PullReview {
+  id: string
+  author: string
+  authorIsBot: boolean
+  association: string
+  /** `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED`, `PENDING`. */
+  state: string
+  body: string
+  submittedAt: number | null
+}
+
+/** One commit on the branch, as the Commits view lists it. */
+export interface PullCommit {
+  /** The full sha. Abbreviated where it is painted, never stored short. */
+  oid: string
+  messageHeadline: string
+  /**
+   * The first author's login, falling back to the name git recorded. A commit
+   * can have several - a co-authored one does - and the list has room for the
+   * one that identifies it.
+   */
+  author: string
+  /** Extra authors beyond the first, so a co-authored commit can say so. */
+  coAuthors: number
+  committedAt: number | null
+}
+
+/** One changed file: what it is and how much of it moved. */
+export interface PullFile {
+  path: string
+  additions: number
+  deletions: number
+}
+
+/**
+ * The check runs, reduced to three numbers.
+ *
+ * Three numbers and not the list, because `statusCheckRollup` is a
+ * heterogeneous GraphQL union - a `CheckRun` has `status`/`conclusion`, a
+ * legacy `StatusContext` has `state`, and GitHub adds members to unions - and a
+ * surface that rendered each entry would have to be right about every shape.
+ * Counting is a claim this can actually keep.
+ */
+export interface PullChecks {
+  total: number
+  failing: number
+  pending: number
+}
+
+/**
+ * Everything behind a pull request, as one fetch of `gh pr view` returns it.
+ *
+ * Cached whole in `pull_requests.detail` and re-fetched only when asked, which
+ * is why nothing rendered is in here: HTML belongs to the version of the
+ * renderer that made it, and a cache holding it would paint last month's
+ * markdown pipeline for as long as the pull request stayed open.
+ */
+export interface PullDetail {
+  /** The description, as markdown. Empty is a real answer - many PRs have none. */
+  body: string
+  comments: PullComment[]
+  reviews: PullReview[]
+  commits: PullCommit[]
+  files: PullFile[]
+  /**
+   * Null when the rollup could not be read at all.
+   *
+   * Null rather than zeroes, and the distinction is the point: `{total: 0}`
+   * means GitHub reported no checks, and null means Helm could not tell. A
+   * surface paints nothing for null, because a wrong checks summary is worse
+   * than an absent one.
+   */
+  checks: PullChecks | null
+  /** `CLEAN`, `BLOCKED`, `DIRTY`, `BEHIND`, ... or '' when it was not reported. */
+  mergeStateStatus: string
+}
+
+/**
+ * A comment and a review, flattened into the one thing they are on screen.
+ *
+ * GitHub returns two lists and shows one conversation, and the merge is by
+ * time: a review left between two comments happened between them, and three
+ * separate stacks sorted only within themselves would be three chronologies
+ * that disagree. `kind` survives the merge because a review carries a verdict
+ * and a comment does not.
+ */
+export interface PullConversationEntry {
+  kind: 'comment' | 'review'
+  id: string
+  author: string
+  authorIsBot: boolean
+  association: string
+  /** A review's verdict; `''` for a comment. */
+  state: string
+  /** Epoch ms, or null when the timestamp would not parse. */
+  at: number | null
+  body: string
+  /** The comment's permalink; `''` for a review, which gh does not give one. */
+  url: string
+}
+
+/** A conversation entry whose markdown the host has already rendered. */
+export interface RenderedPullEntry extends PullConversationEntry {
+  /** Sanitised HTML, or `''` when the entry had no body. */
+  html: string
+}
+
+/**
+ * What the detail tab is painted from.
+ *
+ * The summary travels with it rather than being looked up beside it: the header
+ * shows both - a title and a state from the list fetch, a file count and a
+ * checks roll-up from the detail one - and a tab that assembled them from two
+ * sources could show a title for a pull request whose detail had moved on.
+ */
+export interface PullDetailView {
+  /** `owner/name`, so the pane can link out and name where this came from. */
+  slug: string
+  /** The project directory the tab was opened from. Identity of the tab. */
+  repoPath: string
+  summary: PullSummary
+  detail: PullDetail
+  /** The description rendered; `''` when there is none to render. */
+  bodyHtml: string
+  /** Reviews and comments in one time order. */
+  conversation: RenderedPullEntry[]
+  /** When the **detail** was fetched. Epoch ms; null when it is not known. */
+  fetchedAtMs: number | null
+  /** True when this answer came out of the cache and ran no `gh` at all. */
+  cached: boolean
+}
+
 /** Why the PR surface cannot fetch anything right now. */
 export type GhProblemKind =
   /** No `gh` on this machine. */

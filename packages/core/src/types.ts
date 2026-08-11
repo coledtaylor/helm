@@ -78,10 +78,19 @@ export {
   type GhProblem,
   type GhProblemKind,
   type GhStatus,
+  type PullChecks,
+  type PullComment,
+  type PullCommit,
+  type PullConversationEntry,
+  type PullDetail,
+  type PullDetailView,
+  type PullFile,
   type PullRepo,
+  type PullReview,
   type PullReviewDecision,
   type PullSummary,
   type PullsSnapshot,
+  type RenderedPullEntry,
   type RepoRemote
 } from './github/types'
 

@@ -27,7 +27,9 @@ export {
   recordPrFetch,
   replaceRepoPulls,
   upsertPrRepo,
-  type PrRepoRow
+  writePullDetail,
+  type PrRepoRow,
+  type PullRow
 } from './pulls'
 export {
   createProfile,

@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm'
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
-import type { PullSummary } from '../github/types'
+import type { PullDetail, PullSummary } from '../github/types'
 
 /**
  * `profiles` and `config_snapshots` are not read by any surface yet - they exist
@@ -290,8 +290,8 @@ export const pullRequests = sqliteTable(
     number: integer('number').notNull(),
     /** JSON `PullSummary`. */
     summary: text('summary', { mode: 'json' }).$type<PullSummary>().notNull(),
-    /** JSON detail, or null until the pull request has been opened. */
-    detail: text('detail', { mode: 'json' }),
+    /** JSON `PullDetail`, or null until the pull request has been opened. */
+    detail: text('detail', { mode: 'json' }).$type<PullDetail>(),
     fetchedAt: text('fetched_at').notNull().default(now),
     detailFetchedAt: text('detail_fetched_at')
   },
