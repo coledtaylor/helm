@@ -239,6 +239,27 @@ Schema changes go through Drizzle:
 pnpm db:generate       # drizzle-kit generate, then embed the SQL into the bundle
 ```
 
+### Releasing
+
+Bump `version` in `packages/desktop/package.json` and merge it to `main`. That
+is the whole procedure. `.github/workflows/release.yml` runs the checks, builds
+both artefacts on a clean Windows runner, and publishes a GitHub release tagged
+`v<version>` with the exes attached and the commits since the previous tag as
+its notes.
+
+A merge that does not change the version runs the checks and stops there, so
+`main` is always checked and only a bump cuts a release. Nothing is built on
+anybody's laptop, which is the point: the one time a release *was*, a stale
+`pnpm.exe` shadowed the managed one and shipped an exe with no
+`app.asar.unpacked` that died on its first `dlopen`.
+
+```bash
+pnpm verify:artifact   # assert a built exe carries its unpacked native modules
+```
+
+[docs/PACKAGING.md](docs/PACKAGING.md) has the reasoning, including why the
+release is published outright rather than left as a draft.
+
 ## License
 
 MIT - see [LICENSE](LICENSE).
