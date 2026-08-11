@@ -204,8 +204,32 @@ export function answerStartupGates(
   return () => clearInterval(timer)
 }
 
+/**
+ * Whether a hosted session has reached its own input prompt.
+ *
+ * The signal is the composer's hint line, which the TUI paints only once it is
+ * accepting input, and which has two forms: `? for shortcuts` when no
+ * permission mode is on, and `(shift+tab to cycle)` when one is - the CLI now
+ * starts in auto mode on this machine, so the second is the common case.
+ *
+ * Measured on 2.1.227, in both of the welcome layouts the CLI picks between:
+ *
+ *   Wide (a full window):   Claude Code v2.1.227
+ *                           Fable 5 with high effort · Claude Max
+ *
+ *   Narrow (a docked pane): ┌ Claude Code ──────────┐
+ *                           │  Welcome back Cole!   │
+ *
+ * The narrow one carries **no version at all**, which is why matching the
+ * banner is no longer enough on its own: a session in the session split reached
+ * its prompt and `Claude Code v\d` never appeared. That pattern stays as a
+ * fallback for a CLI whose hint line reads differently again, and because it
+ * costs nothing - but the hint line is the one that means what this is asked.
+ */
 export const atPrompt = (text: string): boolean =>
-  /\?\s*for\s*shortcuts/.test(text) || /Claude\s*Code\s*v\d/.test(text)
+  /\?\s*for\s*shortcuts/.test(text) ||
+  /shift\s*\+?\s*tab\s*to\s*cycle/i.test(text) ||
+  /Claude\s*Code\s*v\d/.test(text)
 
 export function processAlive(pid: number): boolean {
   if (pid <= 0) return false
