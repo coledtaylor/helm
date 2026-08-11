@@ -60,11 +60,17 @@ jobs:
           echo "version=$version" >>"$GITHUB_OUTPUT"
           echo "tag=$tag" >>"$GITHUB_OUTPUT"
 
+          # The decision goes to stdout as well as the summary. When the release
+          # job is skipped there are two possible reasons - this gate said no, or
+          # something it depends on failed - and telling them apart afterwards
+          # should not require re-deriving the gate from the tag list.
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
             echo "release=false" >>"$GITHUB_OUTPUT"
+            echo "GATE: release=false - $tag is already tagged; bump the version to cut a new one."
             echo "**No release.** \`$tag\` is already tagged; bump the version to cut a new one." >>"$GITHUB_STEP_SUMMARY"
           else
             echo "release=true" >>"$GITHUB_OUTPUT"
+            echo "GATE: release=true - $tag does not exist yet."
             echo "**Releasing \`$tag\`.**" >>"$GITHUB_STEP_SUMMARY"
           fi
 
@@ -142,7 +148,15 @@ jobs:
           # landed, which is exactly what a changelog entry is.
           previous=$(git tag --list 'v*' --sort=-v:refname | head -n1)
 
-          sed "s/\${VERSION}/$VERSION/g" .github/release-body.md >notes.md
+          # The note at the top of release-body.md is addressed to whoever edits
+          # that file, not to somebody downloading Helm. An HTML comment does not
+          # render on the release page, but it is still in the body the API
+          # returns and the one the edit box shows - and substitution would
+          # rewrite the very placeholder the note is explaining. Strip comments
+          # first, then substitute, then drop the blank lines the strip left.
+          sed '/^<!--$/,/^-->$/d' .github/release-body.md \
+            | sed '/./,$!d' \
+            | sed "s/\${VERSION}/$VERSION/g" >notes.md
           {
             echo
             if [[ -n $previous ]]; then
