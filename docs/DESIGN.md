@@ -293,11 +293,21 @@ Dividers inside an island fade to transparent at their ends - use the
   was that they were the *only* way in; the sidebar rows are, and stay, the way
   in. What a link from a project adds is the scope - arriving at the pane
   already pointed at the project that was on screen instead of picking it out
-  of a switcher. Such a link is a ghost button at the far end of the pane's
-  action row, carrying the sidebar's own icon for its destination, so the two
-  read as one object. Ghost and not outlined for the reason the title bar's
-  settings button is: the row already has two outlined controls, and four would
-  read as a toolbar with the primary action lost in it.
+  of a switcher. Such a link is a **secondary button** at the far end of the
+  pane's action row, carrying the sidebar's own icon for its destination so the
+  two read as one object.
+
+  It was a ghost first, on the reasoning that four outlined controls in a row
+  read as a toolbar. That was the wrong trade, and the correction is worth
+  writing down because the same reasoning will come back. **Nothing in this app
+  has a pointer cursor** - `body { cursor: default }`, because this is desktop
+  chrome and not a document - so a control's outline is most of its claim to
+  being a control. A ghost works in the title bar, where it sits in a strip of
+  nothing but controls; dropped at the end of a row of prose it is two words
+  with a hover tint nobody hovers long enough to find. What separates a
+  navigation control from an action here is the **gap** - `ml-auto` puts them at
+  the far end - and the accent outline the primary button still has to itself.
+  Weight was being asked to carry a distinction position already carried.
 - **Project rows in the tree**: kind icon, name, `GitChip`. The icon stays
   because harness / repo / plain folder is the one thing a row's name and branch
   cannot say. Inventory counts do not - what a project contributes to a session

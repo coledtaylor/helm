@@ -195,6 +195,102 @@ async function shootProjectRepo(
   return shot.file
 }
 
+/**
+ * A hover tint, **measured** rather than photographed.
+ *
+ * Hover is the design state this walk could never reach: it clicks and moves
+ * on, and a screenshot taken a frame later has the pointer somewhere else. It
+ * is also the state most able to vanish unnoticed, because seeing it at all
+ * requires the pointer to be in one particular place - which is how "the tabs
+ * have no hover any more" came to be reported from the running app rather than
+ * caught here.
+ *
+ * A colour before and a colour after, from `getComputedStyle` on the element
+ * that carries the class, with a real `mouseMove` between them. Printed and not
+ * only saved, because "the tint is subtle" and "there is no tint" are the same
+ * thumbnail and different bugs.
+ */
+async function reportHover(
+  win: BrowserWindow,
+  outDir: string,
+  probe: { name: string; find: string },
+  files: string[]
+): Promise<void> {
+  const read = `(() => {
+    const el = ${probe.find}
+    if (!el) return null
+    const b = el.getBoundingClientRect()
+    return {
+      x: b.left + b.width / 2,
+      y: b.top + b.height / 2,
+      bg: getComputedStyle(el).backgroundColor,
+      // A second hover-driven property on the same element, so "this tint is
+      // broken" can be told apart from "no hover variant resolves at all".
+      kidColor: (() => {
+        const kid = el.querySelector('[data-tab], span, svg')
+        return kid ? getComputedStyle(kid).color : ''
+      })(),
+      // Whether the engine itself thinks the pointer is on this element. The
+      // probe's own positive control: a synthesised mouseMove that never
+      // reaches the hit-test would report "no tint" for every element on
+      // screen, which is indistinguishable from every tint being broken. If
+      // this is false, the finding is about this driver and not about the app.
+      hot: el.matches(':hover')
+    }
+  })()`
+
+  const at = await js<{ x: number; y: number; bg: string; hot: boolean; kidColor: string } | null>(
+    win,
+    read
+  ).catch(() => null)
+  if (at === null) {
+    console.error(`design-shot: hover ${probe.name} - nothing to hover`)
+    return
+  }
+  // Away first, so "after" cannot be a tint left over from wherever the last
+  // click put the pointer.
+  await sendMouse(win, 'mouseMove', 2, 2)
+  await sleep(200)
+  await sendMouse(win, 'mouseMove', at.x, at.y)
+  await sleep(300)
+  const hovered = await js<{ bg: string; hot: boolean; kidColor: string } | null>(win, read).catch(() => null)
+  const after = hovered?.bg ?? '<gone>'
+  const verdict = !(hovered?.hot ?? false)
+    ? '  *** POINTER NEVER LANDED - probe, not app ***'
+    : after === at.bg
+      ? '  *** NO CHANGE ***'
+      : ''
+  console.log(`design-shot: hover ${probe.name} - bg ${at.bg} -> ${after} | kid ${at.kidColor} -> ${hovered?.kidColor ?? "?"}${verdict}`)
+  const shot = await screenshot(win, outDir, `hover-${probe.name}.png`)
+  files.push(shot.file)
+  await sendMouse(win, 'mouseMove', 2, 2)
+  await sleep(150)
+}
+
+/**
+ * What to hover, and the element that carries the tint.
+ *
+ * The tab's is on the **wrapper**, not the `[data-tab]` button inside it - the
+ * button is only as tall as its text, and the fill belongs to the whole folder
+ * tab. Reading the button would report `rgba(0, 0, 0, 0)` whether or not the
+ * hover works.
+ */
+const HOVER_PROBES: Array<{ name: string; find: string }> = [
+  {
+    name: 'tab',
+    find: `[...document.querySelectorAll('[role="tablist"] > div')]
+      .find((d) => d.querySelector('[data-tab][aria-selected="false"]'))`
+  },
+  {
+    name: 'project-row',
+    find: `document.querySelector('aside nav button[title]:not([aria-current])')`
+  },
+  {
+    name: 'project-link',
+    find: `document.querySelector('[data-project-link]')`
+  }
+]
+
 // ---------------------------------------------------------------------------
 // The width sweep
 // ---------------------------------------------------------------------------
@@ -444,6 +540,28 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
   // headers are `sticky` inside a scroll container - a place where "it renders"
   // and "it still behaves" are not the same claim.
   if (want.has('states')) {
+    // Hover first, from a project pane: the one view carrying all three probes
+    // at once - the tree, the pane links, and a tab strip. Two tabs are opened
+    // deliberately and the project left in front, because the tab probe needs
+    // an **inactive** tab to hover and `--only=states` reaches here with the
+    // strip in whatever state the last run left it.
+    await click(win, '[data-open-pulls]')
+    await sleep(400)
+    await click(win, 'aside nav button[title]')
+    await sleep(600)
+    // The capability the override in theme.css exists for. Printed because a
+    // machine answering false here is one where every hover state in the app
+    // would be dead if that override were ever removed.
+    console.log(
+      'design-shot: pointer - ' +
+        (await js<string>(
+          win,
+          `['hover: hover', 'any-hover: hover', 'pointer: fine', 'any-pointer: fine']
+             .map((q) => q + '=' + matchMedia('(' + q + ')').matches).join('  ')`
+        ).catch(() => '<unreadable>'))
+    )
+    for (const probe of HOVER_PROBES) await reportHover(win, outDir, probe, files)
+
     await click(win, '[data-open-config]')
     await sleep(500)
     const before1 = await js<number>(win, `document.querySelectorAll('button[data-config-file]').length`)

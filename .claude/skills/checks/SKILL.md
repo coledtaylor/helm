@@ -178,7 +178,8 @@ rather than eyeballing it - `System.Drawing` from PowerShell is enough to scan a
 column for an island's top and bottom edge.
 
 Four groups, `--only=` like the checks (`GROUPS` in `designshot.ts` is the
-authority): **views** is the walk itself, **states** the collapsed section,
+authority): **views** is the walk itself, **states** the collapsed section and
+the hover probes,
 **responsive** a width sweep over the two scoped pane headers, and **split** a
 pane docked beside a real session at four widths. Two of them are worth knowing
 about. `responsive` **prints numbers** - each header's `overflow` and `spill`,
@@ -188,6 +189,22 @@ And `split` is the only group that spawns a session, and the only one that
 reaches pane widths below the ~596px the window's own `minWidth` leaves: the
 divider is bounded at a *fraction* of the row, so it docks far narrower than
 any window can be made.
+
+`states` **prints numbers too**, and they are the only hover coverage the app
+has. A screenshot walk clicks and moves on, so a hover tint is the one design
+state nothing else here can reach - and it is the one most able to vanish in
+silence. Each probe moves the pointer away, moves it onto the element that
+carries the class, and reports the computed colour before and after, plus a
+child's colour so "this tint is broken" can be told from "no hover variant
+resolves at all". It carries its own positive control - `el.matches(':hover')` -
+because a synthesised move that never reaches the hit test would report every
+tint on screen as dead, which looks identical to every tint being dead.
+
+It has already earned that. Tailwind v4 gates `hover:` behind
+`@media (hover: hover)`, and on a machine where Chromium answers false to that
+(it prints the four pointer queries beside the probes) **every hover state in
+the app dies at once** with nothing else looking wrong. `theme.css` overrides
+the variant; these probes are what would notice if that override went away.
 
 `views` walks the project pane **twice**: once for whatever the tree lists
 first, and once for a project the pull-request snapshot knows about

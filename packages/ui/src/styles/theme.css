@@ -25,6 +25,26 @@
  */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * `hover:` is a plain `:hover`, not one gated on `@media (hover: hover)`.
+ *
+ * Tailwind v4 wraps every hover utility in that query so a phone does not get
+ * a hover state stuck to the last thing tapped. Helm is a desktop shell driven
+ * by a pointer and has no touch story, so the gate can only ever cost - and it
+ * did: measured on a Windows 11 machine where Chromium answers `(hover: hover)`
+ * false, `(pointer: fine)` false and `(any-pointer: fine)` false, which it will
+ * do wherever it fails to find a fine pointer among the attached devices.
+ *
+ * When that happens *every* hover state in the app dies at once, silently, and
+ * nothing else looks wrong: the token resolves, `.bg-hover` paints, the class
+ * is on the element, `el.matches(':hover')` is true, and the rule that would
+ * fill it is behind a media query that never matches. It is one line of CSS and
+ * a dead app, which is why this override is worth more than the phone case it
+ * gives up. `design-shot --only=states` reports the three hover probes that
+ * caught it.
+ */
+@custom-variant hover (&:hover);
+
 /* --------------------------------------------------------------------------
  * Tokens - "Nocturne Islands" (docs/DESIGN.md, Helm design system v1)
  *

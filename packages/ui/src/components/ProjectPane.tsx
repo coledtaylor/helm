@@ -455,7 +455,23 @@ function Panel({
   )
 }
 
-/** A ghost link out of this pane and into another one, scoped to this project. */
+/**
+ * A link out of this pane and into another one, scoped to this project.
+ *
+ * A **secondary button** (DESIGN.md 4), the same shape as "Save as profile"
+ * beside it. It was a ghost first, on the reasoning that four outlined controls
+ * in one row read as a toolbar - and that was the wrong trade. Nothing in this
+ * app has a pointer cursor (`body { cursor: default }` in theme.css: it is
+ * desktop chrome, not a document), so a control's whole claim to being a
+ * control is its shape. Strip the outline and what is left is two words that
+ * happen to sit at the end of a row, with a hover tint nobody hovers long
+ * enough to find.
+ *
+ * What separates these from the two actions is the gap, not the weight: they
+ * are pushed to the far end of the row, and the launch button keeps the only
+ * accent outline on screen. Weight was being asked to carry a distinction that
+ * position already carried, and it cost the affordance.
+ */
 function PaneLink({
   mark,
   onClick,
@@ -477,11 +493,11 @@ function PaneLink({
       onClick={onClick}
       title={title}
       className={cn(
-        'flex items-center gap-1.5 rounded-well px-2.5 py-1.5',
-        'text-[12px] text-fg-muted transition-colors hover:bg-hover hover:text-fg'
+        'flex items-center gap-2 rounded-well border border-border-strong px-3 py-1.5',
+        'text-[12px] text-fg transition-colors hover:bg-hover active:bg-active'
       )}
     >
-      <span className="text-fg-subtle">{icon}</span>
+      <span className="text-accent">{icon}</span>
       {children}
     </button>
   )
