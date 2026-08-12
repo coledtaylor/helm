@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  classifyGhFailure,
   parseGhAuth,
   parseGhVersion,
   parsePullDetail,
@@ -634,6 +635,82 @@ describe('parseGhAuth', () => {
       authenticated: false,
       message: null
     })
+  })
+})
+
+describe('classifyGhFailure', () => {
+  /**
+   * Captured from `gh` 2.86 on Windows with the network made unreachable, not
+   * invented. This is the failure the whole classifier exists for: it is what a
+   * *fetch* prints when there is no route to github.com, and the reason the
+   * fetch is what gets classified rather than `gh auth status` - see the case
+   * below it, which is the same machine at the same moment.
+   */
+  const OFFLINE_FETCH =
+    'Post "https://api.github.com/graphql": proxyconnect tcp: dial tcp 127.0.0.1:1: connectex: No connection could be made because the target machine actively refused it.'
+
+  it('reads a connection failure as offline, not as a sign-in problem', () => {
+    expect(classifyGhFailure(OFFLINE_FETCH)).toBe('offline')
+  })
+
+  it('reads a TLS failure as offline', () => {
+    expect(
+      classifyGhFailure(
+        'Get "https://api.github.com/": tls: failed to verify certificate: x509: certificate signed by unknown authority'
+      )
+    ).toBe('offline')
+    expect(classifyGhFailure('net/http: TLS handshake timeout')).toBe('offline')
+  })
+
+  it('reads DNS and timeouts as offline', () => {
+    expect(classifyGhFailure('dial tcp: lookup api.github.com: no such host')).toBe('offline')
+    expect(classifyGhFailure('context deadline exceeded (Client.Timeout exceeded)')).toBe('offline')
+    expect(classifyGhFailure('connect ETIMEDOUT 140.82.121.6:443')).toBe('offline')
+  })
+
+  it('reads a refused token as auth', () => {
+    expect(classifyGhFailure('HTTP 401: Bad credentials (https://api.github.com/graphql)')).toBe(
+      'auth'
+    )
+    expect(
+      classifyGhFailure('To get started with GitHub CLI, please run: gh auth login')
+    ).toBe('auth')
+  })
+
+  /**
+   * The reason `gh auth status` is not the thing being classified. Offline, it
+   * exits 1 and prints exactly this - a sentence about the token, and an
+   * instruction to replace a credential that is in fact perfectly good. Fed to
+   * the classifier it reads as `auth`, which is why nothing on the offline path
+   * is allowed to consult it.
+   */
+  it('would misread gh auth status offline, which is why fetches are classified instead', () => {
+    expect(
+      classifyGhFailure(
+        'The token in keyring is invalid. To re-authenticate, run: gh auth login -h github.com'
+      )
+    ).toBe('auth')
+    // Same machine, same second, the honest signal:
+    expect(classifyGhFailure(OFFLINE_FETCH)).toBe('offline')
+  })
+
+  it('leaves a per-repository failure alone, 403 included', () => {
+    // Neither of these is a fact about the machine, so neither may raise a
+    // global banner. 403 in particular is spent on rate limits and on
+    // permissions alike and says nothing about the sign-in.
+    expect(classifyGhFailure("could not resolve to a Repository with the name 'o/r'")).toBe('other')
+    expect(classifyGhFailure('HTTP 403: Resource not accessible by integration')).toBe('other')
+    expect(classifyGhFailure('HTTP 404: Not Found')).toBe('other')
+    expect(classifyGhFailure('gh printed something that is not JSON: <!DOCTYPE html>')).toBe(
+      'other'
+    )
+  })
+
+  it('prefers offline when a message could be read either way', () => {
+    // A proxy that answers 401 for an unauthenticated tunnel is still the
+    // network, and of the two readings only "you are offline" is safe to act
+    // on: the other one asks the user to throw away a working login.
+    expect(classifyGhFailure('proxyconnect tcp: HTTP 401 from the proxy')).toBe('offline')
   })
 })
 

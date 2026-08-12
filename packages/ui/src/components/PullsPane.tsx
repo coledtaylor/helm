@@ -116,15 +116,22 @@ export function pullsSummaryLine(snapshot: PullsSnapshot | null): string {
       return 'GitHub CLI not installed'
     case 'unauthenticated':
       return 'Run gh auth login'
+    case 'offline':
+      // Four words that name the connection and not the login. The rail is the
+      // surface most likely to be read at a glance, so it is the one where
+      // "GitHub could not be reached" must not be mistaken for a sign-in
+      // problem the user is expected to go and fix.
+      return 'GitHub unreachable · showing cached'
     case 'failed':
-      return 'GitHub could not be reached'
+      return 'Last check failed'
     default:
       break
   }
   if (snapshot.repos.length === 0) {
     // The same distinction the pane's empty state draws, in four words: an
     // ignore list emptying this rail is not the machine having no GitHub
-    // repositories on it.
+    // repositories on it - and neither is a sweep that has not got to them yet.
+    if (snapshot.unmapped > 0) return 'Checking for repositories…'
     return snapshot.ignored.some((repo) => repo.present)
       ? 'All repositories ignored'
       : 'No github.com repositories'
@@ -533,15 +540,17 @@ function Checks({ checks }: { checks: PullChecks }): JSX.Element {
 }
 
 /**
- * Why the list is empty, which is five different facts.
+ * Why the list is empty, which is six different facts.
  *
- * "No pull requests", "no GitHub repositories", "everything is ignored", "no
- * gh" and "not signed in" are not the same situation, and a single empty state
- * would make the first four look like the last. The ignored case is the one
- * that would otherwise be an outright lie: a machine whose only github.com
- * repository is ignored would be told none of its folders has a github.com
- * origin, which is a fact about the user's own setting reported as a fact about
- * their disk.
+ * "No pull requests", "no GitHub repositories", "nobody has looked yet",
+ * "everything is ignored", "no gh" and "not signed in" are not the same
+ * situation, and a single empty state would make the first five look like the
+ * last. Two of them would otherwise be outright lies. A machine whose only
+ * github.com repository is ignored would be told none of its folders has a
+ * github.com origin - a fact about the user's own setting reported as a fact
+ * about their disk. And a fresh install, whose remotes have not been read yet,
+ * was told the same thing about folders nothing had opened: `unmapped` is what
+ * separates "checked, and none of them is on GitHub" from "still checking".
  */
 function Empty({
   snapshot,
@@ -552,6 +561,16 @@ function Empty({
 }): JSX.Element {
   if (snapshot === null) {
     return <p className="px-3 py-6 text-center text-[12px] text-fg-subtle">Reading&hellip;</p>
+  }
+  if (snapshot.gh.problem === null && snapshot.unmapped > 0) {
+    // Before the problem branch only in the sense that there is no problem yet:
+    // a sweep still reading remotes has concluded nothing about anything.
+    return (
+      <p data-pulls-mapping className="px-3 py-6 text-center text-[12px] text-fg-subtle">
+        Checking {snapshot.unmapped === 1 ? 'one folder' : `${String(snapshot.unmapped)} folders`}{' '}
+        for a github.com remote&hellip;
+      </p>
+    )
   }
   if (snapshot.gh.problem !== null) {
     // The sentence is already above the list; repeating it here would say the

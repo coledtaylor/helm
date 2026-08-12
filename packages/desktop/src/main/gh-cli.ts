@@ -87,3 +87,16 @@ export const GH_MISSING_SENTENCE =
 /** The sentence an unauthenticated `gh` gets. The remedy is the user’s to run. */
 export const GH_UNAUTHENTICATED_SENTENCE =
   'GitHub CLI is not signed in. Run `gh auth login` in a terminal - Helm never handles a GitHub credential.'
+
+/**
+ * The sentence for a machine that cannot reach GitHub.
+ *
+ * Names no remedy on purpose, and above all not `gh auth login`. This branch is
+ * reached when the connection failed, which `gh auth status` reports by
+ * announcing that the token is invalid - so the one instruction a user is
+ * likely to be given here is the one that would have them replace a credential
+ * that works. Helm says what it saw and waits; the next sweep recovers on its
+ * own when the network does.
+ */
+export const GH_OFFLINE_SENTENCE =
+  'GitHub could not be reached, so Helm is showing what it fetched last. Your sign-in is fine - this is the connection, and Helm will try again on the next sweep.'

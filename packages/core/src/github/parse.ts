@@ -459,6 +459,88 @@ export function parseGhAuth(result: {
   return { authenticated: false, message: said ?? null }
 }
 
+/** What a failed `gh` call turned out to be about. */
+export type GhFailureKind =
+  /** GitHub could not be reached at all: DNS, TCP, TLS, a proxy, a timeout. */
+  | 'offline'
+  /** GitHub was reached and refused the token. */
+  | 'auth'
+  /** Anything else, which is a fact about one repository rather than the machine. */
+  | 'other'
+
+/**
+ * Markers that mean the request never got an answer from GitHub.
+ *
+ * Go's networking vocabulary, because that is what `gh` is written in, plus
+ * Node's own `errno` spellings for the cases where the failure happens before
+ * gh does - a spawn that timed out reports through `execFile`, not through
+ * stderr. Substrings rather than patterns: these strings are stable across gh
+ * releases in a way the surrounding sentence is not.
+ */
+const OFFLINE_MARKERS = [
+  'dial tcp',
+  'connectex',
+  'proxyconnect',
+  'no such host',
+  'network is unreachable',
+  'connection refused',
+  'connection reset',
+  'actively refused',
+  'temporary failure in name resolution',
+  'server misbehaving',
+  'i/o timeout',
+  'client.timeout',
+  'context deadline exceeded',
+  'handshake',
+  'tls:',
+  'x509:',
+  'certificate',
+  'etimedout',
+  'econnrefused',
+  'econnreset',
+  'enotfound',
+  'eai_again'
+]
+
+/** Markers that mean GitHub answered and would not accept the token. */
+const AUTH_MARKERS = [
+  'http 401',
+  '401 unauthorized',
+  'bad credentials',
+  'requires authentication',
+  'authentication required',
+  'not logged into',
+  'gh auth login'
+]
+
+/**
+ * Why a `gh` call failed, as far as it can be told from what gh printed.
+ *
+ * This exists because `gh auth status` **cannot** tell these apart and says so
+ * in the most misleading way available: with no route to github.com it exits 1,
+ * reports "The token in keyring is invalid", and tells the user to run
+ * `gh auth login` - for a token that is perfectly good. Reading that exit code
+ * as a verdict is what made a dropped connection look like a signed-out
+ * machine. A **fetch** failure does carry the distinction, so the fetch is what
+ * Helm classifies and `gh auth status` is only ever asked when there is no
+ * fetch to learn from.
+ *
+ * Connectivity is tested first and deliberately: a machine that cannot reach
+ * GitHub often cannot reach it *while* holding a token gh is unsure about, and
+ * of the two readings only "you are offline" is safe to act on. Telling someone
+ * to re-authenticate because their wifi dropped costs them a working login.
+ *
+ * `403` is **not** an auth marker. GitHub spends it on rate limits and on
+ * per-repository permission alike, and neither is a statement about the
+ * machine's sign-in - both belong on the repository's own row.
+ */
+export function classifyGhFailure(message: string): GhFailureKind {
+  const said = message.toLowerCase()
+  if (OFFLINE_MARKERS.some((marker) => said.includes(marker))) return 'offline'
+  if (AUTH_MARKERS.some((marker) => said.includes(marker))) return 'auth'
+  return 'other'
+}
+
 function preview(text: string): string {
   const line = text.split('\n')[0] ?? ''
   return line.length > 120 ? `${line.slice(0, 120)}…` : line

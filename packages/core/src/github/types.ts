@@ -354,13 +354,30 @@ export interface PullDetailView {
   cached: boolean
 }
 
-/** Why the PR surface cannot fetch anything right now. */
+/**
+ * Why the PR surface cannot fetch anything right now.
+ *
+ * Every one of these is a statement about the **machine**, not about one
+ * repository, and only a full sweep in which nothing succeeded may raise one.
+ * A repository that failed on its own carries its reason on its own row - see
+ * `PullRepo.error` - because a single 404 is not a fact about GitHub.
+ */
 export type GhProblemKind =
   /** No `gh` on this machine. */
   | 'missing'
-  /** There is a `gh`, and it is not signed in. */
+  /** There is a `gh`, GitHub answered, and it would not take the token. */
   | 'unauthenticated'
-  /** It is there and signed in, and the last pass still failed. */
+  /**
+   * GitHub could not be reached at all - DNS, TCP, TLS, a proxy, a timeout.
+   *
+   * Kept apart from `unauthenticated` because the remedies are opposites and
+   * the wrong one is expensive: `gh auth status` exits 1 and blames the token
+   * when it merely has no route to github.com, so a surface that folded these
+   * together told people to re-authenticate a login that was never broken.
+   * Nothing on this branch may mention `gh auth login`.
+   */
+  | 'offline'
+  /** It is there and reachable, and the last full sweep still failed. */
   | 'failed'
 
 export interface GhProblem {
@@ -373,10 +390,18 @@ export interface GhProblem {
  * What Helm found out about the `gh` CLI.
  *
  * Carries no credential and never will - the same rule the Claude CLI follows.
- * `authenticated` is decided from `gh auth status`'s **exit code**, and nothing
- * here opens gh's token store, its hosts file or the keyring behind it. The
- * whole remedy for `unauthenticated` is a sentence telling the user to run
- * `gh auth login` themselves.
+ * Nothing here opens gh's token store, its hosts file or the keyring behind it,
+ * and the whole remedy for `unauthenticated` is a sentence telling the user to
+ * run `gh auth login` themselves.
+ *
+ * `authenticated` is a **report, not a gate**. It starts as `gh auth status`'s
+ * exit code, which is the only signal available before anything has been
+ * fetched, and is corrected by the fetches themselves: a `pr list` that came
+ * back proves the token works whatever `auth status` thought, and one refused
+ * with a 401 proves it does not. Nothing may refuse to fetch because this field
+ * is false - that is precisely how one dropped connection used to latch the
+ * whole surface off until the app was restarted, since the only thing that
+ * could have corrected the reading was the fetch it was suppressing.
  */
 export interface GhStatus {
   /** The executable, or null when there is not one. */
@@ -457,6 +482,18 @@ export interface PullsSnapshot {
   open: number
   /** Discovered projects considered, whether or not they turned out to be GitHub. */
   checked: number
+  /**
+   * How many of `checked` Helm has not read an origin remote for yet.
+   *
+   * The difference between "this machine has no GitHub repositories on it" and
+   * "nobody has looked at them yet", which the surface has no other way to
+   * express: a project with no row in `pr_repos` is indistinguishable from one
+   * whose remote turned out not to be GitHub, and on a fresh install every
+   * project is in that state for as long as the first sweep takes. Reporting
+   * that as the former states a fact about somebody's disk that nothing has
+   * checked.
+   */
+  unmapped: number
   gh: GhStatus
   /**
    * The **oldest** successful fetch among the repos on screen, which is what

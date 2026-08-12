@@ -162,8 +162,11 @@ process opens no connection at all.
 it does it by running **your own `gh` CLI** on a schedule you set - every five
 minutes by default, and `0` in Settings turns it off entirely. Helm opens no
 socket of its own for it and stores no GitHub credential: `gh` owns the token,
-every fetch runs on it, and the only thing Helm reads about your sign-in is the
-exit code of `gh auth status`.
+every fetch runs on it, and the only thing Helm reads about your sign-in is what
+`gh` itself prints when it runs. When a fetch fails, Helm tells you whether
+GitHub refused your token or could not be reached at all - and it only ever
+suggests `gh auth login` for the first, because a dropped connection is not
+something a new sign-in fixes.
 
 ## Architecture
 

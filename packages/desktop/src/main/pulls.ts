@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import {
   checkoutPull,
+  classifyGhFailure,
   fetchOpenPulls,
   fetchPullDetail,
   fetchPullDiff,
@@ -26,6 +27,7 @@ import {
   MAX_DIFF_BYTES,
   type AppSettings,
   type GhCommand,
+  type GhFailureKind,
   type GhProblem,
   type GhStatus,
   type IgnoredRepo,
@@ -44,6 +46,7 @@ import {
 import {
   findGhExecutable,
   GH_MISSING_SENTENCE,
+  GH_OFFLINE_SENTENCE,
   GH_UNAUTHENTICATED_SENTENCE,
   resolveGhCommand
 } from './gh-cli'
@@ -220,6 +223,10 @@ function signature(snapshot: PullsSnapshot): string {
     snapshot.gh.problem?.kind ?? null,
     snapshot.open,
     snapshot.checked,
+    // The mapping finishing moves no other field on a machine with no GitHub
+    // remotes on it, and it is precisely the transition from "still looking" to
+    // an answer - so without this the pane would keep saying it was checking.
+    snapshot.unmapped,
     snapshot.fetchedAtMs,
     // Ignoring a repository that had nothing open moves no other field in here
     // - the same reason `pull.checks` is in the row tuple below - so without
@@ -260,6 +267,17 @@ export function createPullsService({
   let pollFixtureMs: number | null = null
 
   let ghStatus: GhStatus | null = null
+  /**
+   * Whether `ghStatus` was concluded from fetches rather than from `gh auth
+   * status`.
+   *
+   * A fetch outranks that command and this flag is what stops the ranking being
+   * undone: `ensureGh` runs at the top of every pass for the executable's
+   * identity, and without this it would re-derive the problem from an exit code
+   * that cannot tell an unreachable GitHub from a rejected token - overwriting
+   * the offline verdict the previous sweep worked out properly.
+   */
+  let verdictFromFetch = false
   let poll: NodeJS.Timeout | null = null
   let inFlight: Promise<PullsSnapshot> | null = null
   let lastPassAtMs = 0
@@ -277,12 +295,22 @@ export function createPullsService({
    * What `gh` is on this machine, cached until something could have changed it.
    *
    * `gh auth status` is a real request against GitHub - it validates the token
-   * rather than merely finding one - so it is asked once and then only when the
-   * answer might have moved: the binary changed, or a fetch has just failed and
-   * the pane owes the user a reason.
+   * rather than merely finding one - which is what makes its answer worth
+   * asking for once and also what makes it untrustworthy as a **verdict**: with
+   * no route to github.com it exits 1 and reports the token as invalid. So this
+   * establishes the executable's identity and offers an opinion, and the pass
+   * corrects the opinion from what the fetches actually did.
+   *
+   * A cached answer is kept when it is good news, or when a fetch has already
+   * overruled it. Bad news of this command's own is re-asked every pass: it
+   * costs one process per interval, and it is the difference between a machine
+   * that recovers when its network comes back and one that has to be restarted.
    */
   async function ensureGh(force = false): Promise<GhStatus> {
-    if (ghStatus !== null && !force) return ghStatus
+    if (ghStatus !== null && !force && (verdictFromFetch || ghStatus.problem === null)) {
+      return ghStatus
+    }
+    verdictFromFetch = false
 
     const override = ghFixture ?? settings().ghPath
     const command = resolveGhCommand(override ?? undefined)
@@ -388,9 +416,19 @@ export function createPullsService({
 
     await mapRemotes(only)
 
+    // Asked for the executable's identity - its path, its version, and a first
+    // opinion on the sign-in for the case where there is nothing to fetch.
     const status = await ensureGh()
     const command = ghCommand()
-    if (command === null || !status.authenticated) return
+    // The **only** thing that stops a pass, and deliberately: "there is no gh on
+    // this machine" is a local fact that cannot go stale between two ticks.
+    // Everything else - not signed in, no route to github.com - is a claim about
+    // a server, and a claim about a server may never gate the very request that
+    // would correct it. Gating on `status.authenticated` here is what used to
+    // latch this surface off for the rest of the session after one dropped
+    // connection: the cached "not signed in" suppressed every fetch, and the
+    // forced re-check that could have cleared it only ran when a fetch failed.
+    if (command === null) return
 
     // One fetch per distinct remote, not per directory: two checkouts of the
     // same repository are two rows in the pane and one call to GitHub.
@@ -415,6 +453,8 @@ export function createPullsService({
     let attempted = 0
     let failures = 0
     let firstFailure: string | null = null
+    /** What each failure turned out to be about, for the verdict below. */
+    const kinds = new Set<GhFailureKind>()
 
     await mapLimit([...bySlug.entries()], FETCH_CONCURRENCY, async ([slug, paths]) => {
       attempted += 1
@@ -426,6 +466,7 @@ export function createPullsService({
         failures += 1
         const message = err instanceof Error ? err.message : String(err)
         firstFailure ??= `${slug}: ${message}`
+        kinds.add(classifyGhFailure(message))
         // The rows already cached stay exactly where they are; only the reason
         // is recorded. That is the whole of stale-with-age.
         recordPrFetch(store, paths, { error: message })
@@ -435,15 +476,91 @@ export function createPullsService({
       recordPrFetch(store, paths, { error: null, fetchedAt: at })
     })
 
-    if (failures > 0) {
-      // Re-asked because a failure is usually a token that expired between two
-      // passes, and "run gh auth login" is a better sentence than an HTTP code.
-      const rechecked = await ensureGh(true)
-      if (rechecked.problem === null && failures === attempted) {
-        ghStatus = { ...rechecked, problem: failedProblem(firstFailure) }
+    if (attempted === 0) {
+      // Nothing was asked of GitHub, so nothing was learned about it. A verdict
+      // an earlier sweep drew from fetches has no fetches supporting it any
+      // more - every repository may since have been ignored or removed - so it
+      // is released, and `ensureGh` goes back to being the only opinion there
+      // is. It re-derives on the next pass rather than here, because asking
+      // again inside a sweep that fetched nothing is a process spent to
+      // re-confirm what it just said.
+      verdictFromFetch = false
+      return
+    }
+    if (failures < attempted) {
+      // Something came back, which settles both questions at once and is the
+      // only evidence on this surface that can: GitHub was reachable and it
+      // accepted the token. Clearing unconditionally is the point - a problem
+      // raised by an earlier sweep has just been disproved, and the version of
+      // this that only refreshed the status when something *failed* left the
+      // banner up through a completely healthy pass.
+      everFetched = true
+      clearProblem()
+      return
+    }
+
+    // Everything failed. A verdict about the machine may only be drawn from a
+    // full sweep: `only` is one repository, and one repository failing is a fact
+    // about that repository however total its own failure was. Retrying a broken
+    // row used to escalate it to "GitHub could not be reached" for this reason.
+    if (only !== null) return
+    ghStatus = { ...status, ...verdict(kinds, status, firstFailure) }
+    verdictFromFetch = true
+  }
+
+  /**
+   * What a sweep in which nothing succeeded means, from what the failures said.
+   *
+   * The classification comes from the **fetches**, never from `gh auth status`:
+   * with no route to github.com that command exits 1 and reports the token as
+   * invalid, so believing it would answer "you are signed out" to a question
+   * that was really about the network - which is exactly the sentence that costs
+   * a user their working login. A `pr list` failure carries the difference in
+   * its own text, and `classifyGhFailure` reads it.
+   *
+   * Mixed kinds fall through to `failed` with the first reason quoted. Two
+   * different explanations for one sweep is not something this can summarise, so
+   * it shows one rather than picking a side.
+   */
+  function verdict(
+    kinds: Set<GhFailureKind>,
+    status: GhStatus,
+    detail: string | null
+  ): Pick<GhStatus, 'authenticated' | 'problem'> {
+    if (kinds.size === 1 && kinds.has('offline')) {
+      // Not a statement about the sign-in either way - the token was never
+      // presented to anybody - so what is known about it is left as it was.
+      return { authenticated: status.authenticated, problem: offlineProblem() }
+    }
+    if (kinds.size === 1 && kinds.has('auth')) {
+      // GitHub answered and refused it. This is the one path that has actually
+      // established a signed-out machine, and the only one allowed to say so.
+      return {
+        authenticated: false,
+        problem: { kind: 'unauthenticated', message: GH_UNAUTHENTICATED_SENTENCE }
       }
     }
-    if (failures < attempted) everFetched = true
+    // Reached GitHub well enough to be told something else - a 404, a 403, a
+    // payload that would not parse. The sign-in is not what is wrong.
+    return { authenticated: true, problem: failedProblem(detail) }
+  }
+
+  /**
+   * Drops a global problem raised by an earlier sweep.
+   *
+   * Called whenever any repository came back, which is the only evidence this
+   * surface has that settles both questions at once, and it settles them
+   * affirmatively: GitHub answered, and it answered on this token.
+   */
+  function clearProblem(): void {
+    if (ghStatus === null) return
+    verdictFromFetch = true
+    if (ghStatus.problem === null && ghStatus.authenticated) return
+    ghStatus = { ...ghStatus, authenticated: true, problem: null }
+  }
+
+  function offlineProblem(): GhProblem {
+    return { kind: 'offline', message: GH_OFFLINE_SENTENCE }
   }
 
   function failedProblem(detail: string | null): GhProblem {
@@ -476,9 +593,14 @@ export function createPullsService({
    * pull request with no comments.
    */
   async function ghForDetail(): Promise<GhCommand> {
-    const status = await ensureGh()
     const command = ghCommand()
-    if (command === null || status.problem !== null) {
+    // Only the local fact stops it, for the reason `pass` gives at more length:
+    // a problem the *list* concluded a while ago describes a sweep, not this
+    // request, and refusing to run on the strength of one would leave a tab
+    // reporting a stale diagnosis instead of trying. If it is still true, this
+    // fetch is about to find that out first-hand and say so.
+    if (command === null) {
+      const status = await ensureGh()
       throw new Error(status.problem?.message ?? GH_MISSING_SENTENCE)
     }
     return command
@@ -548,13 +670,18 @@ export function createPullsService({
       ])
 
       if (detailAttempt.status === 'rejected') {
-        // Re-asked for the same reason the list pass re-asks: a fetch that
-        // failed is usually a token that expired, and "run gh auth login" is a
-        // better sentence than whatever the API said.
-        const rechecked = await ensureGh(true)
         const err: unknown = detailAttempt.reason
         const said = err instanceof Error ? err.message : String(err)
-        throw new Error(rechecked.problem?.message ?? said, { cause: err })
+        // Classified from what this fetch said, not from a fresh `gh auth
+        // status`. The version that re-asked that command turned every dropped
+        // connection into "run gh auth login" - and worse, wrote the answer into
+        // the shared status, so opening one tab while offline took the whole
+        // list down with it. A 401 still earns the sign-in sentence, because a
+        // 401 is GitHub itself refusing the token.
+        const kind = classifyGhFailure(said)
+        if (kind === 'auth') throw new Error(GH_UNAUTHENTICATED_SENTENCE, { cause: err })
+        if (kind === 'offline') throw new Error(GH_OFFLINE_SENTENCE, { cause: err })
+        throw new Error(said, { cause: err })
       }
 
       // A patch that would not fetch is **not** fatal and is not survivable
@@ -767,9 +894,21 @@ export function createPullsService({
     /** Ignored slugs a scanned project maps to, and the folder to call them. */
     const ignoredPresent = new Map<string, string>()
 
+    /**
+     * Projects whose origin remote has not been read yet.
+     *
+     * Counted rather than inferred, because the two states are the same absence
+     * otherwise: a project Helm has never run `git remote get-url` in has no row
+     * here, and so does one whose remote turned out to be GitLab. Without this
+     * the pane told a fresh install that none of its folders was on GitHub while
+     * the very first sweep was still finding out.
+     */
+    let unmapped = 0
+
     const repos: PullRepo[] = []
     for (const project of known) {
       const row = rows.get(project.path.toLowerCase())
+      if (row === undefined) unmapped += 1
       // Only repositories with a github.com origin are listed. The rest are
       // counted - `checked` is what lets the pane say "nothing here is on
       // GitHub" rather than showing an empty list with no explanation.
@@ -834,6 +973,7 @@ export function createPullsService({
       ignored,
       open: distinct.size,
       checked: known.length,
+      unmapped,
       gh: ghStatus ?? {
         path: null,
         source: null,
@@ -928,6 +1068,7 @@ export function createPullsService({
       // The gh status too: `ghPath` and the interval are written through the
       // same channel, and a cached status would keep naming the old executable.
       ghStatus = null
+      verdictFromFetch = false
       arm()
     },
 
@@ -941,6 +1082,7 @@ export function createPullsService({
     pointGh(path) {
       ghFixture = path
       ghStatus = null
+      verdictFromFetch = false
     },
 
     pointRemotes(remotes) {

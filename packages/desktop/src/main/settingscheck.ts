@@ -559,10 +559,11 @@ interface Fixtures {
   /** A program that answers `--version` with 9.9.9 and nothing else. */
   stubCli: string
   /**
-   * A `gh` that is installed and not signed in: it answers `--version` and
-   * fails `auth status` the way the real one does when there is no token.
-   * Which is how the "run gh auth login" sentence is provoked on a machine
-   * where gh *is* signed in.
+   * A `gh` that is installed and not signed in: it answers `--version`, fails
+   * `auth status`, and refuses every fetch with gh's own sign-in sentence -
+   * all three, because a signed-out machine does all three and the verdict is
+   * drawn from the last of them. Which is how the "run gh auth login" sentence
+   * is provoked on a machine where gh *is* signed in.
    */
   ghStub: string
   /** A scan root for the terminal group, with two projects to open shells in. */
@@ -605,8 +606,14 @@ function buildFixtures(dataDir: string): Fixtures {
       '  echo You are not logged into any GitHub hosts. 1>&2',
       '  exit /b 1',
       ')',
-      'echo gh: not signed in 1>&2',
-      'exit /b 1',
+      // What a real signed-out `gh` prints for `pr list`, and it has to be the
+      // real sentence rather than a plausible one: the sign-in verdict is drawn
+      // from the **fetch** now, not from the `auth status` exit code above, so a
+      // stub that invented its own wording would exercise the "some other
+      // failure" branch and prove nothing about the signed-out path it is here
+      // to provoke.
+      'echo To get started with GitHub CLI, please run: gh auth login. 1>&2',
+      'exit /b 4',
       ''
     ].join('\r\n')
   )
