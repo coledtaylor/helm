@@ -25,6 +25,8 @@ import {
   type UsageDisplayMode
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { SEGMENT_ON } from '../lib/segmented'
+import { Checkbox } from './Checkbox'
 import { CaretIcon, CheckIcon, CloseIcon, RefreshIcon, WarnIcon } from './icons'
 import type { SetupClaudeStatus } from './SetupPane'
 import { ThemeToggle } from './ThemeToggle'
@@ -427,7 +429,7 @@ export function SettingsPane({
                     className={cn(
                       'rounded-[5px] px-2.5 py-1 text-[11.5px] transition-colors',
                       usageDisplay === mode
-                        ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                        ? SEGMENT_ON
                         : 'text-fg-subtle hover:text-fg',
                       !available && 'cursor-default opacity-45 hover:text-fg-subtle'
                     )}
@@ -1038,7 +1040,7 @@ function TerminalGroup({
               className={cn(
                 'rounded-[5px] px-2.5 py-1 text-[11.5px] transition-colors',
                 terminal.terminalCursorStyle === style
-                  ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                  ? SEGMENT_ON
                   : 'text-fg-subtle hover:text-fg'
               )}
             >
@@ -1547,7 +1549,8 @@ function Select({
         {...rest}
         className={cn(
           'h-[30px] w-[220px] appearance-none rounded-well border border-border bg-surface-sunken',
-          'pr-7 pl-2.5 text-[12px] text-fg focus:border-accent focus:outline-none'
+          'pr-7 pl-2.5 text-[12px] text-fg transition-colors',
+          'hover:border-border-strong focus:border-accent focus:outline-none'
         )}
       >
         {children}
@@ -1562,35 +1565,6 @@ function Select({
 }
 
 /** The one control the system allows a solid accent fill (DESIGN.md par. 4). */
-function Checkbox({
-  checked,
-  onChange,
-  label
-}: {
-  checked: boolean
-  onChange: () => void
-  label: string
-}): JSX.Element {
-  return (
-    <span className="relative grid size-4 place-items-center">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={onChange}
-        aria-label={label}
-        className={cn(
-          'peer size-4 cursor-pointer appearance-none rounded-[5px] border-[1.5px] border-fg-subtle',
-          'transition-colors checked:border-accent checked:bg-accent hover:border-fg-muted'
-        )}
-      />
-      <CheckIcon
-        width={10}
-        height={10}
-        className="pointer-events-none absolute text-accent-fg opacity-0 peer-checked:opacity-100"
-      />
-    </span>
-  )
-}
 
 function Action({
   children,

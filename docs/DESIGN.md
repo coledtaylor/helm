@@ -106,6 +106,28 @@ Dividers inside an island fade to transparent at their ends - use the
 
 ## 4. Controls
 
+**Affordance.** Two things are true of every control here, and neither is a
+call site's to remember:
+
+- It takes the **pointer cursor**. `body { cursor: default }` still holds - over
+  prose, over a pane, over the canvas, this is desktop chrome and the arrow is
+  the resting state - but the controls are lifted out of it by a `:where(...)`
+  rule in `theme.css` keyed on what a thing *is*: a button, a link, a select, a
+  summary, a checkbox and its label. Disabled ones keep the arrow. This reverses
+  the older rule, which was that nothing had a pointer at all.
+- It **changes appearance under the pointer**. Which property is the recipe's
+  business - a fill for a row or a button, a border for a field, a text tone for
+  a ghost - but *something* must move, and something visible: `bg-hover` on top
+  of `surface-raised` is a measurable change nobody can see, which is why the
+  chosen segment below hovers to `active` instead.
+
+Both are asserted for every control the walk can reach by `pnpm
+affordance-check`, which puts a real pointer on each one in turn. The failure
+that check exists for is not a control someone forgot: Tailwind v4 gates
+`hover:` behind `@media (hover: hover)`, and on a machine reporting no fine
+pointer that killed **every** hover state in the app at once, silently, with the
+tokens resolving and the classes present. `theme.css` overrides the gate.
+
 - **Primary button**: outlined in the accent, never solid-filled.
   `rounded-well border border-accent text-accent-text hover:bg-accent-soft`.
   Disabled keeps the outline at reduced opacity; it never swaps to a grey fill.
@@ -113,15 +135,30 @@ Dividers inside an island fade to transparent at their ends - use the
 - **Ghost button**: no border, `text-fg-muted hover:bg-hover hover:text-fg`.
 - **Danger button**: outlined `border-danger/45 text-danger`.
 - **Input / filter**: sunken well - `rounded-well border-border bg-surface-sunken`,
-  focus swaps the border to the accent. That border *is* the focus indicator, so
-  a field takes **no** offset ring - the two together read as two rings around
-  one input. Set globally in `theme.css`, not per component. Focus ring
-  everywhere else is 2px accent at 2px offset (global `:focus-visible`);
-  checkboxes and radios keep it, having no border to move.
+  hover strengthens the hairline to `border-border-strong`, focus swaps it to
+  the accent. That border *is* the focus indicator, so a field takes **no**
+  offset ring - the two together read as two rings around one input. Set
+  globally in `theme.css`, not per component. Focus ring everywhere else is 2px
+  accent at 2px offset (global `:focus-visible`); checkboxes and radios keep it,
+  having no border to move.
+
+  The hover is on the **border and never the fill**, and that is not a
+  preference. A select's dropped-open list is an OS window that reads the
+  control's own `background-color`; a fill that changes under the pointer is a
+  fill the platform can catch mid-change and paint the listbox with.
 - **Segmented control**: a sunken well (`rounded-well border-border
   bg-surface-sunken p-0.5`) whose chosen segment lifts to
   `bg-surface-raised ring-1 ring-border-strong` at `rounded-[5px]`. For a
   choice of two to four; past that it is a select.
+
+  The chosen segment hovers to `bg-active`, not to `bg-hover` like everything
+  else, and this is the one place the ramp is skipped deliberately: the segment
+  rests on `surface-raised`, and `hover` sits six points from it across the
+  whole channel in dark mode. `active` is one clear step above where the segment
+  actually is. The class lives in `ui/src/lib/segmented.ts` as `SEGMENT_ON`,
+  because the string was copy-pasted at nine call sites and the tone is the part
+  that must not drift; the *unchosen* tone stays per-site, since icons sit at
+  `fg-subtle` and words at `fg-muted`.
 - **Select**: a native `<select>` in the input's sunken-well shape, with
   `appearance-none` and the app's own `CaretIcon` rotated 90°. Native and not
   a listbox of our own so that a driver can set it through
@@ -299,15 +336,20 @@ Dividers inside an island fade to transparent at their ends - use the
 
   It was a ghost first, on the reasoning that four outlined controls in a row
   read as a toolbar. That was the wrong trade, and the correction is worth
-  writing down because the same reasoning will come back. **Nothing in this app
-  has a pointer cursor** - `body { cursor: default }`, because this is desktop
-  chrome and not a document - so a control's outline is most of its claim to
-  being a control. A ghost works in the title bar, where it sits in a strip of
-  nothing but controls; dropped at the end of a row of prose it is two words
-  with a hover tint nobody hovers long enough to find. What separates a
-  navigation control from an action here is the **gap** - `ml-auto` puts them at
-  the far end - and the accent outline the primary button still has to itself.
-  Weight was being asked to carry a distinction position already carried.
+  writing down because the same reasoning will come back: dropped at the end of
+  a row of prose, a ghost is two words that happen to react if you find them. A
+  ghost works in the title bar, where it sits in a strip of nothing but
+  controls. What separates a navigation control from an action here is the
+  **gap** - `ml-auto` puts them at the far end - and the accent outline the
+  primary button still has to itself. Weight was being asked to carry a
+  distinction position already carried.
+
+  The original argument for the outline was that *nothing in this app had a
+  pointer cursor*, so a control's shape was its whole claim to being one. That
+  premise is gone - every control now takes the pointer (§4, "Affordance") -
+  and the conclusion survives it anyway, on the sentence above rather than on
+  the cursor. Worth recording, because the cursor was doing more of the
+  argument's work than it should have been.
 - **Project rows in the tree**: kind icon, name, `GitChip`. The icon stays
   because harness / repo / plain folder is the one thing a row's name and branch
   cannot say. Inventory counts do not - what a project contributes to a session

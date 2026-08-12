@@ -39,6 +39,7 @@ import { createCollector, runSessionsChecks, type CheckContext } from './session
 import { TITLEBAR_OVERLAY } from './chrome'
 import { createPtermHost } from './pterm'
 import { runDesignShot } from './designshot'
+import { runAffordanceChecks } from './affordancecheck'
 import { runProfilesChecks } from './profilescheck'
 import { runHistoryChecks } from './historycheck'
 import { runConfigChecks } from './configcheck'
@@ -86,9 +87,11 @@ type Mode =
   | 'pr-check'
   | 'shim-sweep'
   | 'design-shot'
+  | 'affordance-check'
 
 function modeFromArgv(): Mode {
   if (process.argv.includes('--design-shot')) return 'design-shot'
+  if (process.argv.includes('--affordance-check')) return 'affordance-check'
   if (process.argv.includes('--selftest')) return 'selftest'
   if (process.argv.includes('--fidelity')) return 'fidelity'
   if (process.argv.includes('--claude-check')) return 'claude-check'
@@ -125,7 +128,8 @@ const isSpikeMode =
   mode !== 'usage-check' &&
   mode !== 'settings-check' &&
   mode !== 'pr-check' &&
-  mode !== 'design-shot'
+  mode !== 'design-shot' &&
+  mode !== 'affordance-check'
 
 initDataDir()
 
@@ -819,6 +823,43 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`design-shot crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  if (mode === 'affordance-check') {
+    startApp({
+      onReady: (ctx) => {
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runAffordanceChecks(
+          ctx,
+          join(dataDir, 'screenshots'),
+          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
+        )
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('affordance-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`affordance-check report: ${file}`)
+            for (const c of checks) {
+              console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+              for (const n of c.notes) console.log(`      ${n}`)
+            }
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`affordance-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

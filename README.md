@@ -239,6 +239,7 @@ pnpm history-check          # the session index, checked against ~/.claude itsel
 pnpm config-check          # the config console, and a live session's own answer
 pnpm content-check          # markdown, wikilinks, and the artifact sandbox
 pnpm usage-check       # the status bar's figures, against /usage
+pnpm affordance-check          # every clickable control, under a real pointer
 pnpm packaging-check          # first run, the repos: key, and the built artefacts
 ```
 

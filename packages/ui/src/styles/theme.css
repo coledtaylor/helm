@@ -197,6 +197,51 @@ body {
   cursor: default;
 }
 
+/*
+ * The pointer cursor, granted centrally rather than control by control.
+ *
+ * The `cursor: default` above stays and is still right: over prose, over a
+ * pane, over the canvas, this is desktop chrome and the arrow is the resting
+ * state. What it also did, for as long as it stood alone, was leave every
+ * control in the app under the same arrow as the background behind it - so a
+ * button's entire claim to being a button was its outline, and a control
+ * without one was two words that happened to react if you found them.
+ *
+ * Keyed on what a thing *is*, so a control written tomorrow is affordant the
+ * day it is written; there are ~130 of them on the seven main views and the one
+ * that forgets is the one nobody notices. `pnpm affordance-check` asserts it
+ * for every control it can reach (AFF-3), and asserts the converse in AFF-5 -
+ * that a text field still says `text` and a disabled control still says
+ * `default` - because `* { cursor: pointer }` would pass the first claim and is
+ * the same lie pointing the other way.
+ *
+ * Both selectors sit inside `:where()`, which contributes no specificity. That
+ * buys two things: the disabled rule below wins on source order alone rather
+ * than on a specificity race that `label:has(...)` would otherwise complicate,
+ * and any component that means something different keeps the last word with a
+ * plain `cursor-*` utility.
+ */
+:where(
+  button,
+  [role='button'],
+  [role='tab'],
+  [role='option'],
+  a[href],
+  select,
+  summary,
+  input[type='checkbox'],
+  input[type='radio'],
+  label:has(input[type='checkbox']),
+  label:has(input[type='radio'])
+) {
+  cursor: pointer;
+}
+
+/* A control that cannot be used does not invite the click. */
+:where(:disabled, [aria-disabled='true'], label:has(:disabled)) {
+  cursor: default;
+}
+
 ::selection {
   background: var(--helm-accent-soft);
 }

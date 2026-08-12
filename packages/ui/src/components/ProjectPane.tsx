@@ -110,7 +110,15 @@ export function ProjectPane({
 
   return (
     // The pane island the active folder tab lifts into.
-    <div className="h-full overflow-y-auto rounded-island border border-border bg-surface">
+    <div
+      // The pane is on screen. Every other handle here hangs off a panel that a
+      // project may not have - a folder with no git remote has no pull
+      // requests - so a driver asking "did the pane paint" needs one that does
+      // not depend on what the project turned out to be (`data-settings-pane`
+      // is the same handle for the same reason).
+      data-project-pane
+      className="h-full overflow-y-auto rounded-island border border-border bg-surface"
+    >
       <div className="px-6 py-5">
         <header className="flex items-baseline gap-3">
           <h1 className="shrink-0 truncate text-[21px] leading-tight font-medium tracking-tight text-fg">
@@ -460,12 +468,15 @@ function Panel({
  *
  * A **secondary button** (DESIGN.md 4), the same shape as "Save as profile"
  * beside it. It was a ghost first, on the reasoning that four outlined controls
- * in one row read as a toolbar - and that was the wrong trade. Nothing in this
- * app has a pointer cursor (`body { cursor: default }` in theme.css: it is
- * desktop chrome, not a document), so a control's whole claim to being a
- * control is its shape. Strip the outline and what is left is two words that
- * happen to sit at the end of a row, with a hover tint nobody hovers long
- * enough to find.
+ * in one row read as a toolbar - and that was the wrong trade. Strip the
+ * outline and what is left is two words that happen to sit at the end of a row
+ * of prose, which is a different object from a ghost in the title bar, where
+ * everything around it is a control too.
+ *
+ * The first version of this argument leaned on nothing in the app having a
+ * pointer cursor. Everything clickable does now (DESIGN.md 4, "Affordance"),
+ * and the call still goes the same way - the outline was carrying the shape,
+ * not the cursor.
  *
  * What separates these from the two actions is the gap, not the weight: they
  * are pushed to the far end of the row, and the launch button keeps the only

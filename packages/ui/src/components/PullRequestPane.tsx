@@ -9,6 +9,7 @@ import type {
   RenderedPullEntry
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatMoment } from '../lib/time'
 import {
   CaretIcon,
@@ -617,7 +618,7 @@ function Header({
               className={cn(
                 'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
                 shown === option.id
-                  ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                  ? SEGMENT_ON
                   : 'text-fg-muted hover:text-fg'
               )}
             >

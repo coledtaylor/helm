@@ -2,7 +2,9 @@ import type { JSX, ReactNode } from 'react'
 import { useMemo, useState } from 'react'
 import type { EffectiveEntry, EffectiveView, Profile } from '@helm/core'
 import { cn } from '../lib/cn'
+import { SEGMENT_ON } from '../lib/segmented'
 import { formatBytes } from '../lib/time'
+import { Checkbox } from './Checkbox'
 import { AgentIcon, CommandIcon, LayersIcon, SearchIcon, SparkIcon, WarnIcon } from './icons'
 
 export interface EffectiveViewPaneProps {
@@ -271,7 +273,7 @@ export function EffectiveViewPane({
                         className={cn(
                           'rounded-[5px] px-2 py-0.5 text-[11px] capitalize transition-colors',
                           kind === option
-                            ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                            ? SEGMENT_ON
                             : 'text-fg-muted hover:text-fg'
                         )}
                       >
@@ -317,13 +319,12 @@ export function EffectiveViewPane({
               title="Settings"
               hint="Highest layer that names a key wins, per leaf."
               actions={
-                <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-fg-muted">
-                  <input
-                    type="checkbox"
-                    data-only-overridden
+                <label className="flex items-center gap-1.5 text-[11px] text-fg-muted">
+                  <Checkbox
+                    mark="data-only-overridden"
                     checked={onlyOverridden}
-                    onChange={(event) => setOnlyOverridden(event.target.checked)}
-                    className="size-3 accent-[var(--helm-accent)]"
+                    onChange={() => setOnlyOverridden(!onlyOverridden)}
+                    label="Only where layers disagree"
                   />
                   Only where layers disagree
                 </label>
@@ -507,7 +508,7 @@ function Entry({
 const fieldClass = cn(
   'h-7 w-full rounded-well border border-border bg-surface-sunken px-2 text-[12px]',
   'text-fg placeholder:text-fg-subtle select-text',
-  'focus:border-accent focus:outline-none'
+  'transition-colors hover:border-border-strong focus:border-accent focus:outline-none'
 )
 
 function Plural({ n, one }: { n: number; one: string }): JSX.Element {

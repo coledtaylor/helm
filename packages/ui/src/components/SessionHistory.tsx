@@ -2,7 +2,9 @@ import type { JSX, KeyboardEvent, ReactNode } from 'react'
 import { Fragment, useMemo } from 'react'
 import type { HistoryPage, HistoryPrompt, HistorySession, HistorySummary } from '@helm/core'
 import { cn } from '../lib/cn'
+import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes, formatMoment } from '../lib/time'
+import { Checkbox } from './Checkbox'
 import { PaneBack } from './PaneBack'
 import { CloseIcon, HistoryIcon, RefreshIcon, ResumeIcon, SearchIcon } from './icons'
 
@@ -252,12 +254,11 @@ export function SessionHistory({
                   label="By project"
                 />
               </div>
-              <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-fg-muted">
-                <input
-                  type="checkbox"
+              <label className="flex items-center gap-1.5 text-[11px] text-fg-muted">
+                <Checkbox
                   checked={resumableOnly}
-                  onChange={(event) => onResumableOnlyChange(event.target.checked)}
-                  className="size-3 accent-[var(--helm-accent)]"
+                  onChange={() => onResumableOnlyChange(!resumableOnly)}
+                  label="Resumable only"
                 />
                 Resumable only
               </label>
@@ -520,7 +521,7 @@ function Segment({
       className={cn(
         'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
         active
-          ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+          ? SEGMENT_ON
           : 'text-fg-muted hover:text-fg'
       )}
     >

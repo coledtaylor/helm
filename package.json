@@ -25,6 +25,7 @@
     "fidelity": "pnpm --filter @helm/desktop fidelity",
     "claude-check": "pnpm --filter @helm/desktop claude-check",
     "design-shot": "pnpm --filter @helm/desktop design-shot",
+    "affordance-check": "pnpm --filter @helm/desktop affordance-check",
     "sessions-check": "pnpm --filter @helm/desktop sessions-check",
     "profiles-check": "pnpm --filter @helm/desktop profiles-check",
     "history-check": "pnpm --filter @helm/desktop history-check",

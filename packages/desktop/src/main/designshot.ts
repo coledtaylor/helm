@@ -224,6 +224,10 @@ async function reportHover(
       x: b.left + b.width / 2,
       y: b.top + b.height / 2,
       bg: getComputedStyle(el).backgroundColor,
+      // A hover is not always a fill. The select's is a border that goes from
+      // the 8% hairline to the 16% one, and reading only the background would
+      // report that control as dead.
+      bd: getComputedStyle(el).borderTopColor,
       // A second hover-driven property on the same element, so "this tint is
       // broken" can be told apart from "no hover variant resolves at all".
       kidColor: (() => {
@@ -239,10 +243,8 @@ async function reportHover(
     }
   })()`
 
-  const at = await js<{ x: number; y: number; bg: string; hot: boolean; kidColor: string } | null>(
-    win,
-    read
-  ).catch(() => null)
+  type Read = { x: number; y: number; bg: string; bd: string; hot: boolean; kidColor: string }
+  const at = await js<Read | null>(win, read).catch(() => null)
   if (at === null) {
     console.error(`design-shot: hover ${probe.name} - nothing to hover`)
     return
@@ -253,14 +255,22 @@ async function reportHover(
   await sleep(200)
   await sendMouse(win, 'mouseMove', at.x, at.y)
   await sleep(300)
-  const hovered = await js<{ bg: string; hot: boolean; kidColor: string } | null>(win, read).catch(() => null)
+  const hovered = await js<Read | null>(win, read).catch(() => null)
   const after = hovered?.bg ?? '<gone>'
+  const still =
+    after === at.bg &&
+    (hovered?.bd ?? '') === at.bd &&
+    (hovered?.kidColor ?? '') === at.kidColor
   const verdict = !(hovered?.hot ?? false)
     ? '  *** POINTER NEVER LANDED - probe, not app ***'
-    : after === at.bg
+    : still
       ? '  *** NO CHANGE ***'
       : ''
-  console.log(`design-shot: hover ${probe.name} - bg ${at.bg} -> ${after} | kid ${at.kidColor} -> ${hovered?.kidColor ?? "?"}${verdict}`)
+  console.log(
+    `design-shot: hover ${probe.name} - bg ${at.bg} -> ${after}` +
+      ` | border ${at.bd} -> ${hovered?.bd ?? '?'}` +
+      ` | kid ${at.kidColor} -> ${hovered?.kidColor ?? '?'}${verdict}`
+  )
   const shot = await screenshot(win, outDir, `hover-${probe.name}.png`)
   files.push(shot.file)
   await sendMouse(win, 'mouseMove', 2, 2)
@@ -288,6 +298,18 @@ const HOVER_PROBES: Array<{ name: string; find: string }> = [
   {
     name: 'project-link',
     find: `document.querySelector('[data-project-link]')`
+  },
+  // The two recipes whose hover is a *judgement about a colour* rather than a
+  // yes/no. `affordance-check` says both changed; only the numbers here say
+  // whether the change is one an eye can find - which is the whole reason the
+  // chosen segment hovers to `active` and not to `hover`.
+  {
+    name: 'segment-on',
+    find: `document.querySelector('[role="radio"][aria-checked="true"]')`
+  },
+  {
+    name: 'select',
+    find: `document.querySelector('[data-config-scope], select')`
   }
 ]
 

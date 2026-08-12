@@ -1,6 +1,7 @@
 import type { JSX } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '../lib/cn'
+import { SEGMENT_ON } from '../lib/segmented'
 import { CloseIcon, HelmMarkIcon } from './icons'
 
 export interface NewHarnessDialogProps {
@@ -123,7 +124,7 @@ export function NewHarnessDialog({
                 className={cn(
                   'flex-1 rounded-[5px] px-2.5 py-1 text-[12px] transition-colors',
                   mode === candidate
-                    ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                    ? SEGMENT_ON
                     : 'text-fg-muted hover:text-fg'
                 )}
               >

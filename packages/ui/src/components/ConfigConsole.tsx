@@ -7,6 +7,7 @@ import type {
   ConfigTree
 } from '@helm/core'
 import { cn } from '../lib/cn'
+import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes } from '../lib/time'
 import { PaneBack } from './PaneBack'
 import { PaneHeader } from './PaneHeader'
@@ -203,7 +204,8 @@ export function ConfigConsole({
                 // freed by dropping the title is for.
                 'h-7 w-full max-w-64 min-w-0 rounded-well border border-border bg-surface-sunken px-2',
                 '@[384px]:w-auto @[384px]:min-w-40',
-                'text-[12px] text-fg focus:border-accent focus:outline-none'
+                'text-[12px] text-fg transition-colors',
+                'hover:border-border-strong focus:border-accent focus:outline-none'
               )}
             >
               {['user', 'harness', 'project'].map((kind) => {
@@ -261,7 +263,7 @@ export function ConfigConsole({
                   'min-w-0 truncate rounded-[5px] px-1.5 py-0.5 text-[11px] transition-colors',
                   '@[560px]:px-2.5',
                   view === option.id
-                    ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                    ? SEGMENT_ON
                     : 'text-fg-muted hover:text-fg'
                 )}
               >

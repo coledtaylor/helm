@@ -88,7 +88,9 @@ export function McpPanel({
   const canPreview = draft.name.trim() !== '' && draft.json.trim() !== '' && jsonProblem === null
 
   return (
-    <div className="h-full overflow-y-auto">
+    // `data-mcp-pane` says the view painted; every other handle in here waits
+    // on a `claude mcp list` that may not have run yet.
+    <div data-mcp-pane className="h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl px-8 py-7">
         <header className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
@@ -440,5 +442,5 @@ export function McpPanel({
 const fieldClass = cn(
   'h-7 w-full rounded-well border border-border bg-surface-sunken px-2 text-[12px]',
   'text-fg placeholder:text-fg-subtle select-text',
-  'focus:border-accent focus:outline-none'
+  'transition-colors hover:border-border-strong focus:border-accent focus:outline-none'
 )

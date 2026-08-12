@@ -34,7 +34,13 @@ A change to a surface named here is not done until its check is green.
 | `pnpm usage-check` | the status bar's usage figures | `core/usage/`, the status bar |
 | `pnpm settings-check` | the settings pane, every app setting, terminal/shell preferences | `core/store/settings.ts`, `SettingsPane`, `terminal.ts`, `estimateGrid`, `main/pterm.ts` |
 | `pnpm pr-check` | the pull-request surface end to end | `core/github/`, `main/pulls.ts`, `main/gh-cli.ts`, `PullsPane`, `PullRow`, `PullRequestPane`, the project pane's pull-request panel and its Config/Content links, `SessionHost.review` |
+| `pnpm affordance-check` | every clickable control looks clickable | `theme.css`, `lib/segmented.ts`, `Checkbox`, any shared control recipe, any new pane |
 | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
+
+`affordance-check` is the one that is about *all* of the UI rather than one
+surface, so it is owed by a change to a shared recipe and by a new pane - a new
+pane needs a row in its `VIEWS`, or its controls go unmeasured and the check
+says so in AFF-2 rather than passing quietly.
 
 `terminal.ts` sits under two of them and they answer different questions:
 fidelity says the baked configuration still renders a TUI correctly,
@@ -179,7 +185,7 @@ column for an island's top and bottom edge.
 
 Four groups, `--only=` like the checks (`GROUPS` in `designshot.ts` is the
 authority): **views** is the walk itself, **states** the collapsed section and
-the hover probes,
+the five hover probes,
 **responsive** a width sweep over the two scoped pane headers, and **split** a
 pane docked beside a real session at four widths. Two of them are worth knowing
 about. `responsive` **prints numbers** - each header's `overflow` and `spill`,
@@ -190,21 +196,54 @@ reaches pane widths below the ~596px the window's own `minWidth` leaves: the
 divider is bounded at a *fraction* of the row, so it docks far narrower than
 any window can be made.
 
-`states` **prints numbers too**, and they are the only hover coverage the app
-has. A screenshot walk clicks and moves on, so a hover tint is the one design
-state nothing else here can reach - and it is the one most able to vanish in
-silence. Each probe moves the pointer away, moves it onto the element that
-carries the class, and reports the computed colour before and after, plus a
-child's colour so "this tint is broken" can be told from "no hover variant
-resolves at all". It carries its own positive control - `el.matches(':hover')` -
-because a synthesised move that never reaches the hit test would report every
-tint on screen as dead, which looks identical to every tint being dead.
+`states` **prints numbers too**. Five named probes: each moves the pointer away,
+moves it onto the element that carries the class, and reports background, border
+and a child's colour before and after. Three of them ask "did anything happen";
+the other two - `segment-on` and `select` - exist because their hover is a
+*judgement about a colour* rather than a yes/no, and the numbers are what say
+whether a change an assertion scores as real is one an eye can find. Each probe
+carries its own positive control, `el.matches(':hover')`, because a synthesised
+move that never reaches the hit test reports every tint on screen as dead, which
+looks identical to every tint being dead.
 
-It has already earned that. Tailwind v4 gates `hover:` behind
-`@media (hover: hover)`, and on a machine where Chromium answers false to that
-(it prints the four pointer queries beside the probes) **every hover state in
-the app dies at once** with nothing else looking wrong. `theme.css` overrides
-the variant; these probes are what would notice if that override went away.
+Whether a control has *any* hover state is `affordance-check`'s question, over
+every control rather than five. These five stay because they print colours and
+cost seconds.
+
+**`affordance-check`** - does everything clickable look clickable. Walks ten
+views in the real window, enumerates every button, link, select, tab and
+checkbox on each, and puts a real pointer on each one in turn: AFF-3 says it
+computes `cursor: pointer`, AFF-4 says some computed property actually changes
+underneath it, AFF-5 says the converse - that a text field still reads `text`
+and a disabled control does not read `pointer`, since `* { cursor: pointer }`
+would pass AFF-3 and is the same lie pointing the other way. No sessions, no
+network, about a minute and a half.
+
+Three things about it are worth knowing before touching it. It **plants two
+controls first** (AFF-1) - one with no hover rule and an inline `cursor: default`
+that no stylesheet can outrank, one with both - and refuses to run the walk
+unless it fails the first and passes the second; an auditor is not believed
+until it has been made to fail. It reads what a person would see rather than
+scraping rules, because `document.styleSheets` throws `SecurityError` on
+`file://` and returns an empty list that reads exactly like "no rules matched",
+which is how the original bug survived one investigation. And a view is
+confirmed by an **anchor element**, not by how many controls it produced: a
+count high enough to catch a pane that never opened also fails
+`config:health`, which legitimately holds one control until the doctor has run.
+
+What it does not reach: the modal dialogs, the pull-request detail tabs and the
+profile editor, all of which are behind a state the walk would have to create
+and then unwind - and a walk that leaves a dialog open poisons every view after
+it. Their controls are covered only where they share a recipe with something the
+walk does reach.
+
+Both this and the `states` probes exist because of the same failure. Tailwind v4
+gates `hover:` behind `@media (hover: hover)`, and on a machine where Chromium
+answers false to that (design-shot prints the four pointer queries beside the
+probes) **every hover state in the app dies at once** with nothing else looking
+wrong: the tokens resolve, the classes are present, the rules are in the
+stylesheet. `theme.css` overrides the variant. Sampling three elements cannot
+tell that from three unlucky ones, which is the whole argument for enumerating.
 
 `views` walks the project pane **twice**: once for whatever the tree lists
 first, and once for a project the pull-request snapshot knows about

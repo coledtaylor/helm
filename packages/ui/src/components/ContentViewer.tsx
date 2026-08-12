@@ -172,7 +172,8 @@ export function ContentViewer({
                 // freed by dropping the title is for.
                 'h-7 w-full max-w-64 min-w-0 rounded-well border border-border bg-surface-sunken px-2',
                 '@[384px]:w-auto @[384px]:min-w-40',
-                'text-[12px] text-fg focus:border-accent focus:outline-none'
+                'text-[12px] text-fg transition-colors',
+                'hover:border-border-strong focus:border-accent focus:outline-none'
               )}
             >
               {['harness', 'project'].map((kind) => {
