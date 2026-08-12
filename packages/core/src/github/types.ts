@@ -435,6 +435,18 @@ export interface IgnoredRepo {
    * removable.
    */
   present: boolean
+  /**
+   * Every scanned project that maps to this slug. Empty when `present` is false.
+   *
+   * Carried as well as `name`, because a surface scoped to **one** directory
+   * cannot use a slug: a project pane asking "are my pull requests being
+   * hidden" has a path and nothing else, and the ignore list is structurally
+   * absent from `repos`. Without this the setting would hide itself on that
+   * pane - the one thing the Pulls pane's Ignored section exists to prevent -
+   * by making an ignored repository indistinguishable from a folder with no
+   * github.com origin.
+   */
+  paths: string[]
 }
 
 /** One discovered project, and the pull requests its origin remote has. */

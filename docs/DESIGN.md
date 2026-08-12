@@ -287,6 +287,17 @@ Dividers inside an island fade to transparent at their ends - use the
   harness that happened to be expanded and forced a second unscoped copy to
   stand under an empty tree; a destination that can be hidden by a collapsed
   group is a destination that can be lost.
+
+  A **project pane may still link to both, scoped to itself**, and that is not
+  a reversal of the paragraph above. What was wrong with the per-harness links
+  was that they were the *only* way in; the sidebar rows are, and stay, the way
+  in. What a link from a project adds is the scope - arriving at the pane
+  already pointed at the project that was on screen instead of picking it out
+  of a switcher. Such a link is a ghost button at the far end of the pane's
+  action row, carrying the sidebar's own icon for its destination, so the two
+  read as one object. Ghost and not outlined for the reason the title bar's
+  settings button is: the row already has two outlined controls, and four would
+  read as a toolbar with the primary action lost in it.
 - **Project rows in the tree**: kind icon, name, `GitChip`. The icon stays
   because harness / repo / plain folder is the one thing a row's name and branch
   cannot say. Inventory counts do not - what a project contributes to a session

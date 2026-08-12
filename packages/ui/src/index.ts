@@ -46,7 +46,8 @@ export { GitChip, type GitChipProps } from './components/GitChip'
 export { InventoryChips, type InventoryChipsProps } from './components/InventoryChips'
 export { ProfileEditor, type ProfileEditorProps } from './components/ProfileEditor'
 export { ProfileList, type ProfileListProps } from './components/ProfileList'
-export { ProjectPane, type ProjectPaneProps } from './components/ProjectPane'
+export { ProjectPane, projectPulls, type ProjectPaneProps } from './components/ProjectPane'
+export { PullRow, useNow, type PullRowProps } from './components/PullRow'
 export { ProjectRow, type ProjectRowProps } from './components/ProjectRow'
 export {
   PullsPane,

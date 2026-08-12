@@ -411,6 +411,16 @@ advance would be wrong about all three.
   spends most of the pane printing the names of repositories with nothing in
   them, and puts the two rows that matter below the fold. No buttons on a row
   (house rule); the row itself opens the pull request.
+- **Project pane** - the same rows for the one repository the pane is about,
+  under a panel captioned with the slug and the age. The row is the same
+  component (`PullRow`) *without* its repository pill: the pill says which list
+  a row came out of, and here the panel already said. The panel is **absent**
+  for a project the surface has nothing to say about - a folder with no
+  github.com origin is most folders - and present with a sentence when the
+  ignore list is what is keeping the rows away, which is why `IgnoredRepo`
+  carries the paths it maps to. A pane scoped to one directory cannot look a
+  slug up, and "no panel" on a project page would read as "no pull requests":
+  the setting hiding itself, on a second surface.
 - **Pull request tab** - one island: header facts, then Conversation, Commits
   and Files behind a segmented control, then the review row, separated by
   `.island-rule`s. Laid out as GitHub's own page is because that is the shape

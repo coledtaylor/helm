@@ -231,7 +231,7 @@ function signature(snapshot: PullsSnapshot): string {
     // Ignoring a repository that had nothing open moves no other field in here
     // - the same reason `pull.checks` is in the row tuple below - so without
     // this the pane would keep painting the list from before the toggle.
-    snapshot.ignored.map((repo) => [repo.slug, repo.name, repo.present]),
+    snapshot.ignored.map((repo) => [repo.slug, repo.name, repo.present, repo.paths]),
     snapshot.repos.map((repo) => [
       repo.path,
       repo.slug,
@@ -891,8 +891,8 @@ export function createPullsService({
     const known = projects()
     const ignoredRepos = settings().prIgnoredRepos
 
-    /** Ignored slugs a scanned project maps to, and the folder to call them. */
-    const ignoredPresent = new Map<string, string>()
+    /** Ignored slugs a scanned project maps to: what to call them, and where. */
+    const ignoredPresent = new Map<string, { name: string; paths: string[] }>()
 
     /**
      * Projects whose origin remote has not been read yet.
@@ -916,9 +916,14 @@ export function createPullsService({
       if (isRepoIgnored(ignoredRepos, row.slug)) {
         // First checkout wins the name. Two directories for one slug are one
         // entry, because the setting is one entry - and a list that named the
-        // same repository twice would offer two ticks for one fact.
-        if (!ignoredPresent.has(row.slug.toLowerCase())) {
-          ignoredPresent.set(row.slug.toLowerCase(), project.name)
+        // same repository twice would offer two ticks for one fact. Every
+        // directory is still collected: the entry is one tick, but each of
+        // those checkouts has a project pane that has to know it is covered.
+        const held = ignoredPresent.get(row.slug.toLowerCase())
+        if (held === undefined) {
+          ignoredPresent.set(row.slug.toLowerCase(), { name: project.name, paths: [project.path] })
+        } else {
+          held.paths.push(project.path)
         }
         continue
       }
@@ -959,11 +964,12 @@ export function createPullsService({
     // screen saying so.
     const ignored: IgnoredRepo[] = ignoredRepos
       .map((slug) => {
-        const name = ignoredPresent.get(slug.toLowerCase())
+        const mapped = ignoredPresent.get(slug.toLowerCase())
         return {
           slug,
-          name: name ?? (slug.split('/')[1] ?? slug),
-          present: name !== undefined
+          name: mapped?.name ?? (slug.split('/')[1] ?? slug),
+          present: mapped !== undefined,
+          paths: mapped?.paths ?? []
         }
       })
       .sort((a, b) => a.slug.toLowerCase().localeCompare(b.slug.toLowerCase()))

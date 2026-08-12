@@ -33,7 +33,7 @@ A change to a surface named here is not done until its check is green.
 | `pnpm packaging-check` | first run, packaging, personal-path audit | setup, portable mode, the installer |
 | `pnpm usage-check` | the status bar's usage figures | `core/usage/`, the status bar |
 | `pnpm settings-check` | the settings pane, every app setting, terminal/shell preferences | `core/store/settings.ts`, `SettingsPane`, `terminal.ts`, `estimateGrid`, `main/pterm.ts` |
-| `pnpm pr-check` | the pull-request surface end to end | `core/github/`, `main/pulls.ts`, `main/gh-cli.ts`, `PullsPane`, `PullRequestPane`, `SessionHost.review` |
+| `pnpm pr-check` | the pull-request surface end to end | `core/github/`, `main/pulls.ts`, `main/gh-cli.ts`, `PullsPane`, `PullRow`, `PullRequestPane`, the project pane's pull-request panel and its Config/Content links, `SessionHost.review` |
 | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
 
 `terminal.ts` sits under two of them and they answer different questions:
@@ -188,6 +188,14 @@ And `split` is the only group that spawns a session, and the only one that
 reaches pane widths below the ~596px the window's own `minWidth` leaves: the
 divider is bounded at a *fraction* of the row, so it docks far narrower than
 any window can be made.
+
+`views` walks the project pane **twice**: once for whatever the tree lists
+first, and once for a project the pull-request snapshot knows about
+(`project-repo-*.png`), found by path rather than by position. On a machine
+organised into harnesses the first row is the harness, which is not a git
+repository - so without the second shot a branch, a git stat group and the
+whole pull-request panel are never photographed. It is skipped, out loud, where
+there are no github.com remotes.
 
 ## Where the output lands
 

@@ -103,6 +103,26 @@ async function text(win: BrowserWindow, selector: string): Promise<string> {
   return js<string>(win, `(document.querySelector(${q(selector)})?.textContent ?? '').trim()`)
 }
 
+/**
+ * Click one project row in the sidebar tree, found by the path it carries as
+ * its `title`.
+ *
+ * Compared in JavaScript rather than matched with `[title="..."]`: a fixture
+ * path is a Windows path full of backslashes, and a backslash is an escape
+ * character in a CSS string too. The selector would need escaping twice, and
+ * the version that only breaks on a path containing `\t` or `\U` is the version
+ * that breaks on somebody else's machine.
+ */
+async function clickProjectRow(win: BrowserWindow, path: string): Promise<boolean> {
+  return js<boolean>(
+    win,
+    `(() => { const want = ${JSON.stringify(path.toLowerCase())};
+      const el = [...document.querySelectorAll('aside nav button[title]')]
+        .find((b) => b.title.toLowerCase() === want);
+      if (!el) return false; el.click(); return true })()`
+  )
+}
+
 async function exists(win: BrowserWindow, selector: string): Promise<boolean> {
   return js<boolean>(win, `Boolean(document.querySelector(${q(selector)}))`)
 }
@@ -1405,6 +1425,214 @@ async function fixtureChecks({
       'because that is the control a user has in front of them at the moment they notice',
       'a repository is missing - and the setting is read back afterwards to prove the',
       'chip wrote the setting rather than only repainting the list.'
+    ]
+  })
+
+  // -----------------------------------------------------------------------
+  // PR-23: the project pane carries its own repository's pull requests
+  // -----------------------------------------------------------------------
+  //
+  // Four claims at once, because they are one surface: the panel paints the
+  // pull requests the fixture holds, it drops the source pill that the
+  // flattened list needs, it carries the age caption this whole surface is
+  // required to carry, and a row opens the same tab a Pulls-pane row opens.
+  // The two pane links are checked in the same pass, against the scope
+  // switchers' own values.
+  const alphaFixture = JSON.parse(
+    readFileSync(join(fixtures.home, 'list', `${SLUG_A.replace('/', '__')}.json`), 'utf8')
+  ) as Array<{ number: number }>
+  const expectedNumbers = alphaFixture.map((entry) => entry.number).sort((a, b) => a - b)
+
+  const projectRowClicked = await clickProjectRow(win, fixtures.alpha)
+  const panelPainted = await pollJs(
+    win,
+    `document.querySelector('[data-project-panel="pulls"]')`,
+    10_000
+  )
+  await sleep(400)
+
+  const panel = await js<{ rows: string[]; pills: number; caption: string; links: string[] }>(
+    win,
+    `(() => {
+       const el = document.querySelector('[data-project-panel="pulls"]')
+       if (!el) return { rows: [], pills: 0, caption: '', links: [] }
+       return {
+         rows: [...el.querySelectorAll('[data-pull]')].map((r) => r.getAttribute('data-pull') ?? ''),
+         pills: el.querySelectorAll('[data-pull-repo]').length,
+         caption: (el.querySelector('[data-project-pulls-caption]')?.textContent ?? '').trim(),
+         links: [...document.querySelectorAll('[data-project-link]')]
+           .map((b) => b.getAttribute('data-project-link') ?? '')
+       } })()`
+  )
+  const projectShot = await screenshot(win, shotDir, 'pr-project-pane.png')
+
+  const panelNumbers = panel.rows
+    .map((value) => Number(value.split('#')[1]))
+    .sort((a, b) => a - b)
+
+  // DOM order, which is the pane's own order rather than this sort's.
+  const firstRow = panel.rows[0] ?? ''
+  const firstNumber = firstRow === '' ? null : Number(firstRow.split('#')[1])
+  const rowClicked =
+    firstRow !== '' && (await click(win, `[data-project-panel="pulls"] [data-pull="${firstRow}"]`))
+  const tabOpened = await pollJs(win, `document.querySelector('[data-pr-title]')`, 20_000)
+  await sleep(500)
+  const openedNumber = await attr(win, '[data-pr-number]', 'data-pr-number')
+
+  /**
+   * Out through one link, and back.
+   *
+   * The scope switcher's **own value** is the witness rather than a caption:
+   * it is a real `<select>`, and a select whose value is not among its options
+   * paints blank and reads back `''`. So this fails both when the link does not
+   * re-point the pane and when the project is not a scope the pane can reach -
+   * which are two different bugs with one symptom on screen.
+   */
+  const followLink = async (link: string, anchor: string): Promise<string> => {
+    await clickProjectRow(win, fixtures.alpha)
+    await sleep(300)
+    if (!(await click(win, `[data-project-link="${link}"]`))) return '<no link>'
+    if (!(await pollJs(win, `document.querySelector(${q(anchor)})`, 10_000))) return '<no pane>'
+    await sleep(500)
+    return js<string>(win, `document.querySelector(${q(anchor)})?.value ?? ''`)
+  }
+
+  const configScope = await followLink('config', '[data-config-scope]')
+  const contentScope = await followLink('content', '[data-content-scope]')
+  const same = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
+
+  checks.push({
+    id: 'PR-23',
+    criterion:
+      "A project pane lists its own repository's pull requests and opens Config and Content on it",
+    title: `${String(panelNumbers.length)} rows, no source pill, both links landed on the project`,
+    ok:
+      projectRowClicked &&
+      panelPainted &&
+      // The fixture has to discriminate: two empty lists match each other.
+      expectedNumbers.length > 0 &&
+      panelNumbers.length === expectedNumbers.length &&
+      panelNumbers.every((value, at) => value === expectedNumbers[at]) &&
+      // No source pill. The pane names the repository, so a pill on every row
+      // would be the heading said once per row (DESIGN.md 5, source pills).
+      panel.pills === 0 &&
+      // Mandatory, not decorative - the rule the whole surface degrades by.
+      /fetched/.test(panel.caption) &&
+      panel.links.includes('config') &&
+      panel.links.includes('content') &&
+      rowClicked &&
+      tabOpened &&
+      openedNumber === String(firstNumber) &&
+      same(configScope, fixtures.alpha) &&
+      same(contentScope, fixtures.alpha),
+    detail: {
+      project: fixtures.alpha,
+      fixtureNumbers: expectedNumbers,
+      paneNumbers: panelNumbers,
+      sourcePillsInPanel: panel.pills,
+      caption: panel.caption,
+      links: panel.links,
+      rowClicked: firstRow,
+      openedTabNumber: openedNumber,
+      configScope,
+      contentScope,
+      screenshot: projectShot.file
+    },
+    notes: [
+      'The numbers are compared against this driver\'s own `JSON.parse` of the fixture the',
+      'fake gh answers from, not against the Pulls pane - two surfaces reading one snapshot',
+      'agree with each other whether or not either agrees with GitHub.',
+      'The absence of the source pill is asserted rather than eyeballed: it is the one',
+      'thing that differs between this row and the same row on the Pulls pane, and a',
+      'shared component silently defaulting it back on is exactly the regression a',
+      'screenshot review would pass over.',
+      'The links are read off the scope `<select>`s rather than a heading, because a',
+      'value with no matching option reads back as an empty string - so a project that',
+      'stopped being a config or content scope fails here instead of painting an empty pane.'
+    ]
+  })
+
+  // -----------------------------------------------------------------------
+  // PR-24: the ignore list may not go silent on a project pane
+  // -----------------------------------------------------------------------
+  //
+  // An ignored repository is structurally absent from `snapshot.repos`, which
+  // is deliberate. The consequence is that a pane scoped to one directory has
+  // nothing to find, and "no panel" on a project page reads as "no pull
+  // requests" - the setting hiding itself, which is the thing the Pulls pane's
+  // Ignored section exists to prevent. This is that rule on the new surface,
+  // and it is what `IgnoredRepo.paths` is for.
+  const ignoredAlpha = await sendWrite(win, { prIgnoredRepos: [SLUG_A] })
+  await refreshNow(pulls)
+  await clickProjectRow(win, fixtures.alpha)
+  await sleep(600)
+
+  const ignoredPane = await js<{ said: string; panel: boolean; rows: number; undo: string | null }>(
+    win,
+    `(() => {
+       const el = document.querySelector('[data-project-panel="pulls-ignored"]')
+       return {
+         said: (el?.textContent ?? '').trim(),
+         panel: Boolean(document.querySelector('[data-project-panel="pulls"]')),
+         rows: document.querySelectorAll('[data-pull]').length,
+         undo: document.querySelector('[data-project-unignore]')?.getAttribute('data-project-unignore') ?? null
+       } })()`
+  )
+  const ignoredProjectShot = await screenshot(win, shotDir, 'pr-project-ignored.png')
+
+  // Undone from the pane the user is standing on, the same direction the Pulls
+  // pane offers - and the setting is read back, so the button has to have
+  // written it rather than only repainted.
+  const undoClicked = await click(win, `[data-project-unignore="${SLUG_A}"]`)
+  await refreshNow(pulls)
+  await sleep(700)
+  const afterUndo = await js<{ setting: string[]; rows: number; panel: boolean }>(
+    win,
+    `window.helm.invoke('settings:read').then((s) => ({
+       setting: s.prIgnoredRepos,
+       rows: document.querySelectorAll('[data-project-panel="pulls"] [data-pull]').length,
+       panel: Boolean(document.querySelector('[data-project-panel="pulls"]'))
+     }))`
+  )
+
+  checks.push({
+    id: 'PR-24',
+    criterion: 'An ignored repository says so on its project pane rather than showing nothing',
+    title: `${SLUG_A} named its own ignore entry, and the pane's undo put ${String(afterUndo.rows)} rows back`,
+    ok:
+      ignoredAlpha.accepted &&
+      // It said something, and what it said names the repository being hidden -
+      // an empty panel with a heading would satisfy "a panel exists".
+      ignoredPane.said.includes(SLUG_A) &&
+      // And it is the ignored panel, not the ordinary one painted empty.
+      !ignoredPane.panel &&
+      ignoredPane.rows === 0 &&
+      ignoredPane.undo === SLUG_A &&
+      undoClicked &&
+      afterUndo.setting.length === 0 &&
+      afterUndo.panel &&
+      // Back to what PR-23 counted, from the cache that ignoring left alone.
+      afterUndo.rows === expectedNumbers.length,
+    detail: {
+      project: fixtures.alpha,
+      slug: SLUG_A,
+      writeAccepted: ignoredAlpha.accepted,
+      writeError: ignoredAlpha.error,
+      paneSaid: ignoredPane.said,
+      ordinaryPanelPresent: ignoredPane.panel,
+      rowsWhileIgnored: ignoredPane.rows,
+      undoTarget: ignoredPane.undo,
+      settingAfterUndo: afterUndo.setting,
+      rowsAfterUndo: afterUndo.rows,
+      screenshot: ignoredProjectShot.file
+    },
+    notes: [
+      'This is the reason `IgnoredRepo` carries `paths` at all. The pane has a directory',
+      'and the setting has a slug, and the two only meet through the snapshot - without',
+      'the paths an ignored repository is indistinguishable from a folder that has no',
+      'github.com origin, and both would paint nothing.',
+      'The undo is clicked on the project pane rather than on the Pulls pane, because',
+      'the pane a user notices the absence on is the pane the remedy has to be on.'
     ]
   })
 

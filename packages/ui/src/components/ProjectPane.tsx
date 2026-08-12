@@ -1,14 +1,49 @@
 import type { JSX, ReactNode } from 'react'
 import type { Project } from '@helm/core'
+import type { IgnoredRepo, PullRepo, PullsSnapshot, PullSummary } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { GitChip } from './GitChip'
-import { LayersIcon, TerminalIcon } from './icons'
+import { fetchedCaption } from './PullsPane'
+import { PullRow, useNow } from './PullRow'
+import { BookIcon, LayersIcon, RefreshIcon, SlidersIcon, TerminalIcon } from './icons'
 
 const KIND_LABEL = {
   harness: 'Harness',
   repo: 'Repo',
   folder: 'Folder'
 } as const
+
+/** DESIGN.md 2's caps label, named once because `Panel` renders it two ways. */
+const LABEL = 'text-[9.5px] font-semibold tracking-[.08em] text-fg-subtle uppercase'
+
+/**
+ * What the pull-request surface has to say about **one** project.
+ *
+ * Derived here rather than in the window, and off the same `PullsSnapshot` the
+ * Pulls pane paints, so the two surfaces cannot disagree about a repository:
+ * one reduction of one snapshot, in the package that draws both.
+ *
+ * `ignored` is why this is a function and not a `find`. An ignored repository
+ * is *structurally absent* from `snapshot.repos` - that is deliberate, so no
+ * count can include one by forgetting a filter - which means a project pane
+ * that only looked at `repos` would show nothing at all for it, and "nothing"
+ * on this pane reads as "no pull requests". The setting is not allowed to hide
+ * itself, which is the same rule the Pulls pane's Ignored section exists for.
+ */
+export function projectPulls(
+  snapshot: PullsSnapshot | null,
+  projectPath: string
+): { repo: PullRepo | null; ignored: IgnoredRepo | null } {
+  if (snapshot === null) return { repo: null, ignored: null }
+  const wanted = projectPath.toLowerCase()
+  const repo = snapshot.repos.find((candidate) => candidate.path.toLowerCase() === wanted) ?? null
+  if (repo !== null) return { repo, ignored: null }
+  const ignored =
+    snapshot.ignored.find((candidate) =>
+      candidate.paths.some((path) => path.toLowerCase() === wanted)
+    ) ?? null
+  return { repo: null, ignored }
+}
 
 export interface ProjectPaneProps {
   project: Project
@@ -21,6 +56,22 @@ export interface ProjectPaneProps {
   launchError?: string | null | undefined
   /** Opens the profile editor seeded with this project as the root. */
   onSaveAsProfile?: ((project: Project) => void) | undefined
+  /** Opens the config console with this project as its scope. */
+  onOpenConfig?: ((project: Project) => void) | undefined
+  /** Opens the content viewer with this project as its scope. */
+  onOpenContent?: ((project: Project) => void) | undefined
+  /**
+   * The whole pull-request snapshot, reduced to this project by `projectPulls`.
+   * Null before the first read; the panel is simply absent for a project the
+   * surface has nothing to say about.
+   */
+  pulls?: PullsSnapshot | null | undefined
+  /** Opens one pull request in a tab of its own. */
+  onOpenPull?: ((repo: PullRepo, pull: PullSummary) => void) | undefined
+  /** Checks this one repository now. */
+  onRefreshPulls?: ((repoPath: string) => void) | undefined
+  /** Takes this repository back off the ignore list. */
+  onUnignoreRepo?: ((slug: string) => void) | undefined
 }
 
 /**
@@ -30,6 +81,15 @@ export interface ProjectPaneProps {
  * The inventory table is the argument for the button: it is the same count the
  * sidebar chips carry, laid out so the number that matters - how much this
  * project would contribute to a session - is readable rather than glanceable.
+ *
+ * The pane is also the project's **hub**. The config console and the content
+ * viewer are global entry points in the sidebar and stay that way - DESIGN.md
+ * 5b says why, and nothing here changes it: a destination reachable only
+ * through a project pane would be a destination a collapsed tree could hide.
+ * What the links here add is the *scope*. From the sidebar both panes open on
+ * whatever scope they last had and the user picks this project out of a
+ * switcher; from here they open on it already. A second route to a pane that is
+ * still reachable without it is not the failure that rule is about.
  */
 export function ProjectPane({
   project,
@@ -37,9 +97,16 @@ export function ProjectPane({
   onLaunch,
   launching = false,
   launchError = null,
-  onSaveAsProfile
+  onSaveAsProfile,
+  onOpenConfig,
+  onOpenContent,
+  pulls = null,
+  onOpenPull,
+  onRefreshPulls,
+  onUnignoreRepo
 }: ProjectPaneProps): JSX.Element {
   const { inventory } = project
+  const { repo, ignored } = projectPulls(pulls, project.path)
 
   return (
     // The pane island the active folder tab lifts into.
@@ -94,6 +161,36 @@ export function ProjectPane({
           <span className="text-[11px] text-fg-subtle">
             Runs <code className="font-mono">claude</code> with this folder as the working directory.
           </span>
+          {/* Pushed to the far end, and ghosts rather than outlines: these go
+              somewhere, the two on the left do something. Two more bordered
+              controls in the row would read as a four-button toolbar and bury
+              the launch button in it - the same call the title bar's settings
+              button makes beside the theme toggle. They carry the sidebar's own
+              icons, so a link and its destination are the same object. */}
+          {(onOpenConfig ?? onOpenContent) && (
+            <span className="ml-auto flex shrink-0 items-center gap-1">
+              {onOpenConfig && (
+                <PaneLink
+                  mark="config"
+                  onClick={() => onOpenConfig(project)}
+                  title={`Open the config console on ${project.name}`}
+                  icon={<SlidersIcon width={13} height={13} />}
+                >
+                  Config
+                </PaneLink>
+              )}
+              {onOpenContent && (
+                <PaneLink
+                  mark="content"
+                  onClick={() => onOpenContent(project)}
+                  title={`Open the content viewer on ${project.name}`}
+                  icon={<BookIcon width={13} height={13} />}
+                >
+                  Content
+                </PaneLink>
+              )}
+            </span>
+          )}
         </div>
 
         {launchError !== null && (
@@ -147,17 +244,181 @@ export function ProjectPane({
             </Muted>
           )}
         </Panel>
+
+        <PullRequests
+          repo={repo}
+          ignored={ignored}
+          snapshot={pulls}
+          {...(onOpenPull ? { onOpenPull } : {})}
+          {...(onRefreshPulls ? { onRefresh: onRefreshPulls } : {})}
+          {...(onUnignoreRepo ? { onUnignore: onUnignoreRepo } : {})}
+        />
       </div>
     </div>
   )
 }
 
+/**
+ * This project's open pull requests, or the reason there is no list.
+ *
+ * **Absent, not empty, for a project the surface has nothing to say about.** A
+ * folder with no github.com origin is most folders, and a panel on every one of
+ * them saying so would be a paragraph of nothing repeated down the tree. What
+ * earns the panel is a repository the sweep has mapped - including one with no
+ * pull requests open, which is a fact - or one the ignore list is keeping off
+ * the surface, which is a fact about a setting and may never be silent.
+ *
+ * The **age caption is mandatory**, as it is on the Pulls pane and for the same
+ * reason: this list is a mirror of something on a server, so it is always old,
+ * and a count with no age is a claim about right now that nothing here can
+ * make. Degradation is stale-with-age - the rows stay and the reason goes
+ * beside them - which is the opposite of what the usage figures do, because a
+ * pull request that was open two hours ago is a true fact about two hours ago.
+ */
+function PullRequests({
+  repo,
+  ignored,
+  snapshot,
+  onOpenPull,
+  onRefresh,
+  onUnignore
+}: {
+  repo: PullRepo | null
+  ignored: IgnoredRepo | null
+  snapshot: PullsSnapshot | null
+  onOpenPull?: ((repo: PullRepo, pull: PullSummary) => void) | undefined
+  onRefresh?: ((repoPath: string) => void) | undefined
+  onUnignore?: ((slug: string) => void) | undefined
+}): JSX.Element | null {
+  // One clock for the panel, ticking whether or not the snapshot moves - an
+  // age that only repainted with new data would go on saying "fetched 1m ago"
+  // for the rest of the afternoon.
+  const now = useNow()
+
+  if (repo === null && ignored === null) return null
+
+  if (repo === null) {
+    // Ignored. The panel says which setting, and stands beside its undo - the
+    // reveal direction only, exactly as the Pulls pane does. Ticking it back on
+    // is in Settings, with the rest of the settings.
+    const slug = ignored?.slug ?? ''
+    return (
+      <Panel title="Pull requests" mark="pulls-ignored" className="mt-2">
+        <p className="text-[12px] text-fg-muted">
+          Pull requests for <span className="font-mono text-[11.5px]">{slug}</span> are not being
+          fetched - the repository is on Helm&apos;s ignore list.
+        </p>
+        {onUnignore && (
+          <button
+            type="button"
+            data-project-unignore={slug}
+            onClick={() => onUnignore(slug)}
+            className={cn(
+              'mt-2.5 rounded-well border border-border-strong px-3 py-1',
+              'text-[11.5px] text-fg transition-colors hover:bg-hover'
+            )}
+          >
+            Fetch this repository again
+          </button>
+        )}
+      </Panel>
+    )
+  }
+
+  const problem = snapshot?.gh.problem ?? null
+  const fetching = snapshot?.fetching ?? false
+
+  return (
+    <Panel
+      title="Pull requests"
+      mark="pulls"
+      className="mt-2"
+      caption={
+        <>
+          <span className="font-mono text-[10.5px]">{repo.slug}</span>
+          {/* Full strength, like the Pulls pane header's own separators: this
+              is a caption a reader parses, not a row they scan past. */}
+          <span aria-hidden>·</span>
+          {/* Mandatory. See the component comment. */}
+          <span data-project-pulls-caption>{fetchedCaption(repo.fetchedAtMs, now)}</span>
+        </>
+      }
+      action={
+        onRefresh && (
+          <button
+            type="button"
+            data-project-pulls-refresh
+            onClick={() => onRefresh(repo.path)}
+            disabled={fetching}
+            title={`Check ${repo.slug ?? repo.name} for open pull requests now`}
+            aria-label="Check for open pull requests"
+            className={cn(
+              'grid size-6 shrink-0 place-items-center rounded text-fg-subtle transition-colors',
+              'hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-50'
+            )}
+          >
+            <RefreshIcon className={cn(fetching && 'animate-spin')} />
+          </button>
+        )
+      }
+    >
+      {/* The repository's own failure, painted above rows that survive it. A
+          machine-wide problem is not repeated here: the sidebar and the Pulls
+          pane both carry it, and a third copy on every project pane would be
+          the same sentence three times on one screen. */}
+      {repo.error !== null && (
+        <p
+          data-project-pulls-error
+          className="mb-2 rounded-raised border border-warn/30 bg-warn/10 px-3 py-1.5 text-[11.5px] leading-[1.55] text-warn"
+        >
+          {repo.error}
+        </p>
+      )}
+
+      {repo.pulls.length === 0 ? (
+        <p className="text-[12px] text-fg-subtle">
+          {repo.error !== null || problem !== null
+            ? 'Nothing was fetched.'
+            : 'Nothing open in this repository.'}
+        </p>
+      ) : (
+        // Negative inset so a row's hover well and its 2px selection edge line
+        // up with the panel's own padding rather than sitting inside it.
+        <div className="-mx-2 -mb-1">
+          {repo.pulls.map((pull) => (
+            <PullRow
+              key={pull.number}
+              repo={repo}
+              pull={pull}
+              now={now}
+              // The panel names the repository twice already - in the caption
+              // and in the pane's own title. DESIGN.md's source pill is for a
+              // list flattened out of its groups, which this is not.
+              showRepo={false}
+              {...(onOpenPull ? { onOpen: onOpenPull } : {})}
+            />
+          ))}
+        </div>
+      )}
+    </Panel>
+  )
+}
+
 function Panel({
   title,
+  mark,
+  caption,
+  action,
   children,
   className
 }: {
   title: string
+  /** `data-project-panel`, so a driver can scope a read to one panel. */
+  mark?: string
+  /** Sits beside the label, in the meta style. For facts about the panel. */
+  caption?: ReactNode
+  /** Pinned right on the label row. For a control that acts on the panel. */
+  action?: ReactNode
   children: ReactNode
   className?: string | undefined
 }): JSX.Element {
@@ -165,13 +426,64 @@ function Panel({
     // A raised surface inside the island: one ramp step lighter, 8px radius,
     // no shadow (DESIGN.md "Island anatomy").
     <section
+      {...(mark === undefined ? {} : { 'data-project-panel': mark })}
       className={cn('rounded-raised border border-border bg-surface-raised px-4 py-3.5', className)}
     >
-      <h2 className="mb-2.5 text-[9.5px] font-semibold tracking-[.08em] text-fg-subtle uppercase">
-        {title}
-      </h2>
+      {/* A bare label is a bare `h2`, not a one-child flex row. The row exists
+          only when there is something to sit beside, because a flex item does
+          not wrap the way a block does: the longest of these labels is "What
+          this project would contribute to a session", and as a `shrink-0` flex
+          child it held the panel wider than a 300px docked pane and put a
+          horizontal scrollbar under the whole thing. */}
+      {caption === undefined && !action ? (
+        <h2 className={cn('mb-2.5', LABEL)}>{title}</h2>
+      ) : (
+        <div className="mb-2.5 flex items-baseline gap-2">
+          <h2 className={LABEL}>{title}</h2>
+          {caption !== undefined && (
+            <p className="flex min-w-0 items-baseline gap-1.5 truncate text-[10.5px] text-fg-muted">
+              {caption}
+            </p>
+          )}
+          {action !== undefined && action !== false && (
+            <span className="-my-1 ml-auto shrink-0 self-center">{action}</span>
+          )}
+        </div>
+      )}
       {children}
     </section>
+  )
+}
+
+/** A ghost link out of this pane and into another one, scoped to this project. */
+function PaneLink({
+  mark,
+  onClick,
+  title,
+  icon,
+  children
+}: {
+  /** `data-project-link`, so a driver can reach the link by where it goes. */
+  mark: string
+  onClick: () => void
+  title: string
+  icon: ReactNode
+  children: ReactNode
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      data-project-link={mark}
+      onClick={onClick}
+      title={title}
+      className={cn(
+        'flex items-center gap-1.5 rounded-well px-2.5 py-1.5',
+        'text-[12px] text-fg-muted transition-colors hover:bg-hover hover:text-fg'
+      )}
+    >
+      <span className="text-fg-subtle">{icon}</span>
+      {children}
+    </button>
   )
 }
 

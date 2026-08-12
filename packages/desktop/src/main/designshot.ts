@@ -59,6 +59,25 @@ async function click(win: BrowserWindow, selector: string): Promise<boolean> {
   )
 }
 
+/**
+ * Click one project row, found by the path it carries as its `title`.
+ *
+ * Compared in JavaScript rather than matched with `[title="..."]`, because a
+ * Windows path is full of backslashes and a backslash is an escape character in
+ * a CSS string too - the selector would have to be escaped twice, and the shape
+ * that only fails on paths with a `\U` or a `\t` in them is the shape that
+ * fails on somebody else's machine.
+ */
+async function clickProjectRow(win: BrowserWindow, path: string): Promise<boolean> {
+  return js<boolean>(
+    win,
+    `(() => { const want = ${JSON.stringify(path.toLowerCase())};
+      const el = [...document.querySelectorAll('aside nav button[title]')]
+        .find((b) => b.title.toLowerCase() === want);
+      if (!el) return false; el.click(); return true })()`
+  )
+}
+
 /** Every open tab closed, so an empty workspace is a state the walk can get
  * back to - the second theme pass starts where the first one left off. Scoped
  * to the tab strip: other things on screen have close buttons too. */
@@ -133,6 +152,46 @@ async function shootIgnored(
   const shot = await screenshot(win, outDir, `pulls-ignored-${theme}.png`)
   await writeIgnored(win, found)
   await sleep(400)
+  return shot.file
+}
+
+/**
+ * The project pane of a project the pull-request surface knows about.
+ *
+ * The `project` shot above is whatever the tree lists first, which on a machine
+ * organised into harnesses is the harness - not a git repository, so its pane
+ * paints neither a branch nor the pull-request panel. Those are a third of what
+ * the pane draws and nothing else in the walk reaches them.
+ *
+ * A repository with something open is preferred over a quiet one: an empty
+ * panel and a panel full of rows are different pictures, and the rows are the
+ * half that can go wrong. Returns null where there are no github.com remotes on
+ * the machine, which is honest - the alternative is a second copy of the shot
+ * that was just taken.
+ */
+async function shootProjectRepo(
+  win: BrowserWindow,
+  outDir: string,
+  theme: string
+): Promise<string | null> {
+  const path = await js<string | null>(
+    win,
+    `window.helm.invoke('pr:snapshot').then((s) => {
+       const busy = s.repos.find((r) => r.pulls.length > 0)
+       const repo = busy ?? s.repos[0]
+       return repo ? repo.path : null
+     })`
+  ).catch(() => null)
+  if (path === null) return null
+  if (!(await clickProjectRow(win, path))) {
+    // A repository outside every scanned root has a row in the snapshot and no
+    // row in the tree. Worth saying, because the alternative is a silently
+    // missing shot that reads as a broken selector.
+    console.error(`design-shot: no sidebar row for ${path}`)
+    return null
+  }
+  await sleep(600)
+  const shot = await screenshot(win, outDir, `project-repo-${theme}.png`)
   return shot.file
 }
 
@@ -345,6 +404,13 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
       const shot = await screenshot(win, outDir, `${view.name}-${theme}.png`)
       files.push(shot.file)
 
+      // The project pane again, for a project that is a github.com repository -
+      // the state that carries a branch and the pull-request panel.
+      if (view.name === 'project') {
+        const repoShot = await shootProjectRepo(win, outDir, theme)
+        if (repoShot !== null) files.push(repoShot)
+      }
+
       // The Pulls pane again with a repository ignored. A design state nothing
       // else photographs: a section that only exists when the setting is not
       // empty, and the app's only dashed border - which is exactly the kind of
@@ -437,6 +503,17 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
           await sleep(500)
           reportHeader(`${pane.name} docked at ~${String(target)}`, await measureHeader(win, pane.anchor))
           const shot = await screenshot(win, outDir, `${pane.name}-docked-${String(target)}-dark.png`)
+          files.push(shot.file)
+        }
+
+        // The project pane at the same widths. It has no scope header to
+        // measure, so it is not in `NARROWED` - but its action row is the one
+        // row in the app with a group pinned to the far end of a **wrapping**
+        // flex (the Config and Content links), and where that group lands once
+        // the row has wrapped is only visible down here.
+        if (await click(win, 'aside nav button[title]')) {
+          await sleep(500)
+          const shot = await screenshot(win, outDir, `project-docked-${String(target)}-dark.png`)
           files.push(shot.file)
         }
       }

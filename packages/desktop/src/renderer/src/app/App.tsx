@@ -465,6 +465,44 @@ export function App(): JSX.Element {
   const openContent = useCallback(() => openPane({ kind: 'content' }), [openPane])
 
   /**
+   * The same two panes, opened **on** a project - the project pane's links.
+   *
+   * These do not make either pane per-project again; the sidebar rows above are
+   * still the unscoped way in, which is the whole of what DESIGN.md 5b asks
+   * for. What a link from a project adds is the scope, so the pane arrives
+   * pointed at the project that was on screen instead of at whatever it last
+   * held. The view is deliberately left alone: the scope is the project's to
+   * decide and the view is the pane's.
+   *
+   * Re-pointing goes through the hook's own setter, because that is what clears
+   * the open file - a pane still showing the last scope's file beside this
+   * scope's tree would be two scopes on one screen. Skipped when the scope is
+   * already the one asked for, so clicking the link to *return* to a pane does
+   * not throw away what was open in it.
+   */
+  const { scopePath: configScopePath, setScopePath: setConfigScope } = configState
+  const openConfigAt = useCallback(
+    (project: Project) => {
+      if (configScopePath.toLowerCase() !== project.path.toLowerCase()) {
+        setConfigScope(project.path)
+      }
+      openPane({ kind: 'config' })
+    },
+    [configScopePath, setConfigScope, openPane]
+  )
+
+  const { scopePath: contentScopePath, setScopePath: setContentScope } = contentState
+  const openContentAt = useCallback(
+    (project: Project) => {
+      if (contentScopePath.toLowerCase() !== project.path.toLowerCase()) {
+        setContentScope(project.path)
+      }
+      openPane({ kind: 'content' })
+    },
+    [contentScopePath, setContentScope, openPane]
+  )
+
+  /**
    * Settings is a workspace pane like any other rather than a modal: it is a
    * place, it is worth leaving open beside a session, and a dialog over the
    * window would be one more thing to dismiss before looking at what a setting
@@ -1352,6 +1390,17 @@ export function App(): JSX.Element {
                     access: [project.path]
                   })
                 }}
+                onOpenConfig={openConfigAt}
+                onOpenContent={openContentAt}
+                // The whole snapshot, not this project's slice of it. The pane
+                // reduces it itself (`projectPulls`), so the project page and
+                // the Pulls pane read one answer rather than two - and the
+                // ignore list, which is structurally absent from `repos`, is
+                // still reachable to say that it is what is hiding the rows.
+                pulls={pullsState.snapshot}
+                onOpenPull={openPull}
+                onRefreshPulls={pullsState.refresh}
+                onUnignoreRepo={unignoreRepo}
               />
             </div>
             {/* The project's own shell, in the project's own directory. Its
