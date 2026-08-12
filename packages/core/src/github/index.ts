@@ -4,6 +4,7 @@
 // root. Same reasoning as `usage/shape.ts` and `config/validate.ts`.
 export { parseGitHubRemote } from './remote'
 export {
+  classifyGhFailure,
   parseGhAuth,
   parseGhVersion,
   parsePullDetail,
@@ -13,7 +14,8 @@ export {
   PR_LIST_FIELDS,
   PR_LIST_LIMIT,
   PR_VIEW_FIELDS,
-  type GhAuthReading
+  type GhAuthReading,
+  type GhFailureKind
 } from './parse'
 export {
   checkoutPull,

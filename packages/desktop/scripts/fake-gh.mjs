@@ -88,10 +88,27 @@ if (args[0] === '--version') {
 }
 
 if (args[0] === 'auth' && args[1] === 'status') {
-  // The one signal Helm is allowed to read about a GitHub sign-in is this exit
-  // code. Nothing here writes a token and nothing in Helm reads one.
+  // Helm reads this command's exit code and never a token. Nothing here writes
+  // one and nothing in Helm reads one.
   if (how.auth === 'unauthenticated') {
     fail('You are not logged into any GitHub hosts. To log in, run: gh auth login')
+  }
+  // What a real `gh` prints with **no route to github.com**, captured verbatim
+  // from 2.86 on Windows with the proxy pointed at a closed port. It exits 1,
+  // like the case above it, and blames a token that is in fact perfectly good -
+  // which is the entire reason Helm classifies fetch failures rather than this.
+  // A fixture that only ever modelled the honest signed-out case would let a
+  // Helm that trusted this exit code pass.
+  if (how.auth === 'offline') {
+    fail(
+      [
+        'github.com',
+        '  X Failed to log in to github.com account fixture (keyring)',
+        '  - Active account: true',
+        '  - The token in keyring is invalid.',
+        '  - To re-authenticate, run: gh auth login -h github.com'
+      ].join('\n')
+    )
   }
   out('github.com\n  - Logged in to github.com account fixture (keyring)\n')
 }

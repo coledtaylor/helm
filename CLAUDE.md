@@ -157,11 +157,36 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
 - The same rule for GitHub, and it is the reason the pull-request surface shells
   out to `gh` rather than calling the API. Helm never receives, stores or reads
   a GitHub token: `gh` owns it, every fetch runs on it, and a sign-in is
-  detected **only from the exit code of `gh auth status`** - nothing opens
+  detected **only from what `gh` reports on its own streams** - nothing opens
   `hosts.yml`, the keyring, or `GH_TOKEN`. The whole remedy for "not signed in"
   is a sentence telling the user to run `gh auth login`. A remote URL carrying
   an embedded token is a credential too, so `parseGitHubRemote` strips the
   userinfo before anything is written to the database.
+  - **`gh auth status` is an opinion, not a verdict, and never a gate.** With no
+    route to github.com it exits 1 and reports "The token in keyring is
+    invalid", naming `gh auth login` as the remedy - for a token that is
+    perfectly good. Measured on 2.86: the same token, the same second, exits 0
+    with the network up. So the *fetches* decide, through `classifyGhFailure`,
+    which reads gh's own connection vocabulary and splits `offline` from `auth`;
+    `gh auth status` is consulted only when a sweep had nothing to fetch and so
+    learned nothing. Nothing on the `offline` branch may mention `gh auth
+    login`, because the user who follows that instruction is told they are
+    already logged in and is left with no idea what is wrong.
+  - A pass is stopped by **one** condition: there is no `gh` binary. That is a
+    local fact that cannot go stale between two ticks. Every other reason is a
+    claim about a server, and a claim about a server may never gate the request
+    that would correct it - `authenticated` gating the pass is what latched the
+    whole surface off after a single dropped connection, since the forced
+    re-check that could have cleared it only ran when a fetch failed and there
+    were no longer any fetches. `PR-20` in `pnpm pr-check --only=degrade` is
+    that regression, and it fails if the gate comes back.
+  - A `GhProblem` is a statement about the **machine**, so only a full sweep in
+    which every repository failed may raise one, and any repository coming back
+    clears it. `only !== null` is a targeted refresh and draws no verdict at
+    all: the old "every repository attempted failed" test was satisfied by one
+    failure when one repository was attempted, so clicking a broken row to retry
+    it announced that GitHub was unreachable. Per-repository reasons live on
+    `PullRepo.error` and are painted on the row.
   - This changed Helm's documented network posture and the change was made in
     the open rather than quietly: the update check is now the only **direct**
     request Helm makes, and `gh` makes others on the user's own token on a

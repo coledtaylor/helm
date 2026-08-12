@@ -420,10 +420,25 @@ advance would be wrong about all three.
 
 **Everything goes through the user's own `gh`.** Helm never receives, stores or
 reads a GitHub token: `gh` owns it, every fetch runs on it, and a sign-in is
-detected **only from the exit code of `gh auth status`**. Nothing opens
+detected **only from what `gh` reports on its own streams**. Nothing opens
 `hosts.yml`, the keyring or `GH_TOKEN`. This is the same rule Claude's
 credentials have, for the same reason, and it is why the surface shells out
 rather than calling the API.
+
+**"Signed out" and "cannot reach GitHub" are different answers and Helm must
+not confuse them.** `gh auth status` cannot tell them apart: with no route to
+github.com it exits 1 and reports the token as invalid, naming `gh auth login`
+as the remedy for a credential that is fine. Measured on gh 2.86 - the same
+token exits 0 a second later with the network restored. So the exit code is an
+opinion and the **fetches** are the verdict: `classifyGhFailure` reads gh's
+connection vocabulary off a failed `pr list` and splits `offline` from `auth`,
+and `gh auth status` is consulted only when a sweep had nothing to fetch. Two
+rules follow and both are load-bearing. Nothing on the `offline` branch may
+name `gh auth login` - a user who runs it is told they are already signed in
+and learns nothing. And only the absence of a `gh` **binary** may stop a pass:
+a cached `authenticated: false` gating the sweep meant one dropped connection
+turned the surface off until the app was restarted, because the re-check that
+would have cleared it only ran after a fetch that no longer happened.
 
 **Degradation is stale-with-age, not degrade-to-nothing** - which is the
 opposite of the usage figures (4.4), and the difference is what the number
@@ -594,10 +609,11 @@ Amended by M10, deliberately and in the open, because until then the answer was
   checks a branch out. Bytes leave the machine without `update:check` being
   invoked, so the old sentence would have been false; the qualifier is "direct".
 - **No credential of any kind is stored, read or handled.** Claude's sign-in is
-  detected from the *existence* of an artefact and GitHub's from the *exit code*
-  of `gh auth status`. Nothing opens either. A remote URL carrying an embedded
-  token is a credential too, and it is stripped before anything is written to
-  the database.
+  detected from the *existence* of an artefact, and GitHub's from what `gh`
+  prints when it is asked to do something - its `auth status` exit code as an
+  opinion, and its fetch failures as the verdict that overrules it. Nothing
+  opens either. A remote URL carrying an embedded token is a credential too, and
+  it is stripped before anything is written to the database.
 - **Nothing else talks to anything.** No telemetry, no crash reporting, no
   fonts, no CDN. The renderer's `will-navigate` is prevented and its window-open
   handler denies, so a link in rendered content is inert without

@@ -167,7 +167,9 @@ What has not changed is the part that matters for packaging and for trust. Helm
 opens no socket of its own for any of it: the only outbound connection Helm's
 own process makes is still this one. And Helm **stores no GitHub credential** -
 `gh` owns the token, every fetch runs on it, and a sign-in is detected only from
-the exit code of `gh auth status`. Nothing in the app opens `hosts.yml`, the
+what `gh` prints on its own streams - its `auth status` exit code, corrected by
+what the fetches themselves did, so that an unreachable GitHub is never reported
+as a signed-out one. Nothing in the app opens `hosts.yml`, the
 keyring, or `GH_TOKEN`; a remote URL carrying an embedded token is a credential
 too, and `parseGitHubRemote` strips the userinfo before anything reaches the
 database. A machine with no `gh` gets a sentence naming where to get one, and

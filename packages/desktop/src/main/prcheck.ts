@@ -1054,6 +1054,51 @@ async function fixtureChecks({
     return { ok: sameDom && sameDb && sameCount, dom: domForA, db, sidebar, expected }
   }
 
+  // -----------------------------------------------------------------------
+  // PR-22: before the first sweep, nothing is claimed about the disk
+  //
+  // Asserted here because the state is already set up and is exactly a fresh
+  // install's first seconds: `pr_repos` was emptied a few lines above, the
+  // projects are discovered, and no remote has been read yet. That is a real
+  // window on a real machine, which is the only place this was ever visible -
+  // it is the state a user meets once, on the device they just set Helm up on,
+  // and it told them a falsehood about their own folders.
+  // -----------------------------------------------------------------------
+  await click(win, '[data-open-pulls]')
+  pulls.republish()
+  await sleep(400)
+  const cold = pulls.snapshot()
+  const coldSidebar = await text(win, '[data-open-pulls]')
+  const coldEmpty = await text(win, '[data-pulls-mapping]')
+
+  checks.push({
+    id: 'PR-22',
+    criterion: 'An unswept machine is described as unswept, not as a machine with no GitHub repos',
+    title: `${String(cold.unmapped)} folders unread: the pane says it is checking rather than answering`,
+    ok:
+      cold.checked > 0 &&
+      cold.unmapped === cold.checked &&
+      coldEmpty.includes('github.com remote') &&
+      coldSidebar.includes('Checking') &&
+      // The sentence it used to paint, which is a fact about somebody's disk
+      // stated before anything had opened a single one of those folders.
+      !coldSidebar.includes('No github.com repositories'),
+    detail: {
+      checked: cold.checked,
+      unmapped: cold.unmapped,
+      repos: cold.repos.length,
+      sidebar: coldSidebar,
+      emptyState: coldEmpty
+    },
+    notes: [
+      'A project with no row in `pr_repos` and one whose origin turned out to be GitLab are',
+      'the same absence, so the snapshot carries `unmapped` to tell them apart. Without it the',
+      'pane reported "None of the N folders Helm scans has a github.com origin" for folders',
+      'nothing had run `git remote get-url` in yet - and the sidebar said the same in four',
+      'words, on a first run, which is when it is least likely to be doubted.'
+    ]
+  })
+
   const written = readFixture()
   /** The bytes as built, kept so the mutation can be undone exactly. */
   const asBuilt = readFileSync(listFile, 'utf8')
@@ -2119,8 +2164,21 @@ async function degradeChecks({
 
   // -----------------------------------------------------------------------
   // PR-11: not signed in
+  //
+  // Both halves refuse, which is what a genuinely signed-out machine does: gh
+  // has no token, so `auth status` exits 1 *and* every fetch comes back 401.
+  // The fixture used to pair a failing `auth status` with a working `pr list`,
+  // which is a machine that cannot exist - and pairing them that way was how
+  // the check came to certify the behaviour that broke, since it proved only
+  // that Helm believed the exit code. Under the rule the fetch decides, a
+  // sweep that fetched successfully means signed in whatever the exit code
+  // said, and this fixture has to fetch like the machine it is modelling.
   // -----------------------------------------------------------------------
-  writeBehaviour(fixtures.home, { auth: 'unauthenticated', list: 'ok' })
+  writeBehaviour(fixtures.home, {
+    auth: 'unauthenticated',
+    list: 'error',
+    listError: 'HTTP 401: Bad credentials (https://api.github.com/graphql)'
+  })
   pulls.pointGh(fixtures.shim)
   await refreshNow(pulls)
   await sleep(500)
@@ -2152,12 +2210,138 @@ async function degradeChecks({
     },
     notes: [
       'The whole remedy for "not signed in" is a sentence telling the user to run gh auth',
-      'login - Helm holds no GitHub credential and this is decided from an exit code alone.',
+      'login - Helm holds no GitHub credential, and the fact that establishes this is GitHub',
+      'itself refusing the token with a 401 rather than an exit code that cannot tell a',
+      'refusal from an unreachable host.',
       'This is the opposite of the usage figures, deliberately: a plan percentage from two',
       'hours ago is a wrong number, and a pull request that was open two hours ago is a true',
       'fact about two hours ago. So the rows stay and the caption carries their age.'
     ]
   })
+
+  // -----------------------------------------------------------------------
+  // PR-19: offline is not signed out
+  //
+  // The bug this pair of checks exists for. `gh auth status` exits 1 with no
+  // route to github.com and reports the token as invalid, so a Helm that read
+  // that exit code as a verdict told people to run `gh auth login` - which
+  // says "already logged in", because they were - and then suppressed every
+  // subsequent fetch on the strength of the reading it had cached.
+  // -----------------------------------------------------------------------
+  const OFFLINE_SAID =
+    'Post "https://api.github.com/graphql": dial tcp 140.82.121.6:443: connectex: No connection could be made because the target machine actively refused it.'
+  writeBehaviour(fixtures.home, {
+    // Both, at the same time, because that is what one unplugged cable does.
+    auth: 'offline',
+    list: 'error',
+    listError: OFFLINE_SAID
+  })
+  await refreshNow(pulls)
+  await sleep(500)
+
+  const offlineKind = await attr(win, '[data-pulls-problem]', 'data-pulls-problem')
+  const offlineSentence = await text(win, '[data-pulls-problem]')
+  const rowsWhenOffline = await dataValues(win, 'pull')
+  const shotOffline = await screenshot(win, shotDir, 'pr-degrade-offline.png')
+
+  checks.push({
+    id: 'PR-19',
+    criterion: 'A machine that cannot reach GitHub is not reported as a machine that is signed out',
+    title: 'An unreachable GitHub paints the connection sentence and never says gh auth login',
+    ok:
+      offlineKind === 'offline' &&
+      // The whole point. The remedy for a dropped connection is not to replace
+      // a working credential, and a user who follows that instruction is told
+      // by gh that they are already logged in - which is where "I cannot sync
+      // any more and cannot tell what is going on" came from.
+      !offlineSentence.toLowerCase().includes('gh auth login') &&
+      !offlineSentence.toLowerCase().includes('not signed in') &&
+      JSON.stringify(rowsWhenOffline) === JSON.stringify(rowsWhenHealthy),
+    detail: {
+      problemKind: offlineKind,
+      sentence: offlineSentence,
+      ghSaid: OFFLINE_SAID,
+      rowsBefore: rowsWhenHealthy.length,
+      rowsAfter: rowsWhenOffline.length,
+      screenshot: shotOffline.file
+    },
+    notes: [
+      'The fixture gh refuses both halves the way a real one does offline: `auth status` exits',
+      '1 announcing that the token in the keyring is invalid - captured verbatim from gh 2.86 -',
+      'and the fetch fails with a dial error. Only the second of those carries the distinction,',
+      'which is why Helm classifies the fetch and treats the exit code as an opinion.',
+      'The cached rows stay, as they do for every other failure on this surface.'
+    ]
+  })
+
+  // -----------------------------------------------------------------------
+  // PR-20: and it recovers by itself
+  // -----------------------------------------------------------------------
+  writeBehaviour(fixtures.home, { auth: 'ok', list: 'ok' })
+  await refreshNow(pulls)
+  await sleep(500)
+
+  const recoveredProblem = await js<string | null>(
+    win,
+    `(() => { const el = document.querySelector('[data-pulls-problem]'); return el ? el.getAttribute('data-pulls-problem') : null })()`
+  )
+  const rowsAfterOffline = await dataValues(win, 'pull')
+
+  checks.push({
+    id: 'PR-20',
+    criterion: 'The surface recovers on its own once GitHub answers again',
+    title: 'The next sweep after the network returns clears the banner and refetches',
+    ok:
+      recoveredProblem === null &&
+      JSON.stringify(rowsAfterOffline) === JSON.stringify(rowsWhenHealthy),
+    detail: { problemAfterRecovery: recoveredProblem, rows: rowsAfterOffline.length },
+    notes: [
+      'This is the half that was actually fatal. The old pass gated on a cached',
+      '`authenticated` flag, so once a blip had written `false` into it every later pass',
+      'returned before fetching anything - and the forced re-check that could have corrected',
+      'it only ran when a fetch failed, which is a fetch that no longer happened. Nothing',
+      'short of restarting Helm or editing a setting brought it back, and the refresh button',
+      'went through the same dead path.',
+      'Now a pass is stopped only by there being no gh binary, which is a local fact that',
+      'cannot go stale, and any repository that comes back clears the banner.'
+    ]
+  })
+
+  // -----------------------------------------------------------------------
+  // PR-21: one repository's failure stays on that repository
+  // -----------------------------------------------------------------------
+  writeBehaviour(fixtures.home, { auth: 'ok', list: 'error', listError: OFFLINE_SAID })
+  await refreshNow(pulls, { repoPath: fixtures.alpha })
+  await sleep(500)
+
+  const problemAfterOneRepo = await js<string | null>(
+    win,
+    `(() => { const el = document.querySelector('[data-pulls-problem]'); return el ? el.getAttribute('data-pulls-problem') : null })()`
+  )
+  const rowErrorsAfterOneRepo = await dataValues(win, 'pulls-repo-error')
+
+  checks.push({
+    id: 'PR-21',
+    criterion: 'A single repository failing is reported on that repository, not about GitHub',
+    title: 'Retrying one broken repository raises no machine-wide banner',
+    ok: problemAfterOneRepo === null && rowErrorsAfterOneRepo.length > 0,
+    detail: {
+      problemKind: problemAfterOneRepo,
+      repoErrors: rowErrorsAfterOneRepo,
+      refreshed: fixtures.alpha
+    },
+    notes: [
+      'The escalation test used to be "every repository attempted this pass failed", which a',
+      'single-repository refresh satisfies with one failure - so clicking a broken row to',
+      'retry it announced that GitHub could not be reached. A verdict about the machine may',
+      'now only be drawn from a full sweep; a targeted refresh can set a row error and',
+      'nothing else.'
+    ]
+  })
+
+  writeBehaviour(fixtures.home, { auth: 'ok', list: 'ok' })
+  await refreshNow(pulls)
+  await sleep(500)
 
   // -----------------------------------------------------------------------
   // PR-13: no gh at all
