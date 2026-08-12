@@ -114,7 +114,7 @@ composed in. The tradeoff disappears.
 Three details that are load-bearing rather than stylistic:
 
 - **`--append-system-prompt-file`** carries the overlays' CLAUDE.md. Plugins do
-  not (Spike A), and neither does `--add-dir` (M3, measured). See the risk table.
+  not, and neither does `--add-dir` - both measured. See the risk table.
 - **Argument order.** `--add-dir` is variadic, so `-n` follows it to terminate
   the list and the opening prompt goes last - a positional reachable from
   `--add-dir` is read as another directory.
@@ -126,15 +126,15 @@ Windows note: **directory junctions**, which need no elevation, rather than
 symlinks, which do - created with `fs.symlinkSync(target, path, 'junction')`
 rather than by shelling out to `mklink /J`. Copy as a fallback.
 
-> [!note] Proven by Spike A (2026-08-08)
+> [!note] Proven by the composition spike (2026-08-08)
 > `--plugin-dir` accepts a synthesised junction-based shim: skills, agents, and
 > commands from two composed overlays all resolved and invoked from the harness
 > root. The platform namespaces everything automatically
 > (`<plugin-name>:<skill>`), so cross-overlay name collisions are impossible.
 > One caveat: **plugins do not carry the overlaid repo's CLAUDE.md** - and
-> neither does `--add-dir`, which M3 measured and found wanting. Helm composes
-> them into `--append-system-prompt-file` instead.
-> Measured by Spike A; the composition it settled on is what M3 implements.
+> neither does `--add-dir`, measured later and found wanting. Helm composes
+> them into `--append-system-prompt-file` instead. The composition this settled
+> on is what Helm implements; 8.1 has the detail.
 
 ---
 
@@ -172,7 +172,7 @@ Profiles live in SQLite, exportable to YAML so they travel with a harness.
 
 Three of them are the product - the launcher, the config console and the content
 viewer - and the terminal is what they all point at. Settings (4.5) is the app's
-own, added by M8 because every surface above it had a setting with nowhere to
+own, added late because every surface above it had a setting with nowhere to
 live. Pull requests (4.6) is the first surface added after v1, and the first
 that shows something that is not on this machine.
 
@@ -181,12 +181,12 @@ that shows something that is not on this machine.
 - Tree of harnesses and projects, auto-detected (`harness.yaml`, then `repos/*`,
   degrading gracefully to "just a folder")
 - Saved profiles, pinned and ordered
-- Session list from `history.jsonl` - **799 sessions across 36 projects** at the
-  time M4 landed, which `/resume` can never show you because it only sees the
-  current directory
+- Session list from `history.jsonl` - **799 sessions across 36 projects** when
+  the launcher was built, which `/resume` can never show you because it only
+  sees the current directory
 - Click a session to resume it into a tab
 
-> [!note] Built by M4 (2026-08-09)
+> [!note] Built 2026-08-09
 > The index mirrors `history.jsonl` into SQLite incrementally, and marks each
 > session with whether it can actually be reopened. Three findings shaped it,
 > all measured on 2.1.225:
@@ -206,7 +206,7 @@ that shows something that is not on this machine.
 >
 > Search is `LIKE`, not FTS5: a filter box has to match `geofenc` inside
 > `geofencing`, which a tokenising index does not. Measured p95 **3 ms** over
-> 3,472 prompts against a 100 ms budget (`pnpm m4-check`, M4-4).
+> 3,472 prompts against a 100 ms budget (`pnpm history-check`, HIST-4).
 - Per-project git state at a glance: branch, dirty count, ahead/behind
 
 ### 4.2 Config Console
@@ -217,7 +217,7 @@ The `.claude/` directory of whatever scope you point at, as a real interface.
 - Browse and edit `skills/`, `commands/`, `agents/`, `hooks/`, `settings.json`,
   `CLAUDE.md`, `.mcp.json`
 - **Effective view:** given a profile, show what is *actually* active - which
-  skills resolve and under which overlay namespace (deterministic per Spike A:
+  skills resolve and under which overlay namespace (deterministic per 8.1:
   `<overlay-name>:<skill-name>`), and which scope won for each setting (user vs
   project vs local) and why. This is the payoff of the composition model and the
   thing no file explorer can tell you.
@@ -226,7 +226,7 @@ The `.claude/` directory of whatever scope you point at, as a real interface.
 - Every write snapshotted to SQLite first, with per-file undo history
 - `claude doctor` surfaced as a health panel
 
-> [!note] Built by M5 (2026-08-10)
+> [!note] Built 2026-08-10
 > Four views over one scope switcher - files, effective, MCP, health - and the
 > only surface in Helm that writes to a `.claude` tree. Three findings shaped
 > it, all measured on 2.1.225:
@@ -239,16 +239,17 @@ The `.claude/` directory of whatever scope you point at, as a real interface.
 >   the winner is read back out of a live session rather than assumed.
 > - **`CLAUDE_CONFIG_DIR` moves the credentials too**, so the user layer cannot
 >   be measured against a fixture home - a session pointed at one cannot log
->   in. `pnpm m5-check` therefore borrows the real `~/.claude/settings.json`,
+>   in. `pnpm config-check` therefore borrows the real `~/.claude/settings.json`,
 >   through the console's own snapshotted write, and hash-verifies it back.
 > - **The JSON error position cannot be read out of V8's message.** On Node 24
 >   a trailing comma reports `Unexpected token ',' ... is not valid JSON` with
 >   no offset at all, and falling back to the end of the file marks a line
 >   twenty below the mistake. Helm scans for the position itself.
 >
-> The namespace prediction needed no measurement - Spike A settled it. Overlay
+> The namespace prediction needed no measurement - the composition spike
+> settled it. Overlay
 > skills resolve as `<overlay>:<skill>`, which is decidable from the profile,
-> so the view predicts names rather than detecting collisions. `pnpm m5-check`
+> so the view predicts names rather than detecting collisions. `pnpm config-check`
 > checks all of it against a second, independent read, and the effective view
 > against a real session on haiku.
 
@@ -280,7 +281,7 @@ whether the cursor blinks, and scrollback. What they may not change is the
 pixel-for-pixel by `pnpm fidelity`, so making it settable would be a design
 amendment rather than a row (DESIGN.md par. 6).
 
-> [!note] Built by M9 (2026-08-11)
+> [!note] Built 2026-08-11 - terminal preferences
 > Font changes apply **live to every open terminal** - both registries, session
 > panes and project shells - because a font is judged by looking at the thing
 > you are going to read in it. A pane that is hidden takes the new settings and
@@ -334,11 +335,12 @@ the theme toggle, laid out as one scrolling page of titled groups:
   terminal's own ground. See 4.4 for what these do and why colour is not
   among them.
 
-> [!note] Built by M8 (2026-08-11)
+> [!note] Built 2026-08-11 - the settings pane
 > Three things the app had been missing rather than three new settings:
 > `claudePath` was reachable only during first run, so a wrong pick was
 > permanent once `firstRunCompletedAt` was stamped; `roots:remove` had had a
-> channel and a handler since M7 and **no caller at all**; and the usage mode
+> channel and a handler since first run landed and **no caller at all**; and
+> the usage mode
 > was reachable only by clicking the status bar until it landed on what you
 > wanted.
 >
@@ -487,7 +489,7 @@ moment it starts it is a session tab like any other, and **Helm never reads the
 review's output back**: 6 still applies, and a feature that needed to parse a
 session is a feature that belongs somewhere else.
 
-> [!note] Built by M10, M11 and M12 (2026-08-11)
+> [!note] Built 2026-08-11 - pull requests
 > Four v1 limits, flagged rather than discovered later.
 >
 > **Inline diff-thread comments are invisible to `gh --json`.** The JSON surface
@@ -584,30 +586,18 @@ option open and is what makes the app genuinely portable.
 
 ### Network posture
 
-Amended by M10, deliberately and in the open, because until then the answer was
-"one request, only when asked" and that is no longer the whole of it.
-
 - **Helm's own process opens exactly one outbound connection**: the GitHub
-  releases API, for a version number and a URL. It downloads nothing and
-  executes nothing. See [PACKAGING.md](PACKAGING.md) for why there is no
-  auto-updater.
-  - Amended again after 0.2.1, in the open. It used to happen *only* when
-    `update:check` was invoked by hand, and the honest report of that is that it
-    never happened: the main-process half shipped and the UI half never did, so
-    the check had no call site at all and the app quietly had no way to tell
-    anyone a release existed. It now also runs once per launch, at most once a
-    day (`UPDATE_CHECK_EVERY_MS`), gated by `updateCheck` and off in one tick.
-  - What did **not** change is the part the "only when asked" rule was actually
-    protecting. That rule was about the *download*, not the request: an unsigned
-    replacement puts SmartScreen in front of every update, and a background
-    updater that restarts the app ends a live session. Helm still fetches no
-    artefact, replaces nothing and restarts nothing. The whole outcome is a
-    version number and a line in the status bar.
+  releases API, for a version number and a URL. It runs once per launch, at most
+  once a day (`UPDATE_CHECK_EVERY_MS`), and `updateCheck` turns it off in one
+  tick. It fetches no artefact, replaces nothing and restarts nothing - the
+  whole outcome is a version number and a line in the status bar. See
+  [PACKAGING.md](PACKAGING.md) for why there is no auto-updater; every reason is
+  about replacing the installed app, which this does not do.
 - **The pull-request surface reaches GitHub through the user's own `gh` CLI**,
   on a schedule the user sets - `prPollMinutes`, five minutes by default, `0` to
   turn it off - plus a fetch when a pull request is opened and one when a review
-  checks a branch out. Bytes leave the machine without `update:check` being
-  invoked, so the old sentence would have been false; the qualifier is "direct".
+  checks a branch out. Bytes therefore leave the machine without `update:check`
+  being invoked, and Helm opens no socket of its own for any of it.
 - **No credential of any kind is stored, read or handled.** Claude's sign-in is
   detected from the *existence* of an artefact, and GitHub's from what `gh`
   prints when it is asked to do something - its `auth status` exit code as an
@@ -625,12 +615,12 @@ Amended by M10, deliberately and in the open, because until then the answer was
   hardcoded paths, no `dev/` assumptions. A harness is *any* folder with a
   manifest; its optional `repos:` key names where the repositories are, so a
   folder that already holds repos at its top level can become one without
-  hiding them (M7).
+  hiding them.
 - **Portable install** - single `.exe`, app data beside it when portable,
-  `%APPDATA%` when installed. Both install-tested by `pnpm m7-check --only=package`;
+  `%APPDATA%` when installed. Both install-tested by `pnpm packaging-check --only=package`;
   the NSIS build is per-user and needs no elevation. See [PACKAGING.md](PACKAGING.md).
 - **Shareable** - real first-run setup, nothing specific to the machine it was
-  written on, README. Enforced rather than asserted: `pnpm m7-check --only=audit`
+  written on, README. Enforced rather than asserted: `pnpm packaging-check --only=audit`
   greps the checkout for personal paths and names, and proves it can catch one
   before believing that it found none.
 
@@ -642,64 +632,276 @@ Amended by M10, deliberately and in the open, because until then the answer was
 - Rendering messages, diffs, or permission dialogs
 - Mobile, cloud sync, teams
 - Transcript archival - **worth noting anyway: 106 transcripts survive for 799
-  sessions, a 13% retention rate** (re-measured by M4; the first count of 9% was
-  taken by deriving transcript paths from the recorded project, which misses the
-  ones whose directory was created under a different casing). Prompts persist in
-  `history.jsonl`; the conversations are reaped. Strong v1.1 candidate, and a
-  pure-win feature since an external process copying files cannot break anything.
-  M4 makes the case for it visible: 694 of the rows in the session launcher are
-  history-only, and every one of them is a conversation that could have been kept.
+  sessions, a 13% retention rate** (re-measured against the session index; the
+  first count of 9% was taken by deriving transcript paths from the recorded
+  project, which misses the ones whose directory was created under a different
+  casing). Prompts persist in `history.jsonl`; the conversations are reaped.
+  Strong v1.1 candidate, and a pure-win feature since an external process
+  copying files cannot break anything. The launcher makes the case for it
+  visible: 694 of its rows are history-only, and every one of them is a
+  conversation that could have been kept.
 - WIP dashboard (dirty repos, stale branches) beyond the git chips in the launcher
 
 ---
 
-## 7. Milestones
-
-| # | Milestone | Proves |
-|---|---|---|
-| 0 | **Spike A** - overlay composition | The premise holds |
-| 1 | Electron shell + `core` + SQLite + project discovery | Foundation |
-| 2 | Embedded pty, launch `claude` in a tab at chosen cwd | Hosting works |
-| 3 | **Profiles: compose overlays, launch, skills resolve** | **The product** |
-| 4 | Session list from `history.jsonl`, resume into tabs | Beats `/resume` |
-| 5 | Config console: browse + edit + effective view | Second surface |
-| 6 | Content viewer: markdown + HTML + wikilinks | Third surface |
-| 7 | Portable packaging, first-run, README | Shippable |
-
-Milestone 3 is go/no-go. If a root-launched session with overlays does not
-actually expose project skills, the premise is wrong and it is cheap to learn there.
-
----
-
-## 8. Risks
+## 7. Risks
 
 | Risk | Mitigation |
 |---|---|
-| ~~**`--plugin-dir` may not accept a synthesised dir**~~ | **Closed by Spike A.** Junction-based shims work; two overlays composed in one session. Copy fallback exists but was not needed. |
-| ~~**Skill name collisions** across composed overlays~~ | **Closed by Spike A.** The platform namespaces every overlay automatically (`<plugin-name>:<skill>`); same-named skills in two overlays coexist. Helm only sanitizes plugin manifest names. |
-| ~~**Project CLAUDE.md not carried by `--plugin-dir`**~~ (Spike A finding) | **Closed by M3, but not the way the mitigation guessed.** `--add-dir` does *not* pull in an overlaid repo's CLAUDE.md - measured on 2.1.225, a session launched from the harness root with both flags reported only the user and cwd instruction files. Helm composes the overlays' CLAUDE.md into one document and passes it to **`--append-system-prompt-file`**. A file, not `--append-system-prompt` inline: two repos here total 34 KB against a 32,767-character Windows command line. |
+| ~~**`--plugin-dir` may not accept a synthesised dir**~~ | **Closed by the composition spike.** Junction-based shims work; two overlays composed in one session. Copy fallback exists but was not needed. |
+| ~~**Skill name collisions** across composed overlays~~ | **Closed by the composition spike.** The platform namespaces every overlay automatically (`<plugin-name>:<skill>`); same-named skills in two overlays coexist. Helm only sanitizes plugin manifest names. |
+| ~~**Project CLAUDE.md not carried by `--plugin-dir`**~~ (a composition-spike finding) | **Closed when profiles were built, but not the way the mitigation guessed.** `--add-dir` does *not* pull in an overlaid repo's CLAUDE.md - measured on 2.1.225, a session launched from the harness root with both flags reported only the user and cwd instruction files. Helm composes the overlays' CLAUDE.md into one document and passes it to **`--append-system-prompt-file`**. A file, not `--append-system-prompt` inline: two repos here total 34 KB against a 32,767-character Windows command line. |
 | **Junctions on Windows** | `mklink /J` needs no elevation. Fall back to copy + watch. |
-| **Native modules** (`node-pty`, `better-sqlite3`) vs portable exe | Spike B: package a hello-world with both. |
+| ~~**Native modules** (`node-pty`, `better-sqlite3`) vs portable exe~~ | **Closed by the packaging spike** (8.2). Both ship N-API prebuilds, so nothing is rebuilt against Electron's ABI and nothing compiles; the config that spike produced is what `electron-builder.yml` still holds. |
 | **CLI flag drift** across Claude Code releases | Flags are a stable public surface, far safer than the 0.3.x SDK. Pin a tested version, assert on `claude --version` at startup. |
-| ~~**TUI inside xterm.js** feels wrong (resize, mouse, colour)~~ | **Closed by Spike C.** Fidelity holds; latency is within noise of no terminal at all. The residual risk moved: an *unconfigured* pane degrades the TUI five ways at once, so the configuration in `terminal.ts` and `ptyEnv` is load-bearing and each fix has a regression check. |
+| ~~**TUI inside xterm.js** feels wrong (resize, mouse, colour)~~ | **Closed by the terminal-fidelity spike** (8.3). Fidelity holds; latency is within noise of no terminal at all. The residual risk moved: an *unconfigured* pane degrades the TUI five ways at once, so the configuration in `terminal.ts` and `ptyEnv` is load-bearing and each fix has a regression check. |
 
 ---
 
-## 9. Spikes
+## 8. Spikes
 
-- [x] **Spike A - Composition.** Synthesise an overlay plugin for a project's
-      `.claude` directory, launch `claude` from the harness root with
-      `--plugin-dir`, confirm a project skill resolves. *Everything depends on this.*
-      **GO** - automatic namespacing makes cross-overlay collisions impossible;
-      CLAUDE.md is not carried by plugins (M3 verifies `--add-dir` covers it).
-      Headless (`-p`) only; M3's first profile launch doubles as the interactive
-      proof.
-- [x] **Spike B - Packaging.** Electron + `node-pty` + `better-sqlite3` built as a
-      portable exe. **GO** - see [SPIKE-B.md](SPIKE-B.md).
-- [x] **Spike C - Terminal fidelity.** Real `claude` TUI in xterm.js: resize,
-      mouse, 24-bit colour, paste, Ctrl-C. **GO, embedded-first, no external
-      fallback** - see [SPIKE-C.md](SPIKE-C.md). Fidelity requires five host-side
-      fixes, all landed in `src/renderer/src/terminal.ts` and `src/main/pty.ts`.
+Three timeboxed investigations, run before the app was built, against the three
+assumptions that could each have killed it. All three came back GO. Their
+findings are recorded here in full rather than as verdicts, because most of them
+are the reason some piece of configuration in this repo looks the way it does -
+and a line of configuration with no evidence behind it is a line somebody
+deletes. The code refers to them by letter, which is what these three headings
+are for.
+
+### 8.1 Spike A - Composition. GO
+
+Ran 2026-08-08. Synthesise an overlay plugin for a project's `.claude`
+directory, launch `claude` from the harness root with `--plugin-dir`, confirm a
+project skill resolves. *Everything depended on this.*
+
+`--plugin-dir` accepts a synthesised junction-based shim: skills, agents and
+commands from two composed overlays all resolved and were invoked from the
+harness root. The platform namespaces everything automatically
+(`<plugin-name>:<skill>`), which makes cross-overlay collisions impossible and
+makes the effective view's namespace prediction decidable rather than measured.
+
+One caveat, and it became the design: **plugins do not carry the overlaid repo's
+CLAUDE.md.** `--add-dir` does not either - that was the mitigation this spike
+guessed at, and building profiles proved it wrong. Helm composes the overlays'
+CLAUDE.md into one document and passes `--append-system-prompt-file`.
+
+Headless (`-p`) only. The first profile launch through the real form was the
+interactive proof, and it is `pnpm profiles-check` that keeps it.
+
+### 8.2 Spike B - Portable packaging with native modules. GO
+
+Ran 2026-08-08 on Windows 11, Electron 43.3.0 (Node 24.18.1, ABI 148),
+electron-builder 26.15.3.
+
+Both native modules survive portable packaging. The packaged portable exe passed
+every check when run from a path with spaces, with no admin and no installer:
+SQLite WAL read/write, interactive pwsh in xterm.js via ConPTY (including input
+synthesized as real renderer key events), pty+xterm resize reflected inside the
+shell, and the real `claude` 2.1.225 TUI rendering to its input prompt.
+
+#### The surprise: no ABI rebuild exists in this config
+
+The assumed risk was "native addons must be rebuilt against Electron's ABI".
+That is no longer true for either module:
+
+- **better-sqlite3 13.0.3** has `gypfile: false`, no install script, and ships
+  N-API prebuilds at `prebuilds/<platform>-<arch>.node`. Loads unchanged in
+  Electron.
+- **node-pty 1.1.0** ships N-API prebuilds at `prebuilds/win32-x64/` including
+  its own ConPTY backend (`conpty.node`, `conpty/conpty.dll`,
+  `conpty/OpenConsole.exe`) and winpty fallback (`winpty-agent.exe`,
+  `winpty.dll`). Its binary loader checks `build/Release`, `build/Debug`, then
+  `prebuilds/`.
+
+Consequently `electron-builder.yml` sets **`npmRebuild: false`**. This is not
+just an optimization - running `@electron/rebuild` actively **breaks** the
+build: it tries to compile node-pty from source and dies on the winpty
+`GetCommitHash.bat` gyp bug (`'GetCommitHash.bat' is not recognized...`). Do
+not add `electron-builder install-app-deps` or `postinstall` rebuilds back.
+
+**Version note:** node-pty 1.0.0 (the previous `latest`) has no prebuilds and
+cannot be compiled by node-gyp on this machine at all. 1.1.0 is the floor.
+
+#### asar / asarUnpack
+
+```yaml
+asarUnpack:
+  - '**/node_modules/better-sqlite3/**'
+  - '**/node_modules/node-pty/**'
+```
+
+Both modules must be unpacked: `process.dlopen` cannot load `.node` files from
+inside the asar archive, and node-pty's helper *executables* (OpenConsole.exe,
+winpty-agent.exe) must exist as real files to be spawned. electron-builder
+signs the unpacked helper exes automatically.
+
+#### Portable mode data location
+
+The portable launcher extracts the app to `%TEMP%\<random>\` and sets
+`PORTABLE_EXECUTABLE_DIR` to the directory containing the exe. The main process
+detects that env var and redirects `userData` to `<exe dir>\helm-data\` -
+verified: `helm.db` (WAL), screenshots and the selftest report all landed beside
+the exe; nothing was written to `%APPDATA%`.
+
+`process.execPath` in portable mode points at the temp extraction, so **never
+derive app paths from execPath** - use `PORTABLE_EXECUTABLE_DIR` (portable) or
+`app.getPath('userData')` (installed). The same mechanism is what every check
+driver now uses for isolation.
+
+#### Selftest harness
+
+`Helm.exe --selftest` runs the whole proof unattended and exits 0/1: SQLite
+roundtrip, pwsh marker echo, renderer-synthesized keystrokes, resize
+verification (`[Console]::WindowWidth` inside the shell after
+`pty.resize(120,30)`), then launches `claude`, auto-dismisses startup gates
+(folder trust, MCP enablement) and waits for the version banner. Evidence goes
+to `helm-data/spike-report.json` + `helm-data/screenshots/*.png`.
+
+Two lessons encoded there for future TUI automation:
+
+1. Claude's TUI interleaves cursor/style sequences *inside words* and positions
+   text without emitting spaces - match against an ANSI-stripped buffer with
+   `\s*`-tolerant regexes (`/Claude\s*Code\s*v\d/`).
+2. Startup can present interactive gates (trust prompt, MCP server enablement)
+   before the input prompt; a host must expect arbitrary dialogs, not a fixed
+   startup sequence.
+
+#### Builds
+
+- `pnpm dist:win` → `dist-app/Helm-<version>-portable.exe` (~95 MB) and
+  `Helm-<version>-setup.exe` (NSIS one-click, per-user, no elevation).
+- Reproducible from a clean checkout with no build tools, Python or compiler,
+  because nothing compiles.
+
+What this spike did **not** do was install-test anything; that gap is closed by
+`pnpm packaging-check`, and [PACKAGING.md](PACKAGING.md) is where the release
+process lives now. Keep node-pty pinned >=1.1.0 and better-sqlite3 >=13, and
+revisit `npmRebuild` only if a future dependency lacks N-API prebuilds.
+
+### 8.3 Spike C - Claude TUI fidelity inside xterm.js. GO, embedded-first
+
+Ran 2026-08-09 on Windows 11 (build 26100), Electron 43.3.0, xterm.js 6.0.0,
+node-pty 1.1.0, Claude Code 2.1.225.
+
+**Embedded-first is viable. No external-terminal fallback mode is needed.**
+
+The real `claude` TUI runs in an embedded xterm.js + node-pty pane with no
+observable loss of fidelity, and the pane is as fast as having no terminal at
+all. Every deviation found was a *host configuration* problem - something Helm
+must set, not something xterm.js or Claude Code gets wrong - and all of them are
+fixed and re-verified in this repo.
+
+Fidelity is not free, though: an unconfigured xterm.js pane degrades the TUI in
+five separate ways at once. The deviations table below is the actual deliverable
+of this spike.
+
+#### How it was measured
+
+Two automated drivers, both asserting on what xterm.js *parsed* - cell colours,
+cell widths, wrap flags, buffer coordinates - rather than on a screenshot a
+human has to squint at. Keystrokes and mouse events are synthesised as real
+Chromium input events, so they travel the same path a user's typing does.
+
+```
+pnpm fidelity        # C1-C9, the terminal itself      -> helm-data/fidelity-report.json
+pnpm claude-check    # D0-D7, the real claude TUI      -> helm-data/claude-report.json
+pnpm shell           # the interactive pane, for the soak test
+```
+
+Both accept `--only=C5,C6` to re-run single checks, and both write their report
+and screenshots to the app's data directory. The figures below are what they
+measured; C8 and C9 assert against ceilings derived from them, so a regression
+fails the check rather than waiting to be noticed in a table.
+
+#### The terminal (`pnpm fidelity`), 9/9
+
+| | Check | Evidence |
+|---|---|---|
+| C1 | 24-bit colour | Three RGB triples that exist nowhere in the 256-colour palette parsed as RGB cells **and** appeared as ~1,700 exact-match pixels each in the composited frame. Foreground and background both. |
+| C2 | Unicode widths | A box padded on the assumption of Unicode 11 widths closed on column 13 in all six rows. `中` and `🚀` measured 2 cells, `─` and `█` measured 1. |
+| C3 | Resize reflow | A 300-character line reassembled byte-identical from the wrap flags at 100, 132, 61 and back to 100 columns - including a shrink well below its original wrap point. |
+| C4 | Keyboard | Ctrl-C `\x03` interrupted a running loop; `↑` recalled history; Esc cleared the line editor; Tab completed `Get-Chi` → `Get-ChildItem`; Shift+Enter now distinct from Enter. |
+| C5 | Paste | Multi-line paste arrived bracketed (`ESC[200~ … ESC[201~`) with newlines normalised to CR; unbracketed when mode 2004 is off; 100 KB delivered to the child process losslessly in 64 ms. |
+| C6 | Scrollback | Under streaming output, a wheel scroll parked the viewport at row 1136 and it stayed there while the buffer grew from 1473 to 3273 rows. `scrollToBottom` returned. |
+| C7 | Selection | A synthetic mouse drag selected the exact row text; Ctrl-C copied it; the next Ctrl-C interrupted again. |
+| C8 | Latency | 150 samples: round trip p50 **1.0 ms**, p95 **7.0 ms**, max 16.4 ms. The host's own share (keydown → byte handed to the pty) is p50 **0 ms**, p95 0.1 ms. |
+| C9 | Throughput | 40,000 lines drained in **4,071 ms** at 100x30. |
+
+#### The real TUI (`pnpm claude-check`), 8/8
+
+| | Check | Evidence |
+|---|---|---|
+| D0 | Startup | Reaches the input prompt; startup gates (folder trust, MCP enablement) are arbitrary dialogs a host must expect, not a fixed sequence. |
+| D1 | Resize | The composer rules redrew flush to column 99 / 131 / 71 / 99 at 100, 132, 72 and back to 100 - no ghost columns. |
+| D2 | Colour | Claude emitted 5 distinct 24-bit colours and **zero** 256-palette colours on the first screen. |
+| D3 | Composer | Typing renders; the first Ctrl-C interrupted the running turn and left the composer untouched; the second cleared it; the session survived both. |
+| D4 | Overlays | Slash-command menu rendered and its highlight moved with arrow keys (verified by cell foreground colour, since the highlight is a colour change and not a text change); Esc dismissed it; `/help` rendered; the **`/resume` picker rendered in the alternate buffer** and responded to arrow keys. |
+| D5 | Permission dialog | A Bash tool prompt rendered with its numbered options, moved with arrow keys, and cancelled on Esc - confirmed by the target directory not existing afterwards. |
+| D6 | Shift+Enter | Inserts a newline instead of submitting (after the fix below). |
+| D7 | Newline encodings | The composer accepts **all four** of `ESC CR`, `LF`, `CSI 13;2u` and `\`+CR as an inline newline. |
+
+#### Deviations
+
+Severity is what would happen if Helm shipped without the fix.
+
+| # | Deviation | Severity | Status |
+|---|---|---|---|
+| 1 | **Shift+Enter is byte-identical to Enter.** xterm.js has no default encoding for the modifier, so both send `\r` and the composer *submits the prompt* instead of adding a line. | **High** - silently sends half-written prompts | **Fixed.** The pane binds Shift+Enter to `ESC CR`. D7 established the composer accepts it; D6 verifies the binding. |
+| 2 | **Electron's default menu eats Ctrl-C.** The stock application menu binds Ctrl-C to the Edit→Copy role, which consumes the keydown before xterm sees it - the interrupt never reaches Claude. | **High** - no way to interrupt a turn | **Fixed.** `Menu.setApplicationMenu(null)`. |
+| 3 | **Colour depth is not advertised by default.** Without `COLORTERM=truecolor` in the child environment, Ink resolves 256 colours and the whole theme shifts. | Medium - wrong colours everywhere | **Fixed** in `ptyEnv`. D2 confirms zero palette colours in use. |
+| 4 | **Unicode 6 widths by default.** Without `allowProposedApi` + the Unicode 11 addon, emoji are measured one cell wide and every box-drawn surface - status line, dialogs, the composer - misaligns. | Medium - visibly broken UI | **Fixed.** C2 is the regression test. |
+| 5 | **Inherited `CLAUDE_CODE_*` environment.** Launching Helm from inside a Claude Code session leaks `CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION` and friends into the hosted session, which then announces *"Transcript saving is off - inherited CLAUDE_CODE_CHILD_SESSION marker"* and stops writing a transcript. | Medium - silent data loss, and it defeats the v1.1 transcript-archive plan | **Fixed.** `ptyEnv` scrubs them. |
+| 6 | **Ctrl-C is overloaded.** A terminal host has to choose between copy and interrupt. | Medium | **Implemented** to Windows Terminal's contract: Ctrl-C copies only while a selection is live, any other keystroke drops the selection, Ctrl-Shift-C/V always copy and paste. C7 covers all three transitions. |
+| 7 | **`minimumContrastRatio` and `drawBoldTextInBrightColors`** would rewrite Claude's colours if left at anything but the passive setting. | Low | **Fixed** - both pinned explicitly, with comments saying why. |
+| 8 | **node-pty prints `AttachConsole failed`** from `conpty_console_list_agent` when enumerating the console process list. | Low | **Not fixed.** node-pty has a built-in timeout fallback (it falls back to killing the shell pid alone), so the effect is stderr noise plus a marginally less thorough process-tree kill. Revisit if orphaned processes ever show up. |
+| 9 | **Electron's own binary cannot host a process in a pty.** `electron.exe` run as node inside a ConPTY exits cleanly but its stdio never reaches the pseudoconsole - it is a `/SUBSYSTEM:WINDOWS` binary. | Low | **Informational.** Nothing Helm ships needs it; the spike's own sink/echo processes use `node.exe`. Worth remembering before planning any in-pane helper. |
+
+#### On latency
+
+The acceptance criterion was "indistinguishable from Windows Terminal in normal
+use". Two measurements bound it:
+
+- **Input.** Keydown to the painted frame carrying the echo is p50 1.0 ms, and
+  the host's share of that is p50 0 ms / p95 0.1 ms. There is no room in those
+  numbers for a perceivable difference - a 60 Hz frame is 16.7 ms.
+- **Output.** 40,000 lines drain in 4,071 ms. The same workload through a
+  consumer that does *nothing but read bytes and discard them* takes
+  4,065-4,089 ms. The pane is within noise of having no terminal at all, so
+  ConPTY and PowerShell are the bottleneck and no terminal can be meaningfully
+  faster.
+
+Windows Terminal could not be launched from the automation environment (MSIX
+activation is blocked there), so the side-by-side number is the one measurement
+this spike did not take. Given the floor above it cannot change the verdict, but
+to fill it in, run this in Windows Terminal and compare against 4,071 ms:
+
+```powershell
+pwsh -NoLogo -NoProfile -Command '[Console]::SetWindowSize(100,30); $sw=[Diagnostics.Stopwatch]::StartNew(); 1..40000 | ForEach-Object { "line $_ the quick brown fox jumps over the lazy dog" } | Out-Host; "THROUGHPUT $($sw.ElapsedMilliseconds)"'
+```
+
+#### What automation cannot sign off
+
+`pnpm shell` opens the interactive pane against this repo. A long real-session
+soak is still owed a human verdict on:
+
+- [ ] Latency *feels* right over a long session, not just in percentiles
+- [ ] Diff rendering and syntax highlighting during real edits (this spike
+      proved the colour path, not Claude's diff view specifically)
+- [ ] Memory and responsiveness after a long session with heavy scrollback
+- [ ] Anything that only shows up when a person is actually working
+
+#### What it means for the repo
+
+- **`src/renderer/src/terminal.ts` is the seed**, and it carries all five
+  configuration fixes with a named regression check behind each.
+- **Do not build an external-terminal fallback mode.** Nothing found here
+  justifies the second code path.
+- **`ptyEnv` is load-bearing.** Colour depth and environment scrubbing both live
+  there, and both fail silently and confusingly when wrong.
+- **The probe bridge is worth keeping.** Asserting on parsed cells rather than
+  pixels is what made these checks trustworthy - three of the first-round
+  "failures" were bugs in the tests, and the cell-level detail is what exposed
+  them.
 
 ---
 

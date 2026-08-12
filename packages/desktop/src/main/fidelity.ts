@@ -772,6 +772,10 @@ async function checkSelection(ctx: Ctx): Promise<Check> {
 
 const ECHO_SCRIPT = `process.stdin.setRawMode(true);process.stdin.on('data',d=>process.stdout.write(d));`
 
+/** Measured p50 1 ms / p95 7 ms. See the ceiling's reasoning below. */
+const LATENCY_P50_MAX_MS = 8
+const LATENCY_P95_MAX_MS = 20
+
 async function checkLatency(ctx: Ctx): Promise<Check> {
   const notes: string[] = []
   // The handle is not used directly - `activePty()` owns it from here - but the
@@ -812,9 +816,12 @@ async function checkLatency(ctx: Ctx): Promise<Check> {
     hostInput: { p50: percentile(host, 50), p95: percentile(host, 95), max: percentile(host, 100) }
   }
 
-  // A frame at 60 Hz is 16.7 ms; anything at or under one frame of round trip is
-  // below the threshold where a difference is perceivable.
-  const ok = stats.roundTrip.p50 <= 33 && stats.roundTrip.p95 <= 66
+  // A frame at 60 Hz is 16.7 ms, so two frames is the point where a difference
+  // becomes perceivable - but passing anything under that would let this check
+  // stay green through a twenty-fold regression. The ceilings are the measured
+  // figures with headroom for a slower machine: p50 1 ms and p95 7 ms here, so
+  // a run at 8 and 20 is already worth looking at rather than worth shipping.
+  const ok = stats.roundTrip.p50 <= LATENCY_P50_MAX_MS && stats.roundTrip.p95 <= LATENCY_P95_MAX_MS
   notes.push(
     `Round trip is keydown -> IPC -> pty -> raw echo -> IPC -> parse -> next painted frame. p50 ${stats.roundTrip.p50} ms, p95 ${stats.roundTrip.p95} ms.`
   )
@@ -840,6 +847,20 @@ const THROUGHPUT_CMD =
   '$sw=[Diagnostics.Stopwatch]::StartNew(); 1..40000 | ForEach-Object { "line $_ ' +
   'the quick brown fox jumps over the lazy dog" } | Out-Host; Write-Host "THROUGHPUT $($sw.ElapsedMilliseconds)"'
 
+/**
+ * The ceiling this workload has to stay under. 40,000 lines drained in 4,071 ms
+ * when this was measured, and the same workload through a consumer that reads
+ * bytes and discards them took 4,065-4,089 ms - so ConPTY and PowerShell are
+ * the floor and the pane adds nothing to it.
+ *
+ * 12 s is that floor with room for a machine slower than the one it was taken
+ * on. It is deliberately not tight: the failure worth catching is a pane that
+ * has started blocking on its own rendering, which is a multiple, not a
+ * percentage. Reporting the number and asserting only that it arrived - which
+ * is what this did - passes at forty seconds.
+ */
+const THROUGHPUT_MAX_MS = 12_000
+
 async function checkThroughput(ctx: Ctx): Promise<Check> {
   const shell = spawnPty(ctx.win, {
     file: 'pwsh.exe',
@@ -860,14 +881,17 @@ async function checkThroughput(ctx: Ctx): Promise<Check> {
     id: 'C9',
     criterion: 'Latency feels indistinguishable from Windows Terminal (bulk output)',
     title: 'Drain rate for 40k lines of streamed output',
-    ok: done && ms > 0,
+    ok: done && ms > 0 && ms <= THROUGHPUT_MAX_MS,
     detail: {
       grid: `${ctx.cols}x${ctx.rows}`,
       elapsedMs: ms,
+      ceilingMs: THROUGHPUT_MAX_MS,
       command: THROUGHPUT_CMD,
       note: 'ConPTY back-pressures the writer when the terminal drains slowly, so the time the shell measures is a proxy for terminal throughput. Run the same command in Windows Terminal at the same grid size to compare.'
     },
-    notes: [`40,000 lines drained in ${ms} ms at ${ctx.cols}x${ctx.rows}.`]
+    notes: [
+      `40,000 lines drained in ${ms} ms at ${ctx.cols}x${ctx.rows}, against a ${THROUGHPUT_MAX_MS} ms ceiling.`
+    ]
   }
 }
 

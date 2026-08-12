@@ -280,7 +280,7 @@ content's ground is its own, fixed in both modes.**
 - The **palette** is fixed too, and that is a decision rather than an omission:
   the 24-bit `THEME` in `renderer/terminal.ts` is asserted pixel-for-pixel by
   the fidelity checks, so terminal colours are deliberately not a setting.
-  What *is* settable (M9) is everything that is not colour - font, size,
+  What *is* settable is everything that is not colour - font, size,
   cursor, scrollback - and the settings pane's preview well paints those on
   this same fixed ground, in both themes, so the preview is the pane.
 - A **shell pane's header** is themed chrome on that fixed ground: the caps

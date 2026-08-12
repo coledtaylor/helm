@@ -4,8 +4,6 @@ A portable, configurable desktop shell **on top of** Claude Code. Not a client,
 not a reimplementation - Helm hosts the real `claude` TUI in an embedded terminal
 and owns everything that happens *before* and *after* a session.
 
-![The launcher after first run, scanning one folder of plain projects](docs/screenshots/launcher-plain-folders.png)
-
 ## Why
 
 Claude Code resolves `.claude/` configuration (skills, commands, agents, CLAUDE.md)
@@ -107,8 +105,6 @@ Creating a harness scaffolds the minimum and nothing else - `harness.yaml`,
 `repos/`, an empty `.claude/`. No starter skills, notes or rules: what belongs
 in a harness is yours to decide.
 
-![Harnesses, their repositories, and loose folders in one tree](docs/screenshots/launcher-harnesses.png)
-
 ## What it does
 
 - **Profiles.** The saved composition described above. One click to launch,
@@ -138,8 +134,6 @@ in a harness is yours to decide.
 
 ### The version guard warns; it never gates
 
-![The version banner over a working launcher](docs/screenshots/version-guard.png)
-
 Claude Code's flags are a stable public surface and a newer CLI is far more
 likely to work than not, so Helm pins a tested range, says when you are outside
 it, and otherwise stays out of the way.
@@ -154,19 +148,18 @@ bar when there is one. Clicking it opens the releases page. Helm downloads
 nothing, replaces nothing and restarts nothing - getting the new version is
 still something you do.
 
-That is the only *direct* network request Helm makes, and **Settings →
-Appearance → "Tell me about new releases"** turns it off, after which Helm's own
-process opens no connection at all.
+That is the only network connection Helm's own process opens, and **Settings →
+Appearance → "Tell me about new releases"** turns it off, after which it opens
+none at all.
 
-"Direct" earns its place there. The pull-request pane reaches GitHub too, and
-it does it by running **your own `gh` CLI** on a schedule you set - every five
-minutes by default, and `0` in Settings turns it off entirely. Helm opens no
-socket of its own for it and stores no GitHub credential: `gh` owns the token,
-every fetch runs on it, and the only thing Helm reads about your sign-in is what
-`gh` itself prints when it runs. When a fetch fails, Helm tells you whether
-GitHub refused your token or could not be reached at all - and it only ever
-suggests `gh auth login` for the first, because a dropped connection is not
-something a new sign-in fixes.
+The pull-request pane reaches GitHub too, but through **your own `gh` CLI**, on
+a schedule you set - every five minutes by default, and `0` in Settings turns it
+off entirely. Helm opens no socket of its own for it and stores no GitHub
+credential: `gh` owns the token, every fetch runs on it, and the only thing Helm
+reads about your sign-in is what `gh` itself prints when it runs. When a fetch
+fails, Helm tells you whether GitHub refused your token or could not be reached
+at all, and it only suggests `gh auth login` for the first - a dropped
+connection is not something a new sign-in fixes.
 
 ## Architecture
 
@@ -190,12 +183,12 @@ what keeps the app portable and a future mobile client possible.
 
 - [docs/SPEC.md](docs/SPEC.md) - the v1 spec, with the measured evidence behind
   each design decision. Read this before changing anything.
-- [CLAUDE.md](CLAUDE.md) - the rules that are load-bearing rather than stylistic,
-  and why each one is there.
+- [CLAUDE.md](CLAUDE.md) - the rules that are load-bearing rather than
+  stylistic. Each is short on purpose; the argument behind it is in a comment at
+  the code site it governs, and the detail is in `.claude/skills/`.
 - [docs/PACKAGING.md](docs/PACKAGING.md) - what the build produces, where data
   goes, and why there is no auto-updater.
-- [docs/TASKS.md](docs/TASKS.md) - what is built and what is not.
-- [docs/SPIKE-B.md](docs/SPIKE-B.md), [docs/SPIKE-C.md](docs/SPIKE-C.md) - the
+- [docs/SPEC.md](docs/SPEC.md) section 8 - the three spikes in full: the
   packaging and terminal-fidelity findings the current configuration rests on.
 
 ## Development
@@ -232,13 +225,13 @@ search boxes - rather than calling the main process directly, so what they prove
 is that the thing on screen is wired to the thing underneath:
 
 ```bash
-pnpm m2-check          # sessions, tabs, teardown
-pnpm m3-check          # overlay composition, asked of a live session
-pnpm m4-check          # the session index, checked against ~/.claude itself
-pnpm m5-check          # the config console, and a live session's own answer
-pnpm m6-check          # markdown, wikilinks, and the artifact sandbox
+pnpm sessions-check          # sessions, tabs, teardown
+pnpm profiles-check          # overlay composition, asked of a live session
+pnpm history-check          # the session index, checked against ~/.claude itself
+pnpm config-check          # the config console, and a live session's own answer
+pnpm content-check          # markdown, wikilinks, and the artifact sandbox
 pnpm usage-check       # the status bar's figures, against /usage
-pnpm m7-check          # first run, the repos: key, and the built artefacts
+pnpm packaging-check          # first run, the repos: key, and the built artefacts
 ```
 
 All of them accept `--only=` to re-run part of a run (`--only=C5,C6`,
@@ -246,7 +239,7 @@ All of them accept `--only=` to re-run part of a run (`--only=C5,C6`,
 directory. **The report is the verdict, not the exit status** - node-pty's
 teardown can lose the exit code after the checks have already passed.
 
-`m7-check` is the one that runs a whole second copy of the app: first run is
+`packaging-check` is the one that runs a whole second copy of the app: first run is
 driven against an empty profile in a temporary directory, using the app's own
 portable-mode mechanism as the isolation, so nothing of yours is touched.
 
