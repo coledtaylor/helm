@@ -1,7 +1,9 @@
 import type { BrowserWindow } from 'electron'
 import { execFile, execFileSync } from 'node:child_process'
+import { readdirSync } from 'node:fs'
 import * as pty from 'node-pty'
 import { release } from 'node:os'
+import { join } from 'node:path'
 
 /**
  * Environment variables Electron injects (or that leak from the dev toolchain)
@@ -51,6 +53,69 @@ export function windowsBuildNumber(): number | undefined {
   const parts = release().split('.')
   const build = Number(parts[2])
   return Number.isFinite(build) ? build : undefined
+}
+
+let pwsh: string | null = null
+
+/**
+ * PowerShell 7, resolved once, for the drivers that need a shell whose
+ * behaviour their assertions are calibrated against.
+ *
+ * They used to pass the bare string `pwsh.exe` to node-pty. When PowerShell is
+ * installed from the Store that name does not resolve: the execution alias
+ * lives in `%LOCALAPPDATA%\Microsoft\WindowsApps`, which is not always on
+ * PATH, and the package directory that *is* on PATH cannot be launched from.
+ * node-pty opens a pty anyway, nothing ever writes a prompt into it, and every
+ * check sits in `waitForPrompt` until its own timeout - a run that prints
+ * nothing for twenty minutes and then fails all nine. Measured on this machine
+ * twice before anyone looked for the shell.
+ *
+ * Falling back to Windows PowerShell 5.1 would be worse than failing. C9
+ * asserts a drain rate calibrated against pwsh 7, and 5.1 drains at a
+ * different one, so the check would report a number that is not comparable to
+ * the ceiling it is being measured against. A missing shell is a fact about
+ * the machine and is said as one.
+ */
+export function pwshPath(): string {
+  if (pwsh) return pwsh
+
+  // `where.exe` exits 1 when it matches nothing, which execFileSync throws on -
+  // that is the ordinary answer here, not a failure worth propagating.
+  let found: string | undefined
+  try {
+    found = execFileSync('where.exe', ['pwsh.exe'], { encoding: 'utf8' })
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0)
+  } catch {
+    found = undefined
+  }
+  if (found) {
+    pwsh = found
+    return pwsh
+  }
+
+  // The Store alias, found by **listing the directory** rather than by asking
+  // about the path. An execution alias is an AppExecLink reparse point:
+  // `existsSync` on one returns false and `statSync` throws EACCES, measured
+  // here on the alias that launches pwsh 7.6.4 perfectly well. A readdir sees
+  // it, and node-pty spawns it by full path without trouble.
+  const dir = join(process.env.LOCALAPPDATA ?? '', 'Microsoft', 'WindowsApps')
+  try {
+    if (readdirSync(dir).includes('pwsh.exe')) {
+      pwsh = join(dir, 'pwsh.exe')
+      return pwsh
+    }
+  } catch {
+    // No such directory. Nothing to add to the error below.
+  }
+
+  throw new Error(
+    'PowerShell 7 (pwsh.exe) is not on PATH and there is no execution alias in ' +
+      `${dir}. Install it, or put that directory on PATH. Windows PowerShell ` +
+      '5.1 is deliberately not used as a fallback: the throughput ceiling is ' +
+      'calibrated against pwsh 7.'
+  )
 }
 
 export interface SpawnOptions {

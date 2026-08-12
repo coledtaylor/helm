@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import Database from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
 import { screenshot, sleep, squash, stripAnsi, waitFor } from './bridge'
-import { killPty, spawnPty, windowsBuildNumber } from './pty'
+import { killPty, pwshPath, spawnPty, windowsBuildNumber } from './pty'
 import { findClaudeExecutable } from './claude-cli'
 
 /**
@@ -69,7 +69,7 @@ export async function runSelftest(
 
   await createTerm(win, 80, 24, false)
   const shell = spawnPty(win, {
-    file: 'pwsh.exe',
+    file: pwshPath(),
     args: ['-NoLogo'],
     cols: 80,
     rows: 24,
