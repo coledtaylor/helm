@@ -14,7 +14,7 @@ import {
   waitFor,
   stripAnsi
 } from './bridge'
-import { spawnPty, killPty, windowsBuildNumber, type PtyHandle } from './pty'
+import { spawnPty, killPty, pwshPath, windowsBuildNumber, type PtyHandle } from './pty'
 import type { CellProbe, GeometryProbe, LatencySample, ViewportProbe } from '../shared/protocol'
 
 const ESC = '\x1b'
@@ -609,7 +609,7 @@ async function checkPaste(ctx: Ctx): Promise<Check> {
 async function checkScrollback(ctx: Ctx): Promise<Check> {
   const notes: string[] = []
   const shell = spawnPty(ctx.win, {
-    file: 'pwsh.exe',
+    file: pwshPath(),
     args: PWSH,
     cols: ctx.cols,
     rows: ctx.rows,
@@ -698,7 +698,7 @@ const SELECT_CMD = 'Write-Host $("SELECT"+"ME-0123456789-ABCDEFGHIJ")'
 async function checkSelection(ctx: Ctx): Promise<Check> {
   const notes: string[] = []
   const shell = spawnPty(ctx.win, {
-    file: 'pwsh.exe',
+    file: pwshPath(),
     args: PWSH,
     cols: ctx.cols,
     rows: ctx.rows,
@@ -863,7 +863,7 @@ const THROUGHPUT_MAX_MS = 12_000
 
 async function checkThroughput(ctx: Ctx): Promise<Check> {
   const shell = spawnPty(ctx.win, {
-    file: 'pwsh.exe',
+    file: pwshPath(),
     args: PWSH,
     cols: ctx.cols,
     rows: ctx.rows,
@@ -908,6 +908,11 @@ export async function runFidelity(
   const checks: Check[] = []
   const wanted = (id: string): boolean => !only?.length || only.includes(id)
 
+  // Before anything is opened. A shell that cannot be found is a fact about the
+  // machine, and this is the difference between learning it now and learning it
+  // from nine timeouts.
+  pwshPath()
+
   const create = new Promise<unknown>((resolve) => {
     ipcMain.once('term:created', (_e, info: unknown) => resolve(info))
   })
@@ -921,7 +926,7 @@ export async function runFidelity(
   await sleep(500)
 
   const shell = spawnPty(win, {
-    file: 'pwsh.exe',
+    file: pwshPath(),
     args: PWSH,
     cols: ctx.cols,
     rows: ctx.rows,
