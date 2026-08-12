@@ -76,11 +76,12 @@ runs the checks, skips the release job and finishes green.
   generated notes list merged pull requests, and this repository's history is
   branches merged locally, so the generated body would be a "Full Changelog"
   link and nothing else.
-- **A release page is a changelog, not a second README.** The few lines above
-  the changes live in `.github/release-body.md`, so editing what a stranger
-  reads is not editing release logic - and they stay few on purpose. Install
-  notes, the SmartScreen warning and first run are the README's, maintained
-  once rather than restated at every tag.
+- **A release page is a changelog and nothing else.** Install notes, the
+  SmartScreen warning and first run are the README's, one click away and
+  maintained once rather than restated at every tag.
+  `.github/release-body.md` is what gets prepended to the changes and is
+  deliberately empty; it stays as a seam, so a release that genuinely needs a
+  sentence at the top can have one without editing release logic.
 - **Artefacts are verified before upload, from the inside.**
   `pnpm verify:artifact` unwraps the NSIS exe and the `app-64.7z` nested in it
   and asserts the win32-x64 `better-sqlite3` and `node-pty` binaries are present
