@@ -12,7 +12,7 @@
 //
 // So the app under test gets its own directory, and it is told about it with
 // **PORTABLE_EXECUTABLE_DIR** - the app's own portable-mode mechanism, the same
-// one `run-m7.mjs` already uses as isolation, rather than a hook that exists
+// one `run-packaging.mjs` already uses as isolation, rather than a hook that exists
 // only for checks. `paths.ts` reads it, puts `helm-data` under it and calls
 // `app.setPath('userData')`, so the database, the overlay shims, the reports and
 // Chromium's own profile all move together.

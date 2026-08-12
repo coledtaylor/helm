@@ -433,7 +433,7 @@ export function computeEffectiveView(input: EffectiveInput): EffectiveView {
   // The order a session receives them: the user's, then the working
   // directory's, then whatever the overlays contributed through
   // `--append-system-prompt-file` - which is the only way an overlay's
-  // instructions arrive at all (M3, measured).
+  // instructions arrive at all (measured when profiles were built).
   const instructions: EffectiveView['instructions'] = []
   const addInstruction = (path: string, source: EffectiveSource, origin: string): void => {
     const bytes = fileBytes(path)

@@ -9,11 +9,12 @@ import { terminalPrefs } from './termprefs'
  * whole point of `terminals.ts` and `pterms.ts`, since a terminal *is* the
  * state rather than a rendering of it - so a driver holding the window through
  * `executeJavaScript` has no route to them at all. "The font change reached
- * every open terminal" is M9's central claim, and without this it could only be
+ * every open terminal" is the settings pane's central claim, and without this
+ * it could only be
  * inferred from what got painted.
  *
  * The same deliberate seam as `SessionObserver` in `main/sessions.ts` and the
- * picker stand-ins `--m7-firstrun` passes: product code carrying the one hook a
+ * picker stand-ins `--packaging-firstrun` passes: product code carrying the one hook a
  * check needs, rather than the check asserting on something adjacent. Nothing
  * in the app reads it, it exposes no capability the renderer did not already
  * have, and it cannot write.

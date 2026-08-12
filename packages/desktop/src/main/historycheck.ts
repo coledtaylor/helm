@@ -11,11 +11,12 @@ import {
 import { screenshot, sendKey, sleep, squash, stripAnsi, typeText, waitFor } from './bridge'
 import { resolveClaudeCommand } from './claude-cli'
 import type { Check } from './fidelity'
-import { answerStartupGates, atPrompt, processAlive, type Collector, type M2Context } from './m2check'
+import { answerStartupGates, atPrompt, processAlive, type Collector, type CheckContext } from './sessionscheck'
 import { killSession, spawnSession } from './pty'
 
 /**
- * M4's acceptance criteria, driven through the app the way a user reaches them.
+ * The session-history criteria, driven through the app the way a user reaches
+ * them.
  *
  * The discipline that matters here is that nothing is asserted against Helm's
  * own index alone. Every count is checked against a second, independent read of
@@ -23,7 +24,7 @@ import { killSession, spawnSession } from './pty'
  * parser agreeing with itself proves nothing about whether it read the file
  * correctly.
  *
- * `pnpm m4-check` -> helm-data/m4-report.json
+ * `pnpm history-check` -> helm-data/history-report.json
  */
 
 const SEARCH_BUDGET_MS = 100
@@ -284,8 +285,8 @@ async function typeSearch(win: BrowserWindow, term: string): Promise<string> {
 const GROUPS = ['list', 'search', 'resume', 'reaped', 'outside'] as const
 type Group = (typeof GROUPS)[number]
 
-export async function runM4Checks(
-  ctx: M2Context,
+export async function runHistoryChecks(
+  ctx: CheckContext,
   collector: Collector,
   shotDir: string,
   only?: readonly string[]
@@ -299,7 +300,7 @@ export async function runM4Checks(
   const resumableTruth = trulyResumable(truth)
 
   // -------------------------------------------------------------------------
-  // M4-0: the index agrees with the file
+  // HIST-0: the index agrees with the file
   // -------------------------------------------------------------------------
   const built = await waitFor(() => ctx.history.summary().sessions > 0, 60_000)
   const summary = ctx.history.refresh()
@@ -312,7 +313,7 @@ export async function runM4Checks(
     summary.resumable === resumableTruth.size
 
   checks.push({
-    id: 'M4-0',
+    id: 'HIST-0',
     criterion: 'setup',
     title: 'The index matches an independent read of history.jsonl and projects/',
     ok: indexAgrees,
@@ -334,14 +335,14 @@ export async function runM4Checks(
       }
     },
     notes: [
-      'The second read is a plain readFileSync + JSON.parse in m4check.ts, sharing no',
+      'The second read is a plain readFileSync + JSON.parse in historycheck.ts, sharing no',
       'code with the incremental reader it is checking.'
     ]
   })
 
   if (!indexAgrees) {
     checks.push({
-      id: 'M4-SKIP',
+      id: 'HIST-SKIP',
       criterion: 'setup',
       title: 'Nothing else can be trusted while the index disagrees with the file',
       ok: false,
@@ -352,7 +353,7 @@ export async function runM4Checks(
   }
 
   // -------------------------------------------------------------------------
-  // M4-1: every session visible, grouped, with project and age
+  // HIST-1: every session visible, grouped, with project and age
   // -------------------------------------------------------------------------
   const opened = await click(win, 'aside button[data-open-history]')
   const painted = await pollJs(
@@ -376,10 +377,10 @@ export async function runM4Checks(
     return expected !== undefined && row.fields.some((f) => f.toLowerCase() === expected)
   }).length
 
-  const shotRecent = await screenshot(win, shotDir, 'm4-recent.png')
+  const shotRecent = await screenshot(win, shotDir, 'history-recent.png')
 
   if (running('list')) checks.push({
-    id: 'M4-1',
+    id: 'HIST-1',
     criterion: 'All sessions from history.jsonl visible, grouped and searchable, with project and age',
     title: 'The pane lists every session in the file, each with its project and its age',
     ok:
@@ -403,16 +404,16 @@ export async function runM4Checks(
   })
 
   // -------------------------------------------------------------------------
-  // M4-2: grouped by project
+  // HIST-2: grouped by project
   // -------------------------------------------------------------------------
   await click(win, 'button[aria-pressed="false"]')
   await sleep(500)
   const headers = await groupHeaders(win)
   const groupedRows = await paintedRows(win)
-  const shotGrouped = await screenshot(win, shotDir, 'm4-by-project.png')
+  const shotGrouped = await screenshot(win, shotDir, 'history-by-project.png')
 
   if (running('list')) checks.push({
-    id: 'M4-2',
+    id: 'HIST-2',
     criterion: 'All sessions from history.jsonl visible, grouped and searchable, with project and age',
     title: 'Grouping by project yields one header per recorded working directory',
     ok:
@@ -437,7 +438,7 @@ export async function runM4Checks(
   await sleep(400)
 
   // -------------------------------------------------------------------------
-  // M4-3: resumable and reaped are told apart
+  // HIST-3: resumable and reaped are told apart
   // -------------------------------------------------------------------------
   const resumableRows = rows.filter((row) => row.resumable)
   const reapedRows = rows.filter((row) => !row.resumable)
@@ -449,7 +450,7 @@ export async function runM4Checks(
   ).length
 
   if (running('list')) checks.push({
-    id: 'M4-3',
+    id: 'HIST-3',
     criterion: 'Sessions with surviving transcripts are visually distinct from reaped ones',
     title: 'Every row is marked, correctly, and the mark is a word as well as a shape',
     ok: wronglyMarked === 0 && resumableRows.length === resumableTruth.size && badged === reapedRows.length,
@@ -468,7 +469,7 @@ export async function runM4Checks(
   })
 
   // -------------------------------------------------------------------------
-  // M4-4: search, and what it costs
+  // HIST-4: search, and what it costs
   // -------------------------------------------------------------------------
   const TERMS = ['the', 'schema', 'resume', 'release', 'spec', 'test', 'fix', 'claude']
   const timings: Array<{ term: string; tookMs: number; total: number }> = []
@@ -493,7 +494,7 @@ export async function runM4Checks(
   const matchesTyped = (needle: string) => (p: Truth['prompts'][number]): boolean =>
     p.display.toLowerCase().includes(needle) || p.project.toLowerCase().includes(needle)
   const expectedIds = new Set(truth.prompts.filter(matchesTyped(TYPED)).map((p) => p.sessionId))
-  const shotSearch = await screenshot(win, shotDir, 'm4-search.png')
+  const shotSearch = await screenshot(win, shotDir, 'history-search.png')
 
   /**
    * A term that appears in a project path and in no prompt, so that the project
@@ -530,7 +531,7 @@ export async function runM4Checks(
   }
 
   if (running('search')) checks.push({
-    id: 'M4-4',
+    id: 'HIST-4',
     criterion: 'Search over 3k+ prompts returns in <100ms (SQLite FTS or LIKE with index - measure)',
     title: `Substring search over ${String(truth.prompts.length)} prompts, measured`,
     ok:
@@ -564,7 +565,7 @@ export async function runM4Checks(
   })
 
   // -------------------------------------------------------------------------
-  // M4-5: resuming a session that still has a transcript
+  // HIST-5: resuming a session that still has a transcript
   // -------------------------------------------------------------------------
   //
   // The smallest surviving transcript with a short opening prompt: small so the
@@ -625,10 +626,10 @@ export async function runM4Checks(
     if (restored) break
   }
 
-  const shotResumed = await screenshot(win, shotDir, 'm4-resumed.png')
+  const shotResumed = await screenshot(win, shotDir, 'history-resumed.png')
 
   if (running('resume')) checks.push({
-    id: 'M4-5',
+    id: 'HIST-5',
     criterion: 'Clicking a resumable session opens a tab with that conversation restored in the real TUI',
     title: 'A resumed session runs `claude --resume` in its own project and redraws the conversation',
     ok:
@@ -683,7 +684,7 @@ export async function runM4Checks(
   await showHistory(win)
 
   // -------------------------------------------------------------------------
-  // M4-6: a reaped session explains itself
+  // HIST-6: a reaped session explains itself
   // -------------------------------------------------------------------------
   const reapedTarget = readHistorySessions(services.store)
     .sessions.filter((s) => s.transcriptFile === null && s.promptCount >= 2)
@@ -732,10 +733,10 @@ export async function runM4Checks(
     }
   }
 
-  const shotReaped = await screenshot(win, shotDir, 'm4-reaped.png')
+  const shotReaped = await screenshot(win, shotDir, 'history-reaped.png')
 
   if (running('reaped')) checks.push({
-    id: 'M4-6',
+    id: 'HIST-6',
     criterion: 'Attempting a reaped session shows a graceful explanation, not a broken terminal',
     title: 'A reaped session offers no resume, explains why, and still shows its prompts',
     ok:
@@ -765,7 +766,7 @@ export async function runM4Checks(
   })
 
   // -------------------------------------------------------------------------
-  // M4-7: a session started outside the app turns up on its own
+  // HIST-7: a session started outside the app turns up on its own
   // -------------------------------------------------------------------------
   if (!running('outside')) return checks
 
@@ -775,11 +776,11 @@ export async function runM4Checks(
     readHistorySessions(services.store).sessions.map((s) => s.sessionId)
   )
 
-  const marker = `helm m4 external ${String(Date.now())}`
+  const marker = `helm history external ${String(Date.now())}`
   const outsideCwd = process.cwd()
   let outsideOutput = ''
   let outsideExit: number | null = null
-  const OUTSIDE_ID = 'm4-outside'
+  const OUTSIDE_ID = 'history-outside'
 
   // Resolved the same way the app resolves it, so this is the same binary a
   // person would get by typing `claude` - not an assumption about PATH inside
@@ -836,12 +837,12 @@ export async function runM4Checks(
     )
   }
 
-  const shotOutside = await screenshot(win, shotDir, 'm4-outside.png')
+  const shotOutside = await screenshot(win, shotDir, 'history-outside.png')
   killSession(OUTSIDE_ID)
   await sleep(1500)
 
   checks.push({
-    id: 'M4-7',
+    id: 'HIST-7',
     criterion: 'Index updates within seconds of a new session being started outside the app',
     title: 'A prompt typed into a terminal Helm did not open appears in the launcher',
     ok:

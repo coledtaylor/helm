@@ -147,7 +147,7 @@ describe('syncOverlay', () => {
 
   /**
    * The rebuild path deletes the shim, and the shim's `skills` is a junction
-   * into the real repository. Observed for real during M3's acceptance run: the
+   * into the real repository. Observed for real during a profile check run: the
    * source's skill directory was emptied by a rebuild, and the next session
    * loaded a plugin pointing at nothing. Asserted on the source, not on the
    * shim, because the shim being right is not the property that matters here.

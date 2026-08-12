@@ -1,6 +1,6 @@
-# Spike B verified this config on 2026-08-08 (Electron 43.3.0, Win11) and M7
-# install-tested it - see docs/PACKAGING.md, which records what each of the
-# non-obvious lines below prevents.
+# Spike B verified this config on 2026-08-08 (Electron 43.3.0, Win11) and
+# `pnpm packaging-check` install-tests it - see docs/PACKAGING.md, which records
+# what each of the non-obvious lines below prevents.
 #
 # npmRebuild is off - deliberately. better-sqlite3 >=13 (gypfile:false) and
 # node-pty 1.1.0 both ship N-API prebuilds (prebuilds/<platform>-<arch>) that
@@ -79,13 +79,13 @@ nsis:
   # Load-bearing. The database under %APPDATA%\Helm holds the user's profiles,
   # their session index and every config snapshot Helm has taken on their
   # behalf. Uninstalling the program is not a request to destroy those, and
-  # `pnpm m7-check --only=package` asserts they survive.
+  # `pnpm packaging-check --only=package` asserts they survive.
   deleteAppDataOnUninstall: false
   # A one-click installer that finishes and does nothing reads as a failed
   # install - there is no completion page to say otherwise, which is the whole
   # point of one-click. This was false so the packaging check's silent install
   # would not race its own assertions; that put a test's convenience into the
-  # artefact a stranger runs. `run-m7.mjs` now ends whatever the installer
+  # artefact a stranger runs. `run-packaging.mjs` now ends whatever the installer
   # started, matched by executable path so it cannot reach a portable or dev
   # instance running from somewhere else.
   runAfterFinish: true

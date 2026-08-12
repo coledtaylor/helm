@@ -10,14 +10,14 @@ import {
 } from '@helm/core'
 import { screenshot, sleep, stripAnsi, waitFor } from './bridge'
 import type { Check } from './fidelity'
-import { atPrompt, type Collector, type M2Context } from './m2check'
-import { answerConsent } from './m3check'
+import { atPrompt, type Collector, type CheckContext } from './sessionscheck'
+import { answerConsent } from './profilescheck'
 
 /**
  * The status bar's usage figures, driven through the app the way a user sees
  * them.
  *
- * The discipline is M4's, M5's and M6's: nothing is asserted against Helm's own
+ * The discipline is the other drivers': nothing is asserted against Helm's own
  * answer alone. Everything below is checked against a second read written in
  * this file which shares no code with the thing it checks - a plain
  * `JSON.parse` and hand-written field access beside `parseUsage`, a
@@ -616,7 +616,7 @@ function ownAbsolute(at: number): { weekday: string; clock: string; meridiem: st
 // ---------------------------------------------------------------------------
 
 export async function runUsageChecks(
-  ctx: M2Context,
+  ctx: CheckContext,
   collector: Collector,
   shotDir: string,
   dataDir: string,
@@ -950,7 +950,7 @@ export async function runUsageChecks(
       })
     }
 
-    // The discipline M3-4 failed: a check that passes because its fixture is
+    // The discipline PROF-4 failed: a check that passes because its fixture is
     // empty proves nothing. So the same driver, the same segment and a fixture
     // that *is* good must produce a number - otherwise "showed nothing" is not
     // evidence of anything.

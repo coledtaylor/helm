@@ -20,7 +20,8 @@ export interface AppShellProps {
 
 /**
  * The window frame: sidebar on the left, tabs above the pane, status strip
- * along the bottom. Nothing here knows what a tab contains - M2 swaps the pane
+ * along the bottom. Nothing here knows what a tab contains - the app swaps the
+ * pane
  * for a terminal without touching this file.
  *
  * Islands on a canvas (DESIGN.md): the frame paints the sunken canvas and

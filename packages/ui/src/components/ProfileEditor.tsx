@@ -322,7 +322,7 @@ export function ProfileEditor({
                 className={inputClass}
               />
             </Field>
-            <Field label="MCP servers" hint="Comma separated. Saved and exported; see M5.">
+            <Field label="MCP servers" hint="Comma separated. Saved and exported; see the config console.">
               <input
                 value={mcp}
                 aria-label="MCP servers"
@@ -449,7 +449,7 @@ function Select({
  *
  * A real `<input type="checkbox">` under an overlaid tick rather than a styled
  * button: it keeps the label association, the space key, and `el.checked` -
- * which is what the M3 driver reads to prove composing a repo also granted it
+ * which is what profiles-check reads to prove composing a repo also granted it
  * access.
  */
 function Checkbox({

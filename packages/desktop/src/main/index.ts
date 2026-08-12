@@ -35,14 +35,14 @@ import { createPullsService } from './pulls'
 import { createUsageService } from './usage'
 import { maybeCheckForUpdate } from './update'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
-import { createCollector, runM2Checks, type M2Context } from './m2check'
+import { createCollector, runSessionsChecks, type CheckContext } from './sessionscheck'
 import { TITLEBAR_OVERLAY } from './chrome'
 import { createPtermHost } from './pterm'
 import { runDesignShot } from './designshot'
-import { runM3Checks } from './m3check'
-import { runM4Checks } from './m4check'
-import { runM5Checks } from './m5check'
-import { runM6Checks } from './m6check'
+import { runProfilesChecks } from './profilescheck'
+import { runHistoryChecks } from './historycheck'
+import { runConfigChecks } from './configcheck'
+import { runContentChecks } from './contentcheck'
 import { runUsageChecks } from './usagecheck'
 import { runSettingsChecks } from './settingscheck'
 import { runPrChecks } from './prcheck'
@@ -51,7 +51,7 @@ import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
 import { findClaudeExecutable, setClaudeOverride } from './claude-cli'
 import { setGhOverride } from './gh-cli'
-import { pickerAnswer, runM7Checks } from './m7check'
+import { pickerAnswer, runPackagingChecks } from './packagingcheck'
 import { screenshot } from './bridge'
 
 /**
@@ -72,13 +72,13 @@ type Mode =
   | 'fidelity'
   | 'claude-check'
   | 'claude'
-  | 'm2-check'
-  | 'm3-check'
-  | 'm4-check'
-  | 'm5-check'
-  | 'm6-check'
-  | 'm7-check'
-  | 'm7-firstrun'
+  | 'sessions-check'
+  | 'profiles-check'
+  | 'history-check'
+  | 'config-check'
+  | 'content-check'
+  | 'packaging-check'
+  | 'packaging-firstrun'
   | 'usage-check'
   | 'usage-settings'
   | 'settings-check'
@@ -92,13 +92,13 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--selftest')) return 'selftest'
   if (process.argv.includes('--fidelity')) return 'fidelity'
   if (process.argv.includes('--claude-check')) return 'claude-check'
-  if (process.argv.includes('--m2-check')) return 'm2-check'
-  if (process.argv.includes('--m3-check')) return 'm3-check'
-  if (process.argv.includes('--m4-check')) return 'm4-check'
-  if (process.argv.includes('--m5-check')) return 'm5-check'
-  if (process.argv.includes('--m6-check')) return 'm6-check'
-  if (process.argv.includes('--m7-check')) return 'm7-check'
-  if (process.argv.includes('--m7-firstrun')) return 'm7-firstrun'
+  if (process.argv.includes('--sessions-check')) return 'sessions-check'
+  if (process.argv.includes('--profiles-check')) return 'profiles-check'
+  if (process.argv.includes('--history-check')) return 'history-check'
+  if (process.argv.includes('--config-check')) return 'config-check'
+  if (process.argv.includes('--content-check')) return 'content-check'
+  if (process.argv.includes('--packaging-check')) return 'packaging-check'
+  if (process.argv.includes('--packaging-firstrun')) return 'packaging-firstrun'
   if (process.argv.includes('--usage-check')) return 'usage-check'
   if (process.argv.includes('--usage-settings')) return 'usage-settings'
   if (process.argv.includes('--settings-check')) return 'settings-check'
@@ -115,13 +115,13 @@ const mode = modeFromArgv()
 // real startup path, the database included.
 const isSpikeMode =
   mode !== 'app' &&
-  mode !== 'm2-check' &&
-  mode !== 'm3-check' &&
-  mode !== 'm4-check' &&
-  mode !== 'm5-check' &&
-  mode !== 'm6-check' &&
-  mode !== 'm7-check' &&
-  mode !== 'm7-firstrun' &&
+  mode !== 'sessions-check' &&
+  mode !== 'profiles-check' &&
+  mode !== 'history-check' &&
+  mode !== 'config-check' &&
+  mode !== 'content-check' &&
+  mode !== 'packaging-check' &&
+  mode !== 'packaging-firstrun' &&
   mode !== 'usage-check' &&
   mode !== 'settings-check' &&
   mode !== 'pr-check' &&
@@ -227,20 +227,20 @@ function writeReport(name: string, report: unknown): string {
 // ---------------------------------------------------------------------------
 
 export interface AppOptions {
-  /** Taps for `--m2-check`; the app itself passes none. */
+  /** Taps for `--sessions-check`; the app itself passes none. */
   observer?: SessionObserver | undefined
   /** Answers the "this session is still running" question. Defaults to a dialog. */
   confirm?: Confirm | undefined
   /** Called once the renderer has mounted and the first scan is under way. */
-  onReady?: ((ctx: M2Context) => void) | undefined
+  onReady?: ((ctx: CheckContext) => void) | undefined
   /**
-   * Index a different `.claude` tree. Only `--m4-check` passes one, so that
+   * Index a different `.claude` tree. Only `--history-check` passes one, so that
    * the watch can be proved against a fixture it is allowed to append to as
    * well as against the real file.
    */
   claudeHome?: string | undefined
   /**
-   * Stand-ins for the native pickers, so `--m7-firstrun` can drive "add a
+   * Stand-ins for the native pickers, so `--packaging-firstrun` can drive "add a
    * folder" and "locate claude" through the real handlers. Same shape and same
    * reasoning as `confirm`.
    */
@@ -713,7 +713,7 @@ app.whenReady().then(() => {
    *
    * The "stale shims are swept at startup" criterion is about what
    * `createServices` does on the way in, which the process that already started
-   * cannot assert about itself. So `--m3-check` plants what a crash would have
+   * cannot assert about itself. So `--profiles-check` plants what a crash would have
    * left and this runs afterwards: same startup path, no window, and a report
    * of what it removed.
    */
@@ -826,16 +826,16 @@ app.whenReady().then(() => {
     return
   }
 
-  if (mode === 'm2-check') {
+  if (mode === 'sessions-check') {
     const collector = createCollector()
     startApp({
       observer: collector,
       confirm: collector.confirm,
       onReady: (ctx) => {
-        void runM2Checks(ctx, collector, join(dataDir, 'screenshots'))
+        void runSessionsChecks(ctx, collector, join(dataDir, 'screenshots'))
           .then((checks) => {
             const pass = checks.every((c) => c.ok)
-            const file = writeReport('m2-report.json', {
+            const file = writeReport('sessions-report.json', {
               startedAt: new Date().toISOString(),
               mode: appMode,
               dataDir,
@@ -843,13 +843,13 @@ app.whenReady().then(() => {
               pass,
               checks
             })
-            console.log(`m2-check report: ${file}`)
+            console.log(`sessions-check report: ${file}`)
             for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
 
-            // `quit`, not `exit`: M2-9 left a session running on purpose, and
+            // `quit`, not `exit`: SESS-9 left a session running on purpose, and
             // the whole point is to make the app's own teardown deal with it.
             // `exit` would skip `before-quit` and prove nothing.
-            // Quitting is itself under test - M2-9 left a session running for
+            // Quitting is itself under test - SESS-9 left a session running for
             // the app's own teardown to reap - so the run ends with `quit`,
             // not `exit`, and forces the status once the teardown is done.
             app.once('quit', () => process.exit(pass ? 0 : 1))
@@ -859,7 +859,7 @@ app.whenReady().then(() => {
             setTimeout(() => app.quit(), 200)
           })
           .catch((err: unknown) => {
-            console.error(`m2-check crashed: ${String(err)}`)
+            console.error(`sessions-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }
@@ -867,7 +867,7 @@ app.whenReady().then(() => {
     return
   }
 
-  if (mode === 'm3-check') {
+  if (mode === 'profiles-check') {
     const collector = createCollector()
     startApp({
       observer: collector,
@@ -876,10 +876,10 @@ app.whenReady().then(() => {
         // The driver closes the sessions it opened, so every confirmation it
         // provokes is one it asked for on purpose.
         collector.answerWith(true)
-        void runM3Checks(ctx, collector, join(dataDir, 'screenshots'), dataDir)
+        void runProfilesChecks(ctx, collector, join(dataDir, 'screenshots'), dataDir)
           .then((checks) => {
             const pass = checks.every((c) => c.ok)
-            const file = writeReport('m3-report.json', {
+            const file = writeReport('profiles-report.json', {
               startedAt: new Date().toISOString(),
               mode: appMode,
               dataDir,
@@ -887,10 +887,10 @@ app.whenReady().then(() => {
               pass,
               checks
             })
-            console.log(`m3-check report: ${file}`)
+            console.log(`profiles-check report: ${file}`)
             for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
 
-            // M3-9 planted a stale shim for the `--shim-sweep` start that
+            // PROF-9 planted a stale shim for the `--shim-sweep` start that
             // follows, so this run must end the same way a real one does -
             // through `quit`, not `exit`, which would skip the teardown.
             app.once('quit', () => process.exit(pass ? 0 : 1))
@@ -898,7 +898,7 @@ app.whenReady().then(() => {
             setTimeout(() => app.quit(), 200)
           })
           .catch((err: unknown) => {
-            console.error(`m3-check crashed: ${String(err)}`)
+            console.error(`profiles-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }
@@ -906,7 +906,7 @@ app.whenReady().then(() => {
     return
   }
 
-  if (mode === 'm4-check') {
+  if (mode === 'history-check') {
     const collector = createCollector()
     startApp({
       observer: collector,
@@ -916,7 +916,7 @@ app.whenReady().then(() => {
         // one it asked for on purpose.
         collector.answerWith(true)
         const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runM4Checks(
+        void runHistoryChecks(
           ctx,
           collector,
           join(dataDir, 'screenshots'),
@@ -924,7 +924,7 @@ app.whenReady().then(() => {
         )
           .then((checks) => {
             const pass = checks.every((c) => c.ok)
-            const file = writeReport('m4-report.json', {
+            const file = writeReport('history-report.json', {
               startedAt: new Date().toISOString(),
               mode: appMode,
               dataDir,
@@ -932,7 +932,7 @@ app.whenReady().then(() => {
               pass,
               checks
             })
-            console.log(`m4-check report: ${file}`)
+            console.log(`history-check report: ${file}`)
             for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
 
             app.once('quit', () => process.exit(pass ? 0 : 1))
@@ -940,7 +940,7 @@ app.whenReady().then(() => {
             setTimeout(() => app.quit(), 200)
           })
           .catch((err: unknown) => {
-            console.error(`m4-check crashed: ${String(err)}`)
+            console.error(`history-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }
@@ -948,7 +948,7 @@ app.whenReady().then(() => {
     return
   }
 
-  if (mode === 'm5-check') {
+  if (mode === 'config-check') {
     const collector = createCollector()
     startApp({
       observer: collector,
@@ -958,7 +958,7 @@ app.whenReady().then(() => {
         // one it asked for on purpose.
         collector.answerWith(true)
         const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runM5Checks(
+        void runConfigChecks(
           ctx,
           collector,
           join(dataDir, 'screenshots'),
@@ -967,7 +967,7 @@ app.whenReady().then(() => {
         )
           .then((checks) => {
             const pass = checks.every((c) => c.ok)
-            const file = writeReport('m5-report.json', {
+            const file = writeReport('config-report.json', {
               startedAt: new Date().toISOString(),
               mode: appMode,
               dataDir,
@@ -975,7 +975,7 @@ app.whenReady().then(() => {
               pass,
               checks
             })
-            console.log(`m5-check report: ${file}`)
+            console.log(`config-check report: ${file}`)
             for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
 
             app.once('quit', () => process.exit(pass ? 0 : 1))
@@ -983,7 +983,7 @@ app.whenReady().then(() => {
             setTimeout(() => app.quit(), 200)
           })
           .catch((err: unknown) => {
-            console.error(`m5-check crashed: ${String(err)}`)
+            console.error(`config-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }
@@ -991,7 +991,7 @@ app.whenReady().then(() => {
     return
   }
 
-  if (mode === 'm6-check') {
+  if (mode === 'content-check') {
     const collector = createCollector()
     startApp({
       observer: collector,
@@ -999,7 +999,7 @@ app.whenReady().then(() => {
       onReady: (ctx) => {
         collector.answerWith(true)
         const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runM6Checks(
+        void runContentChecks(
           ctx,
           join(dataDir, 'screenshots'),
           dataDir,
@@ -1007,7 +1007,7 @@ app.whenReady().then(() => {
         )
           .then((checks) => {
             const pass = checks.every((c) => c.ok)
-            const file = writeReport('m6-report.json', {
+            const file = writeReport('content-report.json', {
               startedAt: new Date().toISOString(),
               mode: appMode,
               dataDir,
@@ -1015,7 +1015,7 @@ app.whenReady().then(() => {
               pass,
               checks
             })
-            console.log(`m6-check report: ${file}`)
+            console.log(`content-check report: ${file}`)
             for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
 
             app.once('quit', () => process.exit(pass ? 0 : 1))
@@ -1023,7 +1023,7 @@ app.whenReady().then(() => {
             setTimeout(() => app.quit(), 200)
           })
           .catch((err: unknown) => {
-            console.error(`m6-check crashed: ${String(err)}`)
+            console.error(`content-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }
@@ -1032,12 +1032,12 @@ app.whenReady().then(() => {
   }
 
   /**
-   * M7, in two starts.
+   * First run, in two starts.
    *
-   * `--m7-check` runs against this machine: the grep audit and what the real
+   * `--packaging-check` runs against this machine: the grep audit and what the real
    * `claude` here actually is.
    *
-   * `--m7-firstrun` is the other half, and it is a separate process because
+   * `--packaging-firstrun` is the other half, and it is a separate process because
    * "a machine with a fresh `~/.claude` and no harness at all" is not a state
    * this one can enter. The driver starts it with `PORTABLE_EXECUTABLE_DIR`
    * pointed at a temporary directory - the app's own portable-mode mechanism,
@@ -1045,7 +1045,7 @@ app.whenReady().then(() => {
    * and touches neither `%APPDATA%\Helm` nor the user's `~/.claude`, which it is
    * pointed away from with `--claude-home=`.
    */
-  if (mode === 'm7-check' || mode === 'm7-firstrun') {
+  if (mode === 'packaging-check' || mode === 'packaging-firstrun') {
     const collector = createCollector()
     const arg = (name: string): string | undefined => {
       const found = process.argv.find((a) => a.startsWith(`--${name}=`))
@@ -1061,7 +1061,7 @@ app.whenReady().then(() => {
       ...(claudeHome !== undefined ? { claudeHome } : {}),
       // Answered by the driver, and rewritten by it before each step that
       // opens one. A native dialog has no automation surface.
-      ...(mode === 'm7-firstrun'
+      ...(mode === 'packaging-firstrun'
         ? {
             chooseDirectory: (title: string) => pickerAnswer('directory', title),
             chooseFile: (title: string) => pickerAnswer('file', title)
@@ -1069,8 +1069,8 @@ app.whenReady().then(() => {
         : {}),
       onReady: (ctx) => {
         collector.answerWith(true)
-        void runM7Checks(ctx, collector, join(dataDir, 'screenshots'), dataDir, {
-          phase: mode === 'm7-check' ? 'machine' : 'firstrun',
+        void runPackagingChecks(ctx, collector, join(dataDir, 'screenshots'), dataDir, {
+          phase: mode === 'packaging-check' ? 'machine' : 'firstrun',
           ...(fixtures !== undefined ? { fixtures } : {}),
           ...(claudeHome !== undefined ? { claudeHome } : {}),
           ...(onlyArg !== undefined ? { only: onlyArg.split(',') } : {})
@@ -1078,7 +1078,7 @@ app.whenReady().then(() => {
           .then((checks) => {
             const pass = checks.every((c) => c.ok)
             const file = writeReport(
-              mode === 'm7-check' ? 'm7-report.json' : 'm7-firstrun-report.json',
+              mode === 'packaging-check' ? 'packaging-report.json' : 'packaging-firstrun-report.json',
               {
                 startedAt: new Date().toISOString(),
                 mode: appMode,
@@ -1148,9 +1148,9 @@ app.whenReady().then(() => {
   }
 
   /**
-   * M8's settings pane, driven through the real window.
+   * The settings pane, driven through the real window.
    *
-   * The pickers are answered by the driver for the same reason `--m7-firstrun`
+   * The pickers are answered by the driver for the same reason `--packaging-firstrun`
    * answers them: "add a folder" and "locate the CLI" both open a native dialog
    * that has no automation surface, and everything either one does afterwards -
    * the handler, the settings write, the rescan - is the real thing.
@@ -1199,7 +1199,7 @@ app.whenReady().then(() => {
   }
 
   /**
-   * M12's pull-request surface, driven through the real window.
+   * The pull-request surface, driven through the real window.
    *
    * Borrows the user's database and settings the way `--settings-check` does,
    * and for the same reason - the claim is about the real ones. It adds a scan

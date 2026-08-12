@@ -101,14 +101,14 @@ export interface IpcContext {
    * question is answered by the driver, and every other step still goes through
    * the real handler, the real settings write and the real rescan.
    *
-   * Only `--m7-firstrun` passes these. The app itself passes none and gets the
+   * Only `--packaging-firstrun` passes these. The app itself passes none and gets the
    * dialogs.
    */
   chooseDirectory?: ((title: string) => string | null) | undefined
   chooseFile?: ((title: string) => string | null) | undefined
   /**
    * A different `.claude` tree for the setup pane to report on. Only
-   * `--m7-firstrun` passes one - it is how "a machine with a fresh `~/.claude`"
+   * `--packaging-firstrun` passes one - it is how "a machine with a fresh `~/.claude`"
    * is simulated without going anywhere near the user's real one.
    */
   claudeHome?: string | undefined

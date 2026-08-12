@@ -380,7 +380,7 @@ export interface IpcRequests {
   'roots:remove': { request: { path: string }; response: string[] }
 
   /**
-   * First run (M7). Setup is a *state*, not a wizard the app remembers having
+   * First run. Setup is a *state*, not a wizard the app remembers having
    * shown: the pane is on screen whenever there is nothing to scan and no
    * completion stamp, so quitting halfway through leaves it exactly where it
    * was rather than dropping the user into an empty launcher.
@@ -416,28 +416,21 @@ export interface IpcRequests {
   }
 
   /**
-   * Ask GitHub whether there is a newer release. The only **direct** network
-   * request Helm makes.
+   * Ask GitHub whether there is a newer release. This is the only network
+   * connection Helm's own process opens.
    *
-   * No longer only when this channel is invoked, and that is an amendment made
-   * in the open rather than a drift: the app also asks once per launch, at most
-   * once a day, when `updateCheck` is on - see `maybeCheckForUpdate`. The
-   * reasoning that kept it manual was never about the request, it was about the
-   * download, and there still is none: no artefact is fetched, nothing is
-   * replaced, nothing restarts. What changed is that "only when asked" required
-   * somebody to think to ask, and an update you have to remember to look for is
-   * one you run without for months.
+   * The app asks on its own too: once per launch, at most once a day, when
+   * `updateCheck` is on - see `maybeCheckForUpdate`. Neither path downloads
+   * anything. No artefact is fetched, nothing is replaced, nothing restarts.
    *
    * This channel keeps no throttle of its own. It is a person pressing
    * something, and a deliberate act that silently did nothing would be worse
    * than no button.
    *
-   * "Direct" is doing real work in that sentence and was added when the
-   * pull-request surface landed. That surface reaches GitHub too, and it does
-   * it by running the user's own `gh` CLI on a schedule the user sets (default
-   * every 5 minutes, and `0` turns it off) - so bytes leave the machine without
-   * anybody invoking this channel. What has not changed is the part that
-   * matters: Helm opens no socket of its own for it and stores no GitHub
+   * The pull-request surface reaches GitHub as well, but through the user's own
+   * `gh` CLI on a schedule the user sets (default every 5 minutes, `0` turns it
+   * off), so bytes can leave the machine without this channel being invoked.
+   * Helm opens no socket of its own for that either, and stores no GitHub
    * credential. See `pr:snapshot` and docs/PACKAGING.md.
    */
   'update:check': { request: void; response: UpdateCheck }
@@ -512,7 +505,7 @@ export interface IpcRequests {
   'profile:launch': { request: LaunchProfileRequest; response: LaunchedProfile }
 
   /**
-   * The session index over `~/.claude/history.jsonl` (M4). Read-only: Helm
+   * The session index over `~/.claude/history.jsonl`. Read-only: Helm
    * mirrors that file and never writes to it.
    */
   'history:summary': { request: void; response: HistorySummary }
@@ -529,7 +522,7 @@ export interface IpcRequests {
   'history:resume': { request: ResumeSessionRequest; response: ResumedSession }
 
   /**
-   * The config console (M5). This is the one surface that *writes* to a
+   * The config console. This is the one surface that *writes* to a
    * `.claude` tree, which is why every write goes through `config:write` and
    * nothing else - the snapshot is taken there, and a second path into the
    * filesystem would be a path with no undo behind it.
@@ -624,7 +617,7 @@ export interface IpcRequests {
   'pr:review': { request: ReviewPullRequest; response: LaunchedReview }
 
   /**
-   * The content viewer (M6). Rendering happens here rather than in the window:
+   * The content viewer. Rendering happens here rather than in the window:
    * shiki's grammars are megabytes the browser bundle must not carry, and a
    * live preview that re-parsed a 21 KB note on the UI thread per keystroke
    * would be the one place in the app that stutters.

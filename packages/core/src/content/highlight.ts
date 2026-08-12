@@ -11,7 +11,7 @@
  *     convenience bundle. Nothing is loaded until a fence asks for it.
  *   - The **JavaScript** regex engine rather than the Oniguruma one, so there
  *     is no `.wasm` file to locate at runtime. A WASM asset beside a bundled
- *     main process is a packaging problem waiting for M7, and `forgiving: true`
+ *     main process is a packaging problem, and `forgiving: true`
  *     degrades a grammar the JS engine cannot compile to plain text rather than
  *     throwing in the middle of a document.
  *   - Grammars are `import()`ed by name at the moment a fence needs one. That

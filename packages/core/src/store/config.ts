@@ -5,7 +5,8 @@ import type { Store } from './db'
  * The undo history behind every config write.
  *
  * `~/.claude` is Claude Code's and Helm only reads it - except here, which is
- * the whole point of M5 and exactly why this table is not optional. A snapshot
+ * the whole point of the config console and exactly why this table is not
+ * optional. A snapshot
  * row is taken *before* the bytes are replaced, and the write is not attempted
  * if the row could not be written: a config editor that can lose a file the
  * user spent an afternoon on is worse than no config editor.

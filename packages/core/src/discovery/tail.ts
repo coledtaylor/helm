@@ -5,7 +5,7 @@ import { closeSync, openSync, readSync, statSync } from 'node:fs'
  *
  * Extracted because two indexes now need exactly this and the byte arithmetic
  * is the part that is easy to get subtly wrong: `history.jsonl` for the session
- * index (M4) and `projects/*.jsonl` for the usage index. Both are written by
+ * index and `projects/*.jsonl` for the usage index. Both are written by
  * Claude Code while Helm reads them, both only ever grow, and both would
  * otherwise be re-read whole - 875 KB and 214 MB respectively - to learn about
  * one appended line.

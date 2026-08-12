@@ -4,7 +4,7 @@
  * The CLI caches it in `~/.claude.json` under `cachedUsageUtilization` and
  * refreshes it as it makes requests. That makes percentages free and
  * authoritative - no credentials, no API call, the same "read Claude Code's own
- * files" pattern M4 established for `history.jsonl`.
+ * files" pattern the session index established for `history.jsonl`.
  *
  * It is also undocumented internal state. Measured on 2.1.225, the object next
  * to the ones this reads contains `tangelo`, `nimbus_quill`, `iguana_necktie`

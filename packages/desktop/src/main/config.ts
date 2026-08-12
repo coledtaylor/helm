@@ -77,7 +77,7 @@ export interface ConfigServiceDeps {
   services: Services
   /** Pushes `config:externalChange` at the window. */
   onExternalChange: (change: ConfigExternalChange) => void
-  /** Overridden by `--m5-check` to browse a fixture tree as the user scope. */
+  /** Overridden by `--config-check` to browse a fixture tree as the user scope. */
   userHome?: string | undefined
 }
 

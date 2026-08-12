@@ -424,8 +424,8 @@ function Row({
             journal from a reference at a glance, and the tags are how this
             vault is actually navigated - so they are on the row rather than
             waiting behind an open.
-            With neither, the file name: `Helm M4 - session launcher` does not
-            say it lives in `journal-2026-08-09-helm-m4-session-launcher.md`.
+            With neither, the file name: `Helm - session launcher` does not
+            say it lives in `journal-2026-08-09-session-launcher.md`.
             Unless the name *is* the title, as it is for `.mcp.json`, where
             repeating it reads as a rendering bug. */}
         {(file.noteType !== null || file.tags.length > 0 || file.slug !== file.title) && (

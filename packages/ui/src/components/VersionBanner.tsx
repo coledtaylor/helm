@@ -16,7 +16,7 @@ export interface VersionBannerProps {
 /**
  * The version guard, as a strip above the tabs.
  *
- * A warning and not a gate (SPEC 8). Claude Code's flags are a stable public
+ * A warning and not a gate (SPEC 7). Claude Code's flags are a stable public
  * surface and a newer CLI is far more likely to work than not, so an app that
  * refused to run outside a tested range would break on someone else's release
  * schedule for no measured reason. What it does instead is make sure that when

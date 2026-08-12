@@ -1,9 +1,9 @@
-// The second half of M3-9, run after `--shim-sweep` has exited.
+// The second half of PROF-9, run after `--shim-sweep` has exited.
 //
 // The acceptance criterion is that stale overlay shims left by a crashed run
 // are cleaned up on the *next app start*. A check inside a running process can
 // prove the sweep function works; only a check across two starts can prove the
-// app runs it on the way in. So `--m3-check` plants what a crash would have
+// app runs it on the way in. So `--profiles-check` plants what a crash would have
 // left, `--shim-sweep` performs a real startup, and this asserts the planted
 // directory is gone - and, just as importantly, that the repositories the shim
 // pointed at are not.
@@ -12,7 +12,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const dataDir = process.argv[2] ?? join(process.env.APPDATA ?? process.env.HOME ?? '.', 'Helm')
-const reportPath = join(dataDir, 'm3-report.json')
+const reportPath = join(dataDir, 'profiles-report.json')
 
 let report
 try {
@@ -22,12 +22,12 @@ try {
   process.exit(1)
 }
 
-const planted = report.checks?.find((c) => c.id === 'M3-9')
+const planted = report.checks?.find((c) => c.id === 'PROF-9')
 const dir = planted?.detail?.planted
 const shimRoot = planted?.detail?.shimRoot
 
 if (!dir) {
-  console.error('verify-shims: M3-9 planted nothing, so nothing was verified')
+  console.error('verify-shims: PROF-9 planted nothing, so nothing was verified')
   process.exit(1)
 }
 
@@ -48,7 +48,7 @@ const leftovers = existsSync(shimRoot ?? '')
 const ok = !stillThere && leftovers.length === 0
 
 const result = {
-  id: 'M3-9',
+  id: 'PROF-9',
   criterion: 'Stale shim dirs from crashed sessions are cleaned up on next app start',
   title: 'The next app start removed the shim a crash would have left',
   ok,
@@ -57,15 +57,15 @@ const result = {
 }
 
 // Folded back into the report so it carries every criterion, not all but one.
-report.checks = [...(report.checks ?? []).filter((c) => c.id !== 'M3-9'), result]
+report.checks = [...(report.checks ?? []).filter((c) => c.id !== 'PROF-9'), result]
 report.pass = report.checks.every((c) => c.ok)
 writeFileSync(reportPath, JSON.stringify(report, null, 2))
 
 if (!ok) {
   console.error(
-    `FAIL  M3-9  ${stillThere ? `${dir} survived the next app start` : `leftover shims: ${leftovers.join(', ')}`}`
+    `FAIL  PROF-9  ${stillThere ? `${dir} survived the next app start` : `leftover shims: ${leftovers.join(', ')}`}`
   )
   process.exit(1)
 }
 
-console.log(`PASS  M3-9  the next app start removed ${sweep.removed ?? '?'} stale shim(s)`)
+console.log(`PASS  PROF-9  the next app start removed ${sweep.removed ?? '?'} stale shim(s)`)

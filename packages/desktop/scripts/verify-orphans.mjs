@@ -1,4 +1,4 @@
-// The second half of M2-9, run after the `--m2-check` process has exited.
+// The second half of SESS-9, run after the `--sessions-check` process has exited.
 //
 // The acceptance criterion is that killing the app leaves no orphaned
 // claude/conpty processes. A check inside the app can prove the teardown
@@ -12,7 +12,7 @@ import { execFileSync } from 'node:child_process'
 
 const reportPath =
   process.argv[2] ??
-  join(process.env.APPDATA ?? process.env.HOME ?? '.', 'Helm', 'm2-report.json')
+  join(process.env.APPDATA ?? process.env.HOME ?? '.', 'Helm', 'sessions-report.json')
 
 let report
 try {
@@ -22,11 +22,11 @@ try {
   process.exit(1)
 }
 
-const handoff = report.checks?.find((c) => c.id === 'M2-9')
+const handoff = report.checks?.find((c) => c.id === 'SESS-9')
 const pids = handoff?.detail?.pids ?? []
 
 if (pids.length === 0) {
-  console.error('verify-orphans: M2-9 published no pids, so nothing was verified')
+  console.error('verify-orphans: SESS-9 published no pids, so nothing was verified')
   process.exit(1)
 }
 
@@ -59,8 +59,8 @@ if (alive.length > 0) {
       // Fall back to the bare pid list.
     }
   }
-  console.error(`FAIL  M2-9  ${alive.length} process(es) outlived the app:\n${detail}`)
+  console.error(`FAIL  SESS-9  ${alive.length} process(es) outlived the app:\n${detail}`)
   process.exit(1)
 }
 
-console.log(`PASS  M2-9  all ${pids.length} session process(es) died with the app`)
+console.log(`PASS  SESS-9  all ${pids.length} session process(es) died with the app`)

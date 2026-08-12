@@ -14,7 +14,8 @@ import { readTail } from '../discovery/tail'
  *
  * The cost of doing it naively is measured: 178 files, 214 MB, 22,180 rows,
  * 1,018 ms for a full parse. Far too slow to sit behind a status bar, hence the
- * same treatment M4 gave `history.jsonl` - a per-file byte cursor, tail reads,
+ * same treatment the session index gave `history.jsonl` - a per-file byte
+ * cursor, tail reads,
  * and the aggregate in SQLite.
  */
 

@@ -13,14 +13,16 @@ import {
 import { screenshot, sleep, waitFor } from './bridge'
 import { artifactConsoleEntries, artifactRoots, clearArtifactConsole } from './content'
 import type { Check } from './fidelity'
-import type { M2Context } from './m2check'
+import type { CheckContext } from './sessionscheck'
 
 /**
- * M6's acceptance criteria, driven through the app the way a reader reaches it.
+ * The content-viewer criteria, driven through the app the way a reader reaches
+ * it.
  *
- * The discipline is M4's and M5's: nothing is asserted against Helm's own
- * answer alone. Every count is checked against a second read written in this
- * file, and the second read shares no code with the thing it checks - a regex
+ * The discipline is history-check's and config-check's: nothing is asserted
+ * against Helm's own answer alone. Every count is checked against a second
+ * read written in this file, and the second read shares no code with the thing
+ * it checks - a regex
  * scan of the source beside the remark pipeline, a `readdirSync` walk beside
  * the tree scanner, a hand-built name index beside the wikilink resolver, a
  * plain `indexOf` loop beside the search. A parser agreeing with itself proves
@@ -40,10 +42,10 @@ import type { M2Context } from './m2check'
  * fetch resolves - through `WebFrameMain.executeJavaScript`, which reaches an
  * opaque-origin frame that the window hosting it cannot touch.
  *
- * `pnpm m6-check` -> helm-data/m6-report.json
+ * `pnpm content-check` -> helm-data/content-report.json
  */
 
-const PROFILE_NAME = 'M6 content fixtures'
+const PROFILE_NAME = 'Content fixtures'
 
 const GROUPS = ['browse', 'render', 'links', 'artifact', 'search', 'edit', 'scroll'] as const
 type Group = (typeof GROUPS)[number]
@@ -382,7 +384,7 @@ function buildLongNote(): string {
     'goes',
     'first'
   ]
-  const lines: string[] = ['---', 'type: reference', 'date: 2026-08-10', 'tags: [helm, m6, scroll]', '---', '', '# A long document', '']
+  const lines: string[] = ['---', 'type: reference', 'date: 2026-08-10', 'tags: [helm, fixture, scroll]', '---', '', '# A long document', '']
   let count = 0
   let section = 0
   while (count < 20_000) {
@@ -412,7 +414,7 @@ function buildLongNote(): string {
  * `editChecks`.
  */
 function buildFixtures(dataDir: string): Fixtures {
-  const root = join(dataDir, 'm6-fixtures')
+  const root = join(dataDir, 'content-fixtures')
   rmSync(root, { recursive: true, force: true })
 
   const notes = join(root, 'notes')
@@ -420,7 +422,7 @@ function buildFixtures(dataDir: string): Fixtures {
   mkdirSync(join(root, 'context'), { recursive: true })
   mkdirSync(join(root, 'docs'), { recursive: true })
   mkdirSync(join(root, 'lessons'), { recursive: true })
-  writeFileSync(join(root, 'harness.yaml'), 'name: m6-fixtures\n')
+  writeFileSync(join(root, 'harness.yaml'), 'name: content-fixtures\n')
   writeFileSync(join(root, 'context', 'map.yaml'), 'repos: []\n')
   writeFileSync(join(root, 'docs', 'SPEC.md'), '# Fixture spec\n\nNothing to see.\n')
 
@@ -430,13 +432,13 @@ function buildFixtures(dataDir: string): Fixtures {
       '---',
       'type: journal',
       'date: 2026-08-10',
-      'tags: [helm, m6, fixture]',
+      'tags: [helm, fixture]',
       '---',
       '',
       '# Alpha',
       '',
       'A resolved link to [[beta]] and a broken one to [[never-written]].',
-      'A tag: #helm-m6-fixture and an alias [[beta|the other note]].',
+      'A tag: #helm-content-fixture and an alias [[beta|the other note]].',
       '',
       '## A table',
       '',
@@ -481,7 +483,7 @@ function buildFixtures(dataDir: string): Fixtures {
   const artifact = join(root, 'lessons', 'artifact.html')
   writeFileSync(
     artifact,
-    `<!doctype html><html><head><meta charset="utf-8"><title>M6 fixture artifact</title>
+    `<!doctype html><html><head><meta charset="utf-8"><title>Fixture artifact</title>
 <style>body{font:14px/1.5 system-ui;margin:2rem;color:#222}h1{font-size:1.3rem}</style></head>
 <body><h1 id="heading">HELMM6ARTIFACT</h1><p id="out">pending</p>
 <script>document.getElementById('out').textContent = 'ran'</script></body></html>
@@ -492,7 +494,7 @@ function buildFixtures(dataDir: string): Fixtures {
   const hostile = join(root, 'lessons', 'hostile.html')
   writeFileSync(
     hostile,
-    `<!doctype html><html><head><meta charset="utf-8"><title>M6 hostile artifact</title></head>
+    `<!doctype html><html><head><meta charset="utf-8"><title>Hostile artifact</title></head>
 <body><h1>HELMM6HOSTILE</h1>
 <img id="remote" src="https://example.com/should-not-load.png" alt="">
 <script>
@@ -531,8 +533,8 @@ const round = (value: number): number => Math.round(value * 100) / 100
 
 // ---------------------------------------------------------------------------
 
-export async function runM6Checks(
-  ctx: M2Context,
+export async function runContentChecks(
+  ctx: CheckContext,
   shotDir: string,
   dataDir: string,
   only?: readonly string[]
@@ -598,7 +600,7 @@ export async function runM6Checks(
   )
 
   checks.push({
-    id: 'M6-0',
+    id: 'CONT-0',
     criterion: 'setup',
     title: 'The viewer opens, finds the dev harness, and offers the fixture harness as a scope',
     ok: opened && offersFixture && harness !== undefined && existsSync(fixtures.bigNote),
@@ -620,7 +622,7 @@ export async function runM6Checks(
       checks.push(...(await run()))
     } catch (err) {
       checks.push({
-        id: `M6-${name.toUpperCase()}-THREW`,
+        id: `CONT-${name.toUpperCase()}-THREW`,
         criterion: name,
         title: `The ${name} group threw before it could assert anything`,
         ok: false,
@@ -640,7 +642,7 @@ export async function runM6Checks(
       await group('scroll', () => scrollChecks(ctx, shotDir, harness.path, fixtures))
     } else {
       checks.push({
-        id: 'M6-NO-HARNESS',
+        id: 'CONT-NO-HARNESS',
         criterion: 'setup',
         title: 'Discovery found no harness, so the criteria about the real vault could not run',
         ok: false,
@@ -658,10 +660,10 @@ export async function runM6Checks(
 }
 
 // ---------------------------------------------------------------------------
-// M6-1: the file browser
+// CONT-1: the file browser
 // ---------------------------------------------------------------------------
 
-async function browseChecks(ctx: M2Context, shotDir: string, harnessPath: string): Promise<Check[]> {
+async function browseChecks(ctx: CheckContext, shotDir: string, harnessPath: string): Promise<Check[]> {
   const { win, content } = ctx
 
   const tree = content.tree(harnessPath, true)
@@ -679,7 +681,7 @@ async function browseChecks(ctx: M2Context, shotDir: string, harnessPath: string
     `[...document.querySelectorAll('button[data-content-file]')].map((el) => ({
       relPath: el.dataset.contentFile, kind: el.dataset.contentKind }))`
   )
-  const shot = await screenshot(win, shotDir, 'm6-browse.png')
+  const shot = await screenshot(win, shotDir, 'content-browse.png')
 
   const named = ['notes', 'context', '.claude/skills', 'docs']
   const rootRels = tree.roots.map((root) => root.relPath)
@@ -687,7 +689,7 @@ async function browseChecks(ctx: M2Context, shotDir: string, harnessPath: string
 
   return [
     {
-      id: 'M6-1',
+      id: 'CONT-1',
       criterion: 'File browser scoped to the selected project/harness: notes/, context/, .claude/skills/, docs/',
       title: 'The tree matches an independent walk of the same directory, file for file',
       ok:
@@ -710,7 +712,7 @@ async function browseChecks(ctx: M2Context, shotDir: string, harnessPath: string
         screenshot: shot.file
       },
       notes: [
-        'The second read is a plain readdirSync recursion in m6check.ts with the same exclusion',
+        'The second read is a plain readdirSync recursion in contentcheck.ts with the same exclusion',
         'list and no notion of roots at all - so a scanner that decided the wrong directories',
         'were content would disagree with it.',
         'The four named roots are asserted by name because the criterion names them.'
@@ -720,7 +722,7 @@ async function browseChecks(ctx: M2Context, shotDir: string, harnessPath: string
 }
 
 // ---------------------------------------------------------------------------
-// M6-2 / M6-3: every note in the vault, rendered through the window
+// CONT-2 / CONT-3: every note in the vault, rendered through the window
 // ---------------------------------------------------------------------------
 
 interface PaintedDoc {
@@ -740,7 +742,7 @@ interface PaintedDoc {
 }
 
 async function renderChecks(
-  ctx: M2Context,
+  ctx: CheckContext,
   shotDir: string,
   harnessPath: string,
   appConsole: Array<{ level: string; message: string; source: string }>
@@ -863,7 +865,7 @@ async function renderChecks(
     })()`
   )
 
-  const shot = await screenshot(win, shotDir, 'm6-rendered.png')
+  const shot = await screenshot(win, shotDir, 'content-rendered.png')
 
   /**
    * The document with callouts in it, in both themes.
@@ -896,12 +898,12 @@ async function renderChecks(
       win,
       `document.querySelectorAll('[data-content-body] [data-callout]').length`
     )
-    themeShots.push((await screenshot(win, shotDir, 'm6-callouts-dark.png')).file)
+    themeShots.push((await screenshot(win, shotDir, 'content-callouts-dark.png')).file)
 
     await js<unknown>(win, `window.helm.invoke('settings:write', { theme: 'light' })`)
     await pollJs(win, `!document.documentElement.classList.contains('dark')`, 10_000)
     await sleep(700)
-    themeShots.push((await screenshot(win, shotDir, 'm6-callouts-light.png')).file)
+    themeShots.push((await screenshot(win, shotDir, 'content-callouts-light.png')).file)
     await js<unknown>(win, `window.helm.invoke('settings:write', { theme: 'dark' })`)
     await pollJs(win, `document.documentElement.classList.contains('dark')`, 10_000)
     await sleep(400)
@@ -970,7 +972,7 @@ async function renderChecks(
 
   return [
     {
-      id: 'M6-2',
+      id: 'CONT-2',
       criterion:
         'Every existing note in the dev harness vault (60+ files) renders correctly: frontmatter chips, tables, checkboxes, code highlighting',
       title: `All ${String(markdown.length)} markdown files in the vault were opened through the window and agreed with a regex read of their own source`,
@@ -1016,10 +1018,10 @@ async function renderChecks(
 }
 
 // ---------------------------------------------------------------------------
-// M6-4: wikilinks
+// CONT-4: wikilinks
 // ---------------------------------------------------------------------------
 
-async function linkChecks(ctx: M2Context, shotDir: string, harnessPath: string): Promise<Check[]> {
+async function linkChecks(ctx: CheckContext, shotDir: string, harnessPath: string): Promise<Check[]> {
   const { win, content } = ctx
   const tree = content.tree(harnessPath, true)
   const markdown = tree.files.filter((file) => file.kind === 'markdown')
@@ -1223,7 +1225,7 @@ async function linkChecks(ctx: M2Context, shotDir: string, harnessPath: string):
     `window.helm.invoke('shell:openExternal', { url: 'file:///C:/Windows/win.ini' })`
   )
 
-  const shot = await screenshot(win, shotDir, 'm6-wikilinks.png')
+  const shot = await screenshot(win, shotDir, 'content-wikilinks.png')
 
   const brokenStyle = styling['broken'] as { color?: string; borderBottomStyle?: string } | null
   const visiblyDifferent =
@@ -1234,7 +1236,7 @@ async function linkChecks(ctx: M2Context, shotDir: string, harnessPath: string):
 
   return [
     {
-      id: 'M6-3',
+      id: 'CONT-3',
       criterion: '[[wikilink]] navigation works between notes; broken links visibly distinct',
       title: 'Clicking a wikilink opened the note it names, and a broken one is a different colour and a dashed rule',
       ok:
@@ -1251,7 +1253,7 @@ async function linkChecks(ctx: M2Context, shotDir: string, harnessPath: string):
       ]
     },
     {
-      id: 'M6-11',
+      id: 'CONT-11',
       criterion: 'A link in a note goes somewhere; a link that is not a link goes nowhere',
       title: 'An https link is intercepted rather than left inert, and a file: URL is refused',
       ok: externalLink.found && externalLink.intercepted && refusedFileUrl.opened === false,
@@ -1264,7 +1266,7 @@ async function linkChecks(ctx: M2Context, shotDir: string, harnessPath: string):
       ]
     },
     {
-      id: 'M6-4',
+      id: 'CONT-4',
       criterion: '[[wikilink]] resolution across the vault',
       title: 'Every wikilink in the vault resolves the same way a hand-built name index resolves it',
       ok: expectedTotal > 0 && actualTotal === expectedTotal && actualBroken === expectedBroken,
@@ -1275,7 +1277,7 @@ async function linkChecks(ctx: M2Context, shotDir: string, harnessPath: string):
         filesWithLinks: filesWithLinks.length
       },
       notes: [
-        'The second index is a `Set` of basenames built in m6check.ts, and the second link scan',
+        'The second index is a `Set` of basenames built in contentcheck.ts, and the second link scan',
         'is a regex over the source with fenced and inline code removed. Neither borrows from',
         '`buildWikiIndex` or from the remark transform.',
         'The broken targets are listed rather than only counted, because the value of this',
@@ -1286,7 +1288,7 @@ async function linkChecks(ctx: M2Context, shotDir: string, harnessPath: string):
 }
 
 // ---------------------------------------------------------------------------
-// M6-5 / M6-6: the artifact frame
+// CONT-5 / CONT-6: the artifact frame
 // ---------------------------------------------------------------------------
 
 /** The frame an artifact is rendered in, found among the window's subframes. */
@@ -1307,7 +1309,7 @@ function artifactFrame(win: BrowserWindow): WebFrameMain | null {
 }
 
 async function openArtifact(
-  ctx: M2Context,
+  ctx: CheckContext,
   scopePath: string,
   relPath: string
 ): Promise<{ opened: boolean; frame: WebFrameMain | null }> {
@@ -1326,7 +1328,7 @@ async function openArtifact(
 }
 
 async function artifactChecks(
-  ctx: M2Context,
+  ctx: CheckContext,
   shotDir: string,
   fixtures: Fixtures,
   harnessPath: string | null
@@ -1356,13 +1358,13 @@ async function artifactChecks(
       : null
     await sleep(700)
     const logged = artifactConsoleEntries()
-    const shot = await screenshot(win, shotDir, 'm6-artifact-real.png')
+    const shot = await screenshot(win, shotDir, 'content-artifact-real.png')
 
     const painted = (rendered as { painted?: number } | null)?.painted ?? 0
     const errors = logged.filter((entry) => entry.level === 'error' || entry.level === 'warning')
 
     checks.push({
-      id: 'M6-5',
+      id: 'CONT-5',
       criterion: 'An HTML artifact opens rendered, sandboxed, with no console errors',
       title: `${realArtifact.relPath} rendered in the frame and logged nothing`,
       ok:
@@ -1409,7 +1411,7 @@ async function artifactChecks(
     : null
   await sleep(500)
   const hostileConsole = artifactConsoleEntries()
-  const hostileShot = await screenshot(win, shotDir, 'm6-artifact-sandbox.png')
+  const hostileShot = await screenshot(win, shotDir, 'content-artifact-sandbox.png')
 
   const p = (probe ?? {}) as Record<string, unknown>
   const nodeAbsent =
@@ -1470,7 +1472,7 @@ async function artifactChecks(
     !/https?:/.test(csp)
 
   checks.push({
-    id: 'M6-6',
+    id: 'CONT-6',
     criterion: 'HTML files render in a sandboxed webview (no node, no remote content)',
     title: 'The frame reports no Node, an opaque origin, a rejected fetch, and a blocked remote image; the protocol refuses to leave the artifact’s directory',
     ok:
@@ -1509,7 +1511,7 @@ async function artifactChecks(
       'document that the window hosting it cannot touch - and the fixture actively tries each',
       'thing it must not be able to do.',
       'The frame is expected to log CSP violations here; they are the evidence, not a failure.',
-      'M6-5 is where "no console errors" is measured, against a real artifact.',
+      'CONT-5 is where "no console errors" is measured, against a real artifact.',
       'The traversal is tried twice. `%2e%2e/` is normalised away by the URL parser and never',
       'reaches the handler, which is a 404 and proves the parser. `%2e%2e%2f` survives - `%2f`',
       'is never decoded during canonicalisation - and is what actually reaches `resolve()`, so',
@@ -1521,10 +1523,10 @@ async function artifactChecks(
 }
 
 // ---------------------------------------------------------------------------
-// M6-7: search, measured
+// CONT-7: search, measured
 // ---------------------------------------------------------------------------
 
-async function searchChecks(ctx: M2Context, harnessPath: string): Promise<Check[]> {
+async function searchChecks(ctx: CheckContext, harnessPath: string): Promise<Check[]> {
   const { win, content } = ctx
   const tree = content.tree(harnessPath, true)
   const markdown = tree.files.filter((file) => file.kind === 'markdown')
@@ -1659,7 +1661,7 @@ async function searchChecks(ctx: M2Context, harnessPath: string): Promise<Check[
 
   return [
     {
-      id: 'M6-7',
+      id: 'CONT-7',
       criterion: 'Search finds text across notes and skill files in <200ms',
       title: `p50 ${String(p50)} ms, p95 ${String(p95)} ms over ${String(times.length)} searches of ${String(markdown.length)} files`,
       ok: times.length > 0 && p95 < 200 && wrong.length === 0 && throughTheBox.rows > 0,
@@ -1696,11 +1698,11 @@ async function searchChecks(ctx: M2Context, harnessPath: string): Promise<Check[
 }
 
 // ---------------------------------------------------------------------------
-// M6-8: editing a real note
+// CONT-8: editing a real note
 // ---------------------------------------------------------------------------
 
 async function editChecks(
-  ctx: M2Context,
+  ctx: CheckContext,
   shotDir: string,
   harnessPath: string,
   dataDir: string
@@ -1726,7 +1728,7 @@ async function editChecks(
   if (!note) {
     return [
       {
-        id: 'M6-8',
+        id: 'CONT-8',
         criterion: 'Editing a note and saving preserves frontmatter exactly and snapshots the prior version',
         title: 'No note in the vault has three frontmatter keys, so the check has no discriminating fixture',
         ok: false,
@@ -1738,14 +1740,14 @@ async function editChecks(
 
   const before = readFileSync(note.path, 'utf8')
   const beforeHash = sha256(before)
-  const backup = join(dataDir, 'm6-note.backup.md')
+  const backup = join(dataDir, 'content-note.backup.md')
   copyFileSync(note.path, backup)
 
   const frontmatterBefore = before.slice(0, before.indexOf('\n---', 4) + 4)
   const keysBefore = countSource(before).frontmatterKeys
   const snapshotsBefore = countConfigSnapshots(services.store)
 
-  const marker = `\n<!-- helm m6 probe ${String(Date.now())} -->\n`
+  const marker = `\n<!-- helm content probe ${String(Date.now())} -->\n`
   const edited = `${before.replace(/\n*$/, '\n')}${marker}`
 
   let outcome: Record<string, unknown>
@@ -1790,7 +1792,7 @@ async function editChecks(
       `(document.querySelector('[data-content-body]')?.textContent ?? '').length > 0`,
       8_000
     )
-    const editorShot = await screenshot(win, shotDir, 'm6-editor.png')
+    const editorShot = await screenshot(win, shotDir, 'content-editor.png')
 
     const saved = await click(win, 'button[data-content-save]')
     await sleep(1400)
@@ -1839,7 +1841,7 @@ async function editChecks(
 
   return [
     {
-      id: 'M6-8',
+      id: 'CONT-8',
       criterion: 'Editing a note and saving preserves frontmatter exactly and snapshots the prior version',
       title: `${note.relPath} was edited through the split editor; its frontmatter came back byte for byte and the prior version is in the snapshot table`,
       ok:
@@ -1859,13 +1861,13 @@ async function editChecks(
         'frontmatter somebody else wrote. It is backed up first, restored from the snapshot the',
         'save produced, and hash-verified against a sha256 taken in this file before anything',
         'was typed.',
-        'The snapshot is the same table and the same code path M5 writes through -',
+        'The snapshot is the same table and the same code path the config console writes through -',
         '`writeSnapshottedFile`, with a content guard instead of a config one - so "the prior',
         'version is snapshotted" is a property of the mechanism rather than of this feature.'
       ]
     },
     {
-      id: 'M6-9',
+      id: 'CONT-9',
       criterion: 'The content viewer may not write outside content',
       title: 'The write path refuses a path outside the scope, inside repos/, and with a non-content extension',
       ok: await (async () => {
@@ -1893,7 +1895,7 @@ async function editChecks(
         ]
       },
       notes: [
-        'The guard is the only thing M6 adds to M5’s write. Everything else - the snapshot, the',
+        'The guard is the only thing the content viewer adds to that write. Everything else - the snapshot, the',
         'conflict check, the refusal to rewrite a binary - is shared code, so this is the part',
         'that needs its own check.'
       ]
@@ -1902,11 +1904,11 @@ async function editChecks(
 }
 
 // ---------------------------------------------------------------------------
-// M6-10: scrolling a long document, measured
+// CONT-10: scrolling a long document, measured
 // ---------------------------------------------------------------------------
 
 async function scrollChecks(
-  ctx: M2Context,
+  ctx: CheckContext,
   shotDir: string,
   harnessPath: string,
   fixtures: Fixtures
@@ -2009,13 +2011,13 @@ async function scrollChecks(
     bytes: statSync(fixtures.bigNote).size
   })
 
-  const shot = await screenshot(win, shotDir, 'm6-long-note.png')
+  const shot = await screenshot(win, shotDir, 'content-long-note.png')
   const budgetMs = 32
   const worstP95 = Math.max(...results.map((result) => Number(result['p95'] ?? 0)))
 
   return [
     {
-      id: 'M6-10',
+      id: 'CONT-10',
       criterion: 'A 20k-word note (the report-center redesign note) scrolls smoothly',
       title: `p95 frame interval ${String(round(worstP95))} ms across both documents`,
       ok: results.length > 0 && worstP95 <= budgetMs && results.every((r) => Number(r['frames'] ?? 0) > 40),

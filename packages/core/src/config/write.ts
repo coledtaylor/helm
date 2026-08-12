@@ -136,7 +136,8 @@ export function snapshotKey(scopePath: string, path: string): string {
  * anything outside the scope it named. Passing the rule in rather than
  * branching on a flag is what keeps the three guarantees below - the snapshot,
  * the conflict check, the refusal to touch a binary - identical for both, which
- * is the entire reason M6 does not have a write path of its own.
+ * is the entire reason the content viewer does not have a write path of its
+ * own.
  */
 export type WriteGuard = (scopePath: string, path: string) => void
 

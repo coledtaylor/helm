@@ -17,7 +17,8 @@ import { parseUsage, usageProblem, type UsageSnapshot } from './shape'
  *
  * Normally `~/.claude.json`, a sibling of `~/.claude` rather than a file inside
  * it. `CLAUDE_CONFIG_DIR` moves the whole config directory - credentials
- * included, which is why M5 could not point a live session at a fixture home -
+ * included, which is why config-check cannot point a live session at a fixture
+ * home -
  * and the JSON goes with it. Rather than encode which of the two is right for a
  * given release, this prefers whichever is actually there, so a fixture may use
  * either layout.

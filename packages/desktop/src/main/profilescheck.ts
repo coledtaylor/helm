@@ -15,30 +15,31 @@ import {
 } from '@helm/core'
 import { screenshot, sleep, squash, stripAnsi, waitFor } from './bridge'
 import type { Check } from './fidelity'
-import { atPrompt, type Collector } from './m2check'
+import { atPrompt, type Collector } from './sessionscheck'
 import { shimRoot } from './paths'
 import type { Services } from './services'
 import type { SessionHost } from './sessions'
 
 /**
- * M3's acceptance criteria, driven through the app the way a user reaches them.
+ * The profile and overlay criteria, driven through the app the way a user
+ * reaches them.
  *
- * This is the milestone the whole product is contingent on (SPEC 7): if a
- * root-launched session with overlays does not actually expose project skills,
- * the premise is wrong. Spike A proved the mechanism headlessly with `-p`; what
+ * This is the claim the whole product is contingent on: if a root-launched
+ * session with overlays does not actually expose project skills, the premise is
+ * wrong. The composition spike proved the mechanism headlessly with `-p`; what
  * is here is the first interactive proof, in a hosted TUI, from a profile the
  * driver built by clicking the real form.
  *
  * So the probes talk to a live model rather than asserting on argv alone. Argv
  * is checked too, because it is cheap and exact - but a composed session that
  * assembles the right flags and still cannot invoke a skill would pass an
- * argv-only check, and that is precisely the failure this milestone exists to
- * rule out.
+ * argv-only check, and that is precisely the failure this check exists to rule
+ * out.
  *
- * `pnpm m3-check` -> helm-data/m3-report.json
+ * `pnpm profiles-check` -> helm-data/profiles-report.json
  */
 
-export interface M3Context {
+export interface ProfilesContext {
   win: BrowserWindow
   services: Services
   sessions: SessionHost
@@ -52,8 +53,8 @@ const MODEL = 'haiku'
 const OPENING_TOKEN = 'HELM-OPENING-OK'
 const OPENING_PROMPT = `Reply with exactly the token ${OPENING_TOKEN} and nothing else.`
 
-const PROFILE_NAME = 'M3 composition'
-const FIXTURE_PROFILE = 'M3 skill refresh'
+const PROFILE_NAME = 'Overlay composition'
+const FIXTURE_PROFILE = 'Skill refresh'
 
 // ---------------------------------------------------------------------------
 // Talking to the renderer
@@ -136,7 +137,7 @@ async function pollJs(win: BrowserWindow, expression: string, timeoutMs: number)
 /**
  * Answers the consent prompts a hosted session raises, for as long as it runs.
  *
- * Two families, and the second is why this exists rather than M2's
+ * Two families, and the second is why this exists rather than sessions-check's
  * startup-only version. Folder trust and MCP enablement happen once, at start.
  * **Skill consent happens every time a skill is invoked** - "Use skill
  * `<overlay>:<skill>`? 1. Yes / 2. Yes, and don't ask again / 3. No" - which is
@@ -150,7 +151,7 @@ async function pollJs(win: BrowserWindow, expression: string, timeoutMs: number)
  * Occurrences are counted rather than matched, so a second prompt with the same
  * wording is still answered and an already-answered one is not answered twice.
  */
-export function answerConsent(ctx: M3Context, collector: Collector, ids: number[]): () => void {
+export function answerConsent(ctx: ProfilesContext, collector: Collector, ids: number[]): () => void {
   const answered = new Map<string, number>()
   const count = (text: string, re: RegExp): number => (text.match(re) ?? []).length
 
@@ -177,7 +178,7 @@ export function answerConsent(ctx: M3Context, collector: Collector, ids: number[
       // The TUI positions text by moving the cursor rather than by emitting the
       // spaces between words, so the stream really does read
       // `quicksafetycheck:isthisaproject...`, and a pattern with a space in it
-      // matches nothing. M2's `/Do you trust/` survived only because the
+      // matches nothing. sessions-check's `/Do you trust/` survived only because
       // folders it launched against were already trusted.
       const text = squash(collector.output(id))
       // Wording moves between releases: 2.1.225 asks folder trust as "Quick
@@ -214,7 +215,7 @@ export function answerConsent(ctx: M3Context, collector: Collector, ids: number[
  * differently from typed input.
  */
 export async function ask(
-  ctx: M3Context,
+  ctx: ProfilesContext,
   collector: Collector,
   id: number,
   prompt: string,
@@ -240,14 +241,14 @@ export async function ask(
 
 /** Brings a session to the point where it will accept a prompt. */
 export async function waitForPrompt(
-  ctx: M3Context,
+  ctx: ProfilesContext,
   collector: Collector,
   id: number,
   timeoutMs = 120_000
 ): Promise<boolean> {
-  // `answerConsent`, not M2's startup-only helper: a profile launched against a
-  // directory Claude Code has not seen before stops on the trust gate, and this
-  // driver's fixture repo is new by construction.
+  // `answerConsent`, not sessions-check's startup-only helper: a profile
+  // launched against a directory Claude Code has not seen before stops on the
+  // trust gate, and this driver's fixture repo is new by construction.
   const stop = answerConsent(ctx, collector, [id])
   const ready = await waitFor(() => atPrompt(stripAnsi(collector.output(id))), timeoutMs)
   stop()
@@ -271,7 +272,7 @@ const tail = (collector: Collector, id: number, n = 900): string =>
  *
  * It was fragile. Those directories are mutable and their `.claude/` contents
  * are gitignored. When both lost their `skills/`, `commands/` and `agents/` to
- * an early version of the shim teardown, M3-4 did not go red: it read the two
+ * an early version of the shim teardown, PROF-4 did not go red: it read the two
  * `think` skills' headings off disk, got `''` for both, compared against
  * `SKILL1=` - a substring of any answer using the requested format - and
  * reported PASS while proving nothing.
@@ -289,13 +290,13 @@ export interface ComposeFixtures {
   root: string
   alpha: string
   beta: string
-  /** A fact that exists only in alpha's CLAUDE.md, for M3-5. */
+  /** A fact that exists only in alpha's CLAUDE.md, for PROF-5. */
   alphaFact: string
 }
 
-const FIXTURE_HARNESS = 'helm-m3-harness'
-const FIXTURE_ALPHA = 'helm-m3-alpha'
-const FIXTURE_BETA = 'helm-m3-beta'
+const FIXTURE_HARNESS = 'helm-profiles-harness'
+const FIXTURE_ALPHA = 'helm-profiles-alpha'
+const FIXTURE_BETA = 'helm-profiles-beta'
 
 function writeComposeSkill(repo: string, name: string, token: string): void {
   const dir = join(repo, '.claude', 'skills', name)
@@ -305,7 +306,7 @@ function writeComposeSkill(repo: string, name: string, token: string): void {
     [
       '---',
       `name: ${name}`,
-      `description: Probe skill used by Helm's M3 acceptance check. Reports ${token}.`,
+      `description: Probe skill used by Helm's profile check. Reports ${token}.`,
       '---',
       '',
       `# ${token}`,
@@ -317,20 +318,20 @@ function writeComposeSkill(repo: string, name: string, token: string): void {
 }
 
 function buildComposeFixtures(dataDir: string): ComposeFixtures {
-  const parent = join(dataDir, 'm3-compose-fixtures')
+  const parent = join(dataDir, 'profiles-compose-fixtures')
   rmSync(parent, { recursive: true, force: true })
 
   const root = join(parent, FIXTURE_HARNESS)
   const alpha = join(root, 'repos', FIXTURE_ALPHA)
   const beta = join(root, 'repos', FIXTURE_BETA)
-  const alphaFact = 'helm-m3-build --alpha'
+  const alphaFact = 'helm-profiles-build --alpha'
 
   // `harness.yaml` is what discovery keys on, and `repos/*` is where it looks
   // for the projects under it (`scan.ts`).
   mkdirSync(root, { recursive: true })
   writeFileSync(
     join(root, 'harness.yaml'),
-    ['name: helm-m3-harness', 'template: m3-check', 'version: 0.0.0', ''].join('\n')
+    ['name: helm-profiles-harness', 'template: profiles-check', 'version: 0.0.0', ''].join('\n')
   )
 
   writeComposeSkill(alpha, 'think', 'HELMM3ALPHATHINK')
@@ -340,7 +341,7 @@ function buildComposeFixtures(dataDir: string): ComposeFixtures {
   writeComposeSkill(beta, 'beta-only', 'HELMM3BETAONLY')
 
   // Carried by `--append-system-prompt-file`, which is the only thing that
-  // carries it - neither `--plugin-dir` nor `--add-dir` does (M3-5).
+  // carries it - neither `--plugin-dir` nor `--add-dir` does (PROF-5).
   writeFileSync(
     join(alpha, 'CLAUDE.md'),
     [
@@ -356,7 +357,7 @@ function buildComposeFixtures(dataDir: string): ComposeFixtures {
     [`# ${FIXTURE_BETA}`, '', 'This project has no build command.', ''].join('\n')
   )
 
-  // Read through `--add-dir` by M3-6. The second line differs between them and
+  // Read through `--add-dir` by PROF-6. The second line differs between them and
   // is long enough on both sides for `distinctLine` to choose it, so one answer
   // cannot satisfy both halves of that check.
   for (const [repo, marker] of [
@@ -450,7 +451,7 @@ function writeFixtureSkill(dir: string, token: string): void {
     [
       '---',
       'name: helm-probe',
-      'description: Probe skill used by Helm’s M3 acceptance check. Reports a token.',
+      'description: Probe skill used by Helm’s profile check. Reports a token.',
       '---',
       '',
       `# ${token}`,
@@ -494,8 +495,8 @@ function pick(services: Services, content: ComposeFixtures): Fixtures | null {
 /**
  * `--only=fixture` and friends.
  *
- * Grouped rather than per-check, because these are a chain: M3-2 launches the
- * profile M3-1 built and M3-3..M3-7 all talk to the session M3-2 opened. The
+ * Grouped rather than per-check, because these are a chain: PROF-2 launches the
+ * profile PROF-1 built and PROF-3..PROF-7 all talk to the session PROF-2 opened. The
  * groups are the points where that chain genuinely breaks - which is what makes
  * them the useful thing to re-run while fixing one of them, given a full pass
  * spawns three real sessions and takes minutes.
@@ -511,8 +512,8 @@ function selectedGroups(): Group[] {
   return chosen.length > 0 ? chosen : ALL_GROUPS
 }
 
-export async function runM3Checks(
-  ctx: M3Context,
+export async function runProfilesChecks(
+  ctx: ProfilesContext,
   collector: Collector,
   shotDir: string,
   dataDir: string
@@ -522,7 +523,7 @@ export async function runM3Checks(
   const groups = selectedGroups()
   const wants = (group: Group): boolean => groups.includes(group)
   if (groups.length < ALL_GROUPS.length) {
-    console.log(`m3-check: running only [${groups.join(', ')}]`)
+    console.log(`profiles-check: running only [${groups.join(', ')}]`)
   }
 
   // Wait for the app's own first scan to land before adding to it, so the roots
@@ -539,7 +540,7 @@ export async function runM3Checks(
   if (!scanned || !fixtures) {
     await restoreScanRoots(win, originalRoots, dirname(content.root))
     checks.push({
-      id: 'M3-0',
+      id: 'PROF-0',
       criterion: 'setup',
       title: 'Discovery found the fixture harness and both overlay repos',
       ok: false,
@@ -557,7 +558,7 @@ export async function runM3Checks(
   }
 
   checks.push({
-    id: 'M3-0',
+    id: 'PROF-0',
     criterion: 'setup',
     title: 'Discovery found the fixture harness and both overlay repos',
     ok: true,
@@ -599,14 +600,14 @@ export async function runM3Checks(
 }
 
 /**
- * M3-1 through M3-7: one profile, built in the form, launched, and interrogated.
+ * PROF-1 through PROF-7: one profile, built in the form, launched, and interrogated.
  *
  * These share a session on purpose. Composition is a property of a session, and
  * asking one session all five questions is both the cheaper thing and the
  * truer one - it is the session a person would have.
  */
 async function runComposeChecks(
-  ctx: M3Context,
+  ctx: ProfilesContext,
   collector: Collector,
   shotDir: string,
   fixtures: Fixtures
@@ -616,7 +617,7 @@ async function runComposeChecks(
   const { harness, alpha, beta } = fixtures
 
   // -------------------------------------------------------------------------
-  // M3-1: build a profile through the real form
+  // PROF-1: build a profile through the real form
   // -------------------------------------------------------------------------
   const opened = await clickByLabel(win, 'New profile')
   await sleep(600)
@@ -637,7 +638,7 @@ async function runComposeChecks(
     (await isChecked(win, `Grant access to ${alpha.name}`)) &&
     (await isChecked(win, `Grant access to ${beta.name}`))
 
-  const editorShot = await screenshot(win, shotDir, 'm3-profile-editor.png')
+  const editorShot = await screenshot(win, shotDir, 'profiles-profile-editor.png')
   await clickButtonText(win, 'Save profile')
   await sleep(800)
 
@@ -649,7 +650,7 @@ async function runComposeChecks(
   )
 
   checks.push({
-    id: 'M3-1',
+    id: 'PROF-1',
     criterion: 'Profile CRUD UI: create from scratch; profiles stored in SQLite',
     title: 'A profile built in the form is persisted and listed',
     ok:
@@ -674,7 +675,7 @@ async function runComposeChecks(
   if (!saved) return checks
 
   // -------------------------------------------------------------------------
-  // M3-2: one click launches it into a tab, with the composed argv
+  // PROF-2: one click launches it into a tab, with the composed argv
   // -------------------------------------------------------------------------
   const before = ctx.sessions.list().length
   await js<boolean>(
@@ -714,7 +715,7 @@ async function runComposeChecks(
   const memoryFile = memoryIndex >= 0 ? argv[memoryIndex + 1] : undefined
 
   checks.push({
-    id: 'M3-2',
+    id: 'PROF-2',
     criterion: 'One-click launch from the launcher into a tab; profile → argv builder',
     title: 'Clicking the profile composes the overlays and opens a session tab',
     ok:
@@ -755,16 +756,16 @@ async function runComposeChecks(
   )
   await sleep(2500)
 
-  // M3-3: the opening prompt fired without anyone typing it.
+  // PROF-3: the opening prompt fired without anyone typing it.
   const openingSeen = await waitFor(
     () => squash(collector.output(session.id)).includes(squash(OPENING_TOKEN)),
     180_000
   )
   stopGates()
-  const sessionShot = await screenshot(win, shotDir, 'm3-composed-session.png')
+  const sessionShot = await screenshot(win, shotDir, 'profiles-composed-session.png')
 
   checks.push({
-    id: 'M3-3',
+    id: 'PROF-3',
     criterion: 'Opening prompt fires automatically after session start',
     title: 'The profile’s opening prompt was submitted without any typing',
     ok: ready && openingSeen,
@@ -777,7 +778,7 @@ async function runComposeChecks(
     notes: ['Nothing was written to this pty before the assertion; it came in on the argv.']
   })
 
-  // M3-4: skills from both overlays, including the same-named pair.
+  // PROF-4: skills from both overlays, including the same-named pair.
   //
   // `think` is defined in both fixture repos with a *different* token, which is
   // what makes it the discriminator: reporting both proves two distinct bodies
@@ -814,7 +815,7 @@ async function runComposeChecks(
     : { ok: false, answer: 'the fixture skills carry no distinct tokens, so no answer is evidence' }
 
   checks.push({
-    id: 'M3-4',
+    id: 'PROF-4',
     criterion:
       'A project skill invokes in a root-launched session; same-named skills in two overlays coexist',
     title: 'Both overlays’ `think` skills resolved under their own prefixes and both invoked',
@@ -834,7 +835,7 @@ async function runComposeChecks(
     ]
   })
 
-  // M3-5: the CLAUDE.md gap Spike A found, closed.
+  // PROF-5: the CLAUDE.md gap Spike A found, closed.
   //
   // The fact is written into the alpha fixture's CLAUDE.md by this driver and
   // exists nowhere else on the machine, so a correct answer can only have come
@@ -850,7 +851,7 @@ async function runComposeChecks(
   )
 
   checks.push({
-    id: 'M3-5',
+    id: 'PROF-5',
     criterion: "The overlaid repos' CLAUDE.md instructions are present in the session",
     title: 'An instruction that exists only in an overlay’s CLAUDE.md is in context',
     ok: claudeMd.ok,
@@ -867,10 +868,10 @@ async function runComposeChecks(
     ]
   })
 
-  // M3-6: --add-dir actually grants the files.
+  // PROF-6: --add-dir actually grants the files.
   //
   // Deliberately not CLAUDE.md. Those are already in this session's context by
-  // way of M3-5, so a correct answer about one would prove nothing about
+  // way of PROF-5, so a correct answer about one would prove nothing about
   // whether the file could be *read*. `settings.local.json` is in neither the
   // context nor any plugin, so the only way to report a line of it is to have
   // opened it.
@@ -893,7 +894,7 @@ async function runComposeChecks(
         )
 
   checks.push({
-    id: 'M3-6',
+    id: 'PROF-6',
     criterion: 'Cross-repo file access works in the same session via --add-dir',
     title: 'A file in each overlay repo was read from a session rooted elsewhere',
     ok: files.ok,
@@ -912,7 +913,7 @@ async function runComposeChecks(
   })
 
   // -------------------------------------------------------------------------
-  // M3-7: YAML round trip
+  // PROF-7: YAML round trip
   // -------------------------------------------------------------------------
   const original = readProfile(ctx.services.store, saved.id)
   const yaml = original ? profileToYaml(profileDraft(original)) : ''
@@ -921,7 +922,7 @@ async function runComposeChecks(
   const reimported = yaml === '' ? null : createProfile(ctx.services.store, profileFromYaml(yaml))
 
   checks.push({
-    id: 'M3-7',
+    id: 'PROF-7',
     criterion: 'Profile round-trips through YAML export → delete → import intact',
     title: 'A profile survives being written to YAML, deleted, and read back',
     ok:
@@ -950,7 +951,7 @@ async function runComposeChecks(
 }
 
 /**
- * M3-8: editing a source repo's skill, then relaunching.
+ * PROF-8: editing a source repo's skill, then relaunching.
  *
  * Against a fixture repo rather than the user's. The criterion requires editing
  * a source repo's skill, and the source repos on this machine are real ones -
@@ -958,11 +959,11 @@ async function runComposeChecks(
  * invalidation is not something a check gets to do.
  */
 async function runFixtureCheck(
-  ctx: M3Context,
+  ctx: ProfilesContext,
   collector: Collector,
   dataDir: string
 ): Promise<Check> {
-  const fixtureRoot = join(dataDir, 'm3-fixtures')
+  const fixtureRoot = join(dataDir, 'profiles-fixtures')
   rmSync(fixtureRoot, { recursive: true, force: true })
   writeFixtureSkill(fixtureRoot, 'HELMPROBEALPHA')
 
@@ -990,7 +991,7 @@ async function runFixtureCheck(
   deleteProfile(ctx.services.store, fixtureProfile.id)
 
   return {
-    id: 'M3-8',
+    id: 'PROF-8',
     criterion: 'Editing a source repo’s skill then relaunching the profile picks up the change',
     title: 'A relaunched profile loads the edited skill body, not the one it was built with',
     ok: firstRun.ok && secondRun.ok,
@@ -1010,18 +1011,18 @@ async function runFixtureCheck(
 }
 
 /**
- * M3-9: leave a stale shim for the next app start to sweep.
+ * PROF-9: leave a stale shim for the next app start to sweep.
  *
  * The criterion is about what happens at startup, which cannot be asserted by
  * the process that already started. So this plants what a crash would have left
  * and `--shim-sweep` - a second, real app start - reports on it.
  */
 function plantStaleShim(): Check {
-  const planted = join(shimRoot, 'overlay-m3-crashed')
+  const planted = join(shimRoot, 'overlay-profiles-crashed')
   mkdirSync(join(planted, '.claude-plugin'), { recursive: true })
   writeFileSync(
     join(planted, '.claude-plugin', 'plugin.json'),
-    JSON.stringify({ name: 'm3-crashed', version: '0.0.0' })
+    JSON.stringify({ name: 'profiles-crashed', version: '0.0.0' })
   )
   // No junction in it: what is being tested is whether the sweep finds and
   // removes a stamped `overlay-*` directory, and planting a real link into a
@@ -1030,17 +1031,17 @@ function plantStaleShim(): Check {
   writeFileSync(
     join(planted, '.helm-overlay.json'),
     JSON.stringify({
-      name: 'm3-crashed',
+      name: 'profiles-crashed',
       projectPath: planted,
       mode: 'junction',
       linked: [],
-      fingerprint: 'planted-by-m3-check',
+      fingerprint: 'planted-by-profiles-check',
       builtAt: new Date().toISOString()
     })
   )
 
   return {
-    id: 'M3-9',
+    id: 'PROF-9',
     criterion: 'Stale shim dirs from crashed sessions are cleaned up on next app start',
     title: 'A shim left behind by a crash is planted for the next start to find',
     ok: true,
@@ -1054,7 +1055,7 @@ function plantStaleShim(): Check {
 
 /** Launches the fixture profile, asks its skill for its token, then closes. */
 async function probeFixture(
-  ctx: M3Context,
+  ctx: ProfilesContext,
   collector: Collector,
   profileId: number,
   token: string

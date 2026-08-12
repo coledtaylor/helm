@@ -5,7 +5,7 @@ import type { WriteConfigRequest, WriteConfigResult } from '../types'
 import { contentFileKind } from './roots'
 
 /**
- * Saving a note goes through M5's write, not beside it.
+ * Saving a note goes through the config console's write, not beside it.
  *
  * Everything that makes a config save safe - the snapshot taken before the
  * bytes are touched, the write aborted if the snapshot cannot be taken, the

@@ -6,8 +6,8 @@ import { join } from 'node:path'
 import { readSettings, type AppSettings } from '@helm/core'
 import { screenshot, sendKey, sleep, typeText } from './bridge'
 import type { Check } from './fidelity'
-import type { M2Context } from './m2check'
-import { answerPicker } from './m7check'
+import type { CheckContext } from './sessionscheck'
+import { answerPicker } from './packagingcheck'
 
 /**
  * The settings pane, driven through the real window.
@@ -61,7 +61,7 @@ type Group = (typeof GROUPS)[number]
  * `terminal.ts`.
  *
  * This is the check's own statement of what "the default stack" is, and the
- * whole of M9's font rule is that a user's family goes in *front* of it rather
+ * whole of the font rule is that a user's family goes in *front* of it rather
  * than instead of it. Importing the constant would make the assertion "the code
  * agrees with itself".
  */
@@ -632,7 +632,7 @@ export interface SettingsCheckResult {
 }
 
 export async function runSettingsChecks(
-  ctx: M2Context,
+  ctx: CheckContext,
   shotDir: string,
   dataDir: string,
   only?: readonly string[]
@@ -1025,7 +1025,7 @@ export async function runSettingsChecks(
         screenshot: shot.file
       },
       notes: [
-        'The `roots:remove` channel has had a handler since M7 and no caller at',
+        'The `roots:remove` channel has had a handler since first run landed and no',
         'all. This is the caller, and the row is read out of the database file.',
         'Removal is checked against the next scan rather than against the list of',
         'roots: the setting exists to change what Helm looks at, so the tree',
@@ -1520,7 +1520,7 @@ export async function runSettingsChecks(
         'channel, so what is measured is what a caller would actually get.',
         'Each key is probed twice, valid first: a rejection test whose valid case',
         'never lands cannot tell a working validator from a channel that writes',
-        'nothing - the same trap M3-4 fell into.',
+        'nothing - the same trap PROF-4 fell into.',
         'Reads are tolerant and writes are strict on purpose. A row from another',
         'build is a fact about the past; a malformed write is a bug happening now,',
         'and before this it reached `nativeTheme.themeSource`.',
@@ -1531,7 +1531,7 @@ export async function runSettingsChecks(
   }
 
   // -------------------------------------------------------------------------
-  // S-10 to S-12: the terminal settings (M9)
+  // S-10 to S-12: the terminal settings
   // -------------------------------------------------------------------------
   if (run('terminal')) {
     /**
@@ -2400,7 +2400,7 @@ export async function runSettingsChecks(
   }
 
   // -------------------------------------------------------------------------
-  // S-13: the GitHub group (M10)
+  // S-13: the GitHub group
   // -------------------------------------------------------------------------
   if (run('github')) {
     /** A fetch pass, forced through the real channel and waited on. */
@@ -2486,7 +2486,7 @@ export async function runSettingsChecks(
     await sleep(600)
     const rowWhenFifteen = rowValue(dbFile, 'prPollMinutes')
 
-    // The review launch's two settings (M12), through the pane's own controls.
+    // The review launch's two settings, through the pane's own controls.
     // The template is typed rather than written, because a text field that
     // commits on blur has two ways to fail that a row write does not.
     const template = 'Review {slug}#{number} on {branch}'

@@ -9,7 +9,7 @@ const run = promisify(execFile)
 /**
  * Locates the `claude` CLI and reads its version.
  *
- * SPEC 8 pins the response to flag drift: assert on the version at startup,
+ * SPEC 7 pins the response to flag drift: assert on the version at startup,
  * warn, do not block. A missing CLI is not fatal - the config console and the
  * content viewer work without it, and telling the user what is wrong beats a
  * failed launch later with no explanation.

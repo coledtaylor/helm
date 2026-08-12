@@ -231,7 +231,8 @@ function toSession(row: SessionRow): HistorySession {
  * while you type, so `geofenc` has to match `geofencing` and `--resume` has to
  * match itself; a tokenising index matches whole words and would find neither.
  * The cost is a table scan, which at 3,470 rows and 284 KB of prompt text
- * measures around a millisecond - see the M4 check, which asserts on it.
+ * measures around a millisecond - see `pnpm history-check`, which asserts on
+ * it.
  */
 function likePattern(search: string): string {
   const escaped = search.replace(/[\\%_]/g, (char) => `\\${char}`)
