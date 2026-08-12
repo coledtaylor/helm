@@ -72,12 +72,15 @@ runs the checks, skips the release job and finishes green.
   together rather than leaving a window where the app announces a version whose
   download page is empty. A run cancelled mid-upload leaves an unpublished
   draft; the next run deletes it and starts over.
-- **Notes are `git log` subjects.** GitHub's generated notes list merged pull
-  requests, and this repository's history is branches merged locally, so the
-  generated body would be a "Full Changelog" link and nothing else. The prose
-  above the changes - what Helm is, which file to take, what SmartScreen will
-  say - lives in `.github/release-body.md`, so editing what a stranger reads is
-  not editing release logic.
+- **Notes are `git log` subjects**, oldest first, merges excluded. GitHub's
+  generated notes list merged pull requests, and this repository's history is
+  branches merged locally, so the generated body would be a "Full Changelog"
+  link and nothing else.
+- **A release page is a changelog, not a second README.** The few lines above
+  the changes live in `.github/release-body.md`, so editing what a stranger
+  reads is not editing release logic - and they stay few on purpose. Install
+  notes, the SmartScreen warning and first run are the README's, maintained
+  once rather than restated at every tag.
 - **Artefacts are verified before upload, from the inside.**
   `pnpm verify:artifact` unwraps the NSIS exe and the `app-64.7z` nested in it
   and asserts the win32-x64 `better-sqlite3` and `node-pty` binaries are present

@@ -62,6 +62,14 @@ your user only, into `%LOCALAPPDATA%\Programs\Helm`, and keeps its data in
 `%APPDATA%\Helm`. Uninstalling removes the program and **keeps** your data - the
 database holds your profiles, session index and config snapshots.
 
+Expect **"Windows protected your PC"** either way. These builds are not
+code-signed, so SmartScreen has no publisher to check and warns about every
+download: **More info** -> **Run anyway**. That warning is doing its job, and
+you should not wave it away for software you have no reason to trust. If you
+would rather check than trust, both files are built from the tagged commit by
+[`.github/workflows/release.yml`](.github/workflows/release.yml) and the run is
+linked from the release.
+
 You also need Claude Code itself. Helm runs the real `claude` CLI; it does not
 bundle one and it never handles your credentials. If you have not signed in,
 first run says so and asks you to run `claude` once in a terminal - that is the
