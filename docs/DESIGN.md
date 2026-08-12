@@ -204,6 +204,27 @@ Dividers inside an island fade to transparent at their ends - use the
   trailing actions is **not drawn**: its 40px belong to tabs, and holding them
   open on the welcome screen pushes the pane island below the top edge of the
   sidebar island beside it.
+- **Pane headers**: a scoped console wears one island strip - mark, title,
+  scope switcher, what is being looked at, and a refresh (`PaneHeader`, used by
+  the config console and the content viewer). It **measures itself, not the
+  window**: these panes are the workspace half of a split, so a `lg:` media
+  query is a question about the wrong box, and asking it is how the config
+  header came to paint its view switcher 100px past the island's right edge on
+  a 1280px screen. Every threshold is a container query on the header's own
+  content box.
+
+  As it narrows it drops, in this order: the counts (896), the path (672), then
+  the pane's own controls move to a **second row** rather than going (560),
+  then the title (384), then the mark (240). The scope switcher and the refresh
+  survive every step - a pane you cannot re-point or re-read has nothing left
+  to do - and the switcher gives up its width last, stretching to fill the row
+  only once the title has gone. The height follows the rows (`min-h-11`), and
+  the wrap point is a decision rather than whatever happened to fit: the
+  controls take a full line, everything else is hidden before it can wrap.
+
+  What is dropped is what something else on screen already says: the tab above
+  the header carries the title, and the scope switcher names the scope the path
+  spells out. Nothing that is *only* here is ever dropped.
 - **Stat groups**: raised cards, 21px/500 tabular figure over a 10px subtle
   label.
 - **Status bar**: plain 10.5px subtle text directly on the canvas, segments
@@ -243,7 +264,11 @@ Dividers inside an island fade to transparent at their ends - use the
   picked, then the detail alone with a `‹ Back` row above it (`PaneBack`).
   Clearing the selection is what puts the list back, so the back row and the
   pane's own empty state stay the same thing. At full width both show and
-  nothing swaps - a click saved is not worth a layout that moves.
+  nothing swaps - a click saved is not worth a layout that moves. The strip
+  above them degrades on its own schedule and by its own measurements - see
+  **Pane headers** - because the divider is bounded at 20% of the row, which is
+  a pane of about 195px on a 1280px screen and 119px on the narrowest window
+  the app will open.
 - **Sidebar**: four global rows (session history, pull requests, Config,
   Content), then profiles, then the harness tree. A harness is a collapsible
   group - caret, name in the caps label style but at `fg`, project count, and a

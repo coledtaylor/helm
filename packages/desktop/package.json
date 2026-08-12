@@ -18,7 +18,7 @@
     "selftest": "electron-vite build && electron . --selftest",
     "fidelity": "electron-vite build && electron . --fidelity",
     "claude-check": "electron-vite build && electron . --claude-check",
-    "//design-shot": "Not a check. Opens the real window, walks the main views, and screenshots each in both themes - evidence for a design review against docs/DESIGN.md.",
+    "//design-shot": "Not a check. Opens the real window, walks the main views, and screenshots each in both themes - evidence for a design review against docs/DESIGN.md. Four groups, narrowed with --only=views,states,responsive,split (the GROUPS const in src/main/designshot.ts is the authority): views is the walk, states the collapsed section, responsive the width sweep over the two scoped headers - which prints each header's overflow and spill rather than only photographing it - and split the docked pane, which is the one that spawns a real claude session and the only one that reaches pane widths below the window's own minWidth.",
     "design-shot": "electron-vite build && node scripts/run-isolated.mjs design-shot --design-shot",
     "//sessions-check": "Session lifecycle - launching, tabs and teardown - driven through the real app window. Spawns real claude sessions and ends them; see src/main/sessionscheck.ts.",
     "sessions-check": "electron-vite build && node scripts/run-sessions.mjs",
