@@ -177,6 +177,18 @@ gets looked at rather than reasoned about. Measure a suspect edge in the PNG
 rather than eyeballing it - `System.Drawing` from PowerShell is enough to scan a
 column for an island's top and bottom edge.
 
+Four groups, `--only=` like the checks (`GROUPS` in `designshot.ts` is the
+authority): **views** is the walk itself, **states** the collapsed section,
+**responsive** a width sweep over the two scoped pane headers, and **split** a
+pane docked beside a real session at four widths. Two of them are worth knowing
+about. `responsive` **prints numbers** - each header's `overflow` and `spill`,
+the second being how far a child reaches past the padding box, which is the
+failure a thumbnail does not show and the one the header bug was found by.
+And `split` is the only group that spawns a session, and the only one that
+reaches pane widths below the ~596px the window's own `minWidth` leaves: the
+divider is bounded at a *fraction* of the row, so it docks far narrower than
+any window can be made.
+
 ## Where the output lands
 
 Every check runs against a **data directory of its own**:

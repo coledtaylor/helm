@@ -12,9 +12,12 @@ change that cannot be expressed in the system's tokens is a deliberate
 DESIGN.md amendment or a change to reconsider.
 
 Look at the app, not at the class names. `pnpm design-shot` walks every main
-view in both themes and writes PNGs to `%APPDATA%\Helm\screenshots\design`. A UI
-change is not done until you have looked at one, and measuring a suspect edge in
-the PNG beats eyeballing it.
+view in both themes and writes PNGs to
+`%LOCALAPPDATA%\Helm\checks\design-shot\helm-data\screenshots\design` - its own
+data directory, like every check, and never the `%APPDATA%\Helm` somebody is
+using while it runs. A UI change is not done until you have looked at one, and
+measuring a suspect edge in the PNG beats eyeballing it. `--only=` narrows the
+walk; the **`checks`** skill has the groups.
 
 ## Where the rest of this lives
 

@@ -11,6 +11,7 @@ import type {
 import { cn } from '../lib/cn'
 import { formatAge, formatBytes } from '../lib/time'
 import { PaneBack } from './PaneBack'
+import { PaneHeader } from './PaneHeader'
 import {
   ArtifactIcon,
   BookIcon,
@@ -153,70 +154,83 @@ export function ContentViewer({
   return (
     // Islands with canvas gutters, like the config console (DESIGN.md).
     <div className="flex h-full min-h-0 flex-col gap-2">
-      <header className="flex h-11 shrink-0 items-center gap-3 rounded-island border border-border bg-surface px-4">
-        <BookIcon width={15} height={15} className="shrink-0 text-accent" />
-        <h1 className="shrink-0 text-[13px] font-medium tracking-tight text-fg">Content</h1>
-
-        <label className="flex min-w-0 items-center gap-2">
-          <span className="sr-only">Scope</span>
-          <select
-            data-content-scope
-            aria-label="Scope"
-            value={scopePath}
-            onChange={(event) => onScopeChange(event.target.value)}
+      <PaneHeader
+        name="content"
+        icon={<BookIcon width={15} height={15} />}
+        title="Content"
+        scope={
+          <label className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="sr-only">Scope</span>
+            <select
+              data-content-scope
+              aria-label="Scope"
+              value={scopePath}
+              onChange={(event) => onScopeChange(event.target.value)}
+              className={cn(
+                // Stretches only in the last band, and capped even there: a
+                // 400px select holding the word "dev" is not what the room
+                // freed by dropping the title is for.
+                'h-7 w-full max-w-64 min-w-0 rounded-well border border-border bg-surface-sunken px-2',
+                '@[384px]:w-auto @[384px]:min-w-40',
+                'text-[12px] text-fg focus:border-accent focus:outline-none'
+              )}
+            >
+              {['harness', 'project'].map((kind) => {
+                const inKind = scopes.filter((s) => s.kind === kind)
+                if (inKind.length === 0) return null
+                return (
+                  <optgroup key={kind} label={kind === 'harness' ? 'Harnesses' : 'Projects'}>
+                    {inKind.map((s) => (
+                      <option key={s.path} value={s.path}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                )
+              })}
+            </select>
+          </label>
+        }
+        {...(scope
+          ? {
+              caption: (
+                // Titled, because what a truncated path drops is its tail, and
+                // the tail is the half that identifies a scope.
+                <p className="truncate font-mono text-[11px] text-fg-subtle" title={scope.path}>
+                  {scope.path}
+                </p>
+              )
+            }
+          : {})}
+        {...(tree && tree.roots.length > 0
+          ? {
+              meta: (
+                <p className="flex items-baseline gap-1.5 text-[11px] text-fg-subtle">
+                  <span className="tabular-nums">{total}</span>
+                  <span>files in</span>
+                  <span className="tabular-nums">{tree.roots.length}</span>
+                  <span>{tree.roots.length === 1 ? 'place' : 'places'}</span>
+                </p>
+              )
+            }
+          : {})}
+        action={
+          <button
+            type="button"
+            data-content-refresh
+            onClick={onRefresh}
+            disabled={refreshing}
+            title="Re-read this scope from disk"
+            aria-label="Re-read this scope from disk"
             className={cn(
-              'h-7 max-w-64 min-w-40 rounded-well border border-border bg-surface-sunken px-2',
-              'text-[12px] text-fg focus:border-accent focus:outline-none'
+              'grid size-6 shrink-0 place-items-center rounded text-fg-subtle transition-colors',
+              'hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-50'
             )}
           >
-            {['harness', 'project'].map((kind) => {
-              const inKind = scopes.filter((s) => s.kind === kind)
-              if (inKind.length === 0) return null
-              return (
-                <optgroup key={kind} label={kind === 'harness' ? 'Harnesses' : 'Projects'}>
-                  {inKind.map((s) => (
-                    <option key={s.path} value={s.path}>
-                      {s.label}
-                    </option>
-                  ))}
-                </optgroup>
-              )
-            })}
-          </select>
-        </label>
-
-        {scope && (
-          <p className="hidden min-w-0 truncate font-mono text-[11px] text-fg-subtle lg:block">
-            {scope.path}
-          </p>
-        )}
-
-        <span className="flex-1" />
-
-        {tree && tree.roots.length > 0 && (
-          <p className="hidden shrink-0 items-baseline gap-1.5 text-[11px] text-fg-subtle xl:flex">
-            <span className="tabular-nums">{total}</span>
-            <span>files in</span>
-            <span className="tabular-nums">{tree.roots.length}</span>
-            <span>{tree.roots.length === 1 ? 'place' : 'places'}</span>
-          </p>
-        )}
-
-        <button
-          type="button"
-          data-content-refresh
-          onClick={onRefresh}
-          disabled={refreshing}
-          title="Re-read this scope from disk"
-          aria-label="Re-read this scope from disk"
-          className={cn(
-            'grid size-6 shrink-0 place-items-center rounded text-fg-subtle transition-colors',
-            'hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-50'
-          )}
-        >
-          <RefreshIcon className={cn(refreshing && 'animate-spin')} />
-        </button>
-      </header>
+            <RefreshIcon className={cn(refreshing && 'animate-spin')} />
+          </button>
+        }
+      />
 
       <div className="flex min-h-0 flex-1 gap-2">
         {showList && (

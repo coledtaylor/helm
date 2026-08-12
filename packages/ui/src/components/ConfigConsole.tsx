@@ -9,6 +9,7 @@ import type {
 import { cn } from '../lib/cn'
 import { formatAge, formatBytes } from '../lib/time'
 import { PaneBack } from './PaneBack'
+import { PaneHeader } from './PaneHeader'
 import {
   AgentIcon,
   CaretIcon,
@@ -184,91 +185,108 @@ export function ConfigConsole({
     // then the file list beside the editor. The header is the island the
     // active folder tab lifts into.
     <div className="flex h-full min-h-0 flex-col gap-2">
-      <header className="flex h-11 shrink-0 items-center gap-3 rounded-island border border-border bg-surface px-4">
-        <SlidersIcon width={15} height={15} className="shrink-0 text-accent" />
-        <h1 className="shrink-0 text-[13px] font-medium tracking-tight text-fg">Config</h1>
-
-        <label className="flex min-w-0 items-center gap-2">
-          <span className="sr-only">Scope</span>
-          <select
-            data-config-scope
-            aria-label="Scope"
-            value={scopePath}
-            onChange={(event) => onScopeChange(event.target.value)}
-            className={cn(
-              'h-7 max-w-64 min-w-40 rounded-well border border-border bg-surface-sunken px-2',
-              'text-[12px] text-fg focus:border-accent focus:outline-none'
-            )}
-          >
-            {['user', 'harness', 'project'].map((kind) => {
-              const inKind = scopes.filter((s) => s.kind === kind)
-              if (inKind.length === 0) return null
-              return (
-                <optgroup
-                  key={kind}
-                  label={kind === 'user' ? 'User' : kind === 'harness' ? 'Harnesses' : 'Projects'}
-                >
-                  {inKind.map((s) => (
-                    <option key={s.path} value={s.path}>
-                      {s.label}
-                      {s.exists ? '' : ' (no config)'}
-                    </option>
-                  ))}
-                </optgroup>
-              )
-            })}
-          </select>
-        </label>
-
-        {scope && (
-          <p className="hidden min-w-0 truncate font-mono text-[11px] text-fg-subtle lg:block">
-            {scope.kind === 'user' ? scope.claudeDir : scope.path}
-          </p>
-        )}
-
-        <span className="flex-1" />
-
-        <div
-          role="group"
-          aria-label="View"
-          // A segmented control (DESIGN.md): sunken well, and the chosen
-          // segment lifts to the raised surface with a hairline ring.
-          className="flex gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
-        >
-          {VIEWS.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              data-config-view={option.id}
-              aria-pressed={view === option.id}
-              onClick={() => onViewChange(option.id)}
+      <PaneHeader
+        name="config"
+        icon={<SlidersIcon width={15} height={15} />}
+        title="Config"
+        scope={
+          <label className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="sr-only">Scope</span>
+            <select
+              data-config-scope
+              aria-label="Scope"
+              value={scopePath}
+              onChange={(event) => onScopeChange(event.target.value)}
               className={cn(
-                'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
-                view === option.id
-                  ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
-                  : 'text-fg-muted hover:text-fg'
+                // Stretches only in the last band, and capped even there: a
+                // 400px select holding the word "User" is not what the room
+                // freed by dropping the title is for.
+                'h-7 w-full max-w-64 min-w-0 rounded-well border border-border bg-surface-sunken px-2',
+                '@[384px]:w-auto @[384px]:min-w-40',
+                'text-[12px] text-fg focus:border-accent focus:outline-none'
               )}
             >
-              {option.label}
-            </button>
-          ))}
-        </div>
-
-        <button
-          type="button"
-          data-config-refresh
-          onClick={onRefresh}
-          disabled={refreshing}
-          title="Re-read this scope from disk"
-          aria-label="Re-read this scope from disk"
-          className={cn(
-            'grid size-6 shrink-0 place-items-center rounded text-fg-subtle transition-colors',
-            'hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-50'
-          )}
-        >
-          <RefreshIcon className={cn(refreshing && 'animate-spin')} />
-        </button>
-      </header>
+              {['user', 'harness', 'project'].map((kind) => {
+                const inKind = scopes.filter((s) => s.kind === kind)
+                if (inKind.length === 0) return null
+                return (
+                  <optgroup
+                    key={kind}
+                    label={kind === 'user' ? 'User' : kind === 'harness' ? 'Harnesses' : 'Projects'}
+                  >
+                    {inKind.map((s) => (
+                      <option key={s.path} value={s.path}>
+                        {s.label}
+                        {s.exists ? '' : ' (no config)'}
+                      </option>
+                    ))}
+                  </optgroup>
+                )
+              })}
+            </select>
+          </label>
+        }
+        {...(scope
+          ? {
+              caption: (
+                // Titled, because what a truncated path drops is its tail, and
+                // the tail is the half that identifies a scope.
+                <p
+                  className="truncate font-mono text-[11px] text-fg-subtle"
+                  title={scope.kind === 'user' ? scope.claudeDir : scope.path}
+                >
+                  {scope.kind === 'user' ? scope.claudeDir : scope.path}
+                </p>
+              )
+            }
+          : {})}
+        controls={
+          <div
+            role="group"
+            aria-label="View"
+            // A segmented control (DESIGN.md): sunken well, and the chosen
+            // segment lifts to the raised surface with a hairline ring.
+            // On its own row below 560px, where it is the widest thing in the
+            // header and the row it came from has a scope switcher to keep.
+            className="flex min-w-0 gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
+          >
+            {VIEWS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                data-config-view={option.id}
+                aria-pressed={view === option.id}
+                onClick={() => onViewChange(option.id)}
+                className={cn(
+                  'min-w-0 truncate rounded-[5px] px-1.5 py-0.5 text-[11px] transition-colors',
+                  '@[560px]:px-2.5',
+                  view === option.id
+                    ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                    : 'text-fg-muted hover:text-fg'
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        }
+        action={
+          <button
+            type="button"
+            data-config-refresh
+            onClick={onRefresh}
+            disabled={refreshing}
+            title="Re-read this scope from disk"
+            aria-label="Re-read this scope from disk"
+            className={cn(
+              'grid size-6 shrink-0 place-items-center rounded text-fg-subtle transition-colors',
+              'hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-50'
+            )}
+          >
+            <RefreshIcon className={cn(refreshing && 'animate-spin')} />
+          </button>
+        }
+      />
 
       {view !== 'files' ? (
         <div className="min-h-0 flex-1 overflow-hidden rounded-island border border-border bg-surface">
