@@ -20,7 +20,3 @@ reports/
 # private names the publication audit looks for - the one file in this list
 # that would do harm rather than noise if it were ever committed.
 CLAUDE.local.md
-
-# Generated design artifacts. Rendered from docs/DESIGN.md on demand and
-# regenerable, and the renderer inlines absolute paths from whoever ran it.
-docs/*.dc.html

@@ -19,7 +19,7 @@
 // "cannot find path for dependency ...@undefined" for every production package
 // as a warning, and produces artefacts with **no `app.asar.unpacked`** - an exe
 // that looks fine, is 95 MB, and dies the moment it tries to `dlopen`
-// better-sqlite3. `pnpm m7-check --only=package` asserts the unpacked native
+// better-sqlite3. `pnpm packaging-check --only=package` asserts the unpacked native
 // modules are there for exactly that reason.
 //
 // So: resolve pnpm the way electron-builder will, check it answers the version

@@ -55,7 +55,7 @@ interface Hosted {
 }
 
 /**
- * Optional taps for the `--m2-check` driver.
+ * Optional taps for the `--sessions-check` driver.
  *
  * The app passes none. They exist because the two things this milestone has to
  * prove that leave no trace anywhere else - what a hosted session printed, and

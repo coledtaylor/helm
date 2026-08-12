@@ -13,17 +13,18 @@ import type { Services } from './services'
 import type { UsageService } from './usage'
 
 /**
- * M2's acceptance criteria, driven through the app the way a user reaches them.
+ * The session-lifecycle criteria, driven through the app the way a user
+ * reaches them.
  *
  * Everything here goes through the real surface: sidebar rows are clicked, the
  * launch button is clicked, tabs are switched by clicking tabs. The alternative
  * - calling the session host directly - would prove the main process works and
  * say nothing about whether the thing on screen is wired to it.
  *
- * `pnpm m2-check` -> helm-data/m2-report.json
+ * `pnpm sessions-check` -> helm-data/sessions-report.json
  */
 
-export interface M2Context {
+export interface CheckContext {
   win: BrowserWindow
   services: Services
   sessions: SessionHost
@@ -33,11 +34,11 @@ export interface M2Context {
    * "the pane refit and the pty was told"; nothing else uses it.
    */
   pterm: PtermHost
-  /** M4's driver reads and forces passes through this; M2's ignores it. */
+  /** history-check reads and forces passes through this; sessions-check ignores it. */
   history: HistoryService
-  /** M5's driver reads and writes config through this; nothing else uses it. */
+  /** config-check reads and writes config through this; nothing else uses it. */
   config: ConfigService
-  /** M6's driver reads, renders and searches content through this. */
+  /** content-check reads, renders and searches content through this. */
   content: ContentService
   /**
    * The usage reader. `usage-check` points it at fixtures through this: it is
@@ -311,8 +312,8 @@ function pick(services: Services): Project[] {
   return chosen
 }
 
-export async function runM2Checks(
-  ctx: M2Context,
+export async function runSessionsChecks(
+  ctx: CheckContext,
   collector: Collector,
   shotDir: string
 ): Promise<Check[]> {
@@ -333,7 +334,7 @@ export async function runM2Checks(
 
   if (!scanned || !painted || projects.length < 3) {
     checks.push({
-      id: 'M2-0',
+      id: 'SESS-0',
       criterion: 'setup',
       title: 'Discovery found at least three projects to launch against',
       ok: false,
@@ -344,7 +345,7 @@ export async function runM2Checks(
   }
 
   // -------------------------------------------------------------------------
-  // M2-1: three concurrent sessions, three different repos
+  // SESS-1: three concurrent sessions, three different repos
   // -------------------------------------------------------------------------
   const started: SessionRecord[] = []
   for (const project of projects) {
@@ -370,10 +371,10 @@ export async function runM2Checks(
   await sleep(2500)
 
   const pids = new Map(started.map((s) => [s.id, ctx.sessions.pid(s.id) ?? -1]))
-  const shot1 = await screenshot(win, shotDir, 'm2-three-sessions.png')
+  const shot1 = await screenshot(win, shotDir, 'sessions-three-sessions.png')
 
   checks.push({
-    id: 'M2-1',
+    id: 'SESS-1',
     criterion: 'Can run 3+ concurrent claude sessions in tabs against different repos',
     title: 'Three sessions launched from the launcher, each in its own repo',
     ok:
@@ -399,7 +400,7 @@ export async function runM2Checks(
   })
 
   // -------------------------------------------------------------------------
-  // M2-2: a backgrounded pane keeps its grid
+  // SESS-2: a backgrounded pane keeps its grid
   // -------------------------------------------------------------------------
   const gridsBefore = started.map((s) => ctx.sessions.grid(s.id))
   for (const index of [0, 3, 5, 1]) {
@@ -409,10 +410,10 @@ export async function runM2Checks(
   await clickSessionTab(win, started[0]?.id ?? -1)
   await sleep(700)
   const gridsAfter = started.map((s) => ctx.sessions.grid(s.id))
-  const shot2 = await screenshot(win, shotDir, 'm2-after-tab-switching.png')
+  const shot2 = await screenshot(win, shotDir, 'sessions-after-tab-switching.png')
 
   checks.push({
-    id: 'M2-2',
+    id: 'SESS-2',
     criterion: 'Resize works per Spike C, in an app layout rather than a bare page',
     title: 'A backgrounded pane keeps its grid instead of fitting to a 1x1 box',
     ok: gridsAfter.every((grid) => grid !== null && grid.cols > 20 && grid.rows > 5),
@@ -423,7 +424,7 @@ export async function runM2Checks(
   })
 
   // -------------------------------------------------------------------------
-  // M2-3: reordering the tab strip
+  // SESS-3: reordering the tab strip
   // -------------------------------------------------------------------------
   const orderBefore = await tabOrder(win)
   const moved = await js<boolean>(
@@ -438,7 +439,7 @@ export async function runM2Checks(
   const orderAfter = await tabOrder(win)
 
   checks.push({
-    id: 'M2-3',
+    id: 'SESS-3',
     criterion: 'Tab strip: open sessions across projects, reorder',
     title: 'A tab can be moved along the strip',
     ok:
@@ -451,7 +452,7 @@ export async function runM2Checks(
   })
 
   // -------------------------------------------------------------------------
-  // M2-4 / M2-5: a session that ends on its own
+  // SESS-4 / SESS-5: a session that ends on its own
   // -------------------------------------------------------------------------
   const background = started[1]
   const foreground = started[0]
@@ -476,7 +477,7 @@ export async function runM2Checks(
     // Now go and look at what the ended session's pane says.
     await clickSessionTab(win, background.id)
     await sleep(600)
-    const shot3 = await screenshot(win, shotDir, 'm2-session-ended.png')
+    const shot3 = await screenshot(win, shotDir, 'sessions-session-ended.png')
     const bannerText = await js<string>(
       win,
       `(() => { const el = document.querySelector('[role="status"]');
@@ -484,7 +485,7 @@ export async function runM2Checks(
     )
 
     checks.push({
-      id: 'M2-4',
+      id: 'SESS-4',
       criterion: 'Exit code and duration of each session recorded in SQLite',
       title: 'A session ended with /exit records exit code 0 and a measured duration',
       ok:
@@ -501,7 +502,7 @@ export async function runM2Checks(
     })
 
     checks.push({
-      id: 'M2-5',
+      id: 'SESS-5',
       criterion: "Notification fires when a non-focused tab's session ends",
       title: 'The exit of a background session raises a notification',
       ok: notified && focusedWhenItEnded === `session:${String(foreground.id)}`,
@@ -516,7 +517,7 @@ export async function runM2Checks(
   }
 
   // -------------------------------------------------------------------------
-  // M2-6: closing a tab whose session is alive asks first
+  // SESS-6: closing a tab whose session is alive asks first
   // -------------------------------------------------------------------------
   const live = started.find((s) => s.id !== background?.id)
   if (live) {
@@ -553,7 +554,7 @@ export async function runM2Checks(
     const row = findRow()
 
     checks.push({
-      id: 'M2-6',
+      id: 'SESS-6',
       criterion:
         'Closing a tab with a live session prompts; confirmed close terminates the process cleanly',
       title: 'The confirmation is asked, declining keeps the session, confirming ends it',
@@ -584,7 +585,7 @@ export async function runM2Checks(
   }
 
   // -------------------------------------------------------------------------
-  // M2-7: teardown leaves nothing behind
+  // SESS-7: teardown leaves nothing behind
   // -------------------------------------------------------------------------
   const trees = new Map<number, number[]>()
   for (const session of ctx.sessions.list()) {
@@ -598,7 +599,7 @@ export async function runM2Checks(
   const survivors = watched.filter(processAlive)
 
   checks.push({
-    id: 'M2-7',
+    id: 'SESS-7',
     criterion: 'Killing the app does not leave orphaned claude/conpty processes',
     title: 'Shutdown terminates every session process and its children',
     ok: watched.length > 0 && survivors.length === 0,
@@ -614,7 +615,7 @@ export async function runM2Checks(
 
   const rows = readSessions(ctx.services.store, { limit: 50 })
   checks.push({
-    id: 'M2-8',
+    id: 'SESS-8',
     criterion: 'Exit code and duration of each session recorded in SQLite',
     title: 'Every session from this run left a completed row',
     ok:
@@ -639,10 +640,10 @@ export async function runM2Checks(
   })
 
   // -------------------------------------------------------------------------
-  // M2-9: hand a live session to the app's own quit path
+  // SESS-9: hand a live session to the app's own quit path
   // -------------------------------------------------------------------------
   //
-  // M2-7 proves the teardown function reaps a process tree. This proves the app
+  // SESS-7 proves the teardown function reaps a process tree. This proves the app
   // actually calls it when it quits, which is a different claim and the one the
   // acceptance criterion is about. It cannot be asserted from inside the
   // process that is about to end, so the pids are published and checked by
@@ -662,7 +663,7 @@ export async function runM2Checks(
     const tree = pid !== null && processAlive(pid) ? descendants(pid) : []
 
     checks.push({
-      id: 'M2-9',
+      id: 'SESS-9',
       criterion: 'Killing the app does not leave orphaned claude/conpty processes',
       title: 'A live session is left for the app quit path to reap',
       ok: tree.length > 0,

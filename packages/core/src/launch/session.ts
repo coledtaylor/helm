@@ -1,8 +1,9 @@
 /**
  * What a session launch is, before anything Electron-shaped touches it.
  *
- * M2 launches one project at a time, so the only flag here is `-n`. The shape
- * is a spec object rather than a string of flags because M3 composes overlays
+ * A plain session launches one project at a time, so the only flag here is
+ * `-n`. The shape is a spec object rather than a string of flags because a
+ * profile composes overlays
  * into this same call - `--plugin-dir` per overlay, `--add-dir` per access
  * path - and argv assembly that started life inline in the main process would
  * have to be moved out of it first, untested, to get there.

@@ -1,6 +1,6 @@
 // Runs the status bar's usage checks and decides the verdict from the report.
 //
-// Same reason run-m3.mjs through run-m6.mjs exist: the driver writes its report
+// Same reason run-profiles.mjs through run-content.mjs exist: the driver writes its report
 // and then, during teardown, Electron can lose the exit code. The checks have
 // already run at that point, so the report is the source of truth and the
 // process status is not. A driver that dies before writing fails the run,

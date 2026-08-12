@@ -1,4 +1,4 @@
-// M7's acceptance criteria, in three phases, because they are claims about
+// The packaging criteria, in three phases, because they are claims about
 // three different things.
 //
 // Phase 1 is about this machine: the grep audit over the checkout, and whether
@@ -38,7 +38,7 @@ import { join, resolve } from 'node:path'
 
 const appData = process.env.APPDATA ?? process.env.HOME ?? '.'
 const realDataDir = join(appData, 'Helm')
-const machineReport = join(realDataDir, 'm7-report.json')
+const machineReport = join(realDataDir, 'packaging-report.json')
 const desktopDir = resolve(import.meta.dirname, '..')
 const distDir = join(desktopDir, 'dist-app')
 const { default: electron } = await import('electron')
@@ -61,7 +61,7 @@ if (wants('audit') || wants('cli')) {
   say('--- phase 1: the checkout, and the CLI this machine has ---')
   rmSync(machineReport, { force: true })
   const passThrough = groups ? [`--only=${groups.join(',')}`] : []
-  const { status } = spawnSync(electron, ['.', '--m7-check', ...passThrough], { stdio: 'inherit' })
+  const { status } = spawnSync(electron, ['.', '--packaging-check', ...passThrough], { stdio: 'inherit' })
   if (status !== 0) say(`(phase 1 exited with ${String(status)}; the report decides, not this)`)
 
   if (!existsSync(machineReport)) {
@@ -88,7 +88,7 @@ if (FIRSTRUN_GROUPS.some(wants)) {
   const sandbox = sandboxArg
     ? (mkdirSync(sandboxArg.slice('--sandbox='.length), { recursive: true }),
       sandboxArg.slice('--sandbox='.length))
-    : mkdtempSync(join(tmpdir(), 'helm-m7-'))
+    : mkdtempSync(join(tmpdir(), 'helm-packaging-'))
   // A path with a space in it, deliberately: CLAUDE.md requires those to work
   // and this is the one place a fresh install's own data directory is created.
   const portableDir = join(sandbox, 'Portable Install')
@@ -107,7 +107,7 @@ if (FIRSTRUN_GROUPS.some(wants)) {
     electron,
     [
       '.',
-      '--m7-firstrun',
+      '--packaging-firstrun',
       `--fixtures=${fixtures}`,
       `--claude-home=${claudeHome}`,
       ...passThrough
@@ -116,7 +116,7 @@ if (FIRSTRUN_GROUPS.some(wants)) {
   )
   if (status !== 0) say(`(phase 2 exited with ${String(status)}; the report decides, not this)`)
 
-  const firstRunReport = join(portableDir, 'helm-data', 'm7-firstrun-report.json')
+  const firstRunReport = join(portableDir, 'helm-data', 'packaging-firstrun-report.json')
   if (!existsSync(firstRunReport)) {
     console.error(`FAIL  phase 2 wrote no report to ${firstRunReport}`)
     process.exit(1)
@@ -130,7 +130,7 @@ if (FIRSTRUN_GROUPS.some(wants)) {
     : null
   const added = appDataAfter.filter((f) => !appDataBefore.includes(f))
   checks.push({
-    id: 'M7-F1',
+    id: 'PKG-F1',
     criterion: 'setup: the first-run phase left the real profile alone',
     title: 'A whole first run happened and %APPDATA%\\Helm did not change',
     ok: added.length === 0 && dbBefore === dbAfter && existsSync(join(portableDir, 'helm-data')),
@@ -189,7 +189,7 @@ const failed = checks.filter((c) => !c.ok)
 // Every phase's checks in one file. Phases one and two write their own, but
 // phase three has no app behind it to write anything, and a packaging failure
 // with nothing to read afterwards is a packaging failure nobody can diagnose.
-const combined = join(realDataDir, 'm7-packaging.json')
+const combined = join(realDataDir, 'packaging-packaging.json')
 mkdirSync(realDataDir, { recursive: true })
 writeFileSync(
   combined,
@@ -213,7 +213,7 @@ console.log(`\nPASS  all ${String(checks.length)} checks`)
 // ---------------------------------------------------------------------------
 
 /**
- * M7-P0: the two native modules are unpacked beside the asar.
+ * PKG-P0: the two native modules are unpacked beside the asar.
  *
  * Checked before either exe is run, because the failure it catches is silent at
  * build time and loud only much later. `process.dlopen` cannot load a `.node`
@@ -241,7 +241,7 @@ function unpackedNativeModulesCheck() {
     join(unpacked, 'node-pty', 'prebuilds', 'win32-x64', 'conpty', 'OpenConsole.exe')
   ]
   return {
-    id: 'M7-P0',
+    id: 'PKG-P0',
     criterion: 'packaging: the native modules are unpacked beside the asar, not inside it',
     title: 'better-sqlite3 and node-pty prebuilds are real files in app.asar.unpacked',
     ok:
@@ -260,12 +260,12 @@ function unpackedNativeModulesCheck() {
   }
 }
 
-/** M7-1: the portable exe, run from a directory it has never seen. */
+/** PKG-1: the portable exe, run from a directory it has never seen. */
 function portableChecks(exe) {
   if (!existsSync(exe)) {
     return [
       {
-        id: 'M7-1',
+        id: 'PKG-1',
         criterion: 'Portable exe runs on a Windows machine with no admin rights, from any path',
         title: 'No portable exe was built',
         ok: false,
@@ -294,7 +294,7 @@ function portableChecks(exe) {
 
   return [
     {
-      id: 'M7-1',
+      id: 'PKG-1',
       criterion: 'Portable exe runs on a Windows machine with no admin rights, from any path',
       title: `Ran from a path with spaces and kept its data beside itself`,
       ok:
@@ -326,12 +326,12 @@ function portableChecks(exe) {
   ]
 }
 
-/** M7-2: the NSIS installer, installed, launched, and uninstalled. */
+/** PKG-2: the NSIS installer, installed, launched, and uninstalled. */
 function installerChecks(setupExe) {
   if (!existsSync(setupExe)) {
     return [
       {
-        id: 'M7-2',
+        id: 'PKG-2',
         criterion:
           'NSIS installer installs per-user without elevation, the installed app launches and passes the same smoke checks, app data lands in %APPDATA%, and uninstall removes it cleanly',
         title: 'No installer was built',
@@ -438,7 +438,7 @@ function installerChecks(setupExe) {
 
   return [
     {
-      id: 'M7-2',
+      id: 'PKG-2',
       criterion:
         'NSIS installer installs per-user without elevation, the installed app launches and passes the same smoke checks, app data lands in %APPDATA%, and uninstall removes it cleanly',
       title: `Installed to ${installDir}, ran, and uninstalled`,

@@ -1,4 +1,4 @@
-// Runs M3's three phases and decides the verdict from the report.
+// Runs the profile checks' three phases and decides the verdict from the report.
 //
 // Why this exists rather than `a && b && c`: the driver reliably writes its
 // report and then, during teardown, node-pty's conpty helper dies with
@@ -18,9 +18,9 @@ import { isolate } from './isolate.mjs'
 
 // Its own data directory, seeded from a consistent copy of the real one, so a
 // run cannot disturb the Helm the user is using. See scripts/isolate.mjs.
-const { dataDir, env, root } = isolate('m3')
-console.log(`m3-check is running against ${root}`)
-const reportPath = join(dataDir, 'm3-report.json')
+const { dataDir, env, root } = isolate('profiles')
+console.log(`profiles-check is running against ${root}`)
+const reportPath = join(dataDir, 'profiles-report.json')
 const sweepPath = join(dataDir, 'shim-sweep.json')
 // The `electron` package's main export is the path to the executable itself,
 // which is both hoist-proof - it resolves wherever pnpm actually put it - and
@@ -42,7 +42,7 @@ function phase(label, args) {
   return status
 }
 
-phase('m3-check', ['.', '--m3-check', ...only])
+phase('profiles-check', ['.', '--profiles-check', ...only])
 phase('shim-sweep', ['.', '--shim-sweep'])
 
 const verify = spawnSync(process.execPath, [join('scripts', 'verify-shims.mjs'), dataDir], {
@@ -61,7 +61,7 @@ const failed = (report.checks ?? []).filter((c) => !c.ok)
 console.log('')
 for (const c of report.checks ?? []) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
 
-// verify-shims folds M3-9's real verdict into the report, so its own status is
+// verify-shims folds PROF-9's real verdict into the report, so its own status is
 // only interesting when it could not do that at all.
 if (failed.length > 0 || verify.status !== 0) {
   console.error(`\nFAIL  ${String(failed.length)} of ${String((report.checks ?? []).length)} checks`)

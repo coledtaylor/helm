@@ -431,7 +431,7 @@ export function cleanStaleShims(shimRoot: string, keep: readonly string[] = []):
  * The composed project-instructions document, or null if there is nothing to
  * compose.
  *
- * This is the answer to the gap Spike A found and M3 was to close: a plugin does
+ * This is the answer to the gap the composition spike found: a plugin does
  * not carry the overlaid repo's CLAUDE.md, and `--add-dir` - whose help text
  * suggested it might - does not either. Measured on 2.1.225: a session launched
  * from the harness root with both flags reported only the user and cwd

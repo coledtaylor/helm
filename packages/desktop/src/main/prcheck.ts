@@ -14,8 +14,8 @@ import {
 } from '@helm/core'
 import { screenshot, sleep } from './bridge'
 import type { Check } from './fidelity'
-import type { M2Context } from './m2check'
-import type { Collector } from './m2check'
+import type { CheckContext } from './sessionscheck'
+import type { Collector } from './sessionscheck'
 import { resolveGhCommand } from './gh-cli'
 
 /**
@@ -32,7 +32,7 @@ import { resolveGhCommand } from './gh-cli'
  * when the machine has no gh, no sign-in or no qualifying repository.
  *
  * The fixture is proved to **discriminate before its pass is believed**, which
- * is CLAUDE.md's hard rule and the reason M3-4 reported green for weeks: the
+ * is CLAUDE.md's hard rule and the reason PROF-4 reported green for weeks: the
  * comparator is run against the pull requests as written, then the file on disk
  * is mutated underneath it and the *same* comparison must fail, and only then
  * is the clean result worth anything. Beside every claim about the pane there
@@ -133,7 +133,7 @@ async function dataValues(win: BrowserWindow, name: string): Promise<string[]> {
  * the paragraph.
  */
 async function refreshNow(
-  pulls: M2Context['pulls'],
+  pulls: CheckContext['pulls'],
   request?: { repoPath: string }
 ): Promise<void> {
   const settled = async (): Promise<void> => {
@@ -154,7 +154,7 @@ async function refreshNow(
  * settled state rather than a moment.
  */
 async function stableProjectCount(
-  pulls: M2Context['pulls'],
+  pulls: CheckContext['pulls'],
   want: number,
   timeoutMs: number
 ): Promise<boolean> {
@@ -832,7 +832,7 @@ function forgetInvocations(home: string): void {
 // ---------------------------------------------------------------------------
 
 export async function runPrChecks(
-  ctx: M2Context,
+  ctx: CheckContext,
   collector: Collector,
   shotDir: string,
   dataDir: string,
@@ -1005,7 +1005,7 @@ async function fixtureChecks({
   shotDir
 }: {
   win: BrowserWindow
-  pulls: M2Context['pulls']
+  pulls: CheckContext['pulls']
   dbFile: string
   fixtures: Fixtures
   shotDir: string
@@ -1150,7 +1150,7 @@ async function fixtureChecks({
     },
     notes: [
       'CLAUDE.md: a check that can pass with no evidence behind it is worse than no check.',
-      'M3-4 compared a session\'s answer against a fixture heading, the fixture went missing,',
+      'PROF-4 compared a session\'s answer against a fixture heading, the fixture went missing,',
       'the expected token became the empty string, and every answer matched for weeks.',
       'So the fixture is mutated underneath the same comparison first: one pull request',
       'removed and one title rewritten. That comparison must fail, and it is the same',
@@ -1685,9 +1685,9 @@ async function reviewChecks({
   shotDir,
   started
 }: {
-  ctx: M2Context
+  ctx: CheckContext
   win: BrowserWindow
-  sessions: M2Context['sessions']
+  sessions: CheckContext['sessions']
   dbFile: string
   fixtures: Fixtures
   shotDir: string
@@ -2150,7 +2150,7 @@ async function degradeChecks({
   shotDir
 }: {
   win: BrowserWindow
-  pulls: M2Context['pulls']
+  pulls: CheckContext['pulls']
   dbFile: string
   fixtures: Fixtures
   shotDir: string

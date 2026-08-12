@@ -18,7 +18,7 @@ function fixture(): string {
 
   writeFileSync(
     join(root, 'notes', 'alpha.md'),
-    ['---', 'type: journal', 'date: 2026-08-10', 'tags: [helm, m6]', '---', '', '# Alpha', '', 'Links to [[beta]] and [[nowhere]].', ''].join('\n')
+    ['---', 'type: journal', 'date: 2026-08-10', 'tags: [helm, notes]', '---', '', '# Alpha', '', 'Links to [[beta]] and [[nowhere]].', ''].join('\n')
   )
   writeFileSync(join(root, 'notes', 'beta.md'), '# Beta\n\nAlpha mentions geofencing here.\n')
   writeFileSync(join(root, '.claude', 'skills', 'think', 'SKILL.md'), '---\nname: think\n---\n\n# think\n')
@@ -190,7 +190,7 @@ describe('readContentTree', () => {
       expect(tree.files.some((f) => f.relPath.startsWith('repos/'))).toBe(false)
       const alpha = tree.files.find((f) => f.slug === 'alpha')
       expect(alpha?.noteType).toBe('journal')
-      expect(alpha?.tags).toEqual(['helm', 'm6'])
+      expect(alpha?.tags).toEqual(['helm', 'notes'])
       expect(alpha?.title).toBe('Alpha')
     } finally {
       rmSync(root, { recursive: true, force: true })

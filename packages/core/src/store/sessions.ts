@@ -94,7 +94,8 @@ export function finishSession(
  * Marks sessions that were still running when their host went away.
  *
  * Called once at startup. `ended_at` and `duration_ms` stay null: nobody
- * measured when those processes died, and a guessed duration in a table M4
+ * measured when those processes died, and a guessed duration in a table the
+ * launcher
  * reports from is worse than an absent one.
  */
 export function reconcileRunningSessions(store: Store): number {

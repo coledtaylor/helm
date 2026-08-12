@@ -116,10 +116,10 @@ export function applyPrefs(host: TerminalHost, prefs: TerminalPrefs): void {
  * One live terminal, described for a driver.
  *
  * A read-only tap, in the same spirit as `SessionObserver` in `main/sessions.ts`
- * and the picker stand-ins `--m7-firstrun` passes: the app never calls it. It
+ * and the picker stand-ins `--packaging-firstrun` passes: the app never calls it. It
  * exists because the terminals live outside React in module registries, so a
  * check driving the real window has no other route to them - and "the setting
- * reached every open terminal" is the whole claim M9 makes.
+ * reached every open terminal" is the whole claim a terminal setting makes.
  *
  * `screen` is the measured box of xterm's own screen element, so a driver can
  * divide by `cols`/`rows` and compare the cell size against a measurement it

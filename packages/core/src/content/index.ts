@@ -1,7 +1,7 @@
 /**
- * The content viewer's headless half (M6): finding readable files in a scope,
+ * The content viewer's headless half: finding readable files in a scope,
  * rendering markdown the way this vault writes it, searching it, and saving an
- * edit through M5's snapshot mechanism.
+ * edit through the config console's snapshot mechanism.
  */
 
 export {

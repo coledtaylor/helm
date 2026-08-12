@@ -4,7 +4,7 @@ import type { PullDetail, PullPatch, PullSummary } from '../github/types'
 
 /**
  * `profiles` and `config_snapshots` are not read by any surface yet - they exist
- * so that M3 (profiles) and M5 (snapshot every config write) start from a
+ * so that profiles and the config console's snapshots start from a
  * migrated schema rather than a schema change on a database that already holds
  * a user's data.
  */
@@ -65,7 +65,7 @@ export const projects = sqliteTable(
 )
 
 /**
- * A copy of a config file taken immediately before Helm overwrites it (M5).
+ * A copy of a config file taken immediately before Helm overwrites it.
  * Content is stored inline: `.claude` files are small, and a snapshot that
  * depends on the file still being on disk is not a snapshot.
  */
@@ -118,7 +118,8 @@ export const sessions = sqliteTable(
     durationMs: integer('duration_ms'),
     exitCode: integer('exit_code')
   },
-  // M4 lists sessions newest-first across every project, which is the one query
+  // The launcher lists sessions newest-first across every project, which is
+  // the one query
   // this table is going to be asked for at any size.
   (t) => [index('sessions_started_idx').on(t.startedAt), index('sessions_status_idx').on(t.status)]
 )

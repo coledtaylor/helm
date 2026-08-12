@@ -12,16 +12,17 @@ import {
 import { homedir, userInfo } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { screenshot, sleep, stripAnsi, waitFor } from './bridge'
-import { answerStartupGates, atPrompt, type Collector, type M2Context } from './m2check'
+import { answerStartupGates, atPrompt, type Collector, type CheckContext } from './sessionscheck'
 import type { Check } from './fidelity'
 import { CLAUDE_TESTED_RANGE } from './setup'
 
 /**
- * M7's acceptance criteria: packaging, first run, and the claim that anyone
+ * The packaging criteria: packaging, first run, and the claim that anyone
  * other than the person who wrote it can use this.
  *
- * The discipline is M4's through M6's - every computed value is checked against
- * a second read written here that shares no code with the thing it checks. A
+ * The discipline is the other drivers' - every computed value is checked
+ * against a second read written here that shares no code with the thing it
+ * checks. A
  * hand-written `readdirSync` recursion beside the scaffolder, a hand-written
  * YAML line parser beside the manifest writer, a hand-written semver comparison
  * beside the version guard, a direct `execFileSync` of the CLI beside Helm's
@@ -31,7 +32,7 @@ import { CLAUDE_TESTED_RANGE } from './setup'
  *
  *   "A machine with a fresh `~/.claude` and no harness at all" is not a state
  *   this process can enter. So it is a **second process**, started by
- *   `run-m7.mjs` with `PORTABLE_EXECUTABLE_DIR` pointed at a temporary
+ *   `run-packaging.mjs` with `PORTABLE_EXECUTABLE_DIR` pointed at a temporary
  *   directory. That is not a test hook - it is the app's own portable-mode
  *   mechanism, which redirects `userData` beside the exe. The child therefore
  *   opens an empty database in a temp directory, is pointed away from the real
@@ -39,7 +40,7 @@ import { CLAUDE_TESTED_RANGE } from './setup'
  *   never opened. Nothing is backed up because nothing is touched.
  *
  *   "The portable exe runs from any path" and "NSIS installs per-user" are
- *   claims about artefacts, not about this process. `run-m7.mjs` builds them,
+ *   claims about artefacts, not about this process. `run-packaging.mjs` builds them,
  *   copies the portable exe to a path with spaces, installs the NSIS package
  *   silently, and runs `--selftest` out of each.
  *
@@ -49,7 +50,7 @@ import { CLAUDE_TESTED_RANGE } from './setup'
  * So the auditor is made to fail first - a file carrying a personal path is
  * planted, caught, and removed - before its clean result is believed.
  *
- * `pnpm m7-check` -> helm-data/m7-report.json + helm-data/m7-firstrun-report.json
+ * `pnpm packaging-check` -> helm-data/packaging-report.json + helm-data/packaging-firstrun-report.json
  */
 
 const GROUPS = ['audit', 'cli', 'firstrun', 'harness', 'scan', 'version'] as const
@@ -58,7 +59,7 @@ type Group = (typeof GROUPS)[number]
 const MACHINE_GROUPS: Group[] = ['audit', 'cli']
 const FIRSTRUN_GROUPS: Group[] = ['firstrun', 'harness', 'scan', 'version']
 
-export interface M7Options {
+export interface PackagingOptions {
   phase: 'machine' | 'firstrun'
   /** A scratch directory the first-run phase owns entirely. */
   fixtures?: string | undefined
@@ -457,13 +458,13 @@ const AUDIT_EXT = /\.(ts|tsx|js|mjs|cjs|json|ya?ml|md|css|html)$/i
  */
 function isHarnessFile(rel: string): boolean {
   return (
-    /(^|\/)(m2check|m3check|m4check|m5check|m6check|m7check|usagecheck|claudecheck|fidelity|selftest)\.ts$/.test(rel) ||
+    /(^|\/)(sessionscheck|profilescheck|historycheck|configcheck|contentcheck|packagingcheck|usagecheck|claudecheck|fidelity|selftest)\.ts$/.test(rel) ||
     /\.test\.tsx?$/.test(rel) ||
     rel.startsWith('packages/desktop/scripts/') ||
     rel.startsWith('docs/') ||
     // Both halves of the agent instructions, for one reason: the local half is
     // where a machine's paths are *supposed* to be written down, which is why
-    // it is gitignored. M7-4b, which asks what is publishable rather than what
+    // it is gitignored. PKG-4b, which asks what is publishable rather than what
     // ships, does not see it at all.
     /^CLAUDE(\.local)?\.md$/.test(rel)
   )
@@ -562,12 +563,12 @@ interface PublicationResult {
 }
 
 /**
- * The audit's other question. M7-4 asks whether a personal path reaches what
+ * The audit's other question. PKG-4 asks whether a personal path reaches what
  * *ships*, and deliberately excuses the development harness - the drivers, the
  * unit tests, `docs/` and this repository's own instructions - because a
  * fixture path there breaks nobody's machine.
  *
- * Publishing moved that boundary. Everything M7-4 excuses is world-readable,
+ * Publishing moved that boundary. Everything PKG-4 excuses is world-readable,
  * so this one excuses none of it: same patterns, every publishable file, plus
  * the bare private names the discovered patterns cannot see.
  */
@@ -696,12 +697,12 @@ function buildFixtures(root: string, claudeHome: string): Fixtures {
 
 // ---------------------------------------------------------------------------
 
-export async function runM7Checks(
-  ctx: M2Context,
+export async function runPackagingChecks(
+  ctx: CheckContext,
   collector: Collector,
   shotDir: string,
   dataDir: string,
-  options: M7Options
+  options: PackagingOptions
 ): Promise<Check[]> {
   const requested = options.only?.filter((g): g is Group => (GROUPS as readonly string[]).includes(g))
   const available = options.phase === 'machine' ? MACHINE_GROUPS : FIRSTRUN_GROUPS
@@ -719,7 +720,7 @@ export async function runM7Checks(
 }
 
 // ---------------------------------------------------------------------------
-// M7-4  the audit
+// PKG-4  the audit
 // ---------------------------------------------------------------------------
 
 function auditChecks(): Check[] {
@@ -727,7 +728,7 @@ function auditChecks(): Check[] {
   if (root === null) {
     return [
       {
-        id: 'M7-4',
+        id: 'PKG-4',
         criterion: 'Grep audit confirms no personal paths/names in the codebase outside test fixtures',
         title: 'The repository could not be located, so nothing was audited',
         ok: false,
@@ -771,7 +772,7 @@ function auditChecks(): Check[] {
     writeFileSync(
       probeFile,
       [
-        '// Planted by m7-check and removed in the same breath.',
+        '// Planted by packaging-check and removed in the same breath.',
         'export const PROBE = {',
         `  path: '${bait.profile}',`,
         `  harness: '${bait.harness}',`,
@@ -845,7 +846,7 @@ function auditChecks(): Check[] {
 
   return [
     {
-      id: 'M7-4',
+      id: 'PKG-4',
       criterion: 'Grep audit confirms no personal paths/names in the codebase outside test fixtures',
       title: `${String(files)} files audited; nothing personal in what ships`,
       ok: probeOk && shipped.length === 0,
@@ -867,7 +868,7 @@ function auditChecks(): Check[] {
       ]
     },
     {
-      id: 'M7-4b',
+      id: 'PKG-4b',
       criterion:
         'The same audit repo-wide: nothing publishable names a private repository, account or machine',
       title:
@@ -898,7 +899,7 @@ function auditChecks(): Check[] {
         }
       },
       notes: [
-        'M7-4 asks whether a personal path reaches what ships and excuses the development harness - the drivers, the unit tests, docs/ and CLAUDE.md - because a fixture path there breaks nobody. Publishing moved that boundary: all of it is world-readable, so this check excuses none of it.',
+        'PKG-4 asks whether a personal path reaches what ships and excuses the development harness - the drivers, the unit tests, docs/ and CLAUDE.md - because a fixture path there breaks nobody. Publishing moved that boundary: all of it is world-readable, so this check excuses none of it.',
         `Scope is what git would publish - everything tracked plus everything an ordinary \`git add -A\` would start tracking - rather than a directory walk. A walk would audit build output and the pattern file itself, and would miss the untracked file one careless \`add\` from being public. ${String(publication?.files ?? 0)} files.`,
         local.present
           ? `The bare private names come from \`${PRIVATE_LOCAL_FILE}\`, which .gitignore covers, so the audit never publishes the list it polices. ${String(local.names.length)} names loaded${local.rejected.length === 0 ? '' : `, ${String(local.rejected.length)} rejected as too short to discriminate`}. The discovered patterns anchor a repository name to \`repos/<name>\`, which is right for a path and blind to the same name in a sentence - this class is what closes that.`
@@ -911,10 +912,10 @@ function auditChecks(): Check[] {
 }
 
 // ---------------------------------------------------------------------------
-// M7-0  what the CLI on this machine actually is
+// PKG-0  what the CLI on this machine actually is
 // ---------------------------------------------------------------------------
 
-async function cliChecks(ctx: M2Context): Promise<Check[]> {
+async function cliChecks(ctx: CheckContext): Promise<Check[]> {
   const status = await js<{
     path: string | null
     version: string | null
@@ -966,7 +967,7 @@ async function cliChecks(ctx: M2Context): Promise<Check[]> {
 
   return [
     {
-      id: 'M7-0',
+      id: 'PKG-0',
       criterion: 'setup: the CLI Helm would launch is the one this machine has',
       title: `claude ${status.version ?? 'not found'} located and agreed with an independent read`,
       ok:
@@ -997,11 +998,11 @@ async function cliChecks(ctx: M2Context): Promise<Check[]> {
 // ---------------------------------------------------------------------------
 
 async function firstRunChecks(
-  ctx: M2Context,
+  ctx: CheckContext,
   collector: Collector,
   shotDir: string,
   dataDir: string,
-  options: M7Options,
+  options: PackagingOptions,
   wanted: (group: Group) => boolean
 ): Promise<Check[]> {
   const checks: Check[] = []
@@ -1009,12 +1010,12 @@ async function firstRunChecks(
 
   if (options.fixtures === undefined || options.claudeHome === undefined) {
     checks.push({
-      id: 'M7-F0',
+      id: 'PKG-F0',
       criterion: 'setup',
       title: 'The first-run phase was started without a fixture directory',
       ok: false,
       detail: { fixtures: options.fixtures ?? null, claudeHome: options.claudeHome ?? null },
-      notes: ['run-m7.mjs owns the temporary directory and passes it in.']
+      notes: ['run-packaging.mjs owns the temporary directory and passes it in.']
     })
     return checks
   }
@@ -1043,7 +1044,7 @@ async function firstRunChecks(
     dataDir.toLowerCase() !== realAppData.toLowerCase()
 
   checks.push({
-    id: 'M7-F0',
+    id: 'PKG-F0',
     criterion: 'setup: a fresh profile, isolated from the real one',
     title: 'Empty settings, an absent .claude, and a data directory inside the temp folder',
     ok: isolationOk && paneShowing && sidebarAbsent,
@@ -1078,7 +1079,7 @@ async function firstRunChecks(
   if (wanted('firstrun')) checks.push(...arrival.checks)
   if (!arrival.launcherUp) {
     checks.push({
-      id: 'M7-F2',
+      id: 'PKG-F2',
       criterion: 'setup: the launcher is on screen',
       title: 'Setup did not reach the launcher, so the rest could not be driven',
       ok: false,
@@ -1101,7 +1102,7 @@ async function firstRunChecks(
 }
 
 // ---------------------------------------------------------------------------
-// M7-3, M7-5  first run reaches a launcher; an unauthenticated CLI is caught
+// PKG-3, PKG-5  first run reaches a launcher; an unauthenticated CLI is caught
 // ---------------------------------------------------------------------------
 
 /**
@@ -1112,7 +1113,7 @@ async function firstRunChecks(
  * whether the steps happen.
  */
 async function reachLauncher(
-  ctx: M2Context,
+  ctx: CheckContext,
   shotDir: string,
   fixtures: Fixtures,
   dataDir: string
@@ -1120,14 +1121,14 @@ async function reachLauncher(
   const { win } = ctx
   const checks: Check[] = []
 
-  // --- M7-5: the machine is not signed in, and the pane says what to do -----
+  // --- PKG-5: the machine is not signed in, and the pane says what to do -----
   const status = await js<{ auth: string; authSignal: string; configDir: string; configDirExists: boolean }>(
     win,
     `window.helm.invoke('setup:status')`
   )
   const guidance = await text(win, '[data-setup-auth-guidance]')
   const guidanceShown = await exists(win, '[data-setup-auth-guidance]')
-  const authShot = await screenshot(win, shotDir, 'm7-firstrun-unauthenticated.png')
+  const authShot = await screenshot(win, shotDir, 'packaging-firstrun-unauthenticated.png')
 
   // Independent: nothing that looks like a credential exists anywhere the app
   // could have found one, and Helm wrote nothing into the config directory.
@@ -1173,7 +1174,7 @@ async function reachLauncher(
   const storedNothingSecret = secretLooking.length === 0 && secretKeys.length === 0
 
   checks.push({
-    id: 'M7-5',
+    id: 'PKG-5',
     criterion: 'Unauthenticated claude is detected and the guidance flow works end to end',
     title: 'Not signed in, said out loud, with the remedy being to run `claude` yourself',
     ok:
@@ -1203,7 +1204,7 @@ async function reachLauncher(
     ]
   })
 
-  // --- M7-3: a folder of plain project folders reaches a working launcher ---
+  // --- PKG-3: a folder of plain project folders reaches a working launcher ---
   answerPicker('directory', fixtures.plain)
   await click(win, '[data-setup-add-folder]')
   const rootAppeared = await pollJs(win, `document.querySelector('[data-setup-root]')`, 20_000)
@@ -1215,7 +1216,7 @@ async function reachLauncher(
   await sleep(500)
 
   const paths = await sidebarPaths(win)
-  const shot = await screenshot(win, shotDir, 'm7-firstrun-launcher.png')
+  const shot = await screenshot(win, shotDir, 'packaging-firstrun-launcher.png')
 
   // Independent: what is actually in the folder.
   const onDisk = readdirSync(fixtures.plain, { withFileTypes: true })
@@ -1230,7 +1231,7 @@ async function reachLauncher(
   )
 
   checks.push({
-    id: 'M7-3',
+    id: 'PKG-3',
     criterion:
       'First run on a machine with a fresh ~/.claude (no harness at all) reaches a working launcher with plain project folders',
     title: `Two plain folders added and launched into a working tree`,
@@ -1264,7 +1265,7 @@ async function reachLauncher(
 }
 
 // ---------------------------------------------------------------------------
-// M7-8, M7-11, M7-12  creating a harness
+// PKG-8, PKG-11, PKG-12  creating a harness
 // ---------------------------------------------------------------------------
 
 const HARNESS_NAME = 'Team Harness'
@@ -1286,7 +1287,7 @@ const OPINION_WORDS = [
 ]
 
 async function harnessGroup(
-  ctx: M2Context,
+  ctx: CheckContext,
   collector: Collector,
   shotDir: string,
   fixtures: Fixtures
@@ -1294,7 +1295,7 @@ async function harnessGroup(
   const { win } = ctx
   const checks: Check[] = []
 
-  // --- M7-12: the action is still there, after first run finished ----------
+  // --- PKG-12: the action is still there, after first run finished ----------
   const reachable = await exists(win, '[data-create-harness]')
   const opened = await click(win, '[data-create-harness]')
   const dialogUp = await pollJs(win, `document.querySelector('[data-harness-dialog]')`, 10_000)
@@ -1305,7 +1306,7 @@ async function harnessGroup(
   await fill(win, '[data-harness-name]', HARNESS_NAME)
   await sleep(200)
   const preview = await text(win, '[data-harness-target]')
-  const dialogShot = await screenshot(win, shotDir, 'm7-create-harness.png')
+  const dialogShot = await screenshot(win, shotDir, 'packaging-create-harness.png')
   await click(win, '[data-harness-create]')
 
   const created = join(fixtures.parent, HARNESS_NAME)
@@ -1318,9 +1319,9 @@ async function harnessGroup(
   )
   await sleep(400)
   const sidebar = await sidebarPaths(win)
-  const shot = await screenshot(win, shotDir, 'm7-harness-in-sidebar.png')
+  const shot = await screenshot(win, shotDir, 'packaging-harness-in-sidebar.png')
 
-  // --- M7-11: the scaffold, read by a walker that knows nothing about it ---
+  // --- PKG-11: the scaffold, read by a walker that knows nothing about it ---
   const tree = walk(created)
   const manifest = onDisk ? readManifestLines(join(created, 'harness.yaml')) : null
   const scaffoldBytes = tree
@@ -1341,7 +1342,7 @@ async function harnessGroup(
   const personalHits = personal().filter((p) => p.re.test(manifest?.raw ?? '')).map((p) => p.id)
 
   checks.push({
-    id: 'M7-11',
+    id: 'PKG-11',
     criterion: 'The scaffold contains no author-specific or workflow-opinion content',
     title: 'Three entries, four keys, and nothing that presumes how anyone works',
     ok:
@@ -1371,7 +1372,7 @@ async function harnessGroup(
     ]
   })
 
-  // --- M7-8: usable immediately - visible, and a session launches from it --
+  // --- PKG-8: usable immediately - visible, and a session launches from it --
   const inSidebar = sidebar.some((p) => p.toLowerCase() === created.toLowerCase())
   // The harness row itself, found by its own `title` rather than by a CSS
   // attribute selector - a backslash inside one is an escape, not a character.
@@ -1399,10 +1400,10 @@ async function harnessGroup(
     stop()
     await sleep(1500)
   }
-  const sessionShot = await screenshot(win, shotDir, 'm7-harness-session.png')
+  const sessionShot = await screenshot(win, shotDir, 'packaging-harness-session.png')
 
   checks.push({
-    id: 'M7-8',
+    id: 'PKG-8',
     criterion:
       'On a machine with no harness, first-run offers "Create a harness" and the result is immediately usable',
     title: 'Created through the dialog, in the sidebar, and a live session launched from its root',
@@ -1426,7 +1427,7 @@ async function harnessGroup(
   })
 
   checks.push({
-    id: 'M7-12',
+    id: 'PKG-12',
     criterion: '"Create a harness" remains reachable after first run',
     title: 'The action is in the sidebar once the setup pane is gone',
     ok: reachable && opened && dialogUp,
@@ -1446,14 +1447,14 @@ async function harnessGroup(
 }
 
 // ---------------------------------------------------------------------------
-// M7-9, M7-10  the `repos:` key
+// PKG-9, PKG-10  the `repos:` key
 // ---------------------------------------------------------------------------
 
-async function scanGroup(ctx: M2Context, shotDir: string, fixtures: Fixtures): Promise<Check[]> {
+async function scanGroup(ctx: CheckContext, shotDir: string, fixtures: Fixtures): Promise<Check[]> {
   const { win } = ctx
   const checks: Check[] = []
 
-  // --- M7-9: a named repos directory, and the default when there is none ---
+  // --- PKG-9: a named repos directory, and the default when there is none ---
   await addRootThroughUi(win, fixtures.named)
   await addRootThroughUi(win, fixtures.fallback)
   await sleep(800)
@@ -1467,10 +1468,10 @@ async function scanGroup(ctx: M2Context, shotDir: string, fixtures: Fixtures): P
     .filter((e) => e.isDirectory())
     .map((e) => join(fixtures.fallback, 'repos', e.name).toLowerCase())
 
-  const shot = await screenshot(win, shotDir, 'm7-repos-key.png')
+  const shot = await screenshot(win, shotDir, 'packaging-repos-key.png')
 
   checks.push({
-    id: 'M7-9',
+    id: 'PKG-9',
     criterion: 'Scanner honors `repos:` in harness.yaml; absent key falls back to `repos/`',
     title: 'The named directory is listed, the default one beside it is not, and a manifest without the key still finds repos/',
     ok:
@@ -1489,7 +1490,7 @@ async function scanGroup(ctx: M2Context, shotDir: string, fixtures: Fixtures): P
     ]
   })
 
-  // --- M7-10: converting a folder of repos does not hide them --------------
+  // --- PKG-10: converting a folder of repos does not hide them --------------
   await addRootThroughUi(win, fixtures.convertible)
   await sleep(600)
   const beforePaths = (await sidebarPaths(win)).map((p) => p.toLowerCase())
@@ -1524,10 +1525,10 @@ async function scanGroup(ctx: M2Context, shotDir: string, fixtures: Fixtures): P
   const manifest = manifestWritten
     ? readManifestLines(join(fixtures.convertible, 'harness.yaml'))
     : null
-  const convertShot = await screenshot(win, shotDir, 'm7-converted-folder.png')
+  const convertShot = await screenshot(win, shotDir, 'packaging-converted-folder.png')
 
   checks.push({
-    id: 'M7-10',
+    id: 'PKG-10',
     criterion:
       'Converting an existing folder of repos into a harness does not hide its repos',
     title: `${String(visibleBefore.length)} folders before, ${String(visibleAfter.length)} after, and the harness root gained beside them`,
@@ -1557,10 +1558,10 @@ async function scanGroup(ctx: M2Context, shotDir: string, fixtures: Fixtures): P
 }
 
 // ---------------------------------------------------------------------------
-// M7-7  the version guard warns and does not block
+// PKG-7  the version guard warns and does not block
 // ---------------------------------------------------------------------------
 
-async function versionGroup(ctx: M2Context, shotDir: string, fixtures: Fixtures): Promise<Check[]> {
+async function versionGroup(ctx: CheckContext, shotDir: string, fixtures: Fixtures): Promise<Check[]> {
   const { win } = ctx
 
   // What the stub actually says, asked of it directly.
@@ -1590,7 +1591,7 @@ async function versionGroup(ctx: M2Context, shotDir: string, fixtures: Fixtures)
     win,
     `window.helm.invoke('setup:status')`
   )
-  const shot = await screenshot(win, shotDir, 'm7-version-banner.png')
+  const shot = await screenshot(win, shotDir, 'packaging-version-banner.png')
 
   // Not blocked: the launcher underneath still works. A sidebar row opens its
   // pane and the launch button in it is enabled, with the banner on screen.
@@ -1634,7 +1635,7 @@ async function versionGroup(ctx: M2Context, shotDir: string, fixtures: Fixtures)
 
   return [
     {
-      id: 'M7-7',
+      id: 'PKG-7',
       criterion: 'Version mismatch shows a warning banner but does not block usage',
       title: 'A 9.9.9 CLI raises the banner, the launcher underneath keeps working, and dismissing clears it',
       ok:

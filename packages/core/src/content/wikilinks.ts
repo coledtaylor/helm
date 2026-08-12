@@ -4,8 +4,8 @@ import type { ContentFile } from '../types'
  * `[[wikilink]]` resolution, the way Obsidian resolves it.
  *
  * The rule that matters is that a link is written by *name*, not by path:
- * `[[reference-helm-m4-session-history]]` finds
- * `notes/reference-helm-m4-session-history.md` from anywhere in the vault. So
+ * `[[reference-session-history]]` finds
+ * `notes/reference-session-history.md` from anywhere in the vault. So
  * the index is keyed three ways - bare name, path without extension, and full
  * path - and a link is looked up in that order, because a note called `index`
  * in two directories is a real thing and the more specific spelling has to win.

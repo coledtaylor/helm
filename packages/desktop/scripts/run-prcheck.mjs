@@ -1,6 +1,6 @@
 // Runs the pull-request checks and decides the verdict from the report.
 //
-// Same reason run-m3.mjs through run-settings.mjs exist: the driver writes its
+// Same reason run-profiles.mjs through run-settings.mjs exist: the driver writes its
 // report and then, during teardown, Electron can lose the exit code. The checks
 // have already run by then, so the report is the source of truth and the
 // process status is not. A driver that dies before writing fails the run,

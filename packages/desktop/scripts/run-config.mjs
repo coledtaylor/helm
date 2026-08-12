@@ -1,17 +1,17 @@
-// Runs M5's driver and decides the verdict from the report.
+// Runs the config-console driver and decides the verdict from the report.
 //
-// Same reason run-m3.mjs and run-m4.mjs exist: the driver writes its report and
-// then, during teardown, node-pty's conpty helper can die with "AttachConsole
-// failed" and take the exit code with it (0xC0000409). The checks have already
-// run at that point, so the report is the source of truth and the process
-// status is not.
+// Same reason run-profiles.mjs and run-history.mjs exist: the driver writes its
+// report and then, during teardown, node-pty's conpty helper can die with
+// "AttachConsole failed" and take the exit code with it (0xC0000409). The
+// checks have already run at that point, so the report is the source of truth
+// and the process status is not.
 //
 // A driver that dies before writing fails the run, because there is then no
 // report to read rather than a passing one.
 //
-// M5 has one extra duty. It is the only milestone that writes into the user's
-// real ~/.claude, and it restores what it borrowed from a plain copy in a
-// `finally`. If the process is killed before that runs, the copy is still on
+// This driver has one extra duty. It is the only check that writes into the
+// user's real ~/.claude, and it restores what it borrowed from a plain copy in
+// a `finally`. If the process is killed before that runs, the copy is still on
 // disk - so this script says where, rather than leaving it to be found.
 
 import { spawnSync } from 'node:child_process'
@@ -23,11 +23,11 @@ import { isolate } from './isolate.mjs'
 
 // Its own data directory, seeded from a consistent copy of the real one, so a
 // run cannot disturb the Helm the user is using. See scripts/isolate.mjs.
-const { dataDir, env, root } = isolate('m5')
-console.log(`m5-check is running against ${root}`)
-const reportPath = join(dataDir, 'm5-report.json')
+const { dataDir, env, root } = isolate('config')
+console.log(`config-check is running against ${root}`)
+const reportPath = join(dataDir, 'config-report.json')
 const userSettings = join(homedir(), '.claude', 'settings.json')
-const backup = join(dataDir, 'm5-user-settings.backup.json')
+const backup = join(dataDir, 'config-user-settings.backup.json')
 const { default: electron } = await import('electron')
 
 const sha256 = (file) =>
@@ -36,12 +36,12 @@ const sha256 = (file) =>
 rmSync(reportPath, { force: true })
 const settingsBefore = sha256(userSettings)
 
-const { status } = spawnSync(electron, ['.', '--m5-check', ...process.argv.slice(2)], {
+const { status } = spawnSync(electron, ['.', '--config-check', ...process.argv.slice(2)], {
   stdio: 'inherit',
   env
 })
 if (status !== 0) {
-  console.log(`(m5-check exited with ${String(status)}; the report decides, not this)`)
+  console.log(`(config-check exited with ${String(status)}; the report decides, not this)`)
 }
 
 // Before anything else is reported: the user's file is theirs, and a driver

@@ -442,7 +442,7 @@ export function attachArtifactConsole(
     // The shape is checked rather than assumed. If a future version stops
     // populating `sourceId`, this listener would silently stop recognising
     // artifact output and criterion 3 would pass because it saw nothing - the
-    // exact failure M3-4 taught. So an unrecognised event is *recorded*, not
+    // exact failure PROF-4 taught. So an unrecognised event is *recorded*, not
     // dropped.
     if (typeof event.sourceId !== 'string' || typeof event.level !== 'string') {
       const broken: ArtifactConsoleEntry = {

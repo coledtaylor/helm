@@ -67,7 +67,7 @@ export interface HistoryServiceDeps {
   store: Store
   /** Called after any pass that changed the totals. */
   onChange: (summary: HistorySummary) => void
-  /** Overridden by `--m4-check` to index a fixture instead of the real tree. */
+  /** Overridden by `--history-check` to index a fixture instead of the real tree. */
   home?: string | undefined
 }
 

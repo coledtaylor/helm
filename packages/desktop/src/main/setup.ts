@@ -22,7 +22,7 @@ import type { ClaudeStatus, ClaudeAuth } from '../shared/ipc'
  * refresh or forward a token - when the answer is "not signed in" the whole of
  * the response is a sentence telling the user to run `claude` themselves.
  *
- * The version guard warns and does not block (SPEC 8): a newer CLI is far more
+ * The version guard warns and does not block (SPEC 7): a newer CLI is far more
  * likely to work than not, and an app that refuses to start because a patch
  * release moved is an app that breaks on its own schedule rather than on the
  * CLI's.

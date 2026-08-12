@@ -231,7 +231,7 @@ export type SessionStatus = 'running' | 'exited' | 'lost'
 export interface SessionRecord {
   id: number
   /** The `-n` name handed to the CLI, so the session is identifiable in
-   * `/resume` later (SPEC 4.1, and M4 reads these rows). */
+   * `/resume` later (SPEC 4.1, and the session index reads these rows). */
   name: string
   cwd: string
   /** The discovered project it was launched against, if it was one. */
@@ -405,7 +405,7 @@ export interface Profile {
   /**
    * MCP server names. Persisted and exported, but not yet placed on the argv:
    * no CLI flag selects already-configured servers by name, and resolving them
-   * into a `--mcp-config` document is the config console's job (M5, SPEC 4.2).
+   * into a `--mcp-config` document is the config console's job (SPEC 4.2).
    */
   mcp: string[]
   /** Submitted as the session's first message. */
@@ -764,7 +764,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export const UPDATE_CHECK_EVERY_MS = 24 * 60 * 60 * 1000
 
 // ---------------------------------------------------------------------------
-// Config console (M5)
+// Config console
 // ---------------------------------------------------------------------------
 
 /**
@@ -1056,7 +1056,7 @@ export interface McpResult {
 }
 
 // ---------------------------------------------------------------------------
-// Content viewer (M6)
+// Content viewer
 // ---------------------------------------------------------------------------
 
 /**

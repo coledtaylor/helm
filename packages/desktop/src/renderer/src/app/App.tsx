@@ -145,7 +145,7 @@ const truncate = (text: string, max: number): string =>
 const EMPTY_STRIP: PaneRef[] = []
 
 /** The session strip's tab ids - `session:12` - kept in the exact shape the
- * single-strip era used, because `m2-check` locates tabs by them. */
+ * single-strip era used, because `sessions-check` locates tabs by them. */
 const sessionTabId = (id: number): string => `session:${String(id)}`
 const sessionIdFromTab = (tab: string): number => Number(tab.slice('session:'.length))
 

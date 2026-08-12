@@ -1,8 +1,9 @@
-// Runs M4's driver and decides the verdict from the report.
+// Runs the session-history driver and decides the verdict from the report.
 //
-// Same reason run-m3.mjs exists: the driver writes its report and then, during
-// teardown, node-pty's conpty helper can die with "AttachConsole failed" and
-// take the exit code with it (0xC0000409). The checks have already run at that
+// Same reason run-profiles.mjs exists: the driver writes its report and then,
+// during teardown, node-pty's conpty helper can die with "AttachConsole
+// failed" and take the exit code with it (0xC0000409). The checks have already
+// run at that
 // point, so the report is the source of truth and the process status is not.
 //
 // A driver that dies before writing fails the run, because there is then no
@@ -15,9 +16,9 @@ import { isolate } from './isolate.mjs'
 
 // Its own data directory, seeded from a consistent copy of the real one, so a
 // run cannot disturb the Helm the user is using. See scripts/isolate.mjs.
-const { dataDir, env, root } = isolate('m4')
-console.log(`m4-check is running against ${root}`)
-const reportPath = join(dataDir, 'm4-report.json')
+const { dataDir, env, root } = isolate('history')
+console.log(`history-check is running against ${root}`)
+const reportPath = join(dataDir, 'history-report.json')
 // The `electron` package's main export is the path to the executable itself,
 // which resolves wherever pnpm actually put it and is spawnable without a
 // shell.
@@ -25,12 +26,12 @@ const { default: electron } = await import('electron')
 
 rmSync(reportPath, { force: true })
 
-const { status } = spawnSync(electron, ['.', '--m4-check', ...process.argv.slice(2)], {
+const { status } = spawnSync(electron, ['.', '--history-check', ...process.argv.slice(2)], {
   stdio: 'inherit',
   env
 })
 if (status !== 0) {
-  console.log(`(m4-check exited with ${String(status)}; the report decides, not this)`)
+  console.log(`(history-check exited with ${String(status)}; the report decides, not this)`)
 }
 
 if (!existsSync(reportPath)) {

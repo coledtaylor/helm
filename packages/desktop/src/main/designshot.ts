@@ -1,5 +1,5 @@
 import type { BrowserWindow } from 'electron'
-import type { M2Context } from './m2check'
+import type { CheckContext } from './sessionscheck'
 import { screenshot, sleep } from './bridge'
 
 /**
@@ -111,7 +111,7 @@ async function shootIgnored(
   return shot.file
 }
 
-export async function runDesignShot(ctx: M2Context, outDir: string): Promise<string[]> {
+export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<string[]> {
   const { win } = ctx
   const files: string[] = []
 
@@ -197,7 +197,7 @@ export async function runDesignShot(ctx: M2Context, outDir: string): Promise<str
 
   // The split view, with a real session on the right and the workspace still
   // browsable on the left. The session is reaped by the app's own teardown
-  // when the run quits - the same path M2-9 proves.
+  // when the run quits - the same path SESS-9 proves.
   await click(win, 'aside nav button[title]')
   await sleep(400)
   const launched = await click(win, '[data-tab]') // focus strip first for a stable shot
@@ -216,7 +216,7 @@ export async function runDesignShot(ctx: M2Context, outDir: string): Promise<str
 
       // The "still running" confirmation, reached the way a user reaches it -
       // by closing a tab whose session is alive. Worth walking here because it
-      // is the one dialog `m2-check` cannot see: that driver injects its own
+      // is the one dialog `sessions-check` cannot see: that driver injects its own
       // `Confirm`, so the real renderer round trip runs in the app and nowhere
       // else. Nothing is asserted; the console lines and the shot are the
       // evidence, same as every other view in this walk.
