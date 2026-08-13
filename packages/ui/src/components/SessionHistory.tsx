@@ -11,6 +11,7 @@ import type {
   HistorySummary
 } from '@helm/core'
 import { cn } from '../lib/cn'
+import { ROW_SELECTED } from '../lib/rows'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes, formatMoment } from '../lib/time'
 import { Checkbox } from './Checkbox'
@@ -561,7 +562,7 @@ function Row({
       className={cn(
         'session-row relative flex w-full flex-col gap-0.5 rounded-well py-1.5 pr-2 pl-4 text-left',
         'transition-colors',
-        selected ? 'bg-accent-soft' : 'hover:bg-hover'
+        selected ? ROW_SELECTED : 'hover:bg-hover'
       )}
     >
       {/* What is left of this session, drawn twice on purpose: a mark here for

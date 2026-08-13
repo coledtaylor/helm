@@ -1,6 +1,7 @@
 import type { JSX } from 'react'
 import type { Project } from '@helm/core'
 import { cn } from '../lib/cn'
+import { ROW_SELECTED_GROUP } from '../lib/rows'
 import { GitChip } from './GitChip'
 import { FolderIcon, HarnessIcon, PinIcon, RepoIcon } from './icons'
 
@@ -81,7 +82,7 @@ export function ProjectRow({
           // not the button: the star sits outside this element, and a row that
           // went flat while the pointer was on its own star would read as two
           // controls rather than one row.
-          selected ? 'bg-accent-soft' : 'group-hover:bg-hover'
+          selected ? ROW_SELECTED_GROUP : 'group-hover:bg-hover'
         )}
       >
         {selected && (

@@ -1,13 +1,15 @@
 import type { JSX, ReactNode } from 'react'
 import { Fragment, useEffect, useState } from 'react'
-import { MAX_FILE_LINES } from '@helm/core/types'
+import { anchorThreadsToFile, MAX_FILE_LINES } from '@helm/core/types'
 import type {
+  AnchoredThreads,
   PullDetailView,
   PullDiffHunk,
   PullFileStatus,
   PullFileView,
   RenderedPullEntry,
-  RenderedPullThread
+  RenderedPullThread,
+  ThreadLooseReason
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { SEGMENT_ON } from '../lib/segmented'
@@ -237,7 +239,7 @@ export function PullRequestPane({
         ) : shown === 'commits' ? (
           <Commits view={view} now={now} compact={compact} />
         ) : (
-          <Files view={view} compact={compact} onOpenExternal={onOpenExternal} />
+          <Files view={view} now={now} compact={compact} onOpenExternal={onOpenExternal} />
         )}
       </div>
 
@@ -815,11 +817,23 @@ function Conversation({
 function Thread({
   thread,
   now,
-  onOpenExternal
+  onOpenExternal,
+  inDiff = false
 }: {
   thread: RenderedPullThread
   now: number
   onOpenExternal: (url: string) => void
+  /**
+   * True when this is painted inside the diff it was written against.
+   *
+   * The `diffHunk` is then dropped, and the path with it. Both are context, and
+   * in the Files view the context is the rows immediately above - repeating it
+   * puts the same four lines on screen twice, six pixels apart, in the same
+   * mono at the same size. The line number stays: it is the one part that says
+   * *which* row of the ones above, and an outdated thread's is the only thing
+   * distinguishing "here" from "here, once".
+   */
+  inDiff?: boolean | undefined
 }): JSX.Element {
   const [open, setOpen] = useState(!thread.isResolved)
   const [first, ...replies] = thread.comments
@@ -853,10 +867,17 @@ function Thread({
             (DESIGN.md 2). The directory ellipsises and the file name does not,
             the same call the Files view makes and for the same reason. */}
         <span className="flex min-w-0 items-baseline font-mono text-[11px]">
-          <span className="min-w-0 truncate text-fg-subtle">{dirOf(thread.path)}</span>
-          <span className="shrink-0 text-fg">{baseOf(thread.path)}</span>
+          {!inDiff && (
+            <>
+              <span className="min-w-0 truncate text-fg-subtle">{dirOf(thread.path)}</span>
+              <span className="shrink-0 text-fg">{baseOf(thread.path)}</span>
+            </>
+          )}
           {line !== null && (
-            <span className="shrink-0 tabular-nums text-fg-subtle">:{line}</span>
+            <span className={cn('shrink-0 tabular-nums', inDiff ? 'text-fg' : 'text-fg-subtle')}>
+              {inDiff ? 'line ' : ':'}
+              {line}
+            </span>
           )}
         </span>
 
@@ -875,7 +896,7 @@ function Thread({
 
       {open && (
         <>
-          <Hunk text={thread.diffHunk} />
+          {!inDiff && <Hunk text={thread.diffHunk} />}
           <div className="flex flex-col gap-2 px-3 py-2.5">
             {first !== undefined && (
               <ThreadComment comment={first} now={now} onOpenExternal={onOpenExternal} />
@@ -1237,12 +1258,23 @@ function Commits({
  * all things this view deliberately still does not do. So it paints hunks as
  * plain rows and keeps the link out, which is where the blame still is.
  *
- * Review threads used to be on that list and no longer are: they are fetched
- * and they are in Conversation, each naming its file and line. What is still
- * not done is **anchoring a thread marker into the row it sits on**, which is
- * its own piece of work - it needs the thread's line matched onto a parsed hunk
- * whose numbering came from a different fetch - and the footer says where to
- * read them meanwhile rather than pretending there is nothing to say.
+ * **Review threads are painted on the rows they were left against**, which is
+ * the last thing on that list to be crossed off. The join is
+ * `anchorThreadsToFile` in core, where the interesting decision lives: the
+ * threads and the patch come from two different `gh` calls seconds apart, so
+ * they are two views of a file that are not guaranteed to be the same file, and
+ * a thread whose line has gone is put at the foot of its file with the reason
+ * rather than dropped or guessed at.
+ *
+ * The thread renders **in place, under its row**, rather than the row growing a
+ * control that goes and finds it. DESIGN.md's rule is that a row does not carry
+ * its own actions, and its one exception - a control that changes which list
+ * the row is in - is not this; so rather than argue for a second exception, the
+ * comment is simply put where the comment is about. It is also the better
+ * answer: a marker that sent the reader to Conversation would cost them their
+ * place in the diff, which is the thing they came to the Files view for.
+ *
+ * The rows are still in Conversation, unchanged. This is a second way in.
  *
  * Each file is collapsible and starts open. Starting open because a Files tab
  * that opens as a list of shut drawers is the list this used to be, with an
@@ -1251,10 +1283,12 @@ function Commits({
  */
 function Files({
   view,
+  now,
   compact,
   onOpenExternal
 }: {
   view: PullDetailView
+  now: number
   compact: boolean
   onOpenExternal: (url: string) => void
 }): JSX.Element {
@@ -1262,6 +1296,18 @@ function Files({
   // Collapsed rather than expanded, so the default needs no seeding from the
   // file list and a refresh that adds a file does not reopen the whole tab.
   const [shut, setShut] = useState<ReadonlySet<string>>(() => new Set())
+
+  /**
+   * The threads, taken out of the chronology main already built.
+   *
+   * Out of `conversation` rather than off `detail.reviewThreads`, because these
+   * are the ones whose comment bodies have been rendered to HTML - the raw
+   * threads carry markdown, and a second rendering path on this side is a
+   * second place for the sanitiser to be got wrong.
+   */
+  const threads = view.conversation.filter(
+    (item): item is RenderedPullThread => item.kind === 'thread'
+  )
 
   if (files.length === 0) return <Nothing>No changed files.</Nothing>
 
@@ -1292,6 +1338,9 @@ function Files({
           <FileCard
             key={file.path}
             file={file}
+            threads={anchorThreadsToFile(file.path, file, threads)}
+            now={now}
+            onOpenExternal={onOpenExternal}
             open={!shut.has(file.path)}
             onToggle={() => toggle(file.path)}
           />
@@ -1304,11 +1353,19 @@ function Files({
           <span className="font-mono tabular-nums text-success">+{additions}</span>{' '}
           <span className="font-mono tabular-nums text-danger">&#8722;{deletions}</span>
           {' · '}
-          {/* The threads are read now and are in Conversation, each naming its
-              file and line. What is still not done is anchoring a marker into
-              the row it belongs to, which is why this points at the other view
-              rather than claiming there is nothing to point at. */}
-          Comments left on these lines are in Conversation, or{' '}
+          {/* Never "no comments on this diff". `threadsNote` is the sentence for
+              a pull request cached before Helm fetched threads at all and for a
+              thread query that failed, and an absent key must read as "not
+              fetched" rather than as "nobody said anything" - the same rule
+              this surface follows for a missing patch. When it is null the
+              threads on screen are the threads GitHub has, and the only thing
+              left to offer is the diff itself. */}
+          {view.threadsNote !== null ? (
+            <span data-pr-files-threads-note>{view.threadsNote} </span>
+          ) : (
+            <>Comments are on their lines above, and in Conversation. </>
+          )}
+          Also{' '}
           <button
             type="button"
             data-pr-diff-external
@@ -1334,10 +1391,16 @@ const STATUS_LABEL: Record<PullFileStatus, string> = {
 
 function FileCard({
   file,
+  threads,
+  now,
+  onOpenExternal,
   open,
   onToggle
 }: {
   file: PullFileView
+  threads: AnchoredThreads<RenderedPullThread>
+  now: number
+  onOpenExternal: (url: string) => void
   open: boolean
   onToggle: () => void
 }): JSX.Element {
@@ -1423,8 +1486,80 @@ function FileCard({
         </div>
       )}
 
-      {hasPatch ? open && <Patch hunks={file.hunks} dropped={file.droppedLines} /> : <NoPatch file={file} />}
+      {hasPatch ? (
+        open && (
+          <Patch
+            hunks={file.hunks}
+            dropped={file.droppedLines}
+            byLine={threads.byLine}
+            now={now}
+            onOpenExternal={onOpenExternal}
+          />
+        )
+      ) : (
+        <NoPatch file={file} />
+      )}
+
+      {/* Threads with nowhere to sit, at the foot of the file they belong to.
+          Outside the `open` gate on purpose: a collapsed file is a file the
+          reader has decided not to read the diff of, and hiding a comment
+          behind that decision is the silent drop this is here to avoid. */}
+      {threads.loose.length > 0 && (
+        <LooseThreads loose={threads.loose} now={now} onOpenExternal={onOpenExternal} />
+      )}
     </article>
+  )
+}
+
+/** How a thread that could not be put on a row is explained. */
+const LOOSE_WHY: Record<ThreadLooseReason, string> = {
+  // Said as a fact about the comment rather than as an error, because it is
+  // not one: this is what happens to a remark about a line somebody has since
+  // rewritten, and the thread is usually already flagged `outdated`.
+  'outside-the-patch': 'on a line that is not in this diff',
+  'no-line': 'no longer attached to a line'
+}
+
+/**
+ * The threads this file has that no row of it could carry.
+ *
+ * They are shown, always, and with the reason. A comment that exists and is not
+ * painted is the exact bug the thread fetch was written to fix, and doing it
+ * again here because a line number moved would be the same bug with a better
+ * excuse. The alternative considered and rejected was anchoring each to the
+ * nearest surviving hunk: that is a guess wearing the appearance of precision,
+ * and nothing on screen would tell the reader which rows were guesses.
+ *
+ * These keep their `diffHunk` and their path, where the anchored ones drop
+ * both. Neither is redundant here: there is no row above to be the context, so
+ * the hunk is the only record of what was being talked about, and the path can
+ * legitimately differ from the card's - a thread written before a rename
+ * carries the name the file used to have.
+ */
+function LooseThreads({
+  loose,
+  now,
+  onOpenExternal
+}: {
+  loose: AnchoredThreads<RenderedPullThread>['loose']
+  now: number
+  onOpenExternal: (url: string) => void
+}): JSX.Element {
+  return (
+    <div data-pr-file-loose={loose.length} className="border-t border-border px-3 py-2">
+      <p className="pb-1.5 text-[10.5px] text-fg-subtle">
+        {loose.length} {loose.length === 1 ? 'comment' : 'comments'} on this file that the diff
+        above has no row for.
+      </p>
+      <div className="flex flex-col gap-1.5">
+        {loose.map(({ thread, why }) => (
+          <div key={thread.id} data-pr-loose-thread={why}>
+            <p className="pb-1 text-[10.5px] text-fg-subtle">{LOOSE_WHY[why]}</p>
+            <Thread thread={thread} now={now} onOpenExternal={onOpenExternal} />
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -1454,7 +1589,19 @@ function NoPatch({ file }: { file: PullFileView }): JSX.Element {
  * reading a diff into operating one, and the pane is often docked at half
  * width where nothing would fit anyway.
  */
-function Patch({ hunks, dropped }: { hunks: PullDiffHunk[]; dropped: number }): JSX.Element {
+function Patch({
+  hunks,
+  dropped,
+  byLine,
+  now,
+  onOpenExternal
+}: {
+  hunks: PullDiffHunk[]
+  dropped: number
+  byLine: AnchoredThreads<RenderedPullThread>['byLine']
+  now: number
+  onOpenExternal: (url: string) => void
+}): JSX.Element {
   return (
     <div className="border-t border-border font-mono text-[11px] leading-[1.6]">
       {hunks.map((hunk, at) => (
@@ -1468,29 +1615,68 @@ function Patch({ hunks, dropped }: { hunks: PullDiffHunk[]; dropped: number }): 
             </span>
           </div>
 
-          {hunk.lines.map((line, index) => (
-            <div
-              key={`${String(at)}:${String(index)}`}
-              data-pr-diff-line={line.kind}
-              className={cn(
-                'flex pl-2',
-                line.kind === 'add' && 'bg-success/[.08]',
-                line.kind === 'del' && 'bg-danger/[.08]'
-              )}
-            >
-              <Gutter>{line.oldLine}</Gutter>
-              <Gutter>{line.newLine}</Gutter>
-              <Sign kind={line.kind} />
-              <span
-                className={cn(
-                  'min-w-0 flex-1 py-[1px] pr-3 break-all whitespace-pre-wrap select-text',
-                  line.kind === 'context' ? 'text-fg-muted' : 'text-fg'
+          {hunk.lines.map((line, index) => {
+            const onThisLine = line.newLine === null ? undefined : byLine.get(line.newLine)
+            return (
+              <Fragment key={`${String(at)}:${String(index)}`}>
+                <div
+                  data-pr-diff-line={line.kind}
+                  {...(onThisLine ? { 'data-pr-line-threads': onThisLine.length } : {})}
+                  className={cn(
+                    'relative flex pl-2',
+                    line.kind === 'add' && 'bg-success/[.08]',
+                    line.kind === 'del' && 'bg-danger/[.08]'
+                  )}
+                >
+                  {/* The marker: the accent edge a selected row wears, on a row
+                      somebody wrote about. Information and not a control - it
+                      takes no pointer, no focus and no click, because the thing
+                      it announces is rendered directly underneath it and there
+                      is nowhere for a click to usefully go. That is what keeps
+                      this inside DESIGN.md's rule rather than needing a second
+                      exception to it. */}
+                  {onThisLine && (
+                    <span
+                      aria-hidden
+                      className="absolute inset-y-0 left-0 w-[2px] rounded-full bg-accent"
+                    />
+                  )}
+                  <Gutter>{line.oldLine}</Gutter>
+                  <Gutter>{line.newLine}</Gutter>
+                  <Sign kind={line.kind} />
+                  <span
+                    className={cn(
+                      'min-w-0 flex-1 py-[1px] pr-3 break-all whitespace-pre-wrap select-text',
+                      line.kind === 'context' ? 'text-fg-muted' : 'text-fg'
+                    )}
+                  >
+                    {line.text}
+                  </span>
+                </div>
+
+                {/* Out of the mono grid the diff is set in: a thread is prose
+                    and the rows around it are code, and a comment set at 11px
+                    monospace reads as more diff. Inset so the rows still run
+                    edge to edge and the exchange is visibly hung off one. */}
+                {onThisLine && (
+                  <div
+                    data-pr-line-thread-block={line.newLine ?? undefined}
+                    className="flex flex-col gap-1.5 border-y border-border bg-surface px-3 py-2 font-sans text-[12px] leading-normal"
+                  >
+                    {onThisLine.map((thread) => (
+                      <Thread
+                        key={thread.id}
+                        thread={thread}
+                        now={now}
+                        onOpenExternal={onOpenExternal}
+                        inDiff
+                      />
+                    ))}
+                  </div>
                 )}
-              >
-                {line.text}
-              </span>
-            </div>
-          ))}
+              </Fragment>
+            )
+          })}
         </Fragment>
       ))}
 

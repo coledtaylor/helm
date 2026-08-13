@@ -350,6 +350,36 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   because the question it answers - how much terminal do I want - is about the
   person and their monitor, not the repository. Per-project heights would also
   mean the page's proportions moved as you moved between projects.
+- **Every drag surface, and what a move must carry.** A gesture that tracks the
+  pointer over time is only a drag while a button is held, and a handler that
+  does not check `buttons` will follow a pointer that is merely passing over it.
+  That is not hypothetical: the session divider did exactly that, and because it
+  did, no drag in Helm had ever been exercised by a check - the drivers were
+  sending `sendInputEvent` moves with no `leftbuttondown`, Chromium was
+  delivering them as `buttons: 0`, and the divider was answering them. The
+  arrangement looked correct from both ends for as long as it existed. The
+  complete list:
+
+  | surface | how it tracks | requires the button |
+  |---|---|---|
+  | session split divider | `mousemove` on `window` | yes - `buttons === 0` ends the drag |
+  | project shell handle | `setPointerCapture` | yes - capture, and `hasPointerCapture` gates each move |
+  | workspace tab reorder | HTML5 `dragstart`/`drop` | n/a - the platform owns the gesture |
+  | session tab reorder | HTML5 `dragstart`/`drop` | n/a |
+  | profile list reorder | HTML5 `dragstart`/`drop` | n/a |
+  | terminal text selection | xterm's own handlers | n/a - not Helm's code |
+
+  The pointer-capture form is the better one and the divider is the older one;
+  capture also fixes the case a `buttons` check only mitigates, which is a
+  release *outside the window* that delivers no `mouseup` at all. A new handle
+  takes capture. The HTML5 rows are a different event family that
+  `sendInputEvent` cannot produce at all, which is worth knowing before writing
+  a check for one.
+
+  A driver drives these with **`drag()`** (`main/bridge.ts`), which holds the
+  button, and counts what was delivered with `tracePointer` - so "the app
+  ignored it" and "it never arrived" stop being the same red line. `SESS-15`
+  and `S-21` both assert `buttons: 1` for exactly that reason.
 - **Narrow panes**: the config console, the content viewer and the session
   history are all a bounded list beside a detail, and that needs roughly 700px
   before both are readable. Docked next to the session split none of them get

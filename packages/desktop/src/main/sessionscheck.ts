@@ -3,7 +3,19 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readSessions, type Project, type SessionRecord } from '@helm/core'
-import { screenshot, sendKey, sleep, squash, stripAnsi, typeText, waitFor } from './bridge'
+import {
+  drag,
+  readPointerTrace,
+  screenshot,
+  sendKey,
+  sleep,
+  squash,
+  stripAnsi,
+  tracePointer,
+  typeText,
+  waitFor,
+  type PointerTrace
+} from './bridge'
 import type { ConfigService } from './config'
 import type { ContentService } from './content'
 import type { Check } from './fidelity'
@@ -913,6 +925,239 @@ export async function runSessionsChecks(
         ]
       })
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // SESS-15: the workspace divider is dragged, for the first time ever
+  // -------------------------------------------------------------------------
+  //
+  // This divider is older than every other draggable thing in Helm and until
+  // now nothing had ever exercised it. The one driver that touched it -
+  // `design-shot`'s `dragSplit` - sent its moves with no button held, which
+  // Chromium delivers as `buttons: 0`, a hover; the divider's handler read
+  // `clientX` off whatever arrived and never asked, so it moved, and the whole
+  // arrangement looked correct from both ends.
+  //
+  // Three things are asserted, and the third is the one that is easy to leave
+  // out. The gesture *arrived* (from `tracePointer`, so "the app ignored it"
+  // and "it was never delivered" cannot be the same red line). The pane ended
+  // where the pointer left it. And **the pane tracked the pointer while the
+  // button was still down** - measured between moves, not after the release.
+  //
+  // That last one is not pedantry. A fix for this divider's stutter was written
+  // and reverted on 2026-08-13; its end state was correct and only its
+  // *middle* was broken - the pane lagged, and shrank from the wrong edge,
+  // and snapped into place on release. Every assertion that looked at the
+  // finished state passed it.
+  {
+    const DIVIDER = '[role="separator"][aria-orientation="vertical"]'
+    const sessionsColumnWidth = `(() => {
+      const sep = document.querySelector(${JSON.stringify(DIVIDER)})
+      const col = sep?.nextElementSibling
+      return col ? col.getBoundingClientRect().width : null
+    })()`
+
+    // The session history in the workspace half, which is the state the stutter
+    // was reported in and the only one that discriminates: 900-odd rows is
+    // enough that reconciling them per frame is felt, where a project pane is
+    // not. Its own list is what the observer below watches.
+    await js<boolean>(
+      win,
+      `(() => { const el = document.querySelector('[data-open-history]')
+        if (!el) return false; el.click(); return true })()`
+    )
+    await pollJs(win, `document.querySelector('[data-history-search]')`, 15_000)
+    await sleep(1200)
+    const historyRows = await js<number>(
+      win,
+      `document.querySelectorAll('button[data-session]').length`
+    )
+
+    const grip = await js<{ x: number; y: number; width: number; left: number } | null>(
+      win,
+      `(() => {
+         const el = document.querySelector(${JSON.stringify(DIVIDER)})
+         if (!el) return null
+         const b = el.getBoundingClientRect()
+         const row = el.parentElement.getBoundingClientRect()
+         return { x: b.left + b.width / 2, y: b.top + b.height / 2, width: row.width, left: row.left }
+       })()`
+    ).catch(() => null)
+
+    let dragResult: {
+      before: number | null
+      during: Array<{ width: number | null; pointerX: number }>
+      mutations: string[]
+      nearby: number
+      after: number | null
+      pointer: PointerTrace
+    } | null = null
+
+    if (grip !== null) {
+      const before = await js<number | null>(win, sessionsColumnWidth)
+      // Left, which makes the sessions column - the one on the right of the
+      // divider - wider. Far enough to be past any rounding and short of the
+      // 20% bound so the pane is free to follow the whole way.
+      const to = { x: grip.x - Math.round(grip.width * 0.15), y: grip.y }
+      const during: Array<{ width: number | null; pointerX: number }> = []
+
+      /**
+       * Watch the two columns' **own attributes** while the boundary moves.
+       *
+       * This is the mechanism assertion, and it is the one that would have
+       * caught both previous attempts at this. The fraction lives in a
+       * `--split` custom property on the row; nothing in the render tree reads
+       * it; so a drag changes the columns' computed width without writing
+       * anything to either element. The first implementation set React state
+       * per `mousemove` and rewrote both columns' inline `style` every frame.
+       * The second wrote `column.style.flex` from a ref while React went on
+       * writing the same property from its render - two writers for one value,
+       * which is why the pane fought the pointer and lost.
+       *
+       * **The columns themselves, not their subtrees.** The first version of
+       * this probe watched the whole workspace subtree and failed on five
+       * mutations that had nothing to do with the drag: `name` and `type` on
+       * the history pane's search field and scope checkboxes, which is that
+       * pane still settling a second after being opened. A probe that goes red
+       * for something happening nearby is the shape this suite has just spent
+       * a task removing, so what is asserted is the narrow claim that
+       * discriminates - the drag did not write to either column - and the
+       * subtree is *counted* and reported beside it rather than asserted.
+       */
+      await js<void>(
+        win,
+        `(() => {
+           const sep = document.querySelector(${JSON.stringify(DIVIDER)})
+           const columns = [sep?.previousElementSibling, sep?.nextElementSibling]
+           window.__splitMutations = []
+           window.__splitNearby = 0
+           window.__splitObservers = []
+           for (const el of columns) {
+             if (!el) continue
+             const own = new MutationObserver((records) => {
+               for (const r of records) {
+                 window.__splitMutations.push(
+                   (r.attributeName ?? r.type) + ' on ' + r.target.nodeName +
+                   '.' + ((r.target.className ?? '') + '').slice(0, 32)
+                 )
+               }
+             })
+             own.observe(el, { attributes: true })
+             window.__splitObservers.push(own)
+
+             const near = new MutationObserver((records) => {
+               window.__splitNearby += records.length
+             })
+             near.observe(el, {
+               attributes: true, childList: true, characterData: true, subtree: true
+             })
+             window.__splitObservers.push(near)
+           }
+           return undefined
+         })()`
+      )
+
+      await tracePointer(win, DIVIDER)
+      await drag(win, { x: grip.x, y: grip.y }, to, {
+        steps: 6,
+        onStep: async (i) => {
+          // A frame has to be allowed to happen between the move and the read,
+          // or this measures the event queue rather than the pane. The reverted
+          // fix's own probe fired thirty moves in one synchronous loop for
+          // exactly this reason and learned nothing about the drag.
+          await sleep(90)
+          during.push({
+            width: await js<number | null>(win, sessionsColumnWidth),
+            pointerX: grip.x + ((to.x - grip.x) * i) / 6
+          })
+        }
+      })
+      await sleep(400)
+      // Read before the release settles, so a mutation caused by the settings
+      // write coming back is not counted against the gesture - that one is a
+      // render, and one render after a drag is the point of writing once.
+      const watched = await js<{ mutations: string[]; nearby: number }>(
+        win,
+        `(() => {
+           const seen = window.__splitMutations ?? []
+           const nearby = window.__splitNearby ?? 0
+           for (const o of window.__splitObservers ?? []) o.disconnect()
+           delete window.__splitObservers
+           delete window.__splitMutations
+           delete window.__splitNearby
+           return { mutations: seen, nearby }
+         })()`
+      )
+      dragResult = {
+        before,
+        during,
+        mutations: watched.mutations,
+        nearby: watched.nearby,
+        after: await js<number | null>(win, sessionsColumnWidth),
+        pointer: await readPointerTrace(win)
+      }
+    }
+
+    const r = dragResult
+    // Delivered: a press, the six moves, a release - and the last move carried
+    // the button. `buttons: 0` here is the bug this whole probe exists for.
+    const arrived =
+      r !== null && r.pointer.down === 1 && r.pointer.move >= 6 && r.pointer.up === 1 && r.pointer.buttons === 1
+    // Landed: the column grew by about what the pointer travelled.
+    const travelled = grip === null ? 0 : Math.round(grip.width * 0.15)
+    const landed =
+      r !== null &&
+      r.before !== null &&
+      r.after !== null &&
+      Math.abs(r.after - r.before - travelled) <= 8
+    // Tracked: every mid-gesture reading is already most of the way to where
+    // that step's pointer was, rather than all of them sitting at the start and
+    // jumping at the end. 12px of slack per step for rounding and the bound.
+    const midGesture = r?.during.filter((d) => d.width !== null) ?? []
+    const tracked =
+      r !== null &&
+      r.before !== null &&
+      midGesture.length >= 5 &&
+      midGesture.every(
+        (d) => Math.abs((d.width ?? 0) - (r.before ?? 0) - (grip === null ? 0 : grip.x - d.pointerX)) <= 12
+      )
+
+    // Neither column was written to in order to move the boundary between
+    // them. The floor on the row count is what makes it worth saying: on a
+    // machine with six sessions, a reconcile of six rows also writes nothing
+    // anybody would notice.
+    const wroteToNeitherColumn = r !== null && r.mutations.length === 0
+    const listDiscriminates = historyRows >= 50
+
+    checks.push({
+      id: 'SESS-15',
+      criterion: 'The split between the workspace and the sessions is draggable',
+      title: `A real drag on the workspace divider moves the pane, keeps up with the pointer, and rebuilds none of the ${String(historyRows)} rows beside it`,
+      ok: arrived && landed && tracked && wroteToNeitherColumn && listDiscriminates,
+      detail: {
+        grip,
+        travelledPx: travelled,
+        historyRowsInTheWorkspaceHalf: historyRows,
+        ...(r ?? { note: 'no divider on screen - a workspace pane and a session must both be open' })
+      },
+      notes: [
+        'Driven with `drag()`, which holds the button for the moves in the middle.',
+        'Written out as bare `sendMouse` calls this sends hovers, and this',
+        'divider answered those for as long as it has existed.',
+        '`tracked` is the claim about the middle of the gesture and the reason',
+        'there is a sleep inside the drag: a frame has to render between the',
+        'move and the measurement. A probe that only reads the finished state',
+        'passes a drag that lags the pointer and snaps on release.',
+        '`pointer.buttons` is the positive control - 0 means the driver sent a',
+        'hover and nothing below this line is evidence of anything.',
+        'The mutation count is the mechanism, and the session history is open',
+        'behind it so that it means something: the boundary is a `--split`',
+        'custom property nothing in the render tree reads, so moving it must',
+        'leave the pane beside it completely untouched. Setting React state per',
+        'move instead rewrote the column`s inline style every frame and',
+        'reconciled every row in that list to produce the rows already there.'
+      ]
+    })
   }
 
   // What the restart phase has to find. Written before the teardown below,

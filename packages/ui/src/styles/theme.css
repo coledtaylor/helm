@@ -80,6 +80,10 @@
   --helm-accent: #6f61c4;
   --helm-accent-fg: #ffffff;
   --helm-accent-soft: rgb(111 97 196 / 0.1);
+  /* The hover step for a row that is already selected - see the note beside the
+   * dark value. On white: accent-soft composites to rgb(241 239 249) and this
+   * to rgb(226 223 243), a step of 15/16/6. */
+  --helm-accent-soft-hover: rgb(111 97 196 / 0.2);
   --helm-accent-text: #5a4da8;
 
   --helm-success: #2f7a43;
@@ -119,6 +123,24 @@
    * mark reads as punched out of the accent rather than white-on-purple. */
   --helm-accent-fg: #12131f;
   --helm-accent-soft: rgb(145 132 217 / 0.14);
+  /*
+   * A selected row still has to answer the pointer, and it cannot answer with
+   * `hover`: it is not resting on `surface` any more, it is resting on
+   * `accent-soft`, and `hover` is a *grey* step - putting it on top would make
+   * the row read as less selected under the pointer than beside it.
+   *
+   * So the same move the segmented control makes (DESIGN.md, "the chosen
+   * segment hovers to `bg-active`, not to `bg-hover` like everything else"),
+   * with the tint kept: more of what the row already is.
+   *
+   * Sized against the step that is known to read. On `surface` (#1a1c2b),
+   * `hover` (#242639) is +10/+10/+14 and that is the app's ordinary visible
+   * hover. Here, over the same surface, accent-soft composites to
+   * rgb(43 43 67) and this to rgb(57 55 88) - +14/+12/+21, comfortably past it.
+   * For contrast, `hover` on `surface-raised` is +4/+4/+6, which DESIGN.md
+   * already records as a change nobody can see.
+   */
+  --helm-accent-soft-hover: rgb(145 132 217 / 0.26);
   --helm-accent-text: #d2cefd;
 
   --helm-success: #8fbf7f;
@@ -151,6 +173,7 @@
   --color-accent: var(--helm-accent);
   --color-accent-fg: var(--helm-accent-fg);
   --color-accent-soft: var(--helm-accent-soft);
+  --color-accent-soft-hover: var(--helm-accent-soft-hover);
   --color-accent-text: var(--helm-accent-text);
 
   --color-success: var(--helm-success);
@@ -390,4 +413,52 @@ select:focus-visible {
 .session-row {
   content-visibility: auto;
   contain-intrinsic-size: auto 35px;
+}
+
+/* ---------------------------------------------------------------------------
+ * The workspace/sessions split, driven by a custom property.
+ *
+ * The boundary lives in `--split` on the row, and **React never writes it**.
+ * That is the whole design, and it is the third attempt at this.
+ *
+ * The first was `setSplit` on every `mousemove`, which is correct and stutters:
+ * with the session history open, moving a divider reconciled 966 rows to
+ * produce the same 966 rows, once per frame. The second wrote `column.style.flex`
+ * directly during the drag and committed to React on release. That measured
+ * thirty moves at 47.4ms → 0.1ms and was *worse in the hand* - because a direct
+ * style write means the DOM and React disagree for the length of the gesture,
+ * and React wins whenever anything re-renders. With a live session in the split
+ * something re-renders constantly, since the terminal's own output updates
+ * state; the pane was pulled by the pointer and yanked back by every unrelated
+ * render, so it lagged, shrank from the wrong edge, and snapped on release.
+ *
+ * A custom property has no such fight, because there is no second writer. The
+ * drag sets `--split` on the row; nothing in the render tree mentions it; a
+ * re-render of `App` produces identical markup and leaves the boundary alone.
+ * The settings write happens once, on release.
+ *
+ * `calc(1 - var(--split))` is a unitless flex-grow, which is what `flex-grow`
+ * already is. The fallback in `var()` matters on the first frame: settings
+ * arrive asynchronously and a row with no `--split` yet would otherwise resolve
+ * to an invalid `flex` and collapse a column.
+ * ------------------------------------------------------------------------ */
+.split-row {
+  --split: 0.45;
+}
+
+/* The sessions column - the one on the right of the divider. */
+.split-sessions {
+  flex: var(--split, 0.45) 1 0%;
+}
+
+/* The workspace column, taking whatever is left. */
+.split-workspace {
+  flex: calc(1 - var(--split, 0.45)) 1 0%;
+}
+
+/* Either column with the other maximized away. A class rather than a cleared
+ * custom property: which panes are on screen is discrete state that belongs to
+ * React, and only the *fraction* is the drag's. */
+.split-whole {
+  flex: 1 1 0%;
 }

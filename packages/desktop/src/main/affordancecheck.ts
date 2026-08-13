@@ -587,6 +587,55 @@ export async function runAffordanceChecks(
   const shot = await screenshot(win, shotDir, 'affordance-last-view.png').catch(() => null)
 
   // -------------------------------------------------------------------------
+  /**
+   * A row in its **selected** state, which the walk above cannot speak for.
+   *
+   * The walk enumerates whatever is on each view and takes the first of each
+   * recipe, and a sidebar holding twenty-five projects offers it twenty-four
+   * unselected rows before the one that is selected. So "0 dead" above is a
+   * statement about unselected rows, and the selected branch of the same
+   * component was free to have no hover recipe at all - which, on five
+   * components, is exactly what it had.
+   *
+   * Measured on itself rather than on a tier, deliberately. `near` would pass
+   * this row for the wrong reason: its pin star fades in beside it on
+   * `group-hover`, so a row that answers nothing of its own still scores a
+   * change on a sibling. That is the masking that kept this invisible - the
+   * finding was originally reported as one dead hover and stopped being
+   * reported at all when the star arrived, without the row changing.
+   */
+  let selectedRow: { tier: Tier; label: string; restBg: string; hoverBg: string } | null = null
+  if (wanted.has('hover')) {
+    await closeAllTabs(win)
+    await sleep(300)
+    await click(win, 'aside nav button[title]')
+    await sleep(900)
+    const find = `(() => {
+      ${READ_FN}
+      const el = document.querySelector('aside [aria-current="true"]')
+      return el ? { ...read(el), label: el.textContent?.slice(0, 60) ?? '' } : null
+    })()`
+    const rest = await js<(Reading & { label: string }) | null>(win, find).catch(() => null)
+    if (rest !== null) {
+      await sendMouse(win, 'mouseMove', rest.x, rest.y)
+      await sleep(190)
+      const hover = await js<(Reading & { label: string }) | null>(win, find).catch(() => null)
+      await sendMouse(win, 'mouseMove', PARK.x, PARK.y)
+      await sleep(45)
+      if (hover !== null) {
+        selectedRow = {
+          tier: tierOf(rest, hover),
+          label: rest.label,
+          // The first field `props()` joins is `backgroundColor`, which is the
+          // property this recipe moves. Named in the report so a failure says
+          // "these two are the same colour" rather than "the tier was none".
+          restBg: rest.self.split('|')[0] ?? '',
+          hoverBg: hover.self.split('|')[0] ?? ''
+        }
+      }
+    }
+  }
+
   // The verdicts
   // -------------------------------------------------------------------------
 
@@ -624,17 +673,67 @@ export async function runAffordanceChecks(
   }
 
   if (wanted.has('hover')) {
+    /**
+     * The one control allowed to answer on a peer rather than on itself.
+     *
+     * An active tab is drawn continuous with the pane below it - same fill,
+     * hairline on three sides, a 1px overlap that erases the island's top
+     * border. A fill that moved under the pointer would break exactly the join
+     * that makes it read as the front of the pane, so its own tone is pinned on
+     * purpose, and what answers instead is its close button going from
+     * `opacity-60` to full. That is visible, it is inside the tab to look at,
+     * and it is a sibling only in the DOM - a button cannot be nested in a
+     * button.
+     *
+     * Held as an assertion rather than the count-in-a-note this used to be.
+     * `nearOnly` was informational, and informational is how six of them sat
+     * there while the shape that produced them - an `active ? … : 'hover:…'`
+     * ternary that drops the hover recipe in the selected branch - was also
+     * live on five list-row components, where nothing redraws to cover it.
+     * That was found by reading the six, not by the check, which is the wrong
+     * way round. Now: a control that answers only on a peer has to be a tab.
+     */
+    const peerNotATab = nearOnly.filter((spot) => spot.tag !== 'button[tab]')
     checks.push({
       id: 'AFF-4',
-      criterion: 'Every clickable control changes appearance under the pointer',
-      title: `Hover response on all ${measured} measured controls (${noHover.length} dead)`,
-      ok: noHover.length === 0,
-      detail: { dead: noHover, nearOnly },
+      criterion: 'Every clickable control changes appearance under the pointer, and on itself',
+      title: `Hover response on all ${measured} measured controls (${noHover.length} dead, ${peerNotATab.length} answering only on a peer)`,
+      // `measured` is the floor, by AFF-6's argument: nothing dead and nothing
+      // peer-only is also what a walk that reached no controls at all reports.
+      ok: noHover.length === 0 && peerNotATab.length === 0 && measured > 0,
+      detail: { dead: noHover, nearOnly, peerNotATab },
       notes: [
-        `${nearOnly.length} responded on a sibling or the parent rather than themselves (a peer- pattern; not a fault)`,
+        `${nearOnly.length} responded on a sibling or the parent rather than themselves`,
+        ...(peerNotATab.length === 0
+          ? ['all of them active tabs, which is the one recipe that answers that way deliberately']
+          : peerNotATab
+              .slice(0, 40)
+              .map((n) => `${n.view}  ${n.tag}  "${n.label}"  peer-only  @ ${n.path}`)),
         ...(noHover.length === 0
           ? ['every measured control changed at least one computed property under the pointer']
           : noHover.slice(0, 40).map((n) => `${n.view}  ${n.tag}  "${n.label}"  @ ${n.path}`))
+      ]
+    })
+  }
+
+  if (wanted.has('hover')) {
+    checks.push({
+      id: 'AFF-7',
+      criterion: 'A selected row still answers the pointer, and on itself',
+      title: `The selected sidebar row changes its own fill under the pointer (${selectedRow?.tier ?? 'not found'})`,
+      // `null` fails. Nothing selected means the click never opened a project,
+      // and a probe that reports green because it could not find its subject is
+      // the shape CLAUDE.md names as worse than no check.
+      ok: selectedRow !== null && selectedRow.tier === 'self',
+      detail: { selectedRow },
+      notes: [
+        selectedRow === null
+          ? 'no [aria-current="true"] row in the sidebar - the project never opened, so nothing was measured'
+          : `rest ${selectedRow.restBg} -> hover ${selectedRow.hoverBg}`,
+        'The tier has to be `self`. `near` is what this row scores when it has',
+        'no hover recipe of its own, because its pin star fades in beside it.',
+        'The recipe is `ROW_SELECTED_GROUP` in ui/src/lib/rows.ts; putting the',
+        'row back to a bare `bg-accent-soft` is what makes this go red.'
       ]
     })
   }

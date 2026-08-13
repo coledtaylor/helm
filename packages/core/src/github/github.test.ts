@@ -18,7 +18,7 @@ import {
 import type { PullDetail, PullReviewThread } from './types'
 import { renderPullPrompt, DEFAULT_PR_REVIEW_PROMPT, PR_PROMPT_PLACEHOLDERS } from './prompt'
 import { parseGitHubRemote } from './remote'
-import { indexDiffByPath, parseUnifiedDiff } from './diff'
+import { anchorThreadsToFile, indexDiffByPath, parseUnifiedDiff, type ThreadPosition } from './diff'
 import { isRepoIgnored, isRepoSlug, withRepoIgnored } from './types'
 
 describe('parseGitHubRemote', () => {
@@ -1421,6 +1421,149 @@ describe('parseUnifiedDiff', () => {
   it('carries the truncation flag it was handed', () => {
     expect(parseUnifiedDiff('', { truncated: true }).truncated).toBe(true)
     expect(parseUnifiedDiff('').files).toEqual([])
+  })
+})
+
+describe('anchorThreadsToFile', () => {
+  /** Two hunks, so "in the patch" is a real question and not "line <= 3". */
+  const patch = parseUnifiedDiff(
+    [
+      'diff --git a/src/app.ts b/src/app.ts',
+      'index 1111111..2222222 100644',
+      '--- a/src/app.ts',
+      '+++ b/src/app.ts',
+      '@@ -1,3 +1,4 @@',
+      ' const a = 1',
+      '+const b = 2',
+      ' const c = 3',
+      ' const d = 4',
+      '@@ -40,2 +41,3 @@',
+      ' const y = 25',
+      '+const z = 26',
+      ''
+    ].join('\n')
+  ).files[0]
+
+  const thread = (over: Partial<ThreadPosition> & { id?: string }): ThreadPosition & { id: string } => ({
+    id: 'T',
+    path: 'src/app.ts',
+    line: null,
+    originalLine: null,
+    ...over
+  })
+
+  it('puts a thread on the head line the patch shows', () => {
+    const { byLine, loose } = anchorThreadsToFile('src/app.ts', patch, [
+      thread({ id: 'on-2', line: 2, originalLine: 2 })
+    ])
+    expect(byLine.get(2)?.map((t) => t.id)).toEqual(['on-2'])
+    expect(loose).toEqual([])
+  })
+
+  it('anchors a thread in the second hunk, not just the first', () => {
+    // The line numbers restart from the hunk header rather than counting on
+    // from the previous hunk, so a join that walked the lines would put this
+    // one four rows down instead of at 42.
+    const { byLine } = anchorThreadsToFile('src/app.ts', patch, [
+      thread({ id: 'far', line: 42, originalLine: 42 })
+    ])
+    expect(byLine.get(42)?.map((t) => t.id)).toEqual(['far'])
+  })
+
+  it('falls back to the original line when GitHub no longer claims a current one', () => {
+    // Which is the ordinary state of an outdated thread, not an error.
+    const { byLine, loose } = anchorThreadsToFile('src/app.ts', patch, [
+      thread({ id: 'outdated', line: null, originalLine: 3 })
+    ])
+    expect(byLine.get(3)?.map((t) => t.id)).toEqual(['outdated'])
+    expect(loose).toEqual([])
+  })
+
+  it('keeps a thread whose line is nowhere in the patch, with the reason', () => {
+    const { byLine, loose } = anchorThreadsToFile('src/app.ts', patch, [
+      thread({ id: 'gone', line: 900, originalLine: 900 })
+    ])
+    expect(byLine.size).toBe(0)
+    // Never dropped. A comment that exists and is not shown is the bug the
+    // Conversation fetch was written for, reintroduced one surface over.
+    expect(loose).toEqual([{ thread: expect.objectContaining({ id: 'gone' }), why: 'outside-the-patch' }])
+  })
+
+  it('keeps a thread with no line at all, and says which kind of loose it is', () => {
+    const { loose } = anchorThreadsToFile('src/app.ts', patch, [
+      thread({ id: 'nowhere', line: null, originalLine: null })
+    ])
+    expect(loose).toEqual([{ thread: expect.objectContaining({ id: 'nowhere' }), why: 'no-line' }])
+  })
+
+  it('holds every thread loose when the patch was never fetched', () => {
+    // Undefined is "not fetched", which is not the same as a file with no
+    // comments - the Files view still owes the reader all of them.
+    const { byLine, loose } = anchorThreadsToFile('src/app.ts', undefined, [
+      thread({ id: 'a', line: 2, originalLine: 2 }),
+      thread({ id: 'b', line: null, originalLine: null })
+    ])
+    expect(byLine.size).toBe(0)
+    expect(loose.map((l) => l.thread.id)).toEqual(['a', 'b'])
+  })
+
+  it('ignores threads belonging to other files', () => {
+    // Not loose - some other file's call is going to place them.
+    const { byLine, loose } = anchorThreadsToFile('src/app.ts', patch, [
+      thread({ id: 'elsewhere', path: 'src/other.ts', line: 2, originalLine: 2 })
+    ])
+    expect(byLine.size).toBe(0)
+    expect(loose).toEqual([])
+  })
+
+  it('finds a thread written against the name a renamed file used to have', () => {
+    const renamed = parseUnifiedDiff(
+      [
+        'diff --git a/docs/old.md b/docs/new.md',
+        'similarity index 90%',
+        'rename from docs/old.md',
+        'rename to docs/new.md',
+        '--- a/docs/old.md',
+        '+++ b/docs/new.md',
+        '@@ -1,2 +1,2 @@',
+        ' kept',
+        '+added',
+        ''
+      ].join('\n')
+    ).files[0]
+    const { byLine } = anchorThreadsToFile('docs/new.md', renamed, [
+      thread({ id: 'pre-rename', path: 'docs/old.md', line: 2, originalLine: 2 })
+    ])
+    expect(byLine.get(2)?.map((t) => t.id)).toEqual(['pre-rename'])
+  })
+
+  it('stacks several threads on one line in the order they arrived', () => {
+    const { byLine } = anchorThreadsToFile('src/app.ts', patch, [
+      thread({ id: 'first', line: 2, originalLine: 2 }),
+      thread({ id: 'second', line: 2, originalLine: 2 })
+    ])
+    expect(byLine.get(2)?.map((t) => t.id)).toEqual(['first', 'second'])
+  })
+
+  it('does not anchor to a removed line, which has no head-side row', () => {
+    const withDeletion = parseUnifiedDiff(
+      [
+        'diff --git a/src/x.ts b/src/x.ts',
+        '--- a/src/x.ts',
+        '+++ b/src/x.ts',
+        '@@ -1,2 +1,1 @@',
+        ' kept',
+        '-dropped',
+        ''
+      ].join('\n')
+    ).files[0]
+    // The removed line is old-side line 2 and has no `newLine`; a thread
+    // claiming head line 2 has nothing on screen to sit against.
+    const { byLine, loose } = anchorThreadsToFile('src/x.ts', withDeletion, [
+      thread({ id: 'on-a-deletion', path: 'src/x.ts', line: 2, originalLine: 2 })
+    ])
+    expect(byLine.size).toBe(0)
+    expect(loose[0]?.why).toBe('outside-the-patch')
   })
 })
 

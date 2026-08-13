@@ -9,6 +9,7 @@ import type {
   ContentTree
 } from '@helm/core'
 import { cn } from '../lib/cn'
+import { ROW_SELECTED } from '../lib/rows'
 import { formatAge, formatBytes } from '../lib/time'
 import { PaneBack } from './PaneBack'
 import { PaneHeader } from './PaneHeader'
@@ -407,7 +408,7 @@ function Row({
       title={file.path}
       className={cn(
         'relative flex w-full items-start gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
-        selected ? 'bg-accent-soft' : 'hover:bg-hover'
+        selected ? ROW_SELECTED : 'hover:bg-hover'
       )}
     >
       {selected && (

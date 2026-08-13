@@ -2646,6 +2646,27 @@ async function threadChecks({
 
   const fromCache = await paint()
 
+  /**
+   * The same fact, on the other surface that now paints threads.
+   *
+   * The Files view marks rows from the same list, so it inherits the same rule
+   * and the same way of getting it wrong: an absent key read as "there are
+   * none" would paint a diff with no markers on it and a footer saying so,
+   * which is a page confidently stating something nothing has checked.
+   */
+  await click(win, '[data-pr-view="files"]')
+  await sleep(700)
+  const filesFromCache = await js<{ note: string | null; marked: number; loose: number }>(
+    win,
+    `(() => ({
+       note: document.querySelector('[data-pr-files-threads-note]')?.textContent ?? null,
+       marked: document.querySelectorAll('[data-pr-line-thread-block]').length,
+       loose: document.querySelectorAll('[data-pr-loose-thread]').length
+     }))()`
+  )
+  await click(win, '[data-pr-view="conversation"]')
+  await sleep(400)
+
   // One refresh, with the thread query working again.
   writeBehaviour(fixtures.home, { auth: 'ok', list: 'ok' })
   await refreshTab()
@@ -2669,11 +2690,17 @@ async function threadChecks({
       // entirely rather than being replaced by a different one.
       refreshedJson !== null &&
       refreshedJson.includes('"reviewThreads":[]') &&
-      afterRefresh?.note === null,
+      afterRefresh?.note === null &&
+      // The Files view says the same thing, and paints no markers rather than
+      // an absence of them: the rule holds on every surface that reads the key.
+      (filesFromCache.note ?? '').includes('have not been fetched') &&
+      filesFromCache.marked === 0 &&
+      filesFromCache.loose === 0,
     detail: {
       cachedDetailHasKey: !keyAbsent,
       cachedNote: fromCache?.note ?? null,
       cachedThreads: Object.keys(fromCache?.threads ?? {}).length,
+      filesViewFromCache: filesFromCache,
       afterRefreshNote: afterRefresh?.note ?? null,
       afterRefreshHasEmptyArray: refreshedJson?.includes('"reviewThreads":[]') ?? false
     },
@@ -2796,6 +2823,134 @@ async function threadChecks({
       'other caption on this surface runs on.',
       'The recovery is asserted too. A banner that needed a restart to clear is the failure',
       'PR-20 exists for, one level down.'
+    ]
+  })
+
+  // -----------------------------------------------------------------------
+  // PR-30: the Files view puts each thread on its row, and loses none
+  //
+  // The join is `anchorThreadsToFile`, and its unit tests cover the matching.
+  // What they cannot cover is whether the pane put the marker on the row the
+  // reader is looking at - the head-side gutter number - which is the whole
+  // point of the feature and is a claim about the DOM.
+  //
+  // The fixture already discriminates, and by luck rather than design, so it is
+  // asserted rather than assumed:
+  //   thread 1  remote.ts:14   a head line the patch has     -> on the row
+  //   thread 2  parse.ts:33    another one, and resolved     -> on the row
+  //   thread 3  README.md      line null, originalLine 88    -> nowhere to sit
+  // The third is the one worth having. 88 is not in README's `@@ -0,0 +1,3 @@`,
+  // so it is the case where the two fetches disagree, and it must still be on
+  // screen with a reason rather than dropped.
+  // -----------------------------------------------------------------------
+
+  await click(win, '[data-pr-view="files"]')
+  await pollJs(win, `document.querySelector('[data-pr-files-list]')`, 15_000)
+  await sleep(700)
+
+  const inFiles = await js<{
+    /** thread id -> the head line of the row it was painted under. */
+    onLine: Record<string, number | null>
+    /** thread id -> the reason it was painted at the foot of a file. */
+    loose: Record<string, string>
+    /** Rows carrying the accent marker, as `path:line`. */
+    marked: string[]
+    footer: string | null
+  }>(
+    win,
+    `(() => {
+       const onLine = {}
+       const loose = {}
+       const marked = []
+       for (const card of document.querySelectorAll('[data-pr-file]')) {
+         const path = card.getAttribute('data-pr-file') ?? ''
+         for (const block of card.querySelectorAll('[data-pr-line-thread-block]')) {
+           const at = block.getAttribute('data-pr-line-thread-block')
+           const line = at === null || at === '' ? null : Number(at)
+           if (line !== null) marked.push(path + ':' + String(line))
+           for (const el of block.querySelectorAll('[data-pr-thread]')) {
+             onLine[el.getAttribute('data-pr-thread') ?? ''] = line
+           }
+         }
+         for (const held of card.querySelectorAll('[data-pr-loose-thread]')) {
+           const why = held.getAttribute('data-pr-loose-thread') ?? ''
+           for (const el of held.querySelectorAll('[data-pr-thread]')) {
+             loose[el.getAttribute('data-pr-thread') ?? ''] = why
+           }
+         }
+       }
+       return {
+         onLine,
+         loose,
+         marked,
+         footer: document.querySelector('[data-pr-files-threads-note]')?.textContent ?? null
+       }
+     })()`
+  )
+  const filesShot = await screenshot(win, shotDir, 'pr-files-threads.png')
+
+  const fixture = readThreads()
+  // The fixture must contain all three shapes, or every claim below is
+  // satisfied by having measured nothing - PROF-4's failure, which this file
+  // already guards against once and guards against again here because these
+  // three are a different property of it than PR-25's three.
+  const readmeThread = fixture.find((t) => t.path === 'README.md')
+  const fixtureDiscriminatesHere =
+    fixture.length >= 3 &&
+    fixture.some((t) => t.line !== null && t.path.endsWith('remote.ts')) &&
+    fixture.some((t) => t.line !== null && t.path.endsWith('parse.ts')) &&
+    // The unanchorable one: a line the patch for its file does not contain.
+    readmeThread !== undefined &&
+    readmeThread.line === null &&
+    readmeThread.originalLine !== null &&
+    readmeThread.originalLine > 3
+
+  const anchored = fixture.filter((t) => t.path !== 'README.md')
+  const everyThreadIsSomewhere = fixture.every(
+    (t) => t.id in inFiles.onLine || t.id in inFiles.loose
+  )
+
+  checks.push({
+    id: 'PR-30',
+    criterion:
+      'A comment left on a line of the diff is shown on that line in the Files view, and one that cannot be placed is still shown',
+    title: `${String(Object.keys(inFiles.onLine).length)} threads on their rows, ${String(Object.keys(inFiles.loose).length)} at the foot of a file`,
+    ok:
+      fixtureDiscriminatesHere &&
+      // Each anchored thread on the head line GitHub named, and not near it.
+      anchored.every((t) => inFiles.onLine[t.id] === t.line) &&
+      // The outdated one has nowhere to sit and is kept anyway, with the reason.
+      inFiles.loose[readmeThread?.id ?? ''] === 'outside-the-patch' &&
+      !(readmeThread?.id !== undefined && readmeThread.id in inFiles.onLine) &&
+      // And nothing vanished between the two.
+      everyThreadIsSomewhere,
+    detail: {
+      onLine: inFiles.onLine,
+      loose: inFiles.loose,
+      markedRows: inFiles.marked,
+      expected: fixture.map((t) => ({
+        id: t.id,
+        path: t.path,
+        line: t.line,
+        originalLine: t.originalLine
+      })),
+      fixtureDiscriminatesHere,
+      screenshot: filesShot.file
+    },
+    notes: [
+      'The line asserted is the **head-side** one, which is the number in the right-hand',
+      'gutter - the same figure the reader is looking at. A join that matched on a hunk offset',
+      'could put a marker two rows out and still report a thread per file.',
+      'The unanchorable thread is the one worth having in the fixture. Its line is 88 and its',
+      "file's patch is three lines long, which is the ordinary fate of a remark about a line",
+      'somebody has since rewritten - GitHub already flags it `outdated`. Dropping it would be',
+      'the bug the thread fetch was written to fix, reintroduced in a second surface, so it is',
+      'painted at the foot of its file with the reason instead.',
+      'Anchoring to the nearest surviving hunk was the other option and is deliberately not',
+      'what happens: it is a guess with the appearance of precision, and nothing on the row',
+      'would tell the reader which markers were guesses.',
+      'The threads are still in Conversation, unchanged - PR-25 measures that and is not',
+      'relaxed by this. The Files view is a second way in, not a move.'
     ]
   })
 

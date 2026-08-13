@@ -4,7 +4,17 @@ import { execFileSync } from 'node:child_process'
 import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readSettings, type AppSettings } from '@helm/core'
-import { screenshot, sendKey, sendMouse, sleep, typeText } from './bridge'
+import {
+  drag,
+  readPointerTrace,
+  screenshot,
+  sendKey,
+  sendMouse,
+  sleep,
+  tracePointer,
+  typeText,
+  type PointerTrace
+} from './bridge'
 import type { Check } from './fidelity'
 import type { CheckContext } from './sessionscheck'
 import { answerPicker } from './packagingcheck'
@@ -89,6 +99,9 @@ const DEFAULT_TERMINAL = {
  */
 const SHELL_HEIGHT_BOUNDS = { min: 10, max: 50, default: 30 } as const
 const SHELL_MIN_PX = 180
+
+/** The session split's bounds, written out for the reason above. */
+const SPLIT_BOUNDS = { min: 20, max: 80, default: 45 } as const
 
 /**
  * The shells this driver goes looking for itself, and the arguments it expects
@@ -744,60 +757,6 @@ const disarmSettingsCounter = (win: BrowserWindow): Promise<void> =>
     `(() => { if (window.__settingsWrites) { window.__settingsWrites.off(); delete window.__settingsWrites } })()`
   )
 
-/**
- * What the handle actually received, counted on `document`.
- *
- * Without this a drag that moves nothing is one failure with two very
- * different causes: the app ignored the gesture, or the gesture never arrived.
- * The listeners go on `document` in the bubble phase, which is after React's
- * own handler at the root, so `hasPointerCapture` here is what the app left it
- * as rather than what it found.
- */
-interface PointerTrace {
-  down: number
-  move: number
-  up: number
-  /** Whether the handle held the capture, sampled on the last move. */
-  captured: boolean | null
-  /** `buttons` on the last move - 0 is a hover, 1 is a drag. */
-  buttons: number | null
-}
-
-const tracePointer = (win: BrowserWindow, selector: string): Promise<void> =>
-  js<void>(
-    win,
-    `(() => {
-      if (window.__pointerTrace) window.__pointerTrace.off()
-      const el = document.querySelector(${JSON.stringify(selector)})
-      const t = { down: 0, move: 0, up: 0, captured: null, buttons: null, off: () => undefined }
-      const on = (type, key) => {
-        const fn = (e) => {
-          t[key]++
-          if (type === 'pointermove' && el) {
-            t.captured = el.hasPointerCapture(e.pointerId)
-            t.buttons = e.buttons
-          }
-        }
-        document.addEventListener(type, fn)
-        return () => { document.removeEventListener(type, fn) }
-      }
-      const offs = [on('pointerdown', 'down'), on('pointermove', 'move'), on('pointerup', 'up')]
-      t.off = () => { for (const o of offs) o() }
-      window.__pointerTrace = t
-      return undefined
-    })()`
-  )
-
-const readPointerTrace = (win: BrowserWindow): Promise<PointerTrace> =>
-  js<PointerTrace>(
-    win,
-    `(() => { const t = window.__pointerTrace
-      const answer = { down: t.down, move: t.move, up: t.up, captured: t.captured, buttons: t.buttons }
-      t.off()
-      delete window.__pointerTrace
-      return answer })()`
-  )
-
 /** Opens the settings pane if it is not already the pane on screen. */
 async function openSettings(win: BrowserWindow): Promise<boolean> {
   if (await exists(win, '[data-settings-pane]')) return true
@@ -1000,6 +959,58 @@ export async function runSettingsChecks(
   await sleep(800)
 
   // -------------------------------------------------------------------------
+  // S-0: this check started from the app's own defaults, not the developer's
+  // -------------------------------------------------------------------------
+  //
+  // Ungated by `--only=`, because every group below is standing on it.
+  //
+  // The seed strips `workspaceTabs` and `windowBounds` from a check's copy of
+  // the database (scripts/isolate.mjs). Before it did, this driver started with
+  // whatever the developer had left open and however big they had left the
+  // window - eight panes and 1757x946 on the machine where that was found -
+  // and two probes failed for that reason alone while being right about the
+  // app. A check that fails for a reason unrelated to what it measures gets
+  // waved past, and then so does the day it fails for a real one.
+  //
+  // This exists so that if the strip ever comes back, **one** probe goes red
+  // and names the cause, instead of S-1 and S-10 going red and looking like
+  // bugs in Ctrl+Tab and in terminal attachment.
+  {
+    const bounds = win.getBounds()
+    const stripAtStart = await js<string[]>(
+      win,
+      `[...document.querySelectorAll('[role="tab"][data-tab]')].map((t) => t.dataset.tab ?? '')`
+    )
+    checks.push({
+      id: 'S-0',
+      criterion: 'A check starts from the app’s defaults, not from where the developer left it',
+      title: 'No workspace tabs and no saved window bounds came through in the seeded database',
+      ok:
+        asFound.workspaceTabs === null &&
+        asFound.windowBounds === null &&
+        stripAtStart.length === 0 &&
+        bounds.width === 1280 &&
+        bounds.height === 820,
+      detail: {
+        workspaceTabsRow: asFound.workspaceTabs,
+        windowBoundsRow: asFound.windowBounds,
+        tabsOnScreenAtStart: stripAtStart,
+        window: { width: bounds.width, height: bounds.height },
+        expectedWindow: { width: 1280, height: 820 }
+      },
+      notes: [
+        'Both rows are read from the settings this process actually loaded, and',
+        'the strip is read off the screen - the row being absent and no tab',
+        'being painted are two different claims and both are made.',
+        '1280x820 is `createWindow`’s default and the width designshot.ts',
+        'computes a pane’s worth from. It was photographing 1757 wide.',
+        '`firstRunCompletedAt` is deliberately still carried through: clearing',
+        'it would start every check in the first-run pane.'
+      ]
+    })
+  }
+
+  // -------------------------------------------------------------------------
   // S-1: the gear opens it, every group renders, Ctrl+Tab reaches it
   // -------------------------------------------------------------------------
   if (run('pane')) {
@@ -1059,37 +1070,104 @@ export async function runSettingsChecks(
 
     const shot = await screenshot(win, shotDir, 'settings-1-pane.png')
 
-    // A second workspace tab, so the ring has something to cycle between.
+    // Two more workspace tabs, so the ring is three long and a cycle through it
+    // is a claim about cycling.
+    //
+    // The driver builds the ring rather than inheriting one. Until the seed
+    // learned to strip `workspaceTabs` (scripts/isolate.mjs) this phase started
+    // with whatever panes the developer had left open - eight of them on the
+    // machine where that was found - and the assertion below was one press of
+    // Ctrl+Tab expecting to arrive back at Settings. That only ever held for a
+    // ring of exactly two, so it failed on a populated strip while being
+    // perfectly true about the app.
+    //
+    // Three, not two, because a two-ring cannot tell these apart: cycling
+    // forward, cycling backward, and toggling between the last two tabs. All
+    // three land on Settings from History and only one of them is what the
+    // handler claims to do.
     await click(win, '[data-open-history]')
     const historyUp = await pollJs(
       win,
       `document.querySelector('[role="tab"][data-tab="history"][aria-selected="true"]')`,
       10_000
     )
-    // Ctrl+Tab is bound on the window in capture, so this is the real keystroke
-    // rather than a click on a tab.
-    await sendKey(win, 'Tab', ['control'])
-    const cycledBack = await pollJs(
+    await click(win, '[data-open-pulls]')
+    const pullsUp = await pollJs(
       win,
-      `document.querySelector('[role="tab"][data-tab="settings"][aria-selected="true"]')`,
-      5_000
+      `document.querySelector('[role="tab"][data-tab="pulls"][aria-selected="true"]')`,
+      10_000
     )
+
+    /**
+     * The ring, read off the strips rather than assumed.
+     *
+     * The handler cycles the workspace strip and then the session strip, so a
+     * session open during this phase would be part of the ring. There is none -
+     * sessions belong to the `terminal` group - and that is asserted rather than
+     * relied on, because a phase that silently grew a session would otherwise
+     * turn this into a cycle over a different ring and still report a number.
+     */
+    const strips = await js<{ workspace: string[]; sessions: string[] }>(
+      win,
+      `(() => {
+         const ids = [...document.querySelectorAll('[role="tab"][data-tab]')]
+           .map((t) => t.dataset.tab ?? '')
+         return {
+           workspace: ids.filter((id) => !id.startsWith('session:')),
+           sessions: ids.filter((id) => id.startsWith('session:'))
+         }
+       })()`
+    )
+
+    // Back to Settings, so the cycle starts somewhere known.
+    await click(win, '[role="tab"][data-tab="settings"]')
+    await sleep(300)
+
+    // Ctrl+Tab is sent as a real keystroke through Chromium, not simulated by
+    // clicking the tab: the handler is bound in capture on the window.
+    const visited: string[] = []
+    for (let i = 0; i < strips.workspace.length; i++) {
+      await sendKey(win, 'Tab', ['control'])
+      await sleep(250)
+      visited.push(
+        await js<string>(
+          win,
+          `document.querySelector('[role="tab"][aria-selected="true"]')?.dataset.tab ?? ''`
+        )
+      )
+    }
+
+    // One full lap: every tab once, in strip order, ending where it started.
+    const expectedRing = ['settings', 'history', 'pulls']
+    const expectedLap = ['history', 'pulls', 'settings']
+    const ringAsBuilt = strips.workspace.join(',') === expectedRing.join(',')
+    const cycledWholeRing = visited.join(',') === expectedLap.join(',')
+    const noSessionsInRing = strips.sessions.length === 0
     const paneAfterCycle = await exists(win, '[data-settings-pane]')
 
     checks.push({
       id: 'S-1',
       criterion: 'Gear in the title bar opens the Settings tab; every group renders',
-      title: 'The gear opens a Settings pane with all six groups, and Ctrl+Tab cycles to it',
+      title:
+        'The gear opens a Settings pane with every group, and Ctrl+Tab walks the whole tab ring back to it',
       ok:
         gearThere &&
         !paneBefore &&
         opened &&
         tabSelected === 'true' &&
-        groups.join(',') === 'claude,workspace,appearance,updates,terminal,github' &&
+        // Every group, in order. The list is spelled out rather than counted so
+        // that a group added, removed or reordered all fail here - `archive`
+        // arrived with the transcript archive and this went stale, which nobody
+        // saw because the probe was already red for the inherited tab strip.
+        groups.join(',') ===
+          'claude,workspace,appearance,updates,terminal,archive,github' &&
         Object.values(controls).every(Boolean) &&
         !internalLeaked &&
         historyUp &&
-        cycledBack &&
+        pullsUp &&
+        noSessionsInRing &&
+        ringAsBuilt &&
+        cycledWholeRing &&
         paneAfterCycle,
       detail: {
         gearInTitleBar: gearThere,
@@ -1099,7 +1177,14 @@ export async function runSettingsChecks(
         controlsPresent: controls,
         internalKeysOnScreen: internalLeaked,
         secondTabOpened: historyUp,
-        ctrlTabReturnedToSettings: cycledBack,
+        thirdTabOpened: pullsUp,
+        // The strip as built, so a failure says what the ring was rather than
+        // only that a press landed somewhere unexpected. That is the line that
+        // would have identified the inherited-tabs bug on sight.
+        ringAsBuilt: strips.workspace,
+        sessionsInRing: strips.sessions,
+        ctrlTabVisitedInOrder: visited,
+        ctrlTabExpected: expectedLap,
         screenshot: shot.file
       },
       notes: [
@@ -1107,6 +1192,12 @@ export async function runSettingsChecks(
         'absence beforehand is what makes the click evidence of anything.',
         'Ctrl+Tab is sent as a real keystroke through Chromium, not simulated by',
         'clicking the tab: the handler is bound in capture on the window.',
+        'One full lap of a three-tab ring, asserted tab by tab. A two-tab ring',
+        'cannot distinguish forward, backward and toggle - all three would pass.',
+        'The strip is built by this phase and starts empty, because the seed',
+        'strips `workspaceTabs` from a check’s copy of the database. A driver',
+        'that inherits the developer’s panes measures a different ring on every',
+        'machine - see scripts/isolate.mjs.',
         '`windowBounds` and `firstRunCompletedAt` are state rather than',
         'preferences, and the pane is checked for not having grown a row for them.'
       ]
@@ -2439,6 +2530,15 @@ export async function runSettingsChecks(
         why: 'the project pane may not be given less than half of its own page'
       },
       {
+        key: 'sessionSplitPct',
+        good: 60,
+        // Either bound would do here - neither side of this divider is the
+        // subordinate one - so the floor, which is the one a drag reaches by
+        // pushing the sessions column shut.
+        bad: 19,
+        why: 'below the floor the divider itself enforces'
+      },
+      {
         key: 'transcriptArchiveMaxBytes',
         good: 512 * 1024 * 1024,
         // Not "too small" - the floor is deliberately a kilobyte so a check can
@@ -3688,6 +3788,135 @@ export async function runSettingsChecks(
         ]
       })
 
+      // -----------------------------------------------------------------
+      // S-21: the session split is remembered, and remembered as a layout
+      // -----------------------------------------------------------------
+      //
+      // The half of this that S-9 cannot make. S-9 reads the parked number back
+      // after a restart, which proves the row survived; it says nothing about
+      // whether anything is laid out from it. A percentage that persists
+      // perfectly and moves no boundary is the bug this setting exists to fix,
+      // wearing the shape of a passing check.
+      //
+      // So the claim here is about **the measured column**: write a percentage,
+      // and the sessions pane is that percentage of the row. Then drag, and the
+      // row holds what the pane ended at - one write for the gesture, which is
+      // the other thing a percentage per `mousemove` would pass.
+      {
+        const DIVIDER = '[role="separator"][aria-orientation="vertical"]'
+        const splitGeometry = `(() => {
+          const sep = document.querySelector(${JSON.stringify(DIVIDER)})
+          const row = sep?.parentElement
+          const col = sep?.nextElementSibling
+          if (!sep || !row || !col) return null
+          const r = row.getBoundingClientRect()
+          const c = col.getBoundingClientRect()
+          const s = sep.getBoundingClientRect()
+          return {
+            rowWidth: r.width,
+            rowLeft: r.left,
+            columnWidth: c.width,
+            pct: (c.width / r.width) * 100,
+            gripX: s.left + s.width / 2,
+            gripY: s.top + s.height / 2
+          }
+        })()`
+        type SplitGeometry = {
+          rowWidth: number
+          rowLeft: number
+          columnWidth: number
+          pct: number
+          gripX: number
+          gripY: number
+        }
+
+        const laidOut: Array<{ wrote: number; measured: number | null }> = []
+        // Two, and neither is the default: one value could be the number the
+        // app already had.
+        for (const pct of [SPLIT_BOUNDS.min, 70]) {
+          await sendWrite(win, { sessionSplitPct: pct })
+          await sleep(700)
+          const at = await js<SplitGeometry | null>(win, splitGeometry).catch(() => null)
+          laidOut.push({ wrote: pct, measured: at === null ? null : at.pct })
+        }
+
+        const beforeDrag = await js<SplitGeometry | null>(win, splitGeometry).catch(() => null)
+        let afterDrag: SplitGeometry | null = null
+        let dragWrites = { n: 0, values: [] as number[] }
+        let dragPointer: PointerTrace | null = null
+        if (beforeDrag !== null) {
+          await armSettingsCounter(win)
+          await tracePointer(win, DIVIDER)
+          // Toward the left, which widens the sessions column. Six moves, so
+          // "one write" is a claim about a gesture that had frames to write on.
+          await drag(
+            win,
+            { x: beforeDrag.gripX, y: beforeDrag.gripY },
+            { x: beforeDrag.gripX - Math.round(beforeDrag.rowWidth * 0.1), y: beforeDrag.gripY },
+            { steps: 6 }
+          )
+          await sleep(900)
+          afterDrag = await js<SplitGeometry | null>(win, splitGeometry).catch(() => null)
+          dragWrites = await readSettingsCounter(win)
+          dragPointer = await readPointerTrace(win)
+        }
+
+        const rowAfterDrag = rowValue(dbFile, 'sessionSplitPct')
+        // The row names the pane's own measured share, to the percentage point
+        // the setting is stored in.
+        const rowMatchesPane =
+          afterDrag !== null &&
+          typeof rowAfterDrag === 'number' &&
+          Math.abs(rowAfterDrag - afterDrag.pct) <= 1
+        const followedTheSetting = laidOut.every(
+          (l) => l.measured !== null && Math.abs(l.measured - l.wrote) <= 1
+        )
+        const gestureArrivedHere =
+          dragPointer !== null &&
+          dragPointer.down === 1 &&
+          dragPointer.move >= 6 &&
+          dragPointer.up === 1 &&
+          dragPointer.buttons === 1
+
+        checks.push({
+          id: 'S-21',
+          criterion: 'The session split is remembered, and the pane is laid out from it',
+          title:
+            'A written percentage becomes the sessions pane’s measured share, and a drag writes the row exactly once',
+          ok:
+            followedTheSetting &&
+            gestureArrivedHere &&
+            rowMatchesPane &&
+            dragWrites.n === 1 &&
+            beforeDrag !== null &&
+            afterDrag !== null &&
+            afterDrag.columnWidth > beforeDrag.columnWidth,
+          detail: {
+            bounds: SPLIT_BOUNDS,
+            laidOut,
+            beforeDrag,
+            afterDrag,
+            writesDuringDrag: dragWrites,
+            pointer: dragPointer,
+            rowAfterDrag
+          },
+          notes: [
+            'The pane is measured, never the number. A setting that round-trips',
+            'and lays nothing out is what this is here to catch, and S-9 - which',
+            'reads the same key back after a restart - cannot see the difference.',
+            'Two written values, neither of them the default, because one could',
+            'be the number the app already had on screen.',
+            'One write per drag, over six moves: zero is a divider nothing is',
+            'listening to, and one per move is a database round trip per frame,',
+            'each coming back as a `settings:changed` into the middle of the',
+            'gesture.',
+            '`pointer.buttons` has to read 1. Sent without `leftbuttondown` the',
+            'moves arrive as hovers, and this divider answered those for as long',
+            'as it existed - see `drag()` in main/bridge.ts.'
+          ]
+        })
+      }
+
       // Put the pane back the way a person left it, so the run does not end
       // with a maximised workspace and two fixture shells running.
       await click(win, '[data-maximize="workspace"]')
@@ -4009,6 +4238,9 @@ export async function runSettingsChecks(
     // A shell at half the page is a state no default and no fresh database
     // produces, so finding it after a restart is evidence.
     projectShellHeightPct: SHELL_HEIGHT_BOUNDS.max,
+    // The other pane proportion, parked at its ceiling for the same reason and
+    // deliberately not at a round number a default could plausibly become.
+    sessionSplitPct: SPLIT_BOUNDS.max,
     // The real gh rather than the fixture, for the reason `claudePath` uses the
     // real claude: a restore that somehow does not happen must leave the app
     // pointed at a working program, not at a stub that refuses to sign in.

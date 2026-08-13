@@ -30,6 +30,9 @@
 // the copy - one consistent snapshot through a read-only connection, which is
 // the only safe way to read a SQLite file another process has open in WAL mode.
 // Copying the three files by hand can catch a write in flight.
+//
+// What the copy does **not** carry is where the developer left the app - see
+// `UI_STATE_KEYS`. That distinction cost three probes before anyone drew it.
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
@@ -43,6 +46,39 @@ const electronBinary = createRequire(import.meta.url)('electron')
 export function realDataDir() {
   return join(process.env.APPDATA ?? process.env.HOME ?? '.', 'Helm')
 }
+
+/**
+ * The `app_settings` rows that say **where the developer left the app**, as
+ * opposed to what is true of the machine. Stripped from a check's copy.
+ *
+ * The seed exists so a check sees the machine's real projects, roots and
+ * history. These two are not that. They are one person's last session, and a
+ * driver that starts the app is the thing that decides what is open and how big
+ * the window is - inheriting either means the check measures a different app on
+ * every machine, and on the same machine on different days.
+ *
+ * It is not hypothetical, and the shape of the damage is worth keeping:
+ *
+ * - **`workspaceTabs`** carried eight panes into every check on the machine
+ *   this was found on, six of them project shells that each spawn a terminal.
+ *   `S-1` cycles Ctrl+Tab expecting to land back where it started and found a
+ *   ten-tab ring; `S-10` asserted "every terminal is attached" while counting
+ *   terminals it never started. Both are right about the app and were failing
+ *   about the strip.
+ * - **`windowBounds`** is the same bug one layer out and had not been noticed
+ *   at all. `designshot.ts` says "1280 is the default" and computes what a pane
+ *   is worth at that width; the window it was actually photographing was 1757
+ *   wide, because that is where the developer left it.
+ *
+ * Both now start from the app's own defaults - an empty strip, 1280x820 - on
+ * every machine, which is what those comments already claimed.
+ *
+ * **`firstRunCompletedAt` is deliberately not here.** It is the same *kind* of
+ * row, and clearing it would put every check into the first-run setup pane
+ * instead of the app. "Internal state" is not the rule; "where the developer
+ * left the app" is, and completing first-run is not somewhere anybody left it.
+ */
+export const UI_STATE_KEYS = ['workspaceTabs', 'windowBounds']
 
 /**
  * Where `name`'s run keeps its data.
@@ -76,8 +112,17 @@ export function isolatedRoot(name, group = 'checks') {
  *
  * `group` is the subdirectory of `%LOCALAPPDATA%\Helm` this lands under; see
  * `isolatedRoot`.
+ *
+ * `keepUiState` carries `UI_STATE_KEYS` through into the copy. It defaults off
+ * for a check and on for `pnpm dev`, and `group` is what tells them apart
+ * because that is already the difference: `group === null` is an app somebody
+ * sits in front of, where restoring the tabs and the window is the feature.
+ * A check is a driver, and a driver decides for itself what is open.
  */
-export function isolate(name, { seed = true, concurrent = false, group = 'checks' } = {}) {
+export function isolate(
+  name,
+  { seed = true, concurrent = false, group = 'checks', keepUiState = group === null } = {}
+) {
   const limit = concurrent ? 8 : 1
   for (let attempt = 0; attempt < limit; attempt++) {
     const dirName = attempt === 0 ? name : `${name}-${String(attempt + 1)}`
@@ -90,7 +135,7 @@ export function isolate(name, { seed = true, concurrent = false, group = 'checks
     // same thing on the second run as on the first, and a directory that has
     // been used before already has one - so leaving it alone would quietly turn
     // the first-run mode into the ordinary one after a single use.
-    const prepared = seed ? seedDatabase(dataDir) : clearDatabase(dataDir)
+    const prepared = seed ? seedDatabase(dataDir, { keepUiState }) : clearDatabase(dataDir)
     if (prepared !== 'busy') return { root, dataDir, env }
     if (attempt + 1 < limit) console.log(`(${dirName} is in use; trying the next one)`)
   }
@@ -140,7 +185,7 @@ export function clearDatabase(dataDir) {
  * machine has no real database to copy, which is not a failure: the isolated
  * one then starts empty.
  */
-export function seedDatabase(dataDir) {
+export function seedDatabase(dataDir, { keepUiState = false } = {}) {
   const source = join(realDataDir(), 'helm.db')
   const dest = join(dataDir, 'helm.db')
   if (!existsSync(source)) {
@@ -153,16 +198,44 @@ export function seedDatabase(dataDir) {
   // for Electron's ABI and will not load under a plain one. The destination is
   // bound as a parameter rather than pasted into the SQL: a path is not a
   // string literal, and this one contains backslashes.
+  //
+  // Then, unless the caller wants them, the rows naming where the developer
+  // left the app go - see `UI_STATE_KEYS`. On the copy, never the source, which
+  // this connection could not write to anyway.
+  //
+  // The delete is followed by a **read back**, and a surviving row stops the
+  // run. Deleting nothing is the ordinary case on a machine where the app has
+  // never been opened, so a zero count proves nothing either way; what has to
+  // be true afterwards is that the rows are not there. A renamed key or a table
+  // that moved would otherwise put the old behaviour back silently, and a check
+  // quietly reverting to inheriting somebody's tabs is precisely the failure
+  // this is here to end.
   const script = [
     "const Database = require('better-sqlite3')",
     "const db = new Database(process.argv[1], { readonly: true, fileMustExist: true })",
     "db.prepare('VACUUM INTO ?').run(process.argv[2])",
-    'db.close()'
+    'db.close()',
+    'const strip = JSON.parse(process.argv[3])',
+    'if (strip.length > 0) {',
+    '  const copy = new Database(process.argv[2], { fileMustExist: true })',
+    "  const holes = strip.map(() => '?').join(',')",
+    '  copy.prepare(`DELETE FROM app_settings WHERE key IN (${holes})`).run(...strip)',
+    '  const left = copy',
+    '    .prepare(`SELECT key FROM app_settings WHERE key IN (${holes})`)',
+    '    .all(...strip)',
+    '    .map((row) => row.key)',
+    '  copy.close()',
+    '  if (left.length > 0) throw new Error(`still in the copy after the strip: ${left.join(", ")}`)',
+    '}'
   ].join('\n')
-  const { status, stderr } = spawnSync(electronBinary, ['-e', script, source, dest], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-    encoding: 'utf8'
-  })
+  const { status, stderr } = spawnSync(
+    electronBinary,
+    ['-e', script, source, dest, JSON.stringify(keepUiState ? [] : UI_STATE_KEYS)],
+    {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      encoding: 'utf8'
+    }
+  )
   if (status !== 0) {
     console.error(`could not copy ${source} into ${dest}:\n${stderr ?? ''}`)
     console.error('an isolated run would otherwise start against an empty database - stopping')

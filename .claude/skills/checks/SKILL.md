@@ -102,6 +102,24 @@ claim the process that set it can make: the session itself does not survive
 either - `before-quit` ends it - so what phase two goes looking for is the
 `sessions.label` row, read by a process that never saw the rename happen.
 
+SESS-15 is the workspace divider, and the first thing in Helm's history to
+drag it. Copy its shape for any gesture. It uses `drag()` so the button is held
+- written out as bare `sendMouse` calls the moves arrive as `buttons: 0`, which
+is a hover, and this divider answered those for as long as it existed - and it
+makes three claims rather than one: the gesture *arrived* (`tracePointer`, so
+"ignored" and "never delivered" are different red lines), the pane ended where
+the pointer left it, and the pane **tracked the pointer mid-gesture**, sampled
+between moves with the frame loop allowed to run. That third one is the one to
+copy. A fix for this divider was written and reverted whose end state was
+perfectly correct and whose middle lagged, moved the wrong edge and snapped on
+release; every assertion about the finished state passed it.
+
+It also opens the session history behind the split and asserts that dragging
+mutates **nothing** in that pane. The boundary is a `--split` custom property
+nothing in the render tree reads, so moving it reconciles no rows; the row
+count is asserted too, because on a machine with six sessions "no mutations" is
+also what reconciling six of them reports.
+
 **`profiles-check`** - profiles and overlay composition. Builds a profile through the
 real form, launches it, and asks the live session whether the overlays' skills
 and instructions actually arrived. **Four phases**, orchestrated by
@@ -153,9 +171,34 @@ up because nothing of the user's is opened. And **the audit is made to fail
 first**: a file carrying a Windows profile path, a harness path and a private
 project name is planted, caught, and deleted before its clean result is
 believed, because a grep that finds nothing is indistinguishable from a grep
-looking for nothing. Phase 3 installs the NSIS package for real and uninstalls
-it. `--sandbox=` puts the throwaway profile somewhere with no account name in
-the path, which is how the README's screenshots were taken.
+looking for nothing. `--sandbox=` puts the throwaway profile somewhere with no
+account name in the path, which is how the README's screenshots were taken.
+
+**Phase 3 is destructive to the app you are using, and it is the one check that
+cannot be isolated.** It installs the NSIS package to the real
+`%LOCALAPPDATA%\Programs\Helm`, runs it, and **uninstalls it, putting nothing
+back** - because it is *about* where an installer puts things, so an isolated
+data directory would erase what it measures. Never put it in a sweep of "every
+check". Run it deliberately, on a machine where nobody is working, or narrow
+with `--only=audit,cli,firstrun` which skips it entirely.
+
+It has now cost a session. Run inside a blanket sweep, it uninstalled a Helm
+somebody was working in - and Helm **hosts Claude Code**, so that ended the work
+in it, and the app had to be reinstalled by hand. Two things came out of that:
+
+- The phase now **refuses** when Helm is running from the install directory,
+  rather than terminating it. `--replace-running` is how a release build says it
+  meant to.
+- The termination it did instead of refusing had never worked. `endInstalledApp`
+  built its PowerShell with `JSON.stringify(path)`, which doubles every
+  backslash - and PowerShell's escape character is the backtick, not the
+  backslash, so `StartsWith("C:\\Users\\…")` was false for every process on the
+  machine. It matched nothing, killed nothing, and its "wait until it is gone"
+  loop passed instantly *because* it was looking at nothing. Measured on one
+  machine with the app plainly open: the JSON form counts 0, a PowerShell
+  single-quoted literal counts 4. `psLiteral` is now the only way a path reaches
+  a PowerShell command in that file. A destructive step that silently no-ops and
+  reports success is the `PROF-4` shape with worse consequences.
 
 **`usage-check`** - the status bar's figures. A plain `JSON.parse` beside
 `parseUsage`, a hand-written "which of these may be shown" beside `usageView`, a
@@ -273,6 +316,17 @@ and a disabled control does not read `pointer`, since `* { cursor: pointer }`
 would pass AFF-3 and is the same lie pointing the other way. No sessions, no
 network, about a minute and a half.
 
+AFF-4 also asserts *where* the change lands. A control answering only on a
+sibling or its parent is allowed, but only if it is a tab: the active tab is
+drawn continuous with the pane below it, so its own fill is pinned and what
+moves is its close button. Anything else answering that way fails, and that
+tightening is not decoration - the same shape had been sitting in five list-row
+components, where an `active ? … : 'hover:…'` ternary drops the hover recipe in
+the selected branch and nothing redraws to cover it. AFF-7 is the narrow probe
+for it: it opens a project, finds the sidebar row that is now `aria-current`,
+and requires the row's **own** fill to change. `near` would pass that row for
+the wrong reason, because its pin star fades in beside it.
+
 AFF-6 is the one claim here about something that is *not* clickable. A drag
 handle takes a resize cursor, so making it pass AFF-3 would mean putting a
 wrong cursor on it to satisfy this file - but leaving it out and stopping there
@@ -339,6 +393,33 @@ against the machine's actual projects, roots and history, which is what makes
 them worth running, while never writing to the file the user's Helm is using.
 This is why `run-settings.mjs` can go on parking settings and restoring them:
 what it parks is the copy.
+
+**What the copy does not carry is where the developer left the app.**
+`workspaceTabs` and `windowBounds` are stripped from it - the list is
+`UI_STATE_KEYS` in `scripts/isolate.mjs` - so every check starts with an empty
+tab strip and a 1280x820 window on every machine. Everything else comes across,
+`firstRunCompletedAt` very much included: clearing that would start each run in
+the first-run pane.
+
+Draw that line before writing a driver, because the failure it prevents is the
+expensive kind. `workspaceTabs` persistence landed and three probes began
+failing on one developer's machine and passing everywhere else - S-1's Ctrl+Tab
+ring was ten tabs long instead of two, S-10 was counting terminals it never
+started - while both were entirely right about the app. A check that goes red
+for a reason unrelated to what it measures gets waved past, and so does the day
+it goes red for a real one. It also hid a second, real failure in S-1 for as
+long as it lasted: the settings pane had grown a group and the probe's list had
+gone stale, and nobody could see it behind the first red line.
+
+`windowBounds` went with it and had never been noticed at all - `designshot.ts`
+says "1280 is the default" and sizes a pane from that, while photographing a
+window 1757 wide because that is where somebody had dragged it. `S-0` asserts
+both, ungated by `--only=`, so a regression names itself instead of surfacing
+as a bug in Ctrl+Tab.
+
+A driver that genuinely wants the developer's tabs passes `keepUiState: true`;
+`pnpm dev` does, because it is an app somebody sits in front of rather than a
+driver that decides what is open.
 
 Helm is a desktop app somebody is using while its checks run, and the drivers
 used to point at `%APPDATA%\Helm` directly. Observed once: a run flipped the

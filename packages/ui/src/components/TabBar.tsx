@@ -316,6 +316,19 @@ export function TabBar({
                   // costs the strip no pixels at rest.
                   onDoubleClick={canRename ? () => setEditing(tab.id) : undefined}
                   onKeyDown={(event) => moveWithKeyboard(event, index)}
+                  // The active tab is the one control in the app that answers
+                  // the pointer on a peer instead of on itself, and it is meant
+                  // to. Its fill and text are pinned because it is drawn
+                  // continuous with the pane below - a tone that moved under
+                  // the pointer would break the join that makes it read as the
+                  // front of that pane. What answers is the close button beside
+                  // it, `opacity-60` at rest and full on `group-hover`.
+                  //
+                  // `affordance-check` asserts that exemption by tag rather
+                  // than tolerating it: AFF-4 fails if anything that is *not* a
+                  // tab starts answering this way. Five list-row components had
+                  // grown the same `active ? … : 'hover:…'` shape by accident,
+                  // where nothing redraws to cover it - see `lib/rows.ts`.
                   className={cn(
                     'flex min-w-0 max-w-[240px] items-center gap-1.5 py-0 pl-3 text-[12px]',
                     tab.closable === false ? 'pr-3' : 'pr-1',

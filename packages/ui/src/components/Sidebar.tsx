@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 import type { DiscoveryResult, Harness, Project } from '@helm/core'
 import { isProjectPinned } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { ROW_SELECTED } from '../lib/rows'
 import { baseName, MissingProjectRow, ProjectRow } from './ProjectRow'
 import {
   BookIcon,
@@ -584,7 +585,7 @@ function GlobalLink({
       title={title}
       className={cn(
         'flex w-full items-center gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
-        active ? 'bg-accent-soft' : 'hover:bg-hover'
+        active ? ROW_SELECTED : 'hover:bg-hover'
       )}
       {...rest}
     >

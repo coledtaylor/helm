@@ -138,6 +138,7 @@ describe('settings', () => {
       terminalScrollback: 2500,
       terminalShell: join(dir, 'pwsh.exe'),
       projectShellHeightPct: 42,
+      sessionSplitPct: 62,
       transcriptArchiveMaxBytes: 256 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 15,
@@ -364,6 +365,19 @@ describe('settings validation', () => {
       bad: [9, 51, 0, -30, 100, 30.5, '30', null, Number.NaN, Number.POSITIVE_INFINITY]
     },
     {
+      // The sessions column's share of the window. The bounds are wider than
+      // the shell's because neither side of this divider is the subordinate
+      // one - a workspace squeezed to a fifth is a choice somebody can make,
+      // where a project page that is mostly shell is not.
+      //
+      // The non-finite cases matter here for the same reason: the fraction
+      // becomes a `flex-grow`, and `flex: NaN 1 0%` is dropped by the parser,
+      // which would collapse the column rather than fail.
+      key: 'sessionSplitPct',
+      good: [20, 45, 80],
+      bad: [19, 81, 0, -45, 100, 45.5, '45', null, Number.NaN, Number.POSITIVE_INFINITY]
+    },
+    {
       // A byte count, and null is in the *bad* column deliberately: there is no
       // "no ceiling" for this key. The archive is always on and always bounded,
       // and an unbounded one is the state `helm.db` is not allowed to reach.
@@ -531,6 +545,7 @@ describe('settings validation', () => {
       terminalScrollback: 50_000,
       terminalShell: join(dir, 'cmd.exe'),
       projectShellHeightPct: 45,
+      sessionSplitPct: 70,
       transcriptArchiveMaxBytes: 512 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 0,
@@ -565,6 +580,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   terminalScrollback: 50_000,
   terminalShell: join(dir, 'cmd.exe'),
   projectShellHeightPct: 45,
+  sessionSplitPct: 70,
   transcriptArchiveMaxBytes: 512 * 1024 * 1024,
   ghPath: join(dir, 'gh.exe'),
   prPollMinutes: 0,

@@ -126,6 +126,18 @@ export {
  */
 export { MAX_FILE_LINES } from './github/diff'
 /**
+ * The thread-to-diff-row join, re-exported for the same reason and under the
+ * same guarantee: `diff.ts` is pure and imports nothing but types, so this
+ * reaches the browser bundle without dragging `launch/` or `store/` into it.
+ *
+ * In core rather than in the pane because it is the one part of the Files
+ * view's thread markers that is a *decision* rather than a rendering - what to
+ * do when the patch and the threads, fetched separately, disagree about where a
+ * line is - and a decision belongs where it can be unit-tested.
+ */
+export { anchorThreadsToFile } from './github/diff'
+export type { AnchoredThreads, ThreadLooseReason, ThreadPosition } from './github/diff'
+/**
  * The review prompt's template renderer, re-exported for the same reason again:
  * the detail pane's disclosure sentence names the exact prompt the button will
  * run, so it renders the template itself. The prompt that is actually launched
@@ -631,6 +643,20 @@ export const TERMINAL_SCROLLBACK = { min: 500, max: 200_000, default: 10_000 } a
 export const PROJECT_SHELL_HEIGHT_PCT = { min: 10, max: 50, default: 30 } as const
 
 /**
+ * How much of the window's width the sessions column takes, as a percentage.
+ *
+ * The other axis of the same idea as `PROJECT_SHELL_HEIGHT_PCT`, and the same
+ * bounds the divider has always enforced in its handler - 20% to 80% - now said
+ * once here rather than as two literals inside a `mousemove`.
+ *
+ * The default is 45 because that is the number the split has silently opened at
+ * since it was written, and this key is only being introduced to stop it
+ * forgetting: somebody who never touches the divider must not have the app move
+ * on them the first time they upgrade.
+ */
+export const SESSION_SPLIT_PCT = { min: 20, max: 80, default: 45 } as const
+
+/**
  * How much of `helm.db` the transcript archive may take, in bytes.
  *
  * A gigabyte by default, and both halves of that are deliberate. Unbounded is
@@ -860,6 +886,24 @@ export interface AppSettings {
    * project page's layout.
    */
   projectShellHeightPct: number
+  /**
+   * How wide the sessions column is, as a percentage of the window, when a
+   * workspace pane and a session are both on screen. Bounded by
+   * `SESSION_SPLIT_PCT` and dragged by the divider between them.
+   *
+   * **One value for every project**, the same answer `projectShellHeightPct`
+   * gives and for the same reason: this is "how much terminal do I want beside
+   * my work", which is a fact about the person and the monitor rather than
+   * about a repository. It is also the stronger case of the two - this divider
+   * does not move when you switch tabs, so a per-project value would make the
+   * boundary jump every time somebody changed pane.
+   *
+   * A percentage, not the fraction the renderer holds. The pane's other
+   * remembered size is a percentage, the settings row wants a number a person
+   * can retype, and `0.45` in a database column that its neighbour writes `30`
+   * into is the kind of difference nobody remembers on the day it matters.
+   */
+  sessionSplitPct: number
 
   /**
    * How many bytes of `helm.db` the transcript archive may occupy.
@@ -1017,6 +1061,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalScrollback: TERMINAL_SCROLLBACK.default,
   terminalShell: null,
   projectShellHeightPct: PROJECT_SHELL_HEIGHT_PCT.default,
+  sessionSplitPct: SESSION_SPLIT_PCT.default,
   transcriptArchiveMaxBytes: TRANSCRIPT_ARCHIVE_BYTES.default,
   ghPath: null,
   prPollMinutes: PR_POLL_MINUTES.default,

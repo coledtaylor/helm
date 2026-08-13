@@ -9,6 +9,7 @@ import {
   PR_PROMPT_PLACEHOLDERS,
   PR_REVIEW_PROMPT_MAX_LENGTH,
   PROJECT_SHELL_HEIGHT_PCT,
+  SESSION_SPLIT_PCT,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
@@ -258,6 +259,11 @@ export function pullRepoChoices(
  * project - the shell picker is already here - and a settings pane organised by
  * where a person would look for a thing beats one organised by which module
  * consumes it.
+ *
+ * `sessionSplitPct` is the second of those, and lands here by the same rule
+ * rather than by being any more of a terminal preference than the first. The
+ * two are one question asked about two axes - how much terminal do I want, and
+ * where - and somebody who has come to change one has come to look at both.
  */
 export type TerminalSettings = Pick<
   AppSettings,
@@ -268,6 +274,7 @@ export type TerminalSettings = Pick<
   | 'terminalScrollback'
   | 'terminalShell'
   | 'projectShellHeightPct'
+  | 'sessionSplitPct'
 >
 
 /** What a fact reads when there is nothing to put in it. */
@@ -1568,6 +1575,23 @@ function TerminalGroup({
           label="Project shell height"
           data-settings-shell-height={String(terminal.projectShellHeightPct)}
           onCommit={(projectShellHeightPct) => onChange({ projectShellHeightPct })}
+        />
+      </Row>
+
+      {/* The other axis, and the same argument as the row above it: the divider
+          between the two panes is the control, and this is where the number
+          that divider landed on can be read and retyped. */}
+      <Row
+        label="Session split"
+        hint="Percent of the window the sessions take when a project and a session are both open. Drag the divider between them to change it there."
+      >
+        <NumberField
+          value={terminal.sessionSplitPct}
+          min={SESSION_SPLIT_PCT.min}
+          max={SESSION_SPLIT_PCT.max}
+          label="Session split"
+          data-settings-session-split={String(terminal.sessionSplitPct)}
+          onCommit={(sessionSplitPct) => onChange({ sessionSplitPct })}
         />
       </Row>
 

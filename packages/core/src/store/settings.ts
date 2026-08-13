@@ -10,6 +10,7 @@ import {
   PR_POLL_MINUTES,
   PR_REVIEW_PROMPT_MAX_LENGTH,
   PROJECT_SHELL_HEIGHT_PCT,
+  SESSION_SPLIT_PCT,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
@@ -326,6 +327,20 @@ export const SETTING_VALIDATORS: SettingValidators = {
    * can retype rather than 31.4159.
    */
   projectShellHeightPct: boundedInteger(PROJECT_SHELL_HEIGHT_PCT),
+
+  /**
+   * The sessions column's width, bounded the way the divider already bounded
+   * it. One value for everybody rather than one per project - the argument is
+   * in the field's comment in `types.ts`, and it is the same one
+   * `projectShellHeightPct` makes with one addition: this divider stays put
+   * when you change tabs, so a per-project value would move the boundary every
+   * time somebody did.
+   *
+   * An integer for the same reason its neighbour is one: it is written on
+   * pointerup from a fraction, and a settings row wants 45 rather than
+   * 0.4499999.
+   */
+  sessionSplitPct: boundedInteger(SESSION_SPLIT_PCT),
 
   /**
    * The transcript archive's ceiling, in bytes.

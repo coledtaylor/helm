@@ -1,9 +1,10 @@
 import type { JSX, PointerEvent as ReactPointerEvent } from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_SETTINGS,
   isProjectPinned,
   PROJECT_SHELL_HEIGHT_PCT,
+  SESSION_SPLIT_PCT,
   sessionLabel,
   withProjectPinned,
   withRepoIgnored,
@@ -216,10 +217,20 @@ export function App(): JSX.Element {
   const [requestedSession, setRequestedSession] = useState<number | null>(null)
   /** null = split; one side can take the whole row. */
   const [maximize, setMaximize] = useState<'workspace' | 'sessions' | null>(null)
-  /** Fraction of the row the session pane takes, drag-bounded 0.2-0.8. */
-  const [split, setSplit] = useState(0.45)
+  /**
+   * The split's boundary is a CSS custom property on the row, not state.
+   *
+   * There is no `split` here on purpose. `--split` is written by the drag and
+   * by the effect below and by nothing else - React never mentions it in any
+   * render - so a `mousemove` moves a boundary without reconciling anything,
+   * and an unrelated re-render cannot contradict where the pointer put it. The
+   * argument in full, and the two attempts this replaces, are in `theme.css`
+   * beside `.split-row`.
+   */
   const splitRowRef = useRef<HTMLDivElement>(null)
   const draggingSplit = useRef(false)
+  /** Where the current drag has got to, for the one write on release. */
+  const splitDragged = useRef<number | null>(null)
   const [launching, setLaunching] = useState(false)
   /** The pane box, measured to open a pty at roughly the right grid. */
   const paneRef = useRef<HTMLDivElement>(null)
@@ -277,7 +288,8 @@ export function App(): JSX.Element {
    * Six of the seven are terminal preferences and travel that route.
    * `projectShellHeightPct` is not one - it is the project page's layout, it
    * reaches no terminal, and it is in this group because it is where somebody
-   * looks for the shell under a project.
+   * looks for the shell under a project. `sessionSplitPct` is the second of
+   * those and rides along for the same reason.
    */
   const terminalSettings = useMemo(
     () => ({
@@ -288,7 +300,8 @@ export function App(): JSX.Element {
       terminalScrollback: settings?.terminalScrollback ?? DEFAULT_SETTINGS.terminalScrollback,
       terminalShell: settings?.terminalShell ?? null,
       projectShellHeightPct:
-        settings?.projectShellHeightPct ?? DEFAULT_SETTINGS.projectShellHeightPct
+        settings?.projectShellHeightPct ?? DEFAULT_SETTINGS.projectShellHeightPct,
+      sessionSplitPct: settings?.sessionSplitPct ?? DEFAULT_SETTINGS.sessionSplitPct
     }),
     [settings]
   )
@@ -301,6 +314,31 @@ export function App(): JSX.Element {
   }, [writeSettings])
 
   const savedShellHeight = settings?.projectShellHeightPct ?? DEFAULT_SETTINGS.projectShellHeightPct
+
+  const savedSplitPct = settings?.sessionSplitPct ?? DEFAULT_SETTINGS.sessionSplitPct
+
+  /**
+   * The remembered split, put on the row.
+   *
+   * Runs on mount and whenever the setting changes - which includes the
+   * broadcast that follows this component's own write on release, and that one
+   * is a no-op because the drag already left the property at that value.
+   *
+   * **Skipped while a drag is running.** A `settings:changed` from anywhere
+   * else mid-gesture would otherwise pull the boundary out from under the
+   * pointer, which is the failure mode of the attempt this replaces, arriving
+   * by a different route.
+   *
+   * `useLayoutEffect`, so the property is on the row before the browser paints.
+   * Settings arrive asynchronously and the CSS fallback is the 45% default, so
+   * an ordinary effect would show one frame of the default to anybody whose
+   * split is not 45 - a flash on every launch, on the one setting whose entire
+   * purpose is that the app stops forgetting.
+   */
+  useLayoutEffect(() => {
+    if (draggingSplit.current) return
+    splitRowRef.current?.style.setProperty('--split', String(savedSplitPct / 100))
+  }, [savedSplitPct])
 
   /**
    * Point Helm at a `gh` it did not find. Written straight through
@@ -477,14 +515,62 @@ export function App(): JSX.Element {
   useEffect(() => {
     const onMove = (event: MouseEvent): void => {
       if (!draggingSplit.current || !splitRowRef.current) return
+      // A move with no button held is not this drag any more, so end it here
+      // rather than follow the pointer.
+      //
+      // This is the failure the shell handle's `setPointerCapture` comment
+      // names from the other side: release the button outside the window and
+      // no `mouseup` is ever delivered, so `draggingSplit` stays true and the
+      // divider is still tracking the pointer when it comes back - moving on a
+      // hover, with nothing held down. `buttons` is the only thing that says
+      // so, because the release itself was never seen.
+      //
+      // It is also what stops a driver's synthetic hover from passing for a
+      // drag. Chromium delivers `sendInputEvent` moves as `buttons: 0` unless
+      // the caller passes `leftbuttondown`, and this handler answering them
+      // anyway is why nothing noticed that no drag in this app had ever been
+      // exercised by a check - see `drag()` in main/bridge.ts.
+      if (event.buttons === 0) {
+        draggingSplit.current = false
+        document.body.style.userSelect = ''
+        return
+      }
+      // Re-measured every move rather than cached at `mousedown`. The row's box
+      // can change under a drag - the window is resizable while one is running
+      // - and a cached one turns the pointer's position into the wrong
+      // fraction from the moment it does.
       const box = splitRowRef.current.getBoundingClientRect()
       if (box.width < 1) return
       const fraction = 1 - (event.clientX - box.left) / box.width
-      setSplit(Math.min(0.8, Math.max(0.2, fraction)))
+      const bounded = Math.min(
+        SESSION_SPLIT_PCT.max / 100,
+        Math.max(SESSION_SPLIT_PCT.min / 100, fraction)
+      )
+      splitDragged.current = bounded
+      // The whole move: one custom property, no state, nothing reconciled. What
+      // this costs does not grow with what is in either pane, which is the
+      // difference the session history made so visible - 966 rows rebuilt per
+      // frame so that a boundary could move four pixels.
+      splitRowRef.current.style.setProperty('--split', String(bounded))
     }
     const onUp = (): void => {
       draggingSplit.current = false
       document.body.style.userSelect = ''
+      // One write for the whole gesture, and none for a press that never moved:
+      // a click on the divider is not a decision about anything. Per frame this
+      // would be a database round trip per `mousemove`, and each one comes back
+      // as a `settings:changed` broadcast into the middle of the drag.
+      const landed = splitDragged.current
+      splitDragged.current = null
+      if (landed === null) return
+      const pct = Math.round(landed * 100)
+      // Snap the property to the rounded value the setting will hold, whether
+      // or not there is a write to make. Otherwise a drag that lands back on
+      // the percentage already stored leaves the row at the unrounded fraction
+      // it was dragged to, and the next `settings:changed` from anywhere at all
+      // moves the boundary a few pixels for no reason anybody could see.
+      splitRowRef.current?.style.setProperty('--split', String(pct / 100))
+      if (pct !== savedSplitPct) writeSettings({ sessionSplitPct: pct })
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -492,7 +578,11 @@ export function App(): JSX.Element {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [])
+    // `onUp` compares against the remembered value before writing, so it has to
+    // see the current one. Re-subscribing two window listeners when a setting
+    // changes costs nothing, and a drag in progress survives it: what says one
+    // is running is a ref, not the closure.
+  }, [savedSplitPct, writeSettings])
 
   // `placedOrder` and not the raw `order`, so the first tab opened in a window
   // whose strip came from the last launch is appended to that strip rather than
@@ -1276,12 +1366,9 @@ export function App(): JSX.Element {
         />
       }
     >
-      <div ref={splitRowRef} className="relative flex h-full w-full">
+      <div ref={splitRowRef} className="split-row relative flex h-full w-full">
         {showWorkspace && (
-          <div
-            className="flex min-w-0 flex-col"
-            style={{ flex: showSessions ? `${String(1 - split)} 1 0%` : '1 1 0%' }}
-          >
+          <div className={cn('flex min-w-0 flex-col', showSessions ? 'split-workspace' : 'split-whole')}>
             <TabBar
               tabs={tabs}
               activeId={activeId}
@@ -1750,10 +1837,7 @@ export function App(): JSX.Element {
         )}
 
         {showSessions && (
-          <div
-            className="flex min-w-0 flex-col"
-            style={{ flex: showWorkspace ? `${String(split)} 1 0%` : '1 1 0%' }}
-          >
+          <div className={cn('flex min-w-0 flex-col', showWorkspace ? 'split-sessions' : 'split-whole')}>
             <TabBar
               tabs={sessionTabs}
               activeId={activeSessionId === null ? null : sessionTabId(activeSessionId)}

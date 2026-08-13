@@ -1,7 +1,7 @@
 import type { BrowserWindow } from 'electron'
 import { readPull, writePullDetail, type PullDetail, type Store } from '@helm/core'
 import type { CheckContext } from './sessionscheck'
-import { screenshot, sendMouse, sleep } from './bridge'
+import { drag, screenshot, sendMouse, sleep } from './bridge'
 
 /**
  * `--design-shot`: open the real window, walk the main views, and capture a
@@ -849,6 +849,14 @@ const DOCKED_TARGETS = [300, 420, 520, 760]
  * Through real mouse events on the real grip: the divider's handler lives on
  * `window` and reads `clientX`, so a synthetic click on the element would move
  * nothing.
+ *
+ * Through `drag()` rather than four `sendMouse` calls, and that is not tidying.
+ * Written out by hand this sent its two middle moves with no button held -
+ * `buttons: 0`, which is a hover - and the divider moved anyway, because its
+ * handler did not check. Both halves have since been fixed, and either one
+ * alone would have turned this function into a silent no-op: every docked
+ * screenshot below would have been taken at the default split while claiming
+ * the width in its filename.
  */
 async function dragSplit(win: BrowserWindow, target: number): Promise<boolean> {
   const grip = await js<{ x: number; y: number; left: number; width: number } | null>(
@@ -864,12 +872,7 @@ async function dragSplit(win: BrowserWindow, target: number): Promise<boolean> {
   if (grip === null) return false
 
   const to = grip.left + Math.min(Math.max(target, grip.width * 0.2), grip.width * 0.8)
-  await sendMouse(win, 'mouseDown', grip.x, grip.y)
-  // Two moves: Chromium coalesces a single jump from the press point, and the
-  // first one is what gets the drag past its own start.
-  await sendMouse(win, 'mouseMove', (grip.x + to) / 2, grip.y)
-  await sendMouse(win, 'mouseMove', to, grip.y)
-  await sendMouse(win, 'mouseUp', to, grip.y)
+  await drag(win, { x: grip.x, y: grip.y }, { x: to, y: grip.y })
   await sleep(400)
   return true
 }

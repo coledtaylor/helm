@@ -100,6 +100,119 @@ export async function sendMouse(
 }
 
 /**
+ * A drag, with the button actually held for the moves in the middle.
+ *
+ * This exists because getting it wrong is invisible. `sendMouse` defaults to no
+ * modifiers, so a driver that writes the gesture out by hand - press, move,
+ * move, release - sends two *hovers* between the press and the release, and a
+ * handler that reads `clientX` off whatever move arrives cannot tell the
+ * difference. Helm had two such drivers and one such handler, and between them
+ * they reported a working drag for as long as the divider has existed. The
+ * failure only surfaced on the first handle built with `setPointerCapture`,
+ * which correctly ignored all of it and moved nothing.
+ *
+ * So the button-held case is the one that is easy to write, and the loose
+ * `sendMouse` calls are what now look unusual at a call site.
+ *
+ * `steps` is 2 by default because Chromium coalesces a single jump from the
+ * press point: the first move is what gets a drag past its own start
+ * threshold, and one move on its own can be swallowed.
+ *
+ * `onStep` runs after each move, before the release. A drag is a gesture that
+ * happens *over time*, and every claim worth making about one - does the pane
+ * track the pointer, does it move the edge the pointer is on - is a claim about
+ * the middle. A probe that only looks after the release is measuring the commit
+ * and calling it the drag; that mistake shipped a fix that measured 470x faster
+ * and was unusable in the hand.
+ */
+export async function drag(
+  win: BrowserWindow,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  opts: { steps?: number; onStep?: (index: number) => Promise<void> } = {}
+): Promise<void> {
+  const steps = Math.max(1, opts.steps ?? 2)
+  await sendMouse(win, 'mouseDown', from.x, from.y)
+  for (let i = 1; i <= steps; i++) {
+    const at = {
+      x: from.x + ((to.x - from.x) * i) / steps,
+      y: from.y + ((to.y - from.y) * i) / steps
+    }
+    await sendMouse(win, 'mouseMove', at.x, at.y, { modifiers: ['leftbuttondown'] })
+    // Deliberately after the move and inside the gesture: the button is still
+    // down here, so a frame can render and a measurement can be taken of a
+    // drag in progress rather than of one that has already committed.
+    if (opts.onStep) await opts.onStep(i)
+  }
+  await sendMouse(win, 'mouseUp', to.x, to.y)
+}
+
+/**
+ * What a gesture actually delivered, counted on `document`.
+ *
+ * Without this a drag that moves nothing is one failure with two very different
+ * causes: **the app ignored the gesture, or the gesture never arrived.** Those
+ * want opposite fixes, and told apart only by argument they get told apart
+ * wrong - the first time this mattered, the app was blameless and the driver
+ * had been sending hovers.
+ *
+ * It lives here rather than in one driver because the rule is general: anything
+ * that drives a gesture counts what was delivered, so a silent non-delivery
+ * cannot read as "the app declined". `settings-check` S-20 and the workspace
+ * divider's own probe both take their positive control from this.
+ *
+ * The listeners go on `document` in the bubble phase, which is after React's
+ * own handler at the root, so `hasPointerCapture` here is what the app left it
+ * as rather than what it found.
+ */
+export interface PointerTrace {
+  down: number
+  move: number
+  up: number
+  /** Whether `selector`'s element held the capture, sampled on the last move. */
+  captured: boolean | null
+  /** `buttons` on the last move - 0 is a hover, 1 is a drag. */
+  buttons: number | null
+}
+
+export const tracePointer = (win: BrowserWindow, selector: string): Promise<void> =>
+  win.webContents
+    .executeJavaScript(
+      `(() => {
+      if (window.__pointerTrace) window.__pointerTrace.off()
+      const el = document.querySelector(${JSON.stringify(selector)})
+      const t = { down: 0, move: 0, up: 0, captured: null, buttons: null, off: () => undefined }
+      const on = (type, key) => {
+        const fn = (e) => {
+          t[key]++
+          if (type === 'pointermove' && el) {
+            t.captured = el.hasPointerCapture(e.pointerId)
+            t.buttons = e.buttons
+          }
+        }
+        document.addEventListener(type, fn)
+        return () => { document.removeEventListener(type, fn) }
+      }
+      const offs = [on('pointerdown', 'down'), on('pointermove', 'move'), on('pointerup', 'up')]
+      t.off = () => { for (const o of offs) o() }
+      window.__pointerTrace = t
+      return undefined
+    })()`,
+      true
+    )
+    .then(() => undefined)
+
+export const readPointerTrace = (win: BrowserWindow): Promise<PointerTrace> =>
+  win.webContents.executeJavaScript(
+    `(() => { const t = window.__pointerTrace
+      const answer = { down: t.down, move: t.move, up: t.up, captured: t.captured, buttons: t.buttons }
+      t.off()
+      delete window.__pointerTrace
+      return answer })()`,
+    true
+  ) as Promise<PointerTrace>
+
+/**
  * Scroll the pane by `notches`; positive scrolls back toward older output.
  *
  * Two things this has to get right. Chromium routes a wheel event to whatever
