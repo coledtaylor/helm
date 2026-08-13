@@ -220,12 +220,6 @@ export function App(): JSX.Element {
   const [split, setSplit] = useState(0.45)
   const splitRowRef = useRef<HTMLDivElement>(null)
   const draggingSplit = useRef(false)
-  /** The column the drag resizes, written to directly while it is happening. */
-  const sessionColumnRef = useRef<HTMLDivElement>(null)
-  /** Where the drag has got to, committed to `split` on release. */
-  const pendingSplit = useRef(0.45)
-  /** The split row's box, measured once at mousedown. Null when not dragging. */
-  const dragRow = useRef<DOMRect | null>(null)
   const [launching, setLaunching] = useState(false)
   /** The pane box, measured to open a pty at roughly the right grid. */
   const paneRef = useRef<HTMLDivElement>(null)
@@ -480,39 +474,16 @@ export function App(): JSX.Element {
 
   // The split divider: a plain mouse drag, bounded so neither side can be
   // dragged out of usefulness.
-  //
-  // The moves are written **straight to the column's style** and React is told
-  // once, on release. `split` is an inline `flex` on the sessions column, so
-  // calling `setSplit` per mousemove re-rendered the whole of this component on
-  // every frame of the drag - and everything under it, which with the session
-  // history open is 966 rows being reconciled to produce the same 966 rows.
-  // The layout was already made cheap (see `.session-row`); this is the other
-  // half, and it is the same rule the project shell's handle follows: a drag is
-  // one commit, not one per frame.
-  //
-  // The ref is the authority while dragging and React is the authority the rest
-  // of the time. They agree on release, so the commit repaints nothing - and if
-  // some other state re-renders mid-drag, React writes the last committed value
-  // and the next mousemove puts it back a frame later.
   useEffect(() => {
     const onMove = (event: MouseEvent): void => {
-      // The row this is measured against is the whole split, and nothing during
-      // a drag can move it - the window is not being resized, only the boundary
-      // inside it. Reading it per move meant a forced synchronous layout on
-      // every move, taken immediately after the write above had dirtied layout,
-      // which is the worst moment to ask: measured at 1.58ms a move against
-      // 0.05ms once it is taken at mousedown and kept.
-      const box = dragRow.current
-      if (box === null) return
-      const fraction = Math.min(0.8, Math.max(0.2, 1 - (event.clientX - box.left) / box.width))
-      pendingSplit.current = fraction
-      const column = sessionColumnRef.current
-      if (column) column.style.flex = `${String(fraction)} 1 0%`
+      if (!draggingSplit.current || !splitRowRef.current) return
+      const box = splitRowRef.current.getBoundingClientRect()
+      if (box.width < 1) return
+      const fraction = 1 - (event.clientX - box.left) / box.width
+      setSplit(Math.min(0.8, Math.max(0.2, fraction)))
     }
     const onUp = (): void => {
-      if (draggingSplit.current) setSplit(pendingSplit.current)
       draggingSplit.current = false
-      dragRow.current = null
       document.body.style.userSelect = ''
     }
     window.addEventListener('mousemove', onMove)
@@ -1769,13 +1740,6 @@ export function App(): JSX.Element {
             title="Drag to resize"
             onMouseDown={(event) => {
               event.preventDefault()
-              const box = splitRowRef.current?.getBoundingClientRect()
-              // Refuse rather than start a drag that would divide by zero. The
-              // move handler then has nothing to read and does nothing, which
-              // is the same answer the width check used to give per move.
-              if (!box || box.width < 1) return
-              dragRow.current = box
-              pendingSplit.current = split
               draggingSplit.current = true
               document.body.style.userSelect = 'none'
             }}
@@ -1787,7 +1751,6 @@ export function App(): JSX.Element {
 
         {showSessions && (
           <div
-            ref={sessionColumnRef}
             className="flex min-w-0 flex-col"
             style={{ flex: showWorkspace ? `${String(split)} 1 0%` : '1 1 0%' }}
           >
