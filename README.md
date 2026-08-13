@@ -207,10 +207,23 @@ shape.
 
 ```bash
 pnpm install
-pnpm dev               # the app, with hot reload
+pnpm dev               # the app, with hot reload, isolated
+pnpm dev --fresh       # ...against no database at all, which is first run
+pnpm dev:live          # ...against %APPDATA%\Helm, the installed app's own
 pnpm check             # typecheck + lint + unit tests (what CI runs)
 pnpm dist:win          # portable exe + NSIS installer
 ```
+
+`pnpm dev` keeps its data in `%LOCALAPPDATA%\Helm\dev`: its own database - a
+copy of the real one, taken at launch - its own Chromium profile, its own
+overlay shims, and a synthetic `gh` that answers offline so the pull-request
+pane has something to show without the network. It can therefore run beside an
+installed Helm, and a second `pnpm dev` gets a directory of its own rather than
+failing on a held database. What it does **not** isolate is `~/.claude`:
+`CLAUDE_CONFIG_DIR` moves credentials too, and a dev build that cannot sign in
+cannot host a session. `pnpm dev:live` is the old behaviour, kept because it is
+the only way to see the real database in a dev build - it says so on the console
+at startup, and the status bar names the mode.
 
 Beyond the unit tests there are two families of driver. Both are real: they open
 windows, click things, and most of them spawn actual `claude` processes, so they

@@ -1,4 +1,5 @@
 import { type BrowserWindow } from 'electron'
+import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
@@ -317,7 +318,7 @@ function writeComposeSkill(repo: string, name: string, token: string): void {
   )
 }
 
-function buildComposeFixtures(dataDir: string): ComposeFixtures {
+export function buildComposeFixtures(dataDir: string): ComposeFixtures {
   const parent = join(dataDir, 'profiles-compose-fixtures')
   rmSync(parent, { recursive: true, force: true })
 
@@ -1024,6 +1025,22 @@ function plantStaleShim(): Check {
     join(planted, '.claude-plugin', 'plugin.json'),
     JSON.stringify({ name: 'profiles-crashed', version: '0.0.0' })
   )
+
+  /*
+   * A pid the machine really has finished with.
+   *
+   * The sweep no longer removes every stamped directory it finds - it removes
+   * the ones whose owner is provably gone - so a planted stamp has to name an
+   * owner that is provably gone, and inventing a number would plant either a
+   * pid nothing ever had or, once in a while, a pid something now has. A
+   * process spawned and waited on here is neither: it existed, it exited, and
+   * the trap is exactly the crash the criterion is about.
+   */
+  const corpse = spawnSync(process.execPath, ['-e', 'process.exit(0)'], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    windowsHide: true
+  })
+
   // No junction in it: what is being tested is whether the sweep finds and
   // removes a stamped `overlay-*` directory, and planting a real link into a
   // real repo would put the user's files behind a deletion this check wants to
@@ -1036,7 +1053,8 @@ function plantStaleShim(): Check {
       mode: 'junction',
       linked: [],
       fingerprint: 'planted-by-profiles-check',
-      builtAt: new Date().toISOString()
+      builtAt: new Date().toISOString(),
+      owners: [{ pid: corpse.pid, startedAt: new Date().toISOString() }]
     })
   )
 
@@ -1044,11 +1062,15 @@ function plantStaleShim(): Check {
     id: 'PROF-9',
     criterion: 'Stale shim dirs from crashed sessions are cleaned up on next app start',
     title: 'A shim left behind by a crash is planted for the next start to find',
-    ok: true,
-    detail: { planted, shimRoot },
+    // A stamp naming a pid that never ran would be swept for the wrong reason,
+    // and this check would go on passing after the owner rule stopped working.
+    ok: corpse.pid !== undefined && corpse.status === 0,
+    detail: { planted, shimRoot, ownerPid: corpse.pid ?? null, ownerExit: corpse.status },
     notes: [
       'This check only sets the trap. Whether it caught anything is decided by the',
-      '--shim-sweep run that follows, and asserted by scripts/verify-shims.mjs.'
+      '--shim-sweep run that follows, and asserted by scripts/verify-shims.mjs.',
+      'The owner on the stamp is a process that really ran and really exited, so the',
+      'sweep removes it by establishing the owner is gone rather than by default.'
     ]
   }
 }

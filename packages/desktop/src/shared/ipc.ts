@@ -53,7 +53,13 @@ import type { ProbeOp, TermCreateOptions } from './protocol'
  *   Events   - main pushes to the renderer  (webContents.send)
  */
 
-export type AppMode = 'dev' | 'portable' | 'installed'
+/**
+ * `dev-live` is the unpackaged run with **no data directory of its own**, which
+ * shares `%APPDATA%\Helm` with the installed app. It is a mode rather than the
+ * absence of one because the status bar has to be able to name it: everything
+ * that makes it dangerous is invisible from inside the window.
+ */
+export type AppMode = 'dev' | 'dev-live' | 'portable' | 'installed'
 
 export interface AppInfo {
   version: string

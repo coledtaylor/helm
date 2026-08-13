@@ -31,6 +31,14 @@ derive an app path from execPath.** Use `PORTABLE_EXECUTABLE_DIR` or
 The check drivers use the same mechanism for isolation: they start the app with
 `PORTABLE_EXECUTABLE_DIR` pointed at a directory of their own, so a check runs
 against a real profile layout without touching the one somebody is using.
+`pnpm dev` does too, at `%LOCALAPPDATA%\Helm\dev` - `productName` is `Helm`, so
+an unpackaged run with no such directory resolves `userData` to `%APPDATA%\Helm`
+and shares the installed app's database, shims and Chromium profile. That is
+`pnpm dev:live`, which is the one mode that does it on purpose.
+
+`appMode` therefore reads **two** signals, not one: `app.isPackaged` says build
+or checkout, and `PORTABLE_EXECUTABLE_DIR` says whether the data is its own -
+`installed`, `portable`, `dev`, `dev-live`.
 
 ## What the installer does, and what it deliberately does not
 

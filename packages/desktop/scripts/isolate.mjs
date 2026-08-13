@@ -49,10 +49,16 @@ export function realDataDir() {
  *
  * One directory per check rather than per run, so a failed run's database and
  * screenshots are still there to look at afterwards.
+ *
+ * `group` separates the two things that use this. Checks share `checks/`; `null`
+ * puts the directory straight under `%LOCALAPPDATA%\Helm`, which is where
+ * `pnpm dev` goes - beside the checks rather than among them, so that "delete
+ * every check's leftovers" stays something somebody can do without throwing
+ * away the projects and settings their dev app has accumulated.
  */
-export function isolatedRoot(name) {
+export function isolatedRoot(name, group = 'checks') {
   const base = process.env.LOCALAPPDATA ?? process.env.HOME ?? '.'
-  return join(base, 'Helm', 'checks', name)
+  return group === null ? join(base, 'Helm', name) : join(base, 'Helm', group, name)
 }
 
 /**
@@ -67,48 +73,50 @@ export function isolatedRoot(name) {
  * Windows will not let the seed replace an open file. Checks leave this off on
  * purpose: two of them in one directory would interleave their fixtures and
  * their reports, and the honest answer to that is to stop, not to shard.
+ *
+ * `group` is the subdirectory of `%LOCALAPPDATA%\Helm` this lands under; see
+ * `isolatedRoot`.
  */
-export function isolate(name, { seed = true, concurrent = false } = {}) {
+export function isolate(name, { seed = true, concurrent = false, group = 'checks' } = {}) {
   const limit = concurrent ? 8 : 1
   for (let attempt = 0; attempt < limit; attempt++) {
     const dirName = attempt === 0 ? name : `${name}-${String(attempt + 1)}`
-    const root = isolatedRoot(dirName)
+    const root = isolatedRoot(dirName, group)
     const dataDir = join(root, 'helm-data')
     mkdirSync(dataDir, { recursive: true })
     const env = { ...process.env, PORTABLE_EXECUTABLE_DIR: root }
 
-    if (!seed || seedDatabase(dataDir) !== 'busy') return { root, dataDir, env }
+    // `seed: false` still *clears*. "Start without a database" has to mean the
+    // same thing on the second run as on the first, and a directory that has
+    // been used before already has one - so leaving it alone would quietly turn
+    // the first-run mode into the ordinary one after a single use.
+    const prepared = seed ? seedDatabase(dataDir) : clearDatabase(dataDir)
+    if (prepared !== 'busy') return { root, dataDir, env }
     if (attempt + 1 < limit) console.log(`(${dirName} is in use; trying the next one)`)
   }
 
   console.error(
-    `${name} is already running against ${isolatedRoot(name)}.\n` +
+    `${name} is already running against ${isolatedRoot(name, group)}.\n` +
       'Its database is open, so a fresh copy cannot be put in place. Close it and run this again.'
   )
   process.exit(1)
 }
 
 /**
- * Replace the isolated database with a fresh consistent copy of the real one.
+ * Removes the isolated database, and the `-wal`/`-shm` beside it.
  *
- * Fresh every run, not once: the point of copying at all is that the checks see
- * the machine as it is, and a copy taken a week ago is neither that nor a
- * fixture. The stale `-wal`/`-shm` beside the old copy go with it, or SQLite
- * reads them back over the new file.
+ * Both of those, always: SQLite reads a stale write-ahead log back over a file
+ * that has been replaced, so deleting only `helm.db` produces a database that
+ * is neither the old one nor the new one.
  *
- * Returns `'busy'` when an app still has the previous copy open. Windows holds
- * a mandatory lock on an open file, so the delete fails with EPERM rather than
- * succeeding the way it would on Unix - which is the right answer and not an
- * obstacle: quietly leaving the old database in place would run the next thing
- * against a copy of unknown age while reporting a fresh one.
+ * Returns `'busy'` when an app still has it open. Windows holds a mandatory
+ * lock on an open file, so the delete fails with EPERM rather than succeeding
+ * the way it would on Unix - which is the right answer and not an obstacle:
+ * quietly leaving the old database in place would run the next thing against a
+ * copy of unknown age while reporting a fresh one.
  */
-export function seedDatabase(dataDir) {
-  const source = join(realDataDir(), 'helm.db')
+export function clearDatabase(dataDir) {
   const dest = join(dataDir, 'helm.db')
-  if (!existsSync(source)) {
-    console.log(`(no database at ${source}; the isolated one starts empty)`)
-    return false
-  }
   for (const suffix of ['', '-wal', '-shm']) {
     try {
       rmSync(`${dest}${suffix}`, { force: true })
@@ -117,6 +125,29 @@ export function seedDatabase(dataDir) {
       throw err
     }
   }
+  return true
+}
+
+/**
+ * Replace the isolated database with a fresh consistent copy of the real one.
+ *
+ * Fresh every run, not once: the point of copying at all is that the checks see
+ * the machine as it is, and a copy taken a week ago is neither that nor a
+ * fixture.
+ *
+ * Returns `'busy'` when an app still has the previous copy open - see
+ * `clearDatabase`, which is what makes room for this one - and `false` when the
+ * machine has no real database to copy, which is not a failure: the isolated
+ * one then starts empty.
+ */
+export function seedDatabase(dataDir) {
+  const source = join(realDataDir(), 'helm.db')
+  const dest = join(dataDir, 'helm.db')
+  if (!existsSync(source)) {
+    console.log(`(no database at ${source}; the isolated one starts empty)`)
+    return clearDatabase(dataDir) === 'busy' ? 'busy' : false
+  }
+  if (clearDatabase(dataDir) === 'busy') return 'busy'
 
   // `VACUUM INTO` through Electron's own node, because better-sqlite3 is built
   // for Electron's ABI and will not load under a plain one. The destination is

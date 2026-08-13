@@ -9,8 +9,10 @@
   "private": true,
   "main": "./out/main/index.js",
   "scripts": {
-    "//dev": "--watch is what makes the main process and preload reload too. Without it electron-vite only gives the renderer HMR, and every main-process edit needs the app killed and restarted by hand.",
-    "dev": "electron-vite dev --watch",
+    "//dev": "Goes through scripts/run-dev.mjs, which gives the run a data directory of its own under %LOCALAPPDATA%\\Helm\\dev and points it at a synthetic gh. Without that, productName: Helm resolves userData to %APPDATA%\\Helm - the installed app's - and the two fight over one Chromium profile and one helm.db. --fresh starts with no database, which is the first-run state. A second `pnpm dev` gets its own directory rather than failing on a held helm.db.",
+    "dev": "node scripts/run-dev.mjs",
+    "//dev:live": "The old behaviour: unpackaged, against %APPDATA%\\Helm, sharing everything with the installed app. Kept because it is the only way to see the real database and the real gh in a dev build, and it says so loudly on the console and on the status bar's mode chip. --watch is what makes the main process and preload reload too; without it electron-vite only gives the renderer HMR, and every main-process edit needs the app killed and restarted by hand.",
+    "dev:live": "electron-vite dev --watch",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",

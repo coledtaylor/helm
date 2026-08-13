@@ -12,6 +12,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @helm/desktop dev",
+    "dev:live": "pnpm --filter @helm/desktop dev:live",
     "build": "pnpm --filter @helm/desktop build",
     "start": "pnpm --filter @helm/desktop start",
     "typecheck": "pnpm -r --sequential typecheck",

@@ -26,21 +26,28 @@
 //     view/<owner>__<name>__<n>.json     `gh pr view <n> --json ...` output
 //     diff/<owner>__<name>__<n>.patch    `gh pr diff <n>` output
 //     invocations.jsonl                  every call: argv, cwd, exit code
+//
+// The second mode, `HELM_FAKE_GH_SYNTHETIC=1`, has no fixture directory and is
+// what `pnpm dev` runs against. See `synthesise` at the bottom of this file for
+// why it derives its answers from the slug rather than reading them.
 
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { appendFileSync, existsSync, readFileSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 
 const home = process.env.HELM_FAKE_GH_HOME ?? ''
+const synthetic = process.env.HELM_FAKE_GH_SYNTHETIC === '1'
 const args = process.argv.slice(2)
 
-if (home === '') {
+if (home === '' && !synthetic) {
   writeSync(2, 'fake-gh: HELM_FAKE_GH_HOME is not set\n')
   process.exit(90)
 }
 
 /** Re-read per invocation, so the driver can change the answer between passes. */
 function behaviour() {
+  if (home === '') return {}
   const file = join(home, 'behaviour.json')
   if (!existsSync(file)) return {}
   try {
@@ -55,6 +62,7 @@ const slugFile = (dir, slug, suffix = '') =>
 
 /** What was asked, before what was answered - a call that crashes still logged. */
 function log(entry) {
+  if (home === '') return
   appendFileSync(
     join(home, 'invocations.jsonl'),
     `${JSON.stringify({ at: Date.now(), argv: args, cwd: process.cwd(), ...entry })}\n`
@@ -82,6 +90,8 @@ function flag(name) {
 }
 
 const how = behaviour()
+
+if (synthetic) synthesise()
 
 if (args[0] === '--version') {
   out(`${how.version ?? 'gh version 2.86.0 (fixture)'}\nhttps://github.com/cli/cli\n`)
@@ -177,3 +187,310 @@ if (args[0] === 'pr' && args[1] === 'checkout') {
 }
 
 fail(`unknown command\n\nUsage: gh <command> <subcommand> [flags]\n`, 2)
+
+// ---------------------------------------------------------------------------
+// Synthetic mode
+// ---------------------------------------------------------------------------
+
+/**
+ * A GitHub derived from the slug, with no fixture directory behind it.
+ *
+ * `pnpm dev` runs against a **copy of the real database**, so the repositories
+ * it knows about are the developer's own - and a fixture keyed
+ * `owner__name.json` would answer for none of them. The alternative considered
+ * and rejected was rebuilding fixtures out of the cached `pull_requests` rows,
+ * which means un-parsing `PullDetail` back into `gh --json` shape: a second
+ * reversed mapping, maintained beside the real one, drifting from it.
+ *
+ * So the slug is hashed and the answer computed. Every repository on the
+ * machine gets plausible pull requests, the same ones on every run, with no
+ * network - and the pane's states are reachable because they are assigned from
+ * bits of the hash rather than left to whatever the developer's repositories
+ * happen to have open.
+ *
+ * Three bits per pull request, so a machine with a handful of repositories
+ * reaches all of them: draft, checks failing, and a patch over the 2MB ceiling
+ * `fetchPullDiff` cuts at. `HELM_FAKE_GH_STATES` overrides them for a repository
+ * whose hash is unlucky - see the header `writeDevGh` prints.
+ */
+function synthesise() {
+  if (args[0] === '--version') out('gh version 2.86.0 (synthetic)\nhttps://github.com/cli/cli\n')
+  if (args[0] === 'auth' && args[1] === 'status') {
+    out('github.com\n  - Logged in to github.com account synthetic (keyring)\n')
+  }
+
+  // The one command that changes something. `fake-gh` really runs `git` for the
+  // fixture drivers, on purpose - but dev's projects are the developer's actual
+  // repositories on disk, and a checkout here would move a real working tree
+  // onto a branch that does not exist, for a pull request that does not either.
+  if (args[0] === 'pr' && args[1] === 'checkout') {
+    fail(
+      'This is Helm\'s development mode, whose pull requests are synthetic - there is no ' +
+        'branch to fetch, and checking one out would move a real working tree. Run `pnpm dev:live` ' +
+        'against the real gh to exercise checkout.'
+    )
+  }
+
+  const slug = flag('--repo')
+  if (slug === '') fail('no --repo was given')
+  const pulls = pullsFor(slug)
+
+  if (args[0] === 'pr' && args[1] === 'list') {
+    out(`${JSON.stringify(pulls.map(published), null, 2)}\n`)
+  }
+
+  if (args[0] === 'pr' && args[1] === 'view') {
+    const pull = pulls.find((entry) => String(entry.number) === String(args[2] ?? ''))
+    if (pull === undefined) fail(`no pull requests found for ${slug}#${String(args[2] ?? '')}`)
+    out(`${JSON.stringify(detailFor(slug, pull), null, 2)}\n`)
+  }
+
+  if (args[0] === 'pr' && args[1] === 'diff') {
+    const pull = pulls.find((entry) => String(entry.number) === String(args[2] ?? ''))
+    if (pull === undefined) fail(`no pull requests found for ${slug}#${String(args[2] ?? '')}`)
+    out(diffFor(pull))
+  }
+
+  fail(`unknown command\n\nUsage: gh <command> <subcommand> [flags]\n`, 2)
+}
+
+/** Stable across runs and across machines: the slug is the only input. */
+function hashOf(text) {
+  return parseInt(createHash('sha256').update(text).digest('hex').slice(0, 12), 16)
+}
+
+/**
+ * Something to draw from that is the same on every run.
+ *
+ * `Math.abs` and a floor because the seeds here are 48-bit: a caller reaching
+ * for variety with `seed >> 3` gets a *32-bit* result, which goes negative, and
+ * a negative index returns `undefined` - a field quietly missing from the JSON
+ * rather than an error. That happened to `reviewDecision`.
+ */
+function pick(list, n) {
+  return list[Math.abs(Math.floor(n)) % list.length]
+}
+
+/**
+ * The words the synthetic pull requests are built out of.
+ *
+ * A function rather than four `const`s because this whole section sits below
+ * the dispatch that calls into it - a declaration hoists and an initialiser
+ * does not, and a `const` down here is a temporal-dead-zone crash the first
+ * time anything asks for a list.
+ */
+function catalogue() {
+  return {
+    titles: [
+      'Cache the discovery walk between focus events',
+      'Drop the second read of the settings row',
+      'Bump the pinned toolchain and re-lock',
+      'Fix the empty state on a repository with no remote',
+      'Split the poller out of the service',
+      'Add the missing index on session.started_at',
+      'Handle a patch that arrives with CRLF endings'
+    ],
+    authors: ['octocat', 'app/dependabot', 'hubot', 'mona'],
+    branches: ['fix/empty-state', 'chore/bump-toolchain', 'feat/split-poller', 'fix/crlf']
+  }
+}
+
+/**
+ * A repository's open pull requests: 0 to 3, derived from the slug.
+ *
+ * Zero is one of the four outcomes on purpose. A repository with nothing open is
+ * the commonest state on a real machine and the pane has a row for it, so a
+ * synthetic GitHub where every repository has something open would hide the
+ * empty case entirely.
+ */
+function pullsFor(slug) {
+  const { titles, authors, branches } = catalogue()
+  const base = hashOf(slug)
+  const forced = (process.env.HELM_FAKE_GH_STATES ?? '').split(',').filter(Boolean)
+  const count = forced.length > 0 ? forced.length : base % 4
+
+  const pulls = []
+  for (let i = 0; i < count; i++) {
+    const seed = hashOf(`${slug}#${String(i)}`)
+    const state = forced[i] ?? ''
+    const draft = state === 'draft' || (state === '' && (seed & 1) === 1)
+    const failing = state === 'failing' || (state === '' && (seed & 2) === 2)
+    const bigDiff = state === 'big-diff' || (state === '' && (seed & 4) === 4)
+    const number = 100 + (seed % 800)
+    const author = pick(authors, seed)
+
+    // The files first, and the three counts summed from them. A real `gh`
+    // answers with a header that agrees with its own file list, and a fixture
+    // whose header claimed 127 files over a list of 12 puts the pane into a
+    // state the thing it stands in for cannot produce.
+    const files = filesFor(seed, bigDiff)
+    pulls.push({
+      number,
+      title: pick(titles, seed),
+      url: `https://github.com/${slug}/pull/${String(number)}`,
+      author: { login: author, is_bot: author.startsWith('app/') },
+      state: 'OPEN',
+      isDraft: draft,
+      headRefName: `${pick(branches, seed)}-${String(number)}`,
+      baseRefName: 'main',
+      // Fixed offsets from a fixed epoch rather than from now: a list whose
+      // timestamps moved between two passes would make the pane's "changed
+      // since last fetch" logic fire on every sweep.
+      createdAt: at(-72 - i * 19),
+      updatedAt: at(-2 - i * 7),
+      additions: files.reduce((sum, file) => sum + file.additions, 0),
+      deletions: files.reduce((sum, file) => sum + file.deletions, 0),
+      changedFiles: files.length,
+      reviewDecision: pick(['', 'APPROVED', 'REVIEW_REQUIRED', 'CHANGES_REQUESTED'], seed / 8),
+      statusCheckRollup: rollup(seed, failing),
+      labels: draft ? [{ name: 'wip' }] : [],
+      // Not a field `gh` prints. Stripped before anything is written out; it is
+      // here so the detail and the patch are built from the same file list
+      // rather than from two that agree by coincidence.
+      __files: files
+    })
+  }
+  return pulls
+}
+
+/**
+ * The files one pull request touches.
+ *
+ * A big-diff pull request is a moderate number of files with a great many lines
+ * in each, rather than hundreds of files: what has to go over `MAX_DIFF_BYTES`
+ * is the patch, and a list of five hundred one-line changes makes the Files
+ * view unreadable for a reason that has nothing to do with the ceiling.
+ */
+function filesFor(seed, bigDiff) {
+  const areas = ['core', 'ui', 'desktop']
+  const names = ['index', 'store', 'view', 'poll', 'parse', 'session']
+  const count = bigDiff ? 14 + (seed % 6) : 1 + (seed % 9)
+  const files = []
+  for (let i = 0; i < count; i++) {
+    files.push({
+      path: `packages/${pick(areas, seed + i)}/src/${pick(names, seed + i)}${String(i)}.ts`,
+      additions: bigDiff ? 2_400 + ((seed + i * 37) % 900) : 4 + ((seed + i) % 90),
+      deletions: bigDiff ? 400 + ((seed + i * 11) % 300) : 1 + ((seed + i) % 30)
+    })
+  }
+  return files
+}
+
+/** What `gh` would actually print, without the field this script threads. */
+function published(pull) {
+  const { __files, ...rest } = pull
+  void __files
+  return rest
+}
+
+/** An hour offset from a fixed moment, so nothing here moves between runs. */
+function at(hours) {
+  return new Date(Date.parse('2026-08-01T09:00:00Z') + hours * 3_600_000).toISOString()
+}
+
+/**
+ * `statusCheckRollup`, in the union shape gh actually prints.
+ *
+ * Both members, deliberately: `reduceChecks` reads a `CheckRun` through
+ * `status`/`conclusion` and a legacy `StatusContext` through `state`, and a
+ * fixture that only ever produced one of them would leave half of it
+ * unexercised in the app somebody is looking at.
+ */
+function rollup(seed, failing) {
+  const runs = [
+    { __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' },
+    { __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS' },
+    { __typename: 'StatusContext', context: 'ci/legacy', state: 'SUCCESS' }
+  ]
+  if (failing) {
+    runs[1] = { __typename: 'CheckRun', name: 'test', status: 'COMPLETED', conclusion: 'FAILURE' }
+  }
+  if ((seed & 8) === 8) {
+    runs.push({ __typename: 'CheckRun', name: 'e2e', status: 'IN_PROGRESS', conclusion: '' })
+  }
+  return runs
+}
+
+function detailFor(slug, pull) {
+  const seed = hashOf(`${slug}#${String(pull.number)}`)
+  const files = pull.__files
+
+  return {
+    body:
+      `Synthetic pull request, produced by Helm's development \`gh\`. There is no such ` +
+      `pull request on ${slug} - the contents are derived from the repository's name so ` +
+      `that the pane has something to paint with no network.\n\n` +
+      `- state: ${pull.isDraft ? 'draft' : 'open'}\n` +
+      `- checks: ${pull.statusCheckRollup.some((c) => c.conclusion === 'FAILURE') ? 'one failing' : 'green'}\n`,
+    comments: [
+      {
+        id: `IC_${String(seed)}`,
+        author: { login: 'mona', is_bot: false },
+        authorAssociation: 'MEMBER',
+        body: 'Left a note on the second hunk.',
+        createdAt: at(-6),
+        url: `${pull.url}#issuecomment-${String(seed)}`
+      }
+    ],
+    reviews:
+      pull.reviewDecision === ''
+        ? []
+        : [
+            {
+              id: `PRR_${String(seed)}`,
+              author: { login: 'hubot', is_bot: false },
+              authorAssociation: 'COLLABORATOR',
+              state: pull.reviewDecision === 'APPROVED' ? 'APPROVED' : 'CHANGES_REQUESTED',
+              body: pull.reviewDecision === 'APPROVED' ? 'Looks right to me.' : 'One thing below.',
+              submittedAt: at(-4)
+            }
+          ],
+    commits: [
+      {
+        oid: createHash('sha1').update(`${slug}#${String(pull.number)}`).digest('hex'),
+        messageHeadline: pull.title,
+        authors: [{ login: pull.author.login, name: pull.author.login }],
+        committedDate: at(-8),
+        authoredDate: at(-8)
+      }
+    ],
+    files,
+    statusCheckRollup: pull.statusCheckRollup,
+    mergeStateStatus: (seed & 16) === 16 ? 'BLOCKED' : 'CLEAN'
+  }
+}
+
+/**
+ * The patch, one hunk per file the detail lists.
+ *
+ * Built from `pull.__files` rather than invented, because the Files view pairs
+ * each row with the hunk whose header names it: a patch for a path the detail
+ * does not carry paints "No patch for this file in what was fetched" on every
+ * row - which is a real degradation of Helm's, reached here for a reason a real
+ * `gh` could not produce.
+ *
+ * A big-diff pull request goes past `MAX_DIFF_BYTES` (2MB) on the strength of
+ * its own line counts, so "cut at a line boundary and said so" is a state
+ * somebody can look at in dev rather than only in `pr-check`.
+ */
+function diffFor(pull) {
+  const parts = []
+  for (const file of pull.__files) {
+    parts.push(
+      `diff --git a/${file.path} b/${file.path}\n`,
+      `index 1a2b3c4..5d6e7f8 100644\n`,
+      `--- a/${file.path}\n`,
+      `+++ b/${file.path}\n`,
+      `@@ -1,${String(file.deletions + 3)} +1,${String(file.additions + 3)} @@ function compute()\n`,
+      ` const before = 1\n`
+    )
+    for (let line = 0; line < file.deletions; line++) {
+      parts.push(`-  const old${String(line)} = ${String(line)}\n`)
+    }
+    for (let line = 0; line < file.additions; line++) {
+      parts.push(`+  const step${String(line)} = compute(${String(line)}) // synthetic patch line\n`)
+    }
+    parts.push(` const after = 2\n`)
+  }
+  return parts.join('')
+}

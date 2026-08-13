@@ -91,11 +91,26 @@ and database rows. Then `scripts/verify-orphans.mjs` confirms nothing survived.
 
 **`profiles-check`** - profiles and overlay composition. Builds a profile through the
 real form, launches it, and asks the live session whether the overlays' skills
-and instructions actually arrived. **Three phases**, orchestrated by
+and instructions actually arrived. **Four phases**, orchestrated by
 `run-profiles.mjs` rather than `&&`: the driver, a second real app start
-(`--shim-sweep`), then `scripts/verify-shims.mjs`. The second start exists
-because "stale shims are cleaned at startup" cannot be asserted by the process
-that already started. Spawns real sessions on haiku.
+(`--shim-sweep`), `scripts/verify-shims.mjs`, then the hold phase. Spawns real
+sessions on haiku.
+
+The last two phases are about **two Helms** and they are opposites, which is
+what makes them worth reading together:
+
+- `PROF-9` - a shim from a run that *ended* must be collected. The driver plants
+  one stamped with the pid of a process it spawned and waited on, so the sweep
+  removes it by establishing the owner is gone rather than by default. Asserted
+  across two starts because one process cannot observe its own startup.
+- `PROF-10` - a shim a *running* Helm is serving must survive. This is an
+  overlap rather than a sequence, so `--shim-hold` is **spawned**, not waited
+  on: it launches a real session, writes `shim-hold-ready.json`, and blocks
+  while `run-profiles.mjs` starts a second real app that sweeps. The holder then
+  reads its own shim back and **makes the verdict itself** - it is the process
+  whose session would have lost its skills. It reads the skill body *through*
+  the junction, and asserts the before-values too, since "absent then, absent
+  now" would otherwise pass.
 
 **`history-check`** - the session index. Drives the history pane and checks every
 count against its own read of `~/.claude/history.jsonl`. Spawns two real

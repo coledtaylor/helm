@@ -41,6 +41,7 @@ import { createPtermHost } from './pterm'
 import { runDesignShot } from './designshot'
 import { runAffordanceChecks } from './affordancecheck'
 import { runProfilesChecks } from './profilescheck'
+import { HOLD_REPORT, runShimHold } from './shimhold'
 import { runHistoryChecks } from './historycheck'
 import { runConfigChecks } from './configcheck'
 import { runContentChecks } from './contentcheck'
@@ -86,6 +87,7 @@ type Mode =
   | 'settings-restart'
   | 'pr-check'
   | 'shim-sweep'
+  | 'shim-hold'
   | 'design-shot'
   | 'affordance-check'
 
@@ -108,6 +110,7 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--settings-restart')) return 'settings-restart'
   if (process.argv.includes('--pr-check')) return 'pr-check'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
+  if (process.argv.includes('--shim-hold')) return 'shim-hold'
   if (process.argv.includes('--claude')) return 'claude'
   if (process.argv.includes('--shell')) return 'shell'
   return 'app'
@@ -128,6 +131,7 @@ const isSpikeMode =
   mode !== 'usage-check' &&
   mode !== 'settings-check' &&
   mode !== 'pr-check' &&
+  mode !== 'shim-hold' &&
   mode !== 'design-shot' &&
   mode !== 'affordance-check'
 
@@ -244,6 +248,18 @@ export interface AppOptions {
    */
   claudeHome?: string | undefined
   /**
+   * Fetch pull requests through this `gh` instead of the discovered one.
+   *
+   * `pnpm dev` passes the synthetic gh here, and it is a launch argument rather
+   * than the `ghPath` setting for two reasons. A setting would be written into
+   * the database, and the dev database is a copy somebody may one day copy back
+   * - so dev's fake binary would end up pointed at by the real app, on a path
+   * that no longer exists. And which binary the pull requests come from is not
+   * the window's to choose, which is why there is no IPC channel for it either;
+   * `pointGh` on the service is the same hook `pr-check` uses.
+   */
+  gh?: string | undefined
+  /**
    * Stand-ins for the native pickers, so `--packaging-firstrun` can drive "add a
    * folder" and "locate claude" through the real handlers. Same shape and same
    * reasoning as `confirm`.
@@ -252,7 +268,37 @@ export interface AppOptions {
   chooseFile?: ((title: string) => string | null) | undefined
 }
 
+/**
+ * The one line `pnpm dev:live` owes anybody who runs it.
+ *
+ * Printed before the database is opened, because by the time the window is up
+ * the damage this warns about is already possible: this process is about to
+ * write to the `helm.db`, the `overlays/` and the Chromium profile of whichever
+ * Helm the user has open. The status bar names the mode too, but a chip on a
+ * window somebody is not looking at is not a warning.
+ */
+function announceLiveMode(): void {
+  if (appMode !== 'dev-live') return
+  const rule = '─'.repeat(72)
+  console.warn(
+    [
+      '',
+      rule,
+      '  DEV, LIVE - this run shares the installed app\'s data directory.',
+      `    ${dataDir}`,
+      '  Its database, overlay shims and Chromium profile are the ones the',
+      '  installed Helm uses. Running both at once will fight over the',
+      '  Chromium profile, and anything written here is written there.',
+      '',
+      '  `pnpm dev` is the isolated one. This is `pnpm dev:live`.',
+      rule,
+      ''
+    ].join('\n')
+  )
+}
+
 function startApp(options: AppOptions = {}): void {
+  announceLiveMode()
   const services: Services = createServices()
   // Before anything can spawn: a `claude` the user picked by hand has to win
   // over discovery in every caller, and the session host does not read
@@ -321,6 +367,12 @@ function startApp(options: AppOptions = {}): void {
       })),
     onChange: (snapshot) => emit(win, 'pr:changed', snapshot)
   })
+  // Before the first pass, and through the service's own hook rather than the
+  // setting - see `AppOptions.gh`.
+  if (options.gh !== undefined) {
+    pulls.pointGh(options.gh)
+    console.log(`pull requests are coming from ${options.gh}`)
+  }
 
   const config = createConfigService({
     services,
@@ -723,7 +775,12 @@ app.whenReady().then(() => {
    */
   if (mode === 'shim-sweep') {
     const services = createServices()
-    const file = writeReport('shim-sweep.json', {
+    // `--report=` because this mode runs twice in one `profiles-check`: once
+    // after PROF-9 plants a crashed run's shim, and once *while* `--shim-hold`
+    // is holding a live one. One filename would leave the second overwriting
+    // the first's evidence.
+    const reportArg = process.argv.find((a) => a.startsWith('--report='))
+    const file = writeReport(reportArg?.slice('--report='.length) ?? 'shim-sweep.json', {
       startedAt: new Date().toISOString(),
       shimRoot,
       removed: services.staleShims
@@ -940,6 +997,47 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`profiles-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  /**
+   * PROF-10's first process: a real app with a real session, held open while a
+   * second one starts and sweeps.
+   *
+   * Its own mode rather than a phase of `--profiles-check` because the claim is
+   * about two Helms overlapping, and the driver that plants PROF-9's shim has to
+   * *end* before the sweep that collects it. One process cannot do both.
+   * `run-profiles.mjs` orchestrates the handshake; see `shimhold.ts`.
+   */
+  if (mode === 'shim-hold') {
+    const collector = createCollector()
+    startApp({
+      observer: collector,
+      confirm: collector.confirm,
+      onReady: (ctx) => {
+        collector.answerWith(true)
+        void runShimHold(ctx, dataDir)
+          .then((check) => {
+            const file = writeReport(HOLD_REPORT, {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              pass: check.ok,
+              checks: [check]
+            })
+            console.log(`shim-hold report: ${file}`)
+            console.log(`${check.ok ? 'PASS' : 'FAIL'}  ${check.id}  ${check.title}`)
+
+            app.once('quit', () => process.exit(check.ok ? 0 : 1))
+            setTimeout(() => app.exit(check.ok ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`shim-hold crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }
@@ -1291,7 +1389,10 @@ app.whenReady().then(() => {
     return
   }
 
-  startApp()
+  // The ordinary app. `--gh=` is the only flag it takes, threaded the way
+  // `--claude-home=` is; `pnpm dev` is what passes one.
+  const ghArg = process.argv.find((a) => a.startsWith('--gh='))
+  startApp(ghArg ? { gh: ghArg.slice('--gh='.length) } : {})
 })
 
 app.on('window-all-closed', () => {

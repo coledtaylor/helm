@@ -51,7 +51,7 @@ import {
   type Tab,
   type TabIndicator
 } from '@helm/ui'
-import type { SessionConfirmRequest } from '../../../shared/ipc'
+import type { AppMode, SessionConfirmRequest } from '../../../shared/ipc'
 import { helm } from './bridge'
 import { ProjectShellPane } from './ProjectShellPane'
 import { PullRequestTab } from './PullRequestTab'
@@ -109,6 +109,21 @@ type PaneRef = WorkspaceTab
  */
 const helmOpenExternal = (url: string): Promise<{ opened: boolean }> =>
   helm.invoke('shell:openExternal', { url })
+
+/**
+ * What each build mode is called on the status bar.
+ *
+ * A map rather than the mode string itself because one of them does not read
+ * as English: `dev-live` is the dev build with **no data directory of its own**,
+ * sharing `%APPDATA%\Helm` with the installed app, and the segment that says so
+ * is the only thing on screen that distinguishes it from an ordinary `pnpm dev`.
+ */
+const MODE_LABEL: Record<AppMode, string> = {
+  installed: 'installed',
+  portable: 'portable',
+  dev: 'dev',
+  'dev-live': 'dev · live'
+}
 
 const HISTORY_TAB = 'history'
 const PULLS_TAB = 'pulls'
@@ -1030,16 +1045,16 @@ export function App(): JSX.Element {
       statusBar={
         <StatusBar
           // The mode is shown only when this copy is not an ordinary install.
-          // `dev` and `portable` both change what the binary is and where the
-          // data lives, so they are worth a word; an installed build is the
-          // case that needs none, and labelling it only adds a segment every
-          // user reads once.
+          // `dev`, `dev · live` and `portable` all change what the binary is and
+          // where the data lives, so they are worth a word; an installed build
+          // is the case that needs none, and labelling it only adds a segment
+          // every user reads once.
           build={
             info === null
               ? '…'
               : info.mode === 'installed'
                 ? info.version
-                : `${info.version} · ${info.mode}`
+                : `${info.version} · ${MODE_LABEL[info.mode]}`
           }
           // From the setup status, not from `app:info`. `app:info` is read once
           // at startup, so after the CLI is relocated the strip would keep

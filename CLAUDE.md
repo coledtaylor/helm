@@ -97,6 +97,29 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
 - **Shims are swept only at app start** (`createServices`). Sweeping per launch
   would pull a plugin directory out from under a live session that a different
   profile started.
+- **The sweep removes only what it can prove is dead.** A shim's stamp names the
+  processes holding it; `cleanStaleShims` asks the kernel about each, counts
+  `EPERM` as *alive*, treats a claim from before this boot as dead however the
+  pid probes, and **leaves the shim wherever the answer is unknown**. The
+  asymmetry is the design: a stale directory is collected at the next start,
+  where a live shim deleted is a session that has silently lost its skills.
+  "Nothing else is running" is never a thing one process may assume - `PROF-10`
+  is two of them, overlapping, and it is what says this still holds.
+
+## Where the data lives
+
+Four modes, and `appMode` in `paths.ts` is the authority. Only one of them
+shares a directory with another Helm, and it is opt-in:
+
+| run | data directory |
+|---|---|
+| installed | `%APPDATA%\Helm` |
+| portable | `helm-data` beside the exe |
+| `pnpm dev` | `%LOCALAPPDATA%\Helm\dev\helm-data` - its own database, Chromium profile and `overlays/`, seeded each launch from a `VACUUM INTO` copy of the real one. A synthetic `gh` (`--gh=`), so the pull-request pane is offline and every state reachable. `~/.claude` and `claude` are the real ones, because `CLAUDE_CONFIG_DIR` moves credentials and a dev app that cannot sign in cannot host a session. `--fresh` for the first-run state; a second `pnpm dev` gets `dev-2`. |
+| `pnpm dev:live` | `%APPDATA%\Helm` - the installed app's. Kept deliberately, says so loudly on the console, and the status bar's mode chip reads `dev · live`. |
+
+A check gets its own directory too, under `%LOCALAPPDATA%\Helm\checks\<name>`;
+see the **`checks`** skill.
 
 ## Surfaces that degrade
 
