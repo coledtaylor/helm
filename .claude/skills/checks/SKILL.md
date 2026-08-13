@@ -192,13 +192,27 @@ in it, and the app had to be reinstalled by hand. Two things came out of that:
 - The termination it did instead of refusing had never worked. `endInstalledApp`
   built its PowerShell with `JSON.stringify(path)`, which doubles every
   backslash - and PowerShell's escape character is the backtick, not the
-  backslash, so `StartsWith("C:\\Users\\…")` was false for every process on the
+  backslash, so `StartsWith("C:\\Users\\user\\…")` was false for every process on the
   machine. It matched nothing, killed nothing, and its "wait until it is gone"
   loop passed instantly *because* it was looking at nothing. Measured on one
   machine with the app plainly open: the JSON form counts 0, a PowerShell
   single-quoted literal counts 4. `psLiteral` is now the only way a path reaches
   a PowerShell command in that file. A destructive step that silently no-ops and
   reports success is the `PROF-4` shape with worse consequences.
+- And then the refusal itself threw instead of refusing. `psLiteral` was written
+  as a `const` arrow near the foot of the file, but `run-packaging.mjs` *runs*
+  its phases on the way down, so the guard called it from the temporal dead zone
+  and phase 3 died with `Cannot access 'psLiteral' before initialization`. It
+  failed safe - the throw came before the install - but the message was a stack
+  trace rather than the sentence that says what to close. It is a `function`
+  now, hoisted like the two helpers around it.
+
+  Both faults were in a branch that only runs when Helm is open, and both
+  survived the commit that introduced them because on the machine that wrote
+  them Helm was open, so the phase was never run at all. **Exercise this guard
+  deliberately after touching it**: once with the app open to see it refuse by
+  name, once with `--replace-running` to see it still proceed. Nothing else
+  takes that branch.
 
 **`usage-check`** - the status bar's figures. A plain `JSON.parse` beside
 `parseUsage`, a hand-written "which of these may be shown" beside `usageView`, a

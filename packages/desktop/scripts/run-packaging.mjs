@@ -602,7 +602,7 @@ function waitForFile(path, timeoutMs) {
  * `JSON.stringify` is not that, and the difference is not cosmetic. It doubles
  * every backslash, and a PowerShell double-quoted string does not undo that -
  * backslash is not PowerShell's escape character, backtick is. So a path went
- * across as `"C:\\Users\\..."`, meaning a literal path with doubled separators,
+ * across as `"C:\\Users\\user\\..."`, a literal path with doubled separators,
  * and `StartsWith` on it was false for every process on the machine.
  *
  * What that silently did: `endInstalledApp` matched nothing and killed nothing,
@@ -613,8 +613,22 @@ function waitForFile(path, timeoutMs) {
  *
  * Single quotes, because a PowerShell single-quoted string is literal: only `'`
  * needs escaping, by doubling, and a backslash is just a backslash.
+ *
+ * A `function` and not a `const` arrow, which is not a style preference. This
+ * module *runs* its phases on the way down - `installerChecks` is called around
+ * line 182 - and everything it calls therefore has to be hoisted. Written as a
+ * `const` it sat in the temporal dead zone, and the first thing phase 3 did was
+ * throw `Cannot access 'psLiteral' before initialization` out of the guard that
+ * exists to keep this phase from uninstalling an app somebody is working in.
+ *
+ * That is twice now that this guard has been wrong, and both times because it
+ * had never been run: a branch that refuses only when Helm is open is a branch
+ * nobody takes on the machine that wrote it. It is the code here most worth
+ * exercising deliberately and the least likely to be exercised by accident.
  */
-const psLiteral = (value) => `'${String(value).replace(/'/g, "''")}'`
+function psLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`
+}
 
 /**
  * How many Helm processes are running out of `installDir`.
