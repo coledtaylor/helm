@@ -155,64 +155,185 @@ function rewriteText(
 // ---------------------------------------------------------------------------
 
 /**
+ * The inline elements a wikilink's own text may be found split across.
+ *
+ * Whitelisted rather than "anything that is not a block", because absorbing a
+ * `<p>` into a link would move a whole paragraph inside an anchor. Anything not
+ * named here stops the scan and the `[[` is left as the literal text it is.
+ */
+const INLINE = new Set([
+  'a', 'abbr', 'b', 'br', 'code', 'del', 'em', 'i', 'img', 'ins', 'kbd', 'mark',
+  'q', 's', 'samp', 'small', 'span', 'strong', 'sub', 'sup', 'u', 'var'
+])
+
+/**
+ * A `[[` that ran off the end of its text node, completed across its siblings.
+ *
+ * `[[…]]` is not markdown, so remark does not treat it as one token: anything
+ * inside it that *is* markdown gets parsed, and the brackets end up in
+ * different nodes. `[[note|`alias`]]` becomes three siblings - `[[note|`, a
+ * `<code>`, and `]]` - and a regex over any one of them matches nothing, so the
+ * link rendered as literal text and was counted as no link at all. One in this
+ * vault, silently, for as long as the transform had existed; `CONT-4`'s two
+ * parsers disagreeing by exactly one is what found it.
+ *
+ * Returns the link's raw inner text, the sibling holding the closing `]]`, and
+ * whatever followed it there. The text is taken **flattened**, so an alias
+ * written `` `like this` `` labels the link `like this` and the code span is
+ * dropped: a wikilink's label is text, and the alternative is an `<a>` with
+ * markup inside it that the wikilink styling then has to fight. The scan gives
+ * up rather than guessing wherever the shape is ambiguous.
+ */
+function spanWikilink(
+  children: readonly HastNode[],
+  from: number,
+  head: string
+): { raw: string; through: number; tail: string } | null {
+  if (head.includes('\n')) return null
+  let raw = head
+
+  for (let i = from + 1; i < children.length; i++) {
+    const sibling = children[i]
+    if (sibling === undefined) return null
+
+    if (sibling.type === 'text') {
+      const value = sibling.value ?? ''
+      const close = value.indexOf(']]')
+      if (close >= 0) {
+        const inner = raw + value.slice(0, close)
+        if (inner.includes('\n')) return null
+        return { raw: inner, through: i, tail: value.slice(close + 2) }
+      }
+      // A second `[[` before this one closed means the first was never a link.
+      if (value.includes('[[') || value.includes('\n')) return null
+      raw += value
+      continue
+    }
+
+    if (sibling.tagName === undefined || !INLINE.has(sibling.tagName)) return null
+    const flat = textOf(sibling)
+    // The closer inside markup cannot be split off without rewriting that
+    // element's children, so this shape is left alone rather than mangled.
+    if (flat.includes(']]') || flat.includes('[[')) return null
+    raw += flat
+  }
+  return null
+}
+
+/**
  * `[[wikilink]]`, `[[note|alias]]`, `[[note#heading]]`, `![[embed]]`.
  *
  * A link that resolves gets the absolute path it resolved to; one that does not
  * gets `data-broken` and is styled as a note worth writing. Nothing is dropped
  * and nothing throws - a vault whose links are half-written is the normal case,
  * not the error case.
+ *
+ * This walks children rather than using `rewriteText` because a link may span
+ * several of them - see `spanWikilink`.
  */
 function applyWikilinks(
   tree: HastNode,
   options: RenderMarkdownOptions,
   links: ContentWikilink[]
 ): void {
-  rewriteText(tree, (value) => {
-    if (!value.includes('[[')) return null
-    WIKILINK_RE.lastIndex = 0
+  const anchor = (raw: string, embed: boolean): HastNode => {
+    const link = parseWikilink(raw, embed)
+    const resolved = options.index
+      ? resolveWikilink(options.index, link, options.path ?? null)
+      : null
+    links.push({
+      target: link.target,
+      label: link.label,
+      heading: link.heading,
+      resolved
+    })
+
+    return {
+      type: 'element',
+      tagName: 'a',
+      properties: {
+        className: resolved === null ? ['wikilink', 'wikilink-broken'] : ['wikilink'],
+        href: '#',
+        'data-wikilink': link.target,
+        ...(resolved === null ? { 'data-wikilink-broken': 'true' } : { 'data-wikilink-path': resolved }),
+        ...(link.heading ? { 'data-wikilink-heading': headingSlug(link.heading) } : {}),
+        title:
+          resolved === null
+            ? `No note called “${link.target}” in this scope yet`
+            : resolved
+      },
+      children: [text(link.label)]
+    }
+  }
+
+  const walk = (node: HastNode): void => {
+    if (!node.children) return
+    if (node.tagName !== undefined && OPAQUE.has(node.tagName)) return
+
+    const children = node.children
     const out: HastNode[] = []
-    let at = 0
-    let matched = false
+    let changed = false
 
-    for (let match = WIKILINK_RE.exec(value); match; match = WIKILINK_RE.exec(value)) {
-      matched = true
-      const [whole, bang, name = '', hash = '', alias = ''] = match
-      if (match.index > at) out.push(text(value.slice(at, match.index)))
-      at = match.index + whole.length
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i]
+      if (child === undefined) continue
 
-      const link = parseWikilink(`${name}${hash}${alias}`, bang === '!')
-      const resolved = options.index
-        ? resolveWikilink(options.index, link, options.path ?? null)
-        : null
-      links.push({
-        target: link.target,
-        label: link.label,
-        heading: link.heading,
-        resolved
-      })
+      if (child.type !== 'text') {
+        walk(child)
+        out.push(child)
+        continue
+      }
 
-      out.push({
-        type: 'element',
-        tagName: 'a',
-        properties: {
-          className: resolved === null ? ['wikilink', 'wikilink-broken'] : ['wikilink'],
-          href: '#',
-          'data-wikilink': link.target,
-          ...(resolved === null ? { 'data-wikilink-broken': 'true' } : { 'data-wikilink-path': resolved }),
-          ...(link.heading ? { 'data-wikilink-heading': headingSlug(link.heading) } : {}),
-          title:
-            resolved === null
-              ? `No note called “${link.target}” in this scope yet`
-              : resolved
-        },
-        children: [text(link.label)]
-      })
+      if (!(child.value ?? '').includes('[[')) {
+        out.push(child)
+        continue
+      }
+
+      /**
+       * `cursor` is the sibling the text in hand came from, and `value` is what
+       * is left to scan. A spanned link consumes siblings and hands back the
+       * text after its `]]`, which goes round again - the note that found this
+       * has a second, ordinary link in exactly that position, and pushing the
+       * tail out as plain text would have traded one lost link for another.
+       */
+      let cursor = i
+      let value = child.value ?? ''
+      for (;;) {
+        // Every link that closes inside the text in hand, the ordinary case.
+        WIKILINK_RE.lastIndex = 0
+        let at = 0
+        for (let match = WIKILINK_RE.exec(value); match; match = WIKILINK_RE.exec(value)) {
+          const [whole, bang, name = '', hash = '', alias = ''] = match
+          if (match.index > at) out.push(text(value.slice(at, match.index)))
+          at = match.index + whole.length
+          out.push(anchor(`${name}${hash}${alias}`, bang === '!'))
+          changed = true
+        }
+
+        // Then whatever is left, which may be a `[[` still looking for its `]]`.
+        const rest = value.slice(at)
+        const open = rest.lastIndexOf('[[')
+        const spanned = open < 0 ? null : spanWikilink(children, cursor, rest.slice(open + 2))
+        if (spanned === null) {
+          if (rest !== '') out.push(text(rest))
+          break
+        }
+
+        const embed = rest.slice(0, open).endsWith('!')
+        const before = rest.slice(0, embed ? open - 1 : open)
+        if (before !== '') out.push(text(before))
+        out.push(anchor(spanned.raw, embed))
+        changed = true
+        cursor = spanned.through
+        value = spanned.tail
+      }
+      i = cursor
     }
 
-    if (!matched) return null
-    if (at < value.length) out.push(text(value.slice(at)))
-    return out
-  })
+    if (changed) node.children = out
+  }
+
+  walk(tree)
 }
 
 /** `#tag`, shown as a chip inline the way the vault writes them. */

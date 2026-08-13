@@ -151,9 +151,45 @@ interface SourceCounts {
   taskItems: number
   taskItemsChecked: number
   codeBlocks: number
+  /**
+   * Whether `codeBlocks` is a number this reader is willing to stand behind.
+   *
+   * False where a fence opens four or more columns in. CommonMark measures a
+   * block's indentation *relative to whatever contains it*, so at that depth
+   * the same three backticks are a nested fence inside a list item or a literal
+   * line inside an indented code block depending on container state a line
+   * scanner does not track - and deciding it would mean writing a second
+   * CommonMark implementation, which is the one thing an independent second
+   * reader must not be. So it declines instead, and CONT-2 reports how often.
+   *
+   * Measured over 538 markdown files outside this vault: every other count
+   * agreed with the renderer exactly, and 15 files - 2.8% - declined this one.
+   */
+  codeBlocksClaimed: boolean
   wikilinks: number
   headings: number
   frontmatterKeys: string[]
+}
+
+/**
+ * A GFM row's cells: one optional leading and trailing pipe dropped, then split
+ * on the pipes that are not escaped.
+ *
+ * Written out because "does this line look like a table" cannot be asked of a
+ * whole line. `| `test_connection` | `GET v1/` | - |` is a body row, and with
+ * its code spans taken out it reads `|  |  | - |` - which is nothing but pipes,
+ * spaces and a dash, and matched the delimiter pattern this check used to use.
+ * Two of those in one note counted as two extra tables, and CONT-2 called the
+ * renderer wrong for painting the one table that is actually there.
+ *
+ * By cells the answer is unambiguous: a delimiter cell may not be empty, and
+ * that alone is the whole of the difference.
+ */
+function rowCells(line: string): string[] {
+  const trimmed = line.trim()
+  if (!trimmed.includes('|')) return []
+  const inner = trimmed.replace(/^\|/, '').replace(/(?<!\\)\|$/, '')
+  return inner.split(/(?<!\\)\|/).map((cell) => cell.trim())
 }
 
 function countSource(source: string): SourceCounts {
@@ -176,7 +212,16 @@ function countSource(source: string): SourceCounts {
     }
   }
 
-  const body = lines.slice(start)
+  /**
+   * A blockquote's marker is not part of the line it carries.
+   *
+   * GFM renders a table, a heading and a task item inside a `>` quote exactly
+   * as it renders them outside one, and this reader used to see `> |---|---|`
+   * as prose - so a quoted table was invisible to it and CONT-2 called the
+   * renderer wrong for painting one. Found on a corpus outside this vault; two
+   * files there carry a table inside a quote.
+   */
+  const body = lines.slice(start).map((line) => line.replace(/^(\s*>)+\s?/, ''))
 
   /**
    * Fenced regions out, remembering how many there were.
@@ -187,27 +232,39 @@ function countSource(source: string): SourceCounts {
    * a scanner that closed on the first ``` ends the outer block early and then
    * miscounts everything after it. That is not a hypothetical: it is what this
    * check disagreed with the renderer about, and the renderer was right.
+   *
+   * The opener is matched at **any** indentation rather than CommonMark's three
+   * columns, because a fence nested in a list item is indented to that item's
+   * content column and is still a fence. Reading those as prose is worse than
+   * over-reading them: their contents leak into `prose`, and a `[[…]]` in a
+   * shell snippet then counts as a wikilink that the renderer never painted.
+   * Where that over-reading might itself be wrong, `codeBlocksClaimed` says so.
    */
   const kept: string[] = []
   let fence: string | null = null
   let fenceLength = 0
+  let fenceIndent = 0
   let codeBlocks = 0
+  let codeBlocksClaimed = true
   for (const line of body) {
-    const opener = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line)
-    if (fence === null && opener?.[1] !== undefined) {
+    const opener = /^(\s*)(`{3,}|~{3,})(.*)$/.exec(line)
+    if (fence === null && opener?.[2] !== undefined) {
       // A backtick fence's info string may not contain a backtick.
-      if (opener[1][0] === '`' && (opener[2] ?? '').includes('`')) {
+      if (opener[2][0] === '`' && (opener[3] ?? '').includes('`')) {
         kept.push(line)
         continue
       }
-      fence = opener[1][0] ?? '`'
-      fenceLength = opener[1].length
+      fence = opener[2][0] ?? '`'
+      fenceLength = opener[2].length
+      fenceIndent = (opener[1] ?? '').length
+      if (fenceIndent >= 4) codeBlocksClaimed = false
       codeBlocks++
       continue
     }
     if (fence !== null) {
-      const closer = new RegExp(`^\\s{0,3}\\${fence}{${String(fenceLength)},}\\s*$`)
-      if (closer.test(line)) fence = null
+      const closer = new RegExp(`^(\\s*)\\${fence}{${String(fenceLength)},}\\s*$`)
+      const closed = closer.exec(line)
+      if (closed && (closed[1] ?? '').length <= fenceIndent + 3) fence = null
       continue
     }
     kept.push(line)
@@ -233,9 +290,21 @@ function countSource(source: string): SourceCounts {
 
   let tables = 0
   for (let i = 1; i < prose.length; i++) {
-    // A delimiter row under a header row is what makes a GFM table.
-    if (/^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(prose[i] ?? '') && (prose[i] ?? '').includes('-')) {
-      if ((prose[i - 1] ?? '').includes('|') && (prose[i] ?? '').includes('|')) tables++
+    // A delimiter row under a header row is what makes a GFM table, and GFM
+    // wants every cell of it to be dashes with optional colons - never empty -
+    // and as many cells as the header above it.
+    const cells = rowCells(prose[i] ?? '')
+    if (cells.length === 0 || !cells.every((cell) => /^:?-+:?$/.test(cell))) continue
+    if (rowCells(prose[i - 1] ?? '').length !== cells.length) continue
+    tables++
+    // Then past the body, so a row of literal dashes inside a table cannot be
+    // read as the header of a second one.
+    while (
+      i + 1 < prose.length &&
+      (prose[i + 1] ?? '').trim() !== '' &&
+      (prose[i + 1] ?? '').includes('|')
+    ) {
+      i++
     }
   }
 
@@ -256,6 +325,7 @@ function countSource(source: string): SourceCounts {
     taskItems,
     taskItemsChecked,
     codeBlocks: codeBlocks + indented,
+    codeBlocksClaimed,
     wikilinks,
     headings,
     frontmatterKeys
@@ -636,7 +706,7 @@ export async function runContentChecks(
     if (harness) {
       await group('browse', () => browseChecks(ctx, shotDir, harness.path))
       await group('render', () => renderChecks(ctx, shotDir, harness.path, appConsole))
-      await group('links', () => linkChecks(ctx, shotDir, harness.path))
+      await group('links', () => linkChecks(ctx, shotDir, harness.path, fixtures))
       await group('search', () => searchChecks(ctx, harness.path))
       await group('edit', () => editChecks(ctx, shotDir, harness.path, dataDir))
       await group('scroll', () => scrollChecks(ctx, shotDir, harness.path, fixtures))
@@ -912,6 +982,8 @@ async function renderChecks(
   // ---- against the driver's own read of the same files --------------------
   const byPath = new Map(painted.map((doc) => [doc.path, doc]))
   const disagreements: Array<Record<string, unknown>> = []
+  /** Files whose code-block count `countSource` declined to claim; see `SourceCounts`. */
+  const codeBlocksUnclaimed: string[] = []
   const totals = {
     files: markdown.length,
     tables: 0,
@@ -956,7 +1028,8 @@ async function renderChecks(
         `checked items: DOM ${String(doc.taskItemsChecked)}, source ${String(expected.taskItemsChecked)}`
       )
     }
-    if (doc.codeBlocks !== expected.codeBlocks) {
+    if (!expected.codeBlocksClaimed) codeBlocksUnclaimed.push(file.relPath)
+    else if (doc.codeBlocks !== expected.codeBlocks) {
       problems.push(`code blocks: DOM ${String(doc.codeBlocks)}, source ${String(expected.codeBlocks)}`)
     }
     // Frontmatter that exists must become chips, and the number of them must be
@@ -989,12 +1062,18 @@ async function renderChecks(
         totals.callouts > 0 &&
         calloutsPainted > 0 &&
         markers.ul === 'disc' &&
-        (markers.task === null || markers.task === 'none'),
+        (markers.task === null || markers.task === 'none') &&
+        // The one exemption in this criterion is not allowed to become the
+        // criterion. A vault where a fifth of the files decline the count is
+        // one where this reader has stopped measuring rather than one with
+        // unusual markdown, and that is a red line, not a footnote.
+        codeBlocksUnclaimed.length * 5 < markdown.length,
       detail: {
         scope: harnessPath,
         markdownFiles: markdown.length,
         painted: painting,
         disagreements,
+        codeBlocksUnclaimed,
         filesShowingRawFrontmatter: rawAnywhere,
         consoleErrorsDuringThePass: consoleErrors,
         totals,
@@ -1010,6 +1089,9 @@ async function renderChecks(
         'The expected counts come from `countSource` in this file: fenced regions removed, then',
         'a regex per feature. It shares no code with remark, and it disagrees with the DOM when',
         'either of them is wrong.',
+        '`codeBlocksUnclaimed` lists the files where that reader declined to count code blocks',
+        'rather than guess at a fence indented into a list item - named rather than skipped, and',
+        'capped at a fifth of the vault so the exemption cannot swallow the criterion.',
         'Console errors are collected from the window for the whole pass, so a note that threw',
         'while rendering fails this check even if the DOM it left behind looks plausible.'
       ]
@@ -1021,7 +1103,12 @@ async function renderChecks(
 // CONT-4: wikilinks
 // ---------------------------------------------------------------------------
 
-async function linkChecks(ctx: CheckContext, shotDir: string, harnessPath: string): Promise<Check[]> {
+async function linkChecks(
+  ctx: CheckContext,
+  shotDir: string,
+  harnessPath: string,
+  fixtures: Fixtures
+): Promise<Check[]> {
   const { win, content } = ctx
   const tree = content.tree(harnessPath, true)
   const markdown = tree.files.filter((file) => file.kind === 'markdown')
@@ -1066,13 +1153,6 @@ async function linkChecks(ctx: CheckContext, shotDir: string, harnessPath: strin
     actualBroken += doc.rendered?.counts.brokenWikilinks ?? 0
   }
 
-  // ---- and then a real click, through the window ---------------------------
-  await selectScope(win, harnessPath)
-  const source = filesWithLinks.find((file) => {
-    const targets = wikilinkTargets(readFileSync(file.path, 'utf8'))
-    return targets.some((target) => names.has(target.toLowerCase().split('/').at(-1) ?? ''))
-  })
-
   /** How the two kinds of link are actually painted, read where each occurs. */
   const readLinkStyle = async (which: 'live' | 'broken'): Promise<Record<string, string> | null> =>
     js<Record<string, string> | null>(
@@ -1090,9 +1170,50 @@ async function linkChecks(ctx: CheckContext, shotDir: string, harnessPath: strin
       })()`
     )
 
+  /**
+   * CONT-3's corpus is the fixture harness, not the vault.
+   *
+   * The claim is about the *viewer* - a click navigates, and a broken link is
+   * painted differently from a live one - and settling it needs one document
+   * holding both kinds at once, so the two computed styles come from the same
+   * stylesheet in the same theme. The vault supplied that by accident until it
+   * stopped: a note written one evening had a single broken link and no live
+   * one, `liveStyle` came back null, and the criterion went red over what
+   * somebody had typed in a text editor. A check that goes red for a reason
+   * unrelated to what it measures gets waved past, and then so does the day it
+   * goes red for a real one.
+   *
+   * CONT-2 and CONT-4 keep the whole vault. Breadth is what those two are for,
+   * and it earns its keep - CONT-4's two parsers disagreeing by exactly one is
+   * what found the renderer dropping a wikilink whose alias remark had parsed.
+   */
+  const fixtureMarkdown = content.tree(fixtures.root, true).files.filter(
+    (file) => file.kind === 'markdown'
+  )
+  const fixtureNames = new Set(
+    fixtureMarkdown.map((file) => basename(file.path).replace(/\.[^.]+$/, '').toLowerCase())
+  )
+  const resolvesInFixture = (target: string): boolean =>
+    fixtureNames.has(target.toLowerCase().split('/').at(-1) ?? '')
+
+  /**
+   * And the fixture is made to prove it discriminates before it is believed.
+   *
+   * Without this the probe reports the `PROF-4` shape: a document with no live
+   * link yields `liveStyle: null`, `visiblyDifferent` is false because there
+   * was nothing to differ from, and the report says the styling is wrong when
+   * what is wrong is the subject.
+   */
+  const source = fixtureMarkdown.find((file) => {
+    const targets = wikilinkTargets(readFileSync(file.path, 'utf8'))
+    return targets.some(resolvesInFixture) && targets.some((t) => !resolvesInFixture(t))
+  })
+  const fixtureIsDiscriminating = source !== undefined
+
   let liveStyle: Record<string, string> | null = null
   let navigated: Record<string, unknown> = { attempted: false }
   if (source) {
+    await selectScope(win, fixtures.root)
     await js<boolean>(
       win,
       `(() => { const row = [...document.querySelectorAll('button[data-content-file]')]
@@ -1110,8 +1231,6 @@ async function linkChecks(ctx: CheckContext, shotDir: string, harnessPath: strin
       win,
       `document.querySelector('[data-content-body] a.wikilink[data-wikilink-path]')?.dataset.wikilinkPath ?? null`
     )
-    // Read where a live link actually is. The note that has a broken one need
-    // not have a resolving one as well, and on this vault it does not.
     liveStyle = await readLinkStyle('live')
     await js<boolean>(
       win,
@@ -1139,12 +1258,9 @@ async function linkChecks(ctx: CheckContext, shotDir: string, harnessPath: strin
   }
 
   // The broken ones have to look different, and the difference has to be in the
-  // computed style rather than in a class name nobody styled.
-  const brokenFile = markdown.find((file) =>
-    wikilinkTargets(readFileSync(file.path, 'utf8')).some(
-      (target) => !names.has(target.toLowerCase().split('/').at(-1) ?? '')
-    )
-  )
+  // computed style rather than in a class name nobody styled. Read back in the
+  // document navigation just landed on, which is the same scope and theme.
+  const brokenFile = source
   let styling: Record<string, unknown> = { attempted: false }
   if (brokenFile) {
     await js<boolean>(
@@ -1176,6 +1292,10 @@ async function linkChecks(ctx: CheckContext, shotDir: string, harnessPath: strin
     }
   }
 
+  // Taken here rather than at the end of the group, so the PNG is of the
+  // document the two styles were read from instead of whatever CONT-11 left up.
+  const shot = await screenshot(win, shotDir, 'content-wikilinks.png')
+
   /**
    * An `https://` link in a note, and the two halves of what happens to it.
    *
@@ -1194,6 +1314,8 @@ async function linkChecks(ctx: CheckContext, shotDir: string, harnessPath: strin
     /\]\(https:\/\//.test(readFileSync(file.path, 'utf8'))
   )
   if (withExternal) {
+    // Back to the vault: CONT-3 left the pane on the fixture harness.
+    await selectScope(win, harnessPath)
     await js<boolean>(
       win,
       `(() => { const row = [...document.querySelectorAll('button[data-content-file]')]
@@ -1225,8 +1347,6 @@ async function linkChecks(ctx: CheckContext, shotDir: string, harnessPath: strin
     `window.helm.invoke('shell:openExternal', { url: 'file:///C:/Windows/win.ini' })`
   )
 
-  const shot = await screenshot(win, shotDir, 'content-wikilinks.png')
-
   const brokenStyle = styling['broken'] as { color?: string; borderBottomStyle?: string } | null
   const visiblyDifferent =
     brokenStyle != null &&
@@ -1238,14 +1358,30 @@ async function linkChecks(ctx: CheckContext, shotDir: string, harnessPath: strin
     {
       id: 'CONT-3',
       criterion: '[[wikilink]] navigation works between notes; broken links visibly distinct',
-      title: 'Clicking a wikilink opened the note it names, and a broken one is a different colour and a dashed rule',
+      title: fixtureIsDiscriminating
+        ? 'Clicking a wikilink opened the note it names, and a broken one is a different colour and a dashed rule'
+        : 'No fixture note holds both a live wikilink and a broken one, so this criterion has no discriminating subject',
       ok:
+        fixtureIsDiscriminating &&
         navigated['landedOnIt'] === true &&
         navigated['targetExistsOnDisk'] === true &&
         visiblyDifferent &&
         Number(styling['brokenCount'] ?? 0) > 0,
-      detail: { navigation: navigated, brokenStyling: styling, visiblyDifferent, screenshot: shot.file },
+      detail: {
+        scope: fixtures.root,
+        fixtureIsDiscriminating,
+        fixtureNotes: fixtureMarkdown.length,
+        navigation: navigated,
+        brokenStyling: styling,
+        visiblyDifferent,
+        screenshot: shot.file
+      },
       notes: [
+        'The subject is the fixture harness this driver writes, not the vault: the two styles',
+        'have to be read out of one document for the comparison to mean anything, and which',
+        'vault notes happen to hold both kinds of link is not a fact about Helm.',
+        'The fixture is required to discriminate before the comparison is believed - a note with',
+        'no live link yields `liveStyle: null` and a false verdict about the styling.',
         'The two styles are read with `getComputedStyle` after the document painted, so this is',
         'a claim about what the reader sees rather than about which class was applied.',
         'A broken link is warm-toned and dashed rather than red: in this vault an unresolved',
