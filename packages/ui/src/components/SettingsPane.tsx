@@ -78,6 +78,20 @@ export interface SettingsPaneProps {
   onAddRoot: () => void
   onRemoveRoot: (path: string) => void
 
+  /**
+   * `pinnedProjects`, as stored: absolute paths, in the order the setting holds
+   * them rather than the order the sidebar shows them.
+   *
+   * Pins are *made* on the sidebar's own rows, where the project is, and this
+   * pane is where the whole set is legible at once - including a path whose
+   * folder has gone, which is the one a person comes here to clear. Paths and
+   * not names, deliberately: the setting is a list of paths and it is a list of
+   * paths that a re-clone invalidates, so the pane shows the value rather than
+   * a friendlier rendering of it.
+   */
+  pinnedProjects: string[]
+  onUnpinProject: (path: string) => void
+
   theme: ThemePreference
   onThemeChange: (theme: ThemePreference) => void
 
@@ -252,6 +266,8 @@ export function SettingsPane({
   scanning,
   onAddRoot,
   onRemoveRoot,
+  pinnedProjects,
+  onUnpinProject,
   theme,
   onThemeChange,
   usageDisplay,
@@ -428,6 +444,59 @@ export function SettingsPane({
               Add a folder
             </Action>
           </Actions>
+
+          <Divider />
+
+          {/* Pins are made on the sidebar, on the row of the project being
+              pinned - the star is there because that is where the decision is.
+              This is where the set is legible all at once, which is what the
+              sidebar cannot be: its Pinned section shows a vanished folder as
+              one row saying so, and a list of the paths is what says *which*
+              path, in a form that can be compared with what is on disk. */}
+          <p className="text-[12.5px] text-fg">Pinned projects</p>
+          <p className="mt-0.5 mb-2 text-[11px] leading-[1.55] text-fg-subtle">
+            Lifted to the top of the sidebar, above the harnesses. Pinned by the star on a
+            project&rsquo;s row; a pin remembers the folder&rsquo;s path, so a project moved or
+            cloned somewhere else comes back unpinned.
+          </p>
+
+          {pinnedProjects.length === 0 ? (
+            <p className="text-[12px] text-fg-subtle">Nothing is pinned.</p>
+          ) : (
+            <ul className="overflow-hidden rounded-well border border-border bg-surface-sunken">
+              {pinnedProjects.map((path) => (
+                <li
+                  key={path}
+                  data-settings-pinned={path}
+                  className="flex items-center gap-2 border-b border-border px-3 py-1.5 last:border-b-0"
+                >
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg-muted"
+                    title={path}
+                  >
+                    {path}
+                  </span>
+                  {/* The roots list above wears the same shape with a danger
+                      hover on its ×, and this one deliberately does not:
+                      un-scanning a folder takes projects out of the tree, and
+                      un-pinning one moves a row back into its harness. */}
+                  <button
+                    type="button"
+                    data-settings-unpin={path}
+                    onClick={() => onUnpinProject(path)}
+                    aria-label={`Unpin ${path}`}
+                    title={`Unpin ${path}`}
+                    className={cn(
+                      'grid size-5 shrink-0 place-items-center rounded text-fg-subtle',
+                      'transition-colors hover:bg-hover hover:text-fg'
+                    )}
+                  >
+                    <CloseIcon width={11} height={11} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </Group>
 
         <Group name="appearance" title="Appearance">

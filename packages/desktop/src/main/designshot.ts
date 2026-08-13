@@ -155,6 +155,61 @@ async function shootIgnored(
   return shot.file
 }
 
+/** The pinned list, written the way the sidebar's star writes it. */
+async function writePinned(win: BrowserWindow, paths: string[]): Promise<void> {
+  await js<void>(
+    win,
+    `window.helm.invoke('settings:write', { pinnedProjects: ${JSON.stringify(paths)} }).then(() => undefined)`
+  ).catch(() => undefined)
+}
+
+/**
+ * The sidebar with a Pinned section, and with one pin whose folder has gone.
+ *
+ * The `welcome` shot above already carries the sidebar in whatever pinned state
+ * the machine is in, which on most machines is none - so this is the *other*
+ * state, and it is arranged rather than waited for: three projects taken from
+ * across the tree, so the section is visibly cross-harness, plus a path that
+ * was never a project, which is the only way to photograph the `folder gone`
+ * row. That last one is the picture with something to get wrong: a badge, a
+ * dimmed name and no launch, in a rail 280px wide.
+ *
+ * Restored afterwards, like the theme and the ignore list: a screenshot run
+ * must not repaint the user's app.
+ */
+async function shootPinned(
+  win: BrowserWindow,
+  outDir: string,
+  theme: string,
+  pinnedBefore: string[]
+): Promise<string | null> {
+  const paths = await js<string[]>(
+    win,
+    `[...document.querySelectorAll('aside nav button[title]')].map((b) => b.title)`
+  ).catch(() => [])
+  if (paths.length < 2) {
+    console.error('design-shot: too few project rows to pin any')
+    return null
+  }
+
+  // Spread across the tree rather than the first three, which on a machine
+  // organised into harnesses are three rows of one harness - and a section
+  // holding one harness's projects is exactly the picture that cannot show
+  // whether the section is flat.
+  const picked = [...new Set([paths[0], paths[Math.floor(paths.length / 2)], paths.at(-1)])].filter(
+    (path): path is string => path !== undefined
+  )
+  const gone = `${picked[0] ?? ''}-that-is-not-there`
+  console.log(`design-shot: pinning ${String(picked.length)} projects plus one gone folder`)
+
+  await writePinned(win, [...picked, gone])
+  await sleep(700)
+  const shot = await screenshot(win, outDir, `sidebar-pinned-${theme}.png`)
+  await writePinned(win, pinnedBefore)
+  await sleep(400)
+  return shot.file
+}
+
 /**
  * The project pane of a project the pull-request surface knows about.
  *
@@ -499,6 +554,7 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
   // ignore list is remembered for the same reason and restored beside it.
   const before = ctx.services.settings.theme
   const ignoredBefore = [...ctx.services.settings.prIgnoredRepos]
+  const pinnedBefore = [...ctx.services.settings.pinnedProjects]
 
   for (const theme of ['dark', 'light'] as const) {
     // Through the real toggle, so the shot proves the control too.
@@ -521,6 +577,15 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
       }
       const shot = await screenshot(win, outDir, `${view.name}-${theme}.png`)
       files.push(shot.file)
+
+      // The sidebar again, with things pinned. `welcome` is where the rail has
+      // nothing else on screen competing with it, and the plain shot above is
+      // the same rail with whatever the machine has pinned - which is the zero
+      // state on a machine that has pinned nothing.
+      if (view.name === 'welcome') {
+        const pinned = await shootPinned(win, outDir, theme, pinnedBefore)
+        if (pinned !== null) files.push(pinned)
+      }
 
       // The project pane again, for a project that is a github.com repository -
       // the state that carries a branch and the pull-request panel.

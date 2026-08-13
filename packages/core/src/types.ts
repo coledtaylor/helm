@@ -528,6 +528,55 @@ export type WorkspaceTab =
 export const WORKSPACE_TABS_MAX = 100
 
 /**
+ * How many projects the pinned list may name.
+ *
+ * A ceiling on a value that is JSON in one row and is rewritten whole on every
+ * toggle, exactly as `PR_IGNORED_REPOS_MAX` is - not a statement about how many
+ * anybody pins. A list past a screenful has stopped being a shortlist and the
+ * tree is what it wanted, but that is the user's call and not a validator's.
+ */
+export const PINNED_PROJECTS_MAX = 200
+
+/**
+ * How two project paths are compared, everywhere this list is read or written.
+ *
+ * Case folding and nothing else. The sidebar's own grouping already keys its
+ * harness map with a bare `path.toLowerCase()`, and a second normalisation here
+ * - trailing separators, `resolve`, short-name expansion - would be a way for
+ * the pinned section and the group it lifts a project out of to disagree about
+ * whether they are looking at the same project, which is how the same row ends
+ * up printed twice.
+ */
+function samePath(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase()
+}
+
+/** Whether this project has been lifted into the sidebar's Pinned section. */
+export function isProjectPinned(pinned: readonly string[], path: string): boolean {
+  return pinned.some((entry) => samePath(entry, path))
+}
+
+/**
+ * The pinned list with one project switched on or off.
+ *
+ * The whole list every time, because that is how the setting is written, and
+ * the comparison is the case-insensitive one above - so pinning `C:\Repos\Api`
+ * when the list already holds `c:\repos\api` replaces that entry rather than
+ * adding a second spelling of one project. Sorted by path so the stored value
+ * does not depend on the order somebody clicked; what the sidebar *shows* is
+ * sorted by name instead, which is a different question and answered there.
+ */
+export function withProjectPinned(
+  pinned: readonly string[],
+  path: string,
+  on: boolean
+): string[] {
+  const without = pinned.filter((entry) => !samePath(entry, path))
+  const next = on ? [...without, path] : without
+  return next.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+}
+
+/**
  * Persisted application settings. Keys are the column names in `app_settings`;
  * every value is JSON-encoded on the way in, so adding a key here is the only
  * step needed to persist it.
@@ -536,6 +585,26 @@ export interface AppSettings {
   theme: ThemePreference
   /** Directories the launcher scans. Empty means "not set up yet". */
   scanRoots: string[]
+  /**
+   * Projects lifted out of their harness group into the sidebar's Pinned
+   * section, as absolute paths.
+   *
+   * Keyed by **path**, and that is a decision rather than the only option that
+   * occurred to anybody - see the validator in `store/settings.ts`, which is
+   * where the consequence is written down. Matching is case-insensitive, the
+   * same comparison the sidebar's own grouping already makes on these paths.
+   *
+   * Projects only. A harness is not pinnable: the tree already gives every
+   * harness a collapse state, which is most of what pinning one would be, and
+   * one pin kind means there is no rule to invent for a pinned project inside a
+   * pinned harness.
+   *
+   * A path that no longer resolves keeps its entry. Discovery will not return
+   * it, so the sidebar paints it as gone rather than dropping it - pinning is a
+   * deliberate act, and an unplugged drive is not a decision to un-pin.
+   * Bounded by `PINNED_PROJECTS_MAX`.
+   */
+  pinnedProjects: string[]
   /** Window geometry, restored on next launch. */
   windowBounds: { width: number; height: number; x?: number; y?: number } | null
   /**
@@ -728,6 +797,7 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   scanRoots: [],
+  pinnedProjects: [],
   windowBounds: null,
   workspaceTabs: null,
   firstRunCompletedAt: null,

@@ -49,6 +49,7 @@ const GROUPS = [
   'pane',
   'claude',
   'roots',
+  'pins',
   'appearance',
   'accessors',
   'updates',
@@ -407,6 +408,25 @@ async function typeInto(win: BrowserWindow, selector: string, text: string): Pro
 }
 
 /**
+ * Empty a field, with a real keystroke.
+ *
+ * `typeInto(win, sel, '')` cannot do this: it selects what is there and then
+ * types nothing, which leaves the selection and the value exactly where they
+ * were. A field that stays filled is a filter that stays applied, and every
+ * assertion made after it is then about a filtered tree.
+ */
+async function clearField(win: BrowserWindow, selector: string): Promise<boolean> {
+  const focused = await js<boolean>(
+    win,
+    `(() => { const el = document.querySelector(${q(selector)});
+      if (!el) return false; el.focus(); el.select(); return true })()`
+  )
+  if (!focused) return false
+  await sendKey(win, 'Backspace')
+  return true
+}
+
+/**
  * Set a `<select>` and let React hear about it.
  *
  * Whether the value took is decided **before** the event is dispatched. React
@@ -542,6 +562,64 @@ async function sidebarPaths(win: BrowserWindow): Promise<string[]> {
 }
 
 /**
+ * The sidebar as the pins group needs to read it, in one pass.
+ *
+ * `rows` is every **launchable** project row, lower-cased - the things
+ * `aside nav button[title]` reaches, which is exactly what every driver here
+ * and in `design-shot` means by "a project row". Counting over that list is
+ * what says a pinned project is printed once rather than twice, and a path
+ * absent from it is a path nothing on screen offers to start a session in.
+ *
+ * `pinned` is what the Pinned section holds, taken from the stars' own
+ * `data-pin-project` rather than from the rows, because the section's
+ * unresolvable entries are deliberately not rows.
+ *
+ * One expression rather than four calls: these have to describe the same frame,
+ * and four round trips through `executeJavaScript` can straddle a re-render.
+ */
+interface PinState {
+  /** Whether a Pinned section is on screen at all. */
+  section: boolean
+  rows: string[]
+  pinned: string[]
+  /** The unresolvable row, when the caller asked about one. */
+  goneRow: { badge: boolean; launchable: boolean } | null
+}
+
+async function pinState(win: BrowserWindow, gonePath?: string): Promise<PinState> {
+  return js<PinState>(
+    win,
+    `(() => {
+      const section = document.querySelector('[data-pinned-section]')
+      const want = ${JSON.stringify((gonePath ?? '').toLowerCase())}
+      const rows = [...document.querySelectorAll('aside nav button[title]')]
+        .map((b) => b.title.toLowerCase())
+      const pinned = section
+        ? [...section.querySelectorAll('[data-pin-project]')]
+            .map((el) => el.getAttribute('data-pin-project') || '')
+        : []
+      let goneRow = null
+      if (want !== '' && section) {
+        const star = [...section.querySelectorAll('[data-pin-project]')]
+          .find((el) => (el.getAttribute('data-pin-project') || '').toLowerCase() === want)
+        // The row is the star's parent: a <div> when the folder has gone and a
+        // <button> would be the bug. "Launchable" is asked of the row itself
+        // rather than of a selector, so it is the DOM that answers.
+        const row = star ? star.parentElement : null
+        if (row) {
+          goneRow = {
+            badge: (row.textContent || '').toLowerCase().includes('folder gone'),
+            launchable:
+              row.tagName === 'BUTTON' || row.querySelector('button[title]') !== null
+          }
+        }
+      }
+      return { section: section !== null, rows, pinned, goneRow }
+    })()`
+  )
+}
+
+/**
  * A settings write sent by hand through the real channel.
  *
  * The same route the pane's own controls take - preload, contract, handler -
@@ -592,6 +670,18 @@ interface Fixtures {
   /** A scan root for the terminal group, with two projects to open shells in. */
   termRoot: string
   termProjects: string[]
+  /**
+   * A scan root for the pins group, holding **two** harnesses.
+   *
+   * Two, because the claim the section makes is that it is flat and
+   * cross-harness: one harness would let a Pinned section that had merely
+   * re-labelled a group pass. `pinProjects` are the repos inside them, in the
+   * order the harnesses were built.
+   */
+  pinRoot: string
+  pinProjects: string[]
+  /** A path under `pinRoot` that was never created. Pinnable, never found. */
+  pinGone: string
 }
 
 function buildFixtures(dataDir: string): Fixtures {
@@ -609,6 +699,22 @@ function buildFixtures(dataDir: string): Fixtures {
   for (const path of [...aProjects, ...bProjects, ...termProjects]) {
     mkdirSync(join(path, '.claude'), { recursive: true })
   }
+
+  // Two harnesses - a folder is one exactly when it holds a `harness.yaml`,
+  // which is the whole definition - with one repo each, so a pin taken out of
+  // one of them can be seen sitting beside a pin taken out of the other.
+  const pinRoot = join(dir, 'root pins')
+  const pinProjects: string[] = []
+  for (const harness of ['pin harness one', 'pin-harness-two']) {
+    const home = join(pinRoot, harness)
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'harness.yaml'), `name: ${harness}\n`)
+    const repo = join(home, 'repos', `${harness} repo`)
+    mkdirSync(join(repo, '.claude'), { recursive: true })
+    pinProjects.push(repo)
+  }
+  // Deliberately not created. This is the pinned path whose folder has gone.
+  const pinGone = join(pinRoot, 'pin harness one', 'repos', 'unplugged drive')
 
   const stubDir = join(dir, 'stub')
   mkdirSync(stubDir, { recursive: true })
@@ -641,7 +747,20 @@ function buildFixtures(dataDir: string): Fixtures {
     ].join('\r\n')
   )
 
-  return { dir, rootA, rootB, aProjects, bProjects, stubCli, ghStub, termRoot, termProjects }
+  return {
+    dir,
+    rootA,
+    rootB,
+    aProjects,
+    bProjects,
+    stubCli,
+    ghStub,
+    termRoot,
+    termProjects,
+    pinRoot,
+    pinProjects,
+    pinGone
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -685,6 +804,10 @@ export async function runSettingsChecks(
   const original: AppSettings = {
     ...asFound,
     scanRoots: asFound.scanRoots.filter((root) => !mine(root)),
+    // Same scrub, same reason: the pins group pins fixture projects, and a run
+    // killed before its restore would otherwise hand the user's settings a pin
+    // on a directory this driver is about to delete.
+    pinnedProjects: asFound.pinnedProjects.filter((path) => !mine(path)),
     claudePath: mine(asFound.claudePath) ? null : asFound.claudePath
   }
   writeFileSync(join(dataDir, 'settings-original.json'), JSON.stringify(original, null, 2))
@@ -1061,6 +1184,185 @@ export async function runSettingsChecks(
         'losing exactly the removed roots two projects is the thing worth proving.',
         'The fixture is asserted to have been contributing those projects first.',
         'Both fixture roots contain a path with a space in it - Windows-first.'
+      ]
+    })
+  }
+
+  // -------------------------------------------------------------------------
+  // S-19: pinned projects - the star, the section, and the pin that outlives
+  // its folder
+  // -------------------------------------------------------------------------
+  if (run('pins')) {
+    // A root of this group's own, so `--only=pins` is a run that means
+    // something. Two harnesses under it, because "flat and cross-harness" is
+    // the claim and one harness cannot distinguish it from a renamed group.
+    await openSettings(win)
+    await sleep(300)
+    answerPicker('directory', fixtures.pinRoot)
+    await click(win, '[data-settings-add-root]')
+    await pollJs(win, byData('settings-root', fixtures.pinRoot), 20_000)
+    const scanned = await pollJs(
+      win,
+      `[...document.querySelectorAll('aside nav button[title]')]
+        .filter((b) => b.title.toLowerCase().startsWith(${JSON.stringify(
+          fixtures.pinRoot.toLowerCase()
+        )})).length >= ${String(fixtures.pinProjects.length)}`,
+      45_000
+    )
+    await sleep(600)
+
+    const [first, second] = fixtures.pinProjects
+    const beforeAnyPin = await pinState(win)
+
+    // The star, pressed on the row the project is on. Not `settings:write`:
+    // the claim is about the affordance, and a driver that wrote the setting
+    // by hand would pass on a star that does nothing.
+    const pinnedFirst = await clickByData(win, 'pin-project', first ?? '')
+    await pollJs(win, `document.querySelector('[data-pinned-section]')`, 10_000)
+    await sleep(400)
+    const afterFirst = await pinState(win)
+    const rowFirst = rowValue(dbFile, 'pinnedProjects') as string[] | undefined
+
+    const pinnedSecond = await clickByData(win, 'pin-project', second ?? '')
+    await sleep(500)
+    const afterSecond = await pinState(win)
+    const rowBoth = rowValue(dbFile, 'pinnedProjects') as string[] | undefined
+
+    // The pin whose folder is not there. Written through the channel rather
+    // than clicked, because there is no row to click - which is the whole
+    // condition. Both real pins are re-sent with it, so this is one edit and
+    // the state afterwards is "three pins, one of them unresolvable".
+    const goneWrite = await sendWrite(win, {
+      pinnedProjects: [...(rowBoth ?? []), fixtures.pinGone]
+    })
+    await sleep(600)
+    const afterGone = await pinState(win, fixtures.pinGone)
+    const rowWithGone = rowValue(dbFile, 'pinnedProjects') as string[] | undefined
+    const shotPinned = await screenshot(win, shotDir, 'settings-19-pinned.png')
+
+    // The filter. A pinned section that ignored it would sit above the tree
+    // still showing what the query just excluded.
+    const needle = (second ?? '').split(/[\\/]+/).pop() ?? ''
+    await typeInto(win, 'aside input[aria-label="Filter projects"]', needle)
+    await sleep(500)
+    const whileFiltering = await pinState(win)
+    const filterCleared = await clearField(win, 'aside input[aria-label="Filter projects"]')
+    await sleep(500)
+    const afterFilter = await pinState(win)
+
+    // Off again, through the settings pane's own list this time - the second
+    // surface the setting has, and the one a stale pin is cleared from.
+    await openSettings(win)
+    await sleep(300)
+    const goneListedInPane = await js<boolean>(
+      win,
+      `Boolean(${byData('settings-pinned', fixtures.pinGone)})`
+    )
+    const unpinnedGone = await clickByData(win, 'settings-unpin', fixtures.pinGone)
+    await sleep(500)
+    const unpinnedFirst = await clickByData(win, 'settings-unpin', first ?? '')
+    await sleep(600)
+    const afterUnpin = await pinState(win)
+    const rowAfterUnpin = rowValue(dbFile, 'pinnedProjects') as string[] | undefined
+
+    // And this group's root back out, so the tree it leaves is the tree it
+    // found. The pins on its projects go with `original` in phase two.
+    await clickByData(win, 'settings-remove-root', fixtures.pinRoot)
+    await sleep(800)
+
+    const lower = (list: readonly string[] | undefined): string[] =>
+      (list ?? []).map((entry) => entry.toLowerCase())
+    const onceInTree = (state: PinState, path: string): boolean =>
+      state.rows.filter((row) => row === path.toLowerCase()).length === 1
+
+    checks.push({
+      id: 'S-19',
+      criterion: 'A project can be pinned, appears once, and keeps its pin when its folder goes',
+      title: 'The star lifts a project out of its harness; a pin whose folder has gone says so and offers no launch',
+      ok:
+        scanned &&
+        // The fixture has to discriminate: unless both projects started inside
+        // their harness groups, "it moved to the Pinned section" proves nothing.
+        beforeAnyPin.section === false &&
+        onceInTree(beforeAnyPin, first ?? '') &&
+        onceInTree(beforeAnyPin, second ?? '') &&
+        pinnedFirst &&
+        pinnedSecond &&
+        // The database file, read through this driver's own connection.
+        lower(rowFirst).includes((first ?? '').toLowerCase()) &&
+        lower(rowBoth).length === 2 &&
+        // Once each, and in the section rather than in the group. Two harnesses
+        // apart, in one flat list.
+        afterSecond.section &&
+        afterSecond.pinned.length === 2 &&
+        onceInTree(afterSecond, first ?? '') &&
+        onceInTree(afterSecond, second ?? '') &&
+        lower(afterSecond.pinned).includes((first ?? '').toLowerCase()) &&
+        lower(afterSecond.pinned).includes((second ?? '').toLowerCase()) &&
+        // The pin that outlived its folder: kept, painted, said out loud, and
+        // with nothing on it that could start a session in a directory that is
+        // not there.
+        goneWrite.accepted &&
+        lower(rowWithGone).includes(fixtures.pinGone.toLowerCase()) &&
+        lower(afterGone.pinned).includes(fixtures.pinGone.toLowerCase()) &&
+        afterGone.goneRow?.badge === true &&
+        afterGone.goneRow.launchable === false &&
+        !afterGone.rows.includes(fixtures.pinGone.toLowerCase()) &&
+        // Filtered like everything else. One pin matches the needle, the other
+        // does not, and the unresolvable one does not either.
+        whileFiltering.pinned.length === 1 &&
+        lower(whileFiltering.pinned).includes((second ?? '').toLowerCase()) &&
+        // And the filter is a filter rather than a deletion: clearing it brings
+        // all three back. Without this the assertions after it would be about a
+        // tree that is still filtered, which is what the first run of this
+        // check actually was.
+        filterCleared &&
+        afterFilter.pinned.length === 3 &&
+        // And off again, from the pane.
+        goneListedInPane &&
+        unpinnedGone &&
+        unpinnedFirst &&
+        lower(rowAfterUnpin).length === 1 &&
+        lower(rowAfterUnpin).includes((second ?? '').toLowerCase()) &&
+        onceInTree(afterUnpin, first ?? ''),
+      detail: {
+        fixture: {
+          root: fixtures.pinRoot,
+          projects: fixtures.pinProjects,
+          neverCreated: fixtures.pinGone,
+          scanFound: scanned
+        },
+        beforeAnyPin,
+        afterFirstStar: { state: afterFirst, databaseRow: rowFirst },
+        afterSecondStar: { state: afterSecond, databaseRow: rowBoth },
+        withAGoneFolder: {
+          write: goneWrite,
+          databaseRow: rowWithGone,
+          state: afterGone,
+          screenshot: shotPinned.file
+        },
+        filter: { typed: needle, state: whileFiltering, cleared: filterCleared, afterClearing: afterFilter },
+        afterUnpinning: {
+          goneWasListedInThePane: goneListedInPane,
+          state: afterUnpin,
+          databaseRow: rowAfterUnpin
+        }
+      },
+      notes: [
+        'Pinned through the star on the row, not through `settings:write`: the',
+        'setting is only half of this and the affordance is the other half.',
+        'Every value is then read back out of the database file through this',
+        'driver`s own read-only connection, beside the DOM assertion.',
+        'Two harnesses in the fixture, because a flat cross-harness section and',
+        'a renamed group look identical when there is only one group.',
+        '"Appears once" is counted over every row in the tree, since printing a',
+        'pinned project in both places is the failure the section cannot afford.',
+        'The unresolvable pin is written rather than clicked because there is no',
+        'row to click - that is the condition. What is asserted about it is that',
+        'the entry survives, that the row says `folder gone`, and that the row',
+        'is not a button: it carries no `title`, so no selector that reaches a',
+        'launchable project row reaches it.',
+        'Whether the pin survives a *restart* is S-9`s, from the parked value.'
       ]
     })
   }
@@ -1867,6 +2169,15 @@ export async function runSettingsChecks(
         good: [fixtures.rootA],
         bad: ['projects/alpha'],
         why: 'a relative path resolves against whatever the cwd happens to be'
+      },
+      {
+        key: 'pinnedProjects',
+        good: [fixtures.pinProjects[0] ?? fixtures.rootA],
+        // Two spellings of one path. Windows compares paths case-insensitively
+        // and so does the sidebar, so this would print one project as two rows
+        // in a section where un-pinning either takes both away.
+        bad: [fixtures.rootA, fixtures.rootA.toUpperCase()],
+        why: 'one project under two spellings is a pin that cannot be taken off'
       },
       {
         key: 'claudePath',
@@ -3234,6 +3545,12 @@ export async function runSettingsChecks(
     // carrying both halves of the criterion across the restart. Root A appears
     // exactly once - `original` has had this driver's own paths scrubbed out.
     scanRoots: [...original.scanRoots, fixtures.rootA],
+    // A pin on a path that is not a project and never was. Parked for the same
+    // reason `prIgnoredRepos` is - it is the other array setting, and an array
+    // JSON round-tripping through one `app_settings` row is the half worth
+    // restarting for - and under the fixture directory so `original`'s scrub
+    // takes it out again if this run never reaches its restore.
+    pinnedProjects: [join(fixtures.dir, 'parked-project')],
     // All six terminal settings, every one of them off its default for the same
     // reason. `terminalShell` is parked on a real program rather than a
     // fixture: a restore that somehow does not happen must leave the app able

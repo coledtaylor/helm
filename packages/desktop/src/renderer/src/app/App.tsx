@@ -2,6 +2,8 @@ import type { JSX } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_SETTINGS,
+  isProjectPinned,
+  withProjectPinned,
   withRepoIgnored,
   type HistorySession,
   type Profile,
@@ -295,6 +297,26 @@ export function App(): JSX.Element {
     (slug: string) => {
       const held = settings?.prIgnoredRepos ?? DEFAULT_SETTINGS.prIgnoredRepos
       writeSettings({ prIgnoredRepos: withRepoIgnored(held, slug, false) })
+    },
+    [settings, writeSettings]
+  )
+
+  /**
+   * The sidebar's star, both directions.
+   *
+   * Composed from `settings` rather than from what the sidebar is holding, the
+   * same rule `unignoreRepo` follows: the setting is the whole list, and a list
+   * assembled from a rendered view is a list assembled from whatever had
+   * arrived by then. `withProjectPinned` decides on and off from the list
+   * itself, so this needs no state of its own and two stars pressed in quick
+   * succession cannot each write the other away.
+   */
+  const togglePin = useCallback(
+    (path: string) => {
+      const held = settings?.pinnedProjects ?? DEFAULT_SETTINGS.pinnedProjects
+      writeSettings({
+        pinnedProjects: withProjectPinned(held, path, !isProjectPinned(held, path))
+      })
     },
     [settings, writeSettings]
   )
@@ -1017,6 +1039,8 @@ export function App(): JSX.Element {
           scanning={launcher.scanning}
           scanError={launcher.scanError}
           selectedPath={selectedPath}
+          pinnedPaths={settings?.pinnedProjects ?? DEFAULT_SETTINGS.pinnedProjects}
+          onTogglePin={togglePin}
           onSelect={openProject}
           onRescan={launcher.rescan}
           onAddRoot={launcher.addRoot}
@@ -1342,6 +1366,10 @@ export function App(): JSX.Element {
               scanning={launcher.scanning}
               onAddRoot={launcher.addRoot}
               onRemoveRoot={launcher.removeRoot}
+              pinnedProjects={settings?.pinnedProjects ?? DEFAULT_SETTINGS.pinnedProjects}
+              // The same writer the sidebar's star goes through, so the two
+              // surfaces cannot hold different ideas of what is pinned.
+              onUnpinProject={togglePin}
               theme={settings?.theme ?? 'system'}
               onThemeChange={launcher.setTheme}
               usageDisplay={settings?.usageDisplay ?? 'percent'}

@@ -4,6 +4,7 @@ import {
   DEFAULT_SETTINGS,
   EFFORT_LEVELS,
   isRepoSlug,
+  PINNED_PROJECTS_MAX,
   PR_CHECKOUT_MODES,
   PR_IGNORED_REPOS_MAX,
   PR_POLL_MINUTES,
@@ -121,6 +122,49 @@ export const SETTING_VALIDATORS: SettingValidators = {
         return `expected every root to be a path, got ${describe(entry)}`
       }
       if (!isAbsolute(entry)) return `expected an absolute path, got ${JSON.stringify(entry)}`
+    }
+    return null
+  },
+
+  /**
+   * Projects in the sidebar's Pinned section, as a *set* of absolute paths.
+   *
+   * **Keyed by path, and a moved or re-cloned checkout therefore loses its
+   * pin.** That is the decision, not an oversight found later: `prIgnoredRepos`
+   * next door learned to key by slug precisely so an entry would survive a
+   * re-clone into a different directory, and a project has no slug to key by.
+   * It is not a repository - a plain folder and a harness root are both
+   * pinnable and neither has a remote - and it is not a database row, because
+   * this list has to be readable and writable before the first scan finishes.
+   * Its path is the only identity it has; `Project.path` says so, and the
+   * `projects` table uses it as the primary key for the same reason.
+   *
+   * What that costs is one re-pin after a move, in the surface the pin was made
+   * in. What keying by anything else would cost is an identity that has to be
+   * resolved before the tree can paint. The trade is worth it in that
+   * direction, and it is written here so the next person to meet a pin that
+   * disappeared after a re-clone knows it was chosen rather than broken.
+   *
+   * Absolute, for the reason `scanRoots` is: a relative entry would name a
+   * different directory depending on what the shortcut's working directory was.
+   * The duplicate check is case-insensitive and matches `isProjectPinned`, so
+   * two spellings of one path cannot become two rows in a section where only
+   * one of them could ever be un-pinned.
+   */
+  pinnedProjects: (value) => {
+    if (!Array.isArray(value)) return `expected an array of paths, got ${describe(value)}`
+    if (value.length > PINNED_PROJECTS_MAX) {
+      return `expected at most ${String(PINNED_PROJECTS_MAX)} projects, got ${String(value.length)}`
+    }
+    const seen = new Set<string>()
+    for (const entry of value) {
+      if (typeof entry !== 'string' || entry.trim() === '') {
+        return `expected every pin to be a path, got ${describe(entry)}`
+      }
+      if (!isAbsolute(entry)) return `expected an absolute path, got ${JSON.stringify(entry)}`
+      const key = entry.toLowerCase()
+      if (seen.has(key)) return `expected each project once, got ${JSON.stringify(entry)} twice`
+      seen.add(key)
     }
     return null
   },

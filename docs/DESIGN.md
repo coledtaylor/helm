@@ -216,6 +216,35 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   right. Selection is `bg-accent-soft` plus a 2px accent bar down the left
   edge (absolutely positioned, `rounded-full`), never a solid fill. Hover is
   `bg-hover`. Row radius is `rounded-well`.
+
+  **A row carries no buttons: the row itself is the action.** Everything else
+  about the thing on it is inside it, one click away, on a pane with room to
+  say it. `PullRow` states this at its own call site and it is the rule for
+  every list here. A row with three glyphs down its right edge is a row whose
+  own click target is a guess, and it puts the rare actions in front of the
+  common one.
+
+  **The exception is a control that changes which list the row is in**, and it
+  is an exception rather than a loophole because such a control is not one of
+  the row's actions at all - it is an action on the *list*, and the row is
+  simply where the user is pointing when they decide. Two of them exist: a
+  profile's pin, and a project's. Both wear the same rules:
+
+  - **Hidden at rest, revealed by `group-hover` on the row** (and by
+    `focus-visible`, so it is reachable from the keyboard). A tree of a dozen
+    rows still reads as a column of names.
+  - **Revealed by opacity, never by mounting.** A control that only exists in
+    the DOM under the pointer is one no keyboard reaches and one
+    `affordance-check` cannot enumerate - its walk skips `display:none` and
+    `visibility:hidden`, so such a control would be measured by nothing and
+    reported by nothing, which is the coverage gap AFF-2 exists to name.
+  - **Its space is reserved, not borrowed.** The row holds the gutter open
+    whether or not the control is showing, so nothing on the row moves when it
+    appears and it never floats over the second line's machine data - the half
+    somebody is reading at exactly the moment they point at it.
+  - It carries **no `title`**. `aside nav button[title]` is how every driver
+    and `design-shot` finds "a project row", and a second titled button inside
+    the row makes that selector a coin flip. `aria-label` says what it does.
 - **Source pills**: a list that draws rows from more than one place carries the
   place on the row, as a hairline `border-strong` pill at the head of the second
   line - the repository on a pull request row is the one so far. This is the one
@@ -307,7 +336,7 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   a pane of about 195px on a 1280px screen and 119px on the narrowest window
   the app will open.
 - **Sidebar**: four global rows (session history, pull requests, Config,
-  Content), then profiles, then the harness tree. A harness is a collapsible
+  Content), then profiles, then **Pinned**, then the harness tree. A harness is a collapsible
   group - caret, name in the caps label style but at `fg`, project count, and a
   running-session count at the right in `accent-text`. Groups are separated by
   an `.island-rule`, never a border. The global rows share one shape - icon,
@@ -350,11 +379,35 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   and the conclusion survives it anyway, on the sentence above rather than on
   the cursor. Worth recording, because the cursor was doing more of the
   argument's work than it should have been.
-- **Project rows in the tree**: kind icon, name, `GitChip`. The icon stays
+  The **Pinned** section sits inside the same scroller, above the first group,
+  and holds the projects somebody lifted out of their harnesses. It is
+  deliberately *not* shaped like a harness group: no caret, and its label sits
+  at `fg-subtle` where a group header sits at `fg`. **Only projects are
+  pinnable.** A pinned harness would be very nearly the collapse state the group
+  header already has, and one pin kind means there is no rule to invent for a
+  pinned project inside a pinned harness - so nothing in this rail may offer to
+  pin one. A harness *root* is a project and does have a star, like any other
+  directory a session can start in.
+
+  Pins are flat and cross-harness, which is the whole point of them, so a
+  pinned project appears **once** - in the section, never also in its group -
+  and the section sorts by name rather than by path, since path order is
+  harness order and that is the arrangement being escaped. The filter reaches it
+  like every other row.
+- **Project rows in the tree**: kind icon, name, `GitChip`, and a pinning star
+  in a reserved right gutter under the rules in §5. The icon stays
   because harness / repo / plain folder is the one thing a row's name and branch
   cannot say. Inventory counts do not - what a project contributes to a session
   is answered in full by the project pane, and three numbers in a 280px rail
   only hint at it.
+
+  A pinned row whose folder is no longer there keeps its place and says so, in
+  `SessionHistory`'s own words - the **`folder gone`** badge, the same hairline
+  outline pill. It is **not a button**: a pin is a deliberate act and an
+  unplugged drive is not a decision to un-pin, but a row that offered a launch
+  which would fail is worse than a row that says why it cannot. Its star is the
+  one thing left to do to it, so that one is shown outright rather than on
+  hover - there is nothing else for hover to reveal.
 
 ## 6. Foreign-ground islands
 

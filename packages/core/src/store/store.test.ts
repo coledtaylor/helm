@@ -3,7 +3,15 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, EMPTY_INVENTORY, type AppSettings, type Project } from '../types'
+import {
+  DEFAULT_SETTINGS,
+  EMPTY_INVENTORY,
+  PINNED_PROJECTS_MAX,
+  isProjectPinned,
+  withProjectPinned,
+  type AppSettings,
+  type Project
+} from '../types'
 import { openStore, type Store } from './db'
 import { knownMigrations } from './migrate'
 import { cacheProjects, readCachedProjects } from './projects'
@@ -102,6 +110,7 @@ describe('settings', () => {
     const written = {
       theme: 'light',
       scanRoots: [dir, join(dir, 'other')],
+      pinnedProjects: [join(dir, 'alpha'), join(dir, 'beta')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
       // Every pane kind, because the validator checks each one's own fields and
       // a strip of only the field-less kinds would not exercise them.
@@ -202,6 +211,34 @@ describe('settings validation', () => {
       key: 'scanRoots',
       good: [[], [join(tmpdir(), 'a')], [join(tmpdir(), 'a'), join(tmpdir(), 'b')]],
       bad: [null, 'C:\\work', ['repos/helm'], ['../up'], [''], [17], [null]]
+    },
+    {
+      key: 'pinnedProjects',
+      // Absolute paths, as a set. Two spellings of one path is the interesting
+      // rejection and it is the same shape as `prIgnoredRepos`': the comparison
+      // is case-insensitive, so `C:\Repos\Api` and `c:\repos\api` would present
+      // as two rows in a section where un-pinning either removes both. Mixed
+      // case across *different* paths is fine and is in the good column.
+      good: [
+        [],
+        [join(tmpdir(), 'alpha')],
+        [join(tmpdir(), 'alpha'), join(tmpdir(), 'Beta')],
+        [join(tmpdir(), 'a folder with spaces')]
+      ],
+      bad: [
+        [join(tmpdir(), 'alpha'), join(tmpdir(), 'ALPHA')],
+        [join(tmpdir(), 'alpha'), join(tmpdir(), 'alpha')],
+        ['repos/helm'],
+        ['../up'],
+        [''],
+        ['   '],
+        [17],
+        [null],
+        join(tmpdir(), 'alpha'),
+        null,
+        {},
+        Array.from({ length: PINNED_PROJECTS_MAX + 1 }, (_, i) => join(tmpdir(), `p${String(i)}`))
+      ]
     },
     {
       key: 'claudePath',
@@ -459,6 +496,7 @@ describe('settings validation', () => {
     writeSettings(store, {
       theme: 'dark',
       scanRoots: [dir],
+      pinnedProjects: [join(dir, 'alpha')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
       workspaceTabs: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
       firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
@@ -490,6 +528,7 @@ describe('settings validation', () => {
 const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   theme: 'dark',
   scanRoots: [dir],
+  pinnedProjects: [join(dir, 'alpha')],
   windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
   workspaceTabs: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
   firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
@@ -510,6 +549,50 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   prReviewEffort: null,
   updateCheck: true,
   lastUpdateCheckAt: null
+})
+
+describe('pinned projects', () => {
+  const a = 'C:\\Repos\\Api'
+  const b = 'C:\\Repos\\web'
+
+  it('matches a path however it was spelled', () => {
+    // Windows paths are case-insensitive, and the two places this list meets
+    // the tree - the Pinned section and the harness group a pinned project is
+    // *left out* of - both compare with `toLowerCase`. If this did not, a pin
+    // written in one casing would print the project twice.
+    expect(isProjectPinned([a], 'c:\\repos\\api')).toBe(true)
+    expect(isProjectPinned(['c:\\repos\\api'], a)).toBe(true)
+    expect(isProjectPinned([a], 'C:\\Repos\\Api2')).toBe(false)
+    expect(isProjectPinned([], a)).toBe(false)
+  })
+
+  it('adds and removes, sorted, so the value does not depend on click order', () => {
+    expect(withProjectPinned([], b, true)).toEqual([b])
+    expect(withProjectPinned([b], a, true)).toEqual([a, b])
+    expect(withProjectPinned([a, b], a, false)).toEqual([b])
+  })
+
+  it('never leaves a second spelling of the same project behind', () => {
+    expect(withProjectPinned([a], 'c:\\repos\\api', false)).toEqual([])
+    expect(withProjectPinned([a], 'c:\\repos\\api', true)).toEqual(['c:\\repos\\api'])
+  })
+
+  it('leaves the list it was given alone', () => {
+    const held = [a]
+    expect(withProjectPinned(held, b, true)).toEqual([a, b])
+    expect(held).toEqual([a])
+  })
+
+  it('produces a list the validator accepts', () => {
+    // The toggle and the validator have to agree about what a set is: a helper
+    // that could produce two spellings would build a value nothing can write.
+    let held: string[] = []
+    for (const path of [a, b, 'c:\\repos\\api', 'C:\\Repos\\WEB']) {
+      held = withProjectPinned(held, path, true)
+      expect(validateSetting('pinnedProjects', held)).toBeNull()
+    }
+    expect(held).toHaveLength(2)
+  })
 })
 
 describe('project cache', () => {
