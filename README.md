@@ -150,15 +150,22 @@ it, and otherwise stays out of the way.
 
 There is no auto-updater, on purpose - see
 [docs/PACKAGING.md](docs/PACKAGING.md) for the three reasons. What Helm does
-instead is *tell* you: once per launch, and at most once a day, it asks GitHub
-whether a newer release exists and puts a line beside the version in the status
-bar when there is one. Clicking it opens the releases page. Helm downloads
-nothing, replaces nothing and restarts nothing - getting the new version is
-still something you do.
+instead is *tell* you: it asks GitHub whether a newer release exists and puts a
+line beside the version in the status bar when there is one. Clicking it opens
+the releases page. Helm downloads nothing, replaces nothing and restarts nothing
+- getting the new version is still something you do.
 
-That is the only network connection Helm's own process opens, and **Settings →
-Appearance → "Tell me about new releases"** turns it off, after which it opens
-none at all.
+It asks two ways and no others. On launch, at most once a day, if **Settings →
+Updates → "Tell me about new releases"** is ticked; and whenever you press
+**Check now** in that same group, which is never throttled and works whether the
+tick is on or off - the setting governs whether Helm asks by itself, not whether
+you may. Settings → Updates also shows this build's version, the newest one Helm
+has heard of, and a Release notes link that works offline, because it is a link
+rather than a request.
+
+That check is the only network connection Helm's own process opens. With the
+tick off, Helm opens none on its own initiative, and none at all until somebody
+asks for one.
 
 The pull-request pane reaches GitHub too, but through **your own `gh` CLI**, on
 a schedule you set - every five minutes by default, and `0` in Settings turns it

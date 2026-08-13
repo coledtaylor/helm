@@ -225,10 +225,17 @@ export function App(): JSX.Element {
    * Doing it at the seam means the bar takes a shape whose fields arrive
    * together, instead of taking three nullable ones and restating the rule that
    * connects them.
+   *
+   * From `answered` and not `attempted`, which is the whole reason the hook
+   * keeps two. The bar's line is a standing fact - a newer release exists - and
+   * a manual check that could not reach GitHub is not evidence against it. The
+   * settings pane takes `attempted` instead, because there the question is what
+   * happened when you pressed the button, and "could not ask" is the answer.
    */
+  const answered = check.answered
   const update =
-    check !== null && check.newer && check.latest !== null && check.url !== null
-      ? { latest: check.latest, newer: true, url: check.url }
+    answered !== null && answered.newer && answered.latest !== null && answered.url !== null
+      ? { latest: answered.latest, newer: true, url: answered.url }
       : null
   const setup = useSetup(settings, launcher.rescan)
   const shells = useShells()
@@ -1341,6 +1348,19 @@ export function App(): JSX.Element {
               updateCheck={settings?.updateCheck ?? DEFAULT_SETTINGS.updateCheck}
               onUpdateCheckChange={(updateCheck) => writeSettings({ updateCheck })}
               onUsageDisplayChange={launcher.setUsageDisplay}
+              appVersion={info?.version ?? null}
+              // From `app:info` rather than from a check's result: the states
+              // that produce no result are exactly the ones where somebody
+              // wants this link.
+              releasesUrl={info?.releasesUrl ?? null}
+              // `attempted`, not `answered` - see the narrowing above the
+              // status bar's `update`.
+              update={check.attempted}
+              updateChecking={check.checking}
+              onCheckForUpdate={check.check}
+              onOpenReleases={() => {
+                if (info?.releasesUrl !== undefined) void helmOpenExternal(info.releasesUrl)
+              }}
               // The same fact the status bar's cycle turns on, from the same
               // snapshot, so the pane cannot offer a mode the segment skips.
               hasCostEstimate={usage?.spend != null}

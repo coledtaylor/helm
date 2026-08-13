@@ -1,4 +1,4 @@
-import { nativeTheme, type BrowserWindow } from 'electron'
+import { app, nativeTheme, type BrowserWindow } from 'electron'
 import Database from 'better-sqlite3'
 import { execFileSync } from 'node:child_process'
 import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -8,6 +8,7 @@ import { screenshot, sendKey, sleep, typeText } from './bridge'
 import type { Check } from './fidelity'
 import type { CheckContext } from './sessionscheck'
 import { answerPicker } from './packagingcheck'
+import { pointReleases, releasesAsked } from './update'
 
 /**
  * The settings pane, driven through the real window.
@@ -50,6 +51,7 @@ const GROUPS = [
   'roots',
   'appearance',
   'accessors',
+  'updates',
   'validation',
   'terminal',
   'github'
@@ -137,6 +139,27 @@ function rowValue(dbFile: string, key: keyof AppSettings): unknown {
     } catch {
       return { unparseable: row.value }
     }
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * The same row, uninterpreted - the characters actually in the column.
+ *
+ * For the assertion "this did not move", where `rowValue`'s parse is a
+ * softening: two instants a millisecond apart parse to two different strings
+ * and compare unequal, but so would a rewrite of the same instant in a
+ * different shape, and it is the *write* that S-18 is looking for. Comparing
+ * the stored text catches a row that was written again with the same value.
+ */
+function rawRow(dbFile: string, key: keyof AppSettings): string | undefined {
+  const db = new Database(dbFile, { readonly: true, fileMustExist: true })
+  try {
+    const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as
+      | { value: string }
+      | undefined
+    return row?.value
   } finally {
     db.close()
   }
@@ -718,6 +741,12 @@ export async function runSettingsChecks(
          addRoot: Boolean(document.querySelector('[data-settings-add-root]')),
          theme: Boolean(document.querySelector('[data-settings-theme]')),
          usage: Boolean(document.querySelector('[data-settings-usage]')),
+         appVersion: Boolean(document.querySelector('[data-settings-app-version]')),
+         latestVersion: Boolean(document.querySelector('[data-settings-latest-version]')),
+         updateOutcome: Boolean(document.querySelector('[data-settings-update-outcome]')),
+         updateCheck: Boolean(document.querySelector('[data-settings-update-check]')),
+         updateNow: Boolean(document.querySelector('[data-settings-update-now]')),
+         releases: Boolean(document.querySelector('[data-settings-releases]')),
          terminalFont: Boolean(document.querySelector('[data-settings-terminal-font]')),
          terminalSize: Boolean(document.querySelector('[data-settings-terminal-size]')),
          terminalCursor: Boolean(document.querySelector('[data-settings-terminal-cursor]')),
@@ -767,13 +796,13 @@ export async function runSettingsChecks(
     checks.push({
       id: 'S-1',
       criterion: 'Gear in the title bar opens the Settings tab; every group renders',
-      title: 'The gear opens a Settings pane with all five groups, and Ctrl+Tab cycles to it',
+      title: 'The gear opens a Settings pane with all six groups, and Ctrl+Tab cycles to it',
       ok:
         gearThere &&
         !paneBefore &&
         opened &&
         tabSelected === 'true' &&
-        groups.join(',') === 'claude,workspace,appearance,terminal,github' &&
+        groups.join(',') === 'claude,workspace,appearance,updates,terminal,github' &&
         Object.values(controls).every(Boolean) &&
         !internalLeaked &&
         historyUp &&
@@ -1286,6 +1315,538 @@ export async function runSettingsChecks(
         'on an aeroplane.'
       ]
     })
+  }
+
+  // -------------------------------------------------------------------------
+  // S-14 to S-18: the Updates group, and the check a person asks for
+  // -------------------------------------------------------------------------
+  //
+  // All five run against `pointReleases` - the seam in `update.ts` that swaps
+  // the *source* of the tag rather than the address it is fetched from. A
+  // function and not a URL, because pointing this at a second address would
+  // mean this driver standing up an HTTP server, and "the app has no inbound
+  // listener anywhere in it" is a claim worth keeping true. Swapping the source
+  // also produces the one thing the network cannot be asked for on demand: a
+  // newer release, an older one, and a failure, in that order, on a machine
+  // that is online.
+  //
+  // The seam is restored in a `finally`, so a phase that throws does not leave
+  // a later one asking a fixture.
+  if (run('updates')) {
+    /**
+     * This driver's own count of how many times Helm asked, kept in the closure
+     * beside the source rather than read out of `update.ts`.
+     *
+     * `releasesAsked()` answers the same question and is asserted against this
+     * one at every step. It is `update.ts`'s counter of its own behaviour, so on
+     * its own it would be the code agreeing with itself; this one is incremented
+     * by the function Helm actually called, which is a fact about the call and
+     * not about the bookkeeping around it. Two counters that disagree is a
+     * finding either way.
+     */
+    let askedHere = 0
+
+    /** A source that answers with a tag, optionally taking its time about it. */
+    const answering =
+      (tag: string, delayMs = 0) =>
+      async (): Promise<string> => {
+        askedHere += 1
+        if (delayMs > 0) await sleep(delayMs)
+        return tag
+      }
+
+    /** A source that cannot answer, which is what being offline looks like here. */
+    const refusing = (reason: string) => async (): Promise<string> => {
+      askedHere += 1
+      await sleep(50)
+      throw new Error(reason)
+    }
+
+    /** Wait on this driver's own counter, not on anything the window says. */
+    const waitAsked = async (n: number, timeoutMs = 20_000): Promise<boolean> => {
+      const deadline = Date.now() + timeoutMs
+      while (askedHere < n && Date.now() < deadline) await sleep(100)
+      return askedHere >= n
+    }
+
+    const outcomeState = (): Promise<string | null> =>
+      attr(win, '[data-settings-update-outcome]', 'data-settings-update-outcome')
+    const outcomeSentence = (): Promise<string> => text(win, '[data-settings-update-outcome]')
+    /** The tone, which every group's verdict carries under the same name. */
+    const outcomeTone = (): Promise<string | null> =>
+      attr(win, '[data-settings-update-outcome]', 'data-settings-verdict')
+
+    /**
+     * One press of Check now against a source of this driver's choosing.
+     *
+     * The gate is `waitAsked`, not the attribute on screen: two drives in a row
+     * can legitimately land on the same outcome, and polling for a value that is
+     * already there would report a pass for a button that did nothing. Only once
+     * this driver's own source has been entered is the answer on screen known to
+     * be *this* drive's, and the attribute is read after that.
+     */
+    interface Drive {
+      clicked: boolean
+      asked: boolean
+      askedHere: number
+      askedThere: number
+      settled: boolean
+      state: string | null
+      tone: string | null
+      sentence: string
+      latestFact: string
+      releasesPresent: boolean
+      releasesDisabled: boolean | null
+      releasesTitle: string | null
+    }
+
+    const drive = async (source: () => Promise<string>, expected: string): Promise<Drive> => {
+      pointReleases(source)
+      askedHere = 0
+      const clicked = await click(win, '[data-settings-update-now]')
+      const asked = await waitAsked(1)
+      const settled = await pollJs(
+        win,
+        `document.querySelector('[data-settings-update-outcome]')?.dataset.settingsUpdateOutcome === ${q(expected)}`,
+        20_000
+      )
+      await sleep(250)
+      return {
+        clicked,
+        asked,
+        askedHere,
+        askedThere: releasesAsked(),
+        settled,
+        state: await outcomeState(),
+        tone: await outcomeTone(),
+        sentence: await outcomeSentence(),
+        latestFact: await text(win, '[data-settings-latest-version]'),
+        releasesPresent: await exists(win, '[data-settings-releases]'),
+        releasesDisabled: await disabled(win, '[data-settings-releases]'),
+        releasesTitle: await attr(win, '[data-settings-releases]', 'title')
+      }
+    }
+
+    /**
+     * What this build says it is, asked of Electron rather than read off the
+     * pane. The pane's number came the long way round - `app:info` over IPC and
+     * into React - so the two agreeing is a round trip proved rather than a
+     * value restated.
+     */
+    const runningVersion = app.getVersion()
+    /** A tag no release will ever carry, so `newer` cannot be a coincidence. */
+    const HIGH_TAG = 'v99.9.9'
+    /** A reason no network stack produces, so finding it in the sentence means it was carried. */
+    const REFUSAL = 'the settings-check fixture refused on purpose'
+
+    const updateCheckAtPhaseStart = rowValue(dbFile, 'updateCheck')
+
+    try {
+      await openSettings(win)
+      await sleep(400)
+
+      const paintedVersion = await text(win, '[data-settings-app-version]')
+
+      // -----------------------------------------------------------------------
+      // A positive control for `disabled()`, before anything is believed about
+      // a button *not* being disabled.
+      //
+      // "The button was not disabled" is exactly the assertion that passes when
+      // the probe is broken: a selector that matches nothing, or a helper that
+      // always answered false, would report every control on the pane as live.
+      // So the button is first caught in the one state where it genuinely is
+      // disabled - mid-flight - by pointing the source at something slow enough
+      // for this driver to look while it is still in the air.
+      // -----------------------------------------------------------------------
+      pointReleases(answering(HIGH_TAG, 2000))
+      askedHere = 0
+      const clickedSlow = await click(win, '[data-settings-update-now]')
+      await sleep(500)
+      const nowDisabledInFlight = await disabled(win, '[data-settings-update-now]')
+      const outcomeInFlight = await outcomeState()
+      // Release notes is deliberately not disabled by a check being in progress:
+      // it opens a page, it does not ask GitHub anything.
+      const releasesDisabledInFlight = await disabled(win, '[data-settings-releases]')
+      await waitAsked(1)
+      await pollJs(
+        win,
+        `document.querySelector('[data-settings-update-outcome]')?.dataset.settingsUpdateOutcome !== 'checking'`,
+        20_000
+      )
+      await sleep(250)
+      const nowDisabledAtRest = await disabled(win, '[data-settings-update-now]')
+
+      // -----------------------------------------------------------------------
+      // S-14: unthrottled, twice in a row
+      // -----------------------------------------------------------------------
+      pointReleases(answering(HIGH_TAG))
+      askedHere = 0
+      const askedAtStart = releasesAsked()
+
+      const clickedOnce = await click(win, '[data-settings-update-now]')
+      const reachedOne = await waitAsked(1)
+      const settledOne = await pollJs(
+        win,
+        `document.querySelector('[data-settings-update-outcome]')?.dataset.settingsUpdateOutcome === 'newer'`,
+        20_000
+      )
+      await sleep(300)
+      const afterOneThere = releasesAsked()
+      const afterOneHere = askedHere
+
+      const clickedTwice = await click(win, '[data-settings-update-now]')
+      const reachedTwo = await waitAsked(2)
+      await sleep(400)
+      const afterTwoThere = releasesAsked()
+      const afterTwoHere = askedHere
+      const twiceState = await outcomeState()
+      const twiceSentence = await outcomeSentence()
+
+      const shotUpdates = await screenshot(win, shotDir, 'settings-14-updates.png')
+
+      checks.push({
+        id: 'S-14',
+        criterion: 'A manual check runs on demand and is never throttled, including twice in a row',
+        title: 'Check now asks GitHub every time it is pressed - two presses, two requests',
+        ok:
+          clickedOnce &&
+          clickedTwice &&
+          reachedOne &&
+          reachedTwo &&
+          settledOne &&
+          // The counter is live before anything is concluded from it moving.
+          askedAtStart === 0 &&
+          afterOneThere === 1 &&
+          afterOneHere === 1 &&
+          // The whole check: two, not one. A throttle would leave this at 1.
+          afterTwoThere === 2 &&
+          afterTwoHere === 2 &&
+          twiceState === 'newer' &&
+          twiceSentence.includes('99.9.9') &&
+          twiceSentence.includes(runningVersion),
+        detail: {
+          runningVersion,
+          fixtureTag: HIGH_TAG,
+          asked: {
+            atStart: { updateTs: askedAtStart, driver: 0 },
+            afterFirstPress: { updateTs: afterOneThere, driver: afterOneHere },
+            afterSecondPress: { updateTs: afterTwoThere, driver: afterTwoHere }
+          },
+          clicks: { first: clickedOnce, second: clickedTwice },
+          firstSettledOnNewer: settledOne,
+          outcomeAfterTwo: twiceState,
+          sentenceAfterTwo: twiceSentence,
+          screenshot: shotUpdates.file
+        },
+        notes: [
+          'Two counters, not one. `releasesAsked()` is `update.ts` counting its',
+          'own calls; the other is incremented inside the function Helm actually',
+          'invoked, which this driver wrote. They are asserted equal at every',
+          'step, so a bookkeeping bug in either is a failure rather than a pass.',
+          'The count is checked at zero before the first press and at one after',
+          'it, so "it went to two" is read off a counter already shown to move.',
+          'One is the number a throttled channel would report, which is what',
+          'makes two the discriminating value rather than merely a large one.',
+          'The tag is 99.9.9 - no release carries it, so `newer` cannot be a',
+          'coincidence, and the sentence is checked for naming both versions',
+          'rather than only for existing.'
+        ]
+      })
+
+      // -----------------------------------------------------------------------
+      // S-15: it works with the setting off, and pressing it does not turn it on
+      // -----------------------------------------------------------------------
+      const updateRowBefore = rowValue(dbFile, 'updateCheck')
+      let turnedOff = true
+      if (updateRowBefore !== false) {
+        turnedOff = await click(win, '[data-settings-update-check] input')
+        await sleep(600)
+      }
+      const rowWhenOff = rowValue(dbFile, 'updateCheck')
+      const tickShowsOff = await attr(win, '[data-settings-update-check]', 'data-settings-update-check')
+      // The button, read in the state the criterion is about: the automatic
+      // check off, and Check now still live.
+      const nowDisabledWhileOff = await disabled(win, '[data-settings-update-now]')
+
+      const offDrive = await drive(answering(HIGH_TAG), 'newer')
+      const rowAfterManualCheck = rowValue(dbFile, 'updateCheck')
+      const tickAfterManualCheck = await attr(
+        win,
+        '[data-settings-update-check]',
+        'data-settings-update-check'
+      )
+
+      checks.push({
+        id: 'S-15',
+        criterion:
+          'A manual check works with `updateCheck` off, and pressing it does not turn the setting on',
+        title:
+          'With the launch check off, Check now is still live, still gets an answer, and leaves the setting off',
+        ok:
+          rowWhenOff === false &&
+          tickShowsOff === 'false' &&
+          // Not disabled by the setting - and the probe that says so has been
+          // made to answer `true` for the same button moments earlier.
+          nowDisabledWhileOff === false &&
+          nowDisabledInFlight === true &&
+          nowDisabledAtRest === false &&
+          clickedSlow &&
+          outcomeInFlight === 'checking' &&
+          releasesDisabledInFlight === false &&
+          offDrive.clicked &&
+          offDrive.asked &&
+          offDrive.settled &&
+          offDrive.state === 'newer' &&
+          offDrive.sentence !== '' &&
+          // Unchanged by the press, in the row and on the tick.
+          rowAfterManualCheck === false &&
+          tickAfterManualCheck === 'false',
+        detail: {
+          settingRow: {
+            atPhaseStart: updateCheckAtPhaseStart,
+            beforeThisCheck: updateRowBefore,
+            turnedOffHere: turnedOff,
+            whenOff: rowWhenOff,
+            afterPressingCheckNow: rowAfterManualCheck
+          },
+          tickAttribute: { whenOff: tickShowsOff, afterPressingCheckNow: tickAfterManualCheck },
+          checkNowButton: {
+            disabledWhileSettingOff: nowDisabledWhileOff,
+            disabledMidFlight: nowDisabledInFlight,
+            disabledAtRest: nowDisabledAtRest,
+            outcomeMidFlight: outcomeInFlight,
+            releasesDisabledMidFlight: releasesDisabledInFlight
+          },
+          drive: offDrive
+        },
+        notes: [
+          'The probe is made to fail first. "Not disabled" is the assertion that',
+          'passes when a selector matches nothing, so the same button is caught',
+          'disabled mid-flight - against a source told to take two seconds - and',
+          'live again afterwards, before "not disabled while the setting is off"',
+          'is believed of the identical selector.',
+          'The setting is read out of the database file through this driver’s own',
+          'read-only connection, before and after the press, and off the tick in',
+          'the pane. A press that quietly re-enabled the launch check would move',
+          'one or the other.',
+          'This is the criterion the channel comment states: `updateCheck`',
+          'governs whether Helm asks by itself, not whether the user may.',
+          'Release notes is checked for staying live during the check, because it',
+          'opens a page rather than asking GitHub anything.'
+        ]
+      })
+
+      // -----------------------------------------------------------------------
+      // S-16 and S-17: the three outcomes, and the link that survives all of them
+      // -----------------------------------------------------------------------
+      const newerDrive = await drive(answering(HIGH_TAG), 'newer')
+      // A tag equal to the running build: `isNewer` is strict, so this is the
+      // up-to-date state rather than a lower number pretending to be one.
+      const currentDrive = await drive(answering(`v${runningVersion}`), 'current')
+      const offlineDrive = await drive(refusing(REFUSAL), 'unreachable')
+
+      const sentences = [newerDrive.sentence, currentDrive.sentence, offlineDrive.sentence]
+      const nonEmpty = sentences.every((s) => s.trim() !== '')
+      const distinct = new Set(sentences).size === 3
+      const offlineFollowUp = await text(win, '[data-settings-update-offline]')
+
+      checks.push({
+        id: 'S-16',
+        criterion:
+          'All three outcomes render as sentences; “could not ask” names the reason and does not read as a failure of Helm',
+        title:
+          'Newer, up to date and could-not-ask each render a distinct sentence, and the offline one names its reason without a warning tone',
+        ok:
+          newerDrive.asked &&
+          currentDrive.asked &&
+          offlineDrive.asked &&
+          newerDrive.settled &&
+          currentDrive.settled &&
+          offlineDrive.settled &&
+          newerDrive.state === 'newer' &&
+          currentDrive.state === 'current' &&
+          offlineDrive.state === 'unreachable' &&
+          // The three are non-empty and no two are the same string. A helper
+          // that returned '' three times would satisfy neither.
+          nonEmpty &&
+          distinct &&
+          // Each names what it is about.
+          newerDrive.sentence.includes('99.9.9') &&
+          newerDrive.sentence.includes(runningVersion) &&
+          currentDrive.sentence.includes(runningVersion) &&
+          offlineDrive.sentence.includes(REFUSAL) &&
+          // Tones: up to date is settled, could-not-ask is not a warning.
+          currentDrive.tone === 'ok' &&
+          offlineDrive.tone !== 'warn' &&
+          offlineDrive.tone === 'todo' &&
+          newerDrive.tone !== 'warn' &&
+          // The quieter line pointing at the link that still works.
+          offlineFollowUp !== '' &&
+          // The version fact follows the answer rather than the last good one.
+          newerDrive.latestFact === '99.9.9' &&
+          currentDrive.latestFact === runningVersion &&
+          offlineDrive.latestFact === NOTHING &&
+          paintedVersion === runningVersion,
+        detail: {
+          runningVersion,
+          paneSaysVersion: paintedVersion,
+          refusalPlanted: REFUSAL,
+          sentences: {
+            newer: newerDrive.sentence,
+            current: currentDrive.sentence,
+            unreachable: offlineDrive.sentence
+          },
+          allNonEmpty: nonEmpty,
+          allDistinct: distinct,
+          tones: {
+            newer: newerDrive.tone,
+            current: currentDrive.tone,
+            unreachable: offlineDrive.tone
+          },
+          latestFact: {
+            newer: newerDrive.latestFact,
+            current: currentDrive.latestFact,
+            unreachable: offlineDrive.latestFact
+          },
+          offlineFollowUpLine: offlineFollowUp,
+          drives: { newer: newerDrive, current: currentDrive, unreachable: offlineDrive }
+        },
+        notes: [
+          'The three sentences are asserted **distinct from each other** before',
+          'anything is concluded from any one of them. A reader that returned an',
+          'empty string three times, or a component that painted one sentence in',
+          'every state, is the failure this catches - and it is the failure',
+          'CLAUDE.md records PROF-4 dying of.',
+          'The reason is a string no network stack produces, planted by this',
+          'driver and looked for in what the pane rendered, so "names the reason"',
+          'is carriage proved end to end rather than a plausible sentence.',
+          'The tone is the judgement: could-not-ask is `todo`, never `warn`.',
+          'Offline is an expected answer - nothing is broken and nothing is known',
+          'to be out of date - and a warning triangle would be Helm blaming the',
+          'network for a question Helm asked on its own initiative.',
+          'The Latest fact is read in all three: it must follow the answer that',
+          'just came back, including emptying when that answer carried no',
+          'version, rather than keeping a number nothing just measured.',
+          'The version on screen is compared with `app.getVersion()` asked here,',
+          'which is the `app:info` round trip through IPC and React proved rather',
+          'than restated.'
+        ]
+      })
+
+      checks.push({
+        id: 'S-17',
+        criterion: 'The releases link is reachable when up to date and when offline',
+        title: 'Release notes is present and live in both the up-to-date and the could-not-ask state',
+        ok:
+          currentDrive.releasesPresent &&
+          currentDrive.releasesDisabled === false &&
+          offlineDrive.releasesPresent &&
+          offlineDrive.releasesDisabled === false &&
+          // It points somewhere, rather than merely existing.
+          (currentDrive.releasesTitle ?? '').startsWith('https://') &&
+          currentDrive.releasesTitle === offlineDrive.releasesTitle &&
+          // The same helper answered `true` for a genuinely disabled control in
+          // this run, so `false` here is a reading and not a default.
+          nowDisabledInFlight === true,
+        detail: {
+          upToDate: {
+            present: currentDrive.releasesPresent,
+            disabled: currentDrive.releasesDisabled,
+            title: currentDrive.releasesTitle
+          },
+          couldNotAsk: {
+            present: offlineDrive.releasesPresent,
+            disabled: offlineDrive.releasesDisabled,
+            title: offlineDrive.releasesTitle
+          },
+          disabledProbeProvedItCanSayTrue: nowDisabledInFlight,
+          alsoLiveWhileAskingGitHub: releasesDisabledInFlight === false
+        },
+        notes: [
+          'These two states are the whole reason the URL comes from `app:info`',
+          'and not from a check’s result: up to date and could-not-ask are',
+          'exactly the cases that produce no URL to render, and they are also the',
+          'two where somebody most wants to go and look for themselves.',
+          'The title is asserted to be an https address and to be the same one in',
+          'both states, so this is a link to a place rather than a button that',
+          'happens to be enabled.',
+          '`disabled()` is trusted here only because it was made to answer `true`',
+          'earlier in this same run, on this same button.'
+        ]
+      })
+
+      // -----------------------------------------------------------------------
+      // S-18: a manual check does not move the launch check's throttle
+      // -----------------------------------------------------------------------
+      //
+      // The row is first written through the ordinary channel and read back, for
+      // the reason every rejection case in S-7 is preceded by a valid write:
+      // "the row did not change" is also what a key nothing can write would
+      // report, and a stamp that is simply absent would sit unchanged through
+      // anything.
+      const SENTINEL = '2001-02-03T04:05:06.000Z'
+      const plantedStamp = await sendWrite(win, { lastUpdateCheckAt: SENTINEL })
+      await sleep(600)
+      const stampBefore = rawRow(dbFile, 'lastUpdateCheckAt')
+      const plantLanded = stampBefore === JSON.stringify(SENTINEL)
+
+      const manualDrives: Drive[] = []
+      manualDrives.push(await drive(answering(HIGH_TAG), 'newer'))
+      manualDrives.push(await drive(answering(`v${runningVersion}`), 'current'))
+      manualDrives.push(await drive(refusing(REFUSAL), 'unreachable'))
+      await sleep(600)
+
+      const stampAfter = rawRow(dbFile, 'lastUpdateCheckAt')
+
+      checks.push({
+        id: 'S-18',
+        criterion: 'A manual check does not write `lastUpdateCheckAt`',
+        title: 'Three manual checks leave the launch throttle’s timestamp byte-for-byte unmoved',
+        ok:
+          plantedStamp.accepted &&
+          plantLanded &&
+          manualDrives.every((d) => d.clicked && d.asked && d.settled) &&
+          stampAfter === stampBefore &&
+          // Including the successful ones: a stamp written only on success would
+          // still be a stamp a manual check wrote.
+          manualDrives.filter((d) => d.state !== 'unreachable').length === 2,
+        detail: {
+          sentinelWrittenThroughSettingsWrite: SENTINEL,
+          writeAccepted: plantedStamp.accepted,
+          writeError: plantedStamp.error,
+          rawColumnBefore: stampBefore,
+          rawColumnAfter: stampAfter,
+          plantLanded,
+          outcomesDriven: manualDrives.map((d) => d.state),
+          manualDrives
+        },
+        notes: [
+          'The row is planted through `settings:write` and read back first, so',
+          'the key is shown to be writable and this driver’s reader shown to see',
+          'a write, before "it did not change" is worth anything. An absent stamp',
+          'would sit unchanged through anything at all.',
+          'Read as the raw column text rather than through the JSON parse, which',
+          'is what makes it byte-for-byte: a rewrite of the same instant in a',
+          'different shape is still a write, and it is the write this is looking',
+          'for.',
+          'Three checks and not one, and two of them succeed - the throttle is',
+          'stamped after a *successful* answer (`maybeCheckForUpdate`), so a',
+          'manual check that wrote it would write it on exactly those two.',
+          'The throttle belongs to the launch check, which is what earns the app',
+          'the right to ask on its own. A manual press moving it would let a',
+          'person pressing a button silently buy Helm another day of not asking.'
+        ]
+      })
+    } finally {
+      // Back to the real GitHub, whatever happened above: a later phase must not
+      // inherit a fixture, and neither must the rest of this app's life.
+      pointReleases(null)
+      // And the setting back to where the run found it. S-15 turns it off on
+      // purpose; leaving it off would park a value nothing here meant to park,
+      // and `original` is the boolean the restore is going to write anyway.
+      await sendWrite(win, { updateCheck: original.updateCheck })
+      await sleep(400)
+    }
   }
 
   // -------------------------------------------------------------------------

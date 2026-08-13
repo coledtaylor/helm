@@ -17,7 +17,7 @@ import type { PtermHost } from './pterm'
 import { readClaudeVersion, setClaudeOverride } from './claude-cli'
 import { setGhOverride } from './gh-cli'
 import { readClaudeStatus, verifyClaudeAt } from './setup'
-import { checkForUpdate } from './update'
+import { checkForUpdate, RELEASES_PAGE } from './update'
 import { appMode, dataDir, dbFile } from './paths'
 import { activePty, windowsBuildNumber } from './pty'
 import {
@@ -160,7 +160,8 @@ export function registerIpc(ctx: IpcContext): void {
         node: process.versions['node'] ?? 'unknown'
       },
       claudeVersion: await readClaudeVersion(),
-      windowsBuild: windowsBuildNumber() ?? null
+      windowsBuild: windowsBuildNumber() ?? null,
+      releasesUrl: RELEASES_PAGE
     }),
 
     'settings:read': () => services.settings,

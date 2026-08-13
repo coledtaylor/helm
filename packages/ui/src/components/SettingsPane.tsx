@@ -26,6 +26,7 @@ import {
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { SEGMENT_ON } from '../lib/segmented'
+import { formatAge } from '../lib/time'
 import { Checkbox } from './Checkbox'
 import { CaretIcon, CheckIcon, CloseIcon, RefreshIcon, WarnIcon } from './icons'
 import type { SetupClaudeStatus } from './SetupPane'
@@ -40,8 +41,8 @@ import { ThemeToggle } from './ThemeToggle'
  * permanent home for it - every setting a later feature adds lands here as
  * another row in an existing group or another group at the end.
  *
- * One scrolling page of grouped cards rather than sub-views. Five groups and
- * seventeen controls; a segmented navigator over that many rows is furniture
+ * One scrolling page of grouped cards rather than sub-views. Six groups and
+ * two dozen controls; a segmented navigator over that many rows is furniture
  * standing in for content. When a group outgrows the page, it earns its own
  * view then.
  *
@@ -84,6 +85,24 @@ export interface SettingsPaneProps {
   updateCheck: boolean
   onUpdateCheckChange: (next: boolean) => void
   onUsageDisplayChange: (mode: UsageDisplayMode) => void
+
+  /** This build's version, from `app:info`. Null until that read lands. */
+  appVersion: string | null
+  /**
+   * The releases page, from `app:info` rather than from a check's result.
+   *
+   * The link has to be reachable in exactly the states no check produces - up
+   * to date, offline, the setting off - so it cannot come from `update`.
+   */
+  releasesUrl: string | null
+  /**
+   * The last check attempted, complete or not. Null means nobody has asked
+   * since launch, which is its own sentence and not an error.
+   */
+  update: UpdateCheckResult | null
+  updateChecking: boolean
+  onCheckForUpdate: () => void
+  onOpenReleases: () => void
   /**
    * Whether the transcript index has an estimate yet. `cost` is offered only
    * when it has - the same rule the status bar's cycle follows, from the same
@@ -136,6 +155,22 @@ export interface SettingsPaneProps {
   onPrReviewModelChange: (model: string | null) => void
   prReviewEffort: EffortLevel | null
   onPrReviewEffortChange: (effort: EffortLevel | null) => void
+}
+
+/**
+ * The outcome of a check, as this package needs it.
+ *
+ * Structural rather than the desktop package's `UpdateCheck`, for the reason
+ * `StatusBarProps.update` gives: the IPC contract belongs to the host. Unlike
+ * the bar's version this keeps `error` and `checkedAt`, because the pane's job
+ * is to say what happened - including that nothing did.
+ */
+export interface UpdateCheckResult {
+  current: string
+  latest: string | null
+  newer: boolean
+  error: string | null
+  checkedAt: string
 }
 
 /** One tickable repository in the GitHub group's list. */
@@ -224,6 +259,12 @@ export function SettingsPane({
   onUpdateCheckChange,
   onUsageDisplayChange,
   hasCostEstimate,
+  appVersion,
+  releasesUrl,
+  update,
+  updateChecking,
+  onCheckForUpdate,
+  onOpenReleases,
   terminal,
   onTerminalChange,
   terminalFontStack,
@@ -440,27 +481,18 @@ export function SettingsPane({
               })}
             </div>
           </Row>
-
-          <Divider />
-
-          {/* Here rather than in a group of its own, because from the user's
-              side this is a line in the status bar - the same question the row
-              above it answers. The network posture is the hint's job, and it
-              says what Helm does and what it does not: an update Helm told you
-              about is still an update you go and get. */}
-          <Row
-            label="Tell me about new releases"
-            hint="Asks GitHub once a day, on launch, whether a newer Helm exists and says so in the status bar. Downloads nothing and installs nothing. This is the only request Helm's own process makes."
-          >
-            <span data-settings-update-check={String(updateCheck)}>
-              <Checkbox
-                checked={updateCheck}
-                onChange={() => onUpdateCheckChange(!updateCheck)}
-                label="Check for new releases on launch"
-              />
-            </span>
-          </Row>
         </Group>
+
+        <UpdatesGroup
+          appVersion={appVersion}
+          releasesUrl={releasesUrl}
+          update={update}
+          checking={updateChecking}
+          onCheckNow={onCheckForUpdate}
+          onOpenReleases={onOpenReleases}
+          updateCheck={updateCheck}
+          onUpdateCheckChange={onUpdateCheckChange}
+        />
 
         <TerminalGroup
           terminal={terminal}
@@ -489,6 +521,199 @@ export function SettingsPane({
         />
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Updates
+// ---------------------------------------------------------------------------
+
+/** The five things this group can be saying, named so a driver can read one. */
+export type UpdateOutcomeState = 'checking' | 'unasked' | 'newer' | 'current' | 'unreachable'
+
+export interface UpdateOutcome {
+  state: UpdateOutcomeState
+  tone: 'ok' | 'warn' | 'todo'
+  text: string
+}
+
+/**
+ * The whole of what this group says, as one pure function of what it was given.
+ *
+ * Separate from the component because the five states are the interesting part
+ * and a component cannot be asked what it would say. Exported so a driver could
+ * reach it - though `settings-check` deliberately writes its own expected
+ * sentences rather than importing these, because a check that asked this
+ * function what this function says would be asserting that the code agrees with
+ * itself.
+ *
+ * `unreachable` is `todo` and not `warn`, which is the one judgement in here.
+ * Offline is an expected answer, not a fault: nothing is broken, nothing is out
+ * of date as far as anyone knows, and a machine on a train has done nothing
+ * wrong. A warning triangle would be Helm blaming the user's network for a
+ * question Helm asked on its own initiative. The sentence names the reason and
+ * says what could not be *asked*, never what failed.
+ */
+export function updateOutcome(update: UpdateCheckResult | null, checking: boolean): UpdateOutcome {
+  if (checking) return { state: 'checking', tone: 'todo', text: 'Asking GitHub…' }
+  if (update === null) {
+    return {
+      state: 'unasked',
+      tone: 'todo',
+      text: 'Helm has not asked GitHub since it started.'
+    }
+  }
+  if (update.error !== null) {
+    return { state: 'unreachable', tone: 'todo', text: `Could not ask GitHub - ${update.error}.` }
+  }
+  if (update.newer && update.latest !== null) {
+    return {
+      state: 'newer',
+      tone: 'todo',
+      text: `${update.latest} is available. This build is ${update.current}.`
+    }
+  }
+  return {
+    state: 'current',
+    tone: 'ok',
+    text: `${update.current} is the newest release. Asked ${askedWhen(update.checkedAt)}.`
+  }
+}
+
+/**
+ * "just now" or "5m ago", from the instant the check carries.
+ *
+ * `formatAge` answers `now` under a minute, which does not take the word "ago",
+ * and an unparseable instant answers nothing at all rather than `NaNm` - a row
+ * or a payload from another build is a fact about the past, and the sentence
+ * around this one is still true without its last clause.
+ */
+function askedWhen(checkedAt: string): string {
+  const at = Date.parse(checkedAt)
+  if (!Number.isFinite(at)) return 'this session'
+  const age = formatAge(at)
+  return age === 'now' ? 'just now' : `${age} ago`
+}
+
+/**
+ * Releases: what this build is, what the newest one is, and how to ask.
+ *
+ * This was a single tick in the Appearance group, and the comment there argued
+ * for keeping it there - "here rather than in a group of its own, because from
+ * the user's side this is a line in the status bar", the same question the
+ * usage row above it answered. That argument was right for as long as it was
+ * one tick. It stops holding at six controls: two facts, a sentence, the tick
+ * and two buttons, every one of them about releases and none of them about how
+ * the app looks. The group outgrew the reason rather than contradicting it.
+ *
+ * What the old hint carried is kept rather than dropped: Helm downloads
+ * nothing and installs nothing, and an update Helm told you about is still an
+ * update you go and get.
+ *
+ * The two buttons are the point of the group and they are deliberately
+ * independent of everything above them. Check now is live whatever the tick
+ * says - the setting governs whether Helm asks by itself, not whether the user
+ * may - and Release notes is live whatever the last check returned, because
+ * "up to date", "could not ask" and "never asked" are exactly the three states
+ * in which somebody wants to go and look for themselves.
+ */
+function UpdatesGroup({
+  appVersion,
+  releasesUrl,
+  update,
+  checking,
+  onCheckNow,
+  onOpenReleases,
+  updateCheck,
+  onUpdateCheckChange
+}: {
+  appVersion: string | null
+  releasesUrl: string | null
+  update: UpdateCheckResult | null
+  checking: boolean
+  onCheckNow: () => void
+  onOpenReleases: () => void
+  updateCheck: boolean
+  onUpdateCheckChange: (next: boolean) => void
+}): JSX.Element {
+  const outcome = updateOutcome(update, checking)
+
+  return (
+    // The posture belongs to the group rather than to the tick, the way the
+    // Claude CLI and GitHub groups carry theirs: it is true of everything in
+    // here, including the button, and it stayed true when the tick stopped
+    // being the only thing that could ask.
+    <Group
+      name="updates"
+      title="Updates"
+      hint="The only request Helm's own process makes. It reads a version number and hands you a link - nothing is downloaded, replaced or restarted."
+    >
+      <div className="pb-1">
+        <Verdict
+          data-settings-update-outcome={outcome.state}
+          tone={outcome.tone}
+          text={outcome.text}
+        />
+        <dl className="mt-2.5 space-y-1.5">
+          <Fact label="Version">
+            <span data-settings-app-version>{appVersion ?? NOTHING}</span>
+          </Fact>
+          {/* Empty after a check that could not complete, and that is the
+              intended reading rather than a gap: the last request came back
+              with no version in it, so there is no number here anybody has
+              been told. Painting the previous one would be the status bar's
+              mistake in reverse - a figure on screen that nothing just
+              measured. */}
+          <Fact label="Latest">
+            <span data-settings-latest-version>{update?.latest ?? NOTHING}</span>
+          </Fact>
+        </dl>
+
+        {outcome.state === 'unreachable' && (
+          <p
+            data-settings-update-offline
+            className="mt-2.5 text-[11px] leading-[1.55] text-fg-subtle"
+          >
+            Release notes below still opens the releases page - that is a link handed to your
+            browser, not a request Helm makes, so it works from here either way.
+          </p>
+        )}
+      </div>
+
+      <Divider />
+
+      <Row
+        label="Tell me about new releases"
+        hint="Asks on launch, at most once a day, and puts a line in the status bar if a newer Helm exists. Off stops only that - Check now still asks."
+      >
+        <span data-settings-update-check={String(updateCheck)}>
+          <Checkbox
+            checked={updateCheck}
+            onChange={() => onUpdateCheckChange(!updateCheck)}
+            label="Check for new releases on launch"
+          />
+        </span>
+      </Row>
+
+      <Actions>
+        {/* Disabled only while a check is in flight - never because the tick
+            above is off. A button that greyed itself out when the automatic
+            check was turned off would make the setting mean something it does
+            not say. */}
+        <Action data-settings-update-now onClick={onCheckNow} disabled={checking}>
+          <RefreshIcon className={cn('mr-1.5 inline', checking && 'animate-spin')} />
+          Check now
+        </Action>
+        <Action
+          data-settings-releases
+          onClick={onOpenReleases}
+          disabled={releasesUrl === null}
+          title={releasesUrl ?? 'Not known until app:info lands'}
+        >
+          Release notes
+        </Action>
+      </Actions>
+    </Group>
   )
 }
 
@@ -1349,10 +1574,28 @@ function Actions({ children }: { children: ReactNode }): JSX.Element {
   return <div className="mt-3 flex flex-wrap gap-2">{children}</div>
 }
 
-/** The resolved-status line: a tone dot and a sentence, not a paragraph. */
-function Verdict({ tone, text }: { tone: 'ok' | 'warn' | 'todo'; text: string }): JSX.Element {
+/**
+ * The resolved-status line: a tone dot and a sentence, not a paragraph.
+ *
+ * Takes further `data-*` attributes so a group with more than one thing to say
+ * can name *which* of its states this sentence is - the tone alone cannot,
+ * since two different outcomes can honestly share one. `data-settings-verdict`
+ * stays the tone in every group, so a driver reads the two together.
+ */
+function Verdict({
+  tone,
+  text,
+  ...rest
+}: { tone: 'ok' | 'warn' | 'todo'; text: string } & Record<
+  `data-${string}`,
+  unknown
+>): JSX.Element {
   return (
-    <p data-settings-verdict={tone} className="flex items-center gap-2 text-[12.5px] text-fg">
+    <p
+      data-settings-verdict={tone}
+      {...rest}
+      className="flex items-center gap-2 text-[12.5px] text-fg"
+    >
       <span
         className={cn(
           'grid size-4 shrink-0 place-items-center rounded-full',

@@ -105,10 +105,15 @@ runs the checks, skips the release job and finishes green.
 against `app.getVersion()` and returns a URL. It downloads nothing and executes
 nothing; upgrading is something the user does from the releases page.
 
-It runs once per launch, at most once a day (`UPDATE_CHECK_EVERY_MS`), and a
-newer release is reported beside the version in the status bar. `updateCheck` in
-Settings turns it off. Offline is an expected answer, reported as "could not
-ask" rather than silently as "up to date".
+It happens two ways and no others, and never on a timer. The app asks on its own
+at launch, at most once a day (`UPDATE_CHECK_EVERY_MS`), when `updateCheck` is
+on; and a person asks by pressing **Check now** in Settings → Updates, which
+keeps no throttle of its own and works with `updateCheck` off. A deliberate act
+that silently did nothing would be worse than no button, and the bound that
+earns the app the right to ask by itself is the launch throttle - which a manual
+check therefore does not stamp. Either way a newer release is reported beside
+the version in the status bar. Offline is an expected answer, reported as "could
+not ask", with the reason, rather than silently as "up to date".
 
 There is deliberately no electron-updater. Three reasons, any one of which would
 be enough:
@@ -126,8 +131,9 @@ Code-signing the build would retire reason 1. It would not touch 2 or 3.
 
 ## Network posture
 
-The update check is **the only network connection Helm's own process opens**,
-and with `updateCheck` off it opens none at all.
+The update check is **the only network connection Helm's own process opens**.
+With `updateCheck` off, Helm opens none on its own initiative; the one remaining
+route is a person pressing Check now, so nothing leaves the machine unasked for.
 
 The pull-request pane reaches GitHub as well, but through the user's own `gh`
 CLI: `gh pr list` per repository on a timer (`prPollMinutes`, five minutes by

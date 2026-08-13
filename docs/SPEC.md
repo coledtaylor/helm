@@ -329,6 +329,9 @@ the theme toggle, laid out as one scrolling page of titled groups:
   is inside the tested range, "Locate manually…", and **Clear override**
 - **Workspace** - the scan roots, with add *and remove*
 - **Appearance** - theme, and what the status bar's usage segment shows
+- **Updates** - this build's version, the newest release Helm has heard of, one
+  sentence saying which of five things is true of the pair, the launch-check
+  tick, **Check now** and **Release notes**
 - **Terminal** - font family (with a hint when it is not installed), size,
   cursor shape, cursor blink, scrollback, and the default shell for project
   panes; then a preview well rendering a sample at the chosen font on the
@@ -385,6 +388,43 @@ the theme toggle, laid out as one scrolling page of titled groups:
 > not a record to take apart. What is saved is the strip **on screen**
 > (`openPanes`), so a tab whose project a rescan no longer finds does not come
 > back on the next launch.
+
+> [!note] Updates became a group, and gained a Check now (2026-08-12)
+> The update check could only ever happen to you. It ran at launch, at most once
+> a day, and if the throttle had not elapsed or the network was away there was
+> no way to ask and nothing on screen saying so - the whole surface was one tick
+> in Appearance and a line in the status bar that appeared only when a newer
+> release existed. Three of the four states it can be in were invisible.
+>
+> So: an **Updates** group, and a **Check now** in it. The channel already
+> existed and already kept no throttle; what was missing was anything that
+> pressed it. It is deliberately unthrottled and deliberately live when
+> `updateCheck` is off - the setting governs whether Helm asks *by itself*, not
+> whether the user may, and a deliberate act that silently did nothing would be
+> worse than no button. The network posture in section 5 is unchanged: same one
+> connection, same payload, still no artefact fetched.
+>
+> The launch throttle (`lastUpdateCheckAt`) is **not** stamped by a manual
+> check, and that is the load-bearing half. The bound is what earns the app the
+> right to ask on its own; a button that moved it would let a person pressing it
+> silently buy Helm another day of not asking.
+>
+> The outcome is one sentence in five states - `checking`, `unasked`, `newer`,
+> `current`, `unreachable` - and `unreachable` is toned `todo`, never `warn`. A
+> machine on a train has done nothing wrong, nothing is known to be out of date,
+> and a warning triangle would be Helm blaming the network for a question Helm
+> asked. It names the reason and says what could not be *asked*.
+>
+> `AppInfo` gained `releasesUrl` for the same reason. The link has to work in
+> exactly the three states that produce no check result - up to date, could not
+> ask, never asked - which are also the three where somebody most wants to go
+> and look, so it cannot come from `UpdateCheck.url`.
+>
+> The renderer's hook keeps two results, not one. The status bar reads the last
+> check that *completed*, so a failed manual check cannot take down a link a
+> successful one put up; the pane reads the last check *attempted*, because
+> "could not ask" is what a person who just pressed the button is owed.
+> `pnpm settings-check --only=updates` is S-14 to S-18.
 
 ### 4.6 Pull requests
 
@@ -597,9 +637,13 @@ option open and is what makes the app genuinely portable.
 ### Network posture
 
 - **Helm's own process opens exactly one outbound connection**: the GitHub
-  releases API, for a version number and a URL. It runs once per launch, at most
-  once a day (`UPDATE_CHECK_EVERY_MS`), and `updateCheck` turns it off in one
-  tick. It fetches no artefact, replaces nothing and restarts nothing - the
+  releases API, for a version number and a URL. It happens two ways and no
+  others, and never on a timer - at launch, at most once a day
+  (`UPDATE_CHECK_EVERY_MS`), when `updateCheck` is ticked; and when a person
+  presses Check now in Settings → Updates, which is deliberately unthrottled and
+  works with the tick off. `updateCheck` governs whether Helm asks by itself,
+  not whether the user may, so with it off nothing leaves the machine unasked
+  for. It fetches no artefact, replaces nothing and restarts nothing - the
   whole outcome is a version number and a line in the status bar. See
   [PACKAGING.md](PACKAGING.md) for why there is no auto-updater; every reason is
   about replacing the installed app, which this does not do.

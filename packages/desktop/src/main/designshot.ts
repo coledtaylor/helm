@@ -539,6 +539,20 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
       }
     }
 
+    // The Updates group, which is below the fold too and is the one group whose
+    // content is a *sentence* rather than a row of controls. What a thumbnail
+    // has to answer for it is whether that sentence sits in the same rhythm as
+    // the label-and-control rows around it and whether it wraps somewhere
+    // sensible - neither of which the top-of-pane shot reaches.
+    await js<void>(
+      win,
+      `(() => { const el = document.querySelector('[data-settings-group="updates"]');
+        if (el) el.scrollIntoView({ block: 'center' }) })()`
+    )
+    await sleep(400)
+    const updatesShot = await screenshot(win, outDir, `settings-updates-${theme}.png`)
+    files.push(updatesShot.file)
+
     // The settings pane scrolled to the end, because the Terminal group sits
     // below the fold on a default-sized window - and it is the group made of
     // controls the rest of the app does not use (a stepper, a preview well on

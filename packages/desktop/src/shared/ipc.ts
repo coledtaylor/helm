@@ -80,6 +80,17 @@ export interface AppInfo {
   claudeVersion: string | null
   /** Windows build number; xterm uses it to pick ConPTY quirk handling. */
   windowsBuild: number | null
+  /**
+   * The releases page, so a window can offer it without having asked GitHub
+   * anything.
+   *
+   * `UpdateCheck.url` carries the same address but only arrives with an answer,
+   * and the three states where somebody most wants this link - up to date, the
+   * setting off, no network - are exactly the three that produce no answer.
+   * Read once at startup with the rest of the app's identity; opened through
+   * `shell:openExternal`, never fetched.
+   */
+  releasesUrl: string
 }
 
 /**
@@ -430,8 +441,10 @@ export interface IpcRequests {
    * anything. No artefact is fetched, nothing is replaced, nothing restarts.
    *
    * This channel keeps no throttle of its own. It is a person pressing
-   * something, and a deliberate act that silently did nothing would be worse
-   * than no button.
+   * something - Check now, in Settings under Updates - and a deliberate act
+   * that silently did nothing would be worse than no button. It is also the
+   * only route to an answer when `updateCheck` is off: the setting governs
+   * whether Helm asks by itself, not whether the user may.
    *
    * The pull-request surface reaches GitHub as well, but through the user's own
    * `gh` CLI on a schedule the user sets (default every 5 minutes, `0` turns it

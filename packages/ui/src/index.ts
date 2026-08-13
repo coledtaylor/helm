@@ -37,9 +37,13 @@ export {
 export {
   SettingsPane,
   pullRepoChoices,
+  updateOutcome,
   type PrRepoChoice,
   type SettingsPaneProps,
-  type TerminalSettings
+  type TerminalSettings,
+  type UpdateCheckResult,
+  type UpdateOutcome,
+  type UpdateOutcomeState
 } from './components/SettingsPane'
 export { VersionBanner, type VersionBannerProps } from './components/VersionBanner'
 export { GitChip, type GitChipProps } from './components/GitChip'
