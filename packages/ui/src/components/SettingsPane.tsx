@@ -8,11 +8,14 @@ import {
   PR_POLL_MINUTES,
   PR_PROMPT_PLACEHOLDERS,
   PR_REVIEW_PROMPT_MAX_LENGTH,
+  PROJECT_SHELL_HEIGHT_PCT,
+  SESSION_SPLIT_PCT,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
   USAGE_DISPLAY_MODES,
   type AppSettings,
+  type ArchiveStats,
   type DetectedShell,
   withRepoIgnored,
   type EffortLevel,
@@ -25,6 +28,9 @@ import {
   type UsageDisplayMode
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { SEGMENT_ON } from '../lib/segmented'
+import { formatAge, formatBytes } from '../lib/time'
+import { Checkbox } from './Checkbox'
 import { CaretIcon, CheckIcon, CloseIcon, RefreshIcon, WarnIcon } from './icons'
 import type { SetupClaudeStatus } from './SetupPane'
 import { ThemeToggle } from './ThemeToggle'
@@ -38,8 +44,8 @@ import { ThemeToggle } from './ThemeToggle'
  * permanent home for it - every setting a later feature adds lands here as
  * another row in an existing group or another group at the end.
  *
- * One scrolling page of grouped cards rather than sub-views. Five groups and
- * seventeen controls; a segmented navigator over that many rows is furniture
+ * One scrolling page of grouped cards rather than sub-views. Six groups and
+ * two dozen controls; a segmented navigator over that many rows is furniture
  * standing in for content. When a group outgrows the page, it earns its own
  * view then.
  *
@@ -75,6 +81,20 @@ export interface SettingsPaneProps {
   onAddRoot: () => void
   onRemoveRoot: (path: string) => void
 
+  /**
+   * `pinnedProjects`, as stored: absolute paths, in the order the setting holds
+   * them rather than the order the sidebar shows them.
+   *
+   * Pins are *made* on the sidebar's own rows, where the project is, and this
+   * pane is where the whole set is legible at once - including a path whose
+   * folder has gone, which is the one a person comes here to clear. Paths and
+   * not names, deliberately: the setting is a list of paths and it is a list of
+   * paths that a re-clone invalidates, so the pane shows the value rather than
+   * a friendlier rendering of it.
+   */
+  pinnedProjects: string[]
+  onUnpinProject: (path: string) => void
+
   theme: ThemePreference
   onThemeChange: (theme: ThemePreference) => void
 
@@ -82,6 +102,24 @@ export interface SettingsPaneProps {
   updateCheck: boolean
   onUpdateCheckChange: (next: boolean) => void
   onUsageDisplayChange: (mode: UsageDisplayMode) => void
+
+  /** This build's version, from `app:info`. Null until that read lands. */
+  appVersion: string | null
+  /**
+   * The releases page, from `app:info` rather than from a check's result.
+   *
+   * The link has to be reachable in exactly the states no check produces - up
+   * to date, offline, the setting off - so it cannot come from `update`.
+   */
+  releasesUrl: string | null
+  /**
+   * The last check attempted, complete or not. Null means nobody has asked
+   * since launch, which is its own sentence and not an error.
+   */
+  update: UpdateCheckResult | null
+  updateChecking: boolean
+  onCheckForUpdate: () => void
+  onOpenReleases: () => void
   /**
    * Whether the transcript index has an estimate yet. `cost` is offered only
    * when it has - the same rule the status bar's cycle follows, from the same
@@ -100,6 +138,17 @@ export interface SettingsPaneProps {
   shells: DetectedShell[]
   /** Native file picker, for a shell installed somewhere `where.exe` misses. */
   onLocateShell: () => void
+
+  /**
+   * What the transcript archive holds. Null until the first read lands.
+   *
+   * Passed in rather than derived from the settings, because the interesting
+   * half of this group is not the ceiling - it is how much is actually stored
+   * against it, which only the main process knows.
+   */
+  archiveStats: ArchiveStats | null
+  transcriptArchiveMaxBytes: number
+  onTranscriptArchiveMaxBytesChange: (bytes: number) => void
 
   /**
    * What Helm found out about `gh`, out of the pull-request snapshot. Null
@@ -134,6 +183,22 @@ export interface SettingsPaneProps {
   onPrReviewModelChange: (model: string | null) => void
   prReviewEffort: EffortLevel | null
   onPrReviewEffortChange: (effort: EffortLevel | null) => void
+}
+
+/**
+ * The outcome of a check, as this package needs it.
+ *
+ * Structural rather than the desktop package's `UpdateCheck`, for the reason
+ * `StatusBarProps.update` gives: the IPC contract belongs to the host. Unlike
+ * the bar's version this keeps `error` and `checkedAt`, because the pane's job
+ * is to say what happened - including that nothing did.
+ */
+export interface UpdateCheckResult {
+  current: string
+  latest: string | null
+  newer: boolean
+  error: string | null
+  checkedAt: string
 }
 
 /** One tickable repository in the GitHub group's list. */
@@ -184,7 +249,22 @@ export function pullRepoChoices(
   )
 }
 
-/** The six the Terminal group owns, named once so nothing has to list them twice. */
+/**
+ * The seven the Terminal group owns, named once so nothing has to list them
+ * twice.
+ *
+ * `projectShellHeightPct` is the odd one: it is not a terminal preference and
+ * never reaches `applyPrefs`, it is how tall a project page's shell is. It is
+ * shown here because this is the group somebody looks in for the shell under a
+ * project - the shell picker is already here - and a settings pane organised by
+ * where a person would look for a thing beats one organised by which module
+ * consumes it.
+ *
+ * `sessionSplitPct` is the second of those, and lands here by the same rule
+ * rather than by being any more of a terminal preference than the first. The
+ * two are one question asked about two axes - how much terminal do I want, and
+ * where - and somebody who has come to change one has come to look at both.
+ */
 export type TerminalSettings = Pick<
   AppSettings,
   | 'terminalFontFamily'
@@ -193,6 +273,8 @@ export type TerminalSettings = Pick<
   | 'terminalCursorBlink'
   | 'terminalScrollback'
   | 'terminalShell'
+  | 'projectShellHeightPct'
+  | 'sessionSplitPct'
 >
 
 /** What a fact reads when there is nothing to put in it. */
@@ -215,6 +297,8 @@ export function SettingsPane({
   scanning,
   onAddRoot,
   onRemoveRoot,
+  pinnedProjects,
+  onUnpinProject,
   theme,
   onThemeChange,
   usageDisplay,
@@ -222,11 +306,20 @@ export function SettingsPane({
   onUpdateCheckChange,
   onUsageDisplayChange,
   hasCostEstimate,
+  appVersion,
+  releasesUrl,
+  update,
+  updateChecking,
+  onCheckForUpdate,
+  onOpenReleases,
   terminal,
   onTerminalChange,
   terminalFontStack,
   shells,
   onLocateShell,
+  archiveStats,
+  transcriptArchiveMaxBytes,
+  onTranscriptArchiveMaxBytesChange,
   gh,
   onLocateGh,
   onClearGhOverride,
@@ -385,6 +478,59 @@ export function SettingsPane({
               Add a folder
             </Action>
           </Actions>
+
+          <Divider />
+
+          {/* Pins are made on the sidebar, on the row of the project being
+              pinned - the star is there because that is where the decision is.
+              This is where the set is legible all at once, which is what the
+              sidebar cannot be: its Pinned section shows a vanished folder as
+              one row saying so, and a list of the paths is what says *which*
+              path, in a form that can be compared with what is on disk. */}
+          <p className="text-[12.5px] text-fg">Pinned projects</p>
+          <p className="mt-0.5 mb-2 text-[11px] leading-[1.55] text-fg-subtle">
+            Lifted to the top of the sidebar, above the harnesses. Pinned by the star on a
+            project&rsquo;s row; a pin remembers the folder&rsquo;s path, so a project moved or
+            cloned somewhere else comes back unpinned.
+          </p>
+
+          {pinnedProjects.length === 0 ? (
+            <p className="text-[12px] text-fg-subtle">Nothing is pinned.</p>
+          ) : (
+            <ul className="overflow-hidden rounded-well border border-border bg-surface-sunken">
+              {pinnedProjects.map((path) => (
+                <li
+                  key={path}
+                  data-settings-pinned={path}
+                  className="flex items-center gap-2 border-b border-border px-3 py-1.5 last:border-b-0"
+                >
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg-muted"
+                    title={path}
+                  >
+                    {path}
+                  </span>
+                  {/* The roots list above wears the same shape with a danger
+                      hover on its ×, and this one deliberately does not:
+                      un-scanning a folder takes projects out of the tree, and
+                      un-pinning one moves a row back into its harness. */}
+                  <button
+                    type="button"
+                    data-settings-unpin={path}
+                    onClick={() => onUnpinProject(path)}
+                    aria-label={`Unpin ${path}`}
+                    title={`Unpin ${path}`}
+                    className={cn(
+                      'grid size-5 shrink-0 place-items-center rounded text-fg-subtle',
+                      'transition-colors hover:bg-hover hover:text-fg'
+                    )}
+                  >
+                    <CloseIcon width={11} height={11} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </Group>
 
         <Group name="appearance" title="Appearance">
@@ -427,7 +573,7 @@ export function SettingsPane({
                     className={cn(
                       'rounded-[5px] px-2.5 py-1 text-[11.5px] transition-colors',
                       usageDisplay === mode
-                        ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                        ? SEGMENT_ON
                         : 'text-fg-subtle hover:text-fg',
                       !available && 'cursor-default opacity-45 hover:text-fg-subtle'
                     )}
@@ -438,27 +584,18 @@ export function SettingsPane({
               })}
             </div>
           </Row>
-
-          <Divider />
-
-          {/* Here rather than in a group of its own, because from the user's
-              side this is a line in the status bar - the same question the row
-              above it answers. The network posture is the hint's job, and it
-              says what Helm does and what it does not: an update Helm told you
-              about is still an update you go and get. */}
-          <Row
-            label="Tell me about new releases"
-            hint="Asks GitHub once a day, on launch, whether a newer Helm exists and says so in the status bar. Downloads nothing and installs nothing. This is the only request Helm's own process makes."
-          >
-            <span data-settings-update-check={String(updateCheck)}>
-              <Checkbox
-                checked={updateCheck}
-                onChange={() => onUpdateCheckChange(!updateCheck)}
-                label="Check for new releases on launch"
-              />
-            </span>
-          </Row>
         </Group>
+
+        <UpdatesGroup
+          appVersion={appVersion}
+          releasesUrl={releasesUrl}
+          update={update}
+          checking={updateChecking}
+          onCheckNow={onCheckForUpdate}
+          onOpenReleases={onOpenReleases}
+          updateCheck={updateCheck}
+          onUpdateCheckChange={onUpdateCheckChange}
+        />
 
         <TerminalGroup
           terminal={terminal}
@@ -466,6 +603,12 @@ export function SettingsPane({
           fontStack={terminalFontStack}
           shells={shells}
           onLocateShell={onLocateShell}
+        />
+
+        <ArchiveGroup
+          stats={archiveStats}
+          maxBytes={transcriptArchiveMaxBytes}
+          onMaxBytesChange={onTranscriptArchiveMaxBytesChange}
         />
 
         <GitHubGroup
@@ -487,6 +630,318 @@ export function SettingsPane({
         />
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Transcript archive
+// ---------------------------------------------------------------------------
+
+/**
+ * The ceilings this pane offers.
+ *
+ * Not the validator's range, which runs from a kilobyte so that a check can
+ * drive eviction. These are the sizes a person would choose, and the smallest
+ * of them is still four hundred times the whole archive on the machine this was
+ * written against (1.47 MB for 21,952 messages out of 311 MB of transcripts).
+ */
+const ARCHIVE_CEILINGS = [
+  { bytes: 256 * 1024 * 1024, label: '256 MB' },
+  { bytes: 512 * 1024 * 1024, label: '512 MB' },
+  { bytes: 1024 ** 3, label: '1 GB' },
+  { bytes: 2 * 1024 ** 3, label: '2 GB' },
+  { bytes: 4 * 1024 ** 3, label: '4 GB' },
+  { bytes: 8 * 1024 ** 3, label: '8 GB' }
+] as const
+
+/**
+ * What Helm has kept, and the one knob over it.
+ *
+ * The figures are stated rather than drawn. A bar with no number on it would
+ * be exactly the wrong answer here: the whole reason this group exists is that
+ * `helm.db` is the user's file and a feature that grows it silently is one they
+ * find out about from their disk. So the sentence says how many conversations,
+ * how many messages, how many bytes, and how many bytes out of how many - and,
+ * when the ceiling has actually bitten, how many conversations it dropped.
+ *
+ * There is no on/off switch and that is deliberate; the field's comment in
+ * `types.ts` has the argument. What can be turned down is the ceiling.
+ */
+function ArchiveGroup({
+  stats,
+  maxBytes,
+  onMaxBytesChange
+}: {
+  stats: ArchiveStats | null
+  maxBytes: number
+  onMaxBytesChange: (bytes: number) => void
+}): JSX.Element {
+  const used = stats?.storedBytes ?? 0
+  const percent = maxBytes > 0 ? (used / maxBytes) * 100 : 0
+  // Two significant figures below 1%, so a real archive on a default ceiling
+  // reads "0.00014%" rather than "0%" - which would say "nothing is stored"
+  // about something that is.
+  const percentText = percent === 0 ? '0%' : percent < 1 ? `${percent.toPrecision(2)}%` : `${percent.toFixed(1)}%`
+
+  // A ceiling set outside the offered list - by a check, or by a build that
+  // offered different sizes - is added to the list rather than silently
+  // replaced by the nearest one, which would make the select lie about what is
+  // in force the moment it painted.
+  const choices = ARCHIVE_CEILINGS.some((choice) => choice.bytes === maxBytes)
+    ? ARCHIVE_CEILINGS
+    : [{ bytes: maxBytes, label: formatBytes(maxBytes) }, ...ARCHIVE_CEILINGS]
+
+  return (
+    <Group
+      name="archive"
+      title="Transcript archive"
+      hint="Claude Code deletes conversation transcripts on its own schedule and keeps the prompts for ever. Helm reads each one before that happens and stores the messages here, compressed. It never writes to Claude's files."
+    >
+      <div className="pb-1">
+        <Verdict
+          data-settings-archive-state={stats === null ? 'reading' : stats.sessions === 0 ? 'empty' : 'holding'}
+          tone={stats === null ? 'todo' : 'ok'}
+          text={
+            stats === null
+              ? 'Reading…'
+              : stats.sessions === 0
+                ? 'Nothing archived yet'
+                : `${stats.sessions.toLocaleString()} conversations kept`
+          }
+        />
+        <dl className="mt-2.5 space-y-1.5">
+          <Fact label="Kept">
+            <span data-settings-archive-sessions={String(stats?.sessions ?? 0)}>
+              {(stats?.sessions ?? 0).toLocaleString()} sessions ·{' '}
+              {(stats?.messages ?? 0).toLocaleString()} messages
+            </span>
+          </Fact>
+          <Fact label="Stored">
+            <span data-settings-archive-stored={String(used)}>
+              {formatBytes(used)} of {formatBytes(maxBytes)} ({percentText})
+            </span>
+          </Fact>
+          <Fact label="Dropped">
+            <span data-settings-archive-evicted={String(stats?.evictedSessions ?? 0)}>
+              {(stats?.evictedSessions ?? 0).toLocaleString()} sessions
+            </span>
+          </Fact>
+        </dl>
+      </div>
+
+      <Divider />
+
+      <Row
+        label="Keep at most"
+        hint="Reached, Helm drops the oldest archived conversation whole and marks it dropped - never half of one. Lowering this can evict immediately."
+      >
+        <Select
+          value={String(maxBytes)}
+          label="How much of the database the archive may use"
+          data-settings-archive-max={String(maxBytes)}
+          onChange={(value) => onMaxBytesChange(Number(value))}
+        >
+          {choices.map((choice) => (
+            <option key={choice.bytes} value={String(choice.bytes)}>
+              {choice.label}
+            </option>
+          ))}
+        </Select>
+      </Row>
+    </Group>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Updates
+// ---------------------------------------------------------------------------
+
+/** The five things this group can be saying, named so a driver can read one. */
+export type UpdateOutcomeState = 'checking' | 'unasked' | 'newer' | 'current' | 'unreachable'
+
+export interface UpdateOutcome {
+  state: UpdateOutcomeState
+  tone: 'ok' | 'warn' | 'todo'
+  text: string
+}
+
+/**
+ * The whole of what this group says, as one pure function of what it was given.
+ *
+ * Separate from the component because the five states are the interesting part
+ * and a component cannot be asked what it would say. Exported so a driver could
+ * reach it - though `settings-check` deliberately writes its own expected
+ * sentences rather than importing these, because a check that asked this
+ * function what this function says would be asserting that the code agrees with
+ * itself.
+ *
+ * `unreachable` is `todo` and not `warn`, which is the one judgement in here.
+ * Offline is an expected answer, not a fault: nothing is broken, nothing is out
+ * of date as far as anyone knows, and a machine on a train has done nothing
+ * wrong. A warning triangle would be Helm blaming the user's network for a
+ * question Helm asked on its own initiative. The sentence names the reason and
+ * says what could not be *asked*, never what failed.
+ */
+export function updateOutcome(update: UpdateCheckResult | null, checking: boolean): UpdateOutcome {
+  if (checking) return { state: 'checking', tone: 'todo', text: 'Asking GitHub…' }
+  if (update === null) {
+    return {
+      state: 'unasked',
+      tone: 'todo',
+      text: 'Helm has not asked GitHub since it started.'
+    }
+  }
+  if (update.error !== null) {
+    return { state: 'unreachable', tone: 'todo', text: `Could not ask GitHub - ${update.error}.` }
+  }
+  if (update.newer && update.latest !== null) {
+    return {
+      state: 'newer',
+      tone: 'todo',
+      text: `${update.latest} is available. This build is ${update.current}.`
+    }
+  }
+  return {
+    state: 'current',
+    tone: 'ok',
+    text: `${update.current} is the newest release. Asked ${askedWhen(update.checkedAt)}.`
+  }
+}
+
+/**
+ * "just now" or "5m ago", from the instant the check carries.
+ *
+ * `formatAge` answers `now` under a minute, which does not take the word "ago",
+ * and an unparseable instant answers nothing at all rather than `NaNm` - a row
+ * or a payload from another build is a fact about the past, and the sentence
+ * around this one is still true without its last clause.
+ */
+function askedWhen(checkedAt: string): string {
+  const at = Date.parse(checkedAt)
+  if (!Number.isFinite(at)) return 'this session'
+  const age = formatAge(at)
+  return age === 'now' ? 'just now' : `${age} ago`
+}
+
+/**
+ * Releases: what this build is, what the newest one is, and how to ask.
+ *
+ * This was a single tick in the Appearance group, and the comment there argued
+ * for keeping it there - "here rather than in a group of its own, because from
+ * the user's side this is a line in the status bar", the same question the
+ * usage row above it answered. That argument was right for as long as it was
+ * one tick. It stops holding at six controls: two facts, a sentence, the tick
+ * and two buttons, every one of them about releases and none of them about how
+ * the app looks. The group outgrew the reason rather than contradicting it.
+ *
+ * What the old hint carried is kept rather than dropped: Helm downloads
+ * nothing and installs nothing, and an update Helm told you about is still an
+ * update you go and get.
+ *
+ * The two buttons are the point of the group and they are deliberately
+ * independent of everything above them. Check now is live whatever the tick
+ * says - the setting governs whether Helm asks by itself, not whether the user
+ * may - and Release notes is live whatever the last check returned, because
+ * "up to date", "could not ask" and "never asked" are exactly the three states
+ * in which somebody wants to go and look for themselves.
+ */
+function UpdatesGroup({
+  appVersion,
+  releasesUrl,
+  update,
+  checking,
+  onCheckNow,
+  onOpenReleases,
+  updateCheck,
+  onUpdateCheckChange
+}: {
+  appVersion: string | null
+  releasesUrl: string | null
+  update: UpdateCheckResult | null
+  checking: boolean
+  onCheckNow: () => void
+  onOpenReleases: () => void
+  updateCheck: boolean
+  onUpdateCheckChange: (next: boolean) => void
+}): JSX.Element {
+  const outcome = updateOutcome(update, checking)
+
+  return (
+    // The posture belongs to the group rather than to the tick, the way the
+    // Claude CLI and GitHub groups carry theirs: it is true of everything in
+    // here, including the button, and it stayed true when the tick stopped
+    // being the only thing that could ask.
+    <Group
+      name="updates"
+      title="Updates"
+      hint="The only request Helm's own process makes. It reads a version number and hands you a link - nothing is downloaded, replaced or restarted."
+    >
+      <div className="pb-1">
+        <Verdict
+          data-settings-update-outcome={outcome.state}
+          tone={outcome.tone}
+          text={outcome.text}
+        />
+        <dl className="mt-2.5 space-y-1.5">
+          <Fact label="Version">
+            <span data-settings-app-version>{appVersion ?? NOTHING}</span>
+          </Fact>
+          {/* Empty after a check that could not complete, and that is the
+              intended reading rather than a gap: the last request came back
+              with no version in it, so there is no number here anybody has
+              been told. Painting the previous one would be the status bar's
+              mistake in reverse - a figure on screen that nothing just
+              measured. */}
+          <Fact label="Latest">
+            <span data-settings-latest-version>{update?.latest ?? NOTHING}</span>
+          </Fact>
+        </dl>
+
+        {outcome.state === 'unreachable' && (
+          <p
+            data-settings-update-offline
+            className="mt-2.5 text-[11px] leading-[1.55] text-fg-subtle"
+          >
+            Release notes below still opens the releases page - that is a link handed to your
+            browser, not a request Helm makes, so it works from here either way.
+          </p>
+        )}
+      </div>
+
+      <Divider />
+
+      <Row
+        label="Tell me about new releases"
+        hint="Asks on launch, at most once a day, and puts a line in the status bar if a newer Helm exists. Off stops only that - Check now still asks."
+      >
+        <span data-settings-update-check={String(updateCheck)}>
+          <Checkbox
+            checked={updateCheck}
+            onChange={() => onUpdateCheckChange(!updateCheck)}
+            label="Check for new releases on launch"
+          />
+        </span>
+      </Row>
+
+      <Actions>
+        {/* Disabled only while a check is in flight - never because the tick
+            above is off. A button that greyed itself out when the automatic
+            check was turned off would make the setting mean something it does
+            not say. */}
+        <Action data-settings-update-now onClick={onCheckNow} disabled={checking}>
+          <RefreshIcon className={cn('mr-1.5 inline', checking && 'animate-spin')} />
+          Check now
+        </Action>
+        <Action
+          data-settings-releases
+          onClick={onOpenReleases}
+          disabled={releasesUrl === null}
+          title={releasesUrl ?? 'Not known until app:info lands'}
+        >
+          Release notes
+        </Action>
+      </Actions>
+    </Group>
   )
 }
 
@@ -1038,7 +1493,7 @@ function TerminalGroup({
               className={cn(
                 'rounded-[5px] px-2.5 py-1 text-[11.5px] transition-colors',
                 terminal.terminalCursorStyle === style
-                  ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                  ? SEGMENT_ON
                   : 'text-fg-subtle hover:text-fg'
               )}
             >
@@ -1100,6 +1555,44 @@ function TerminalGroup({
             Choose…
           </Action>
         </div>
+      </Row>
+
+      <Divider />
+
+      {/* The drag handle above the shell is the control for this; the row is
+          here so the value is findable and so a drag that landed somewhere
+          silly can be typed back. Which is also why it is a field rather than a
+          stepper: nobody nudges this while watching it, because the thing it
+          moves is on a different tab. */}
+      <Row
+        label="Shell height"
+        hint="Percent of a project page the shell takes. Drag the handle above it to change it there; a project page never gives the shell more than half."
+      >
+        <NumberField
+          value={terminal.projectShellHeightPct}
+          min={PROJECT_SHELL_HEIGHT_PCT.min}
+          max={PROJECT_SHELL_HEIGHT_PCT.max}
+          label="Project shell height"
+          data-settings-shell-height={String(terminal.projectShellHeightPct)}
+          onCommit={(projectShellHeightPct) => onChange({ projectShellHeightPct })}
+        />
+      </Row>
+
+      {/* The other axis, and the same argument as the row above it: the divider
+          between the two panes is the control, and this is where the number
+          that divider landed on can be read and retyped. */}
+      <Row
+        label="Session split"
+        hint="Percent of the window the sessions take when a project and a session are both open. Drag the divider between them to change it there."
+      >
+        <NumberField
+          value={terminal.sessionSplitPct}
+          min={SESSION_SPLIT_PCT.min}
+          max={SESSION_SPLIT_PCT.max}
+          label="Session split"
+          data-settings-session-split={String(terminal.sessionSplitPct)}
+          onCommit={(sessionSplitPct) => onChange({ sessionSplitPct })}
+        />
       </Row>
 
       {/* Plain DOM at the chosen font, not an xterm instance: the point is to
@@ -1347,10 +1840,28 @@ function Actions({ children }: { children: ReactNode }): JSX.Element {
   return <div className="mt-3 flex flex-wrap gap-2">{children}</div>
 }
 
-/** The resolved-status line: a tone dot and a sentence, not a paragraph. */
-function Verdict({ tone, text }: { tone: 'ok' | 'warn' | 'todo'; text: string }): JSX.Element {
+/**
+ * The resolved-status line: a tone dot and a sentence, not a paragraph.
+ *
+ * Takes further `data-*` attributes so a group with more than one thing to say
+ * can name *which* of its states this sentence is - the tone alone cannot,
+ * since two different outcomes can honestly share one. `data-settings-verdict`
+ * stays the tone in every group, so a driver reads the two together.
+ */
+function Verdict({
+  tone,
+  text,
+  ...rest
+}: { tone: 'ok' | 'warn' | 'todo'; text: string } & Record<
+  `data-${string}`,
+  unknown
+>): JSX.Element {
   return (
-    <p data-settings-verdict={tone} className="flex items-center gap-2 text-[12.5px] text-fg">
+    <p
+      data-settings-verdict={tone}
+      {...rest}
+      className="flex items-center gap-2 text-[12.5px] text-fg"
+    >
       <span
         className={cn(
           'grid size-4 shrink-0 place-items-center rounded-full',
@@ -1547,7 +2058,8 @@ function Select({
         {...rest}
         className={cn(
           'h-[30px] w-[220px] appearance-none rounded-well border border-border bg-surface-sunken',
-          'pr-7 pl-2.5 text-[12px] text-fg focus:border-accent focus:outline-none'
+          'pr-7 pl-2.5 text-[12px] text-fg transition-colors',
+          'hover:border-border-strong focus:border-accent focus:outline-none'
         )}
       >
         {children}
@@ -1562,35 +2074,6 @@ function Select({
 }
 
 /** The one control the system allows a solid accent fill (DESIGN.md par. 4). */
-function Checkbox({
-  checked,
-  onChange,
-  label
-}: {
-  checked: boolean
-  onChange: () => void
-  label: string
-}): JSX.Element {
-  return (
-    <span className="relative grid size-4 place-items-center">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={onChange}
-        aria-label={label}
-        className={cn(
-          'peer size-4 cursor-pointer appearance-none rounded-[5px] border-[1.5px] border-fg-subtle',
-          'transition-colors checked:border-accent checked:bg-accent hover:border-fg-muted'
-        )}
-      />
-      <CheckIcon
-        width={10}
-        height={10}
-        className="pointer-events-none absolute text-accent-fg opacity-0 peer-checked:opacity-100"
-      />
-    </span>
-  )
-}
 
 function Action({
   children,

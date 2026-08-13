@@ -70,5 +70,10 @@ export function formatMoment(at: number): string {
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${String(bytes)} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  // GB became reachable with the transcript archive's ceiling, which defaults
+  // to one. Nothing else in the app gets near it - the largest transcript on
+  // the machine this was written against is 4 MB - so the tier is here for the
+  // limit rather than for the things measured against it.
+  if (bytes < 1024 ** 3) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / 1024 ** 3).toFixed(bytes % 1024 ** 3 === 0 ? 0 : 1)} GB`
 }

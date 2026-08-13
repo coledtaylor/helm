@@ -9,6 +9,7 @@ import type {
   ContentTree
 } from '@helm/core'
 import { cn } from '../lib/cn'
+import { ROW_SELECTED } from '../lib/rows'
 import { formatAge, formatBytes } from '../lib/time'
 import { PaneBack } from './PaneBack'
 import { PaneHeader } from './PaneHeader'
@@ -172,7 +173,8 @@ export function ContentViewer({
                 // freed by dropping the title is for.
                 'h-7 w-full max-w-64 min-w-0 rounded-well border border-border bg-surface-sunken px-2',
                 '@[384px]:w-auto @[384px]:min-w-40',
-                'text-[12px] text-fg focus:border-accent focus:outline-none'
+                'text-[12px] text-fg transition-colors',
+                'hover:border-border-strong focus:border-accent focus:outline-none'
               )}
             >
               {['harness', 'project'].map((kind) => {
@@ -406,7 +408,7 @@ function Row({
       title={file.path}
       className={cn(
         'relative flex w-full items-start gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
-        selected ? 'bg-accent-soft' : 'hover:bg-hover'
+        selected ? ROW_SELECTED : 'hover:bg-hover'
       )}
     >
       {selected && (

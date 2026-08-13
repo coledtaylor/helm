@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { spawnSync } from 'node:child_process'
 import {
   existsSync,
   mkdirSync,
@@ -16,11 +17,47 @@ import {
   overlayPluginName,
   overlayPluginNames,
   planOverlays,
-  syncOverlay
+  probeProcess,
+  syncOverlay,
+  type ShimOwner,
+  type ShimWorld
 } from './overlay'
 
 let root: string
 let shimRoot: string
+
+const STAMP = '.helm-overlay.json'
+
+/**
+ * A machine that has rebooted since the shim was stamped.
+ *
+ * Which is what "the previous run" means once the sweep asks about processes: a
+ * pid recorded before this boot cannot name anything running now, so every
+ * owner on the stamp is dead by construction and the probe is never consulted.
+ * The tests that predate ownership all describe exactly that situation.
+ */
+function rebooted(): Partial<ShimWorld> {
+  return { bootAtMs: Date.now() + 1000 }
+}
+
+function readOwners(dir: string): ShimOwner[] {
+  const stamp: unknown = JSON.parse(readFileSync(join(dir, STAMP), 'utf8'))
+  return (stamp as { owners?: ShimOwner[] }).owners ?? []
+}
+
+/** Rewrites a real shim's owner list, standing in for another Helm's claim. */
+function setOwners(dir: string, owners: ShimOwner[] | undefined): void {
+  const stamp: unknown = JSON.parse(readFileSync(join(dir, STAMP), 'utf8'))
+  const next = { ...(stamp as Record<string, unknown>) }
+  if (owners === undefined) delete next['owners']
+  else next['owners'] = owners
+  writeFileSync(join(dir, STAMP), JSON.stringify(next, null, 2))
+}
+
+/** A pid that is not this process, with a start time inside the current boot. */
+function otherHelm(pid: number): ShimOwner {
+  return { pid, startedAt: new Date().toISOString() }
+}
 
 /** A repo with a `.claude/` tree, the way the fixtures in `repos/` look. */
 function makeProject(
@@ -186,7 +223,7 @@ describe('cleanStaleShims', () => {
     syncOverlay(planOverlays([a], shimRoot)[0]!)
     syncOverlay(planOverlays([b], shimRoot)[0]!)
 
-    const removed = cleanStaleShims(shimRoot, ['alpha'])
+    const removed = cleanStaleShims(shimRoot, ['alpha'], rebooted())
     expect(removed).toEqual([join(shimRoot, 'overlay-beta')])
     expect(existsSync(join(shimRoot, 'overlay-alpha'))).toBe(true)
     expect(existsSync(join(shimRoot, 'overlay-beta'))).toBe(false)
@@ -195,7 +232,7 @@ describe('cleanStaleShims', () => {
   it('removes every shim when nothing is running', () => {
     const a = makeProject('alpha', { skills: ['one'] })
     syncOverlay(planOverlays([a], shimRoot)[0]!)
-    expect(cleanStaleShims(shimRoot)).toHaveLength(1)
+    expect(cleanStaleShims(shimRoot, [], rebooted())).toHaveLength(1)
     expect(existsSync(join(shimRoot, 'overlay-alpha'))).toBe(false)
   })
 
@@ -208,7 +245,7 @@ describe('cleanStaleShims', () => {
     const project = makeProject('acme', { skills: ['think'], agents: ['reviewer'] })
     syncOverlay(planOverlays([project], shimRoot)[0]!)
 
-    cleanStaleShims(shimRoot)
+    cleanStaleShims(shimRoot, [], rebooted())
 
     expect(existsSync(join(shimRoot, 'overlay-acme'))).toBe(false)
     expect(readFileSync(join(project, '.claude', 'skills', 'think', 'SKILL.md'), 'utf8')).toBe(
@@ -222,7 +259,7 @@ describe('cleanStaleShims', () => {
     writeFileSync(join(shimRoot, 'overlay-not-ours', 'keep.txt'), 'x')
     mkdirSync(join(shimRoot, 'unrelated'), { recursive: true })
 
-    expect(cleanStaleShims(shimRoot)).toEqual([])
+    expect(cleanStaleShims(shimRoot, [], rebooted())).toEqual([])
     expect(existsSync(join(shimRoot, 'overlay-not-ours', 'keep.txt'))).toBe(true)
     expect(existsSync(join(shimRoot, 'unrelated'))).toBe(true)
   })
@@ -236,9 +273,228 @@ describe('cleanStaleShims', () => {
     writeFileSync(join(shimRoot, 'memory-cloud-sync.md'), '# composed')
     writeFileSync(join(shimRoot, 'notes.md'), 'not ours')
 
-    const removed = cleanStaleShims(shimRoot)
+    const removed = cleanStaleShims(shimRoot, [], rebooted())
     expect(removed).toEqual([join(shimRoot, 'memory-cloud-sync.md')])
     expect(existsSync(join(shimRoot, 'notes.md'))).toBe(true)
+  })
+})
+
+/**
+ * Who is allowed to delete a shim.
+ *
+ * The failure being ruled out is one process removing another's live
+ * `--plugin-dir`: the session keeps running and silently loses its skills, so
+ * there is no symptom to notice. Every case below is therefore written from the
+ * sweep's point of view, and the ones with no clear answer assert that nothing
+ * happened.
+ */
+describe('cleanStaleShims and the process holding the shim', () => {
+  /** Builds a real shim and returns where it landed. */
+  function plant(name: string): string {
+    const project = makeProject(name, { skills: ['one'] })
+    return syncOverlay(planOverlays([project], shimRoot)[0]!).dir
+  }
+
+  it('records this process as the owner of a shim it just built', () => {
+    const dir = plant('alpha')
+    expect(readOwners(dir)).toEqual([
+      { pid: process.pid, startedAt: expect.any(String) as unknown as string }
+    ])
+  })
+
+  it('leaves a shim whose owner is still running', () => {
+    const dir = plant('alpha')
+    setOwners(dir, [otherHelm(4321)])
+
+    const removed = cleanStaleShims(shimRoot, [], { probe: () => 'alive' })
+    expect(removed).toEqual([])
+    expect(existsSync(dir)).toBe(true)
+  })
+
+  it('removes a shim whose owner is gone', () => {
+    const dir = plant('alpha')
+    setOwners(dir, [otherHelm(4321)])
+
+    expect(cleanStaleShims(shimRoot, [], { probe: () => 'gone' })).toEqual([dir])
+    expect(existsSync(dir)).toBe(false)
+  })
+
+  /**
+   * The pre-boot rule, which is what makes pid reuse safe rather than merely
+   * unlikely: a pid recorded before this boot names nothing that is running
+   * now, whatever the kernel says about the number today.
+   */
+  it('removes a shim stamped before the current boot even if the pid is live', () => {
+    const dir = plant('alpha')
+    setOwners(dir, [{ pid: 4321, startedAt: new Date(Date.now() - 86_400_000).toISOString() }])
+
+    const removed = cleanStaleShims(shimRoot, [], {
+      probe: () => 'alive',
+      bootAtMs: Date.now() - 60_000
+    })
+    expect(removed).toEqual([dir])
+    expect(existsSync(dir)).toBe(false)
+  })
+
+  it('leaves a shim when the kernel will not say', () => {
+    const dir = plant('alpha')
+    setOwners(dir, [otherHelm(4321)])
+
+    expect(cleanStaleShims(shimRoot, [], { probe: () => 'unknown' })).toEqual([])
+    expect(existsSync(dir)).toBe(true)
+  })
+
+  it('leaves a shim when one of several owners is still running', () => {
+    const dir = plant('alpha')
+    setOwners(dir, [otherHelm(4321), otherHelm(8765)])
+
+    const removed = cleanStaleShims(shimRoot, [], {
+      probe: (pid) => (pid === 8765 ? 'alive' : 'gone')
+    })
+    expect(removed).toEqual([])
+    expect(existsSync(dir)).toBe(true)
+  })
+
+  it('removes a shim once every owner has gone', () => {
+    const dir = plant('alpha')
+    setOwners(dir, [otherHelm(4321), otherHelm(8765)])
+
+    expect(cleanStaleShims(shimRoot, [], { probe: () => 'gone' })).toEqual([dir])
+    expect(existsSync(dir)).toBe(false)
+  })
+
+  it('never removes a shim this process itself holds', () => {
+    const dir = plant('alpha')
+    // The probe would say gone for anything it is asked about; the self entry
+    // must not reach it.
+    expect(cleanStaleShims(shimRoot, [], { probe: () => 'gone' })).toEqual([])
+    expect(existsSync(dir)).toBe(true)
+  })
+
+  /**
+   * A shim built by a Helm from before ownership was recorded. Nothing can be
+   * said about who holds it, so the clock decides: within this boot it is left
+   * alone, and the next boot collects it.
+   */
+  it('leaves a stamp with no owners that was built during this boot', () => {
+    const dir = plant('alpha')
+    setOwners(dir, undefined)
+
+    expect(cleanStaleShims(shimRoot, [], { probe: () => 'gone' })).toEqual([])
+    expect(existsSync(dir)).toBe(true)
+  })
+
+  it('removes a stamp with no owners that predates this boot', () => {
+    const dir = plant('alpha')
+    setOwners(dir, undefined)
+
+    const removed = cleanStaleShims(shimRoot, [], {
+      probe: () => 'gone',
+      bootAtMs: Date.now() + 1000
+    })
+    expect(removed).toEqual([dir])
+    expect(existsSync(dir)).toBe(false)
+  })
+
+  /**
+   * Re-syncing an unchanged shim adds this process to the list rather than
+   * replacing it. Two Helms that launched the same profile both hold it, and a
+   * sweep after the first exits must still find the second.
+   */
+  it('adds a claim to an unchanged shim instead of taking it over', () => {
+    const project = makeProject('alpha', { skills: ['one'] })
+    const plan = planOverlays([project], shimRoot)[0]!
+    const dir = syncOverlay(plan).dir
+    setOwners(dir, [otherHelm(4321)])
+    // 4321 is nothing on this machine, and a claim that probes as gone would be
+    // pruned - which is a different behaviour from the one under test.
+    vi.spyOn(process, 'kill').mockReturnValue(true)
+
+    expect(syncOverlay(plan).rebuilt).toBe(false)
+    expect(readOwners(dir).map((owner) => owner.pid)).toEqual([4321, process.pid])
+    vi.restoreAllMocks()
+  })
+
+  it('prunes owners that have gone when it claims one', () => {
+    const project = makeProject('alpha', { skills: ['one'] })
+    const plan = planOverlays([project], shimRoot)[0]!
+    const dir = syncOverlay(plan).dir
+    // Stamped before this boot, so the claim is dead however the pid probes.
+    setOwners(dir, [{ pid: 4321, startedAt: new Date(0).toISOString() }])
+
+    syncOverlay(plan)
+    expect(readOwners(dir).map((owner) => owner.pid)).toEqual([process.pid])
+  })
+})
+
+/**
+ * The probe itself, against the kernel where the answer is unambiguous and
+ * against a stubbed `process.kill` where it is not.
+ *
+ * `EPERM` is the case worth stubbing. A machine cannot be relied on to hold a
+ * process this one may not signal - and the pid that would, on Windows, is a
+ * protected system process, which is a brittle thing to build a test on - but
+ * getting it wrong is what deletes a live session's plugin directory, so it is
+ * not a branch to leave unexercised.
+ */
+describe('probeProcess', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('says a process that is running is alive', () => {
+    expect(probeProcess(process.pid)).toBe('alive')
+  })
+
+  it('says a process that has exited is gone', () => {
+    const child = spawnSync(process.execPath, ['-e', 'process.exit(0)'])
+    expect(child.status).toBe(0)
+    expect(child.pid).toBeGreaterThan(0)
+    expect(probeProcess(child.pid!)).toBe('gone')
+  })
+
+  it('reads a pid it may not signal as alive rather than absent', () => {
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err: NodeJS.ErrnoException = new Error('operation not permitted')
+      err.code = 'EPERM'
+      throw err
+    })
+    expect(probeProcess(4321)).toBe('alive')
+  })
+
+  it('says unknown for anything else the platform raises', () => {
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err: NodeJS.ErrnoException = new Error('invalid argument')
+      err.code = 'EINVAL'
+      throw err
+    })
+    expect(probeProcess(4321)).toBe('unknown')
+  })
+})
+
+/**
+ * And the sweep's own reading of an EPERM, end to end: the probe classifies,
+ * `ownerVerdict` refuses to delete on anything but `gone`, and the directory is
+ * still there afterwards.
+ */
+describe('cleanStaleShims against a pid it may not signal', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('leaves the shim', () => {
+    const project = makeProject('alpha', { skills: ['one'] })
+    const dir = syncOverlay(planOverlays([project], shimRoot)[0]!).dir
+    setOwners(dir, [{ pid: 4321, startedAt: new Date().toISOString() }])
+
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err: NodeJS.ErrnoException = new Error('operation not permitted')
+      err.code = 'EPERM'
+      throw err
+    })
+
+    expect(cleanStaleShims(shimRoot)).toEqual([])
+    expect(existsSync(dir)).toBe(true)
   })
 })
 

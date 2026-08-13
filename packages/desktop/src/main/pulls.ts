@@ -6,7 +6,9 @@ import {
   fetchOpenPulls,
   fetchPullDetail,
   fetchPullDiff,
+  fetchReviewThreads,
   forgetPrRepos,
+  heldReviewThreads,
   indexDiffByPath,
   isRepoIgnored,
   parseGitHubRemote,
@@ -38,9 +40,11 @@ import {
   type PullFileView,
   type PullPatch,
   type PullRepo,
+  type PullReviewThread,
   type PullsSnapshot,
   type PullSummary,
-  type RenderedPullEntry,
+  type RenderedPullItem,
+  type RenderedThreadComment,
   type Store
 } from '@helm/core'
 import {
@@ -231,7 +235,7 @@ function signature(snapshot: PullsSnapshot): string {
     // Ignoring a repository that had nothing open moves no other field in here
     // - the same reason `pull.checks` is in the row tuple below - so without
     // this the pane would keep painting the list from before the toggle.
-    snapshot.ignored.map((repo) => [repo.slug, repo.name, repo.present]),
+    snapshot.ignored.map((repo) => [repo.slug, repo.name, repo.present, repo.paths]),
     snapshot.repos.map((repo) => [
       repo.path,
       repo.slug,
@@ -655,18 +659,21 @@ export function createPullsService({
     let patch: PullPatch | null = cached.diff
     /** Why there is no patch, when the fetch is the reason. */
     let patchProblem: string | null = null
+    /** Why the threads are missing or old, when the fetch is the reason. */
+    let threadProblem: string | null = null
     let fetchedAt = cached.detailFetchedAt
     let fromCache = true
 
     if (held === null || request.refresh === true) {
       const command = await ghForDetail()
 
-      // Both at once. They are one act to whoever opened the tab, they are
+      // All three at once. They are one act to whoever opened the tab, they are
       // independent calls to gh, and running them in series would make the
       // conversation wait on a patch it does not need - or the other way round.
-      const [detailAttempt, diffAttempt] = await Promise.allSettled([
+      const [detailAttempt, diffAttempt, threadAttempt] = await Promise.allSettled([
         fetchPullDetail(command, slug, request.number),
-        fetchPullDiff(command, slug, request.number)
+        fetchPullDiff(command, slug, request.number),
+        fetchReviewThreads(command, slug, request.number)
       ])
 
       if (detailAttempt.status === 'rejected') {
@@ -695,18 +702,52 @@ export function createPullsService({
         patchProblem = err instanceof Error ? err.message : String(err)
       }
 
+      // The threads go the **other** way to the patch, and the difference is
+      // what each one is anchored to. A patch describes a file list that has
+      // just been replaced, so keeping the old one would paint hunks under
+      // paths that no longer have them. A thread is anchored to a path and a
+      // line and carries its own record of the diff it was written against, so
+      // one fetched ten minutes ago is still a true fact about that
+      // conversation - and this surface degrades stale-with-age rather than to
+      // nothing. So a failed thread query keeps what was cached, and the view
+      // says both that it failed and how old what is on screen is.
+      const previous = heldReviewThreads(cached.detail)
+      let threads = previous
+      let threadsAt = cached.detail?.reviewThreadsFetchedAt ?? null
+      if (threadAttempt.status === 'fulfilled') {
+        threads = threadAttempt.value
+        threadsAt = Date.now()
+      } else {
+        const err: unknown = threadAttempt.reason
+        threadProblem = err instanceof Error ? err.message : String(err)
+      }
+
       const at = new Date().toISOString()
-      writePullDetail(store, slug, request.number, detailAttempt.value, {
+      // Spread onto the fetched detail rather than written beside it: threads
+      // ride inside `PullDetail`, so this is the object the cache holds and the
+      // one the view is built from, and `undefined` here is a key that
+      // `JSON.stringify` drops - which is exactly how "never fetched" survives
+      // a round trip through the database.
+      const fetched: PullDetail = {
+        ...detailAttempt.value,
+        ...(threads === undefined ? {} : { reviewThreads: threads }),
+        ...(threadsAt === null ? {} : { reviewThreadsFetchedAt: threadsAt })
+      }
+      writePullDetail(store, slug, request.number, fetched, {
         diff: patch,
         detailFetchedAt: at
       })
-      held = detailAttempt.value
+      held = fetched
       fetchedAt = at
       fromCache = false
     }
 
-    const conversation: RenderedPullEntry[] = await Promise.all(
-      pullConversation(held).map(async (entry) => ({ ...entry, html: await render(entry.body) }))
+    const conversation: RenderedPullItem[] = await Promise.all(
+      pullConversation(held).map(async (entry) =>
+        entry.kind === 'thread'
+          ? { ...entry, comments: await renderThread(entry.comments) }
+          : { ...entry, html: await render(entry.body) }
+      )
     )
 
     return {
@@ -716,10 +757,60 @@ export function createPullsService({
       detail: held,
       bodyHtml: await render(held.body),
       conversation,
+      threadsNote: threadsNote(held, threadProblem),
+      threadsFetchedAtMs: held.reviewThreadsFetchedAt ?? null,
       ...filesOf(held, patch, patchProblem),
       fetchedAtMs: msOf(fetchedAt),
       cached: fromCache
     }
+  }
+
+  /** Every comment of one thread, each through the same pipeline as a body. */
+  async function renderThread(
+    comments: PullReviewThread['comments']
+  ): Promise<RenderedThreadComment[]> {
+    return Promise.all(
+      comments.map(async (comment) => ({ ...comment, html: await render(comment.body) }))
+    )
+  }
+
+  /**
+   * What the Conversation view has to admit about its diff-line threads.
+   *
+   * Three states and they are genuinely different facts, which is why this is a
+   * sentence rather than a flag. **Never fetched** is a pull request cached by a
+   * Helm that had no thread query - it must not read as "nobody annotated this",
+   * which is the bug the query was added to fix. **Failed with something to fall
+   * back on** keeps the old threads and captions them, which is this surface's
+   * whole degradation rule. **Failed with nothing** says so plainly. And an
+   * empty array that actually came back from GitHub says nothing at all, because
+   * a pull request with no inline comments is not a pull request with a problem.
+   */
+  function threadsNote(detail: PullDetail, problem: string | null): string | null {
+    const held = heldReviewThreads(detail)
+    if (problem !== null) {
+      // Terminated before anything is appended to it. What gh prints is a
+      // fragment - `HTTP 502: the fixture is unwell` - with no full stop on the
+      // end, and a sentence continued straight off one reads as a single run-on
+      // that nobody can find the seam in.
+      const said = /[.!?]$/.test(problem) ? problem : `${problem}.`
+      if (held === undefined || held.length === 0) {
+        return `Comments left on lines of the diff could not be read - ${said}`
+      }
+      // "Shown" rather than "below": this sentence sits at the foot of the
+      // conversation and the threads it is about are above it, interleaved with
+      // everything else by time rather than gathered into a block.
+      //
+      // No age in it either, and the age is not missing: it is painted beside
+      // it from `threadsFetchedAtMs`, by the pane, off the same live clock every
+      // other caption on this surface runs on. A moment turned into "4m ago" in
+      // main is a moment that stops being true the second after it is sent.
+      return `Comments left on lines of the diff could not be re-read - ${said} The ${String(held.length)} shown ${held.length === 1 ? 'is the one' : 'are the ones'} Helm already had.`
+    }
+    if (held === undefined) {
+      return 'Comments left on lines of the diff have not been fetched for this pull request - it was cached before Helm could read them. Refresh to fetch them.'
+    }
+    return null
   }
 
   /**
@@ -891,8 +982,8 @@ export function createPullsService({
     const known = projects()
     const ignoredRepos = settings().prIgnoredRepos
 
-    /** Ignored slugs a scanned project maps to, and the folder to call them. */
-    const ignoredPresent = new Map<string, string>()
+    /** Ignored slugs a scanned project maps to: what to call them, and where. */
+    const ignoredPresent = new Map<string, { name: string; paths: string[] }>()
 
     /**
      * Projects whose origin remote has not been read yet.
@@ -916,9 +1007,14 @@ export function createPullsService({
       if (isRepoIgnored(ignoredRepos, row.slug)) {
         // First checkout wins the name. Two directories for one slug are one
         // entry, because the setting is one entry - and a list that named the
-        // same repository twice would offer two ticks for one fact.
-        if (!ignoredPresent.has(row.slug.toLowerCase())) {
-          ignoredPresent.set(row.slug.toLowerCase(), project.name)
+        // same repository twice would offer two ticks for one fact. Every
+        // directory is still collected: the entry is one tick, but each of
+        // those checkouts has a project pane that has to know it is covered.
+        const held = ignoredPresent.get(row.slug.toLowerCase())
+        if (held === undefined) {
+          ignoredPresent.set(row.slug.toLowerCase(), { name: project.name, paths: [project.path] })
+        } else {
+          held.paths.push(project.path)
         }
         continue
       }
@@ -959,11 +1055,12 @@ export function createPullsService({
     // screen saying so.
     const ignored: IgnoredRepo[] = ignoredRepos
       .map((slug) => {
-        const name = ignoredPresent.get(slug.toLowerCase())
+        const mapped = ignoredPresent.get(slug.toLowerCase())
         return {
           slug,
-          name: name ?? (slug.split('/')[1] ?? slug),
-          present: name !== undefined
+          name: mapped?.name ?? (slug.split('/')[1] ?? slug),
+          present: mapped !== undefined,
+          paths: mapped?.paths ?? []
         }
       })
       .sort((a, b) => a.slug.toLowerCase().localeCompare(b.slug.toLowerCase()))

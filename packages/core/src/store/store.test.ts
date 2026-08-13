@@ -3,7 +3,16 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, EMPTY_INVENTORY, type AppSettings, type Project } from '../types'
+import {
+  DEFAULT_SETTINGS,
+  EMPTY_INVENTORY,
+  PINNED_PROJECTS_MAX,
+  isProjectPinned,
+  sessionLabel,
+  withProjectPinned,
+  type AppSettings,
+  type Project
+} from '../types'
 import { openStore, type Store } from './db'
 import { knownMigrations } from './migrate'
 import { cacheProjects, readCachedProjects } from './projects'
@@ -11,6 +20,7 @@ import {
   finishSession,
   readSessions,
   reconcileRunningSessions,
+  renameSession,
   runningSessionNames,
   startSession
 } from './sessions'
@@ -102,6 +112,7 @@ describe('settings', () => {
     const written = {
       theme: 'light',
       scanRoots: [dir, join(dir, 'other')],
+      pinnedProjects: [join(dir, 'alpha'), join(dir, 'beta')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
       // Every pane kind, because the validator checks each one's own fields and
       // a strip of only the field-less kinds would not exercise them.
@@ -126,6 +137,9 @@ describe('settings', () => {
       terminalCursorBlink: false,
       terminalScrollback: 2500,
       terminalShell: join(dir, 'pwsh.exe'),
+      projectShellHeightPct: 42,
+      sessionSplitPct: 62,
+      transcriptArchiveMaxBytes: 256 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 15,
       prIgnoredRepos: ['acme/noisy', 'other/quiet'],
@@ -202,6 +216,34 @@ describe('settings validation', () => {
       key: 'scanRoots',
       good: [[], [join(tmpdir(), 'a')], [join(tmpdir(), 'a'), join(tmpdir(), 'b')]],
       bad: [null, 'C:\\work', ['repos/helm'], ['../up'], [''], [17], [null]]
+    },
+    {
+      key: 'pinnedProjects',
+      // Absolute paths, as a set. Two spellings of one path is the interesting
+      // rejection and it is the same shape as `prIgnoredRepos`': the comparison
+      // is case-insensitive, so `C:\Repos\Api` and `c:\repos\api` would present
+      // as two rows in a section where un-pinning either removes both. Mixed
+      // case across *different* paths is fine and is in the good column.
+      good: [
+        [],
+        [join(tmpdir(), 'alpha')],
+        [join(tmpdir(), 'alpha'), join(tmpdir(), 'Beta')],
+        [join(tmpdir(), 'a folder with spaces')]
+      ],
+      bad: [
+        [join(tmpdir(), 'alpha'), join(tmpdir(), 'ALPHA')],
+        [join(tmpdir(), 'alpha'), join(tmpdir(), 'alpha')],
+        ['repos/helm'],
+        ['../up'],
+        [''],
+        ['   '],
+        [17],
+        [null],
+        join(tmpdir(), 'alpha'),
+        null,
+        {},
+        Array.from({ length: PINNED_PROJECTS_MAX + 1 }, (_, i) => join(tmpdir(), `p${String(i)}`))
+      ]
     },
     {
       key: 'claudePath',
@@ -311,6 +353,37 @@ describe('settings validation', () => {
       key: 'terminalShell',
       good: [null, join(tmpdir(), 'pwsh.exe'), join(tmpdir(), 'bin', 'bash')],
       bad: ['pwsh.exe', 'bin\\pwsh.exe', '', 42, {}]
+    },
+    {
+      // A percentage of the project page's column. 51 is in the bad column
+      // because the ceiling is the user's own ask - the project pane is never
+      // the smaller half of its own page - and the non-finite cases are there
+      // because this number becomes a `height`, where `NaN%` is a declaration
+      // the style parser drops without a word.
+      key: 'projectShellHeightPct',
+      good: [10, 30, 50],
+      bad: [9, 51, 0, -30, 100, 30.5, '30', null, Number.NaN, Number.POSITIVE_INFINITY]
+    },
+    {
+      // The sessions column's share of the window. The bounds are wider than
+      // the shell's because neither side of this divider is the subordinate
+      // one - a workspace squeezed to a fifth is a choice somebody can make,
+      // where a project page that is mostly shell is not.
+      //
+      // The non-finite cases matter here for the same reason: the fraction
+      // becomes a `flex-grow`, and `flex: NaN 1 0%` is dropped by the parser,
+      // which would collapse the column rather than fail.
+      key: 'sessionSplitPct',
+      good: [20, 45, 80],
+      bad: [19, 81, 0, -45, 100, 45.5, '45', null, Number.NaN, Number.POSITIVE_INFINITY]
+    },
+    {
+      // A byte count, and null is in the *bad* column deliberately: there is no
+      // "no ceiling" for this key. The archive is always on and always bounded,
+      // and an unbounded one is the state `helm.db` is not allowed to reach.
+      key: 'transcriptArchiveMaxBytes',
+      good: [1024, 1024 ** 3, 64 * 1024 ** 3],
+      bad: [1023, 0, -1, 64 * 1024 ** 3 + 1, 1024.5, '1073741824', null, {}]
     },
     {
       key: 'ghPath',
@@ -459,6 +532,7 @@ describe('settings validation', () => {
     writeSettings(store, {
       theme: 'dark',
       scanRoots: [dir],
+      pinnedProjects: [join(dir, 'alpha')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
       workspaceTabs: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
       firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
@@ -470,6 +544,9 @@ describe('settings validation', () => {
       terminalCursorBlink: false,
       terminalScrollback: 50_000,
       terminalShell: join(dir, 'cmd.exe'),
+      projectShellHeightPct: 45,
+      sessionSplitPct: 70,
+      transcriptArchiveMaxBytes: 512 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 0,
       prIgnoredRepos: ['acme/noisy'],
@@ -490,6 +567,7 @@ describe('settings validation', () => {
 const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   theme: 'dark',
   scanRoots: [dir],
+  pinnedProjects: [join(dir, 'alpha')],
   windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
   workspaceTabs: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
   firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
@@ -501,6 +579,9 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   terminalCursorBlink: false,
   terminalScrollback: 50_000,
   terminalShell: join(dir, 'cmd.exe'),
+  projectShellHeightPct: 45,
+  sessionSplitPct: 70,
+  transcriptArchiveMaxBytes: 512 * 1024 * 1024,
   ghPath: join(dir, 'gh.exe'),
   prPollMinutes: 0,
   prIgnoredRepos: ['acme/noisy'],
@@ -510,6 +591,50 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   prReviewEffort: null,
   updateCheck: true,
   lastUpdateCheckAt: null
+})
+
+describe('pinned projects', () => {
+  const a = 'C:\\Repos\\Api'
+  const b = 'C:\\Repos\\web'
+
+  it('matches a path however it was spelled', () => {
+    // Windows paths are case-insensitive, and the two places this list meets
+    // the tree - the Pinned section and the harness group a pinned project is
+    // *left out* of - both compare with `toLowerCase`. If this did not, a pin
+    // written in one casing would print the project twice.
+    expect(isProjectPinned([a], 'c:\\repos\\api')).toBe(true)
+    expect(isProjectPinned(['c:\\repos\\api'], a)).toBe(true)
+    expect(isProjectPinned([a], 'C:\\Repos\\Api2')).toBe(false)
+    expect(isProjectPinned([], a)).toBe(false)
+  })
+
+  it('adds and removes, sorted, so the value does not depend on click order', () => {
+    expect(withProjectPinned([], b, true)).toEqual([b])
+    expect(withProjectPinned([b], a, true)).toEqual([a, b])
+    expect(withProjectPinned([a, b], a, false)).toEqual([b])
+  })
+
+  it('never leaves a second spelling of the same project behind', () => {
+    expect(withProjectPinned([a], 'c:\\repos\\api', false)).toEqual([])
+    expect(withProjectPinned([a], 'c:\\repos\\api', true)).toEqual(['c:\\repos\\api'])
+  })
+
+  it('leaves the list it was given alone', () => {
+    const held = [a]
+    expect(withProjectPinned(held, b, true)).toEqual([a, b])
+    expect(held).toEqual([a])
+  })
+
+  it('produces a list the validator accepts', () => {
+    // The toggle and the validator have to agree about what a set is: a helper
+    // that could produce two spellings would build a value nothing can write.
+    let held: string[] = []
+    for (const path of [a, b, 'c:\\repos\\api', 'C:\\Repos\\WEB']) {
+      held = withProjectPinned(held, path, true)
+      expect(validateSetting('pinnedProjects', held)).toBeNull()
+    }
+    expect(held).toHaveLength(2)
+  })
 })
 
 describe('project cache', () => {
@@ -633,5 +758,64 @@ describe('session log', () => {
     finishSession(store, one.id, { exitCode: 0 })
 
     expect(runningSessionNames(store)).toEqual(['alpha 2'])
+  })
+
+  it('records the branch the cwd was on, and null for a cwd that is not on one', () => {
+    const onBranch = startSession(store, { name: 'alpha', cwd: dir, branch: 'feat/tabs' })
+    const noBranch = startSession(store, { name: 'beta', cwd: dir })
+
+    expect(onBranch.branch).toBe('feat/tabs')
+    expect(noBranch.branch).toBeNull()
+  })
+
+  it('starts with no label, so a session is called what the CLI was told', () => {
+    const session = started()
+    expect(session.label).toBeNull()
+    expect(sessionLabel(session)).toBe('alpha')
+  })
+
+  it('renames a session without touching the name that went to the CLI', () => {
+    const session = started()
+    const renamed = renameSession(store, session.id, 'PR review')
+
+    expect(renamed).toMatchObject({ id: session.id, label: 'PR review', name: 'alpha' })
+    expect(sessionLabel(renamed!)).toBe('PR review')
+    // And it is in the row, not only in the answer.
+    expect(readSessions(store)[0]).toMatchObject({ label: 'PR review', name: 'alpha' })
+  })
+
+  it('treats an empty or whitespace label as clearing it, not as an empty title', () => {
+    const session = started()
+    renameSession(store, session.id, 'PR review')
+
+    expect(renameSession(store, session.id, '   ')?.label).toBeNull()
+    expect(sessionLabel(readSessions(store)[0]!)).toBe('alpha')
+    expect(renameSession(store, session.id, null)?.label).toBeNull()
+  })
+
+  it('trims a label rather than storing the spaces around it', () => {
+    const session = started()
+    expect(renameSession(store, session.id, '  PR review  ')?.label).toBe('PR review')
+  })
+
+  it('answers null for a session id that is not in this database', () => {
+    expect(renameSession(store, 9999, 'nope')).toBeNull()
+  })
+
+  it('keeps the label through the session ending, so a dead tab stays named', () => {
+    const session = started()
+    renameSession(store, session.id, 'PR review')
+
+    expect(finishSession(store, session.id, { exitCode: 0 })?.label).toBe('PR review')
+  })
+
+  it('gives a new session none of a finished one’s label', () => {
+    const first = started('alpha')
+    renameSession(store, first.id, 'PR review')
+    finishSession(store, first.id, { exitCode: 0 })
+
+    // A label belongs to a row. Nothing recycles it onto the next session, which
+    // is the failure the `-n` counter had.
+    expect(started('alpha').label).toBeNull()
   })
 })

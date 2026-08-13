@@ -92,6 +92,7 @@ export {
   type PullComment,
   type PullCommit,
   type PullConversationEntry,
+  type PullConversationItem,
   type PullDetail,
   type PullDetailView,
   type PullDiff,
@@ -105,9 +106,15 @@ export {
   type PullRepo,
   type PullReview,
   type PullReviewDecision,
+  type PullReviewThread,
   type PullSummary,
   type PullsSnapshot,
+  type PullThreadComment,
+  type PullThreadEntry,
   type RenderedPullEntry,
+  type RenderedPullItem,
+  type RenderedPullThread,
+  type RenderedThreadComment,
   type RepoRemote
 } from './github/types'
 /**
@@ -118,6 +125,18 @@ export {
  * imports nothing but types.
  */
 export { MAX_FILE_LINES } from './github/diff'
+/**
+ * The thread-to-diff-row join, re-exported for the same reason and under the
+ * same guarantee: `diff.ts` is pure and imports nothing but types, so this
+ * reaches the browser bundle without dragging `launch/` or `store/` into it.
+ *
+ * In core rather than in the pane because it is the one part of the Files
+ * view's thread markers that is a *decision* rather than a rendering - what to
+ * do when the patch and the threads, fetched separately, disagree about where a
+ * line is - and a decision belongs where it can be unit-tested.
+ */
+export { anchorThreadsToFile } from './github/diff'
+export type { AnchoredThreads, ThreadLooseReason, ThreadPosition } from './github/diff'
 /**
  * The review prompt's template renderer, re-exported for the same reason again:
  * the detail pane's disclosure sentence names the exact prompt the button will
@@ -231,9 +250,15 @@ export type SessionStatus = 'running' | 'exited' | 'lost'
 export interface SessionRecord {
   id: number
   /** The `-n` name handed to the CLI, so the session is identifiable in
-   * `/resume` later (SPEC 4.1, and the session index reads these rows). */
+   * `/resume` later (SPEC 4.1, and the session index reads these rows). Never
+   * rewritten - a rename writes `label`. See the column comment in `schema.ts`. */
   name: string
+  /** What Helm calls it on screen, or null for "use `name`". `sessionLabel`. */
+  label: string | null
   cwd: string
+  /** The branch `cwd` was on when this was spawned. Null for a non-repo cwd, a
+   * detached HEAD, or a read that failed. Captured, never followed. */
+  branch: string | null
   /** The discovered project it was launched against, if it was one. */
   projectPath: string | null
   /** The profile it was launched from, if it was one. Not a foreign key: the
@@ -247,6 +272,26 @@ export interface SessionRecord {
   durationMs: number | null
   /** Null while running, and for a session whose exit code was never observed. */
   exitCode: number | null
+}
+
+/**
+ * What to call a session on screen: its label if it has one, its `-n` name if
+ * not.
+ *
+ * One function rather than `label ?? name` at each call site, and that is the
+ * whole reason it exists. A session is named in four places - the tab, the tab's
+ * hover hint, the sidebar's live-session tooltip, and the confirmation before it
+ * is ended - and the failure a shared helper prevents is the one where the tab
+ * says "PR review", the dialog asking to end it says "dev 2", and the user has
+ * to work out that those are the same session before answering a question whose
+ * cost is whatever the session had not finished saying.
+ *
+ * In `types.ts` because the renderer imports it, and a value import into the
+ * browser bundle comes from `@helm/core/types` and not the package root
+ * (CLAUDE.md "Boundaries").
+ */
+export function sessionLabel(session: Pick<SessionRecord, 'name' | 'label'>): string {
+  return session.label ?? session.name
 }
 
 /**
@@ -292,11 +337,88 @@ export interface HistorySession {
   /** False when the recorded working directory is no longer there. */
   projectExists: boolean
   /**
+   * What Helm's own archive holds for this session, or null when it has never
+   * held anything.
+   *
+   * The third fact about a session, alongside the transcript and the folder,
+   * and it does not follow from either: a conversation Claude Code reaped can
+   * still be readable here, and one that is still on disk may never have been
+   * captured. `'evicted'` is deliberately not folded into null - see
+   * `ArchiveSessionState`.
+   */
+  archive: ArchiveSessionState | null
+  /** Messages in the archive for it. Zero once the ceiling has dropped them. */
+  archivedMessages: number | null
+  /**
    * The first prompt that matched the search, when the query had one. Absent
    * for an unfiltered listing rather than set to the opening prompt, so the UI
    * can tell "matched here" from "this is just the start of it".
    */
   match?: string | undefined
+}
+
+// ---------------------------------------------------------------------------
+// Transcript archive
+// ---------------------------------------------------------------------------
+
+/**
+ * What Helm's archive holds for a session.
+ *
+ * Two values and no third for "never captured", which is the absence of a row.
+ * The distinction that has to survive every refactor is `'evicted'` against
+ * null: "we had this conversation and dropped it to stay under your limit" and
+ * "this was reaped before Helm ever saw it" are different facts about the same
+ * missing text, and only one of them is something the user chose.
+ */
+export type ArchiveSessionState = 'archived' | 'evicted'
+
+/** One message of an archived conversation, as the viewer renders it. */
+export interface ArchiveMessage {
+  uuid: string
+  role: 'user' | 'assistant'
+  /** Epoch ms. */
+  at: number
+  text: string
+}
+
+/**
+ * One archived conversation.
+ *
+ * `messages` is empty for an evicted one, and the row is still returned: the
+ * pane has something to say about a conversation Helm dropped, and nothing to
+ * say about one it never had.
+ */
+export interface ArchivedConversation {
+  sessionId: string
+  /** The transcript it was read from. Usually gone by the time this is read. */
+  sourceFile: string
+  state: ArchiveSessionState
+  firstAt: number | null
+  lastAt: number | null
+  messageCount: number
+  /** Message text as read, before compression. */
+  rawBytes: number
+  /** What it costs in the database now. Zero once evicted. */
+  storedBytes: number
+  capturedAt: string
+  evictedAt: string | null
+  messages: ArchiveMessage[]
+}
+
+/** What the archive holds, for the settings pane to state rather than imply. */
+export interface ArchiveStats {
+  sessions: number
+  /** Sessions the ceiling dropped. Counted separately; they are not gone-gone. */
+  evictedSessions: number
+  messages: number
+  rawBytes: number
+  /** Compressed message bodies. The figure the ceiling is enforced against. */
+  storedBytes: number
+  /** The ceiling in force, from `transcriptArchiveMaxBytes`. */
+  maxBytes: number
+  /** Last-message time of the oldest and newest archived conversation. */
+  oldestAt: number | null
+  newestAt: number | null
 }
 
 /**
@@ -338,9 +460,27 @@ export interface HistorySummary {
   error?: string | undefined
 }
 
+/**
+ * What a search is over.
+ *
+ * `prompts` is the historic behaviour and the default: a substring of a prompt
+ * or a project path, matched with `LIKE`. `messages` is the archive - every
+ * word of every conversation Helm captured, through FTS5.
+ *
+ * Two scopes rather than one box that searches both, and that is a decision.
+ * They answer different questions and return wildly different counts, and the
+ * counts are the point: "sessions where I typed this" and "conversations where
+ * this was said" are not the same list, and a box that quietly returned the
+ * union would make the smaller of the two unreachable.
+ */
+export const HISTORY_SEARCH_SCOPES = ['prompts', 'messages'] as const
+export type HistorySearchScope = (typeof HISTORY_SEARCH_SCOPES)[number]
+
 export interface HistoryQuery {
   /** Case-insensitive substring of a prompt. Empty means no filter. */
   search?: string | undefined
+  /** What `search` is matched against. Defaults to `prompts`. */
+  scope?: HistorySearchScope | undefined
   /** One recorded working directory, compared case-insensitively. */
   project?: string | undefined
   /** Drop sessions that could not be resumed. */
@@ -484,6 +624,62 @@ export const TERMINAL_FONT_SIZE = { min: 8, max: 32, default: 14 } as const
 export const TERMINAL_SCROLLBACK = { min: 500, max: 200_000, default: 10_000 } as const
 
 /**
+ * How much of the project page's column the shell may take, as a percentage.
+ *
+ * The default is where the shell used to be pinned, and the argument that put
+ * it there is still the argument for the default: about a third of the page
+ * gives a tall display 15+ rows - PSReadLine's ListView threshold - while a
+ * small window keeps most of its height for the project pane. What that
+ * argument never justified was being the *only* value, which is what a fixed
+ * class made it.
+ *
+ * The ceiling is half, and it is the user's own ask: past half the project
+ * pane would be the smaller part of the page it names. The floor here is
+ * proportional and is deliberately not the whole floor - the pane carries a
+ * pixel floor too (`PROJECT_SHELL_MIN_PX`), which is the binding one on any
+ * window this app opens. This bound is what stops a percentage chosen on a
+ * short window describing a four-row terminal on a tall one.
+ */
+export const PROJECT_SHELL_HEIGHT_PCT = { min: 10, max: 50, default: 30 } as const
+
+/**
+ * How much of the window's width the sessions column takes, as a percentage.
+ *
+ * The other axis of the same idea as `PROJECT_SHELL_HEIGHT_PCT`, and the same
+ * bounds the divider has always enforced in its handler - 20% to 80% - now said
+ * once here rather than as two literals inside a `mousemove`.
+ *
+ * The default is 45 because that is the number the split has silently opened at
+ * since it was written, and this key is only being introduced to stop it
+ * forgetting: somebody who never touches the divider must not have the app move
+ * on them the first time they upgrade.
+ */
+export const SESSION_SPLIT_PCT = { min: 20, max: 80, default: 45 } as const
+
+/**
+ * How much of `helm.db` the transcript archive may take, in bytes.
+ *
+ * A gigabyte by default, and both halves of that are deliberate. Unbounded is
+ * not an option: `helm.db` is the user's file, and a feature that grows it
+ * without limit is one they find out about from their disk rather than from
+ * Helm. A gigabyte is enormous for what this actually stores - the conversation
+ * text out of one 3.9 MB transcript on this machine is 54 KB before
+ * compression, a 71x difference, because tool traffic is not archived - so on
+ * any ordinary machine the ceiling is a guard rail rather than a budget.
+ *
+ * The floor is a kilobyte rather than something respectable, because a bound
+ * that no check can drive past is a bound nothing has ever tested: the eviction
+ * rule is the interesting part of this feature, and `pnpm transcript-check`
+ * makes it fire by setting a ceiling smaller than what it just archived. The
+ * settings pane offers sensible sizes; the validator only enforces the shape.
+ */
+export const TRANSCRIPT_ARCHIVE_BYTES = {
+  min: 1024,
+  max: 64 * 1024 ** 3,
+  default: 1024 ** 3
+} as const
+
+/**
  * A shell Helm found on this machine, offered in the shell pickers.
  *
  * `path` is what gets launched and what gets stored, and it is absolute for the
@@ -528,6 +724,55 @@ export type WorkspaceTab =
 export const WORKSPACE_TABS_MAX = 100
 
 /**
+ * How many projects the pinned list may name.
+ *
+ * A ceiling on a value that is JSON in one row and is rewritten whole on every
+ * toggle, exactly as `PR_IGNORED_REPOS_MAX` is - not a statement about how many
+ * anybody pins. A list past a screenful has stopped being a shortlist and the
+ * tree is what it wanted, but that is the user's call and not a validator's.
+ */
+export const PINNED_PROJECTS_MAX = 200
+
+/**
+ * How two project paths are compared, everywhere this list is read or written.
+ *
+ * Case folding and nothing else. The sidebar's own grouping already keys its
+ * harness map with a bare `path.toLowerCase()`, and a second normalisation here
+ * - trailing separators, `resolve`, short-name expansion - would be a way for
+ * the pinned section and the group it lifts a project out of to disagree about
+ * whether they are looking at the same project, which is how the same row ends
+ * up printed twice.
+ */
+function samePath(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase()
+}
+
+/** Whether this project has been lifted into the sidebar's Pinned section. */
+export function isProjectPinned(pinned: readonly string[], path: string): boolean {
+  return pinned.some((entry) => samePath(entry, path))
+}
+
+/**
+ * The pinned list with one project switched on or off.
+ *
+ * The whole list every time, because that is how the setting is written, and
+ * the comparison is the case-insensitive one above - so pinning `C:\Repos\Api`
+ * when the list already holds `c:\repos\api` replaces that entry rather than
+ * adding a second spelling of one project. Sorted by path so the stored value
+ * does not depend on the order somebody clicked; what the sidebar *shows* is
+ * sorted by name instead, which is a different question and answered there.
+ */
+export function withProjectPinned(
+  pinned: readonly string[],
+  path: string,
+  on: boolean
+): string[] {
+  const without = pinned.filter((entry) => !samePath(entry, path))
+  const next = on ? [...without, path] : without
+  return next.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+}
+
+/**
  * Persisted application settings. Keys are the column names in `app_settings`;
  * every value is JSON-encoded on the way in, so adding a key here is the only
  * step needed to persist it.
@@ -536,6 +781,26 @@ export interface AppSettings {
   theme: ThemePreference
   /** Directories the launcher scans. Empty means "not set up yet". */
   scanRoots: string[]
+  /**
+   * Projects lifted out of their harness group into the sidebar's Pinned
+   * section, as absolute paths.
+   *
+   * Keyed by **path**, and that is a decision rather than the only option that
+   * occurred to anybody - see the validator in `store/settings.ts`, which is
+   * where the consequence is written down. Matching is case-insensitive, the
+   * same comparison the sidebar's own grouping already makes on these paths.
+   *
+   * Projects only. A harness is not pinnable: the tree already gives every
+   * harness a collapse state, which is most of what pinning one would be, and
+   * one pin kind means there is no rule to invent for a pinned project inside a
+   * pinned harness.
+   *
+   * A path that no longer resolves keeps its entry. Discovery will not return
+   * it, so the sidebar paints it as gone rather than dropping it - pinning is a
+   * deliberate act, and an unplugged drive is not a decision to un-pin.
+   * Bounded by `PINNED_PROJECTS_MAX`.
+   */
+  pinnedProjects: string[]
   /** Window geometry, restored on next launch. */
   windowBounds: { width: number; height: number; x?: number; y?: number } | null
   /**
@@ -602,7 +867,58 @@ export interface AppSettings {
    * `claude` executable its own pty and this setting never reaches it.
    */
   terminalShell: string | null
+  /**
+   * How tall a project page's shell is, as a percentage of that page's column.
+   * Bounded by `PROJECT_SHELL_HEIGHT_PCT`, dragged by the handle above the
+   * shell, and settable in the Terminal group for when a drag lands somewhere
+   * silly.
+   *
+   * **One value for every project rather than one per project.** The question
+   * being answered is "how much terminal do I want", and that is about the
+   * person and the monitor in front of them, not about the repository: someone
+   * who wants a tall shell to read a `pnpm dev` in wants it in every checkout
+   * they read one in. Per-project heights would also mean the page's
+   * proportions moved as you moved between projects, which is furniture
+   * rearranging itself.
+   *
+   * Not a terminal preference, whatever the settings group it is shown in says:
+   * it never reaches `applyPrefs` and no session pane has one. It is the
+   * project page's layout.
+   */
+  projectShellHeightPct: number
+  /**
+   * How wide the sessions column is, as a percentage of the window, when a
+   * workspace pane and a session are both on screen. Bounded by
+   * `SESSION_SPLIT_PCT` and dragged by the divider between them.
+   *
+   * **One value for every project**, the same answer `projectShellHeightPct`
+   * gives and for the same reason: this is "how much terminal do I want beside
+   * my work", which is a fact about the person and the monitor rather than
+   * about a repository. It is also the stronger case of the two - this divider
+   * does not move when you switch tabs, so a per-project value would make the
+   * boundary jump every time somebody changed pane.
+   *
+   * A percentage, not the fraction the renderer holds. The pane's other
+   * remembered size is a percentage, the settings row wants a number a person
+   * can retype, and `0.45` in a database column that its neighbour writes `30`
+   * into is the kind of difference nobody remembers on the day it matters.
+   */
+  sessionSplitPct: number
 
+  /**
+   * How many bytes of `helm.db` the transcript archive may occupy.
+   *
+   * The archive itself has no on/off switch, and that is the decision rather
+   * than an omission. 91% of the conversations behind `history.jsonl` were
+   * already gone when this was measured, and a default-off setting would go on
+   * losing them while it sat off - the cost of capturing is a few kilobytes per
+   * conversation and the cost of not capturing is the conversation. What *is*
+   * a setting is the ceiling, because that is the part with a real trade-off in
+   * it: bounded by `TRANSCRIPT_ARCHIVE_BYTES`, enforced after every pass by
+   * dropping the oldest archived session whole. See `evictToCeiling` - the
+   * ceiling is adjustable and the eviction rule is not.
+   */
+  transcriptArchiveMaxBytes: number
   /**
    * A `gh` executable the user picked by hand, for the machine where it is not
    * on PATH and not in the usual install directory. Null means "find it".
@@ -728,6 +1044,7 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   scanRoots: [],
+  pinnedProjects: [],
   windowBounds: null,
   workspaceTabs: null,
   firstRunCompletedAt: null,
@@ -743,6 +1060,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalCursorBlink: true,
   terminalScrollback: TERMINAL_SCROLLBACK.default,
   terminalShell: null,
+  projectShellHeightPct: PROJECT_SHELL_HEIGHT_PCT.default,
+  sessionSplitPct: SESSION_SPLIT_PCT.default,
+  transcriptArchiveMaxBytes: TRANSCRIPT_ARCHIVE_BYTES.default,
   ghPath: null,
   prPollMinutes: PR_POLL_MINUTES.default,
   prIgnoredRepos: [],

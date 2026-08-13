@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
+  ArchiveStats,
+  ArchivedConversation,
   HistoryPage,
   HistoryPrompt,
+  HistorySearchScope,
   HistorySession,
   HistorySummary,
   SessionRecord
@@ -29,6 +32,9 @@ export interface HistoryState {
 
   search: string
   setSearch: (value: string) => void
+  /** Prompts or archived conversations. See `HistorySearchScope`. */
+  scope: HistorySearchScope
+  setScope: (value: HistorySearchScope) => void
   grouping: HistoryGrouping
   setGrouping: (value: HistoryGrouping) => void
   resumableOnly: boolean
@@ -41,6 +47,11 @@ export interface HistoryState {
   select: (session: HistorySession | null) => void
   prompts: HistoryPrompt[]
   promptsLoading: boolean
+  /** The archived conversation for the selected session, fetched on selection. */
+  conversation: ArchivedConversation | null
+  conversationLoading: boolean
+  /** What the archive holds. Pushed from main; never polled. */
+  archiveStats: ArchiveStats | null
 
   refresh: () => void
   refreshing: boolean
@@ -85,6 +96,10 @@ export function useHistory(): HistoryState {
 
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [scope, setScope] = useState<HistorySearchScope>('prompts')
+  const [archiveStats, setArchiveStats] = useState<ArchiveStats | null>(null)
+  const [conversationAnswer, setConversationAnswer] =
+    useState<Answered<ArchivedConversation | null> | null>(null)
   const [grouping, setGrouping] = useState<HistoryGrouping>('recent')
   const [resumableOnly, setResumableOnly] = useState(false)
   const [project, setProject] = useState<string | null>(null)
@@ -102,6 +117,14 @@ export function useHistory(): HistoryState {
     return off
   }, [])
 
+  // Pushed, for the reason the summary is: a pass in the main process captures
+  // a conversation without the window having asked for anything.
+  useEffect(() => {
+    const off = helm.on('archive:changed', setArchiveStats)
+    void helm.invoke('archive:stats').then(setArchiveStats)
+    return off
+  }, [])
+
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(timer)
@@ -114,7 +137,18 @@ export function useHistory(): HistoryState {
    * whole summary object, which is a new reference on every push.
    */
   const indexVersion = `${String(summary?.indexedBytes ?? -1)}:${String(summary?.sessions ?? -1)}`
-  const queryKey = JSON.stringify([debouncedSearch, resumableOnly, project, indexVersion])
+  // The archive is part of what a listing shows - the third state on every row -
+  // so a pass that captured something has to re-run the query, exactly as an
+  // index pass does.
+  const archiveVersion = `${String(archiveStats?.sessions ?? -1)}:${String(archiveStats?.messages ?? -1)}`
+  const queryKey = JSON.stringify([
+    debouncedSearch,
+    scope,
+    resumableOnly,
+    project,
+    indexVersion,
+    archiveVersion
+  ])
   const seq = useRef(0)
 
   useEffect(() => {
@@ -122,6 +156,7 @@ export function useHistory(): HistoryState {
     void helm
       .invoke('history:sessions', {
         search: debouncedSearch,
+        scope,
         resumableOnly,
         ...(project === null ? {} : { project })
       })
@@ -135,7 +170,7 @@ export function useHistory(): HistoryState {
         if (ticket !== seq.current) return
         setError(readable(err))
       })
-  }, [debouncedSearch, resumableOnly, project, queryKey])
+  }, [debouncedSearch, scope, resumableOnly, project, queryKey])
 
   // Re-read on an index change too: a selected session that is still running
   // in a terminal gains prompts while its detail is on screen.
@@ -151,6 +186,34 @@ export function useHistory(): HistoryState {
       live = false
     }
   }, [promptKey, selectedId])
+
+  /*
+   * The conversation, fetched on selection rather than with the list.
+   *
+   * A page carries up to 2,000 rows and this is the one field that is measured
+   * in kilobytes per row, so it does not travel with them. Keyed on the archive
+   * version as well as the id, because a pass can capture more of a
+   * conversation while its detail is on screen - and because the ceiling can
+   * take one away while somebody is reading it, which the pane then has to be
+   * able to say.
+   */
+  const conversationKey = selectedId === null ? null : `${selectedId}:${archiveVersion}`
+
+  useEffect(() => {
+    if (conversationKey === null || selectedId === null) return
+    let live = true
+    void helm
+      .invoke('archive:conversation', { sessionId: selectedId })
+      .then((value) => {
+        if (live) setConversationAnswer({ key: conversationKey, value })
+      })
+      .catch(() => {
+        if (live) setConversationAnswer({ key: conversationKey, value: null })
+      })
+    return () => {
+      live = false
+    }
+  }, [conversationKey, selectedId])
 
   const refresh = useCallback(() => {
     setRefreshing(true)
@@ -190,6 +253,9 @@ export function useHistory(): HistoryState {
   const loading = answer === null || answer.key !== queryKey
   const prompts = promptAnswer?.key === promptKey ? promptAnswer.value : []
   const promptsLoading = selectedId !== null && promptAnswer?.key !== promptKey
+  const conversation =
+    conversationAnswer?.key === conversationKey ? conversationAnswer.value : null
+  const conversationLoading = selectedId !== null && conversationAnswer?.key !== conversationKey
 
   // Resolved from the current page rather than held as state, so a row whose
   // resumability changed under it shows the new answer instead of the one it
@@ -208,6 +274,8 @@ export function useHistory(): HistoryState {
     error,
     search,
     setSearch,
+    scope,
+    setScope,
     grouping,
     setGrouping,
     resumableOnly,
@@ -218,6 +286,9 @@ export function useHistory(): HistoryState {
     select,
     prompts,
     promptsLoading,
+    conversation,
+    conversationLoading,
+    archiveStats,
     refresh,
     refreshing,
     resume,

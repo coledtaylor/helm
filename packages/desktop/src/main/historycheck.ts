@@ -253,14 +253,32 @@ async function typeSearch(win: BrowserWindow, term: string): Promise<string> {
    * to be positive, so the DOM is compared against what the query for that
    * exact text returns. What the answer should *be* is still settled against
    * `history.jsonl` by the caller; this only decides when to look.
+   *
+   * The comparison is over the **session ids**, and it used to be over the row
+   * count. That was the same mistake one level down: two different searches
+   * returning the same number of rows agree on the count while showing entirely
+   * different sessions, and this machine has a term matching four sessions and
+   * a project matching four others. The check reported the pane as returning
+   * the wrong rows for a search it had not run yet. Ids, in order, cannot do
+   * that.
    */
   for (let attempt = 0; attempt < 30; attempt++) {
     const agreed = await js<boolean>(
       win,
       `(async () => {
         const box = document.querySelector('input[data-history-search]');
-        const page = await window.helm.invoke('history:sessions', { search: box.value });
-        return page.sessions.length === document.querySelectorAll('button[data-session]').length;
+        // The scope the pane is actually on, not an assumption about it: this
+        // comparison decides *when* to look, and asking the wrong question
+        // would answer "not yet" for ever.
+        const on = document.querySelector('[data-history-scope][aria-pressed="true"]');
+        const page = await window.helm.invoke('history:sessions', {
+          search: box.value,
+          scope: on ? on.dataset.historyScope : 'prompts'
+        });
+        const painted = [...document.querySelectorAll('button[data-session]')]
+          .map((el) => el.dataset.session);
+        return page.sessions.length === painted.length &&
+          page.sessions.every((s, i) => s.sessionId === painted[i]);
       })()`
     ).catch(() => false)
     if (agreed) return typeable
@@ -404,9 +422,151 @@ export async function runHistoryChecks(
   })
 
   // -------------------------------------------------------------------------
+  // HIST-8: the list off screen costs nothing, and says its true length
+  // -------------------------------------------------------------------------
+  // Two claims: that a resize is cheap, and that the scrollbar is honest.
+  //
+  // The cost one is measured **against itself**, with the rule turned off and
+  // on again in the same window on the same list in the same second, and the
+  // assertion is the ratio. An absolute millisecond bound would be a claim
+  // about the machine the check is running on, and this suite already has two
+  // probes that fail on a developer's machine for reasons that have nothing to
+  // do with what they measure (868kqvrn4); adding a third would be worse than
+  // adding none. A ratio is the same number on a fast machine and a slow one.
+  //
+  // The first draft of this probe asserted the *mechanism* - that rows below
+  // the fold have unrendered subtrees - and it failed, correctly, because that
+  // is not what is happening. `content-visibility: auto` also applies
+  // `contain: layout style paint` unconditionally, and on Chromium 150 that
+  // containment is the whole of the win: 0 of 965 rows were ever observed
+  // skipped, scrolled to the bottom and back. The lesson is in the assertion
+  // now - measure what the user complained about, which was a stutter, not the
+  // implementation detail that was supposed to fix it.
+  //
+  // The second claim has a bug already behind it. `contain-intrinsic-size`
+  // describes a **content box**, and writing the height a ruler reports gives a
+  // skipped row its own padding twice: 47px instead of 35px turned a 45,718px
+  // list into a 56,824px one. Every row still correct, the search still
+  // working, and a scrollbar describing a list that does not exist. Nothing
+  // else in this file would ever have caught it.
+  const layout = await js<{
+    rows: number
+    withRule: number
+    msWithRule: number
+    msWithoutRule: number
+    msRestored: number
+    speedup: number
+    scrollHeight: number
+    rowHeight: number
+    predicted: number
+    errorPct: number
+  }>(
+    win,
+    `(() => {
+      const list = document.querySelector('[role=group][aria-label=Sessions]')
+      const rows = [...list.querySelectorAll('button[data-session]')]
+      // One resize tick's worth of work: change the width the rows lay out
+      // against, then force the layout the next frame would have done anyway.
+      const once = (w) => {
+        const t = performance.now()
+        list.style.width = w
+        void list.offsetHeight
+        return performance.now() - t
+      }
+      // Median of seven, alternating widths so no run can be answered from the
+      // last one's cached layout. Median rather than mean: one GC pause in the
+      // middle of a sample should not decide a check.
+      const sample = () => {
+        const runs = []
+        for (let i = 0; i < 7; i++) runs.push(once(i % 2 ? '99.5%' : '99%'))
+        list.style.width = ''
+        void list.offsetHeight
+        runs.sort((a, b) => a - b)
+        return runs[3]
+      }
+      const withRule = sample()
+      const off = document.createElement('style')
+      off.textContent =
+        '.session-row { content-visibility: visible !important; contain: none !important; }'
+      document.head.appendChild(off)
+      void list.offsetHeight
+      const withoutRule = sample()
+      off.remove()
+      void list.offsetHeight
+      const restored = sample()
+
+      const rowHeight = rows.length ? rows[0].getBoundingClientRect().height : 0
+      const predicted = rowHeight * rows.length
+      return {
+        rows: rows.length,
+        withRule: rows.filter((r) => getComputedStyle(r).contentVisibility === 'auto').length,
+        msWithRule: withRule,
+        msWithoutRule: withoutRule,
+        msRestored: restored,
+        speedup: withRule === 0 ? 0 : withoutRule / withRule,
+        scrollHeight: list.scrollHeight,
+        rowHeight,
+        predicted,
+        errorPct: predicted === 0 ? 0 : ((list.scrollHeight - predicted) / predicted) * 100
+      }
+    })()`
+  )
+
+  // 3x against a measured 8.4-9.2x. Far enough below to survive a noisy
+  // machine, far enough above 1x that losing the rule is caught.
+  const cheapToResize = layout.speedup >= 3
+  // Turning it back on has to restore the win, which is what says the
+  // measurement was of the rule rather than of warm-up.
+  const restoredWin = layout.msRestored <= layout.msWithRule * 2
+  // 2% of a list this long is a row and a half - tight enough to catch the
+  // padding mistake (24%) and loose enough to survive the half pixel a row
+  // differs by depending on where it lands on the device grid.
+  const scrollbarHonest = Math.abs(layout.errorPct) < 2
+
+  if (running('list')) checks.push({
+    id: 'HIST-8',
+    criterion: 'All sessions from history.jsonl visible, grouped and searchable, with project and age',
+    title: 'A resize does not pay for every row in the history, and the scrollbar still describes the whole list',
+    ok:
+      layout.rows > 0 &&
+      layout.withRule === layout.rows &&
+      cheapToResize &&
+      restoredWin &&
+      scrollbarHonest,
+    detail: {
+      rows: layout.rows,
+      rowsCarryingTheRule: layout.withRule,
+      relayoutMs: {
+        withRule: Number(layout.msWithRule.toFixed(2)),
+        withoutRule: Number(layout.msWithoutRule.toFixed(2)),
+        restored: Number(layout.msRestored.toFixed(2))
+      },
+      speedup: Number(layout.speedup.toFixed(1)),
+      scrollHeight: layout.scrollHeight,
+      rowHeight: layout.rowHeight,
+      predicted: Math.round(layout.predicted),
+      errorPct: Number(layout.errorPct.toFixed(2))
+    },
+    notes: [
+      'The rule is turned off and back on inside one measurement, so the two',
+      'numbers come from the same window, the same list and the same second.',
+      'That is what makes a ratio meaningful where a millisecond would not be.',
+      'Restoring it has to restore the win as well, which is what separates',
+      'the rule from a warm cache.',
+      'The scrollbar assertion is here because nothing else would catch it -',
+      'every row can be correct while the bar describes a different list.'
+    ]
+  })
+
+  // -------------------------------------------------------------------------
   // HIST-2: grouped by project
   // -------------------------------------------------------------------------
-  await click(win, 'button[aria-pressed="false"]')
+  // Named rather than "the first unpressed button": this pane now holds two
+  // segmented groups - grouping, and what the search box searches - and the
+  // positional selector started clicking the wrong one the moment the second
+  // arrived. It reported zero group headers and then a search over the wrong
+  // scope, which looked like two unrelated regressions.
+  await click(win, '[data-history-grouping="project"]')
   await sleep(500)
   const headers = await groupHeaders(win)
   const groupedRows = await paintedRows(win)
@@ -434,7 +594,7 @@ export async function runHistoryChecks(
   })
 
   // Back to the flat list for everything that follows.
-  await click(win, 'button[aria-pressed="false"]')
+  await click(win, '[data-history-grouping="recent"]')
   await sleep(400)
 
   // -------------------------------------------------------------------------
@@ -442,9 +602,14 @@ export async function runHistoryChecks(
   // -------------------------------------------------------------------------
   const resumableRows = rows.filter((row) => row.resumable)
   const reapedRows = rows.filter((row) => !row.resumable)
-  const badged = reapedRows.filter((row) =>
-    /history only|folder gone/i.test(row.text)
-  ).length
+  // Four words now, not two. The transcript archive gave the pane a third and a
+  // fourth state - `archived` for a conversation Helm kept before Claude Code
+  // deleted it, `dropped` for one the storage ceiling later took - and they are
+  // sub-kinds of "cannot be reopened" rather than a second vocabulary beside it.
+  // `pnpm transcript-check` is what asserts the *right* one is on each row; this
+  // one still asserts that every unreopenable row carries one at all.
+  const BADGES = /history only|folder gone|archived|dropped/i
+  const badged = reapedRows.filter((row) => BADGES.test(row.text)).length
   const wronglyMarked = rows.filter(
     (row) => row.resumable !== resumableTruth.has(row.sessionId)
   ).length
@@ -460,11 +625,14 @@ export async function runHistoryChecks(
       resumableOnDisk: resumableTruth.size,
       wronglyMarked,
       reapedRowsCarryingABadge: badged,
+      badgeVocabulary: BADGES.source.split('|'),
       retention: `${String(Math.round((resumableTruth.size / truth.sessions.size) * 1000) / 10)}%`
     },
     notes: [
       'The badge matters as much as the dot: a difference only in colour is not a',
-      'difference for everyone reading it.'
+      'difference for everyone reading it.',
+      'Resumability is still the thing the *dot* answers. What the badge says has grown with',
+      'the archive, so the words are listed here rather than left in a regex nobody reads.'
     ]
   })
 
@@ -525,7 +693,13 @@ export async function runHistoryChecks(
       expected.size > 0 &&
       rows.length === expected.size &&
       rows.every((row) => expected.has(row.sessionId))
-    projectSearch = { term: projectTerm, painted: rows.length, expected: expected.size }
+    projectSearch = {
+      term: projectTerm,
+      painted: rows.length,
+      expected: expected.size,
+      paintedNotExpected: rows.filter((row) => !expected.has(row.sessionId)).map((r) => r.sessionId),
+      expectedNotPainted: [...expected].filter((id) => !rows.some((row) => row.sessionId === id))
+    }
     await typeSearch(win, TYPED)
     await sleep(300)
   }
@@ -554,7 +728,20 @@ export async function runHistoryChecks(
           medianMs: Math.round((runs[Math.floor(runs.length / 2)]?.tookMs ?? 0) * 1000) / 1000
         }
       }),
-      throughTheUi: { typed: TYPED, rows: searched.length, expected: expectedIds.size },
+      throughTheUi: {
+        typed: TYPED,
+        rows: searched.length,
+        expected: expectedIds.size,
+        // The ids, not only the counts. Two sets of four that do not overlap
+        // report as "4 and 4" and fail on the `every` below, which is a
+        // failure with nothing in the report to explain it.
+        paintedNotExpected: searched
+          .filter((row) => !expectedIds.has(row.sessionId))
+          .map((row) => row.sessionId),
+        expectedNotPainted: [...expectedIds].filter(
+          (id) => !searched.some((row) => row.sessionId === id)
+        )
+      },
       screenshot: shotSearch.file
     },
     notes: [
@@ -726,7 +913,10 @@ export async function runHistoryChecks(
     // The pane will not offer it, but the main process is what actually spawns
     // - so it has to refuse on its own rather than trust the window.
     try {
-      ctx.sessions.resume({ sessionId: reapedTarget.sessionId, cols: 100, rows: 30 })
+      // Awaited inside the `try`: the refusal is a rejected promise now that a
+      // launch reads the branch first, and an unawaited one would sail past
+      // this catch and report that nothing refused.
+      await ctx.sessions.resume({ sessionId: reapedTarget.sessionId, cols: 100, rows: 30 })
       refusal = null
     } catch (err) {
       refusal = err instanceof Error ? err.message : String(err)

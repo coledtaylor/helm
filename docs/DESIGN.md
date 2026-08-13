@@ -106,6 +106,28 @@ Dividers inside an island fade to transparent at their ends - use the
 
 ## 4. Controls
 
+**Affordance.** Two things are true of every control here, and neither is a
+call site's to remember:
+
+- It takes the **pointer cursor**. `body { cursor: default }` still holds - over
+  prose, over a pane, over the canvas, this is desktop chrome and the arrow is
+  the resting state - but the controls are lifted out of it by a `:where(...)`
+  rule in `theme.css` keyed on what a thing *is*: a button, a link, a select, a
+  summary, a checkbox and its label. Disabled ones keep the arrow. This reverses
+  the older rule, which was that nothing had a pointer at all.
+- It **changes appearance under the pointer**. Which property is the recipe's
+  business - a fill for a row or a button, a border for a field, a text tone for
+  a ghost - but *something* must move, and something visible: `bg-hover` on top
+  of `surface-raised` is a measurable change nobody can see, which is why the
+  chosen segment below hovers to `active` instead.
+
+Both are asserted for every control the walk can reach by `pnpm
+affordance-check`, which puts a real pointer on each one in turn. The failure
+that check exists for is not a control someone forgot: Tailwind v4 gates
+`hover:` behind `@media (hover: hover)`, and on a machine reporting no fine
+pointer that killed **every** hover state in the app at once, silently, with the
+tokens resolving and the classes present. `theme.css` overrides the gate.
+
 - **Primary button**: outlined in the accent, never solid-filled.
   `rounded-well border border-accent text-accent-text hover:bg-accent-soft`.
   Disabled keeps the outline at reduced opacity; it never swaps to a grey fill.
@@ -113,15 +135,30 @@ Dividers inside an island fade to transparent at their ends - use the
 - **Ghost button**: no border, `text-fg-muted hover:bg-hover hover:text-fg`.
 - **Danger button**: outlined `border-danger/45 text-danger`.
 - **Input / filter**: sunken well - `rounded-well border-border bg-surface-sunken`,
-  focus swaps the border to the accent. That border *is* the focus indicator, so
-  a field takes **no** offset ring - the two together read as two rings around
-  one input. Set globally in `theme.css`, not per component. Focus ring
-  everywhere else is 2px accent at 2px offset (global `:focus-visible`);
-  checkboxes and radios keep it, having no border to move.
+  hover strengthens the hairline to `border-border-strong`, focus swaps it to
+  the accent. That border *is* the focus indicator, so a field takes **no**
+  offset ring - the two together read as two rings around one input. Set
+  globally in `theme.css`, not per component. Focus ring everywhere else is 2px
+  accent at 2px offset (global `:focus-visible`); checkboxes and radios keep it,
+  having no border to move.
+
+  The hover is on the **border and never the fill**, and that is not a
+  preference. A select's dropped-open list is an OS window that reads the
+  control's own `background-color`; a fill that changes under the pointer is a
+  fill the platform can catch mid-change and paint the listbox with.
 - **Segmented control**: a sunken well (`rounded-well border-border
   bg-surface-sunken p-0.5`) whose chosen segment lifts to
   `bg-surface-raised ring-1 ring-border-strong` at `rounded-[5px]`. For a
   choice of two to four; past that it is a select.
+
+  The chosen segment hovers to `bg-active`, not to `bg-hover` like everything
+  else, and this is the one place the ramp is skipped deliberately: the segment
+  rests on `surface-raised`, and `hover` sits six points from it across the
+  whole channel in dark mode. `active` is one clear step above where the segment
+  actually is. The class lives in `ui/src/lib/segmented.ts` as `SEGMENT_ON`,
+  because the string was copy-pasted at nine call sites and the tone is the part
+  that must not drift; the *unchosen* tone stays per-site, since icons sit at
+  `fg-subtle` and words at `fg-muted`.
 - **Select**: a native `<select>` in the input's sunken-well shape, with
   `appearance-none` and the app's own `CaretIcon` rotated 90°. Native and not
   a listbox of our own so that a driver can set it through
@@ -179,6 +216,35 @@ Dividers inside an island fade to transparent at their ends - use the
   right. Selection is `bg-accent-soft` plus a 2px accent bar down the left
   edge (absolutely positioned, `rounded-full`), never a solid fill. Hover is
   `bg-hover`. Row radius is `rounded-well`.
+
+  **A row carries no buttons: the row itself is the action.** Everything else
+  about the thing on it is inside it, one click away, on a pane with room to
+  say it. `PullRow` states this at its own call site and it is the rule for
+  every list here. A row with three glyphs down its right edge is a row whose
+  own click target is a guess, and it puts the rare actions in front of the
+  common one.
+
+  **The exception is a control that changes which list the row is in**, and it
+  is an exception rather than a loophole because such a control is not one of
+  the row's actions at all - it is an action on the *list*, and the row is
+  simply where the user is pointing when they decide. Two of them exist: a
+  profile's pin, and a project's. Both wear the same rules:
+
+  - **Hidden at rest, revealed by `group-hover` on the row** (and by
+    `focus-visible`, so it is reachable from the keyboard). A tree of a dozen
+    rows still reads as a column of names.
+  - **Revealed by opacity, never by mounting.** A control that only exists in
+    the DOM under the pointer is one no keyboard reaches and one
+    `affordance-check` cannot enumerate - its walk skips `display:none` and
+    `visibility:hidden`, so such a control would be measured by nothing and
+    reported by nothing, which is the coverage gap AFF-2 exists to name.
+  - **Its space is reserved, not borrowed.** The row holds the gutter open
+    whether or not the control is showing, so nothing on the row moves when it
+    appears and it never floats over the second line's machine data - the half
+    somebody is reading at exactly the moment they point at it.
+  - It carries **no `title`**. `aside nav button[title]` is how every driver
+    and `design-shot` finds "a project row", and a second titled button inside
+    the row makes that selector a coin flip. `aria-label` says what it does.
 - **Source pills**: a list that draws rows from more than one place carries the
   place on the row, as a hairline `border-strong` pill at the head of the second
   line - the repository on a pull request row is the one so far. This is the one
@@ -254,9 +320,66 @@ Dividers inside an island fade to transparent at their ends - use the
   a 3px `border-strong` grip that goes accent on hover, drag-bounded 20-80%.
   Each strip ends in a ⤢/⇱ maximize toggle.
 - **Project shell**: a project pane carries a plain shell (PowerShell, cwd at
-  the project) as a terminal island below it - roughly a third of the pane,
-  hidden while the session split is open. It is furniture, not a session: no
-  row, no history, no notification.
+  the project) as a terminal island below it. It is furniture, not a session:
+  no row, no history, no notification. It stays on screen while the session
+  split is open - the session has its own column and takes nothing from the
+  project's, and dropping the shell took a second terminal away at the moment
+  one is most useful.
+
+  **A third of the page is where its height starts, not what it is.** The
+  proportion is the default and the argument for it is a row count: about a
+  third gives a tall display the 15 rows PSReadLine needs before it will draw
+  its ListView, while a small window keeps most of its height for the project
+  pane. What that never justified was being the only value, so the gutter
+  between the two carries a **drag handle** - the split view's divider recipe
+  rotated, a 3px `border-strong` grip that goes accent on hover, in a full-width
+  8px row that is the whole target. Dragging moves the shell's top edge,
+  double-clicking returns it to the default.
+
+  It is bounded at both ends and the two bounds are different in kind. The
+  ceiling is **half the column**, so the project pane is never the smaller part
+  of the page it names. The floor is **180px**, a pixel figure rather than a
+  percentage because "still enough rows to be a terminal" is not something a
+  percentage can say - the same 12% is a working shell on one monitor and four
+  lines on another. Where a window is short enough that the two disagree, the
+  floor wins. There is no pixel *ceiling*: a fixed one is what made a tall
+  monitor useless, the extra height going to a project pane with nothing more
+  to say.
+
+  The height is **one setting for every project** (`projectShellHeightPct`),
+  because the question it answers - how much terminal do I want - is about the
+  person and their monitor, not the repository. Per-project heights would also
+  mean the page's proportions moved as you moved between projects.
+- **Every drag surface, and what a move must carry.** A gesture that tracks the
+  pointer over time is only a drag while a button is held, and a handler that
+  does not check `buttons` will follow a pointer that is merely passing over it.
+  That is not hypothetical: the session divider did exactly that, and because it
+  did, no drag in Helm had ever been exercised by a check - the drivers were
+  sending `sendInputEvent` moves with no `leftbuttondown`, Chromium was
+  delivering them as `buttons: 0`, and the divider was answering them. The
+  arrangement looked correct from both ends for as long as it existed. The
+  complete list:
+
+  | surface | how it tracks | requires the button |
+  |---|---|---|
+  | session split divider | `mousemove` on `window` | yes - `buttons === 0` ends the drag |
+  | project shell handle | `setPointerCapture` | yes - capture, and `hasPointerCapture` gates each move |
+  | workspace tab reorder | HTML5 `dragstart`/`drop` | n/a - the platform owns the gesture |
+  | session tab reorder | HTML5 `dragstart`/`drop` | n/a |
+  | profile list reorder | HTML5 `dragstart`/`drop` | n/a |
+  | terminal text selection | xterm's own handlers | n/a - not Helm's code |
+
+  The pointer-capture form is the better one and the divider is the older one;
+  capture also fixes the case a `buttons` check only mitigates, which is a
+  release *outside the window* that delivers no `mouseup` at all. A new handle
+  takes capture. The HTML5 rows are a different event family that
+  `sendInputEvent` cannot produce at all, which is worth knowing before writing
+  a check for one.
+
+  A driver drives these with **`drag()`** (`main/bridge.ts`), which holds the
+  button, and counts what was delivered with `tracePointer` - so "the app
+  ignored it" and "it never arrived" stop being the same red line. `SESS-15`
+  and `S-21` both assert `buttons: 1` for exactly that reason.
 - **Narrow panes**: the config console, the content viewer and the session
   history are all a bounded list beside a detail, and that needs roughly 700px
   before both are readable. Docked next to the session split none of them get
@@ -270,7 +393,7 @@ Dividers inside an island fade to transparent at their ends - use the
   a pane of about 195px on a 1280px screen and 119px on the narrowest window
   the app will open.
 - **Sidebar**: four global rows (session history, pull requests, Config,
-  Content), then profiles, then the harness tree. A harness is a collapsible
+  Content), then profiles, then **Pinned**, then the harness tree. A harness is a collapsible
   group - caret, name in the caps label style but at `fg`, project count, and a
   running-session count at the right in `accent-text`. Groups are separated by
   an `.island-rule`, never a border. The global rows share one shape - icon,
@@ -287,11 +410,61 @@ Dividers inside an island fade to transparent at their ends - use the
   harness that happened to be expanded and forced a second unscoped copy to
   stand under an empty tree; a destination that can be hidden by a collapsed
   group is a destination that can be lost.
-- **Project rows in the tree**: kind icon, name, `GitChip`. The icon stays
+
+  A **project pane may still link to both, scoped to itself**, and that is not
+  a reversal of the paragraph above. What was wrong with the per-harness links
+  was that they were the *only* way in; the sidebar rows are, and stay, the way
+  in. What a link from a project adds is the scope - arriving at the pane
+  already pointed at the project that was on screen instead of picking it out
+  of a switcher. Such a link is a **secondary button** at the far end of the
+  pane's action row, carrying the sidebar's own icon for its destination so the
+  two read as one object.
+
+  It was a ghost first, on the reasoning that four outlined controls in a row
+  read as a toolbar. That was the wrong trade, and the correction is worth
+  writing down because the same reasoning will come back: dropped at the end of
+  a row of prose, a ghost is two words that happen to react if you find them. A
+  ghost works in the title bar, where it sits in a strip of nothing but
+  controls. What separates a navigation control from an action here is the
+  **gap** - `ml-auto` puts them at the far end - and the accent outline the
+  primary button still has to itself. Weight was being asked to carry a
+  distinction position already carried.
+
+  The original argument for the outline was that *nothing in this app had a
+  pointer cursor*, so a control's shape was its whole claim to being one. That
+  premise is gone - every control now takes the pointer (§4, "Affordance") -
+  and the conclusion survives it anyway, on the sentence above rather than on
+  the cursor. Worth recording, because the cursor was doing more of the
+  argument's work than it should have been.
+  The **Pinned** section sits inside the same scroller, above the first group,
+  and holds the projects somebody lifted out of their harnesses. It is
+  deliberately *not* shaped like a harness group: no caret, and its label sits
+  at `fg-subtle` where a group header sits at `fg`. **Only projects are
+  pinnable.** A pinned harness would be very nearly the collapse state the group
+  header already has, and one pin kind means there is no rule to invent for a
+  pinned project inside a pinned harness - so nothing in this rail may offer to
+  pin one. A harness *root* is a project and does have a star, like any other
+  directory a session can start in.
+
+  Pins are flat and cross-harness, which is the whole point of them, so a
+  pinned project appears **once** - in the section, never also in its group -
+  and the section sorts by name rather than by path, since path order is
+  harness order and that is the arrangement being escaped. The filter reaches it
+  like every other row.
+- **Project rows in the tree**: kind icon, name, `GitChip`, and a pinning star
+  in a reserved right gutter under the rules in §5. The icon stays
   because harness / repo / plain folder is the one thing a row's name and branch
   cannot say. Inventory counts do not - what a project contributes to a session
   is answered in full by the project pane, and three numbers in a 280px rail
   only hint at it.
+
+  A pinned row whose folder is no longer there keeps its place and says so, in
+  `SessionHistory`'s own words - the **`folder gone`** badge, the same hairline
+  outline pill. It is **not a button**: a pin is a deliberate act and an
+  unplugged drive is not a decision to un-pin, but a row that offered a launch
+  which would fail is worse than a row that says why it cannot. Its star is the
+  one thing left to do to it, so that one is shown outright rather than on
+  hover - there is nothing else for hover to reveal.
 
 ## 6. Foreign-ground islands
 

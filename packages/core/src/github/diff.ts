@@ -319,3 +319,140 @@ export function indexDiffByPath(diff: PullDiff): Map<string, PullFileDiff> {
   }
   return byPath
 }
+
+/** Why a thread is not sitting on a row of this patch. */
+export type ThreadLooseReason =
+  /** GitHub gave it no current line and no original one either. */
+  | 'no-line'
+  /** It has a line, and that line is not among the ones this patch shows. */
+  | 'outside-the-patch'
+
+/**
+ * The three fields anchoring actually reads.
+ *
+ * Named rather than taking a `PullReviewThread`, so the same join works on a
+ * thread whose comments have been rendered to HTML - which is the one the pane
+ * has. `RenderedPullThread` differs from the raw shape only in its comments,
+ * and the comments have nothing to do with where a thread sits.
+ */
+export interface ThreadPosition {
+  /** The head-side path the thread is anchored to. */
+  path: string
+  /** The line in the head file, or null when GitHub no longer claims one. */
+  line: number | null
+  /** The line as it was when the first comment was written. */
+  originalLine: number | null
+}
+
+/**
+ * One file's threads, sorted into the ones that landed on a row and the ones
+ * that did not.
+ *
+ * `byLine` is keyed on the **head-side** line, which is the number in the Files
+ * view's right-hand gutter - so a marker is placed against the same figure the
+ * reader is looking at, rather than against a position computed from a hunk
+ * offset that nothing on screen shows.
+ */
+export interface AnchoredThreads<T extends ThreadPosition> {
+  byLine: Map<number, T[]>
+  /** In the order GitHub returned them, each with why it could not be placed. */
+  loose: Array<{ thread: T; why: ThreadLooseReason }>
+}
+
+/**
+ * Match a file's review threads onto the lines of its patch.
+ *
+ * **The two sides come from different requests.** The threads are one
+ * `gh api graphql` and the patch is a separate `gh pr diff`, seconds apart,
+ * against a branch somebody may have pushed to in between. So this is a join
+ * between two views of a file that are not guaranteed to be the same file, and
+ * the interesting half is not the matching - it is what happens when they
+ * disagree.
+ *
+ * What happens is that **nothing is ever dropped**. A comment that exists and
+ * is not shown is precisely the bug the Conversation view was fixed for; doing
+ * it again in a second surface because a line number moved would be the same
+ * bug with a better excuse. Every thread comes back either on a line or in
+ * `loose` with the reason, and the pane is expected to paint both.
+ *
+ * Three cases, in order:
+ *
+ * 1. `line` is set and that line is in the patch. The ordinary case: GitHub
+ *    still claims a current position and the patch agrees it exists.
+ * 2. `line` is null - which is the *normal* state of an outdated thread, not an
+ *    error - and `originalLine` is in the patch. Anchored there. GitHub stops
+ *    claiming a position once the lines have moved, and `originalLine` is then
+ *    the only honest number; the thread is already flagged `isOutdated`, so the
+ *    pane can say the position is historical rather than implying it is live.
+ * 3. Neither resolves to a row here. `loose`, with which of the two it was.
+ *
+ * Deliberately **not** a fourth case: anchoring to the nearest surviving hunk.
+ * It is guessing dressed as precision - a comment about a line that is gone,
+ * pinned confidently to a line nobody wrote it about, and no way for the reader
+ * to tell that from case 1. The foot of the file is a worse position and a true
+ * one.
+ *
+ * `path` is given separately from `file` rather than read off it, because the
+ * case where there is no patch is exactly the case that still has to select
+ * this file's threads: `file` is undefined when the diff was never fetched or
+ * was too big to keep, and a file the pane can list but cannot paint still owes
+ * the reader every comment left on it. Every thread is `loose` then, and the
+ * pane says why.
+ *
+ * Threads belonging to other files are not this function's business and are
+ * skipped - they are neither anchored nor loose here, because some other file's
+ * call is going to place them.
+ */
+export function anchorThreadsToFile<T extends ThreadPosition>(
+  path: string,
+  file: PullFileDiff | undefined,
+  threads: readonly T[]
+): AnchoredThreads<T> {
+  const byLine = new Map<number, T[]>()
+  const loose: AnchoredThreads<T>['loose'] = []
+  if (threads.length === 0) return { byLine, loose }
+
+  // Both names, the same rule `indexDiffByPath` follows: a thread written
+  // before a rename carries the path the file had.
+  const names = new Set<string>([path])
+  if (file) {
+    names.add(file.path)
+    if (file.oldPath !== null) names.add(file.oldPath)
+  }
+
+  // The head-side lines this patch actually shows. A removed line has no
+  // `newLine` and cannot carry a marker - there is no row on the head side for
+  // it to sit on. Lines past `MAX_FILE_LINES` are absent for the same reason
+  // they are absent from the screen, and a thread on one of those is `loose`
+  // rather than silently attached to a row nobody can see.
+  const present = new Set<number>()
+  for (const hunk of file?.hunks ?? []) {
+    for (const line of hunk.lines) {
+      if (line.newLine !== null) present.add(line.newLine)
+    }
+  }
+
+  const place = (line: number, thread: T): void => {
+    const at = byLine.get(line)
+    if (at) at.push(thread)
+    else byLine.set(line, [thread])
+  }
+
+  for (const thread of threads) {
+    if (!names.has(thread.path)) continue
+    if (thread.line !== null && present.has(thread.line)) {
+      place(thread.line, thread)
+      continue
+    }
+    if (thread.line === null && thread.originalLine !== null && present.has(thread.originalLine)) {
+      place(thread.originalLine, thread)
+      continue
+    }
+    loose.push({
+      thread,
+      why: thread.line === null && thread.originalLine === null ? 'no-line' : 'outside-the-patch'
+    })
+  }
+
+  return { byLine, loose }
+}

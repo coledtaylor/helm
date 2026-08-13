@@ -25,6 +25,26 @@
  */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * `hover:` is a plain `:hover`, not one gated on `@media (hover: hover)`.
+ *
+ * Tailwind v4 wraps every hover utility in that query so a phone does not get
+ * a hover state stuck to the last thing tapped. Helm is a desktop shell driven
+ * by a pointer and has no touch story, so the gate can only ever cost - and it
+ * did: measured on a Windows 11 machine where Chromium answers `(hover: hover)`
+ * false, `(pointer: fine)` false and `(any-pointer: fine)` false, which it will
+ * do wherever it fails to find a fine pointer among the attached devices.
+ *
+ * When that happens *every* hover state in the app dies at once, silently, and
+ * nothing else looks wrong: the token resolves, `.bg-hover` paints, the class
+ * is on the element, `el.matches(':hover')` is true, and the rule that would
+ * fill it is behind a media query that never matches. It is one line of CSS and
+ * a dead app, which is why this override is worth more than the phone case it
+ * gives up. `design-shot --only=states` reports the three hover probes that
+ * caught it.
+ */
+@custom-variant hover (&:hover);
+
 /* --------------------------------------------------------------------------
  * Tokens - "Nocturne Islands" (docs/DESIGN.md, Helm design system v1)
  *
@@ -60,6 +80,10 @@
   --helm-accent: #6f61c4;
   --helm-accent-fg: #ffffff;
   --helm-accent-soft: rgb(111 97 196 / 0.1);
+  /* The hover step for a row that is already selected - see the note beside the
+   * dark value. On white: accent-soft composites to rgb(241 239 249) and this
+   * to rgb(226 223 243), a step of 15/16/6. */
+  --helm-accent-soft-hover: rgb(111 97 196 / 0.2);
   --helm-accent-text: #5a4da8;
 
   --helm-success: #2f7a43;
@@ -99,6 +123,24 @@
    * mark reads as punched out of the accent rather than white-on-purple. */
   --helm-accent-fg: #12131f;
   --helm-accent-soft: rgb(145 132 217 / 0.14);
+  /*
+   * A selected row still has to answer the pointer, and it cannot answer with
+   * `hover`: it is not resting on `surface` any more, it is resting on
+   * `accent-soft`, and `hover` is a *grey* step - putting it on top would make
+   * the row read as less selected under the pointer than beside it.
+   *
+   * So the same move the segmented control makes (DESIGN.md, "the chosen
+   * segment hovers to `bg-active`, not to `bg-hover` like everything else"),
+   * with the tint kept: more of what the row already is.
+   *
+   * Sized against the step that is known to read. On `surface` (#1a1c2b),
+   * `hover` (#242639) is +10/+10/+14 and that is the app's ordinary visible
+   * hover. Here, over the same surface, accent-soft composites to
+   * rgb(43 43 67) and this to rgb(57 55 88) - +14/+12/+21, comfortably past it.
+   * For contrast, `hover` on `surface-raised` is +4/+4/+6, which DESIGN.md
+   * already records as a change nobody can see.
+   */
+  --helm-accent-soft-hover: rgb(145 132 217 / 0.26);
   --helm-accent-text: #d2cefd;
 
   --helm-success: #8fbf7f;
@@ -131,6 +173,7 @@
   --color-accent: var(--helm-accent);
   --color-accent-fg: var(--helm-accent-fg);
   --color-accent-soft: var(--helm-accent-soft);
+  --color-accent-soft-hover: var(--helm-accent-soft-hover);
   --color-accent-text: var(--helm-accent-text);
 
   --color-success: var(--helm-success);
@@ -174,6 +217,51 @@ body {
    * stray drag must not select the whole sidebar. Panes opt back in. */
   overflow: hidden;
   user-select: none;
+  cursor: default;
+}
+
+/*
+ * The pointer cursor, granted centrally rather than control by control.
+ *
+ * The `cursor: default` above stays and is still right: over prose, over a
+ * pane, over the canvas, this is desktop chrome and the arrow is the resting
+ * state. What it also did, for as long as it stood alone, was leave every
+ * control in the app under the same arrow as the background behind it - so a
+ * button's entire claim to being a button was its outline, and a control
+ * without one was two words that happened to react if you found them.
+ *
+ * Keyed on what a thing *is*, so a control written tomorrow is affordant the
+ * day it is written; there are ~130 of them on the seven main views and the one
+ * that forgets is the one nobody notices. `pnpm affordance-check` asserts it
+ * for every control it can reach (AFF-3), and asserts the converse in AFF-5 -
+ * that a text field still says `text` and a disabled control still says
+ * `default` - because `* { cursor: pointer }` would pass the first claim and is
+ * the same lie pointing the other way.
+ *
+ * Both selectors sit inside `:where()`, which contributes no specificity. That
+ * buys two things: the disabled rule below wins on source order alone rather
+ * than on a specificity race that `label:has(...)` would otherwise complicate,
+ * and any component that means something different keeps the last word with a
+ * plain `cursor-*` utility.
+ */
+:where(
+  button,
+  [role='button'],
+  [role='tab'],
+  [role='option'],
+  a[href],
+  select,
+  summary,
+  input[type='checkbox'],
+  input[type='radio'],
+  label:has(input[type='checkbox']),
+  label:has(input[type='radio'])
+) {
+  cursor: pointer;
+}
+
+/* A control that cannot be used does not invite the click. */
+:where(:disabled, [aria-disabled='true'], label:has(:disabled)) {
   cursor: default;
 }
 
@@ -254,4 +342,123 @@ select:focus-visible {
 *::-webkit-scrollbar-thumb:hover {
   background-color: var(--helm-fg-subtle);
   background-clip: content-box;
+}
+
+/**
+ * The tab strip keeps its scrollbar.
+ *
+ * It was hidden once, on the argument that a 40px strip has no room for one and
+ * that the bar drew a rule through the seam where the active tab meets its pane.
+ * Half of that was wrong and the other half was the wrong trade. The bar carries
+ * no arrow buttons - nothing in this app does, `scrollbar-width: thin` above
+ * sees to that - and it is the only thing on screen that says there are more
+ * tabs than fit. Hiding it did not make the strip cleaner, it made two open
+ * tabs invisible and unreachable.
+ *
+ * So it stays, at the same `thin` every other scroll container in Helm uses -
+ * 10px, measured, against 15px for `auto`. It only appears when the tabs
+ * actually overflow, which is the only time it has anything to say.
+ *
+ * The rule is kept rather than deleted because the class is what the wheel
+ * handler in `TabBar.tsx` is named for, and because the next person to find a
+ * bar in a 40px strip inconvenient should find this note before they hide it
+ * again. `::-webkit-scrollbar` is not the lever: Chromium ignores those
+ * pseudo-elements once `scrollbar-width` is set, which the `*` rule above does
+ * for every element in the app, so the block of webkit rules there is doing
+ * nothing on a current Chromium and the only real controls are
+ * `scrollbar-width` and `scrollbar-color`.
+ */
+.tab-scroll {
+  scrollbar-width: thin;
+}
+
+/**
+ * A session row is isolated from every other row's layout.
+ *
+ * The session list is the one place in Helm where the number of rows is the
+ * user's history rather than a screenful of anything. Measured on a machine
+ * with 964 of them: 8,516 DOM nodes and a 45,718px scroll height in a 649px
+ * viewport. Changing the width the list lays out against - which is what a
+ * window resize does, on every tick it delivers - cost a **15.8ms** relayout,
+ * because each of those 964 rows had to be laid out again to answer it. Against
+ * a 16.7ms frame that is the jitter, and it was spent on rows nobody could see.
+ *
+ * With this it is **1.8ms**, a measured 8.4-9.2x over three runs.
+ *
+ * Where that comes from is worth stating precisely, because the obvious reading
+ * of this property is not what was observed. `content-visibility: auto` does two
+ * things: it applies `contain: layout style paint` **always**, and it *may* skip
+ * a subtree entirely when the browser judges it far from the viewport. All of
+ * the measured win here is the first one - the containment, which stops one
+ * row's internals participating in any other row's layout. The skipping was
+ * looked for and not found: on Chromium 150, with the list scrolled to the
+ * bottom and back, `checkVisibility({contentVisibilityAuto: true})` reported 0
+ * of 965 rows skipped. So do not describe this as virtualisation and do not
+ * expect the DOM to shrink.
+ *
+ * `contain-intrinsic-size` is still correct and still load-bearing, because the
+ * browser is free to start skipping at any time and did so during an earlier
+ * measurement. It is a **content box**, which is the trap in this property: a
+ * row measures 47px, but 12px of that is its own `py-1.5`, which is added back
+ * on top of whatever is declared here. Writing the 47px a ruler reports gave
+ * every skipped row 59px and turned a 45,718px list into a 56,824px one - a
+ * scrollbar describing a list that does not exist, which is a worse bug than
+ * the stutter. So 35px, and it moves if the row's leading or padding does.
+ *
+ * This rather than windowing or paging because every row stays in the DOM: the
+ * search, the arrow keys, `scrollIntoView` and find-in-page all still reach a
+ * row that is off screen, and a virtual list would have had to reimplement all
+ * four. Paging would have answered a resize problem by taking sessions away.
+ */
+.session-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 35px;
+}
+
+/* ---------------------------------------------------------------------------
+ * The workspace/sessions split, driven by a custom property.
+ *
+ * The boundary lives in `--split` on the row, and **React never writes it**.
+ * That is the whole design, and it is the third attempt at this.
+ *
+ * The first was `setSplit` on every `mousemove`, which is correct and stutters:
+ * with the session history open, moving a divider reconciled 966 rows to
+ * produce the same 966 rows, once per frame. The second wrote `column.style.flex`
+ * directly during the drag and committed to React on release. That measured
+ * thirty moves at 47.4ms → 0.1ms and was *worse in the hand* - because a direct
+ * style write means the DOM and React disagree for the length of the gesture,
+ * and React wins whenever anything re-renders. With a live session in the split
+ * something re-renders constantly, since the terminal's own output updates
+ * state; the pane was pulled by the pointer and yanked back by every unrelated
+ * render, so it lagged, shrank from the wrong edge, and snapped on release.
+ *
+ * A custom property has no such fight, because there is no second writer. The
+ * drag sets `--split` on the row; nothing in the render tree mentions it; a
+ * re-render of `App` produces identical markup and leaves the boundary alone.
+ * The settings write happens once, on release.
+ *
+ * `calc(1 - var(--split))` is a unitless flex-grow, which is what `flex-grow`
+ * already is. The fallback in `var()` matters on the first frame: settings
+ * arrive asynchronously and a row with no `--split` yet would otherwise resolve
+ * to an invalid `flex` and collapse a column.
+ * ------------------------------------------------------------------------ */
+.split-row {
+  --split: 0.45;
+}
+
+/* The sessions column - the one on the right of the divider. */
+.split-sessions {
+  flex: var(--split, 0.45) 1 0%;
+}
+
+/* The workspace column, taking whatever is left. */
+.split-workspace {
+  flex: calc(1 - var(--split, 0.45)) 1 0%;
+}
+
+/* Either column with the other maximized away. A class rather than a cleared
+ * custom property: which panes are on screen is discrete state that belongs to
+ * React, and only the *fraction* is the drag's. */
+.split-whole {
+  flex: 1 1 0%;
 }

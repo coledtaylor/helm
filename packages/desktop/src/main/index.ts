@@ -8,7 +8,13 @@ import {
   protocol,
   shell
 } from 'electron'
-import { writeSetting, writeSettings, type AppSettings } from '@helm/core'
+import {
+  claudeHome,
+  projectsDirIn,
+  writeSetting,
+  writeSettings,
+  type AppSettings
+} from '@helm/core'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -30,22 +36,31 @@ import {
   createContentService,
   registerContentProtocol
 } from './content'
+import { createArchiveService } from './archive'
 import { createHistoryService } from './history'
 import { createPullsService } from './pulls'
 import { createUsageService } from './usage'
 import { maybeCheckForUpdate } from './update'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
-import { createCollector, runSessionsChecks, type CheckContext } from './sessionscheck'
+import {
+  createCollector,
+  runSessionsChecks,
+  runSessionsRestartChecks,
+  type CheckContext
+} from './sessionscheck'
 import { TITLEBAR_OVERLAY } from './chrome'
 import { createPtermHost } from './pterm'
 import { runDesignShot } from './designshot'
+import { runAffordanceChecks } from './affordancecheck'
 import { runProfilesChecks } from './profilescheck'
+import { HOLD_REPORT, runShimHold } from './shimhold'
 import { runHistoryChecks } from './historycheck'
 import { runConfigChecks } from './configcheck'
 import { runContentChecks } from './contentcheck'
 import { runUsageChecks } from './usagecheck'
 import { runSettingsChecks } from './settingscheck'
 import { runPrChecks } from './prcheck'
+import { runTranscriptChecks, runTranscriptRestartChecks } from './transcriptcheck'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -73,6 +88,7 @@ type Mode =
   | 'claude-check'
   | 'claude'
   | 'sessions-check'
+  | 'sessions-restart'
   | 'profiles-check'
   | 'history-check'
   | 'config-check'
@@ -84,15 +100,21 @@ type Mode =
   | 'settings-check'
   | 'settings-restart'
   | 'pr-check'
+  | 'transcript-check'
+  | 'transcript-restart'
   | 'shim-sweep'
+  | 'shim-hold'
   | 'design-shot'
+  | 'affordance-check'
 
 function modeFromArgv(): Mode {
   if (process.argv.includes('--design-shot')) return 'design-shot'
+  if (process.argv.includes('--affordance-check')) return 'affordance-check'
   if (process.argv.includes('--selftest')) return 'selftest'
   if (process.argv.includes('--fidelity')) return 'fidelity'
   if (process.argv.includes('--claude-check')) return 'claude-check'
   if (process.argv.includes('--sessions-check')) return 'sessions-check'
+  if (process.argv.includes('--sessions-restart')) return 'sessions-restart'
   if (process.argv.includes('--profiles-check')) return 'profiles-check'
   if (process.argv.includes('--history-check')) return 'history-check'
   if (process.argv.includes('--config-check')) return 'config-check'
@@ -104,7 +126,10 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--settings-check')) return 'settings-check'
   if (process.argv.includes('--settings-restart')) return 'settings-restart'
   if (process.argv.includes('--pr-check')) return 'pr-check'
+  if (process.argv.includes('--transcript-check')) return 'transcript-check'
+  if (process.argv.includes('--transcript-restart')) return 'transcript-restart'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
+  if (process.argv.includes('--shim-hold')) return 'shim-hold'
   if (process.argv.includes('--claude')) return 'claude'
   if (process.argv.includes('--shell')) return 'shell'
   return 'app'
@@ -116,6 +141,7 @@ const mode = modeFromArgv()
 const isSpikeMode =
   mode !== 'app' &&
   mode !== 'sessions-check' &&
+  mode !== 'sessions-restart' &&
   mode !== 'profiles-check' &&
   mode !== 'history-check' &&
   mode !== 'config-check' &&
@@ -125,7 +151,11 @@ const isSpikeMode =
   mode !== 'usage-check' &&
   mode !== 'settings-check' &&
   mode !== 'pr-check' &&
-  mode !== 'design-shot'
+  mode !== 'transcript-check' &&
+  mode !== 'transcript-restart' &&
+  mode !== 'shim-hold' &&
+  mode !== 'design-shot' &&
+  mode !== 'affordance-check'
 
 initDataDir()
 
@@ -240,6 +270,18 @@ export interface AppOptions {
    */
   claudeHome?: string | undefined
   /**
+   * Fetch pull requests through this `gh` instead of the discovered one.
+   *
+   * `pnpm dev` passes the synthetic gh here, and it is a launch argument rather
+   * than the `ghPath` setting for two reasons. A setting would be written into
+   * the database, and the dev database is a copy somebody may one day copy back
+   * - so dev's fake binary would end up pointed at by the real app, on a path
+   * that no longer exists. And which binary the pull requests come from is not
+   * the window's to choose, which is why there is no IPC channel for it either;
+   * `pointGh` on the service is the same hook `pr-check` uses.
+   */
+  gh?: string | undefined
+  /**
    * Stand-ins for the native pickers, so `--packaging-firstrun` can drive "add a
    * folder" and "locate claude" through the real handlers. Same shape and same
    * reasoning as `confirm`.
@@ -248,7 +290,37 @@ export interface AppOptions {
   chooseFile?: ((title: string) => string | null) | undefined
 }
 
+/**
+ * The one line `pnpm dev:live` owes anybody who runs it.
+ *
+ * Printed before the database is opened, because by the time the window is up
+ * the damage this warns about is already possible: this process is about to
+ * write to the `helm.db`, the `overlays/` and the Chromium profile of whichever
+ * Helm the user has open. The status bar names the mode too, but a chip on a
+ * window somebody is not looking at is not a warning.
+ */
+function announceLiveMode(): void {
+  if (appMode !== 'dev-live') return
+  const rule = '─'.repeat(72)
+  console.warn(
+    [
+      '',
+      rule,
+      '  DEV, LIVE - this run shares the installed app\'s data directory.',
+      `    ${dataDir}`,
+      '  Its database, overlay shims and Chromium profile are the ones the',
+      '  installed Helm uses. Running both at once will fight over the',
+      '  Chromium profile, and anything written here is written there.',
+      '',
+      '  `pnpm dev` is the isolated one. This is `pnpm dev:live`.',
+      rule,
+      ''
+    ].join('\n')
+  )
+}
+
 function startApp(options: AppOptions = {}): void {
+  announceLiveMode()
   const services: Services = createServices()
   // Before anything can spawn: a `claude` the user picked by hand has to win
   // over discovery in every caller, and the session host does not read
@@ -287,9 +359,27 @@ function startApp(options: AppOptions = {}): void {
     defaultShell: () => services.settings.terminalShell
   })
 
+  /*
+   * The archive, and the session index that feeds it.
+   *
+   * Declared in this order and wired in the other: the archive is a **second
+   * consumer of the walk the session index already does** rather than a second
+   * walk, so `createHistoryService` hands it the transcript map it has just
+   * built. `archive.start` is given the index's own `refresh` for the same
+   * reason - the watch over `projects/` wakes one pass that serves both.
+   * `main/archive.ts` explains why it is this walk and not the usage index's.
+   */
+  const archive = createArchiveService({
+    store: services.store,
+    projectsDir: projectsDirIn(options.claudeHome ?? claudeHome()),
+    maxBytes: () => services.settings.transcriptArchiveMaxBytes,
+    onChange: (stats) => emit(win, 'archive:changed', stats)
+  })
+
   const history = createHistoryService({
     store: services.store,
     home: options.claudeHome,
+    onTranscripts: (transcripts) => archive.consume(transcripts),
     onChange: (summary) => emit(win, 'history:changed', summary)
   })
 
@@ -317,6 +407,12 @@ function startApp(options: AppOptions = {}): void {
       })),
     onChange: (snapshot) => emit(win, 'pr:changed', snapshot)
   })
+  // Before the first pass, and through the service's own hook rather than the
+  // setting - see `AppOptions.gh`.
+  if (options.gh !== undefined) {
+    pulls.pointGh(options.gh)
+    console.log(`pull requests are coming from ${options.gh}`)
+  }
 
   const config = createConfigService({
     services,
@@ -332,6 +428,7 @@ function startApp(options: AppOptions = {}): void {
     sessions,
     pterm,
     history,
+    archive,
     usage,
     pulls,
     config,
@@ -376,6 +473,15 @@ function startApp(options: AppOptions = {}): void {
           console.warn(`history index could not be built: ${String(err)}`)
         }
         history.start()
+        // The archive rides that same first pass - `onTranscripts` has already
+        // run by the time `refresh()` returned - so this only arms the watch
+        // over `projects/`, which is the trigger a session appending to its
+        // transcript without submitting a prompt would otherwise not have.
+        // A session that ended while Helm was closed was caught by the pass
+        // above, which is what makes the start-up sweep a sweep.
+        archive.start(() => {
+          history.refresh()
+        })
 
         // Cheap by comparison - one 134 KB file, parsed - but it is on the
         // same "after the first paint" footing: the status bar has everything
@@ -410,7 +516,18 @@ function startApp(options: AppOptions = {}): void {
       })
 
       if (win) {
-        options.onReady?.({ win, services, sessions, pterm, history, usage, pulls, config, content })
+        options.onReady?.({
+          win,
+          services,
+          sessions,
+          pterm,
+          history,
+          archive,
+          usage,
+          pulls,
+          config,
+          content
+        })
       }
     }
   })
@@ -719,7 +836,12 @@ app.whenReady().then(() => {
    */
   if (mode === 'shim-sweep') {
     const services = createServices()
-    const file = writeReport('shim-sweep.json', {
+    // `--report=` because this mode runs twice in one `profiles-check`: once
+    // after PROF-9 plants a crashed run's shim, and once *while* `--shim-hold`
+    // is holding a live one. One filename would leave the second overwriting
+    // the first's evidence.
+    const reportArg = process.argv.find((a) => a.startsWith('--report='))
+    const file = writeReport(reportArg?.slice('--report='.length) ?? 'shim-sweep.json', {
       startedAt: new Date().toISOString(),
       shimRoot,
       removed: services.staleShims
@@ -826,13 +948,85 @@ app.whenReady().then(() => {
     return
   }
 
+  if (mode === 'affordance-check') {
+    startApp({
+      onReady: (ctx) => {
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runAffordanceChecks(
+          ctx,
+          join(dataDir, 'screenshots'),
+          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
+        )
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('affordance-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`affordance-check report: ${file}`)
+            for (const c of checks) {
+              console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+              for (const n of c.notes) console.log(`      ${n}`)
+            }
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`affordance-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  /**
+   * The second half of sessions-check: a real second app start, reading back
+   * the label phase one gave a tab. "It survived a restart" is not a claim the
+   * process that set it can make - see `runSessionsRestartChecks`.
+   */
+  if (mode === 'sessions-restart') {
+    startApp({
+      onReady: (ctx) => {
+        void runSessionsRestartChecks(ctx, dataDir)
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('sessions-restart-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`sessions-restart report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 30_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`sessions-restart crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
   if (mode === 'sessions-check') {
     const collector = createCollector()
     startApp({
       observer: collector,
       confirm: collector.confirm,
       onReady: (ctx) => {
-        void runSessionsChecks(ctx, collector, join(dataDir, 'screenshots'))
+        void runSessionsChecks(ctx, collector, join(dataDir, 'screenshots'), dataDir)
           .then((checks) => {
             const pass = checks.every((c) => c.ok)
             const file = writeReport('sessions-report.json', {
@@ -899,6 +1093,47 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`profiles-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  /**
+   * PROF-10's first process: a real app with a real session, held open while a
+   * second one starts and sweeps.
+   *
+   * Its own mode rather than a phase of `--profiles-check` because the claim is
+   * about two Helms overlapping, and the driver that plants PROF-9's shim has to
+   * *end* before the sweep that collects it. One process cannot do both.
+   * `run-profiles.mjs` orchestrates the handshake; see `shimhold.ts`.
+   */
+  if (mode === 'shim-hold') {
+    const collector = createCollector()
+    startApp({
+      observer: collector,
+      confirm: collector.confirm,
+      onReady: (ctx) => {
+        collector.answerWith(true)
+        void runShimHold(ctx, dataDir)
+          .then((check) => {
+            const file = writeReport(HOLD_REPORT, {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              pass: check.ok,
+              checks: [check]
+            })
+            console.log(`shim-hold report: ${file}`)
+            console.log(`${check.ok ? 'PASS' : 'FAIL'}  ${check.id}  ${check.title}`)
+
+            app.once('quit', () => process.exit(check.ok ? 0 : 1))
+            setTimeout(() => app.exit(check.ok ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`shim-hold crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }
@@ -1250,7 +1485,62 @@ app.whenReady().then(() => {
     return
   }
 
-  startApp()
+  /**
+   * The transcript archive, driven through the real window in two phases.
+   *
+   * Both phases run against a `.claude` tree of the runner's own, pointed at
+   * with the real `CLAUDE_CONFIG_DIR` rather than a flag - which is what makes
+   * T-0 an assertion about the criterion instead of a statement about a hook.
+   * The second phase exists because "the archive survives the transcript being
+   * deleted and the app restarting" is not a claim the process that wrote the
+   * rows can make: `scripts/run-transcript.mjs` deletes the transcript between
+   * them.
+   */
+  if (mode === 'transcript-check' || mode === 'transcript-restart') {
+    const restart = mode === 'transcript-restart'
+    startApp({
+      onReady: (ctx) => {
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        const options = {
+          dataDir,
+          shotDir: join(dataDir, 'screenshots'),
+          ...(onlyArg ? { only: onlyArg.slice('--only='.length).split(',') } : {})
+        }
+        void (restart ? runTranscriptRestartChecks(ctx, options) : runTranscriptChecks(ctx, options))
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport(
+              restart ? 'transcript-restart-report.json' : 'transcript-report.json',
+              {
+                startedAt: new Date().toISOString(),
+                mode: appMode,
+                dataDir,
+                claudeConfigDir: process.env['CLAUDE_CONFIG_DIR'] ?? null,
+                versions: process.versions,
+                pass,
+                checks
+              }
+            )
+            console.log(`${mode} report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`${mode} crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  // The ordinary app. `--gh=` is the only flag it takes, threaded the way
+  // `--claude-home=` is; `pnpm dev` is what passes one.
+  const ghArg = process.argv.find((a) => a.startsWith('--gh='))
+  startApp(ghArg ? { gh: ghArg.slice('--gh='.length) } : {})
 })
 
 app.on('window-all-closed', () => {

@@ -4,14 +4,18 @@ import {
   DEFAULT_SETTINGS,
   EFFORT_LEVELS,
   isRepoSlug,
+  PINNED_PROJECTS_MAX,
   PR_CHECKOUT_MODES,
   PR_IGNORED_REPOS_MAX,
   PR_POLL_MINUTES,
   PR_REVIEW_PROMPT_MAX_LENGTH,
+  PROJECT_SHELL_HEIGHT_PCT,
+  SESSION_SPLIT_PCT,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
   THEME_PREFERENCES,
+  TRANSCRIPT_ARCHIVE_BYTES,
   USAGE_DISPLAY_MODES,
   WORKSPACE_TABS_MAX,
   type AppSettings
@@ -121,6 +125,49 @@ export const SETTING_VALIDATORS: SettingValidators = {
         return `expected every root to be a path, got ${describe(entry)}`
       }
       if (!isAbsolute(entry)) return `expected an absolute path, got ${JSON.stringify(entry)}`
+    }
+    return null
+  },
+
+  /**
+   * Projects in the sidebar's Pinned section, as a *set* of absolute paths.
+   *
+   * **Keyed by path, and a moved or re-cloned checkout therefore loses its
+   * pin.** That is the decision, not an oversight found later: `prIgnoredRepos`
+   * next door learned to key by slug precisely so an entry would survive a
+   * re-clone into a different directory, and a project has no slug to key by.
+   * It is not a repository - a plain folder and a harness root are both
+   * pinnable and neither has a remote - and it is not a database row, because
+   * this list has to be readable and writable before the first scan finishes.
+   * Its path is the only identity it has; `Project.path` says so, and the
+   * `projects` table uses it as the primary key for the same reason.
+   *
+   * What that costs is one re-pin after a move, in the surface the pin was made
+   * in. What keying by anything else would cost is an identity that has to be
+   * resolved before the tree can paint. The trade is worth it in that
+   * direction, and it is written here so the next person to meet a pin that
+   * disappeared after a re-clone knows it was chosen rather than broken.
+   *
+   * Absolute, for the reason `scanRoots` is: a relative entry would name a
+   * different directory depending on what the shortcut's working directory was.
+   * The duplicate check is case-insensitive and matches `isProjectPinned`, so
+   * two spellings of one path cannot become two rows in a section where only
+   * one of them could ever be un-pinned.
+   */
+  pinnedProjects: (value) => {
+    if (!Array.isArray(value)) return `expected an array of paths, got ${describe(value)}`
+    if (value.length > PINNED_PROJECTS_MAX) {
+      return `expected at most ${String(PINNED_PROJECTS_MAX)} projects, got ${String(value.length)}`
+    }
+    const seen = new Set<string>()
+    for (const entry of value) {
+      if (typeof entry !== 'string' || entry.trim() === '') {
+        return `expected every pin to be a path, got ${describe(entry)}`
+      }
+      if (!isAbsolute(entry)) return `expected an absolute path, got ${JSON.stringify(entry)}`
+      const key = entry.toLowerCase()
+      if (seen.has(key)) return `expected each project once, got ${JSON.stringify(entry)} twice`
+      seen.add(key)
     }
     return null
   },
@@ -265,6 +312,46 @@ export const SETTING_VALIDATORS: SettingValidators = {
     if (!isAbsolute(value)) return `expected an absolute path, got ${JSON.stringify(value)}`
     return null
   },
+
+  /**
+   * A percentage of the project page's column, bounded at both ends.
+   *
+   * The non-finite case is the one worth naming. This number is divided into a
+   * layout - it becomes a `height` - and `NaN%` is a declaration the style
+   * parser drops silently, so the pane would keep whatever height it happened
+   * to have and nothing on screen would say the setting was broken. The bound
+   * that refuses it is the same one that refuses 900.
+   *
+   * Whole numbers only, because that is what the drag writes: a percentage is
+   * rounded before it is stored, so the settings row shows the number a person
+   * can retype rather than 31.4159.
+   */
+  projectShellHeightPct: boundedInteger(PROJECT_SHELL_HEIGHT_PCT),
+
+  /**
+   * The sessions column's width, bounded the way the divider already bounded
+   * it. One value for everybody rather than one per project - the argument is
+   * in the field's comment in `types.ts`, and it is the same one
+   * `projectShellHeightPct` makes with one addition: this divider stays put
+   * when you change tabs, so a per-project value would move the boundary every
+   * time somebody did.
+   *
+   * An integer for the same reason its neighbour is one: it is written on
+   * pointerup from a fraction, and a settings row wants 45 rather than
+   * 0.4499999.
+   */
+  sessionSplitPct: boundedInteger(SESSION_SPLIT_PCT),
+
+  /**
+   * The transcript archive's ceiling, in bytes.
+   *
+   * A plain bounded integer, with no "off" value beside it - unlike
+   * `prPollMinutes`, where zero is a real state. Turning the archive off is not
+   * something this key expresses, because the archive is not optional: see the
+   * field's comment in `types.ts`. The floor is low enough for a check to drive
+   * eviction, which is the whole reason it is not something respectable.
+   */
+  transcriptArchiveMaxBytes: boundedInteger(TRANSCRIPT_ARCHIVE_BYTES),
 
   /** Null means "find it"; anything else is absolute, exactly as `claudePath`. */
   ghPath: (value) => {

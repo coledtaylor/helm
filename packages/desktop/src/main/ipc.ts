@@ -2,6 +2,7 @@ import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell
 import { isAbsolute, relative } from 'node:path'
 import {
   createHarness,
+  readArchivedConversation,
   readHistoryProjects,
   readHistoryPrompts,
   readHistorySessions,
@@ -9,6 +10,7 @@ import {
 } from '@helm/core'
 import type { ConfigService } from './config'
 import type { ContentService } from './content'
+import type { ArchiveService } from './archive'
 import type { HistoryService } from './history'
 import type { PullsService } from './pulls'
 import type { UsageService } from './usage'
@@ -17,7 +19,7 @@ import type { PtermHost } from './pterm'
 import { readClaudeVersion, setClaudeOverride } from './claude-cli'
 import { setGhOverride } from './gh-cli'
 import { readClaudeStatus, verifyClaudeAt } from './setup'
-import { checkForUpdate } from './update'
+import { checkForUpdate, RELEASES_PAGE } from './update'
 import { appMode, dataDir, dbFile } from './paths'
 import { activePty, windowsBuildNumber } from './pty'
 import {
@@ -82,6 +84,8 @@ export interface IpcContext {
   pterm: PtermHost
   /** Keeps the index over `~/.claude/history.jsonl` current; see `history.ts`. */
   history: HistoryService
+  /** Keeps the conversations Claude Code deletes; see `archive.ts`. */
+  archive: ArchiveService
   /** Mirrors Claude Code's cached plan-limit figures; see `usage.ts`. */
   usage: UsageService
   /** Sweeps the discovered repositories for open pull requests; see `pulls.ts`. */
@@ -160,7 +164,8 @@ export function registerIpc(ctx: IpcContext): void {
         node: process.versions['node'] ?? 'unknown'
       },
       claudeVersion: await readClaudeVersion(),
-      windowsBuild: windowsBuildNumber() ?? null
+      windowsBuild: windowsBuildNumber() ?? null,
+      releasesUrl: RELEASES_PAGE
     }),
 
     'settings:read': () => services.settings,
@@ -360,6 +365,7 @@ export function registerIpc(ctx: IpcContext): void {
     'session:start': (request) => ctx.sessions.start(request),
     'session:close': (request) => ctx.sessions.close(request),
     'session:list': () => ctx.sessions.list(),
+    'session:rename': (request) => ctx.sessions.rename(request),
 
     'pterm:open': (request) => ctx.pterm.open(request),
     'pterm:close': ({ id }) => {
@@ -406,6 +412,12 @@ export function registerIpc(ctx: IpcContext): void {
     // reasons a resume cannot happen are sentences, and a tab is the wrong
     // place to learn them.
     'history:resume': (request) => ctx.sessions.resume(request),
+
+    // Read-only, both of them, and there is deliberately no third channel here
+    // that captures or deletes anything: what the archive holds is decided by a
+    // pass in the main process, and the ceiling is an ordinary setting.
+    'archive:conversation': ({ sessionId }) => readArchivedConversation(services.store, sessionId),
+    'archive:stats': () => ctx.archive.stats(),
 
     'config:scopes': () => ctx.config.scopes(),
     'config:tree': ({ scopePath }) => ctx.config.tree(scopePath),
@@ -463,7 +475,7 @@ export function registerIpc(ctx: IpcContext): void {
      */
     'pr:review': async ({ repoPath, number, cols, rows }) => {
       const plan = await ctx.pulls.prepareReview({ repoPath, number })
-      const session = ctx.sessions.review(plan, { cols, rows })
+      const session = await ctx.sessions.review(plan, { cols, rows })
       return {
         session,
         prompt: plan.prompt,

@@ -1,7 +1,12 @@
-import type { JSX } from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { JSX, PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_SETTINGS,
+  isProjectPinned,
+  PROJECT_SHELL_HEIGHT_PCT,
+  SESSION_SPLIT_PCT,
+  sessionLabel,
+  withProjectPinned,
   withRepoIgnored,
   type HistorySession,
   type Profile,
@@ -51,11 +56,11 @@ import {
   type Tab,
   type TabIndicator
 } from '@helm/ui'
-import type { SessionConfirmRequest } from '../../../shared/ipc'
+import type { AppMode, SessionConfirmRequest } from '../../../shared/ipc'
 import { helm } from './bridge'
-import { ProjectShellPane } from './ProjectShellPane'
+import { PROJECT_SHELL_MIN_PX, ProjectShellPane } from './ProjectShellPane'
 import { PullRequestTab } from './PullRequestTab'
-import { disposeShell } from './pterms'
+import { disposeShell, getShell } from './pterms'
 import { estimateGrid } from './terminals'
 import { TerminalPane } from './TerminalPane'
 import { terminalFontStack } from '../terminal'
@@ -110,6 +115,21 @@ type PaneRef = WorkspaceTab
 const helmOpenExternal = (url: string): Promise<{ opened: boolean }> =>
   helm.invoke('shell:openExternal', { url })
 
+/**
+ * What each build mode is called on the status bar.
+ *
+ * A map rather than the mode string itself because one of them does not read
+ * as English: `dev-live` is the dev build with **no data directory of its own**,
+ * sharing `%APPDATA%\Helm` with the installed app, and the segment that says so
+ * is the only thing on screen that distinguishes it from an ordinary `pnpm dev`.
+ */
+const MODE_LABEL: Record<AppMode, string> = {
+  installed: 'installed',
+  portable: 'portable',
+  dev: 'dev',
+  'dev-live': 'dev · live'
+}
+
 const HISTORY_TAB = 'history'
 const PULLS_TAB = 'pulls'
 const CONFIG_TAB = 'config'
@@ -149,6 +169,25 @@ const EMPTY_STRIP: PaneRef[] = []
 const sessionTabId = (id: number): string => `session:${String(id)}`
 const sessionIdFromTab = (tab: string): number => Number(tab.slice('session:'.length))
 
+/**
+ * The shell's height as a percentage of `column`, for a drag that has put the
+ * shell's top edge at `top`.
+ *
+ * Clamped in pixels first and in percent second, and that order is the whole
+ * of it. The pixel floor is the bound with a measurement behind it
+ * (`PROJECT_SHELL_MIN_PX`), and converting an already-clamped pixel height
+ * into a percentage is what keeps the stored number a description of the
+ * height on screen. Clamping the percentage alone would let the setting read
+ * 10 while CSS drew 180px - a handle that has stopped moving under a number
+ * that has not, and a settings row reporting a height the app is not at.
+ */
+function shellHeightFor(column: DOMRect, top: number): number {
+  const ceiling = (column.height * PROJECT_SHELL_HEIGHT_PCT.max) / 100
+  const px = Math.min(ceiling, Math.max(PROJECT_SHELL_MIN_PX, column.bottom - top))
+  const pct = Math.round((px / column.height) * 100)
+  return Math.min(PROJECT_SHELL_HEIGHT_PCT.max, Math.max(PROJECT_SHELL_HEIGHT_PCT.min, pct))
+}
+
 export function App(): JSX.Element {
   const launcher = useLauncher()
   const { discovery, settings, info } = launcher
@@ -178,13 +217,25 @@ export function App(): JSX.Element {
   const [requestedSession, setRequestedSession] = useState<number | null>(null)
   /** null = split; one side can take the whole row. */
   const [maximize, setMaximize] = useState<'workspace' | 'sessions' | null>(null)
-  /** Fraction of the row the session pane takes, drag-bounded 0.2-0.8. */
-  const [split, setSplit] = useState(0.45)
+  /**
+   * The split's boundary is a CSS custom property on the row, not state.
+   *
+   * There is no `split` here on purpose. `--split` is written by the drag and
+   * by the effect below and by nothing else - React never mentions it in any
+   * render - so a `mousemove` moves a boundary without reconciling anything,
+   * and an unrelated re-render cannot contradict where the pointer put it. The
+   * argument in full, and the two attempts this replaces, are in `theme.css`
+   * beside `.split-row`.
+   */
   const splitRowRef = useRef<HTMLDivElement>(null)
   const draggingSplit = useRef(false)
+  /** Where the current drag has got to, for the one write on release. */
+  const splitDragged = useRef<number | null>(null)
   const [launching, setLaunching] = useState(false)
   /** The pane box, measured to open a pty at roughly the right grid. */
   const paneRef = useRef<HTMLDivElement>(null)
+  /** The project page's column, measured by its shell's drag handle. */
+  const projectColumnRef = useRef<HTMLDivElement>(null)
 
   const activateSession = useCallback((id: number) => {
     setRequestedSession(id)
@@ -210,22 +261,35 @@ export function App(): JSX.Element {
    * Doing it at the seam means the bar takes a shape whose fields arrive
    * together, instead of taking three nullable ones and restating the rule that
    * connects them.
+   *
+   * From `answered` and not `attempted`, which is the whole reason the hook
+   * keeps two. The bar's line is a standing fact - a newer release exists - and
+   * a manual check that could not reach GitHub is not evidence against it. The
+   * settings pane takes `attempted` instead, because there the question is what
+   * happened when you pressed the button, and "could not ask" is the answer.
    */
+  const answered = check.answered
   const update =
-    check !== null && check.newer && check.latest !== null && check.url !== null
-      ? { latest: check.latest, newer: true, url: check.url }
+    answered !== null && answered.newer && answered.latest !== null && answered.url !== null
+      ? { latest: answered.latest, newer: true, url: answered.url }
       : null
   const setup = useSetup(settings, launcher.rescan)
   const shells = useShells()
 
   /**
-   * The six terminal settings, and one writer for them.
+   * What the Terminal group shows, and one writer for them.
    *
    * Written through `settings:write` like everything else, which is also what
    * pushes them to the terminals: the main process answers with the whole
    * settings object, `useLauncher` adopts it, and the registries that own the
    * live terminals are told from there (termprefs.ts). Nothing here reaches a
    * terminal directly.
+   *
+   * Six of the seven are terminal preferences and travel that route.
+   * `projectShellHeightPct` is not one - it is the project page's layout, it
+   * reaches no terminal, and it is in this group because it is where somebody
+   * looks for the shell under a project. `sessionSplitPct` is the second of
+   * those and rides along for the same reason.
    */
   const terminalSettings = useMemo(
     () => ({
@@ -234,7 +298,10 @@ export function App(): JSX.Element {
       terminalCursorStyle: settings?.terminalCursorStyle ?? DEFAULT_SETTINGS.terminalCursorStyle,
       terminalCursorBlink: settings?.terminalCursorBlink ?? DEFAULT_SETTINGS.terminalCursorBlink,
       terminalScrollback: settings?.terminalScrollback ?? DEFAULT_SETTINGS.terminalScrollback,
-      terminalShell: settings?.terminalShell ?? null
+      terminalShell: settings?.terminalShell ?? null,
+      projectShellHeightPct:
+        settings?.projectShellHeightPct ?? DEFAULT_SETTINGS.projectShellHeightPct,
+      sessionSplitPct: settings?.sessionSplitPct ?? DEFAULT_SETTINGS.sessionSplitPct
     }),
     [settings]
   )
@@ -245,6 +312,33 @@ export function App(): JSX.Element {
       if (path !== null) writeSettings({ terminalShell: path })
     })
   }, [writeSettings])
+
+  const savedShellHeight = settings?.projectShellHeightPct ?? DEFAULT_SETTINGS.projectShellHeightPct
+
+  const savedSplitPct = settings?.sessionSplitPct ?? DEFAULT_SETTINGS.sessionSplitPct
+
+  /**
+   * The remembered split, put on the row.
+   *
+   * Runs on mount and whenever the setting changes - which includes the
+   * broadcast that follows this component's own write on release, and that one
+   * is a no-op because the drag already left the property at that value.
+   *
+   * **Skipped while a drag is running.** A `settings:changed` from anywhere
+   * else mid-gesture would otherwise pull the boundary out from under the
+   * pointer, which is the failure mode of the attempt this replaces, arriving
+   * by a different route.
+   *
+   * `useLayoutEffect`, so the property is on the row before the browser paints.
+   * Settings arrive asynchronously and the CSS fallback is the 45% default, so
+   * an ordinary effect would show one frame of the default to anybody whose
+   * split is not 45 - a flash on every launch, on the one setting whose entire
+   * purpose is that the app stops forgetting.
+   */
+  useLayoutEffect(() => {
+    if (draggingSplit.current) return
+    splitRowRef.current?.style.setProperty('--split', String(savedSplitPct / 100))
+  }, [savedSplitPct])
 
   /**
    * Point Helm at a `gh` it did not find. Written straight through
@@ -273,6 +367,26 @@ export function App(): JSX.Element {
     (slug: string) => {
       const held = settings?.prIgnoredRepos ?? DEFAULT_SETTINGS.prIgnoredRepos
       writeSettings({ prIgnoredRepos: withRepoIgnored(held, slug, false) })
+    },
+    [settings, writeSettings]
+  )
+
+  /**
+   * The sidebar's star, both directions.
+   *
+   * Composed from `settings` rather than from what the sidebar is holding, the
+   * same rule `unignoreRepo` follows: the setting is the whole list, and a list
+   * assembled from a rendered view is a list assembled from whatever had
+   * arrived by then. `withProjectPinned` decides on and off from the list
+   * itself, so this needs no state of its own and two stars pressed in quick
+   * succession cannot each write the other away.
+   */
+  const togglePin = useCallback(
+    (path: string) => {
+      const held = settings?.pinnedProjects ?? DEFAULT_SETTINGS.pinnedProjects
+      writeSettings({
+        pinnedProjects: withProjectPinned(held, path, !isProjectPinned(held, path))
+      })
     },
     [settings, writeSettings]
   )
@@ -401,14 +515,62 @@ export function App(): JSX.Element {
   useEffect(() => {
     const onMove = (event: MouseEvent): void => {
       if (!draggingSplit.current || !splitRowRef.current) return
+      // A move with no button held is not this drag any more, so end it here
+      // rather than follow the pointer.
+      //
+      // This is the failure the shell handle's `setPointerCapture` comment
+      // names from the other side: release the button outside the window and
+      // no `mouseup` is ever delivered, so `draggingSplit` stays true and the
+      // divider is still tracking the pointer when it comes back - moving on a
+      // hover, with nothing held down. `buttons` is the only thing that says
+      // so, because the release itself was never seen.
+      //
+      // It is also what stops a driver's synthetic hover from passing for a
+      // drag. Chromium delivers `sendInputEvent` moves as `buttons: 0` unless
+      // the caller passes `leftbuttondown`, and this handler answering them
+      // anyway is why nothing noticed that no drag in this app had ever been
+      // exercised by a check - see `drag()` in main/bridge.ts.
+      if (event.buttons === 0) {
+        draggingSplit.current = false
+        document.body.style.userSelect = ''
+        return
+      }
+      // Re-measured every move rather than cached at `mousedown`. The row's box
+      // can change under a drag - the window is resizable while one is running
+      // - and a cached one turns the pointer's position into the wrong
+      // fraction from the moment it does.
       const box = splitRowRef.current.getBoundingClientRect()
       if (box.width < 1) return
       const fraction = 1 - (event.clientX - box.left) / box.width
-      setSplit(Math.min(0.8, Math.max(0.2, fraction)))
+      const bounded = Math.min(
+        SESSION_SPLIT_PCT.max / 100,
+        Math.max(SESSION_SPLIT_PCT.min / 100, fraction)
+      )
+      splitDragged.current = bounded
+      // The whole move: one custom property, no state, nothing reconciled. What
+      // this costs does not grow with what is in either pane, which is the
+      // difference the session history made so visible - 966 rows rebuilt per
+      // frame so that a boundary could move four pixels.
+      splitRowRef.current.style.setProperty('--split', String(bounded))
     }
     const onUp = (): void => {
       draggingSplit.current = false
       document.body.style.userSelect = ''
+      // One write for the whole gesture, and none for a press that never moved:
+      // a click on the divider is not a decision about anything. Per frame this
+      // would be a database round trip per `mousemove`, and each one comes back
+      // as a `settings:changed` broadcast into the middle of the drag.
+      const landed = splitDragged.current
+      splitDragged.current = null
+      if (landed === null) return
+      const pct = Math.round(landed * 100)
+      // Snap the property to the rounded value the setting will hold, whether
+      // or not there is a write to make. Otherwise a drag that lands back on
+      // the percentage already stored leaves the row at the unrounded fraction
+      // it was dragged to, and the next `settings:changed` from anywhere at all
+      // moves the boundary a few pixels for no reason anybody could see.
+      splitRowRef.current?.style.setProperty('--split', String(pct / 100))
+      if (pct !== savedSplitPct) writeSettings({ sessionSplitPct: pct })
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -416,7 +578,11 @@ export function App(): JSX.Element {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [])
+    // `onUp` compares against the remembered value before writing, so it has to
+    // see the current one. Re-subscribing two window listeners when a setting
+    // changes costs nothing, and a drag in progress survives it: what says one
+    // is running is a ref, not the closure.
+  }, [savedSplitPct, writeSettings])
 
   // `placedOrder` and not the raw `order`, so the first tab opened in a window
   // whose strip came from the last launch is appended to that strip rather than
@@ -463,6 +629,44 @@ export function App(): JSX.Element {
    */
   const openConfig = useCallback(() => openPane({ kind: 'config' }), [openPane])
   const openContent = useCallback(() => openPane({ kind: 'content' }), [openPane])
+
+  /**
+   * The same two panes, opened **on** a project - the project pane's links.
+   *
+   * These do not make either pane per-project again; the sidebar rows above are
+   * still the unscoped way in, which is the whole of what DESIGN.md 5b asks
+   * for. What a link from a project adds is the scope, so the pane arrives
+   * pointed at the project that was on screen instead of at whatever it last
+   * held. The view is deliberately left alone: the scope is the project's to
+   * decide and the view is the pane's.
+   *
+   * Re-pointing goes through the hook's own setter, because that is what clears
+   * the open file - a pane still showing the last scope's file beside this
+   * scope's tree would be two scopes on one screen. Skipped when the scope is
+   * already the one asked for, so clicking the link to *return* to a pane does
+   * not throw away what was open in it.
+   */
+  const { scopePath: configScopePath, setScopePath: setConfigScope } = configState
+  const openConfigAt = useCallback(
+    (project: Project) => {
+      if (configScopePath.toLowerCase() !== project.path.toLowerCase()) {
+        setConfigScope(project.path)
+      }
+      openPane({ kind: 'config' })
+    },
+    [configScopePath, setConfigScope, openPane]
+  )
+
+  const { scopePath: contentScopePath, setScopePath: setContentScope } = contentState
+  const openContentAt = useCallback(
+    (project: Project) => {
+      if (contentScopePath.toLowerCase() !== project.path.toLowerCase()) {
+        setContentScope(project.path)
+      }
+      openPane({ kind: 'content' })
+    },
+    [contentScopePath, setContentScope, openPane]
+  )
 
   /**
    * Settings is a workspace pane like any other rather than a modal: it is a
@@ -770,16 +974,42 @@ export function App(): JSX.Element {
     const indicator: TabIndicator =
       session.status === 'running' ? 'running' : session.exitCode ? 'failed' : 'ended'
     const project = session.projectPath ? projectsByPath.get(session.projectPath) : undefined
+    const label = sessionLabel(session)
+    /**
+     * The branch first, and the project's name only when there is no branch.
+     *
+     * Several sessions against one project is the normal case - that is what
+     * tabs are for - and in that case the titles are `dev`, `dev 2`, `dev 3`,
+     * none of which says what the session is doing. The branch is what those
+     * sessions actually differ by, and the subtitle slot is empty in precisely
+     * that case, because the old rule only painted when the project's name
+     * differed from the session's.
+     *
+     * `session.branch` is the branch the cwd was on **when the session was
+     * spawned**, captured on the row - not a live reading. The argument for
+     * that is at the capture site in `main/sessions.ts`; the short version is
+     * that two sessions in one working tree share a HEAD, so a live reading
+     * would give them the same subtitle.
+     *
+     * A cwd that is not a repository has no branch, and there the old rule
+     * keeps its turn: the project's name, when it is not already the title.
+     */
+    const subtitle =
+      session.branch ?? (project && project.name !== label ? project.name : undefined)
     return [
       {
         id: sessionTabId(id),
-        title: session.name,
-        hint: `${session.name} · ${session.cwd}`,
-        ...(project && project.name !== session.name ? { subtitle: project.name } : {}),
+        title: label,
+        hint: `${label} · ${session.cwd}`,
+        ...(subtitle === undefined ? {} : { subtitle }),
+        // A branch is machine data and reads in mono (DESIGN.md); a project's
+        // name is a name.
+        subtitleMono: session.branch !== null,
         indicator,
         // A session tab lifts into the terminal's fixed ground, not the
         // island's - see Tab.ground.
-        ground: 'terminal' as const
+        ground: 'terminal' as const,
+        renamable: true
       }
     ]
   })
@@ -787,16 +1017,123 @@ export function App(): JSX.Element {
   const activeProject =
     activePane?.kind === 'project' ? (projectsByPath.get(activePane.path) ?? null) : null
   const selectedPath = activeProject?.path ?? null
-  const runningSessions = sessions.filter((session) => session.status === 'running').length
-  // Which sidebar rows get a live dot: the projects with a running session.
-  const livePaths = useMemo(() => {
-    const paths = new Set<string>()
-    for (const session of sessions) {
-      if (session.status === 'running' && session.projectPath !== null) {
-        paths.add(session.projectPath.toLowerCase())
+
+  // -------------------------------------------------------------------------
+  // The project shell's drag handle
+  // -------------------------------------------------------------------------
+  //
+  // The setting is the state, and while a drag is in flight the DOM is ahead of
+  // it: a `pointermove` sets the pane's height itself and `pointerup` writes it
+  // once. Two things fall out of that and both are the point. A settings write
+  // per frame is a database write per frame, which is what the criterion for
+  // this feature forbids. And re-rendering the page sixty times a second to
+  // move one edge would re-render the project pane and the terminal with it -
+  // React state is the wrong home for a value in flight.
+  //
+  // The shell pane still renders its height from `savedShellHeight`, so once
+  // the write lands React and the DOM agree on a value they already both hold
+  // and nothing moves. That is also what makes the settings row and this handle
+  // the same control rather than two that fight.
+  const shellPaneRef = useRef<HTMLDivElement>(null)
+  /**
+   * Where inside the handle it was grabbed, and what the drag has reached.
+   *
+   * The grab offset is why the shell does not jump on the first move: the
+   * pointer lands anywhere in the handle's 8px, and without remembering where,
+   * the first `pointermove` would snap the top edge onto the pointer.
+   */
+  const shellGrab = useRef(0)
+  const shellDragged = useRef<number | null>(null)
+
+  /**
+   * Pointer capture rather than the window listeners the session split's
+   * divider uses. That divider predates this one and has the bug capture
+   * exists to prevent: let go outside the window and no `mouseup` ever
+   * arrives, so the drag is still running when the pointer comes back.
+   */
+  const startShellDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    shellGrab.current = event.clientY - event.currentTarget.getBoundingClientRect().bottom
+    shellDragged.current = null
+    document.body.style.userSelect = 'none'
+  }, [])
+
+  const moveShellDrag = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const column = projectColumnRef.current
+      const pane = shellPaneRef.current
+      if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+      if (column === null || pane === null || selectedPath === null) return
+      const box = column.getBoundingClientRect()
+      if (box.height < 1) return
+
+      const next = shellHeightFor(box, event.clientY - shellGrab.current)
+      if (next === shellDragged.current) return
+      shellDragged.current = next
+      pane.style.height = `${String(next)}%`
+      // The pane re-measures because the pane moved its own box - the same
+      // contract `park` keeps in pterms.ts, and the same one the height effect
+      // in ProjectShellPane keeps for every route that is not this one.
+      //
+      // Measured, so it is not claimed to be more than it is: `terminal.ts`
+      // observes the container too, and a drag with this line taken out still
+      // took the grid from 12 rows to 22 while the button was down. It stays
+      // because the observer is the terminal's and this is the pane's: the
+      // code that changed the box is the code that knows the grid is stale,
+      // and `refit` tells the pty only when the answer actually changed.
+      getShell(selectedPath)?.refit()
+    },
+    [selectedPath]
+  )
+
+  const endShellDrag = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
       }
+      document.body.style.userSelect = ''
+      const landed = shellDragged.current
+      shellDragged.current = null
+      // One write for the whole gesture, and none at all for a pointer that
+      // never moved: a click on the handle is not a decision about anything.
+      if (landed !== null && landed !== savedShellHeight) {
+        writeSettings({ projectShellHeightPct: landed })
+      }
+    },
+    [savedShellHeight, writeSettings]
+  )
+
+  /**
+   * Double-click puts it back to the third of the page it starts at.
+   *
+   * Written through the setting like any other change, and the pane's height
+   * follows from the render rather than from here - a drag is the only thing
+   * that gets to touch the style directly, because a drag is the only thing
+   * that happens between two renders.
+   */
+  const resetShellHeight = useCallback(() => {
+    writeSettings({ projectShellHeightPct: DEFAULT_SETTINGS.projectShellHeightPct })
+  }, [writeSettings])
+  const runningSessions = sessions.filter((session) => session.status === 'running').length
+  /**
+   * Which sidebar rows get a live dot, and what those sessions are called.
+   *
+   * The labels travel with the paths rather than the sidebar being handed a
+   * count, so the row's tooltip names the sessions running there the same way
+   * their tabs do - through `sessionLabel`, the one helper, so a renamed session
+   * cannot be one thing in the strip and another in the tree.
+   */
+  const liveSessions = useMemo(() => {
+    const byPath = new Map<string, string[]>()
+    for (const session of sessions) {
+      if (session.status !== 'running' || session.projectPath === null) continue
+      const key = session.projectPath.toLowerCase()
+      const names = byPath.get(key)
+      if (names) names.push(sessionLabel(session))
+      else byPath.set(key, [sessionLabel(session)])
     }
-    return paths
+    return byPath
   }, [sessions])
 
   /**
@@ -916,7 +1253,7 @@ export function App(): JSX.Element {
       sidebar={
         !showWorkspace ? null : (
         <Sidebar
-          livePaths={livePaths}
+          liveSessions={liveSessions}
           profiles={
             <ProfileList
               profiles={profileState.profiles}
@@ -957,6 +1294,8 @@ export function App(): JSX.Element {
           scanning={launcher.scanning}
           scanError={launcher.scanError}
           selectedPath={selectedPath}
+          pinnedPaths={settings?.pinnedProjects ?? DEFAULT_SETTINGS.pinnedProjects}
+          onTogglePin={togglePin}
           onSelect={openProject}
           onRescan={launcher.rescan}
           onAddRoot={launcher.addRoot}
@@ -992,16 +1331,16 @@ export function App(): JSX.Element {
       statusBar={
         <StatusBar
           // The mode is shown only when this copy is not an ordinary install.
-          // `dev` and `portable` both change what the binary is and where the
-          // data lives, so they are worth a word; an installed build is the
-          // case that needs none, and labelling it only adds a segment every
-          // user reads once.
+          // `dev`, `dev · live` and `portable` all change what the binary is and
+          // where the data lives, so they are worth a word; an installed build
+          // is the case that needs none, and labelling it only adds a segment
+          // every user reads once.
           build={
             info === null
               ? '…'
               : info.mode === 'installed'
                 ? info.version
-                : `${info.version} · ${info.mode}`
+                : `${info.version} · ${MODE_LABEL[info.mode]}`
           }
           // From the setup status, not from `app:info`. `app:info` is read once
           // at startup, so after the CLI is relocated the strip would keep
@@ -1027,12 +1366,9 @@ export function App(): JSX.Element {
         />
       }
     >
-      <div ref={splitRowRef} className="relative flex h-full w-full">
+      <div ref={splitRowRef} className="split-row relative flex h-full w-full">
         {showWorkspace && (
-          <div
-            className="flex min-w-0 flex-col"
-            style={{ flex: showSessions ? `${String(1 - split)} 1 0%` : '1 1 0%' }}
-          >
+          <div className={cn('flex min-w-0 flex-col', showSessions ? 'split-workspace' : 'split-whole')}>
             <TabBar
               tabs={tabs}
               activeId={activeId}
@@ -1061,6 +1397,9 @@ export function App(): JSX.Element {
               error={historyState.error}
               search={historyState.search}
               onSearchChange={historyState.setSearch}
+              scope={historyState.scope}
+              onScopeChange={historyState.setScope}
+              archiveStats={historyState.archiveStats}
               grouping={historyState.grouping}
               onGroupingChange={historyState.setGrouping}
               resumableOnly={historyState.resumableOnly}
@@ -1071,6 +1410,8 @@ export function App(): JSX.Element {
               onSelect={historyState.select}
               prompts={historyState.prompts}
               promptsLoading={historyState.promptsLoading}
+              conversation={historyState.conversation}
+              conversationLoading={historyState.conversationLoading}
               onRefresh={historyState.refresh}
               refreshing={historyState.refreshing}
               onResume={(session) => void resumeSession(session)}
@@ -1282,12 +1623,29 @@ export function App(): JSX.Element {
               scanning={launcher.scanning}
               onAddRoot={launcher.addRoot}
               onRemoveRoot={launcher.removeRoot}
+              pinnedProjects={settings?.pinnedProjects ?? DEFAULT_SETTINGS.pinnedProjects}
+              // The same writer the sidebar's star goes through, so the two
+              // surfaces cannot hold different ideas of what is pinned.
+              onUnpinProject={togglePin}
               theme={settings?.theme ?? 'system'}
               onThemeChange={launcher.setTheme}
               usageDisplay={settings?.usageDisplay ?? 'percent'}
               updateCheck={settings?.updateCheck ?? DEFAULT_SETTINGS.updateCheck}
               onUpdateCheckChange={(updateCheck) => writeSettings({ updateCheck })}
               onUsageDisplayChange={launcher.setUsageDisplay}
+              appVersion={info?.version ?? null}
+              // From `app:info` rather than from a check's result: the states
+              // that produce no result are exactly the ones where somebody
+              // wants this link.
+              releasesUrl={info?.releasesUrl ?? null}
+              // `attempted`, not `answered` - see the narrowing above the
+              // status bar's `update`.
+              update={check.attempted}
+              updateChecking={check.checking}
+              onCheckForUpdate={check.check}
+              onOpenReleases={() => {
+                if (info?.releasesUrl !== undefined) void helmOpenExternal(info.releasesUrl)
+              }}
               // The same fact the status bar's cycle turns on, from the same
               // snapshot, so the pane cannot offer a mode the segment skips.
               hasCostEstimate={usage?.spend != null}
@@ -1298,6 +1656,17 @@ export function App(): JSX.Element {
               terminalFontStack={terminalFontStack(terminalSettings.terminalFontFamily)}
               shells={shells}
               onLocateShell={locateShell}
+              // The archive's own figures, out of the same state the history
+              // pane reads them from - one subscription to `archive:changed`,
+              // so the pane and the settings group cannot disagree about how
+              // much is stored.
+              archiveStats={historyState.archiveStats}
+              transcriptArchiveMaxBytes={
+                settings?.transcriptArchiveMaxBytes ?? DEFAULT_SETTINGS.transcriptArchiveMaxBytes
+              }
+              onTranscriptArchiveMaxBytesChange={(transcriptArchiveMaxBytes) =>
+                writeSettings({ transcriptArchiveMaxBytes })
+              }
               // What `gh` actually resolved to, out of the same snapshot the
               // Pulls pane paints - so the pane cannot report one executable
               // while the fetches use another.
@@ -1333,7 +1702,10 @@ export function App(): JSX.Element {
         )}
 
         {activeProject && (
-          <div className="absolute inset-0 flex flex-col gap-2">
+          // No `gap-2`: the handle below is the gutter, exactly as the session
+          // split's divider is the gutter of its row. Two children with a gap
+          // and a handle between them would be 8px of nothing either side of it.
+          <div ref={projectColumnRef} className="absolute inset-0 flex flex-col">
             <div className="min-h-0 flex-1">
               <ProjectPane
                 key={activeProject.path}
@@ -1352,6 +1724,17 @@ export function App(): JSX.Element {
                     access: [project.path]
                   })
                 }}
+                onOpenConfig={openConfigAt}
+                onOpenContent={openContentAt}
+                // The whole snapshot, not this project's slice of it. The pane
+                // reduces it itself (`projectPulls`), so the project page and
+                // the Pulls pane read one answer rather than two - and the
+                // ignore list, which is structurally absent from `repos`, is
+                // still reachable to say that it is what is hiding the rows.
+                pulls={pullsState.snapshot}
+                onOpenPull={openPull}
+                onRefreshPulls={pullsState.refresh}
+                onUnignoreRepo={unignoreRepo}
               />
             </div>
             {/* The project's own shell, in the project's own directory. Its
@@ -1369,12 +1752,56 @@ export function App(): JSX.Element {
                 one project's shell, and handing the same component a different
                 project made it re-mount someone else's terminal into a box that
                 still held the last one. */}
+            {/* The shell's drag handle, living in the gutter it replaces.
+                Dragging up grows the shell, down shrinks it, double-click puts
+                it back to the default.
+
+                `cursor: ns-resize`, and it is a `separator` rather than a
+                button. `pnpm affordance-check` asserts `cursor: pointer` on
+                every *control* it can reach - buttons, links, selects, tabs,
+                checkboxes - and a separator is not one, so this sits outside
+                that claim by what it is rather than by an exemption granted to
+                it. Making it a pointer to satisfy the walk would be adopting a
+                wrong cursor to please a checker, and DESIGN.md already records
+                the cursor being asked to carry more of an argument than it
+                should. What the walk does say about it is AFF-6, which is the
+                converse claim over the set the pointer rule does not cover: a
+                separator has to compute the resize cursor its own orientation
+                calls for, and a `ns-resize` on the vertical divider or a
+                `default` here would be caught there. */}
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize the shell"
+              title="Drag to resize the shell, double-click to reset"
+              onPointerDown={startShellDrag}
+              onPointerMove={moveShellDrag}
+              onPointerUp={endShellDrag}
+              onPointerCancel={endShellDrag}
+              onDoubleClick={resetShellHeight}
+              className="group flex h-2 shrink-0 cursor-ns-resize items-center justify-center"
+            >
+              {/* The session split's divider recipe, rotated: a 3px
+                  `border-strong` grip that goes accent on hover (DESIGN.md
+                  "Split view"). The grip is a mark and the row is the target -
+                  the whole 8px is draggable.
+
+                  It was a full-width hairline first, which is what a horizontal
+                  divider wants to be. The screenshot says otherwise: the gutter
+                  is 8px, so a line down the middle of it lands 4px under the
+                  project pane's bottom edge and 4px above the shell's top one,
+                  and three hairlines in nine pixels read as a doubled border
+                  rather than as something to hold. */}
+              <span className="h-[3px] w-10 rounded-full bg-border-strong transition-colors group-hover:bg-accent" />
+            </div>
             <ProjectShellPane
               key={activeProject.path}
+              ref={shellPaneRef}
               path={activeProject.path}
               windowsBuild={info?.windowsBuild ?? null}
               visible
               shells={shells}
+              heightPct={savedShellHeight}
             />
           </div>
         )}
@@ -1410,16 +1837,14 @@ export function App(): JSX.Element {
         )}
 
         {showSessions && (
-          <div
-            className="flex min-w-0 flex-col"
-            style={{ flex: showWorkspace ? `${String(split)} 1 0%` : '1 1 0%' }}
-          >
+          <div className={cn('flex min-w-0 flex-col', showWorkspace ? 'split-sessions' : 'split-whole')}>
             <TabBar
               tabs={sessionTabs}
               activeId={activeSessionId === null ? null : sessionTabId(activeSessionId)}
               onActivate={(id) => setRequestedSession(sessionIdFromTab(id))}
               onClose={(id) => closeSession(sessionIdFromTab(id))}
               onReorder={reorderSessions}
+              onRename={(id, label) => void sessionState.rename(sessionIdFromTab(id), label)}
               actions={
                 <PaneMaxButton
                   maximized={effectiveMaximize === 'sessions'}

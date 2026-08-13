@@ -1,10 +1,9 @@
 import type { JSX, ReactNode } from 'react'
-import { useEffect, useState } from 'react'
-import type { PullChecks, PullRepo, PullsSnapshot, PullSummary } from '@helm/core/types'
-import { Chip, type ChipTone } from './Chip'
+import type { PullRepo, PullsSnapshot, PullSummary } from '@helm/core/types'
 import { cn } from '../lib/cn'
-import { formatAge, formatMoment } from '../lib/time'
-import { CheckIcon, PullRequestIcon, RefreshIcon, WarnIcon } from './icons'
+import { formatAge } from '../lib/time'
+import { PullRequestIcon, RefreshIcon, WarnIcon } from './icons'
+import { PullRow, useNow } from './PullRow'
 
 /**
  * Every open pull request across the repositories Helm scans.
@@ -39,8 +38,9 @@ import { CheckIcon, PullRequestIcon, RefreshIcon, WarnIcon } from './icons'
  * There is no detail beside the list and therefore no `PaneBack`: a pull request
  * opens in its own workspace tab rather than in a panel here.
  *
- * Rows carry no buttons, per the house rule - the row itself is the action, and
- * everything else about a pull request is inside it.
+ * The row itself is `PullRow`, shared with the project pane. This is the list
+ * that carries the repository pill on it, because this is the list whose rows
+ * have been flattened out of their groups.
  */
 
 export interface PullsPaneProps {
@@ -67,31 +67,6 @@ export interface PullsPaneProps {
    * only drops the columns there is no longer room for.
    */
   compact?: boolean | undefined
-}
-
-/**
- * A clock for the age caption.
- *
- * The caption is the point of this pane and it changes with time rather than
- * with data, so nothing would repaint it: a snapshot that has not moved in
- * twenty minutes would still say "fetched 1m ago". Half a minute is finer than
- * anything `formatAge` can express below the hour mark.
- */
-function useNow(everyMs = 30_000): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), everyMs)
-    return () => clearInterval(timer)
-  }, [everyMs])
-  return now
-}
-
-const DECISION: Record<string, { label: string; tone: ChipTone }> = {
-  APPROVED: { label: 'approved', tone: 'success' },
-  CHANGES_REQUESTED: { label: 'changes requested', tone: 'danger' }
-  // REVIEW_REQUIRED is deliberately absent. It is the state nearly every open
-  // pull request is in, so a chip for it is a chip on every row saying nothing;
-  // the detail header has the room to spell it out and does.
 }
 
 /** "fetched 4m ago", or the sentence for a list nothing has ever filled. */
@@ -273,7 +248,7 @@ export function PullsPane({
                 ) : (
                   <div className="mt-0.5">
                     {open.map(({ repo, pull }) => (
-                      <Row
+                      <PullRow
                         key={`${repo.path}#${String(pull.number)}`}
                         repo={repo}
                         pull={pull}
@@ -399,143 +374,6 @@ function Section({
       </h2>
       {children}
     </section>
-  )
-}
-
-/**
- * One pull request. Two lines: what it is, then where it is and how it is doing.
- *
- * Everything on the second line that is machine data is mono - a branch pair, a
- * check tally (DESIGN.md 2). The repository and the author are names, so they
- * are not, and the repository is a pill rather than a plain word because it is
- * the one fact on the row that is *about* the row rather than in it.
- */
-function Row({
-  repo,
-  pull,
-  now,
-  compact,
-  onOpen
-}: {
-  repo: PullRepo
-  pull: PullSummary
-  now: number
-  compact: boolean
-  onOpen?: ((repo: PullRepo, pull: PullSummary) => void) | undefined
-}): JSX.Element {
-  const age = pull.updatedAt === null ? null : formatAge(pull.updatedAt, now)
-  const decision = pull.reviewDecision === null ? null : DECISION[pull.reviewDecision]
-  const author = pull.authorIsBot ? pull.author.replace(/^app\//, '') : pull.author
-
-  return (
-    <button
-      type="button"
-      data-pull={`${repo.slug ?? ''}#${String(pull.number)}`}
-      disabled={onOpen === undefined}
-      onClick={() => onOpen?.(repo, pull)}
-      title={
-        pull.updatedAt === null
-          ? pull.title
-          : `${pull.title} - updated ${formatMoment(pull.updatedAt)}`
-      }
-      className={cn(
-        'flex w-full flex-col gap-0.5 rounded-well px-2 py-1.5 text-left transition-colors',
-        onOpen === undefined ? 'cursor-default' : 'hover:bg-hover'
-      )}
-    >
-      <span className="flex w-full items-baseline gap-2">
-        {/* The state, as a 5px mark rather than a word: on this list every row
-            is open or draft, so the *word* would be the same on all of them and
-            the distinction is the only thing worth a glyph. */}
-        <span
-          aria-hidden
-          data-pull-state={pull.isDraft ? 'draft' : 'open'}
-          className={cn(
-            'size-[5px] shrink-0 translate-y-[-1px] rounded-full',
-            pull.isDraft ? 'bg-fg-subtle/60' : 'bg-success'
-          )}
-        />
-        <span className="shrink-0 font-mono text-[11px] tabular-nums text-fg-subtle">
-          #{pull.number}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[12.5px] text-fg">{pull.title}</span>
-        {pull.isDraft && (
-          <Chip dense tone="neutral">
-            draft
-          </Chip>
-        )}
-        {decision && (
-          <Chip dense tone={decision.tone}>
-            {compact && decision.label === 'changes requested' ? 'changes' : decision.label}
-          </Chip>
-        )}
-        <span className="shrink-0 font-mono text-[11px] tabular-nums text-success">
-          +{pull.additions}
-        </span>
-        <span className="shrink-0 font-mono text-[11px] tabular-nums text-danger">
-          &#8722;{pull.deletions}
-        </span>
-      </span>
-
-      {/* Indented past the state mark, so the two lines read as one block and
-          the repository pill starts under the number rather than under the dot. */}
-      <span className="flex w-full items-baseline gap-1.5 pl-[13px] text-[10.5px] text-fg-subtle">
-        <span
-          data-pull-repo={repo.slug ?? ''}
-          title={repo.slug ?? repo.path}
-          className="max-w-[30%] shrink-0 truncate rounded-full border border-border-strong px-1.5 py-px leading-[14px] text-fg-muted"
-        >
-          {repo.name}
-        </span>
-        <span className="min-w-0 max-w-[30%] truncate">{author}</span>
-        {pull.authorIsBot && <span className="shrink-0 opacity-70">bot</span>}
-        {age !== null && (
-          <>
-            <span aria-hidden className="shrink-0 text-fg-subtle/50">
-              ·
-            </span>
-            <span className="shrink-0 tabular-nums">{age}</span>
-          </>
-        )}
-        {!compact && (
-          <span className="ml-1 min-w-0 truncate font-mono">
-            {pull.headRefName} &#8594; {pull.baseRefName}
-          </span>
-        )}
-        <span className="flex-1" />
-        {pull.checks !== null && pull.checks.total > 0 && <Checks checks={pull.checks} />}
-      </span>
-    </button>
-  )
-}
-
-/**
- * The check tally, as a tick and a fraction.
- *
- * The fraction and not a word, because the useful question on a list is "how
- * many of them" - and it is the same reduction the detail header paints, out of
- * the same three numbers, so a row and the tab it opens cannot disagree.
- */
-function Checks({ checks }: { checks: PullChecks }): JSX.Element {
-  const failing = checks.failing > 0
-  const pending = !failing && checks.pending > 0
-  const passed = checks.total - checks.failing - checks.pending
-  return (
-    <span
-      data-pull-checks={`${String(checks.total)}/${String(checks.failing)}/${String(checks.pending)}`}
-      title={`${String(checks.total)} checks, ${String(checks.failing)} failing, ${String(checks.pending)} pending`}
-      className={cn(
-        'flex shrink-0 items-center gap-1 font-mono tabular-nums',
-        failing ? 'text-danger' : pending ? 'text-warn' : 'text-success'
-      )}
-    >
-      {failing ? <WarnIcon width={10} height={10} /> : <CheckIcon width={10} height={10} />}
-      {failing
-        ? `${String(checks.failing)}/${String(checks.total)}`
-        : pending
-          ? `${String(checks.pending)}/${String(checks.total)}`
-          : `${String(passed)}/${String(checks.total)}`}
-    </span>
   )
 }
 

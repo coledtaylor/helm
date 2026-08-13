@@ -12,6 +12,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @helm/desktop dev",
+    "dev:live": "pnpm --filter @helm/desktop dev:live",
     "build": "pnpm --filter @helm/desktop build",
     "start": "pnpm --filter @helm/desktop start",
     "typecheck": "pnpm -r --sequential typecheck",
@@ -25,6 +26,7 @@
     "fidelity": "pnpm --filter @helm/desktop fidelity",
     "claude-check": "pnpm --filter @helm/desktop claude-check",
     "design-shot": "pnpm --filter @helm/desktop design-shot",
+    "affordance-check": "pnpm --filter @helm/desktop affordance-check",
     "sessions-check": "pnpm --filter @helm/desktop sessions-check",
     "profiles-check": "pnpm --filter @helm/desktop profiles-check",
     "history-check": "pnpm --filter @helm/desktop history-check",
@@ -34,6 +36,7 @@
     "usage-check": "pnpm --filter @helm/desktop usage-check",
     "settings-check": "pnpm --filter @helm/desktop settings-check",
     "pr-check": "pnpm --filter @helm/desktop pr-check",
+    "transcript-check": "pnpm --filter @helm/desktop transcript-check",
     "dist:win": "pnpm --filter @helm/desktop dist:win",
     "verify:artifact": "pnpm --filter @helm/desktop verify:artifact",
     "db:generate": "pnpm --filter @helm/core db:generate",

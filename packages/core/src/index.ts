@@ -6,6 +6,7 @@
  */
 
 export * from './types'
+export * from './archive'
 export * from './config'
 export * from './content'
 export * from './discovery'

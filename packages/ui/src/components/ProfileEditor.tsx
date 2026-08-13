@@ -14,7 +14,8 @@ import {
   type Project
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
-import { CaretIcon, CheckIcon, CloseIcon, HelmMarkIcon } from './icons'
+import { Checkbox } from './Checkbox'
+import { CaretIcon, CloseIcon, HelmMarkIcon } from './icons'
 
 export interface ProfileEditorProps {
   /** The profile being edited, or a draft to seed a new one. */
@@ -382,7 +383,7 @@ export function ProfileEditor({
 const inputClass = cn(
   'h-[30px] w-full rounded-well border border-border bg-surface-sunken px-2.5 text-[12.5px]',
   'text-fg placeholder:text-fg-subtle select-text',
-  'focus:border-accent focus:outline-none'
+  'transition-colors hover:border-border-strong focus:border-accent focus:outline-none'
 )
 
 const labelClass =
@@ -452,32 +453,3 @@ function Select({
  * which is what profiles-check reads to prove composing a repo also granted it
  * access.
  */
-function Checkbox({
-  checked,
-  onChange,
-  label
-}: {
-  checked: boolean
-  onChange: () => void
-  label: string
-}): JSX.Element {
-  return (
-    <span className="relative grid size-4 place-items-center">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={onChange}
-        aria-label={label}
-        className={cn(
-          'peer size-4 cursor-pointer appearance-none rounded-[5px] border-[1.5px] border-fg-subtle',
-          'transition-colors checked:border-accent checked:bg-accent hover:border-fg-muted'
-        )}
-      />
-      <CheckIcon
-        width={10}
-        height={10}
-        className="pointer-events-none absolute text-accent-fg opacity-0 peer-checked:opacity-100"
-      />
-    </span>
-  )
-}

@@ -1,6 +1,7 @@
 import type { JSX } from 'react'
 import type { ThemePreference } from '@helm/core'
 import { cn } from '../lib/cn'
+import { SEGMENT_ON } from '../lib/segmented'
 import { MonitorIcon, MoonIcon, SunIcon } from './icons'
 
 const OPTIONS: Array<{
@@ -41,7 +42,7 @@ export function ThemeToggle({ value, onChange }: ThemeToggleProps): JSX.Element 
           className={cn(
             'grid size-6 place-items-center rounded-[5px] transition-colors',
             value === option
-              ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+              ? SEGMENT_ON
               : 'text-fg-subtle hover:text-fg'
           )}
         >

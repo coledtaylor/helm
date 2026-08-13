@@ -1,13 +1,24 @@
-import { nativeTheme, type BrowserWindow } from 'electron'
+import { app, nativeTheme, type BrowserWindow } from 'electron'
 import Database from 'better-sqlite3'
 import { execFileSync } from 'node:child_process'
 import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readSettings, type AppSettings } from '@helm/core'
-import { screenshot, sendKey, sleep, typeText } from './bridge'
+import {
+  drag,
+  readPointerTrace,
+  screenshot,
+  sendKey,
+  sendMouse,
+  sleep,
+  tracePointer,
+  typeText,
+  type PointerTrace
+} from './bridge'
 import type { Check } from './fidelity'
 import type { CheckContext } from './sessionscheck'
 import { answerPicker } from './packagingcheck'
+import { pointReleases, releasesAsked } from './update'
 
 /**
  * The settings pane, driven through the real window.
@@ -48,8 +59,10 @@ const GROUPS = [
   'pane',
   'claude',
   'roots',
+  'pins',
   'appearance',
   'accessors',
+  'updates',
   'validation',
   'terminal',
   'github'
@@ -74,6 +87,21 @@ const DEFAULT_TERMINAL = {
   cursorBlink: true,
   scrollback: 10000
 } as const
+
+/**
+ * The project shell's own bounds, restated here rather than imported.
+ *
+ * The same reason `DEFAULT_FONT_STACK` is written out: importing
+ * `PROJECT_SHELL_HEIGHT_PCT` would make "the pane stops at half" a claim
+ * checked against the constant the pane stops at, which is the code agreeing
+ * with itself. The floor is a pixel figure because that is what the pane
+ * actually enforces - a percentage cannot say "still a usable terminal".
+ */
+const SHELL_HEIGHT_BOUNDS = { min: 10, max: 50, default: 30 } as const
+const SHELL_MIN_PX = 180
+
+/** The session split's bounds, written out for the reason above. */
+const SPLIT_BOUNDS = { min: 20, max: 80, default: 45 } as const
 
 /**
  * The shells this driver goes looking for itself, and the arguments it expects
@@ -137,6 +165,27 @@ function rowValue(dbFile: string, key: keyof AppSettings): unknown {
     } catch {
       return { unparseable: row.value }
     }
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * The same row, uninterpreted - the characters actually in the column.
+ *
+ * For the assertion "this did not move", where `rowValue`'s parse is a
+ * softening: two instants a millisecond apart parse to two different strings
+ * and compare unequal, but so would a rewrite of the same instant in a
+ * different shape, and it is the *write* that S-18 is looking for. Comparing
+ * the stored text catches a row that was written again with the same value.
+ */
+function rawRow(dbFile: string, key: keyof AppSettings): string | undefined {
+  const db = new Database(dbFile, { readonly: true, fileMustExist: true })
+  try {
+    const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as
+      | { value: string }
+      | undefined
+    return row?.value
   } finally {
     db.close()
   }
@@ -384,6 +433,25 @@ async function typeInto(win: BrowserWindow, selector: string, text: string): Pro
 }
 
 /**
+ * Empty a field, with a real keystroke.
+ *
+ * `typeInto(win, sel, '')` cannot do this: it selects what is there and then
+ * types nothing, which leaves the selection and the value exactly where they
+ * were. A field that stays filled is a filter that stays applied, and every
+ * assertion made after it is then about a filtered tree.
+ */
+async function clearField(win: BrowserWindow, selector: string): Promise<boolean> {
+  const focused = await js<boolean>(
+    win,
+    `(() => { const el = document.querySelector(${q(selector)});
+      if (!el) return false; el.focus(); el.select(); return true })()`
+  )
+  if (!focused) return false
+  await sendKey(win, 'Backspace')
+  return true
+}
+
+/**
  * Set a `<select>` and let React hear about it.
  *
  * Whether the value took is decided **before** the event is dispatched. React
@@ -519,6 +587,64 @@ async function sidebarPaths(win: BrowserWindow): Promise<string[]> {
 }
 
 /**
+ * The sidebar as the pins group needs to read it, in one pass.
+ *
+ * `rows` is every **launchable** project row, lower-cased - the things
+ * `aside nav button[title]` reaches, which is exactly what every driver here
+ * and in `design-shot` means by "a project row". Counting over that list is
+ * what says a pinned project is printed once rather than twice, and a path
+ * absent from it is a path nothing on screen offers to start a session in.
+ *
+ * `pinned` is what the Pinned section holds, taken from the stars' own
+ * `data-pin-project` rather than from the rows, because the section's
+ * unresolvable entries are deliberately not rows.
+ *
+ * One expression rather than four calls: these have to describe the same frame,
+ * and four round trips through `executeJavaScript` can straddle a re-render.
+ */
+interface PinState {
+  /** Whether a Pinned section is on screen at all. */
+  section: boolean
+  rows: string[]
+  pinned: string[]
+  /** The unresolvable row, when the caller asked about one. */
+  goneRow: { badge: boolean; launchable: boolean } | null
+}
+
+async function pinState(win: BrowserWindow, gonePath?: string): Promise<PinState> {
+  return js<PinState>(
+    win,
+    `(() => {
+      const section = document.querySelector('[data-pinned-section]')
+      const want = ${JSON.stringify((gonePath ?? '').toLowerCase())}
+      const rows = [...document.querySelectorAll('aside nav button[title]')]
+        .map((b) => b.title.toLowerCase())
+      const pinned = section
+        ? [...section.querySelectorAll('[data-pin-project]')]
+            .map((el) => el.getAttribute('data-pin-project') || '')
+        : []
+      let goneRow = null
+      if (want !== '' && section) {
+        const star = [...section.querySelectorAll('[data-pin-project]')]
+          .find((el) => (el.getAttribute('data-pin-project') || '').toLowerCase() === want)
+        // The row is the star's parent: a <div> when the folder has gone and a
+        // <button> would be the bug. "Launchable" is asked of the row itself
+        // rather than of a selector, so it is the DOM that answers.
+        const row = star ? star.parentElement : null
+        if (row) {
+          goneRow = {
+            badge: (row.textContent || '').toLowerCase().includes('folder gone'),
+            launchable:
+              row.tagName === 'BUTTON' || row.querySelector('button[title]') !== null
+          }
+        }
+      }
+      return { section: section !== null, rows, pinned, goneRow }
+    })()`
+  )
+}
+
+/**
  * A settings write sent by hand through the real channel.
  *
  * The same route the pane's own controls take - preload, contract, handler -
@@ -536,6 +662,100 @@ async function sendWrite(
        .catch((err) => ({ accepted: false, error: String(err && err.message ? err.message : err) }))`
   )
 }
+
+/**
+ * The project shell island, its handle, the column they share, and the grid
+ * the terminal in it is at - all measured in one read, so the box and the grid
+ * describe the same instant.
+ *
+ * `screen` and `container` are the two halves of "the grid matches its box":
+ * `.xterm-screen` is exactly `rows` cells tall, and the element it sits in is
+ * what `FitAddon` measures. The difference between them can only be less than
+ * one cell, and a terminal still describing an old box is where that stops
+ * being true.
+ */
+interface ShellPaneReading {
+  pane: { top: number; bottom: number; height: number; left: number; width: number }
+  handle: { top: number; height: number }
+  column: { top: number; bottom: number; height: number }
+  /** The percentage the pane was rendered with, off its own `data-` hook. */
+  pct: number
+  rows: number
+  cols: number
+  /** `.xterm-screen`, which is `rows` cells tall and nothing else. */
+  screen: number
+  /** The box the fit is measured against. */
+  container: number
+}
+
+async function readShellPane(win: BrowserWindow, path: string): Promise<ShellPaneReading | null> {
+  return js<ShellPaneReading | null>(
+    win,
+    `(() => {
+      const pane = document.querySelector('[data-project-shell]')
+      const handle = document.querySelector('[role="separator"][aria-orientation="horizontal"]')
+      if (!pane || !handle || !pane.parentElement) return null
+      const box = (el) => {
+        const b = el.getBoundingClientRect()
+        return { top: b.top, bottom: b.bottom, height: b.height, left: b.left, width: b.width }
+      }
+      const term = window.__helmTerminals().shells.find(
+        (s) => s.path.toLowerCase() === ${JSON.stringify(path.toLowerCase())} && s.attached
+      )
+      const screen = pane.querySelector('.xterm-screen')
+      const holder = pane.querySelector('.xterm')
+      return {
+        pane: box(pane),
+        handle: box(handle),
+        column: box(pane.parentElement),
+        pct: Number(pane.dataset.projectShell),
+        rows: term ? term.rows : -1,
+        cols: term ? term.cols : -1,
+        screen: screen ? screen.getBoundingClientRect().height : -1,
+        container: holder && holder.parentElement
+          ? holder.parentElement.getBoundingClientRect().height
+          : -1
+      }
+    })()`
+  ).catch(() => null)
+}
+
+/**
+ * Count what main broadcasts, not what the window believes it sent.
+ *
+ * `settings:changed` is emitted once per accepted `settings:write`, so this is
+ * the honest witness for "one write for the whole gesture" - the claim that
+ * separates a drag that saves its answer from a drag that saves sixty of them.
+ * Subscribed through the real bridge; the returned detach is kept so the tap
+ * comes off again.
+ */
+async function armSettingsCounter(win: BrowserWindow): Promise<void> {
+  await js<string>(
+    win,
+    `(() => {
+      if (window.__settingsWrites) window.__settingsWrites.off()
+      const seen = { n: 0, values: [], off: () => undefined }
+      seen.off = window.helm.on('settings:changed', (s) => {
+        seen.n++
+        seen.values.push(s.projectShellHeightPct)
+      })
+      window.__settingsWrites = seen
+      return 'armed'
+    })()`
+  )
+}
+
+const readSettingsCounter = (win: BrowserWindow): Promise<{ n: number; values: number[] }> =>
+  js<{ n: number; values: number[] }>(
+    win,
+    `({ n: window.__settingsWrites.n, values: window.__settingsWrites.values })`
+  )
+
+const disarmSettingsCounter = (win: BrowserWindow): Promise<void> =>
+  js<void>(
+    win,
+    `(() => { if (window.__settingsWrites) { window.__settingsWrites.off(); delete window.__settingsWrites } })()`
+  )
 
 /** Opens the settings pane if it is not already the pane on screen. */
 async function openSettings(win: BrowserWindow): Promise<boolean> {
@@ -569,6 +789,18 @@ interface Fixtures {
   /** A scan root for the terminal group, with two projects to open shells in. */
   termRoot: string
   termProjects: string[]
+  /**
+   * A scan root for the pins group, holding **two** harnesses.
+   *
+   * Two, because the claim the section makes is that it is flat and
+   * cross-harness: one harness would let a Pinned section that had merely
+   * re-labelled a group pass. `pinProjects` are the repos inside them, in the
+   * order the harnesses were built.
+   */
+  pinRoot: string
+  pinProjects: string[]
+  /** A path under `pinRoot` that was never created. Pinnable, never found. */
+  pinGone: string
 }
 
 function buildFixtures(dataDir: string): Fixtures {
@@ -586,6 +818,22 @@ function buildFixtures(dataDir: string): Fixtures {
   for (const path of [...aProjects, ...bProjects, ...termProjects]) {
     mkdirSync(join(path, '.claude'), { recursive: true })
   }
+
+  // Two harnesses - a folder is one exactly when it holds a `harness.yaml`,
+  // which is the whole definition - with one repo each, so a pin taken out of
+  // one of them can be seen sitting beside a pin taken out of the other.
+  const pinRoot = join(dir, 'root pins')
+  const pinProjects: string[] = []
+  for (const harness of ['pin harness one', 'pin-harness-two']) {
+    const home = join(pinRoot, harness)
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'harness.yaml'), `name: ${harness}\n`)
+    const repo = join(home, 'repos', `${harness} repo`)
+    mkdirSync(join(repo, '.claude'), { recursive: true })
+    pinProjects.push(repo)
+  }
+  // Deliberately not created. This is the pinned path whose folder has gone.
+  const pinGone = join(pinRoot, 'pin harness one', 'repos', 'unplugged drive')
 
   const stubDir = join(dir, 'stub')
   mkdirSync(stubDir, { recursive: true })
@@ -618,7 +866,20 @@ function buildFixtures(dataDir: string): Fixtures {
     ].join('\r\n')
   )
 
-  return { dir, rootA, rootB, aProjects, bProjects, stubCli, ghStub, termRoot, termProjects }
+  return {
+    dir,
+    rootA,
+    rootB,
+    aProjects,
+    bProjects,
+    stubCli,
+    ghStub,
+    termRoot,
+    termProjects,
+    pinRoot,
+    pinProjects,
+    pinGone
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -662,6 +923,10 @@ export async function runSettingsChecks(
   const original: AppSettings = {
     ...asFound,
     scanRoots: asFound.scanRoots.filter((root) => !mine(root)),
+    // Same scrub, same reason: the pins group pins fixture projects, and a run
+    // killed before its restore would otherwise hand the user's settings a pin
+    // on a directory this driver is about to delete.
+    pinnedProjects: asFound.pinnedProjects.filter((path) => !mine(path)),
     claudePath: mine(asFound.claudePath) ? null : asFound.claudePath
   }
   writeFileSync(join(dataDir, 'settings-original.json'), JSON.stringify(original, null, 2))
@@ -694,6 +959,58 @@ export async function runSettingsChecks(
   await sleep(800)
 
   // -------------------------------------------------------------------------
+  // S-0: this check started from the app's own defaults, not the developer's
+  // -------------------------------------------------------------------------
+  //
+  // Ungated by `--only=`, because every group below is standing on it.
+  //
+  // The seed strips `workspaceTabs` and `windowBounds` from a check's copy of
+  // the database (scripts/isolate.mjs). Before it did, this driver started with
+  // whatever the developer had left open and however big they had left the
+  // window - eight panes and 1757x946 on the machine where that was found -
+  // and two probes failed for that reason alone while being right about the
+  // app. A check that fails for a reason unrelated to what it measures gets
+  // waved past, and then so does the day it fails for a real one.
+  //
+  // This exists so that if the strip ever comes back, **one** probe goes red
+  // and names the cause, instead of S-1 and S-10 going red and looking like
+  // bugs in Ctrl+Tab and in terminal attachment.
+  {
+    const bounds = win.getBounds()
+    const stripAtStart = await js<string[]>(
+      win,
+      `[...document.querySelectorAll('[role="tab"][data-tab]')].map((t) => t.dataset.tab ?? '')`
+    )
+    checks.push({
+      id: 'S-0',
+      criterion: 'A check starts from the app’s defaults, not from where the developer left it',
+      title: 'No workspace tabs and no saved window bounds came through in the seeded database',
+      ok:
+        asFound.workspaceTabs === null &&
+        asFound.windowBounds === null &&
+        stripAtStart.length === 0 &&
+        bounds.width === 1280 &&
+        bounds.height === 820,
+      detail: {
+        workspaceTabsRow: asFound.workspaceTabs,
+        windowBoundsRow: asFound.windowBounds,
+        tabsOnScreenAtStart: stripAtStart,
+        window: { width: bounds.width, height: bounds.height },
+        expectedWindow: { width: 1280, height: 820 }
+      },
+      notes: [
+        'Both rows are read from the settings this process actually loaded, and',
+        'the strip is read off the screen - the row being absent and no tab',
+        'being painted are two different claims and both are made.',
+        '1280x820 is `createWindow`’s default and the width designshot.ts',
+        'computes a pane’s worth from. It was photographing 1757 wide.',
+        '`firstRunCompletedAt` is deliberately still carried through: clearing',
+        'it would start every check in the first-run pane.'
+      ]
+    })
+  }
+
+  // -------------------------------------------------------------------------
   // S-1: the gear opens it, every group renders, Ctrl+Tab reaches it
   // -------------------------------------------------------------------------
   if (run('pane')) {
@@ -718,6 +1035,12 @@ export async function runSettingsChecks(
          addRoot: Boolean(document.querySelector('[data-settings-add-root]')),
          theme: Boolean(document.querySelector('[data-settings-theme]')),
          usage: Boolean(document.querySelector('[data-settings-usage]')),
+         appVersion: Boolean(document.querySelector('[data-settings-app-version]')),
+         latestVersion: Boolean(document.querySelector('[data-settings-latest-version]')),
+         updateOutcome: Boolean(document.querySelector('[data-settings-update-outcome]')),
+         updateCheck: Boolean(document.querySelector('[data-settings-update-check]')),
+         updateNow: Boolean(document.querySelector('[data-settings-update-now]')),
+         releases: Boolean(document.querySelector('[data-settings-releases]')),
          terminalFont: Boolean(document.querySelector('[data-settings-terminal-font]')),
          terminalSize: Boolean(document.querySelector('[data-settings-terminal-size]')),
          terminalCursor: Boolean(document.querySelector('[data-settings-terminal-cursor]')),
@@ -747,37 +1070,104 @@ export async function runSettingsChecks(
 
     const shot = await screenshot(win, shotDir, 'settings-1-pane.png')
 
-    // A second workspace tab, so the ring has something to cycle between.
+    // Two more workspace tabs, so the ring is three long and a cycle through it
+    // is a claim about cycling.
+    //
+    // The driver builds the ring rather than inheriting one. Until the seed
+    // learned to strip `workspaceTabs` (scripts/isolate.mjs) this phase started
+    // with whatever panes the developer had left open - eight of them on the
+    // machine where that was found - and the assertion below was one press of
+    // Ctrl+Tab expecting to arrive back at Settings. That only ever held for a
+    // ring of exactly two, so it failed on a populated strip while being
+    // perfectly true about the app.
+    //
+    // Three, not two, because a two-ring cannot tell these apart: cycling
+    // forward, cycling backward, and toggling between the last two tabs. All
+    // three land on Settings from History and only one of them is what the
+    // handler claims to do.
     await click(win, '[data-open-history]')
     const historyUp = await pollJs(
       win,
       `document.querySelector('[role="tab"][data-tab="history"][aria-selected="true"]')`,
       10_000
     )
-    // Ctrl+Tab is bound on the window in capture, so this is the real keystroke
-    // rather than a click on a tab.
-    await sendKey(win, 'Tab', ['control'])
-    const cycledBack = await pollJs(
+    await click(win, '[data-open-pulls]')
+    const pullsUp = await pollJs(
       win,
-      `document.querySelector('[role="tab"][data-tab="settings"][aria-selected="true"]')`,
-      5_000
+      `document.querySelector('[role="tab"][data-tab="pulls"][aria-selected="true"]')`,
+      10_000
     )
+
+    /**
+     * The ring, read off the strips rather than assumed.
+     *
+     * The handler cycles the workspace strip and then the session strip, so a
+     * session open during this phase would be part of the ring. There is none -
+     * sessions belong to the `terminal` group - and that is asserted rather than
+     * relied on, because a phase that silently grew a session would otherwise
+     * turn this into a cycle over a different ring and still report a number.
+     */
+    const strips = await js<{ workspace: string[]; sessions: string[] }>(
+      win,
+      `(() => {
+         const ids = [...document.querySelectorAll('[role="tab"][data-tab]')]
+           .map((t) => t.dataset.tab ?? '')
+         return {
+           workspace: ids.filter((id) => !id.startsWith('session:')),
+           sessions: ids.filter((id) => id.startsWith('session:'))
+         }
+       })()`
+    )
+
+    // Back to Settings, so the cycle starts somewhere known.
+    await click(win, '[role="tab"][data-tab="settings"]')
+    await sleep(300)
+
+    // Ctrl+Tab is sent as a real keystroke through Chromium, not simulated by
+    // clicking the tab: the handler is bound in capture on the window.
+    const visited: string[] = []
+    for (let i = 0; i < strips.workspace.length; i++) {
+      await sendKey(win, 'Tab', ['control'])
+      await sleep(250)
+      visited.push(
+        await js<string>(
+          win,
+          `document.querySelector('[role="tab"][aria-selected="true"]')?.dataset.tab ?? ''`
+        )
+      )
+    }
+
+    // One full lap: every tab once, in strip order, ending where it started.
+    const expectedRing = ['settings', 'history', 'pulls']
+    const expectedLap = ['history', 'pulls', 'settings']
+    const ringAsBuilt = strips.workspace.join(',') === expectedRing.join(',')
+    const cycledWholeRing = visited.join(',') === expectedLap.join(',')
+    const noSessionsInRing = strips.sessions.length === 0
     const paneAfterCycle = await exists(win, '[data-settings-pane]')
 
     checks.push({
       id: 'S-1',
       criterion: 'Gear in the title bar opens the Settings tab; every group renders',
-      title: 'The gear opens a Settings pane with all five groups, and Ctrl+Tab cycles to it',
+      title:
+        'The gear opens a Settings pane with every group, and Ctrl+Tab walks the whole tab ring back to it',
       ok:
         gearThere &&
         !paneBefore &&
         opened &&
         tabSelected === 'true' &&
-        groups.join(',') === 'claude,workspace,appearance,terminal,github' &&
+        // Every group, in order. The list is spelled out rather than counted so
+        // that a group added, removed or reordered all fail here - `archive`
+        // arrived with the transcript archive and this went stale, which nobody
+        // saw because the probe was already red for the inherited tab strip.
+        groups.join(',') ===
+          'claude,workspace,appearance,updates,terminal,archive,github' &&
         Object.values(controls).every(Boolean) &&
         !internalLeaked &&
         historyUp &&
-        cycledBack &&
+        pullsUp &&
+        noSessionsInRing &&
+        ringAsBuilt &&
+        cycledWholeRing &&
         paneAfterCycle,
       detail: {
         gearInTitleBar: gearThere,
@@ -787,7 +1177,14 @@ export async function runSettingsChecks(
         controlsPresent: controls,
         internalKeysOnScreen: internalLeaked,
         secondTabOpened: historyUp,
-        ctrlTabReturnedToSettings: cycledBack,
+        thirdTabOpened: pullsUp,
+        // The strip as built, so a failure says what the ring was rather than
+        // only that a press landed somewhere unexpected. That is the line that
+        // would have identified the inherited-tabs bug on sight.
+        ringAsBuilt: strips.workspace,
+        sessionsInRing: strips.sessions,
+        ctrlTabVisitedInOrder: visited,
+        ctrlTabExpected: expectedLap,
         screenshot: shot.file
       },
       notes: [
@@ -795,6 +1192,12 @@ export async function runSettingsChecks(
         'absence beforehand is what makes the click evidence of anything.',
         'Ctrl+Tab is sent as a real keystroke through Chromium, not simulated by',
         'clicking the tab: the handler is bound in capture on the window.',
+        'One full lap of a three-tab ring, asserted tab by tab. A two-tab ring',
+        'cannot distinguish forward, backward and toggle - all three would pass.',
+        'The strip is built by this phase and starts empty, because the seed',
+        'strips `workspaceTabs` from a check’s copy of the database. A driver',
+        'that inherits the developer’s panes measures a different ring on every',
+        'machine - see scripts/isolate.mjs.',
         '`windowBounds` and `firstRunCompletedAt` are state rather than',
         'preferences, and the pane is checked for not having grown a row for them.'
       ]
@@ -1032,6 +1435,215 @@ export async function runSettingsChecks(
         'losing exactly the removed roots two projects is the thing worth proving.',
         'The fixture is asserted to have been contributing those projects first.',
         'Both fixture roots contain a path with a space in it - Windows-first.'
+      ]
+    })
+  }
+
+  // -------------------------------------------------------------------------
+  // S-19: pinned projects - the star, the section, and the pin that outlives
+  // its folder
+  // -------------------------------------------------------------------------
+  if (run('pins')) {
+    // A root of this group's own, so `--only=pins` is a run that means
+    // something. Two harnesses under it, because "flat and cross-harness" is
+    // the claim and one harness cannot distinguish it from a renamed group.
+    await openSettings(win)
+    await sleep(300)
+    answerPicker('directory', fixtures.pinRoot)
+    await click(win, '[data-settings-add-root]')
+    await pollJs(win, byData('settings-root', fixtures.pinRoot), 20_000)
+    const scanned = await pollJs(
+      win,
+      `[...document.querySelectorAll('aside nav button[title]')]
+        .filter((b) => b.title.toLowerCase().startsWith(${JSON.stringify(
+          fixtures.pinRoot.toLowerCase()
+        )})).length >= ${String(fixtures.pinProjects.length)}`,
+      45_000
+    )
+    await sleep(600)
+
+    const [first, second] = fixtures.pinProjects
+    const beforeAnyPin = await pinState(win)
+
+    // The star, pressed on the row the project is on. Not `settings:write`:
+    // the claim is about the affordance, and a driver that wrote the setting
+    // by hand would pass on a star that does nothing.
+    const pinnedFirst = await clickByData(win, 'pin-project', first ?? '')
+    await pollJs(win, `document.querySelector('[data-pinned-section]')`, 10_000)
+    await sleep(400)
+    const afterFirst = await pinState(win)
+    const rowFirst = rowValue(dbFile, 'pinnedProjects') as string[] | undefined
+
+    const pinnedSecond = await clickByData(win, 'pin-project', second ?? '')
+    await sleep(500)
+    const afterSecond = await pinState(win)
+    const rowBoth = rowValue(dbFile, 'pinnedProjects') as string[] | undefined
+
+    // The pin whose folder is not there. Written through the channel rather
+    // than clicked, because there is no row to click - which is the whole
+    // condition. Both real pins are re-sent with it, so this is one edit and
+    // the state afterwards is "three pins, one of them unresolvable".
+    const goneWrite = await sendWrite(win, {
+      pinnedProjects: [...(rowBoth ?? []), fixtures.pinGone]
+    })
+    await sleep(600)
+    const afterGone = await pinState(win, fixtures.pinGone)
+    const rowWithGone = rowValue(dbFile, 'pinnedProjects') as string[] | undefined
+    const shotPinned = await screenshot(win, shotDir, 'settings-19-pinned.png')
+
+    // A rescan, through the sidebar's own button. It replaces the tree the
+    // section resolves against, so "the pins are still there afterwards" is a
+    // claim about two stores staying out of each other's way - the list is in
+    // `app_settings` and the projects are in `projects` - and that is worth a
+    // scan rather than an argument. The unresolvable one is the interesting
+    // half: a scan is exactly the moment something could decide to tidy away a
+    // path it did not find.
+    const rescanned = await click(win, 'aside button[aria-label="Rescan all roots"]')
+    await sleep(500)
+    await pollJs(
+      win,
+      `!document.querySelector('aside button[aria-label="Rescan all roots"]').disabled`,
+      45_000
+    )
+    await sleep(600)
+    const afterRescan = await pinState(win, fixtures.pinGone)
+    const rowAfterRescan = rowValue(dbFile, 'pinnedProjects') as string[] | undefined
+
+    // The filter. A pinned section that ignored it would sit above the tree
+    // still showing what the query just excluded.
+    const needle = (second ?? '').split(/[\\/]+/).pop() ?? ''
+    await typeInto(win, 'aside input[aria-label="Filter projects"]', needle)
+    await sleep(500)
+    const whileFiltering = await pinState(win)
+    const filterCleared = await clearField(win, 'aside input[aria-label="Filter projects"]')
+    await sleep(500)
+    const afterFilter = await pinState(win)
+
+    // Off again, through the settings pane's own list this time - the second
+    // surface the setting has, and the one a stale pin is cleared from.
+    await openSettings(win)
+    await sleep(300)
+    const goneListedInPane = await js<boolean>(
+      win,
+      `Boolean(${byData('settings-pinned', fixtures.pinGone)})`
+    )
+    const unpinnedGone = await clickByData(win, 'settings-unpin', fixtures.pinGone)
+    await sleep(500)
+    const unpinnedFirst = await clickByData(win, 'settings-unpin', first ?? '')
+    await sleep(600)
+    const afterUnpin = await pinState(win)
+    const rowAfterUnpin = rowValue(dbFile, 'pinnedProjects') as string[] | undefined
+
+    // And this group's root back out, so the tree it leaves is the tree it
+    // found. The pins on its projects go with `original` in phase two.
+    await clickByData(win, 'settings-remove-root', fixtures.pinRoot)
+    await sleep(800)
+
+    const lower = (list: readonly string[] | undefined): string[] =>
+      (list ?? []).map((entry) => entry.toLowerCase())
+    const onceInTree = (state: PinState, path: string): boolean =>
+      state.rows.filter((row) => row === path.toLowerCase()).length === 1
+
+    checks.push({
+      id: 'S-19',
+      criterion: 'A project can be pinned, appears once, and keeps its pin when its folder goes',
+      title: 'The star lifts a project out of its harness; a pin whose folder has gone says so and offers no launch',
+      ok:
+        scanned &&
+        // The fixture has to discriminate: unless both projects started inside
+        // their harness groups, "it moved to the Pinned section" proves nothing.
+        beforeAnyPin.section === false &&
+        onceInTree(beforeAnyPin, first ?? '') &&
+        onceInTree(beforeAnyPin, second ?? '') &&
+        pinnedFirst &&
+        pinnedSecond &&
+        // The database file, read through this driver's own connection.
+        lower(rowFirst).includes((first ?? '').toLowerCase()) &&
+        lower(rowBoth).length === 2 &&
+        // Once each, and in the section rather than in the group. Two harnesses
+        // apart, in one flat list.
+        afterSecond.section &&
+        afterSecond.pinned.length === 2 &&
+        onceInTree(afterSecond, first ?? '') &&
+        onceInTree(afterSecond, second ?? '') &&
+        lower(afterSecond.pinned).includes((first ?? '').toLowerCase()) &&
+        lower(afterSecond.pinned).includes((second ?? '').toLowerCase()) &&
+        // The pin that outlived its folder: kept, painted, said out loud, and
+        // with nothing on it that could start a session in a directory that is
+        // not there.
+        goneWrite.accepted &&
+        lower(rowWithGone).includes(fixtures.pinGone.toLowerCase()) &&
+        lower(afterGone.pinned).includes(fixtures.pinGone.toLowerCase()) &&
+        afterGone.goneRow?.badge === true &&
+        afterGone.goneRow.launchable === false &&
+        !afterGone.rows.includes(fixtures.pinGone.toLowerCase()) &&
+        // And a scan does not disturb any of it, the unresolvable one included.
+        rescanned &&
+        afterRescan.pinned.length === 3 &&
+        lower(rowAfterRescan).length === 3 &&
+        afterRescan.goneRow?.badge === true &&
+        afterRescan.goneRow.launchable === false &&
+        onceInTree(afterRescan, first ?? '') &&
+        onceInTree(afterRescan, second ?? '') &&
+        // Filtered like everything else. One pin matches the needle, the other
+        // does not, and the unresolvable one does not either.
+        whileFiltering.pinned.length === 1 &&
+        lower(whileFiltering.pinned).includes((second ?? '').toLowerCase()) &&
+        // And the filter is a filter rather than a deletion: clearing it brings
+        // all three back. Without this the assertions after it would be about a
+        // tree that is still filtered, which is what the first run of this
+        // check actually was.
+        filterCleared &&
+        afterFilter.pinned.length === 3 &&
+        // And off again, from the pane.
+        goneListedInPane &&
+        unpinnedGone &&
+        unpinnedFirst &&
+        lower(rowAfterUnpin).length === 1 &&
+        lower(rowAfterUnpin).includes((second ?? '').toLowerCase()) &&
+        onceInTree(afterUnpin, first ?? ''),
+      detail: {
+        fixture: {
+          root: fixtures.pinRoot,
+          projects: fixtures.pinProjects,
+          neverCreated: fixtures.pinGone,
+          scanFound: scanned
+        },
+        beforeAnyPin,
+        afterFirstStar: { state: afterFirst, databaseRow: rowFirst },
+        afterSecondStar: { state: afterSecond, databaseRow: rowBoth },
+        withAGoneFolder: {
+          write: goneWrite,
+          databaseRow: rowWithGone,
+          state: afterGone,
+          screenshot: shotPinned.file
+        },
+        afterARescan: { pressed: rescanned, state: afterRescan, databaseRow: rowAfterRescan },
+        filter: { typed: needle, state: whileFiltering, cleared: filterCleared, afterClearing: afterFilter },
+        afterUnpinning: {
+          goneWasListedInThePane: goneListedInPane,
+          state: afterUnpin,
+          databaseRow: rowAfterUnpin
+        }
+      },
+      notes: [
+        'Pinned through the star on the row, not through `settings:write`: the',
+        'setting is only half of this and the affordance is the other half.',
+        'Every value is then read back out of the database file through this',
+        'driver`s own read-only connection, beside the DOM assertion.',
+        'Two harnesses in the fixture, because a flat cross-harness section and',
+        'a renamed group look identical when there is only one group.',
+        '"Appears once" is counted over every row in the tree, since printing a',
+        'pinned project in both places is the failure the section cannot afford.',
+        'The unresolvable pin is written rather than clicked because there is no',
+        'row to click - that is the condition. What is asserted about it is that',
+        'the entry survives, that the row says `folder gone`, and that the row',
+        'is not a button: it carries no `title`, so no selector that reaches a',
+        'launchable project row reaches it.',
+        'Then a real rescan, because "the pins survive one" is a claim about the',
+        'settings row and the projects table staying out of each other`s way -',
+        'and a scan is the moment a path nothing found could get tidied away.',
+        'Whether the pin survives a *restart* is S-9`s, from the parked value.'
       ]
     })
   }
@@ -1289,6 +1901,538 @@ export async function runSettingsChecks(
   }
 
   // -------------------------------------------------------------------------
+  // S-14 to S-18: the Updates group, and the check a person asks for
+  // -------------------------------------------------------------------------
+  //
+  // All five run against `pointReleases` - the seam in `update.ts` that swaps
+  // the *source* of the tag rather than the address it is fetched from. A
+  // function and not a URL, because pointing this at a second address would
+  // mean this driver standing up an HTTP server, and "the app has no inbound
+  // listener anywhere in it" is a claim worth keeping true. Swapping the source
+  // also produces the one thing the network cannot be asked for on demand: a
+  // newer release, an older one, and a failure, in that order, on a machine
+  // that is online.
+  //
+  // The seam is restored in a `finally`, so a phase that throws does not leave
+  // a later one asking a fixture.
+  if (run('updates')) {
+    /**
+     * This driver's own count of how many times Helm asked, kept in the closure
+     * beside the source rather than read out of `update.ts`.
+     *
+     * `releasesAsked()` answers the same question and is asserted against this
+     * one at every step. It is `update.ts`'s counter of its own behaviour, so on
+     * its own it would be the code agreeing with itself; this one is incremented
+     * by the function Helm actually called, which is a fact about the call and
+     * not about the bookkeeping around it. Two counters that disagree is a
+     * finding either way.
+     */
+    let askedHere = 0
+
+    /** A source that answers with a tag, optionally taking its time about it. */
+    const answering =
+      (tag: string, delayMs = 0) =>
+      async (): Promise<string> => {
+        askedHere += 1
+        if (delayMs > 0) await sleep(delayMs)
+        return tag
+      }
+
+    /** A source that cannot answer, which is what being offline looks like here. */
+    const refusing = (reason: string) => async (): Promise<string> => {
+      askedHere += 1
+      await sleep(50)
+      throw new Error(reason)
+    }
+
+    /** Wait on this driver's own counter, not on anything the window says. */
+    const waitAsked = async (n: number, timeoutMs = 20_000): Promise<boolean> => {
+      const deadline = Date.now() + timeoutMs
+      while (askedHere < n && Date.now() < deadline) await sleep(100)
+      return askedHere >= n
+    }
+
+    const outcomeState = (): Promise<string | null> =>
+      attr(win, '[data-settings-update-outcome]', 'data-settings-update-outcome')
+    const outcomeSentence = (): Promise<string> => text(win, '[data-settings-update-outcome]')
+    /** The tone, which every group's verdict carries under the same name. */
+    const outcomeTone = (): Promise<string | null> =>
+      attr(win, '[data-settings-update-outcome]', 'data-settings-verdict')
+
+    /**
+     * One press of Check now against a source of this driver's choosing.
+     *
+     * The gate is `waitAsked`, not the attribute on screen: two drives in a row
+     * can legitimately land on the same outcome, and polling for a value that is
+     * already there would report a pass for a button that did nothing. Only once
+     * this driver's own source has been entered is the answer on screen known to
+     * be *this* drive's, and the attribute is read after that.
+     */
+    interface Drive {
+      clicked: boolean
+      asked: boolean
+      askedHere: number
+      askedThere: number
+      settled: boolean
+      state: string | null
+      tone: string | null
+      sentence: string
+      latestFact: string
+      releasesPresent: boolean
+      releasesDisabled: boolean | null
+      releasesTitle: string | null
+    }
+
+    const drive = async (source: () => Promise<string>, expected: string): Promise<Drive> => {
+      pointReleases(source)
+      askedHere = 0
+      const clicked = await click(win, '[data-settings-update-now]')
+      const asked = await waitAsked(1)
+      const settled = await pollJs(
+        win,
+        `document.querySelector('[data-settings-update-outcome]')?.dataset.settingsUpdateOutcome === ${q(expected)}`,
+        20_000
+      )
+      await sleep(250)
+      return {
+        clicked,
+        asked,
+        askedHere,
+        askedThere: releasesAsked(),
+        settled,
+        state: await outcomeState(),
+        tone: await outcomeTone(),
+        sentence: await outcomeSentence(),
+        latestFact: await text(win, '[data-settings-latest-version]'),
+        releasesPresent: await exists(win, '[data-settings-releases]'),
+        releasesDisabled: await disabled(win, '[data-settings-releases]'),
+        releasesTitle: await attr(win, '[data-settings-releases]', 'title')
+      }
+    }
+
+    /**
+     * What this build says it is, asked of Electron rather than read off the
+     * pane. The pane's number came the long way round - `app:info` over IPC and
+     * into React - so the two agreeing is a round trip proved rather than a
+     * value restated.
+     */
+    const runningVersion = app.getVersion()
+    /** A tag no release will ever carry, so `newer` cannot be a coincidence. */
+    const HIGH_TAG = 'v99.9.9'
+    /** A reason no network stack produces, so finding it in the sentence means it was carried. */
+    const REFUSAL = 'the settings-check fixture refused on purpose'
+
+    const updateCheckAtPhaseStart = rowValue(dbFile, 'updateCheck')
+
+    try {
+      await openSettings(win)
+      await sleep(400)
+
+      const paintedVersion = await text(win, '[data-settings-app-version]')
+
+      // -----------------------------------------------------------------------
+      // A positive control for `disabled()`, before anything is believed about
+      // a button *not* being disabled.
+      //
+      // "The button was not disabled" is exactly the assertion that passes when
+      // the probe is broken: a selector that matches nothing, or a helper that
+      // always answered false, would report every control on the pane as live.
+      // So the button is first caught in the one state where it genuinely is
+      // disabled - mid-flight - by pointing the source at something slow enough
+      // for this driver to look while it is still in the air.
+      // -----------------------------------------------------------------------
+      pointReleases(answering(HIGH_TAG, 2000))
+      askedHere = 0
+      const clickedSlow = await click(win, '[data-settings-update-now]')
+      await sleep(500)
+      const nowDisabledInFlight = await disabled(win, '[data-settings-update-now]')
+      const outcomeInFlight = await outcomeState()
+      // Release notes is deliberately not disabled by a check being in progress:
+      // it opens a page, it does not ask GitHub anything.
+      const releasesDisabledInFlight = await disabled(win, '[data-settings-releases]')
+      await waitAsked(1)
+      await pollJs(
+        win,
+        `document.querySelector('[data-settings-update-outcome]')?.dataset.settingsUpdateOutcome !== 'checking'`,
+        20_000
+      )
+      await sleep(250)
+      const nowDisabledAtRest = await disabled(win, '[data-settings-update-now]')
+
+      // -----------------------------------------------------------------------
+      // S-14: unthrottled, twice in a row
+      // -----------------------------------------------------------------------
+      pointReleases(answering(HIGH_TAG))
+      askedHere = 0
+      const askedAtStart = releasesAsked()
+
+      const clickedOnce = await click(win, '[data-settings-update-now]')
+      const reachedOne = await waitAsked(1)
+      const settledOne = await pollJs(
+        win,
+        `document.querySelector('[data-settings-update-outcome]')?.dataset.settingsUpdateOutcome === 'newer'`,
+        20_000
+      )
+      await sleep(300)
+      const afterOneThere = releasesAsked()
+      const afterOneHere = askedHere
+
+      const clickedTwice = await click(win, '[data-settings-update-now]')
+      const reachedTwo = await waitAsked(2)
+      await sleep(400)
+      const afterTwoThere = releasesAsked()
+      const afterTwoHere = askedHere
+      const twiceState = await outcomeState()
+      const twiceSentence = await outcomeSentence()
+
+      const shotUpdates = await screenshot(win, shotDir, 'settings-14-updates.png')
+
+      checks.push({
+        id: 'S-14',
+        criterion: 'A manual check runs on demand and is never throttled, including twice in a row',
+        title: 'Check now asks GitHub every time it is pressed - two presses, two requests',
+        ok:
+          clickedOnce &&
+          clickedTwice &&
+          reachedOne &&
+          reachedTwo &&
+          settledOne &&
+          // The counter is live before anything is concluded from it moving.
+          askedAtStart === 0 &&
+          afterOneThere === 1 &&
+          afterOneHere === 1 &&
+          // The whole check: two, not one. A throttle would leave this at 1.
+          afterTwoThere === 2 &&
+          afterTwoHere === 2 &&
+          twiceState === 'newer' &&
+          twiceSentence.includes('99.9.9') &&
+          twiceSentence.includes(runningVersion),
+        detail: {
+          runningVersion,
+          fixtureTag: HIGH_TAG,
+          asked: {
+            atStart: { updateTs: askedAtStart, driver: 0 },
+            afterFirstPress: { updateTs: afterOneThere, driver: afterOneHere },
+            afterSecondPress: { updateTs: afterTwoThere, driver: afterTwoHere }
+          },
+          clicks: { first: clickedOnce, second: clickedTwice },
+          firstSettledOnNewer: settledOne,
+          outcomeAfterTwo: twiceState,
+          sentenceAfterTwo: twiceSentence,
+          screenshot: shotUpdates.file
+        },
+        notes: [
+          'Two counters, not one. `releasesAsked()` is `update.ts` counting its',
+          'own calls; the other is incremented inside the function Helm actually',
+          'invoked, which this driver wrote. They are asserted equal at every',
+          'step, so a bookkeeping bug in either is a failure rather than a pass.',
+          'The count is checked at zero before the first press and at one after',
+          'it, so "it went to two" is read off a counter already shown to move.',
+          'One is the number a throttled channel would report, which is what',
+          'makes two the discriminating value rather than merely a large one.',
+          'The tag is 99.9.9 - no release carries it, so `newer` cannot be a',
+          'coincidence, and the sentence is checked for naming both versions',
+          'rather than only for existing.'
+        ]
+      })
+
+      // -----------------------------------------------------------------------
+      // S-15: it works with the setting off, and pressing it does not turn it on
+      // -----------------------------------------------------------------------
+      const updateRowBefore = rowValue(dbFile, 'updateCheck')
+      let turnedOff = true
+      if (updateRowBefore !== false) {
+        turnedOff = await click(win, '[data-settings-update-check] input')
+        await sleep(600)
+      }
+      const rowWhenOff = rowValue(dbFile, 'updateCheck')
+      const tickShowsOff = await attr(win, '[data-settings-update-check]', 'data-settings-update-check')
+      // The button, read in the state the criterion is about: the automatic
+      // check off, and Check now still live.
+      const nowDisabledWhileOff = await disabled(win, '[data-settings-update-now]')
+
+      const offDrive = await drive(answering(HIGH_TAG), 'newer')
+      const rowAfterManualCheck = rowValue(dbFile, 'updateCheck')
+      const tickAfterManualCheck = await attr(
+        win,
+        '[data-settings-update-check]',
+        'data-settings-update-check'
+      )
+
+      checks.push({
+        id: 'S-15',
+        criterion:
+          'A manual check works with `updateCheck` off, and pressing it does not turn the setting on',
+        title:
+          'With the launch check off, Check now is still live, still gets an answer, and leaves the setting off',
+        ok:
+          rowWhenOff === false &&
+          tickShowsOff === 'false' &&
+          // Not disabled by the setting - and the probe that says so has been
+          // made to answer `true` for the same button moments earlier.
+          nowDisabledWhileOff === false &&
+          nowDisabledInFlight === true &&
+          nowDisabledAtRest === false &&
+          clickedSlow &&
+          outcomeInFlight === 'checking' &&
+          releasesDisabledInFlight === false &&
+          offDrive.clicked &&
+          offDrive.asked &&
+          offDrive.settled &&
+          offDrive.state === 'newer' &&
+          offDrive.sentence !== '' &&
+          // Unchanged by the press, in the row and on the tick.
+          rowAfterManualCheck === false &&
+          tickAfterManualCheck === 'false',
+        detail: {
+          settingRow: {
+            atPhaseStart: updateCheckAtPhaseStart,
+            beforeThisCheck: updateRowBefore,
+            turnedOffHere: turnedOff,
+            whenOff: rowWhenOff,
+            afterPressingCheckNow: rowAfterManualCheck
+          },
+          tickAttribute: { whenOff: tickShowsOff, afterPressingCheckNow: tickAfterManualCheck },
+          checkNowButton: {
+            disabledWhileSettingOff: nowDisabledWhileOff,
+            disabledMidFlight: nowDisabledInFlight,
+            disabledAtRest: nowDisabledAtRest,
+            outcomeMidFlight: outcomeInFlight,
+            releasesDisabledMidFlight: releasesDisabledInFlight
+          },
+          drive: offDrive
+        },
+        notes: [
+          'The probe is made to fail first. "Not disabled" is the assertion that',
+          'passes when a selector matches nothing, so the same button is caught',
+          'disabled mid-flight - against a source told to take two seconds - and',
+          'live again afterwards, before "not disabled while the setting is off"',
+          'is believed of the identical selector.',
+          'The setting is read out of the database file through this driver’s own',
+          'read-only connection, before and after the press, and off the tick in',
+          'the pane. A press that quietly re-enabled the launch check would move',
+          'one or the other.',
+          'This is the criterion the channel comment states: `updateCheck`',
+          'governs whether Helm asks by itself, not whether the user may.',
+          'Release notes is checked for staying live during the check, because it',
+          'opens a page rather than asking GitHub anything.'
+        ]
+      })
+
+      // -----------------------------------------------------------------------
+      // S-16 and S-17: the three outcomes, and the link that survives all of them
+      // -----------------------------------------------------------------------
+      const newerDrive = await drive(answering(HIGH_TAG), 'newer')
+      // A tag equal to the running build: `isNewer` is strict, so this is the
+      // up-to-date state rather than a lower number pretending to be one.
+      const currentDrive = await drive(answering(`v${runningVersion}`), 'current')
+      const offlineDrive = await drive(refusing(REFUSAL), 'unreachable')
+
+      const sentences = [newerDrive.sentence, currentDrive.sentence, offlineDrive.sentence]
+      const nonEmpty = sentences.every((s) => s.trim() !== '')
+      const distinct = new Set(sentences).size === 3
+      const offlineFollowUp = await text(win, '[data-settings-update-offline]')
+
+      checks.push({
+        id: 'S-16',
+        criterion:
+          'All three outcomes render as sentences; “could not ask” names the reason and does not read as a failure of Helm',
+        title:
+          'Newer, up to date and could-not-ask each render a distinct sentence, and the offline one names its reason without a warning tone',
+        ok:
+          newerDrive.asked &&
+          currentDrive.asked &&
+          offlineDrive.asked &&
+          newerDrive.settled &&
+          currentDrive.settled &&
+          offlineDrive.settled &&
+          newerDrive.state === 'newer' &&
+          currentDrive.state === 'current' &&
+          offlineDrive.state === 'unreachable' &&
+          // The three are non-empty and no two are the same string. A helper
+          // that returned '' three times would satisfy neither.
+          nonEmpty &&
+          distinct &&
+          // Each names what it is about.
+          newerDrive.sentence.includes('99.9.9') &&
+          newerDrive.sentence.includes(runningVersion) &&
+          currentDrive.sentence.includes(runningVersion) &&
+          offlineDrive.sentence.includes(REFUSAL) &&
+          // Tones: up to date is settled, could-not-ask is not a warning.
+          currentDrive.tone === 'ok' &&
+          offlineDrive.tone !== 'warn' &&
+          offlineDrive.tone === 'todo' &&
+          newerDrive.tone !== 'warn' &&
+          // The quieter line pointing at the link that still works.
+          offlineFollowUp !== '' &&
+          // The version fact follows the answer rather than the last good one.
+          newerDrive.latestFact === '99.9.9' &&
+          currentDrive.latestFact === runningVersion &&
+          offlineDrive.latestFact === NOTHING &&
+          paintedVersion === runningVersion,
+        detail: {
+          runningVersion,
+          paneSaysVersion: paintedVersion,
+          refusalPlanted: REFUSAL,
+          sentences: {
+            newer: newerDrive.sentence,
+            current: currentDrive.sentence,
+            unreachable: offlineDrive.sentence
+          },
+          allNonEmpty: nonEmpty,
+          allDistinct: distinct,
+          tones: {
+            newer: newerDrive.tone,
+            current: currentDrive.tone,
+            unreachable: offlineDrive.tone
+          },
+          latestFact: {
+            newer: newerDrive.latestFact,
+            current: currentDrive.latestFact,
+            unreachable: offlineDrive.latestFact
+          },
+          offlineFollowUpLine: offlineFollowUp,
+          drives: { newer: newerDrive, current: currentDrive, unreachable: offlineDrive }
+        },
+        notes: [
+          'The three sentences are asserted **distinct from each other** before',
+          'anything is concluded from any one of them. A reader that returned an',
+          'empty string three times, or a component that painted one sentence in',
+          'every state, is the failure this catches - and it is the failure',
+          'CLAUDE.md records PROF-4 dying of.',
+          'The reason is a string no network stack produces, planted by this',
+          'driver and looked for in what the pane rendered, so "names the reason"',
+          'is carriage proved end to end rather than a plausible sentence.',
+          'The tone is the judgement: could-not-ask is `todo`, never `warn`.',
+          'Offline is an expected answer - nothing is broken and nothing is known',
+          'to be out of date - and a warning triangle would be Helm blaming the',
+          'network for a question Helm asked on its own initiative.',
+          'The Latest fact is read in all three: it must follow the answer that',
+          'just came back, including emptying when that answer carried no',
+          'version, rather than keeping a number nothing just measured.',
+          'The version on screen is compared with `app.getVersion()` asked here,',
+          'which is the `app:info` round trip through IPC and React proved rather',
+          'than restated.'
+        ]
+      })
+
+      checks.push({
+        id: 'S-17',
+        criterion: 'The releases link is reachable when up to date and when offline',
+        title: 'Release notes is present and live in both the up-to-date and the could-not-ask state',
+        ok:
+          currentDrive.releasesPresent &&
+          currentDrive.releasesDisabled === false &&
+          offlineDrive.releasesPresent &&
+          offlineDrive.releasesDisabled === false &&
+          // It points somewhere, rather than merely existing.
+          (currentDrive.releasesTitle ?? '').startsWith('https://') &&
+          currentDrive.releasesTitle === offlineDrive.releasesTitle &&
+          // The same helper answered `true` for a genuinely disabled control in
+          // this run, so `false` here is a reading and not a default.
+          nowDisabledInFlight === true,
+        detail: {
+          upToDate: {
+            present: currentDrive.releasesPresent,
+            disabled: currentDrive.releasesDisabled,
+            title: currentDrive.releasesTitle
+          },
+          couldNotAsk: {
+            present: offlineDrive.releasesPresent,
+            disabled: offlineDrive.releasesDisabled,
+            title: offlineDrive.releasesTitle
+          },
+          disabledProbeProvedItCanSayTrue: nowDisabledInFlight,
+          alsoLiveWhileAskingGitHub: releasesDisabledInFlight === false
+        },
+        notes: [
+          'These two states are the whole reason the URL comes from `app:info`',
+          'and not from a check’s result: up to date and could-not-ask are',
+          'exactly the cases that produce no URL to render, and they are also the',
+          'two where somebody most wants to go and look for themselves.',
+          'The title is asserted to be an https address and to be the same one in',
+          'both states, so this is a link to a place rather than a button that',
+          'happens to be enabled.',
+          '`disabled()` is trusted here only because it was made to answer `true`',
+          'earlier in this same run, on this same button.'
+        ]
+      })
+
+      // -----------------------------------------------------------------------
+      // S-18: a manual check does not move the launch check's throttle
+      // -----------------------------------------------------------------------
+      //
+      // The row is first written through the ordinary channel and read back, for
+      // the reason every rejection case in S-7 is preceded by a valid write:
+      // "the row did not change" is also what a key nothing can write would
+      // report, and a stamp that is simply absent would sit unchanged through
+      // anything.
+      const SENTINEL = '2001-02-03T04:05:06.000Z'
+      const plantedStamp = await sendWrite(win, { lastUpdateCheckAt: SENTINEL })
+      await sleep(600)
+      const stampBefore = rawRow(dbFile, 'lastUpdateCheckAt')
+      const plantLanded = stampBefore === JSON.stringify(SENTINEL)
+
+      const manualDrives: Drive[] = []
+      manualDrives.push(await drive(answering(HIGH_TAG), 'newer'))
+      manualDrives.push(await drive(answering(`v${runningVersion}`), 'current'))
+      manualDrives.push(await drive(refusing(REFUSAL), 'unreachable'))
+      await sleep(600)
+
+      const stampAfter = rawRow(dbFile, 'lastUpdateCheckAt')
+
+      checks.push({
+        id: 'S-18',
+        criterion: 'A manual check does not write `lastUpdateCheckAt`',
+        title: 'Three manual checks leave the launch throttle’s timestamp byte-for-byte unmoved',
+        ok:
+          plantedStamp.accepted &&
+          plantLanded &&
+          manualDrives.every((d) => d.clicked && d.asked && d.settled) &&
+          stampAfter === stampBefore &&
+          // Including the successful ones: a stamp written only on success would
+          // still be a stamp a manual check wrote.
+          manualDrives.filter((d) => d.state !== 'unreachable').length === 2,
+        detail: {
+          sentinelWrittenThroughSettingsWrite: SENTINEL,
+          writeAccepted: plantedStamp.accepted,
+          writeError: plantedStamp.error,
+          rawColumnBefore: stampBefore,
+          rawColumnAfter: stampAfter,
+          plantLanded,
+          outcomesDriven: manualDrives.map((d) => d.state),
+          manualDrives
+        },
+        notes: [
+          'The row is planted through `settings:write` and read back first, so',
+          'the key is shown to be writable and this driver’s reader shown to see',
+          'a write, before "it did not change" is worth anything. An absent stamp',
+          'would sit unchanged through anything at all.',
+          'Read as the raw column text rather than through the JSON parse, which',
+          'is what makes it byte-for-byte: a rewrite of the same instant in a',
+          'different shape is still a write, and it is the write this is looking',
+          'for.',
+          'Three checks and not one, and two of them succeed - the throttle is',
+          'stamped after a *successful* answer (`maybeCheckForUpdate`), so a',
+          'manual check that wrote it would write it on exactly those two.',
+          'The throttle belongs to the launch check, which is what earns the app',
+          'the right to ask on its own. A manual press moving it would let a',
+          'person pressing a button silently buy Helm another day of not asking.'
+        ]
+      })
+    } finally {
+      // Back to the real GitHub, whatever happened above: a later phase must not
+      // inherit a fixture, and neither must the rest of this app's life.
+      pointReleases(null)
+      // And the setting back to where the run found it. S-15 turns it off on
+      // purpose; leaving it off would park a value nothing here meant to park,
+      // and `original` is the boolean the restore is going to write anyway.
+      await sendWrite(win, { updateCheck: original.updateCheck })
+      await sleep(400)
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // S-7: runtime validation rejects malformed values for every key
   // -------------------------------------------------------------------------
   if (run('validation')) {
@@ -1306,6 +2450,15 @@ export async function runSettingsChecks(
         good: [fixtures.rootA],
         bad: ['projects/alpha'],
         why: 'a relative path resolves against whatever the cwd happens to be'
+      },
+      {
+        key: 'pinnedProjects',
+        good: [fixtures.pinProjects[0] ?? fixtures.rootA],
+        // Two spellings of one path. Windows compares paths case-insensitively
+        // and so does the sidebar, so this would print one project as two rows
+        // in a section where un-pinning either takes both away.
+        bad: [fixtures.rootA, fixtures.rootA.toUpperCase()],
+        why: 'one project under two spellings is a pin that cannot be taken off'
       },
       {
         key: 'claudePath',
@@ -1366,6 +2519,34 @@ export async function runSettingsChecks(
         good: now.terminalShell ?? whereIs('cmd.exe')[0] ?? null,
         bad: 'cmd.exe',
         why: 'a bare name is resolved against whatever PATH Helm was started with'
+      },
+      {
+        key: 'projectShellHeightPct',
+        good: 40,
+        // Above the ceiling rather than below the floor, because the ceiling is
+        // the half of this bound somebody asked for: past 50 the project pane
+        // is the smaller part of the page it names.
+        bad: 51,
+        why: 'the project pane may not be given less than half of its own page'
+      },
+      {
+        key: 'sessionSplitPct',
+        good: 60,
+        // Either bound would do here - neither side of this divider is the
+        // subordinate one - so the floor, which is the one a drag reaches by
+        // pushing the sessions column shut.
+        bad: 19,
+        why: 'below the floor the divider itself enforces'
+      },
+      {
+        key: 'transcriptArchiveMaxBytes',
+        good: 512 * 1024 * 1024,
+        // Not "too small" - the floor is deliberately a kilobyte so a check can
+        // drive eviction. Too *large* is the interesting rejection: this bounds
+        // how much of the user's `helm.db` one feature may take, and an
+        // unbounded archive is the state the whole ceiling exists to prevent.
+        bad: 1024 ** 4,
+        why: 'a terabyte is not a ceiling, and a ceiling is the point of the key'
       },
       {
         key: 'ghPath',
@@ -2372,6 +3553,370 @@ export async function runSettingsChecks(
         ]
       })
 
+      // ---------------------------------------------------------------------
+      // S-20: the shell's height is the user's, and its terminal follows it
+      // ---------------------------------------------------------------------
+      //
+      // The claim a resizable pane has to make is not "the box moved" - that is
+      // visible - it is that the grid inside it moved with it. A shell whose
+      // terminal still describes the old box paints into rows the pty does not
+      // know it has, and nothing on screen says so until something wraps in the
+      // wrong place. So every reading here carries `.xterm-screen`'s height and
+      // the box the fit is measured against, and the verdict is arithmetic on
+      // those rather than a screenshot.
+      await clickProject(win, projectOne)
+      await pollJs(win, `document.querySelector('[data-project-shell]')`, 15_000)
+      await sendWrite(win, { projectShellHeightPct: SHELL_HEIGHT_BOUNDS.default })
+      await sleep(900)
+
+      const HANDLE = '[role="separator"][aria-orientation="horizontal"]'
+
+      interface DragResult {
+        before: ShellPaneReading | null
+        after: ShellPaneReading | null
+        writes: { n: number; values: number[] }
+        resizes: Array<{ id: number; cols: number; rows: number }>
+        pointer: PointerTrace
+        row: unknown
+      }
+
+      /**
+       * One pointer drag on the handle, `dy` pixels, with everything it moved.
+       *
+       * Eight moves rather than one, because the thing being measured is a
+       * gesture: a single jump would be satisfied by a build that wrote the
+       * setting on `pointerdown`, and the count of writes is only interesting
+       * when there were frames it could have written on.
+       */
+      const dragShell = async (dy: number): Promise<DragResult> => {
+        const before = await readShellPane(win, projectOne)
+        await armSettingsCounter(win)
+        await tracePointer(win, HANDLE)
+        shellResizes.length = 0
+        if (before !== null) {
+          const x = before.pane.left + before.pane.width / 2
+          const y = before.handle.top + before.handle.height / 2
+          // `leftbuttondown` on the moves, because a move without it is a
+          // hover: see `sendMouse`. The press and the release carry it too, so
+          // the whole gesture reads as one button being held and let go.
+          const held = { modifiers: ['leftbuttondown' as const] }
+          await sendMouse(win, 'mouseDown', x, y, held)
+          for (let step = 1; step <= 8; step++) {
+            await sendMouse(win, 'mouseMove', x, y + (dy * step) / 8, held)
+          }
+          await sendMouse(win, 'mouseUp', x, y + dy, held)
+          await sleep(900)
+        }
+        return {
+          before,
+          after: await readShellPane(win, projectOne),
+          writes: await readSettingsCounter(win),
+          resizes: [...shellResizes],
+          pointer: await readPointerTrace(win),
+          row: rowValue(dbFile, 'projectShellHeightPct')
+        }
+      }
+
+      const atRest = await readShellPane(win, projectOne)
+      // Far past the ceiling in one gesture, so "it stopped at half" is the
+      // pane refusing rather than the pointer running out of travel.
+      const up = await dragShell(-600)
+      const shotUp = await screenshot(win, shotDir, 'settings-20-shell-ceiling.png')
+      const down = await dragShell(600)
+      const shotDown = await screenshot(win, shotDir, 'settings-20-shell-floor.png')
+
+      // And the double-click, which is the only way back to the default that
+      // does not involve typing a number into another pane.
+      await armSettingsCounter(win)
+      shellResizes.length = 0
+      const beforeReset = await readShellPane(win, projectOne)
+      if (beforeReset !== null) {
+        const x = beforeReset.pane.left + beforeReset.pane.width / 2
+        const y = beforeReset.handle.top + beforeReset.handle.height / 2
+        for (const clickCount of [1, 2]) {
+          await sendMouse(win, 'mouseDown', x, y, { clickCount })
+          await sendMouse(win, 'mouseUp', x, y, { clickCount })
+        }
+        await sleep(900)
+      }
+      const reset = await readShellPane(win, projectOne)
+      const resetWrites = await readSettingsCounter(win)
+      const resetRow = rowValue(dbFile, 'projectShellHeightPct')
+      const resetResizes = [...shellResizes]
+      await disarmSettingsCounter(win)
+
+      /**
+       * One cell, taken from the terminal before anything was dragged.
+       *
+       * Nothing about the font changes across these drags, so a cell measured
+       * once is the constant every later grid is checked against - and it is
+       * measured from what xterm painted (`.xterm-screen` over `rows`) rather
+       * than from anything Helm computed.
+       */
+      const shellCell = atRest !== null && atRest.rows > 0 ? atRest.screen / atRest.rows : 0
+
+      /** The grid describes the box it is in, to within the one cell it must. */
+      const gridFitsBox = (r: ShellPaneReading | null): boolean =>
+        r !== null &&
+        r.rows > 0 &&
+        shellCell > 0 &&
+        Math.abs(r.screen - r.rows * shellCell) < 1 &&
+        r.container - r.screen >= 0 &&
+        r.container - r.screen < shellCell
+
+      const halfOf = (r: ShellPaneReading): number =>
+        (r.column.height * SHELL_HEIGHT_BOUNDS.max) / 100
+
+      const ceilingHeld =
+        up.after !== null &&
+        up.after.pct === SHELL_HEIGHT_BOUNDS.max &&
+        up.row === SHELL_HEIGHT_BOUNDS.max &&
+        Math.abs(up.after.pane.height - halfOf(up.after)) <= 1 &&
+        up.before !== null &&
+        up.after.rows > up.before.rows
+
+      // The floor is a pixel figure, so it is checked in pixels. The row is
+      // checked separately and loosely: it is that same height expressed as a
+      // whole percentage, so it can only be a rounding away from it.
+      const floorHeld =
+        down.after !== null &&
+        Math.abs(down.after.pane.height - SHELL_MIN_PX) <= 1 &&
+        up.after !== null &&
+        down.after.rows < up.after.rows &&
+        typeof down.row === 'number' &&
+        Math.abs((down.row / 100) * down.after.column.height - SHELL_MIN_PX) <=
+          down.after.column.height / 100
+
+      const resetHeld =
+        reset !== null &&
+        reset.pct === SHELL_HEIGHT_BOUNDS.default &&
+        resetRow === SHELL_HEIGHT_BOUNDS.default &&
+        Math.abs(
+          reset.pane.height - (reset.column.height * SHELL_HEIGHT_BOUNDS.default) / 100
+        ) <= 1
+
+      // One write for each gesture. Not zero - which is what a handle that
+      // moved nothing would report - and not one a frame, which is a database
+      // write per `pointermove`.
+      const oneWriteEach =
+        up.writes.n === 1 && down.writes.n === 1 && resetWrites.n === 1
+
+      // The pty was told, and told the grid the terminal actually settled at.
+      const ptyToldLast = (r: DragResult, at: ShellPaneReading | null): boolean =>
+        r.resizes.length > 0 && at !== null && (r.resizes.at(-1)?.rows ?? -1) === at.rows
+
+      // The positive control, in AFF-1's spirit: a gesture that never reached
+      // the handle produces exactly the readings a handle nobody wired up
+      // produces, and "the height did not move" would be a finding about this
+      // driver rather than about Helm.
+      const gestureArrived = (r: DragResult): boolean =>
+        r.pointer.down === 1 && r.pointer.move >= 8 && r.pointer.up === 1
+
+      checks.push({
+        id: 'S-20',
+        criterion:
+          'The project shell can be dragged between its floor and half the page, the height persists as one write per drag, and the terminal’s grid follows its box',
+        title:
+          'A drag past the ceiling stops at half the column, a drag past the floor stops at 180px, the double-click returns to the default, and every grid still describes the box it is in',
+        ok:
+          atRest !== null &&
+          atRest.pct === SHELL_HEIGHT_BOUNDS.default &&
+          gridFitsBox(atRest) &&
+          gestureArrived(up) &&
+          gestureArrived(down) &&
+          ceilingHeld &&
+          gridFitsBox(up.after) &&
+          ptyToldLast(up, up.after) &&
+          floorHeld &&
+          gridFitsBox(down.after) &&
+          ptyToldLast(down, down.after) &&
+          resetHeld &&
+          gridFitsBox(reset) &&
+          oneWriteEach,
+        detail: {
+          cellHeightFromXterm: shellCell,
+          bounds: { ...SHELL_HEIGHT_BOUNDS, floorPx: SHELL_MIN_PX },
+          atRest,
+          draggedUp: {
+            ...up,
+            halfTheColumn: up.after === null ? null : halfOf(up.after),
+            held: ceilingHeld,
+            gridFitsBox: gridFitsBox(up.after)
+          },
+          draggedDown: {
+            ...down,
+            held: floorHeld,
+            gridFitsBox: gridFitsBox(down.after)
+          },
+          doubleClicked: {
+            before: beforeReset,
+            after: reset,
+            row: resetRow,
+            writes: resetWrites,
+            resizes: resetResizes,
+            held: resetHeld,
+            gridFitsBox: gridFitsBox(reset)
+          },
+          screenshots: [shotUp.file, shotDown.file]
+        },
+        notes: [
+          'The grid is read, not looked at. `.xterm-screen` is exactly `rows`',
+          'cells tall and the element around it is what FitAddon measures, so',
+          'the difference between them can only be under one cell - and a',
+          'terminal still describing the box it had before the drag is where',
+          'that stops being true. The cell itself comes from what xterm painted',
+          'before any of this, not from anything Helm computed.',
+          'Every pointer event is counted on `document` as well, because a',
+          'drag the app ignored and a drag that was never delivered produce',
+          'identical readings otherwise - and the first time this ran, the',
+          'gesture was being sent without `leftbuttondown` and Helm never saw',
+          'a single move of it.',
+          'Each drag is eight moves, so "one write" is a claim about a gesture',
+          'that had frames to write on. The count is `settings:changed` events,',
+          'which main emits once per accepted write - the app broadcasting,',
+          'rather than the window’s account of what it sent.',
+          'Zero writes would fail it too: that is what a handle nothing is',
+          'listening to reports.',
+          'Both bounds are driven past rather than up to. Half is checked',
+          'against half of the column measured in the same read, and the floor',
+          'in pixels, because a pixel is what the floor is: a percentage cannot',
+          'say "still enough rows to be a terminal".',
+          'Every pty resize is captured by the same wrapper S-10 uses, and the',
+          'last one has to name the grid the terminal ended at - a pane that',
+          'refit itself and never told the pty would pass every box measurement',
+          'above and still be the bug this feature could ship.'
+        ]
+      })
+
+      // -----------------------------------------------------------------
+      // S-21: the session split is remembered, and remembered as a layout
+      // -----------------------------------------------------------------
+      //
+      // The half of this that S-9 cannot make. S-9 reads the parked number back
+      // after a restart, which proves the row survived; it says nothing about
+      // whether anything is laid out from it. A percentage that persists
+      // perfectly and moves no boundary is the bug this setting exists to fix,
+      // wearing the shape of a passing check.
+      //
+      // So the claim here is about **the measured column**: write a percentage,
+      // and the sessions pane is that percentage of the row. Then drag, and the
+      // row holds what the pane ended at - one write for the gesture, which is
+      // the other thing a percentage per `mousemove` would pass.
+      {
+        const DIVIDER = '[role="separator"][aria-orientation="vertical"]'
+        const splitGeometry = `(() => {
+          const sep = document.querySelector(${JSON.stringify(DIVIDER)})
+          const row = sep?.parentElement
+          const col = sep?.nextElementSibling
+          if (!sep || !row || !col) return null
+          const r = row.getBoundingClientRect()
+          const c = col.getBoundingClientRect()
+          const s = sep.getBoundingClientRect()
+          return {
+            rowWidth: r.width,
+            rowLeft: r.left,
+            columnWidth: c.width,
+            pct: (c.width / r.width) * 100,
+            gripX: s.left + s.width / 2,
+            gripY: s.top + s.height / 2
+          }
+        })()`
+        type SplitGeometry = {
+          rowWidth: number
+          rowLeft: number
+          columnWidth: number
+          pct: number
+          gripX: number
+          gripY: number
+        }
+
+        const laidOut: Array<{ wrote: number; measured: number | null }> = []
+        // Two, and neither is the default: one value could be the number the
+        // app already had.
+        for (const pct of [SPLIT_BOUNDS.min, 70]) {
+          await sendWrite(win, { sessionSplitPct: pct })
+          await sleep(700)
+          const at = await js<SplitGeometry | null>(win, splitGeometry).catch(() => null)
+          laidOut.push({ wrote: pct, measured: at === null ? null : at.pct })
+        }
+
+        const beforeDrag = await js<SplitGeometry | null>(win, splitGeometry).catch(() => null)
+        let afterDrag: SplitGeometry | null = null
+        let dragWrites = { n: 0, values: [] as number[] }
+        let dragPointer: PointerTrace | null = null
+        if (beforeDrag !== null) {
+          await armSettingsCounter(win)
+          await tracePointer(win, DIVIDER)
+          // Toward the left, which widens the sessions column. Six moves, so
+          // "one write" is a claim about a gesture that had frames to write on.
+          await drag(
+            win,
+            { x: beforeDrag.gripX, y: beforeDrag.gripY },
+            { x: beforeDrag.gripX - Math.round(beforeDrag.rowWidth * 0.1), y: beforeDrag.gripY },
+            { steps: 6 }
+          )
+          await sleep(900)
+          afterDrag = await js<SplitGeometry | null>(win, splitGeometry).catch(() => null)
+          dragWrites = await readSettingsCounter(win)
+          dragPointer = await readPointerTrace(win)
+        }
+
+        const rowAfterDrag = rowValue(dbFile, 'sessionSplitPct')
+        // The row names the pane's own measured share, to the percentage point
+        // the setting is stored in.
+        const rowMatchesPane =
+          afterDrag !== null &&
+          typeof rowAfterDrag === 'number' &&
+          Math.abs(rowAfterDrag - afterDrag.pct) <= 1
+        const followedTheSetting = laidOut.every(
+          (l) => l.measured !== null && Math.abs(l.measured - l.wrote) <= 1
+        )
+        const gestureArrivedHere =
+          dragPointer !== null &&
+          dragPointer.down === 1 &&
+          dragPointer.move >= 6 &&
+          dragPointer.up === 1 &&
+          dragPointer.buttons === 1
+
+        checks.push({
+          id: 'S-21',
+          criterion: 'The session split is remembered, and the pane is laid out from it',
+          title:
+            'A written percentage becomes the sessions pane’s measured share, and a drag writes the row exactly once',
+          ok:
+            followedTheSetting &&
+            gestureArrivedHere &&
+            rowMatchesPane &&
+            dragWrites.n === 1 &&
+            beforeDrag !== null &&
+            afterDrag !== null &&
+            afterDrag.columnWidth > beforeDrag.columnWidth,
+          detail: {
+            bounds: SPLIT_BOUNDS,
+            laidOut,
+            beforeDrag,
+            afterDrag,
+            writesDuringDrag: dragWrites,
+            pointer: dragPointer,
+            rowAfterDrag
+          },
+          notes: [
+            'The pane is measured, never the number. A setting that round-trips',
+            'and lays nothing out is what this is here to catch, and S-9 - which',
+            'reads the same key back after a restart - cannot see the difference.',
+            'Two written values, neither of them the default, because one could',
+            'be the number the app already had on screen.',
+            'One write per drag, over six moves: zero is a divider nothing is',
+            'listening to, and one per move is a database round trip per frame,',
+            'each coming back as a `settings:changed` into the middle of the',
+            'gesture.',
+            '`pointer.buttons` has to read 1. Sent without `leftbuttondown` the',
+            'moves arrive as hovers, and this divider answered those for as long',
+            'as it existed - see `drag()` in main/bridge.ts.'
+          ]
+        })
+      }
+
       // Put the pane back the way a person left it, so the run does not end
       // with a maximised workspace and two fixture shells running.
       await click(win, '[data-maximize="workspace"]')
@@ -2673,6 +4218,12 @@ export async function runSettingsChecks(
     // carrying both halves of the criterion across the restart. Root A appears
     // exactly once - `original` has had this driver's own paths scrubbed out.
     scanRoots: [...original.scanRoots, fixtures.rootA],
+    // A pin on a path that is not a project and never was. Parked for the same
+    // reason `prIgnoredRepos` is - it is the other array setting, and an array
+    // JSON round-tripping through one `app_settings` row is the half worth
+    // restarting for - and under the fixture directory so `original`'s scrub
+    // takes it out again if this run never reaches its restore.
+    pinnedProjects: [join(fixtures.dir, 'parked-project')],
     // All six terminal settings, every one of them off its default for the same
     // reason. `terminalShell` is parked on a real program rather than a
     // fixture: a restore that somehow does not happen must leave the app able
@@ -2683,6 +4234,13 @@ export async function runSettingsChecks(
     terminalCursorBlink: false,
     terminalScrollback: 12345,
     terminalShell: whereIs('cmd.exe')[0] ?? original.terminalShell,
+    // Off the default in the one direction that is unambiguous: the ceiling.
+    // A shell at half the page is a state no default and no fresh database
+    // produces, so finding it after a restart is evidence.
+    projectShellHeightPct: SHELL_HEIGHT_BOUNDS.max,
+    // The other pane proportion, parked at its ceiling for the same reason and
+    // deliberately not at a round number a default could plausibly become.
+    sessionSplitPct: SPLIT_BOUNDS.max,
     // The real gh rather than the fixture, for the reason `claudePath` uses the
     // real claude: a restore that somehow does not happen must leave the app
     // pointed at a working program, not at a stub that refuses to sign in.
@@ -2697,7 +4255,12 @@ export async function runSettingsChecks(
     // no default could produce and the checkout mode is the non-default half of
     // a two-value enum, which is the strongest either can be parked on.
     prReviewPrompt: '/security-review {number} in {slug}',
-    prCheckout: 'checkout'
+    prCheckout: 'checkout',
+    // The archive's ceiling, parked well *above* its default rather than below
+    // it. Below would evict from this run's database on the way past, which is
+    // a copy of the user's and holds their real archive - and a restart check
+    // has no business destroying the thing it is checking the setting for.
+    transcriptArchiveMaxBytes: 4 * 1024 ** 3
   }
 
   const applied = await sendWrite(win, parked as Record<string, unknown>)

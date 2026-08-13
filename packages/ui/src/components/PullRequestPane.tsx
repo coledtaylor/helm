@@ -1,14 +1,18 @@
 import type { JSX, ReactNode } from 'react'
 import { Fragment, useEffect, useState } from 'react'
-import { MAX_FILE_LINES } from '@helm/core/types'
+import { anchorThreadsToFile, MAX_FILE_LINES } from '@helm/core/types'
 import type {
+  AnchoredThreads,
   PullDetailView,
   PullDiffHunk,
   PullFileStatus,
   PullFileView,
-  RenderedPullEntry
+  RenderedPullEntry,
+  RenderedPullThread,
+  ThreadLooseReason
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatMoment } from '../lib/time'
 import {
   CaretIcon,
@@ -37,21 +41,27 @@ import { fetchedCaption } from './PullsPane'
  * card sitting above some other pane's contents. The 8px gutters bought nothing
  * and cost two of them out of the reading width.
  *
- * Two limits are visible here and are worth knowing before reading the
- * conversation as complete. `gh --json` exposes issue-level comments and the
- * summary body of each review; the notes people leave on individual lines of
- * the diff are review-thread comments and do not appear in it at all. And a
- * review submitted with no summary shows as a verdict with no text, because
- * that is exactly what it is.
+ * The Conversation carries three things, merged into one chronology by main:
+ * the issue-level comments, each review's summary body, and the **threads left
+ * on individual lines of the diff**. The last of those comes from a second
+ * fetch - `gh api graphql` over `pullRequest.reviewThreads`, which is the only
+ * surface that exposes them - and is where most of a review's substance lives,
+ * so a review submitted with no summary is a verdict with no text *and* a run
+ * of threads beside it, rather than a verdict with nothing at all.
+ *
+ * A thread is **one entity** here, not n loose comments: a `path:line` header,
+ * its hunk as context, and the replies visibly subordinate to the note that
+ * started it. That is the whole reason it is not flattened into the entry list.
  *
  * Markdown arrives already rendered. The pipeline - remark, rehype, GitHub's
  * sanitize schema, shiki - runs in the main process, so what lands here is HTML
  * this pane injects and never evaluates. Same arrangement as the content
  * viewer, and for the same two reasons: the grammars are megabytes the browser
  * bundle must not carry, and one sanitiser on one side of the wire is easier to
- * be sure of than two. The **diff** is the exception and deliberately so - it
- * arrives as parsed rows and is painted as text, never as HTML, so no part of
- * somebody's branch can be markup on this surface.
+ * be sure of than two. The **diff is the exception** and deliberately so, and
+ * it is two things now rather than one: the Files view's parsed rows and a
+ * thread's `diffHunk`. Both are painted as text and never as HTML, so no part
+ * of somebody's branch can be markup on this surface.
  */
 
 export type PullView = 'conversation' | 'commits' | 'files'
@@ -229,7 +239,7 @@ export function PullRequestPane({
         ) : shown === 'commits' ? (
           <Commits view={view} now={now} compact={compact} />
         ) : (
-          <Files view={view} compact={compact} onOpenExternal={onOpenExternal} />
+          <Files view={view} now={now} compact={compact} onOpenExternal={onOpenExternal} />
         )}
       </div>
 
@@ -617,7 +627,7 @@ function Header({
               className={cn(
                 'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
                 shown === option.id
-                  ? 'bg-surface-raised text-fg ring-1 ring-border-strong'
+                  ? SEGMENT_ON
                   : 'text-fg-muted hover:text-fg'
               )}
             >
@@ -741,16 +751,282 @@ function Conversation({
           )}
         </Island>
 
-        {view.conversation.map((entry) => (
-          <Entry key={entry.id} entry={entry} now={now} onOpenExternal={onOpenExternal} />
-        ))}
+        {view.conversation.map((item) =>
+          item.kind === 'thread' ? (
+            <Thread key={item.id} thread={item} now={now} onOpenExternal={onOpenExternal} />
+          ) : (
+            <Entry key={item.id} entry={item} now={now} onOpenExternal={onOpenExternal} />
+          )
+        )}
 
-        {/* Said once, at the bottom, where somebody has just finished reading a
-            conversation that may be missing half of itself. */}
-        <Note>
-          Comments left on individual lines of the diff are not shown - the GitHub CLI&rsquo;s JSON
-          does not expose them. Open the pull request on GitHub to read those.
-        </Note>
+        {/* Said only when there is something to admit. The sentence that used to
+            live here unconditionally - "comments on individual lines are not
+            shown" - was true of a Helm that could not fetch them and is not
+            true of this one; a disclaimer left standing after the limit it
+            described was lifted is a surface lying about itself. What replaced
+            it is the honest residue: the three states in which the threads on
+            screen are not the threads GitHub has. */}
+        {view.threadsNote !== null && (
+          <Note>
+            <span data-pr-threads-note>{view.threadsNote}</span>
+            {/* The age of what is on screen, beside the reason - mandatory on
+                this surface rather than decorative, exactly as on the header
+                caption and for the same reason. */}
+            {view.threadsFetchedAtMs !== null && (
+              <>
+                {' '}
+                <span
+                  data-pr-threads-age
+                  className="tabular-nums"
+                  title={formatMoment(view.threadsFetchedAtMs)}
+                >
+                  {/* The list pane's own caption function, for the reason the
+                      header caption gives: two surfaces composing an age from
+                      the same `formatAge` drift into saying "fetched just now"
+                      and "fetched now ago", and this one did. */}
+                  {capitalise(fetchedCaption(view.threadsFetchedAtMs, now))}.
+                </span>
+              </>
+            )}
+          </Note>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// A review thread
+// ---------------------------------------------------------------------------
+
+/**
+ * One conversation about one line of the diff.
+ *
+ * The layout is the argument. A thread is a single entity - `path:line`, the
+ * hunk it was written against, and an exchange - so it is one card with one
+ * header, and the replies are indented under a hairline rather than stacked as
+ * peers. Rendering the comments as siblings of the issue-level ones is the
+ * shape this deliberately does not have: five people apparently talking past
+ * each other about a file nobody named.
+ *
+ * **Resolved threads start collapsed.** A resolved thread is a settled
+ * question, and a Conversation that opened forty of them at full height would
+ * bury the ones still open. Outdated ones do not collapse: outdated means the
+ * diff moved under it, not that anybody answered it.
+ */
+function Thread({
+  thread,
+  now,
+  onOpenExternal,
+  inDiff = false
+}: {
+  thread: RenderedPullThread
+  now: number
+  onOpenExternal: (url: string) => void
+  /**
+   * True when this is painted inside the diff it was written against.
+   *
+   * The `diffHunk` is then dropped, and the path with it. Both are context, and
+   * in the Files view the context is the rows immediately above - repeating it
+   * puts the same four lines on screen twice, six pixels apart, in the same
+   * mono at the same size. The line number stays: it is the one part that says
+   * *which* row of the ones above, and an outdated thread's is the only thing
+   * distinguishing "here" from "here, once".
+   */
+  inDiff?: boolean | undefined
+}): JSX.Element {
+  const [open, setOpen] = useState(!thread.isResolved)
+  const [first, ...replies] = thread.comments
+  // `line` is null on a thread GitHub no longer has a current position for,
+  // which is the normal state of an outdated one - so the original line is what
+  // is painted, and it is the honest number rather than a blank.
+  const line = thread.line ?? thread.originalLine
+
+  return (
+    <article
+      data-pr-thread={thread.id}
+      {...(open ? { 'data-pr-thread-open': '' } : {})}
+      data-pr-thread-comments={thread.comments.length}
+      className="overflow-hidden rounded-raised border border-border bg-surface-raised"
+    >
+      <button
+        type="button"
+        data-pr-thread-toggle={thread.id}
+        onClick={() => setOpen((was) => !was)}
+        aria-expanded={open}
+        title={line === null ? thread.path : `${thread.path}:${String(line)}`}
+        className="flex w-full items-center gap-2 border-b border-border px-3 py-1.5 text-left transition-colors hover:bg-hover"
+      >
+        <CaretIcon
+          width={11}
+          height={11}
+          className={cn('shrink-0 text-fg-subtle transition-transform', open && 'rotate-90')}
+        />
+
+        {/* A path and a line number are machine data, so they are mono
+            (DESIGN.md 2). The directory ellipsises and the file name does not,
+            the same call the Files view makes and for the same reason. */}
+        <span className="flex min-w-0 items-baseline font-mono text-[11px]">
+          {!inDiff && (
+            <>
+              <span className="min-w-0 truncate text-fg-subtle">{dirOf(thread.path)}</span>
+              <span className="shrink-0 text-fg">{baseOf(thread.path)}</span>
+            </>
+          )}
+          {line !== null && (
+            <span className={cn('shrink-0 tabular-nums', inDiff ? 'text-fg' : 'text-fg-subtle')}>
+              {inDiff ? 'line ' : ':'}
+              {line}
+            </span>
+          )}
+        </span>
+
+        {thread.isResolved && <Pill>resolved</Pill>}
+        {thread.isOutdated && <Pill>outdated</Pill>}
+
+        <span className="flex-1" />
+
+        <span className="shrink-0 text-[10.5px] text-fg-subtle">
+          {thread.comments.length} {thread.comments.length === 1 ? 'comment' : 'comments'}
+        </span>
+        {thread.at !== null && (
+          <Meta title={formatMoment(thread.at)}>{formatAge(thread.at, now)}</Meta>
+        )}
+      </button>
+
+      {open && (
+        <>
+          {!inDiff && <Hunk text={thread.diffHunk} />}
+          <div className="flex flex-col gap-2 px-3 py-2.5">
+            {first !== undefined && (
+              <ThreadComment comment={first} now={now} onOpenExternal={onOpenExternal} />
+            )}
+            {replies.length > 0 && (
+              // Indented behind a hairline: the replies belong to the note
+              // above them, and a stack of equal cards would say they do not.
+              <div className="flex flex-col gap-2 border-l border-border pl-3 ml-1">
+                {replies.map((reply) => (
+                  <ThreadComment
+                    key={reply.id}
+                    comment={reply}
+                    now={now}
+                    reply
+                    onOpenExternal={onOpenExternal}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </article>
+  )
+}
+
+/**
+ * The `@@` run a thread was written against, as context and not as the point.
+ *
+ * **Text, never HTML** - the same rule the Files view follows, and the one that
+ * matters most here: a `diffHunk` is a fragment of somebody's branch arriving
+ * from a stranger's pull request, and a surface that injected it would be a
+ * surface where a contributor chooses Helm's markup.
+ *
+ * Only the tail is painted. GitHub sends up to thirty lines of leading context
+ * and anchors the thread on the **last** of them, so the last few are the ones
+ * the note is about and the rest is a wall above it. What is cut is counted and
+ * said, like every other ceiling on this surface.
+ */
+function Hunk({ text }: { text: string }): JSX.Element | null {
+  if (text.trim() === '') return null
+  const lines = text.split('\n')
+  const shown = lines.slice(-HUNK_TAIL_LINES)
+  const hidden = lines.length - shown.length
+
+  return (
+    <div
+      data-pr-thread-hunk
+      className="border-b border-border bg-surface-sunken px-3 py-1.5 font-mono text-[10.5px] leading-[1.6]"
+    >
+      {hidden > 0 && (
+        <p className="text-fg-subtle/70">
+          {hidden} earlier {hidden === 1 ? 'line' : 'lines'} of context
+        </p>
+      )}
+      {shown.map((line, at) => (
+        <p
+          key={`${String(at)}:${line}`}
+          data-pr-thread-hunk-line={signOf(line)}
+          className={cn(
+            'break-all whitespace-pre-wrap select-text',
+            signOf(line) === 'add'
+              ? 'text-success'
+              : signOf(line) === 'del'
+                ? 'text-danger'
+                : // The `@@` line is the hunk's coordinates rather than any of
+                  // its code, dimmed for the reason the Files view puts its
+                  // header row on a different ground: read at the tone of the
+                  // lines it describes, the loudest thing in a block of
+                  // context is the one part of it nobody reads.
+                  signOf(line) === 'header'
+                  ? 'text-fg-subtle/70'
+                  : 'text-fg-muted'
+          )}
+        >
+          {line === '' ? ' ' : line}
+        </p>
+      ))}
+    </div>
+  )
+}
+
+/** How many trailing lines of a `diffHunk` are worth showing. */
+const HUNK_TAIL_LINES = 6
+
+/**
+ * What a raw hunk line's first character says it is.
+ *
+ * `@@` is checked before the signs and not after: a hunk header begins
+ * `@@ -12,5 +12,7 @@` and contains both, and a reading that took the first `+`
+ * it found would paint the coordinates as an added line.
+ */
+function signOf(line: string): 'add' | 'del' | 'context' | 'header' {
+  if (line.startsWith('@@')) return 'header'
+  if (line.startsWith('+')) return 'add'
+  if (line.startsWith('-')) return 'del'
+  return 'context'
+}
+
+/** One note on a thread: who, when, and what they wrote. */
+function ThreadComment({
+  comment,
+  now,
+  reply = false,
+  onOpenExternal
+}: {
+  comment: RenderedPullThread['comments'][number]
+  now: number
+  reply?: boolean
+  onOpenExternal: (url: string) => void
+}): JSX.Element {
+  const association = ASSOCIATION[comment.association]
+  return (
+    <div data-pr-thread-comment={comment.id} {...(reply ? { 'data-pr-thread-reply': '' } : {})}>
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span className="text-[11.5px] text-fg">
+          {comment.authorIsBot ? comment.author.replace(/^app\//, '') : comment.author}
+        </span>
+        {comment.authorIsBot && <Pill>bot</Pill>}
+        {association !== undefined && <Pill>{association}</Pill>}
+        {comment.createdAt !== null && (
+          <Meta title={formatMoment(comment.createdAt)}>{formatAge(comment.createdAt, now)}</Meta>
+        )}
+      </div>
+      <div className="mt-1">
+        {comment.html === '' ? (
+          <p className="text-[12px] text-fg-subtle italic">No text.</p>
+        ) : (
+          <Body html={comment.html} hook={comment.id} onOpenExternal={onOpenExternal} />
+        )}
       </div>
     </div>
   )
@@ -789,8 +1065,15 @@ function Entry({
       }
     >
       {entry.html === '' ? (
+        // A review with no summary body used to be a dead end and said so by
+        // pointing at GitHub. It is not one any more: what such a review
+        // consisted of is the diff-line threads, and they are on this page,
+        // merged into the same chronology - so the sentence names where they
+        // are rather than sending somebody away to find them.
         <p className="text-[12px] text-fg-subtle italic">
-          {entry.kind === 'review' ? 'No summary - see the review on GitHub.' : 'No text.'}
+          {entry.kind === 'review'
+            ? 'No summary - this review’s notes are on the diff threads.'
+            : 'No text.'}
         </p>
       ) : (
         <Body html={entry.html} hook={entry.id} onOpenExternal={onOpenExternal} />
@@ -853,6 +1136,11 @@ function Pill({ children }: { children: string }): JSX.Element {
 /** A closing sentence under a view: what this surface is not showing. */
 function Note({ children }: { children: ReactNode }): JSX.Element {
   return <p className="px-1 pt-1 text-[10.5px] leading-[1.6] text-fg-subtle">{children}</p>
+}
+
+/** `fetched 4m ago` -> `Fetched 4m ago`, for a caption that starts a sentence. */
+function capitalise(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 /**
@@ -966,10 +1254,27 @@ function Commits({
  * patch, on the grounds that half a diff viewer is worse than a link. What
  * changed the call is that the missing half turned out to be small: a patch is
  * text, `gh pr diff` hands over the whole of one, and the parts that made a
- * real diff viewer hard - syntax grammars, whitespace modes, review threads -
- * are all things this view deliberately still does not do. So it paints hunks
- * as plain rows and keeps the link out, which is where the review threads and
- * the blame still are.
+ * real diff viewer hard - syntax grammars, whitespace modes, side-by-side - are
+ * all things this view deliberately still does not do. So it paints hunks as
+ * plain rows and keeps the link out, which is where the blame still is.
+ *
+ * **Review threads are painted on the rows they were left against**, which is
+ * the last thing on that list to be crossed off. The join is
+ * `anchorThreadsToFile` in core, where the interesting decision lives: the
+ * threads and the patch come from two different `gh` calls seconds apart, so
+ * they are two views of a file that are not guaranteed to be the same file, and
+ * a thread whose line has gone is put at the foot of its file with the reason
+ * rather than dropped or guessed at.
+ *
+ * The thread renders **in place, under its row**, rather than the row growing a
+ * control that goes and finds it. DESIGN.md's rule is that a row does not carry
+ * its own actions, and its one exception - a control that changes which list
+ * the row is in - is not this; so rather than argue for a second exception, the
+ * comment is simply put where the comment is about. It is also the better
+ * answer: a marker that sent the reader to Conversation would cost them their
+ * place in the diff, which is the thing they came to the Files view for.
+ *
+ * The rows are still in Conversation, unchanged. This is a second way in.
  *
  * Each file is collapsible and starts open. Starting open because a Files tab
  * that opens as a list of shut drawers is the list this used to be, with an
@@ -978,10 +1283,12 @@ function Commits({
  */
 function Files({
   view,
+  now,
   compact,
   onOpenExternal
 }: {
   view: PullDetailView
+  now: number
   compact: boolean
   onOpenExternal: (url: string) => void
 }): JSX.Element {
@@ -989,6 +1296,18 @@ function Files({
   // Collapsed rather than expanded, so the default needs no seeding from the
   // file list and a refresh that adds a file does not reopen the whole tab.
   const [shut, setShut] = useState<ReadonlySet<string>>(() => new Set())
+
+  /**
+   * The threads, taken out of the chronology main already built.
+   *
+   * Out of `conversation` rather than off `detail.reviewThreads`, because these
+   * are the ones whose comment bodies have been rendered to HTML - the raw
+   * threads carry markdown, and a second rendering path on this side is a
+   * second place for the sanitiser to be got wrong.
+   */
+  const threads = view.conversation.filter(
+    (item): item is RenderedPullThread => item.kind === 'thread'
+  )
 
   if (files.length === 0) return <Nothing>No changed files.</Nothing>
 
@@ -1019,6 +1338,9 @@ function Files({
           <FileCard
             key={file.path}
             file={file}
+            threads={anchorThreadsToFile(file.path, file, threads)}
+            now={now}
+            onOpenExternal={onOpenExternal}
             open={!shut.has(file.path)}
             onToggle={() => toggle(file.path)}
           />
@@ -1031,14 +1353,26 @@ function Files({
           <span className="font-mono tabular-nums text-success">+{additions}</span>{' '}
           <span className="font-mono tabular-nums text-danger">&#8722;{deletions}</span>
           {' · '}
-          Review threads on these lines live on GitHub -{' '}
+          {/* Never "no comments on this diff". `threadsNote` is the sentence for
+              a pull request cached before Helm fetched threads at all and for a
+              thread query that failed, and an absent key must read as "not
+              fetched" rather than as "nobody said anything" - the same rule
+              this surface follows for a missing patch. When it is null the
+              threads on screen are the threads GitHub has, and the only thing
+              left to offer is the diff itself. */}
+          {view.threadsNote !== null ? (
+            <span data-pr-files-threads-note>{view.threadsNote} </span>
+          ) : (
+            <>Comments are on their lines above, and in Conversation. </>
+          )}
+          Also{' '}
           <button
             type="button"
             data-pr-diff-external
             onClick={() => onOpenExternal(`${view.summary.url}/files`)}
             className="rounded text-accent-text underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
           >
-            open them there
+            in the diff on GitHub
           </button>
           .
         </Note>
@@ -1057,10 +1391,16 @@ const STATUS_LABEL: Record<PullFileStatus, string> = {
 
 function FileCard({
   file,
+  threads,
+  now,
+  onOpenExternal,
   open,
   onToggle
 }: {
   file: PullFileView
+  threads: AnchoredThreads<RenderedPullThread>
+  now: number
+  onOpenExternal: (url: string) => void
   open: boolean
   onToggle: () => void
 }): JSX.Element {
@@ -1146,8 +1486,80 @@ function FileCard({
         </div>
       )}
 
-      {hasPatch ? open && <Patch hunks={file.hunks} dropped={file.droppedLines} /> : <NoPatch file={file} />}
+      {hasPatch ? (
+        open && (
+          <Patch
+            hunks={file.hunks}
+            dropped={file.droppedLines}
+            byLine={threads.byLine}
+            now={now}
+            onOpenExternal={onOpenExternal}
+          />
+        )
+      ) : (
+        <NoPatch file={file} />
+      )}
+
+      {/* Threads with nowhere to sit, at the foot of the file they belong to.
+          Outside the `open` gate on purpose: a collapsed file is a file the
+          reader has decided not to read the diff of, and hiding a comment
+          behind that decision is the silent drop this is here to avoid. */}
+      {threads.loose.length > 0 && (
+        <LooseThreads loose={threads.loose} now={now} onOpenExternal={onOpenExternal} />
+      )}
     </article>
+  )
+}
+
+/** How a thread that could not be put on a row is explained. */
+const LOOSE_WHY: Record<ThreadLooseReason, string> = {
+  // Said as a fact about the comment rather than as an error, because it is
+  // not one: this is what happens to a remark about a line somebody has since
+  // rewritten, and the thread is usually already flagged `outdated`.
+  'outside-the-patch': 'on a line that is not in this diff',
+  'no-line': 'no longer attached to a line'
+}
+
+/**
+ * The threads this file has that no row of it could carry.
+ *
+ * They are shown, always, and with the reason. A comment that exists and is not
+ * painted is the exact bug the thread fetch was written to fix, and doing it
+ * again here because a line number moved would be the same bug with a better
+ * excuse. The alternative considered and rejected was anchoring each to the
+ * nearest surviving hunk: that is a guess wearing the appearance of precision,
+ * and nothing on screen would tell the reader which rows were guesses.
+ *
+ * These keep their `diffHunk` and their path, where the anchored ones drop
+ * both. Neither is redundant here: there is no row above to be the context, so
+ * the hunk is the only record of what was being talked about, and the path can
+ * legitimately differ from the card's - a thread written before a rename
+ * carries the name the file used to have.
+ */
+function LooseThreads({
+  loose,
+  now,
+  onOpenExternal
+}: {
+  loose: AnchoredThreads<RenderedPullThread>['loose']
+  now: number
+  onOpenExternal: (url: string) => void
+}): JSX.Element {
+  return (
+    <div data-pr-file-loose={loose.length} className="border-t border-border px-3 py-2">
+      <p className="pb-1.5 text-[10.5px] text-fg-subtle">
+        {loose.length} {loose.length === 1 ? 'comment' : 'comments'} on this file that the diff
+        above has no row for.
+      </p>
+      <div className="flex flex-col gap-1.5">
+        {loose.map(({ thread, why }) => (
+          <div key={thread.id} data-pr-loose-thread={why}>
+            <p className="pb-1 text-[10.5px] text-fg-subtle">{LOOSE_WHY[why]}</p>
+            <Thread thread={thread} now={now} onOpenExternal={onOpenExternal} />
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -1177,7 +1589,19 @@ function NoPatch({ file }: { file: PullFileView }): JSX.Element {
  * reading a diff into operating one, and the pane is often docked at half
  * width where nothing would fit anyway.
  */
-function Patch({ hunks, dropped }: { hunks: PullDiffHunk[]; dropped: number }): JSX.Element {
+function Patch({
+  hunks,
+  dropped,
+  byLine,
+  now,
+  onOpenExternal
+}: {
+  hunks: PullDiffHunk[]
+  dropped: number
+  byLine: AnchoredThreads<RenderedPullThread>['byLine']
+  now: number
+  onOpenExternal: (url: string) => void
+}): JSX.Element {
   return (
     <div className="border-t border-border font-mono text-[11px] leading-[1.6]">
       {hunks.map((hunk, at) => (
@@ -1191,29 +1615,68 @@ function Patch({ hunks, dropped }: { hunks: PullDiffHunk[]; dropped: number }): 
             </span>
           </div>
 
-          {hunk.lines.map((line, index) => (
-            <div
-              key={`${String(at)}:${String(index)}`}
-              data-pr-diff-line={line.kind}
-              className={cn(
-                'flex pl-2',
-                line.kind === 'add' && 'bg-success/[.08]',
-                line.kind === 'del' && 'bg-danger/[.08]'
-              )}
-            >
-              <Gutter>{line.oldLine}</Gutter>
-              <Gutter>{line.newLine}</Gutter>
-              <Sign kind={line.kind} />
-              <span
-                className={cn(
-                  'min-w-0 flex-1 py-[1px] pr-3 break-all whitespace-pre-wrap select-text',
-                  line.kind === 'context' ? 'text-fg-muted' : 'text-fg'
+          {hunk.lines.map((line, index) => {
+            const onThisLine = line.newLine === null ? undefined : byLine.get(line.newLine)
+            return (
+              <Fragment key={`${String(at)}:${String(index)}`}>
+                <div
+                  data-pr-diff-line={line.kind}
+                  {...(onThisLine ? { 'data-pr-line-threads': onThisLine.length } : {})}
+                  className={cn(
+                    'relative flex pl-2',
+                    line.kind === 'add' && 'bg-success/[.08]',
+                    line.kind === 'del' && 'bg-danger/[.08]'
+                  )}
+                >
+                  {/* The marker: the accent edge a selected row wears, on a row
+                      somebody wrote about. Information and not a control - it
+                      takes no pointer, no focus and no click, because the thing
+                      it announces is rendered directly underneath it and there
+                      is nowhere for a click to usefully go. That is what keeps
+                      this inside DESIGN.md's rule rather than needing a second
+                      exception to it. */}
+                  {onThisLine && (
+                    <span
+                      aria-hidden
+                      className="absolute inset-y-0 left-0 w-[2px] rounded-full bg-accent"
+                    />
+                  )}
+                  <Gutter>{line.oldLine}</Gutter>
+                  <Gutter>{line.newLine}</Gutter>
+                  <Sign kind={line.kind} />
+                  <span
+                    className={cn(
+                      'min-w-0 flex-1 py-[1px] pr-3 break-all whitespace-pre-wrap select-text',
+                      line.kind === 'context' ? 'text-fg-muted' : 'text-fg'
+                    )}
+                  >
+                    {line.text}
+                  </span>
+                </div>
+
+                {/* Out of the mono grid the diff is set in: a thread is prose
+                    and the rows around it are code, and a comment set at 11px
+                    monospace reads as more diff. Inset so the rows still run
+                    edge to edge and the exchange is visibly hung off one. */}
+                {onThisLine && (
+                  <div
+                    data-pr-line-thread-block={line.newLine ?? undefined}
+                    className="flex flex-col gap-1.5 border-y border-border bg-surface px-3 py-2 font-sans text-[12px] leading-normal"
+                  >
+                    {onThisLine.map((thread) => (
+                      <Thread
+                        key={thread.id}
+                        thread={thread}
+                        now={now}
+                        onOpenExternal={onOpenExternal}
+                        inDiff
+                      />
+                    ))}
+                  </div>
                 )}
-              >
-                {line.text}
-              </span>
-            </div>
-          ))}
+              </Fragment>
+            )
+          })}
         </Fragment>
       ))}
 

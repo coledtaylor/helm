@@ -1,13 +1,16 @@
 import type { JSX, ReactNode } from 'react'
 import { useMemo, useState } from 'react'
 import type { DiscoveryResult, Harness, Project } from '@helm/core'
+import { isProjectPinned } from '@helm/core/types'
 import { cn } from '../lib/cn'
-import { ProjectRow } from './ProjectRow'
+import { ROW_SELECTED } from '../lib/rows'
+import { baseName, MissingProjectRow, ProjectRow } from './ProjectRow'
 import {
   BookIcon,
   CaretIcon,
   HarnessIcon,
   HistoryIcon,
+  PinIcon,
   PlusIcon,
   PullRequestIcon,
   RefreshIcon,
@@ -49,8 +52,29 @@ export interface SidebarProps {
   scanning: boolean
   scanError?: string | undefined
   selectedPath: string | null
-  /** Lower-cased project paths with a running session - the green dots. */
-  livePaths?: ReadonlySet<string> | undefined
+  /**
+   * Lower-cased project path -> what the sessions running there are called: the
+   * green dots, and the names behind them.
+   *
+   * A map rather than the set of paths this used to be, because the dot is the
+   * one place the tree admits a session exists and "a session is running here"
+   * is no answer at all once three of them are. The names come from the caller
+   * already resolved through `sessionLabel`, so a session renamed in the strip
+   * is renamed here too rather than in one place out of two.
+   */
+  liveSessions?: ReadonlyMap<string, readonly string[]> | undefined
+  /**
+   * `pinnedProjects`, straight off the settings. Projects only - a harness is
+   * not pinnable, and nothing here offers to make one so.
+   *
+   * Required rather than optional, unlike the pane entry points above: those
+   * are features a sidebar can be built without, and this one is a rule about
+   * where every project row is drawn. A caller that forgot it would silently
+   * print pinned projects back inside their harness groups.
+   */
+  pinnedPaths: readonly string[]
+  /** Star pressed. The caller owns the list; this only says which path moved. */
+  onTogglePin: (path: string) => void
   onSelect: (project: Project) => void
   onRescan: () => void
   onAddRoot: () => void
@@ -69,7 +93,56 @@ interface Group {
   members: Project[]
 }
 
-function groupProjects(discovery: DiscoveryResult | null): Group[] {
+/**
+ * One entry of the Pinned section: the path that was pinned, and the project
+ * discovery found at it - or null, for a path that no longer resolves.
+ */
+interface Pin {
+  path: string
+  project: Project | null
+  /** What the row is called and what the section sorts by. */
+  name: string
+}
+
+/**
+ * The pinned paths, resolved against the current scan.
+ *
+ * Flat and cross-harness on purpose: escaping the grouping is the whole point,
+ * so this is one list however many harnesses the projects came out of. Sorted
+ * by **name** rather than by path, which is where it differs from the stored
+ * value - a list ordered by path is a list ordered by harness, which is the
+ * arrangement the section exists to get out of.
+ *
+ * A path with nothing behind it keeps its place. Discovery does not return a
+ * directory that is not there, and dropping the row would turn "this drive is
+ * not plugged in" into "your pin is gone".
+ */
+function resolvePins(discovery: DiscoveryResult | null, pinned: readonly string[]): Pin[] {
+  const byPath = new Map<string, Project>()
+  for (const project of discovery?.projects ?? []) byPath.set(project.path.toLowerCase(), project)
+
+  return pinned
+    .map((path) => {
+      const project = byPath.get(path.toLowerCase()) ?? null
+      return { path, project, name: project?.name ?? baseName(path) }
+    })
+    .sort(
+      (a, b) =>
+        a.name.toLowerCase().localeCompare(b.name.toLowerCase()) ||
+        a.path.toLowerCase().localeCompare(b.path.toLowerCase())
+    )
+}
+
+/**
+ * The harness tree, with the pinned projects taken out of it.
+ *
+ * Taken out rather than marked: a pinned project printed in both places is two
+ * rows for one project, which is the thing a section for the ones you actually
+ * open cannot afford. The comparison is `isProjectPinned`'s, which is the same
+ * `toLowerCase` the harness map below keys on - one normalisation, so the
+ * section and the group it lifts a project out of cannot disagree.
+ */
+function groupProjects(discovery: DiscoveryResult | null, pinned: readonly string[]): Group[] {
   if (!discovery) return []
 
   const byHarness = new Map<string, Group>()
@@ -85,6 +158,7 @@ function groupProjects(discovery: DiscoveryResult | null): Group[] {
   }
 
   for (const project of discovery.projects) {
+    if (isProjectPinned(pinned, project.path)) continue
     if (project.harnessPath === null) {
       loose.push(project)
       continue
@@ -105,10 +179,22 @@ function groupProjects(discovery: DiscoveryResult | null): Group[] {
   return groups
 }
 
-function matches(project: Project, query: string): boolean {
+/**
+ * The filter, as one predicate over a name and a path.
+ *
+ * Taken apart from `matches` so the Pinned section can use the same one: a
+ * pinned row whose folder has gone has a path and a basename and no `Project`,
+ * and a section that ignored the filter would leave rows on screen under a
+ * query that excludes them.
+ */
+function matchesText(name: string, path: string, query: string): boolean {
   if (query === '') return true
   const needle = query.toLowerCase()
-  return project.name.toLowerCase().includes(needle) || project.path.toLowerCase().includes(needle)
+  return name.toLowerCase().includes(needle) || path.toLowerCase().includes(needle)
+}
+
+function matches(project: Project, query: string): boolean {
+  return matchesText(project.name, project.path, query)
 }
 
 export function Sidebar({
@@ -128,7 +214,9 @@ export function Sidebar({
   scanning,
   scanError,
   selectedPath,
-  livePaths,
+  liveSessions,
+  pinnedPaths,
+  onTogglePin,
   onSelect,
   onRescan,
   onAddRoot,
@@ -139,7 +227,8 @@ export function Sidebar({
   // open, so a harness discovered after this render starts expanded rather than
   // hidden behind a key nothing has written yet.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
-  const groups = useMemo(() => groupProjects(discovery), [discovery])
+  const groups = useMemo(() => groupProjects(discovery, pinnedPaths), [discovery, pinnedPaths])
+  const pins = useMemo(() => resolvePins(discovery, pinnedPaths), [discovery, pinnedPaths])
 
   const filtered = useMemo(
     () =>
@@ -155,8 +244,20 @@ export function Sidebar({
     [groups, query]
   )
 
+  // Filtered like any other row. A section that ignored the query would sit
+  // above the tree still showing what the query just excluded.
+  const shownPins = useMemo(
+    () => pins.filter((pin) => matchesText(pin.name, pin.path, query)),
+    [pins, query]
+  )
+
   const total = discovery?.projects.length ?? 0
-  const shown = filtered.reduce((n, g) => n + g.members.length + (g.root ? 1 : 0), 0)
+  // Both counts are about projects discovery found, so a pinned path that no
+  // longer resolves is in neither - it is a row on screen and not a project in
+  // the tree. The Pinned heading carries its own count, which does include it.
+  const shown =
+    filtered.reduce((n, g) => n + g.members.length + (g.root ? 1 : 0), 0) +
+    shownPins.filter((pin) => pin.project !== null).length
   const harnessCount = discovery?.harnesses.length ?? 0
 
   const toggle = (key: string): void =>
@@ -278,29 +379,77 @@ export function Sidebar({
           </p>
         )}
 
+        {/* Above the groups, because the point of a pin is not to have to find
+            the harness first. Not a collapsible group and deliberately not
+            shaped like one: no caret, and the label sits at `fg-subtle` where a
+            harness header sits at `fg`. A section that looked like a harness
+            would be a section that reads as a pinnable harness, and harnesses
+            are not pinnable. */}
+        {shownPins.length > 0 && (
+          <section data-pinned-section className="mb-1">
+            <div className="flex items-center gap-1.5 px-2 py-1.5">
+              <PinIcon width={9} height={9} className="shrink-0 text-fg-subtle" />
+              <span className="text-[10.5px] leading-[13px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
+                Pinned
+              </span>
+              <span className="text-[9.5px] leading-[13px] tabular-nums text-fg-subtle">
+                {shownPins.length}
+              </span>
+            </div>
+
+            <div className="pl-1.5">
+              {shownPins.map((pin) =>
+                pin.project === null ? (
+                  <MissingProjectRow key={pin.path} path={pin.path} onTogglePin={onTogglePin} />
+                ) : (
+                  <ProjectRow
+                    key={pin.path}
+                    project={pin.project}
+                    pinned
+                    selected={pin.project.path === selectedPath}
+                    liveNames={liveSessions?.get(pin.project.path.toLowerCase())}
+                    onSelect={onSelect}
+                    onTogglePin={(project) => onTogglePin(project.path)}
+                  />
+                )
+              )}
+            </div>
+          </section>
+        )}
+
         {filtered.length === 0 ? (
-          <EmptyState
-            scanning={scanning}
-            filtering={query !== '' && total > 0}
-            hasRoots={(discovery?.roots.length ?? 0) > 0}
-            onAddRoot={onAddRoot}
-          />
+          shownPins.length === 0 && (
+            <EmptyState
+              scanning={scanning}
+              filtering={query !== '' && total > 0}
+              hasRoots={(discovery?.roots.length ?? 0) > 0}
+              onAddRoot={onAddRoot}
+            />
+          )
         ) : (
           filtered.map((group, index) => {
+            // Sessions, not projects-with-a-session. The count's own tooltip has
+            // always said "N sessions running here", and with the labels in hand
+            // it can be that rather than an undercount of it.
             const live = group.members
               .concat(group.root ? [group.root] : [])
-              .filter((p) => livePaths?.has(p.path.toLowerCase()) ?? false).length
+              .reduce((n, p) => n + (liveSessions?.get(p.path.toLowerCase())?.length ?? 0), 0)
             return (
               <HarnessGroup
                 key={group.key}
                 group={group}
-                first={index === 0}
+                // The rule the divider follows is "not first on screen", so a
+                // Pinned section above takes the first group's exemption with
+                // it - otherwise the section's own rule and the group's are two
+                // hairlines with nothing between them.
+                first={index === 0 && shownPins.length === 0}
                 expanded={isExpanded(group.key)}
                 running={live}
                 onToggle={() => toggle(group.key)}
                 selectedPath={selectedPath}
                 onSelect={onSelect}
-                {...(livePaths ? { livePaths } : {})}
+                onTogglePin={onTogglePin}
+                {...(liveSessions ? { liveSessions } : {})}
               />
             )
           })
@@ -316,6 +465,13 @@ export function Sidebar({
  * The header is a label and a disclosure, not a project: the harness root is
  * still listed as the first row inside, because it is a directory a session can
  * start in and losing that would cost a capability to gain a tidier tree.
+ *
+ * It carries no star, and that is the decision rather than an omission. Only
+ * projects are pinnable: a pinned harness is very nearly the collapse state
+ * this header already has, and one pin kind means there is no rule to invent
+ * for a pinned project inside a pinned harness. The harness *root* is a project
+ * and does have one - it is a directory a session starts in, like any other row
+ * in here.
  */
 function HarnessGroup({
   group,
@@ -324,8 +480,9 @@ function HarnessGroup({
   running,
   onToggle,
   selectedPath,
-  livePaths,
-  onSelect
+  liveSessions,
+  onSelect,
+  onTogglePin
 }: {
   group: Group
   first: boolean
@@ -333,8 +490,9 @@ function HarnessGroup({
   running: number
   onToggle: () => void
   selectedPath: string | null
-  livePaths?: ReadonlySet<string> | undefined
+  liveSessions?: ReadonlyMap<string, readonly string[]> | undefined
   onSelect: (project: Project) => void
+  onTogglePin: (path: string) => void
 }): JSX.Element {
   const name = group.harness?.name ?? 'Folders'
   const count = group.members.length + (group.root ? 1 : 0)
@@ -377,8 +535,9 @@ function HarnessGroup({
             <ProjectRow
               project={group.root}
               selected={group.root.path === selectedPath}
-              live={livePaths?.has(group.root.path.toLowerCase()) ?? false}
+              liveNames={liveSessions?.get(group.root.path.toLowerCase())}
               onSelect={onSelect}
+              onTogglePin={(project) => onTogglePin(project.path)}
             />
           )}
           {group.members.map((project) => (
@@ -386,8 +545,9 @@ function HarnessGroup({
               key={project.path}
               project={project}
               selected={project.path === selectedPath}
-              live={livePaths?.has(project.path.toLowerCase()) ?? false}
+              liveNames={liveSessions?.get(project.path.toLowerCase())}
               onSelect={onSelect}
+              onTogglePin={(p) => onTogglePin(p.path)}
             />
           ))}
         </div>
@@ -425,7 +585,7 @@ function GlobalLink({
       title={title}
       className={cn(
         'flex w-full items-center gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
-        active ? 'bg-accent-soft' : 'hover:bg-hover'
+        active ? ROW_SELECTED : 'hover:bg-hover'
       )}
       {...rest}
     >

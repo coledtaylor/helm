@@ -30,14 +30,43 @@ if (pids.length === 0) {
   process.exit(1)
 }
 
-const alive = pids.filter((pid) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-})
+const living = () =>
+  pids.filter((pid) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  })
+
+/**
+ * How long a tree gets to finish dying before it counts as orphaned.
+ *
+ * Sampled once, immediately, this raced the operating system and said so: a run
+ * reported "1 process(es) outlived the app" and then printed **no name for it**,
+ * because between `process.kill(pid, 0)` succeeding and the `Get-Process` that
+ * would have named it, the process had gone. It was not an orphan. It was a
+ * process the app had already told to die, a few milliseconds from being reaped.
+ *
+ * The criterion is that quitting the app does not *leave* processes behind, and
+ * a tree that is gone a moment later has not been left behind - `before-quit`
+ * ended it and Windows took its time. An orphan is one that is still there when
+ * nothing is coming to collect it, so the question is asked over an interval
+ * rather than at an instant.
+ *
+ * Ten seconds, and the elapsed time is printed on success: a run that starts
+ * needing eight of them is a regression this would otherwise hide, and the
+ * number is the only thing that would show it.
+ */
+const GRACE_MS = 10_000
+const startedAt = Date.now()
+let alive = living()
+while (alive.length > 0 && Date.now() - startedAt < GRACE_MS) {
+  await new Promise((resolve) => setTimeout(resolve, 250))
+  alive = living()
+}
+const tookMs = Date.now() - startedAt
 
 if (alive.length > 0) {
   // Name them: "3 pids survived" is not something anyone can act on.
@@ -59,8 +88,13 @@ if (alive.length > 0) {
       // Fall back to the bare pid list.
     }
   }
-  console.error(`FAIL  SESS-9  ${alive.length} process(es) outlived the app:\n${detail}`)
+  console.error(
+    `FAIL  SESS-9  ${alive.length} process(es) outlived the app by more than ${String(GRACE_MS)}ms:\n${detail}`
+  )
   process.exit(1)
 }
 
-console.log(`PASS  SESS-9  all ${pids.length} session process(es) died with the app`)
+console.log(
+  `PASS  SESS-9  all ${pids.length} session process(es) died with the app` +
+    ` (last one gone ${String(tookMs)}ms after it exited)`
+)

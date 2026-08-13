@@ -53,6 +53,78 @@ const checks = []
 
 const say = (line) => console.log(line)
 
+const repoRoot = resolve(desktopDir, '..', '..')
+
+/**
+ * Everything the packaged artefacts are built out of.
+ *
+ * The three source trees, the manifest that carries the version and the
+ * dependency list, the electron-builder configuration, the script that drives
+ * it, and the lockfile. Written out rather than derived from `git ls-files` so
+ * that an uncommitted edit counts too - the question is what is on disk, not
+ * what has been committed.
+ */
+const PACKAGE_INPUTS = [
+  join(repoRoot, 'packages', 'core', 'src'),
+  join(repoRoot, 'packages', 'ui', 'src'),
+  join(desktopDir, 'src'),
+  join(desktopDir, 'package.json'),
+  join(desktopDir, 'electron-builder.yml'),
+  join(desktopDir, 'scripts', 'dist-win.mjs'),
+  join(repoRoot, 'pnpm-lock.yaml')
+]
+
+/**
+ * The newest **file** mtime under a path, and the file carrying it.
+ *
+ * Directories are walked but never timed, and that is the whole of the care
+ * needed here. A directory's mtime moves whenever an entry is added or removed
+ * inside it, which has nothing to do with whether its contents went into the
+ * package - and `electron-vite build`, which runs at the head of every
+ * `packaging-check`, moves several of them. Timing directories made the rule
+ * self-fulfilling: build, watch the build touch a source directory, decide the
+ * source is newer than the artefact just written, rebuild. Measured with the
+ * first cut of this: `packages/core/src` stamped 15:17:34 against a setup.exe
+ * written at 15:17:00, while the newest file under it was from 14:41.
+ */
+function newestUnder(path) {
+  let stat
+  try {
+    stat = statSync(path)
+  } catch {
+    return null
+  }
+  if (!stat.isDirectory()) return { path, mtimeMs: stat.mtimeMs }
+
+  let best = null
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    const found = newestUnder(join(path, entry.name))
+    if (found && (best === null || found.mtimeMs > best.mtimeMs)) best = found
+  }
+  return best
+}
+
+/**
+ * The source file newer than the oldest artefact, or null if none is.
+ *
+ * Compared against the *oldest* of them, because both have to be current: a
+ * portable exe rebuilt on its own would otherwise vouch for a stale installer.
+ */
+function newerThanArtefacts(artefacts) {
+  const times = artefacts.map((file) => (existsSync(file) ? statSync(file).mtimeMs : 0))
+  const oldest = Math.min(...times)
+  if (oldest === 0) return null // missing; the caller builds anyway
+
+  let newest = null
+  for (const input of PACKAGE_INPUTS) {
+    const found = newestUnder(input)
+    if (found && found.mtimeMs > oldest && (newest === null || found.mtimeMs > newest.mtimeMs)) {
+      newest = found
+    }
+  }
+  return newest === null ? null : newest.path.slice(repoRoot.length + 1)
+}
+
 // ---------------------------------------------------------------------------
 // Phase 1: this machine
 // ---------------------------------------------------------------------------
@@ -164,7 +236,26 @@ if (wants('package')) {
   const portableExe = join(distDir, `Helm-${version}-portable.exe`)
   const setupExe = join(distDir, `Helm-${version}-setup.exe`)
 
-  if (!existsSync(portableExe) || !existsSync(setupExe)) {
+  /**
+   * Build if the artefacts are missing **or older than the source**.
+   *
+   * Existence alone was the test, and it is not one. The artefact is named for
+   * the version - `Helm-0.2.3-setup.exe` - and the version does not move
+   * between commits, so once a package exists any number of commits can land
+   * behind it while this phase goes on installing the old one and reporting
+   * green. Measured: a run of this phase installed a package built 22 minutes
+   * before the commit that fixed this very script, and PKG-2 passed. This is
+   * the only check that proves the installer works, and it was proving it
+   * about a build nobody had asked about.
+   *
+   * The dependency is a `make` rule and nothing cleverer: newer source than
+   * artefact means rebuild. `out/` is deliberately not in the set - the
+   * `electron-vite build` at the head of every run rewrites it, so comparing
+   * against it would mean rebuilding the installer every time.
+   */
+  const stale = newerThanArtefacts([portableExe, setupExe])
+  if (!existsSync(portableExe) || !existsSync(setupExe) || stale !== null) {
+    if (stale !== null) say(`${stale} is newer than the packaged artefacts; rebuilding.`)
     say('building (electron-builder --win); this takes a few minutes...')
     const built = spawnSync('pnpm', ['run', 'dist:win'], {
       cwd: desktopDir,
@@ -367,6 +458,49 @@ function installerChecks(setupExe) {
     say(`(an existing install at ${installDir} is being replaced by this run)`)
   }
 
+  /**
+   * Stop if the installed Helm is **running**.
+   *
+   * This phase kills it (`endInstalledApp`) and uninstalls it at the end, and
+   * puts nothing back. Every other check in this repository gets its own data
+   * directory precisely because `%APPDATA%\Helm` is "the app somebody is using
+   * while the check runs"; this one cannot be isolated - it is *about* where an
+   * installer puts things - so the same care has to be taken here, out loud,
+   * rather than assumed.
+   *
+   * It was assumed, and it cost: this ran inside a `pnpm packaging-check` in a
+   * sweep of every check, killed the installed Helm, and took the Claude Code
+   * session somebody was working in down with it - then uninstalled the app, so
+   * it had to be put back by hand. Helm **hosts sessions**. Terminating it is
+   * not like terminating an editor with everything saved.
+   *
+   * A running instance is therefore a refusal and not a warning. `--replace-running`
+   * is the way to say it on purpose, which is what a release build does on a
+   * machine where nobody is working.
+   */
+  const running = countInstalledProcesses(installDir)
+  if (running > 0 && !process.argv.includes('--replace-running')) {
+    say('')
+    say(`FAIL  PKG-2  ${String(running)} Helm process(es) are running from ${installDir}.`)
+    say('This phase terminates the installed app, uninstalls it, and does not put it back.')
+    say('Helm hosts Claude Code sessions, so that ends whatever is running in them.')
+    say('Close it and run this again, or pass --replace-running if that is what you want.')
+    return [
+      {
+        id: 'PKG-2',
+        criterion:
+          'NSIS installer installs per-user without elevation, the installed app launches and passes the same smoke checks, app data lands in %APPDATA%, and uninstall removes it cleanly',
+        title: `Refused: ${String(running)} process(es) are running from the install directory`,
+        ok: false,
+        detail: { installDir, running, remedy: 'close the installed Helm, or pass --replace-running' },
+        notes: [
+          'Not a failure of the installer. This phase would have uninstalled an app somebody',
+          'is using, which it has done once already - see the comment at this guard.'
+        ]
+      }
+    ]
+  }
+
   say('installing silently, as the current user...')
   const elevated = isElevated()
   spawnSync(setupExe, ['/S'], { stdio: 'inherit', timeout: 300_000 })
@@ -553,30 +687,73 @@ function waitForFile(path, timeoutMs) {
  * processes to actually be gone, because the uninstall that follows cannot
  * remove files a live process still holds.
  */
+/**
+ * A Windows path as a PowerShell **string literal**.
+ *
+ * `JSON.stringify` is not that, and the difference is not cosmetic. It doubles
+ * every backslash, and a PowerShell double-quoted string does not undo that -
+ * backslash is not PowerShell's escape character, backtick is. So a path went
+ * across as `"C:\\Users\\user\\..."`, a literal path with doubled separators,
+ * and `StartsWith` on it was false for every process on the machine.
+ *
+ * What that silently did: `endInstalledApp` matched nothing and killed nothing,
+ * `stillRunning()` answered "no" without ever having looked, and the phase then
+ * installed and uninstalled **over a running Helm**. Measured on this machine -
+ * the JSON form returns 0 and this one returns 4, with the app plainly open. It
+ * took down a Claude Code session somebody was working in.
+ *
+ * Single quotes, because a PowerShell single-quoted string is literal: only `'`
+ * needs escaping, by doubling, and a backslash is just a backslash.
+ *
+ * A `function` and not a `const` arrow, which is not a style preference. This
+ * module *runs* its phases on the way down - `installerChecks` is called around
+ * line 182 - and everything it calls therefore has to be hoisted. Written as a
+ * `const` it sat in the temporal dead zone, and the first thing phase 3 did was
+ * throw `Cannot access 'psLiteral' before initialization` out of the guard that
+ * exists to keep this phase from uninstalling an app somebody is working in.
+ *
+ * That is twice now that this guard has been wrong, and both times because it
+ * had never been run: a branch that refuses only when Helm is open is a branch
+ * nobody takes on the machine that wrote it. It is the code here most worth
+ * exercising deliberately and the least likely to be exercised by accident.
+ */
+function psLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`
+}
+
+/**
+ * How many Helm processes are running out of `installDir`.
+ *
+ * Matched by **executable path**, not image name, so a portable build or a
+ * `pnpm dev` running from elsewhere on this machine is not counted - the
+ * question is only ever about the installed one.
+ */
+function countInstalledProcesses(installDir) {
+  const probe = spawnSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `@(Get-CimInstance Win32_Process -Filter "Name = 'Helm.exe'" | ` +
+        `Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith(${psLiteral(installDir)}) }).Count`
+    ],
+    { encoding: 'utf8', timeout: 60_000 }
+  )
+  return Number((probe.stdout ?? '0').trim()) || 0
+}
+
 function endInstalledApp(installDir) {
   const script =
     `Get-CimInstance Win32_Process -Filter "Name = 'Helm.exe'" | ` +
-    `Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith(${JSON.stringify(installDir)}) } | ` +
+    `Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith(${psLiteral(installDir)}) } | ` +
     `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`
   spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
     stdio: 'ignore',
     timeout: 60_000
   })
 
-  const stillRunning = () => {
-    const probe = spawnSync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `@(Get-CimInstance Win32_Process -Filter "Name = 'Helm.exe'" | ` +
-          `Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith(${JSON.stringify(installDir)}) }).Count`
-      ],
-      { encoding: 'utf8', timeout: 60_000 }
-    )
-    return Number((probe.stdout ?? '0').trim()) > 0
-  }
+  const stillRunning = () => countInstalledProcesses(installDir) > 0
 
   const deadline = Date.now() + 30_000
   while (Date.now() < deadline && stillRunning()) sleepSync(500)

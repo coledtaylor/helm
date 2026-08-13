@@ -150,15 +150,22 @@ it, and otherwise stays out of the way.
 
 There is no auto-updater, on purpose - see
 [docs/PACKAGING.md](docs/PACKAGING.md) for the three reasons. What Helm does
-instead is *tell* you: once per launch, and at most once a day, it asks GitHub
-whether a newer release exists and puts a line beside the version in the status
-bar when there is one. Clicking it opens the releases page. Helm downloads
-nothing, replaces nothing and restarts nothing - getting the new version is
-still something you do.
+instead is *tell* you: it asks GitHub whether a newer release exists and puts a
+line beside the version in the status bar when there is one. Clicking it opens
+the releases page. Helm downloads nothing, replaces nothing and restarts nothing
+- getting the new version is still something you do.
 
-That is the only network connection Helm's own process opens, and **Settings →
-Appearance → "Tell me about new releases"** turns it off, after which it opens
-none at all.
+It asks two ways and no others. On launch, at most once a day, if **Settings →
+Updates → "Tell me about new releases"** is ticked; and whenever you press
+**Check now** in that same group, which is never throttled and works whether the
+tick is on or off - the setting governs whether Helm asks by itself, not whether
+you may. Settings → Updates also shows this build's version, the newest one Helm
+has heard of, and a Release notes link that works offline, because it is a link
+rather than a request.
+
+That check is the only network connection Helm's own process opens. With the
+tick off, Helm opens none on its own initiative, and none at all until somebody
+asks for one.
 
 The pull-request pane reaches GitHub too, but through **your own `gh` CLI**, on
 a schedule you set - every five minutes by default, and `0` in Settings turns it
@@ -207,10 +214,24 @@ shape.
 
 ```bash
 pnpm install
-pnpm dev               # the app, with hot reload
+pnpm dev               # the app, with hot reload, isolated
+pnpm dev --fresh       # ...against no database at all, which is first run
+pnpm dev --drive       # ...with the port scripts/drive-dev.mjs clicks through
+pnpm dev:live          # ...against %APPDATA%\Helm, the installed app's own
 pnpm check             # typecheck + lint + unit tests (what CI runs)
 pnpm dist:win          # portable exe + NSIS installer
 ```
+
+`pnpm dev` keeps its data in `%LOCALAPPDATA%\Helm\dev`: its own database - a
+copy of the real one, taken at launch - its own Chromium profile, its own
+overlay shims, and a synthetic `gh` that answers offline so the pull-request
+pane has something to show without the network. It can therefore run beside an
+installed Helm, and a second `pnpm dev` gets a directory of its own rather than
+failing on a held database. What it does **not** isolate is `~/.claude`:
+`CLAUDE_CONFIG_DIR` moves credentials too, and a dev build that cannot sign in
+cannot host a session. `pnpm dev:live` is the old behaviour, kept because it is
+the only way to see the real database in a dev build - it says so on the console
+at startup, and the status bar names the mode.
 
 Beyond the unit tests there are two families of driver. Both are real: they open
 windows, click things, and most of them spawn actual `claude` processes, so they
@@ -239,6 +260,7 @@ pnpm history-check          # the session index, checked against ~/.claude itsel
 pnpm config-check          # the config console, and a live session's own answer
 pnpm content-check          # markdown, wikilinks, and the artifact sandbox
 pnpm usage-check       # the status bar's figures, against /usage
+pnpm affordance-check          # every clickable control, under a real pointer
 pnpm packaging-check          # first run, the repos: key, and the built artefacts
 ```
 

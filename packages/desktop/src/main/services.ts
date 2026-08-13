@@ -47,12 +47,23 @@ export function createServices(): Services {
     settings: readSettings(store),
     lastScan: null,
     lostSessions: reconcileRunningSessions(store),
-    // Every shim, because at this point in startup nothing is hosting a session
-    // and therefore nothing is reading a plugin directory. Any shim that
-    // exists is from a run that has ended - cleanly or otherwise - and a launch
-    // rebuilds what it needs. This is the only place they are swept: doing it
-    // per launch would pull a plugin directory out from under a live session
-    // started by a different profile.
+    /*
+     * The shims no live process is holding.
+     *
+     * This used to sweep *every* shim, reasoning that at this point in startup
+     * nothing is hosting a session and therefore nothing is reading a plugin
+     * directory. That reasoning was wrong, and wrong in the way that matters:
+     * it is a statement about this process, and the directory belongs to the
+     * machine. A second Helm - the dev build beside the installed one, a
+     * portable copy beside an install, two installs - starting while the first
+     * has a live session unlinked that session's `--plugin-dir` out from under
+     * it. The session kept running and silently lost its skills.
+     *
+     * So a shim now records the processes holding it and `cleanStaleShims`
+     * asks the kernel about each one, removing only what it can positively
+     * establish is dead. This is still the only place they are swept: doing it
+     * per launch would churn directories a session in *this* app is reading.
+     */
     staleShims: cleanStaleShims(shimRoot).length
   }
 }

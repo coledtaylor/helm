@@ -19,6 +19,10 @@ using while it runs. A UI change is not done until you have looked at one, and
 measuring a suspect edge in the PNG beats eyeballing it. `--only=` narrows the
 walk; the **`checks`** skill has the groups.
 
+For the question design-shot's fixed itinerary does not reach - what happens
+two clicks in - `pnpm dev --drive` and `scripts/drive-dev.mjs` click through
+the window you have open, and take the same capture. The **`dev`** skill has it.
+
 ## Where the rest of this lives
 
 This file is the part that has to be in mind while doing *anything*. Everything
@@ -28,6 +32,7 @@ true when the code moves.
 
 | skill | read it before |
 |---|---|
+| **`dev`** | launching the app to look at a change, or driving the window you have open |
 | **`checks`** | running or writing a real-window check, or deciding which one a change owes |
 | **`surfaces`** | editing the terminal, the usage figures, the pull-request pane, or anything touching a `.claude` tree |
 | **`procedures`** | adding an app setting, changing the schema, or building a release |
@@ -43,7 +48,7 @@ check disagree, the check is right.
 
 ```
 packages/
-├── core/     # headless: discovery/, launch/, config/, content/, github/, usage/, store/
+├── core/     # headless: discovery/, launch/, config/, content/, github/, usage/, archive/, store/
 ├── ui/       # React components
 └── desktop/  # Electron main + preload + renderer + the spike harness
 ```
@@ -97,6 +102,29 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
 - **Shims are swept only at app start** (`createServices`). Sweeping per launch
   would pull a plugin directory out from under a live session that a different
   profile started.
+- **The sweep removes only what it can prove is dead.** A shim's stamp names the
+  processes holding it; `cleanStaleShims` asks the kernel about each, counts
+  `EPERM` as *alive*, treats a claim from before this boot as dead however the
+  pid probes, and **leaves the shim wherever the answer is unknown**. The
+  asymmetry is the design: a stale directory is collected at the next start,
+  where a live shim deleted is a session that has silently lost its skills.
+  "Nothing else is running" is never a thing one process may assume - `PROF-10`
+  is two of them, overlapping, and it is what says this still holds.
+
+## Where the data lives
+
+Four modes, and `appMode` in `paths.ts` is the authority. Only one of them
+shares a directory with another Helm, and it is opt-in:
+
+| run | data directory |
+|---|---|
+| installed | `%APPDATA%\Helm` |
+| portable | `helm-data` beside the exe |
+| `pnpm dev` | `%LOCALAPPDATA%\Helm\dev\helm-data` - its own database, Chromium profile and `overlays/`, seeded each launch from a `VACUUM INTO` copy of the real one. A synthetic `gh` (`--gh=`), so the pull-request pane is offline and every state reachable. `~/.claude` and `claude` are the real ones, because `CLAUDE_CONFIG_DIR` moves credentials and a dev app that cannot sign in cannot host a session. `--fresh` for the first-run state; a second `pnpm dev` gets `dev-2`. |
+| `pnpm dev:live` | `%APPDATA%\Helm` - the installed app's. Kept deliberately, says so loudly on the console, and the status bar's mode chip reads `dev · live`. |
+
+A check gets its own directory too, under `%LOCALAPPDATA%\Helm\checks\<name>`;
+see the **`checks`** skill.
 
 ## Surfaces that degrade
 
@@ -116,7 +144,10 @@ is in the **`surfaces`** skill.
   the request that would correct it (`PR-20`).
 - **`~/.claude` is Claude Code's and Helm only reads it**, with exactly one
   exception: the config console writes, through a snapshot taken *before* the
-  file is touched that aborts the write if the row cannot be taken.
+  file is touched that aborts the write if the row cannot be taken. The
+  transcript archive is **not** a second exception - it reads those files and
+  copies what it reads into `helm.db`, and `pnpm transcript-check`'s T-5 hashes
+  the whole tree either side of a full pass to say so.
 - **`CLAUDE_CONFIG_DIR` moves credentials too**, so a session pointed at a
   fixture home cannot log in. Measuring the user settings layer means using the
   real `~/.claude/settings.json`, snapshotted and put back.
@@ -147,9 +178,19 @@ and how to narrow a re-run. Two rules belong here rather than there:
 - **Do not use `@anthropic-ai/claude-agent-sdk`.** Helm shells out to the
   `claude` CLI - see SPEC "Supersedes the SDK draft". The app hosts the TUI, it
   does not reimplement the client.
-- Helm renders no session messages, parses no session output and handles no
-  permission prompts. A feature that seems to need that belongs in the
-  transcript-archive backlog or is out of scope.
+- **Helm renders nothing for a live session.** It parses no session output,
+  handles no permission prompts, and puts nothing of its own between the user
+  and the TUI it hosts. A feature that seems to need that is out of scope.
+
+  **Amended when the transcript archive landed**, and the line is worth stating
+  rather than deleting. Claude Code writes a transcript per session and reaps it
+  on its own schedule - 744 sessions recorded on this machine, 68 transcripts
+  surviving, 91% of the conversations already gone. Helm now reads those files
+  before they are deleted and can render an **archived** one. That is not
+  hosting a client: it is read-only, retrospective, over a record on disk, and
+  never in the path of a running session. The boundary is *live*, not *messages*
+  - while a session is running Helm still shows a terminal and gets out of the
+  way. See `core/archive/`, `main/archive.ts` and `pnpm transcript-check`.
 - Windows-first: junctions (`mklink /J`) not symlinks, no elevation
   assumptions, test paths with spaces.
 

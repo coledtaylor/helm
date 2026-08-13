@@ -76,6 +76,34 @@ const PR_A = 42
 /** Substituted into a comment body so the render pipeline has to have run. */
 const BOLD_MARKER = 'ELEVENTEEN'
 
+/**
+ * The same trick for a **thread** comment, and a different word on purpose.
+ *
+ * Two markers rather than one, because the two travel by completely different
+ * routes - one arrives in `gh pr view --json comments`, the other in a
+ * GraphQL answer to a query the JSON surface cannot make - and a single word
+ * found in the DOM would not say which of them got there.
+ */
+const THREAD_MARKER = 'SIXTYSEVENTEEN'
+
+/**
+ * Markup planted **inside a `diffHunk`**, which must reach the screen as text.
+ *
+ * A hunk is a fragment of somebody's branch arriving from a stranger's pull
+ * request. The rule is the Files view's and it is not negotiable: the diff is
+ * painted as text and never as HTML, so a contributor cannot choose Helm's
+ * markup. The attribute is what makes the failure detectable - if the hunk were
+ * injected, `querySelector` finds an element; if it is text, it never can.
+ */
+const HUNK_MARKUP = '<b data-hunk-markup="yes">not markup</b>'
+
+/** The pull request the pagination probe works on: 120 threads, one with 130 replies. */
+const PR_PAGED = 3
+
+/** Past the 50 a page of `PR_THREADS_QUERY` holds, so both loops have to run. */
+const PAGED_THREADS = 120
+const PAGED_REPLIES = 130
+
 // ---------------------------------------------------------------------------
 // The driver's own reads
 // ---------------------------------------------------------------------------
@@ -101,6 +129,26 @@ async function click(win: BrowserWindow, selector: string): Promise<boolean> {
 
 async function text(win: BrowserWindow, selector: string): Promise<string> {
   return js<string>(win, `(document.querySelector(${q(selector)})?.textContent ?? '').trim()`)
+}
+
+/**
+ * Click one project row in the sidebar tree, found by the path it carries as
+ * its `title`.
+ *
+ * Compared in JavaScript rather than matched with `[title="..."]`: a fixture
+ * path is a Windows path full of backslashes, and a backslash is an escape
+ * character in a CSS string too. The selector would need escaping twice, and
+ * the version that only breaks on a path containing `\t` or `\U` is the version
+ * that breaks on somebody else's machine.
+ */
+async function clickProjectRow(win: BrowserWindow, path: string): Promise<boolean> {
+  return js<boolean>(
+    win,
+    `(() => { const want = ${JSON.stringify(path.toLowerCase())};
+      const el = [...document.querySelectorAll('aside nav button[title]')]
+        .find((b) => b.title.toLowerCase() === want);
+      if (!el) return false; el.click(); return true })()`
+  )
 }
 
 async function exists(win: BrowserWindow, selector: string): Promise<boolean> {
@@ -462,6 +510,7 @@ function buildFixtures(dataDir: string): Fixtures {
   mkdirSync(join(home, 'list'), { recursive: true })
   mkdirSync(join(home, 'view'), { recursive: true })
   mkdirSync(join(home, 'diff'), { recursive: true })
+  mkdirSync(join(home, 'threads'), { recursive: true })
 
   // Spaces on purpose, in the scan root and in a project under it: Windows
   // first, and every path Helm stores has to survive one.
@@ -583,6 +632,19 @@ function buildFixtures(dataDir: string): Fixtures {
             state: 'CHANGES_REQUESTED',
             body: 'Two things.',
             submittedAt: '2026-08-10T13:00:00Z'
+          },
+          // A review whose entire content was inline notes: GitHub gives it a
+          // verdict and an empty body, and before the threads were fetched this
+          // painted as a card with a verdict and nothing else - a reviewer
+          // apparently saying nothing. It is here so the probe can check that
+          // the substance is now on the page beside it.
+          {
+            id: 'PRR_fixture_2',
+            author: { login: 'reviewer-three', is_bot: false },
+            authorAssociation: 'MEMBER',
+            state: 'COMMENTED',
+            body: '',
+            submittedAt: '2026-08-10T14:00:00Z'
           }
         ],
         commits: [
@@ -711,6 +773,150 @@ function buildFixtures(dataDir: string): Fixtures {
     )
   )
 
+  // -----------------------------------------------------------------------
+  // The review threads, which `gh pr view --json` cannot see at all
+  // -----------------------------------------------------------------------
+  //
+  // Written as GraphQL **nodes** rather than as an answer, because the fake gh
+  // pages this array itself at whatever `first:` the shipped query asks for -
+  // so the pagination the driver checks is the pagination in `gh.ts` and not an
+  // agreement between two fixtures.
+  //
+  // The moments are chosen so the chronology below is not sorted: two threads
+  // land between the issue comment and the first review and a third lands after
+  // the second review, so a Conversation that appended threads to the end
+  // rather than merging them by time fails on the order alone.
+  writeFileSync(
+    join(home, 'threads', `${SLUG_A.replace('/', '__')}__${String(PR_A)}.json`),
+    JSON.stringify(
+      [
+        {
+          id: 'PRRT_fixture_1',
+          path: 'packages/core/src/github/remote.ts',
+          line: 14,
+          originalLine: 14,
+          isResolved: false,
+          isOutdated: false,
+          comments: [
+            {
+              id: 'PRRC_fixture_1a',
+              author: { login: 'reviewer-two', __typename: 'User' },
+              authorAssociation: 'COLLABORATOR',
+              body: `This needs paging - **${THREAD_MARKER}** replies would be lost.`,
+              createdAt: '2026-08-10T12:30:00Z',
+              url: `https://github.com/${SLUG_A}/pull/${String(PR_A)}#discussion_r1`,
+              diffHunk: [
+                '@@ -12,5 +12,7 @@ export function parseGitHubRemote(url: string): RepoRemote | null {',
+                '   const trimmed = url.trim()',
+                `   // ${HUNK_MARKUP}`,
+                '+  const forks = true'
+              ].join('\n')
+            },
+            {
+              id: 'PRRC_fixture_1b',
+              author: { login: 'fixture-author', __typename: 'User' },
+              authorAssociation: 'OWNER',
+              body: 'Good catch - pushed a fix.',
+              createdAt: '2026-08-10T12:33:00Z',
+              url: `https://github.com/${SLUG_A}/pull/${String(PR_A)}#discussion_r2`,
+              diffHunk: '@@ -12,5 +12,7 @@\n+  const forks = true'
+            },
+            {
+              id: 'PRRC_fixture_1c',
+              author: { login: 'app/dependabot', __typename: 'Bot' },
+              authorAssociation: 'NONE',
+              body: 'Confirmed on my side too.',
+              createdAt: '2026-08-10T12:36:00Z',
+              url: `https://github.com/${SLUG_A}/pull/${String(PR_A)}#discussion_r3`,
+              diffHunk: '@@ -12,5 +12,7 @@\n+  const forks = true'
+            }
+          ]
+        },
+        {
+          id: 'PRRT_fixture_2',
+          path: 'packages/core/src/github/parse.ts',
+          line: 33,
+          originalLine: 33,
+          isResolved: true,
+          isOutdated: false,
+          comments: [
+            {
+              id: 'PRRC_fixture_2a',
+              author: { login: 'reviewer-one', __typename: 'User' },
+              authorAssociation: 'MEMBER',
+              body: 'Settled: this one was already handled.',
+              createdAt: '2026-08-10T12:40:00Z',
+              url: `https://github.com/${SLUG_A}/pull/${String(PR_A)}#discussion_r4`,
+              diffHunk: "@@ -30,4 +30,5 @@\n+  'statusCheckRollup',"
+            }
+          ]
+        },
+        {
+          // `line: null` with an `originalLine` is what GitHub answers for an
+          // outdated thread: the lines it was written against have moved and it
+          // has no current position. A pane that assumed a number paints
+          // `:null` here, which is the reason this one is in the fixture.
+          id: 'PRRT_fixture_3',
+          path: 'README.md',
+          line: null,
+          originalLine: 88,
+          isResolved: false,
+          isOutdated: true,
+          comments: [
+            {
+              id: 'PRRC_fixture_3a',
+              author: { login: 'reviewer-three', __typename: 'User' },
+              authorAssociation: 'MEMBER',
+              body: 'This paragraph moved - leaving the note for the record.',
+              createdAt: '2026-08-10T14:30:00Z',
+              url: `https://github.com/${SLUG_A}/pull/${String(PR_A)}#discussion_r5`,
+              diffHunk: '@@ -0,0 +1,3 @@\n+# alpha one'
+            }
+          ]
+        }
+      ],
+      null,
+      2
+    )
+  )
+
+  // The pagination fixture, on the second repository so it cannot disturb the
+  // counts above. Both ceilings are passed at once: more threads than a page
+  // holds, and - on the first of them - more replies than a page of *comments*
+  // holds, which is the second loop and the one a `--paginate` flag would not
+  // have walked. Every thread past the first two is resolved, so the pane
+  // starts them collapsed and the DOM stays a size a driver can read.
+  writeFileSync(
+    join(home, 'threads', `${SLUG_B.replace('/', '__')}__${String(PR_PAGED)}.json`),
+    JSON.stringify(pagedThreads(), null, 2)
+  )
+
+  // The detail behind that pull request. Thin, like carto's: the pagination
+  // probe is about the threads, and the tab will not open at all without one.
+  writeFileSync(
+    join(home, 'view', `${SLUG_B.replace('/', '__')}__${String(PR_PAGED)}.json`),
+    JSON.stringify(
+      {
+        body: 'A pull request somebody reviewed at length.\n',
+        comments: [],
+        reviews: [],
+        commits: [
+          {
+            oid: 'd4e5f60718293a4b5c6d7e8f9012345678901234',
+            messageHeadline: 'One pull request, in a second repository',
+            authors: [{ login: 'fixture-author', name: 'Fixture Author' }],
+            committedDate: '2026-08-07T07:40:00Z'
+          }
+        ],
+        files: [{ path: 'src/paged.ts', additions: 30, deletions: 1 }],
+        statusCheckRollup: [],
+        mergeStateStatus: 'CLEAN'
+      },
+      null,
+      2
+    )
+  )
+
   writeBehaviour(home, { auth: 'ok', list: 'ok' })
 
   // The real repository: a real `git init`, a real commit and a real origin, so
@@ -746,6 +952,53 @@ function buildFixtures(dataDir: string): Fixtures {
       [beta]: `git@github.com:${SLUG_B}.git`
     }
   }
+}
+
+/**
+ * A pull request with more review on it than one page of either connection.
+ *
+ * The counts are the point and they are both deliberately awkward:
+ * `PAGED_THREADS` threads is three pages of `reviewThreads` and the first
+ * thread's `PAGED_REPLIES` comments are three pages of `comments`, which is the
+ * *nested* connection - the one a naive `gh api --paginate` would silently
+ * truncate rather than fail on. Every id is derived from its index, so the
+ * driver can assert the set is complete and in order rather than only counting.
+ */
+function pagedThreads(): Array<Record<string, unknown>> {
+  const threads: Array<Record<string, unknown>> = []
+  for (let t = 0; t < PAGED_THREADS; t++) {
+    const replies = t === 0 ? PAGED_REPLIES : 1
+    const comments = []
+    for (let c = 0; c < replies; c++) {
+      comments.push({
+        id: `PRRC_paged_${String(t)}_${String(c)}`,
+        author: { login: c === 0 ? 'reviewer-one' : 'fixture-author', __typename: 'User' },
+        authorAssociation: c === 0 ? 'MEMBER' : 'OWNER',
+        body: `Note ${String(t)}.${String(c)} on the paged pull request.`,
+        // A minute apart, so the chronology is total and the driver's expected
+        // order is the fixture's own rather than a tie-break.
+        createdAt: new Date(
+          Date.parse('2026-08-05T00:00:00Z') + (t * 60 + c) * 60_000
+        ).toISOString(),
+        url: `https://github.com/${SLUG_B}/pull/${String(PR_PAGED)}#discussion_r${String(t)}_${String(c)}`,
+        diffHunk: `@@ -1,2 +1,3 @@\n+const line${String(t)} = ${String(t)}`
+      })
+    }
+    threads.push({
+      id: `PRRT_paged_${String(t)}`,
+      path: `src/paged${String(t)}.ts`,
+      line: t + 1,
+      originalLine: t + 1,
+      // The first two stay open so their comments are in the DOM to count; the
+      // rest are resolved and therefore collapsed, which keeps a hundred and
+      // eighteen threads' worth of bodies out of a document the driver has to
+      // read back through `executeJavaScript`.
+      isResolved: t > 1,
+      isOutdated: false,
+      comments
+    })
+  }
+  return threads
 }
 
 /** What the fake gh should do next time. Re-read by it per invocation. */
@@ -951,7 +1204,7 @@ export async function runPrChecks(
     await refreshNow(pulls)
 
     if (run('detail')) {
-      checks.push(...(await detailChecks({ win, fixtures, shotDir })))
+      checks.push(...(await detailChecks({ win, fixtures, dbFile, shotDir })))
     }
 
     if (run('review')) {
@@ -1408,6 +1661,214 @@ async function fixtureChecks({
     ]
   })
 
+  // -----------------------------------------------------------------------
+  // PR-23: the project pane carries its own repository's pull requests
+  // -----------------------------------------------------------------------
+  //
+  // Four claims at once, because they are one surface: the panel paints the
+  // pull requests the fixture holds, it drops the source pill that the
+  // flattened list needs, it carries the age caption this whole surface is
+  // required to carry, and a row opens the same tab a Pulls-pane row opens.
+  // The two pane links are checked in the same pass, against the scope
+  // switchers' own values.
+  const alphaFixture = JSON.parse(
+    readFileSync(join(fixtures.home, 'list', `${SLUG_A.replace('/', '__')}.json`), 'utf8')
+  ) as Array<{ number: number }>
+  const expectedNumbers = alphaFixture.map((entry) => entry.number).sort((a, b) => a - b)
+
+  const projectRowClicked = await clickProjectRow(win, fixtures.alpha)
+  const panelPainted = await pollJs(
+    win,
+    `document.querySelector('[data-project-panel="pulls"]')`,
+    10_000
+  )
+  await sleep(400)
+
+  const panel = await js<{ rows: string[]; pills: number; caption: string; links: string[] }>(
+    win,
+    `(() => {
+       const el = document.querySelector('[data-project-panel="pulls"]')
+       if (!el) return { rows: [], pills: 0, caption: '', links: [] }
+       return {
+         rows: [...el.querySelectorAll('[data-pull]')].map((r) => r.getAttribute('data-pull') ?? ''),
+         pills: el.querySelectorAll('[data-pull-repo]').length,
+         caption: (el.querySelector('[data-project-pulls-caption]')?.textContent ?? '').trim(),
+         links: [...document.querySelectorAll('[data-project-link]')]
+           .map((b) => b.getAttribute('data-project-link') ?? '')
+       } })()`
+  )
+  const projectShot = await screenshot(win, shotDir, 'pr-project-pane.png')
+
+  const panelNumbers = panel.rows
+    .map((value) => Number(value.split('#')[1]))
+    .sort((a, b) => a - b)
+
+  // DOM order, which is the pane's own order rather than this sort's.
+  const firstRow = panel.rows[0] ?? ''
+  const firstNumber = firstRow === '' ? null : Number(firstRow.split('#')[1])
+  const rowClicked =
+    firstRow !== '' && (await click(win, `[data-project-panel="pulls"] [data-pull="${firstRow}"]`))
+  const tabOpened = await pollJs(win, `document.querySelector('[data-pr-title]')`, 20_000)
+  await sleep(500)
+  const openedNumber = await attr(win, '[data-pr-number]', 'data-pr-number')
+
+  /**
+   * Out through one link, and back.
+   *
+   * The scope switcher's **own value** is the witness rather than a caption:
+   * it is a real `<select>`, and a select whose value is not among its options
+   * paints blank and reads back `''`. So this fails both when the link does not
+   * re-point the pane and when the project is not a scope the pane can reach -
+   * which are two different bugs with one symptom on screen.
+   */
+  const followLink = async (link: string, anchor: string): Promise<string> => {
+    await clickProjectRow(win, fixtures.alpha)
+    await sleep(300)
+    if (!(await click(win, `[data-project-link="${link}"]`))) return '<no link>'
+    if (!(await pollJs(win, `document.querySelector(${q(anchor)})`, 10_000))) return '<no pane>'
+    await sleep(500)
+    return js<string>(win, `document.querySelector(${q(anchor)})?.value ?? ''`)
+  }
+
+  const configScope = await followLink('config', '[data-config-scope]')
+  const contentScope = await followLink('content', '[data-content-scope]')
+  const same = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
+
+  checks.push({
+    id: 'PR-23',
+    criterion:
+      "A project pane lists its own repository's pull requests and opens Config and Content on it",
+    title: `${String(panelNumbers.length)} rows, no source pill, both links landed on the project`,
+    ok:
+      projectRowClicked &&
+      panelPainted &&
+      // The fixture has to discriminate: two empty lists match each other.
+      expectedNumbers.length > 0 &&
+      panelNumbers.length === expectedNumbers.length &&
+      panelNumbers.every((value, at) => value === expectedNumbers[at]) &&
+      // No source pill. The pane names the repository, so a pill on every row
+      // would be the heading said once per row (DESIGN.md 5, source pills).
+      panel.pills === 0 &&
+      // Mandatory, not decorative - the rule the whole surface degrades by.
+      /fetched/.test(panel.caption) &&
+      panel.links.includes('config') &&
+      panel.links.includes('content') &&
+      rowClicked &&
+      tabOpened &&
+      openedNumber === String(firstNumber) &&
+      same(configScope, fixtures.alpha) &&
+      same(contentScope, fixtures.alpha),
+    detail: {
+      project: fixtures.alpha,
+      fixtureNumbers: expectedNumbers,
+      paneNumbers: panelNumbers,
+      sourcePillsInPanel: panel.pills,
+      caption: panel.caption,
+      links: panel.links,
+      rowClicked: firstRow,
+      openedTabNumber: openedNumber,
+      configScope,
+      contentScope,
+      screenshot: projectShot.file
+    },
+    notes: [
+      'The numbers are compared against this driver\'s own `JSON.parse` of the fixture the',
+      'fake gh answers from, not against the Pulls pane - two surfaces reading one snapshot',
+      'agree with each other whether or not either agrees with GitHub.',
+      'The absence of the source pill is asserted rather than eyeballed: it is the one',
+      'thing that differs between this row and the same row on the Pulls pane, and a',
+      'shared component silently defaulting it back on is exactly the regression a',
+      'screenshot review would pass over.',
+      'The links are read off the scope `<select>`s rather than a heading, because a',
+      'value with no matching option reads back as an empty string - so a project that',
+      'stopped being a config or content scope fails here instead of painting an empty pane.'
+    ]
+  })
+
+  // -----------------------------------------------------------------------
+  // PR-24: the ignore list may not go silent on a project pane
+  // -----------------------------------------------------------------------
+  //
+  // An ignored repository is structurally absent from `snapshot.repos`, which
+  // is deliberate. The consequence is that a pane scoped to one directory has
+  // nothing to find, and "no panel" on a project page reads as "no pull
+  // requests" - the setting hiding itself, which is the thing the Pulls pane's
+  // Ignored section exists to prevent. This is that rule on the new surface,
+  // and it is what `IgnoredRepo.paths` is for.
+  const ignoredAlpha = await sendWrite(win, { prIgnoredRepos: [SLUG_A] })
+  await refreshNow(pulls)
+  await clickProjectRow(win, fixtures.alpha)
+  await sleep(600)
+
+  const ignoredPane = await js<{ said: string; panel: boolean; rows: number; undo: string | null }>(
+    win,
+    `(() => {
+       const el = document.querySelector('[data-project-panel="pulls-ignored"]')
+       return {
+         said: (el?.textContent ?? '').trim(),
+         panel: Boolean(document.querySelector('[data-project-panel="pulls"]')),
+         rows: document.querySelectorAll('[data-pull]').length,
+         undo: document.querySelector('[data-project-unignore]')?.getAttribute('data-project-unignore') ?? null
+       } })()`
+  )
+  const ignoredProjectShot = await screenshot(win, shotDir, 'pr-project-ignored.png')
+
+  // Undone from the pane the user is standing on, the same direction the Pulls
+  // pane offers - and the setting is read back, so the button has to have
+  // written it rather than only repainted.
+  const undoClicked = await click(win, `[data-project-unignore="${SLUG_A}"]`)
+  await refreshNow(pulls)
+  await sleep(700)
+  const afterUndo = await js<{ setting: string[]; rows: number; panel: boolean }>(
+    win,
+    `window.helm.invoke('settings:read').then((s) => ({
+       setting: s.prIgnoredRepos,
+       rows: document.querySelectorAll('[data-project-panel="pulls"] [data-pull]').length,
+       panel: Boolean(document.querySelector('[data-project-panel="pulls"]'))
+     }))`
+  )
+
+  checks.push({
+    id: 'PR-24',
+    criterion: 'An ignored repository says so on its project pane rather than showing nothing',
+    title: `${SLUG_A} named its own ignore entry, and the pane's undo put ${String(afterUndo.rows)} rows back`,
+    ok:
+      ignoredAlpha.accepted &&
+      // It said something, and what it said names the repository being hidden -
+      // an empty panel with a heading would satisfy "a panel exists".
+      ignoredPane.said.includes(SLUG_A) &&
+      // And it is the ignored panel, not the ordinary one painted empty.
+      !ignoredPane.panel &&
+      ignoredPane.rows === 0 &&
+      ignoredPane.undo === SLUG_A &&
+      undoClicked &&
+      afterUndo.setting.length === 0 &&
+      afterUndo.panel &&
+      // Back to what PR-23 counted, from the cache that ignoring left alone.
+      afterUndo.rows === expectedNumbers.length,
+    detail: {
+      project: fixtures.alpha,
+      slug: SLUG_A,
+      writeAccepted: ignoredAlpha.accepted,
+      writeError: ignoredAlpha.error,
+      paneSaid: ignoredPane.said,
+      ordinaryPanelPresent: ignoredPane.panel,
+      rowsWhileIgnored: ignoredPane.rows,
+      undoTarget: ignoredPane.undo,
+      settingAfterUndo: afterUndo.setting,
+      rowsAfterUndo: afterUndo.rows,
+      screenshot: ignoredProjectShot.file
+    },
+    notes: [
+      'This is the reason `IgnoredRepo` carries `paths` at all. The pane has a directory',
+      'and the setting has a slug, and the two only meet through the snapshot - without',
+      'the paths an ignored repository is indistinguishable from a folder that has no',
+      'github.com origin, and both would paint nothing.',
+      'The undo is clicked on the project pane rather than on the Pulls pane, because',
+      'the pane a user notices the absence on is the pane the remedy has to be on.'
+    ]
+  })
+
   // Everything after this phase wants the hook back; the caller re-points it.
   return checks
 }
@@ -1419,10 +1880,12 @@ async function fixtureChecks({
 async function detailChecks({
   win,
   fixtures,
+  dbFile,
   shotDir
 }: {
   win: BrowserWindow
   fixtures: Fixtures
+  dbFile: string
   shotDir: string
 }): Promise<Check[]> {
   const checks: Check[] = []
@@ -1666,6 +2129,828 @@ async function detailChecks({
       'ran - in the main process, which is the whole arrangement (the grammars are megabytes',
       'the browser bundle must not carry, and one sanitiser on one side of the wire is easier',
       'to be sure of than two).'
+    ]
+  })
+
+  checks.push(...(await threadChecks({ win, fixtures, dbFile, shotDir })))
+
+  return checks
+}
+
+// ---------------------------------------------------------------------------
+// The diff-line threads
+//
+// `gh pr view --json` cannot see these at all, which is why they arrive from a
+// second fetch - `gh api graphql` over `pullRequest.reviewThreads` - and why
+// they get their own block here. Every check below is against this driver's own
+// `JSON.parse` of the thread fixture, or against its own read-only connection
+// to `helm.db`; nothing is compared against what Helm says about itself.
+// ---------------------------------------------------------------------------
+
+/** One thread as the fixture writes it, which is GitHub's node shape. */
+interface FixtureThread {
+  id: string
+  path: string
+  line: number | null
+  originalLine: number | null
+  isResolved: boolean
+  isOutdated: boolean
+  comments: Array<{ id: string; createdAt: string; body: string }>
+}
+
+/** What the Conversation view painted, thread by thread and in order. */
+interface PaintedConversation {
+  /** Every entry and thread in the order they are on screen. */
+  order: string[]
+  /** Thread id -> what its card says. */
+  threads: Record<
+    string,
+    {
+      header: string
+      /** How many the thread holds, whether or not the card is open. */
+      count: number
+      comments: string[]
+      replies: string[]
+      open: boolean
+      chips: string[]
+      hunk: string
+      hunkIsMarkup: boolean
+    }
+  >
+  /** Every rendered body's text, joined - for "is the substance on screen". */
+  text: string
+  note: string | null
+}
+
+/** The raw `detail` column, as text, so a missing key can be seen as missing. */
+function detailJsonFor(dbFile: string, slug: string, number: number): string | null {
+  const db = new Database(dbFile, { readonly: true, fileMustExist: true })
+  try {
+    const row = db
+      .prepare('SELECT detail FROM pull_requests WHERE slug = ? AND number = ?')
+      .get(slug, number) as { detail: string | null } | undefined
+    return row?.detail ?? null
+  } finally {
+    db.close()
+  }
+}
+
+async function threadChecks({
+  win,
+  fixtures,
+  dbFile,
+  shotDir
+}: {
+  win: BrowserWindow
+  fixtures: Fixtures
+  dbFile: string
+  shotDir: string
+}): Promise<Check[]> {
+  const checks: Check[] = []
+  const threadFile = join(
+    fixtures.home,
+    'threads',
+    `${SLUG_A.replace('/', '__')}__${String(PR_A)}.json`
+  )
+  const asWritten = readFileSync(threadFile, 'utf8')
+
+  /** The fixture as this driver reads it, never as Helm reports it. */
+  const readThreads = (): FixtureThread[] => JSON.parse(asWritten) as FixtureThread[]
+
+  const view = JSON.parse(
+    readFileSync(
+      join(fixtures.home, 'view', `${SLUG_A.replace('/', '__')}__${String(PR_A)}.json`),
+      'utf8'
+    )
+  ) as {
+    comments: Array<{ id: string; createdAt: string }>
+    reviews: Array<{ id: string; submittedAt: string; body: string }>
+  }
+
+  /**
+   * The chronology this driver works out for itself, from the two fixtures.
+   *
+   * Composed here rather than read off the view, which is the point: the claim
+   * is that main merges three lists by time, and comparing Helm's order against
+   * Helm's order would assert that a sort is deterministic.
+   */
+  const expectedOrder = (threads: FixtureThread[]): string[] =>
+    [
+      ...view.comments.map((c) => ({ id: c.id, at: Date.parse(c.createdAt) })),
+      ...view.reviews.map((r) => ({ id: r.id, at: Date.parse(r.submittedAt) })),
+      // A thread sits at its **first** comment - where the exchange started -
+      // and not at its last reply.
+      ...threads.map((t) => ({ id: t.id, at: Date.parse(t.comments[0]?.createdAt ?? '') }))
+    ]
+      .sort((a, b) => a.at - b.at)
+      .map((entry) => entry.id)
+
+  const PAINT_PROBE = `(() => {
+    const root = document.querySelector('[data-pr-conversation]')
+    if (root === null) return null
+    const order = [...root.querySelectorAll('[data-pr-entry], [data-pr-thread]')]
+      .map((el) => el.getAttribute('data-pr-entry') ?? el.getAttribute('data-pr-thread') ?? '')
+    const threads = {}
+    for (const card of root.querySelectorAll('[data-pr-thread]')) {
+      const id = card.getAttribute('data-pr-thread') ?? ''
+      const hunk = card.querySelector('[data-pr-thread-hunk]')
+      threads[id] = {
+        header: (card.querySelector('[data-pr-thread-toggle]')?.textContent ?? '').trim(),
+        count: Number(card.getAttribute('data-pr-thread-comments') ?? '-1'),
+        comments: [...card.querySelectorAll('[data-pr-thread-comment]')]
+          .map((el) => el.getAttribute('data-pr-thread-comment') ?? ''),
+        replies: [...card.querySelectorAll('[data-pr-thread-reply]')]
+          .map((el) => el.getAttribute('data-pr-thread-comment') ?? ''),
+        open: card.hasAttribute('data-pr-thread-open'),
+        chips: [...card.querySelectorAll('[data-pr-thread-toggle] span')]
+          .map((el) => (el.textContent ?? '').trim())
+          .filter((t) => t === 'resolved' || t === 'outdated'),
+        hunk: (hunk?.textContent ?? ''),
+        // The whole diff rule in one boolean: if the hunk had been injected as
+        // HTML this element would exist, and it can never exist if it is text.
+        hunkIsMarkup: card.querySelector('[data-hunk-markup]') !== null
+      }
+    }
+    return {
+      order,
+      threads,
+      text: (root.textContent ?? ''),
+      note: document.querySelector('[data-pr-threads-note]')?.textContent ?? null
+    }
+  })()`
+
+  const paint = async (): Promise<PaintedConversation | null> =>
+    js<PaintedConversation | null>(win, PAINT_PROBE)
+
+  /**
+   * The tab's own refresh arrow, and the wait for the fetch behind it.
+   *
+   * The arrow disables itself while a fetch is in flight and comes back when
+   * one lands, so the button's own `disabled` is the fetch's signal - waiting a
+   * fixed number of seconds instead would be a race that only fails on a slow
+   * machine.
+   */
+  const refreshTab = async (): Promise<void> => {
+    await click(win, '[data-pr-refresh]')
+    await sleep(300)
+    await pollJs(win, `document.querySelector('[data-pr-refresh]:not(:disabled)')`, 30_000)
+    await pollJs(win, `document.querySelector('[data-pr-conversation]')`, 10_000)
+    await sleep(500)
+  }
+
+  // -----------------------------------------------------------------------
+  // PR-25: every note left on a line of the diff, as one thread each, in time
+  //
+  // The comparator is handed its expectation rather than re-reading the file,
+  // and then the file is mutated underneath it and the *same* comparison has to
+  // fail. A comparator that cannot fail on a fixture missing a thread is a
+  // comparator that proves nothing when the fixture has one.
+  // -----------------------------------------------------------------------
+
+  const compareThreads = async (
+    expected: FixtureThread[]
+  ): Promise<{
+    ok: boolean
+    painted: PaintedConversation | null
+    expectedOrder: string[]
+    expectedComments: Record<string, string[]>
+  }> => {
+    const painted = await paint()
+    const wantOrder = expectedOrder(expected)
+    const wantComments: Record<string, string[]> = {}
+    for (const thread of expected) wantComments[thread.id] = thread.comments.map((c) => c.id)
+
+    const sameOrder = JSON.stringify(painted?.order ?? []) === JSON.stringify(wantOrder)
+    const sameComments = expected.every((thread) => {
+      const card = painted?.threads[thread.id]
+      if (card === undefined) return false
+      // The thread's own count, which the card carries whether or not it is
+      // open - a resolved thread starts collapsed and its comments are not in
+      // the DOM at all, which is the design and not a gap.
+      if (card.count !== thread.comments.length) return false
+      if (!card.open) return true
+      // Every comment of an open thread, inside the thread's own card. A pane
+      // that listed them as top-level entries would fail `sameOrder`; this is
+      // what says they are *in* the card rather than merely somewhere.
+      if (JSON.stringify(card.comments) !== JSON.stringify(wantComments[thread.id])) return false
+      // The first is the note and the rest are replies, and the replies are the
+      // ones marked subordinate. That is the whole "one entity" claim.
+      return (
+        JSON.stringify(card.replies) === JSON.stringify(thread.comments.slice(1).map((c) => c.id))
+      )
+    })
+    // And at least one of them has to be an open thread with replies in it, or
+    // the paragraph above asserted nothing: a pane that collapsed everything
+    // would satisfy every `card.open === false` shortcut above it.
+    const anyOpenWithReplies = expected.some((thread) => {
+      const card = painted?.threads[thread.id]
+      return card !== undefined && card.open && card.replies.length > 0
+    })
+    return {
+      ok: sameOrder && sameComments && anyOpenWithReplies,
+      painted,
+      expectedOrder: wantOrder,
+      expectedComments: wantComments
+    }
+  }
+
+  await click(win, '[data-pr-view="conversation"]')
+  await sleep(400)
+  const clean = await compareThreads(readThreads())
+  const threadsShot = await screenshot(win, shotDir, 'pr-threads.png')
+
+  // Mutated: one thread gone and one reply gone from another. Both are failures
+  // the pane could plausibly have - a fetch that stopped after the first page,
+  // a thread flattened into its first comment - so a comparator blind to either
+  // would be blind to a real bug.
+  const mutated = JSON.parse(asWritten) as FixtureThread[]
+  mutated.splice(1, 1)
+  mutated[0]?.comments.splice(2, 1)
+  writeFileSync(threadFile, JSON.stringify(mutated, null, 2))
+  await refreshTab()
+  const withMutation = await compareThreads(readThreads())
+
+  writeFileSync(threadFile, asWritten)
+  await refreshTab()
+  const restored = await compareThreads(readThreads())
+
+  const fixtureThreads = readThreads()
+  // The fixture has to be able to discriminate before any of the above is
+  // worth anything: a thread with replies, a resolved one and an outdated one.
+  // PROF-4 was green for weeks against fixtures that had gone missing.
+  const fixtureDiscriminates =
+    fixtureThreads.length >= 3 &&
+    fixtureThreads.some((t) => t.comments.length >= 3) &&
+    fixtureThreads.some((t) => t.isResolved) &&
+    fixtureThreads.some((t) => t.isOutdated) &&
+    // And the chronology has to be interleaved rather than merely concatenated,
+    // or "in one time order" is a claim the fixture cannot test.
+    expectedOrder(fixtureThreads)[0]?.startsWith('IC_') === true &&
+    expectedOrder(fixtureThreads).at(-1)?.startsWith('PRRT_') === true
+
+  checks.push({
+    id: 'PR-25',
+    criterion:
+      'Every comment left on a line of the diff is in Conversation, as one thread each, merged into one time order',
+    title:
+      clean.painted === null
+        ? 'the conversation never painted'
+        : `${String(Object.keys(clean.painted.threads).length)} threads in an order of ${String(clean.painted.order.length)}; the mutated fixture ${withMutation.ok ? 'still passed' : 'failed as it must'}`,
+    ok: fixtureDiscriminates && clean.ok && !withMutation.ok && restored.ok,
+    detail: {
+      clean,
+      withMutation: {
+        ok: withMutation.ok,
+        order: withMutation.painted?.order ?? null,
+        threads: Object.keys(withMutation.painted?.threads ?? {})
+      },
+      restored: { ok: restored.ok, order: restored.painted?.order ?? null },
+      fixtureDiscriminates,
+      fixture: fixtureThreads.map((t) => ({
+        id: t.id,
+        comments: t.comments.length,
+        isResolved: t.isResolved,
+        isOutdated: t.isOutdated
+      })),
+      screenshot: threadsShot.file
+    },
+    notes: [
+      'These comments are invisible to `gh pr view --json` - it exposes issue-level comments',
+      'and each review\'s summary body and nothing else - so this is the second fetch, `gh api',
+      'graphql` over `pullRequest.reviewThreads`, and it is still gh and still the user\'s own',
+      'token.',
+      'The expected order is composed by this driver out of two fixture files, not read off',
+      'the view: the claim is that main merges three lists by time, and comparing Helm\'s order',
+      'against Helm\'s order would only assert that a sort is deterministic.',
+      'A thread takes its place at its **first** comment. A thread opened on Monday and',
+      'replied to on Friday is a Monday remark, and sorting by the reply would move a week of',
+      'conversation to the bottom every time somebody answered it.',
+      'The fixture is mutated underneath the comparison before the clean pass is believed - a',
+      'thread removed and a reply removed - and the same comparison has to fail on it.'
+    ]
+  })
+
+  // -----------------------------------------------------------------------
+  // PR-26: the two rules a thread's own card has to keep
+  // -----------------------------------------------------------------------
+
+  const first = restored.painted?.threads['PRRT_fixture_1'] ?? null
+  const resolved = restored.painted?.threads['PRRT_fixture_2'] ?? null
+  const outdated = restored.painted?.threads['PRRT_fixture_3'] ?? null
+
+  const bold = await js<{ strong: string | null; raw: boolean }>(
+    win,
+    `(() => { const el = document.querySelector('[data-pr-body="PRRC_fixture_1a"]');
+      return { strong: el?.querySelector('strong')?.textContent ?? null,
+               raw: (el?.textContent ?? '').includes('**') } })()`
+  )
+
+  // Opened by a click, because a resolved thread starts shut - which is also
+  // the assertion: a card that was open all along cannot be opened.
+  await click(win, '[data-pr-thread-toggle="PRRT_fixture_2"]')
+  await sleep(300)
+  const resolvedOpened = await js<boolean>(
+    win,
+    `document.querySelector('[data-pr-thread="PRRT_fixture_2"]')?.hasAttribute('data-pr-thread-open') ?? false`
+  )
+
+  checks.push({
+    id: 'PR-26',
+    criterion:
+      'A thread names its file and line, paints its hunk as text, and marks resolved and outdated - resolved starting collapsed',
+    title:
+      first === null
+        ? 'the first thread never painted'
+        : `header "${first.header.replace(/\s+/g, ' ').slice(0, 60)}"; hunk ${String(first.hunk.length)} chars of text`,
+    ok:
+      first !== null &&
+      // File and line, from the fixture's own numbers.
+      first.header.includes('packages/core/src/github/remote.ts:14') &&
+      // The markdown went through the same main-process pipeline every other
+      // body on this pane does.
+      bold.strong === THREAD_MARKER &&
+      !bold.raw &&
+      // The hunk is on screen and is **text**. The element the markup would
+      // have produced does not exist, and cannot: this is the Files view's rule
+      // applied to the other place a diff reaches this surface.
+      first.hunk.includes('<b data-hunk-markup="yes">') &&
+      !first.hunkIsMarkup &&
+      first.hunk.includes('@@ -12,5 +12,7 @@') &&
+      // Chips, and the collapse that goes with one of them.
+      resolved !== null &&
+      JSON.stringify(resolved.chips) === JSON.stringify(['resolved']) &&
+      !restored.painted?.threads['PRRT_fixture_2']?.open &&
+      resolvedOpened &&
+      outdated !== null &&
+      JSON.stringify(outdated.chips) === JSON.stringify(['outdated']) &&
+      outdated.open &&
+      // An outdated thread has no current line, so the header carries the
+      // original one rather than `:null`.
+      outdated.header.includes('README.md:88') &&
+      // The first thread is neither, and carries no chip at all - the converse,
+      // without which a pane that chipped everything would pass.
+      JSON.stringify(first.chips) === JSON.stringify([]),
+    detail: {
+      first,
+      resolved,
+      outdated,
+      bold,
+      resolvedOpenedByClick: resolvedOpened,
+      marker: THREAD_MARKER,
+      plantedMarkup: HUNK_MARKUP
+    },
+    notes: [
+      'The marker is a second nonsense word, different from the one PR-5 uses, because the two',
+      'travel by completely different routes - one arrives in `--json comments`, the other in a',
+      'GraphQL answer the JSON surface cannot produce - and one word found in the DOM would not',
+      'say which of them got there.',
+      'The hunk carries a `<b data-hunk-markup>` on purpose. If it were injected as HTML the',
+      'attribute selector would find an element; because it is text, it never can. That is the',
+      'Files view\'s rule reaching the other place a diff arrives on this surface, and a hunk is',
+      'a fragment of a stranger\'s branch.',
+      'Resolved starts collapsed and outdated does not, which is a distinction and not a',
+      'preference: resolved means somebody settled it, outdated only means the diff moved.',
+      'The unresolved thread is asserted to carry **no** chip, because a pane that chipped',
+      'everything would pass the two positive assertions on its own.'
+    ]
+  })
+
+  // -----------------------------------------------------------------------
+  // PR-27: a long review, which is where a fetch that does not page breaks
+  // -----------------------------------------------------------------------
+
+  const pagedFixture = JSON.parse(
+    readFileSync(
+      join(fixtures.home, 'threads', `${SLUG_B.replace('/', '__')}__${String(PR_PAGED)}.json`),
+      'utf8'
+    )
+  ) as FixtureThread[]
+
+  // The fixture has to be past both page sizes or this probe asserts nothing.
+  // A page of `PR_THREADS_QUERY` holds 50 of each, and the *nested* one is the
+  // connection a `--paginate` flag would have walked past silently.
+  const pagedDiscriminates =
+    pagedFixture.length > 50 && (pagedFixture[0]?.comments.length ?? 0) > 50
+
+  await click(win, '[data-open-pulls]')
+  await pollJs(win, `document.querySelector('[data-pull="${SLUG_B}#${String(PR_PAGED)}"]')`, 10_000)
+  await click(win, `[data-pull="${SLUG_B}#${String(PR_PAGED)}"]`)
+  await pollJs(win, `document.querySelector('[data-pr-thread]')`, 30_000)
+  await sleep(1200)
+
+  const paged = await js<{
+    threads: string[]
+    counts: number[]
+    bigComments: string[]
+    note: string | null
+  }>(
+    win,
+    `(() => {
+       const cards = [...document.querySelectorAll('[data-pr-thread]')]
+       const big = document.querySelector('[data-pr-thread="PRRT_paged_0"]')
+       return {
+         threads: cards.map((el) => el.getAttribute('data-pr-thread') ?? ''),
+         counts: cards.map((el) => Number(el.getAttribute('data-pr-thread-comments') ?? '-1')),
+         bigComments: [...(big?.querySelectorAll('[data-pr-thread-comment]') ?? [])]
+           .map((el) => el.getAttribute('data-pr-thread-comment') ?? ''),
+         note: document.querySelector('[data-pr-threads-note]')?.textContent ?? null
+       }
+     })()`
+  )
+
+  const wantedThreadIds = pagedFixture.map((t) => t.id)
+  const wantedBigComments = pagedFixture[0]?.comments.map((c) => c.id) ?? []
+
+  checks.push({
+    id: 'PR-27',
+    criterion:
+      'A pull request with more threads than a page, and a thread with more replies than a page, shows all of them',
+    title: `${String(paged.threads.length)} threads painted of ${String(pagedFixture.length)}; the long thread has ${String(paged.bigComments.length)} of ${String(wantedBigComments.length)}`,
+    ok:
+      pagedDiscriminates &&
+      JSON.stringify(paged.threads) === JSON.stringify(wantedThreadIds) &&
+      JSON.stringify(paged.bigComments) === JSON.stringify(wantedBigComments) &&
+      // Every thread's own count, so a card that arrived without its replies is
+      // caught even where the card is collapsed and its comments are not in the
+      // DOM to count.
+      JSON.stringify(paged.counts) ===
+        JSON.stringify(pagedFixture.map((t) => t.comments.length)) &&
+      // Nothing was missed, so nothing is admitted.
+      paged.note === null,
+    detail: {
+      pagedDiscriminates,
+      fixtureThreads: pagedFixture.length,
+      fixtureRepliesOnFirst: pagedFixture[0]?.comments.length ?? 0,
+      paintedThreads: paged.threads.length,
+      paintedBigComments: paged.bigComments.length,
+      firstMissing: wantedThreadIds.find((id) => !paged.threads.includes(id)) ?? null,
+      note: paged.note,
+      pageSize: 50
+    },
+    notes: [
+      'Two connections page and both are walked. `reviewThreads` pages, and so do the comments',
+      'inside each thread - and the nested one is the connection a `gh api --paginate` would',
+      'have truncated silently rather than failed on.',
+      'The fake gh cuts the fixture array into pages at whatever `first:` the shipped query',
+      'asks for, rather than at a size agreed with this driver - so what is under test is the',
+      'loop in `gh.ts` and not two fixtures that match.',
+      'The counts are asserted to be past the page size first. A pagination probe that could',
+      'pass on a fixture of three threads is a probe that tests nothing, which is the PROF-4',
+      'failure with different numbers.',
+      'The ids are compared as an ordered list, not counted: a second page fetched with the',
+      'wrong cursor returns the right *number* of threads and the wrong ones.'
+    ]
+  })
+
+  // -----------------------------------------------------------------------
+  // PR-28: a row cached before any of this existed
+  //
+  // The whole correctness rule of the feature. `undefined` is "nobody has
+  // asked" and `[]` is "asked, and there are none", and they may never collapse
+  // into each other - a pull request that was cached before Helm could read
+  // threads must not repaint as one nobody wrote a line of review on.
+  //
+  // Reached through the app rather than by writing a row: a detail fetched
+  // while the thread query is failing, with nothing cached behind it, is
+  // byte-for-byte the row an older Helm wrote.
+  // -----------------------------------------------------------------------
+
+  writeBehaviour(fixtures.home, { auth: 'ok', list: 'ok', threads: 'error' })
+
+  await click(win, '[data-open-pulls]')
+  await pollJs(win, `document.querySelector('[data-pull="${SLUG_REAL}#9"]')`, 10_000)
+  await click(win, `[data-pull="${SLUG_REAL}#9"]`)
+  await pollJs(win, `document.querySelector('[data-pr-title]')`, 30_000)
+  await sleep(1200)
+
+  // This driver's own read of the column, not Helm's report of it: the claim is
+  // about a key that is *absent* from the JSON, and only the text can say that.
+  const cachedJson = detailJsonFor(dbFile, SLUG_REAL, 9)
+  const keyAbsent = cachedJson !== null && !cachedJson.includes('"reviewThreads"')
+
+  // Close the tab and open it again. The reopen is served from the cache -
+  // `pr:detail` runs no gh when a detail is held - which is exactly the state a
+  // Helm that was upgraded overnight starts in.
+  await js<boolean>(
+    win,
+    `(() => { const tab = document.querySelector('[data-tab="pr:${SLUG_REAL.replace(/"/g, '')}"]');
+      const el = [...document.querySelectorAll('[role="tablist"] button[aria-label^="Close "]')].at(-1);
+      if (!el) return false; el.click(); return true })()`
+  )
+  await sleep(600)
+  await click(win, '[data-open-pulls]')
+  await sleep(400)
+  await click(win, `[data-pull="${SLUG_REAL}#9"]`)
+  await pollJs(win, `document.querySelector('[data-pr-title]')`, 20_000)
+  await sleep(800)
+
+  const fromCache = await paint()
+
+  /**
+   * The same fact, on the other surface that now paints threads.
+   *
+   * The Files view marks rows from the same list, so it inherits the same rule
+   * and the same way of getting it wrong: an absent key read as "there are
+   * none" would paint a diff with no markers on it and a footer saying so,
+   * which is a page confidently stating something nothing has checked.
+   */
+  await click(win, '[data-pr-view="files"]')
+  await sleep(700)
+  const filesFromCache = await js<{ note: string | null; marked: number; loose: number }>(
+    win,
+    `(() => ({
+       note: document.querySelector('[data-pr-files-threads-note]')?.textContent ?? null,
+       marked: document.querySelectorAll('[data-pr-line-thread-block]').length,
+       loose: document.querySelectorAll('[data-pr-loose-thread]').length
+     }))()`
+  )
+  await click(win, '[data-pr-view="conversation"]')
+  await sleep(400)
+
+  // One refresh, with the thread query working again.
+  writeBehaviour(fixtures.home, { auth: 'ok', list: 'ok' })
+  await refreshTab()
+  const afterRefresh = await paint()
+  const refreshedJson = detailJsonFor(dbFile, SLUG_REAL, 9)
+
+  checks.push({
+    id: 'PR-28',
+    criterion:
+      'A detail cached before threads were fetched repaints as "not fetched", never as "none", and one refresh fixes it',
+    title: `the cached row ${keyAbsent ? 'has no reviewThreads key' : 'unexpectedly has one'}; the pane said ${JSON.stringify((fromCache?.note ?? '').slice(0, 48))}`,
+    ok:
+      keyAbsent &&
+      // "Not fetched", and the remedy named. Not "there are none", which is the
+      // sentence that would state as a fact something nothing has checked.
+      (fromCache?.note ?? '').includes('have not been fetched') &&
+      (fromCache?.note ?? '').includes('Refresh') &&
+      Object.keys(fromCache?.threads ?? {}).length === 0 &&
+      // ...and one refresh really does fix it: the key is written, and because
+      // this pull request genuinely has no threads the sentence goes away
+      // entirely rather than being replaced by a different one.
+      refreshedJson !== null &&
+      refreshedJson.includes('"reviewThreads":[]') &&
+      afterRefresh?.note === null &&
+      // The Files view says the same thing, and paints no markers rather than
+      // an absence of them: the rule holds on every surface that reads the key.
+      (filesFromCache.note ?? '').includes('have not been fetched') &&
+      filesFromCache.marked === 0 &&
+      filesFromCache.loose === 0,
+    detail: {
+      cachedDetailHasKey: !keyAbsent,
+      cachedNote: fromCache?.note ?? null,
+      cachedThreads: Object.keys(fromCache?.threads ?? {}).length,
+      filesViewFromCache: filesFromCache,
+      afterRefreshNote: afterRefresh?.note ?? null,
+      afterRefreshHasEmptyArray: refreshedJson?.includes('"reviewThreads":[]') ?? false
+    },
+    notes: [
+      'The two states are different facts and the surface has to say so: `undefined` is a pull',
+      'request nobody has asked the question of, `[]` is one GitHub answered "none" about. A',
+      'cache that folded them together would repaint every pull request cached by an earlier',
+      'Helm as one nobody wrote a line of review on - which is the bug this whole fetch exists',
+      'to fix, put back one level up.',
+      'The absent key is read out of the `detail` column as **text** by this driver\'s own',
+      'connection. A parsed object cannot tell "the key is missing" from "the key is undefined";',
+      'the JSON can, and it is the JSON the cache holds.',
+      'The row is produced by the app rather than planted: a detail fetched while the thread',
+      'query is failing, with nothing cached behind it, has exactly the shape an older Helm',
+      'wrote. Then the tab is closed and reopened, which is served from the cache and runs no',
+      'gh at all - the state a Helm upgraded overnight starts in.'
+    ]
+  })
+
+  // -----------------------------------------------------------------------
+  // PR-29: the thread fetch failing may not empty the pane
+  //
+  // This surface degrades stale-with-age, not to nothing. A thread is anchored
+  // to a path and a line and carries its own record of the diff it was written
+  // against, so one fetched ten minutes ago is still a true fact - and the age
+  // beside the reason is what makes keeping it honest.
+  // -----------------------------------------------------------------------
+
+  await click(win, '[data-open-pulls]')
+  await sleep(400)
+  await click(win, `[data-pull="${SLUG_A}#${String(PR_A)}"]`)
+  await pollJs(win, `document.querySelector('[data-pr-thread]')`, 20_000)
+  await sleep(600)
+
+  writeBehaviour(fixtures.home, { auth: 'ok', list: 'ok', threads: 'error' })
+  await refreshTab()
+
+  const degraded = await js<{
+    threads: string[]
+    entries: string[]
+    body: boolean
+    note: string | null
+    age: string | null
+  }>(
+    win,
+    `(() => {
+       const root = document.querySelector('[data-pr-conversation]')
+       return {
+         threads: [...(root?.querySelectorAll('[data-pr-thread]') ?? [])]
+           .map((el) => el.getAttribute('data-pr-thread') ?? ''),
+         entries: [...(root?.querySelectorAll('[data-pr-entry]') ?? [])]
+           .map((el) => el.getAttribute('data-pr-entry') ?? ''),
+         body: document.querySelector('[data-pr-body="body"]') !== null,
+         note: document.querySelector('[data-pr-threads-note]')?.textContent ?? null,
+         age: document.querySelector('[data-pr-threads-age]')?.textContent ?? null
+       }
+     })()`
+  )
+  // Scrolled to the foot before the shot, because the sentence this probe is
+  // about is the last thing on the page - a screenshot of the top would show a
+  // conversation that looks entirely healthy, which is exactly the picture that
+  // proves nothing.
+  await js<void>(
+    win,
+    `(() => { const el = document.querySelector('[data-pr-conversation]');
+      if (el) el.scrollTop = el.scrollHeight })()`
+  )
+  await sleep(400)
+  const degradedShot = await screenshot(win, shotDir, 'pr-threads-degraded.png')
+
+  writeBehaviour(fixtures.home, { auth: 'ok', list: 'ok' })
+  await refreshTab()
+  const recovered = await paint()
+
+  const wantedEntries = [...view.comments.map((c) => c.id), ...view.reviews.map((r) => r.id)].sort()
+
+  checks.push({
+    id: 'PR-29',
+    criterion:
+      'A thread fetch that fails keeps the conversation, keeps the threads it had, and says what is missing and how old it is',
+    title: `after the failure: ${String(degraded.entries.length)} entries, ${String(degraded.threads.length)} threads, note ${JSON.stringify((degraded.note ?? '').slice(0, 40))}`,
+    ok:
+      // The body, the issue comments and both reviews are all still there. A
+      // thread query that emptied the pane would be a second fetch taking the
+      // first one's answer down with it.
+      degraded.body &&
+      JSON.stringify([...degraded.entries].sort()) === JSON.stringify(wantedEntries) &&
+      // And the threads themselves stay, with their age on them - which is the
+      // rule this surface degrades by and the opposite of the usage figures.
+      JSON.stringify(degraded.threads) === JSON.stringify(readThreads().map((t) => t.id)) &&
+      (degraded.note ?? '').includes('could not be re-read') &&
+      (degraded.note ?? '').includes('the fixture is unwell') &&
+      degraded.age !== null &&
+      // The list pane's own caption, capitalised - which is "Fetched just now."
+      // for a moment inside the minute and "Fetched 4m ago." beyond it. Both
+      // forms are accepted because the driver cannot control which side of the
+      // minute the fetch lands on, and "Fetched now ago" - the shape a second
+      // copy of the caption logic produced - matches neither.
+      /^Fetched (just now|.+ ago)\.$/.test(degraded.age.trim()) &&
+      // ...and it clears by itself on the next good fetch, rather than latching.
+      recovered?.note === null,
+    detail: {
+      degraded,
+      expectedEntries: wantedEntries,
+      expectedThreads: readThreads().map((t) => t.id),
+      recoveredNote: recovered?.note ?? null,
+      screenshot: degradedShot.file
+    },
+    notes: [
+      'The one condition that stops a fetch pass on this surface is a missing `gh` binary',
+      '(PR-20). A thread query GitHub refused is a claim about a server, so it degrades rather',
+      'than gates: the tab keeps everything the other two fetches returned.',
+      'The threads themselves are **kept** rather than dropped, which is the opposite call to',
+      'the one the patch makes and the difference is what each is anchored to. A patch',
+      'describes a file list that has just been replaced; a thread is anchored to a path and a',
+      'line and carries the diff it was written against, so one from ten minutes ago is still',
+      'a true fact about that conversation.',
+      'The age is asserted separately from the sentence because they are computed in different',
+      'processes: the reason is main\'s, the age is the pane\'s, off the same live clock every',
+      'other caption on this surface runs on.',
+      'The recovery is asserted too. A banner that needed a restart to clear is the failure',
+      'PR-20 exists for, one level down.'
+    ]
+  })
+
+  // -----------------------------------------------------------------------
+  // PR-30: the Files view puts each thread on its row, and loses none
+  //
+  // The join is `anchorThreadsToFile`, and its unit tests cover the matching.
+  // What they cannot cover is whether the pane put the marker on the row the
+  // reader is looking at - the head-side gutter number - which is the whole
+  // point of the feature and is a claim about the DOM.
+  //
+  // The fixture already discriminates, and by luck rather than design, so it is
+  // asserted rather than assumed:
+  //   thread 1  remote.ts:14   a head line the patch has     -> on the row
+  //   thread 2  parse.ts:33    another one, and resolved     -> on the row
+  //   thread 3  README.md      line null, originalLine 88    -> nowhere to sit
+  // The third is the one worth having. 88 is not in README's `@@ -0,0 +1,3 @@`,
+  // so it is the case where the two fetches disagree, and it must still be on
+  // screen with a reason rather than dropped.
+  // -----------------------------------------------------------------------
+
+  await click(win, '[data-pr-view="files"]')
+  await pollJs(win, `document.querySelector('[data-pr-files-list]')`, 15_000)
+  await sleep(700)
+
+  const inFiles = await js<{
+    /** thread id -> the head line of the row it was painted under. */
+    onLine: Record<string, number | null>
+    /** thread id -> the reason it was painted at the foot of a file. */
+    loose: Record<string, string>
+    /** Rows carrying the accent marker, as `path:line`. */
+    marked: string[]
+    footer: string | null
+  }>(
+    win,
+    `(() => {
+       const onLine = {}
+       const loose = {}
+       const marked = []
+       for (const card of document.querySelectorAll('[data-pr-file]')) {
+         const path = card.getAttribute('data-pr-file') ?? ''
+         for (const block of card.querySelectorAll('[data-pr-line-thread-block]')) {
+           const at = block.getAttribute('data-pr-line-thread-block')
+           const line = at === null || at === '' ? null : Number(at)
+           if (line !== null) marked.push(path + ':' + String(line))
+           for (const el of block.querySelectorAll('[data-pr-thread]')) {
+             onLine[el.getAttribute('data-pr-thread') ?? ''] = line
+           }
+         }
+         for (const held of card.querySelectorAll('[data-pr-loose-thread]')) {
+           const why = held.getAttribute('data-pr-loose-thread') ?? ''
+           for (const el of held.querySelectorAll('[data-pr-thread]')) {
+             loose[el.getAttribute('data-pr-thread') ?? ''] = why
+           }
+         }
+       }
+       return {
+         onLine,
+         loose,
+         marked,
+         footer: document.querySelector('[data-pr-files-threads-note]')?.textContent ?? null
+       }
+     })()`
+  )
+  const filesShot = await screenshot(win, shotDir, 'pr-files-threads.png')
+
+  const fixture = readThreads()
+  // The fixture must contain all three shapes, or every claim below is
+  // satisfied by having measured nothing - PROF-4's failure, which this file
+  // already guards against once and guards against again here because these
+  // three are a different property of it than PR-25's three.
+  const readmeThread = fixture.find((t) => t.path === 'README.md')
+  const fixtureDiscriminatesHere =
+    fixture.length >= 3 &&
+    fixture.some((t) => t.line !== null && t.path.endsWith('remote.ts')) &&
+    fixture.some((t) => t.line !== null && t.path.endsWith('parse.ts')) &&
+    // The unanchorable one: a line the patch for its file does not contain.
+    readmeThread !== undefined &&
+    readmeThread.line === null &&
+    readmeThread.originalLine !== null &&
+    readmeThread.originalLine > 3
+
+  const anchored = fixture.filter((t) => t.path !== 'README.md')
+  const everyThreadIsSomewhere = fixture.every(
+    (t) => t.id in inFiles.onLine || t.id in inFiles.loose
+  )
+
+  checks.push({
+    id: 'PR-30',
+    criterion:
+      'A comment left on a line of the diff is shown on that line in the Files view, and one that cannot be placed is still shown',
+    title: `${String(Object.keys(inFiles.onLine).length)} threads on their rows, ${String(Object.keys(inFiles.loose).length)} at the foot of a file`,
+    ok:
+      fixtureDiscriminatesHere &&
+      // Each anchored thread on the head line GitHub named, and not near it.
+      anchored.every((t) => inFiles.onLine[t.id] === t.line) &&
+      // The outdated one has nowhere to sit and is kept anyway, with the reason.
+      inFiles.loose[readmeThread?.id ?? ''] === 'outside-the-patch' &&
+      !(readmeThread?.id !== undefined && readmeThread.id in inFiles.onLine) &&
+      // And nothing vanished between the two.
+      everyThreadIsSomewhere,
+    detail: {
+      onLine: inFiles.onLine,
+      loose: inFiles.loose,
+      markedRows: inFiles.marked,
+      expected: fixture.map((t) => ({
+        id: t.id,
+        path: t.path,
+        line: t.line,
+        originalLine: t.originalLine
+      })),
+      fixtureDiscriminatesHere,
+      screenshot: filesShot.file
+    },
+    notes: [
+      'The line asserted is the **head-side** one, which is the number in the right-hand',
+      'gutter - the same figure the reader is looking at. A join that matched on a hunk offset',
+      'could put a marker two rows out and still report a thread per file.',
+      'The unanchorable thread is the one worth having in the fixture. Its line is 88 and its',
+      "file's patch is three lines long, which is the ordinary fate of a remark about a line",
+      'somebody has since rewritten - GitHub already flags it `outdated`. Dropping it would be',
+      'the bug the thread fetch was written to fix, reintroduced in a second surface, so it is',
+      'painted at the foot of its file with the reason instead.',
+      'Anchoring to the nearest surviving hunk was the other option and is deliberately not',
+      'what happens: it is a guess with the appearance of precision, and nothing on the row',
+      'would tell the reader which markers were guesses.',
+      'The threads are still in Conversation, unchanged - PR-25 measures that and is not',
+      'relaxed by this. The Files view is a second way in, not a move.'
     ]
   })
 

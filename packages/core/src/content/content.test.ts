@@ -151,6 +151,65 @@ describe('renderMarkdown', () => {
     expect(out.html).toContain('[[not a link]]')
   })
 
+  /**
+   * `[[…]]` is not markdown, so remark parses what is inside it and the
+   * brackets land in different nodes. Every one of these rendered as literal
+   * text and counted as no link at all; the vault had one, and `CONT-4`'s two
+   * parsers disagreeing by exactly one is what found it.
+   */
+  it('finds a wikilink whose alias remark split into its own node', async () => {
+    const index = buildWikiIndex([
+      { path: 'C:/v/notes/beta.md', relPath: 'notes/beta.md', slug: 'beta' }
+    ] as never)
+    for (const alias of ['`code`', '**bold**', '_thin_']) {
+      const out = await renderMarkdown(`See [[beta|${alias}]] now.\n`, { index })
+      expect(out.counts.wikilinks, alias).toBe(1)
+      expect(out.counts.brokenWikilinks, alias).toBe(0)
+      expect(out.html, alias).toContain('data-wikilink-path="C:/v/notes/beta.md"')
+      expect(out.html, alias).not.toContain('[[')
+    }
+  })
+
+  /**
+   * The text after a spanned link's `]]` has to be scanned again rather than
+   * pushed out as prose. The first cut of the fix did push it, which traded the
+   * link it had just recovered for the next one along and left the total
+   * unchanged - a fix that measures as a no-op rather than as a regression.
+   */
+  it('still finds an ordinary wikilink following a spanned one', async () => {
+    const index = buildWikiIndex([
+      { path: 'C:/v/notes/beta.md', relPath: 'notes/beta.md', slug: 'beta' },
+      { path: 'C:/v/notes/gamma.md', relPath: 'notes/gamma.md', slug: 'gamma' }
+    ] as never)
+    const out = await renderMarkdown('Off [[beta|`alias`]], then see [[gamma]] after.\n', { index })
+    expect(out.counts.wikilinks).toBe(2)
+    expect(out.counts.brokenWikilinks).toBe(0)
+    expect(out.links.map((link) => link.target)).toEqual(['beta', 'gamma'])
+    expect(out.html).toContain('data-wikilink-path="C:/v/notes/gamma.md"')
+  })
+
+  /** A label is text: the alias's own markup is flattened away, not nested. */
+  it('labels a spanned link with its alias text and no markup', async () => {
+    const index = buildWikiIndex([
+      { path: 'C:/v/notes/beta.md', relPath: 'notes/beta.md', slug: 'beta' }
+    ] as never)
+    const out = await renderMarkdown('See [[beta|`project-pane-hub`]].\n', { index })
+    expect(out.links[0]?.label).toBe('project-pane-hub')
+    expect(out.html).toContain('>project-pane-hub</a>')
+    expect(out.html).not.toContain('<code>')
+  })
+
+  it('leaves an unclosed or block-spanning bracket pair as the text it is', async () => {
+    for (const source of [
+      'A stray [[open `bracket` with no closer.\n',
+      'A pair [[across `code`\n\nand a paragraph]] break.\n'
+    ]) {
+      const out = await renderMarkdown(source)
+      expect(out.counts.wikilinks, source).toBe(0)
+      expect(out.html, source).toContain('[[')
+    }
+  })
+
   it('renders a callout as an admonition, not a quotation', async () => {
     const out = await renderMarkdown('> [!warning] Supersedes the SDK draft\n> The body.\n')
     expect(out.counts.callouts).toBe(1)

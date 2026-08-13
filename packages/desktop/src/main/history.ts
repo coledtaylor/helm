@@ -10,7 +10,8 @@ import {
   readHistoryTail,
   scanTranscripts,
   type HistorySummary,
-  type Store
+  type Store,
+  type TranscriptFile
 } from '@helm/core'
 
 /**
@@ -67,6 +68,16 @@ export interface HistoryServiceDeps {
   store: Store
   /** Called after any pass that changed the totals. */
   onChange: (summary: HistorySummary) => void
+  /**
+   * The transcript archive, fed the walk this service has already done.
+   *
+   * `scanTranscripts` runs on every pass here because resumability is a
+   * property of the disk right now. The archive needs the same answer keyed by
+   * the same thing, so it is a second consumer of this walk rather than a
+   * second walk - see `main/archive.ts`, which explains why it is this walk and
+   * not the usage index's.
+   */
+  onTranscripts?: ((transcripts: Map<string, TranscriptFile>) => void) | undefined
   /** Overridden by `--history-check` to index a fixture instead of the real tree. */
   home?: string | undefined
 }
@@ -74,6 +85,7 @@ export interface HistoryServiceDeps {
 export function createHistoryService({
   store,
   onChange,
+  onTranscripts,
   home = claudeHome()
 }: HistoryServiceDeps): HistoryService {
   const file = historyFileIn(home)
@@ -105,6 +117,17 @@ export function createHistoryService({
       next.error !== last.error
     last = next
     if (changed) onChange(next)
+    // After the index, and outside its transaction: the archive is a separate
+    // set of tables with a separate cursor, and a slow pass over a transcript
+    // that has grown must not hold the write lock the launcher's list reads
+    // through. A throw here is the archive's problem and not the index's.
+    if (onTranscripts !== undefined) {
+      try {
+        onTranscripts(transcripts)
+      } catch (err) {
+        console.warn(`transcript archive pass failed: ${String(err)}`)
+      }
+    }
     return next
   }
 

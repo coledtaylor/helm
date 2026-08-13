@@ -3,10 +3,10 @@ import { join } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import {
+  drag,
   probe,
   screenshot,
   sendKey,
-  sendMouse,
   sendWheel,
   typeText,
   countExactPixels,
@@ -720,10 +720,13 @@ async function checkSelection(ctx: Ctx): Promise<Check> {
   const x0 = geo.x + geo.cellWidth * 0.2
   const x1 = geo.x + geo.cellWidth * (SELECT_TEXT.length - 0.2)
 
-  await sendMouse(ctx.win, 'mouseDown', x0, y)
-  await sendMouse(ctx.win, 'mouseMove', (x0 + x1) / 2, y)
-  await sendMouse(ctx.win, 'mouseMove', x1, y)
-  await sendMouse(ctx.win, 'mouseUp', x1, y)
+  // A real drag - the button held for the moves in the middle. Written out by
+  // hand this sent them as `buttons: 0`, which is a hover; xterm's selection
+  // manager tracks moves it started on a press and does not check, so it made
+  // the selection anyway. It works either way, and this is the suite whose
+  // subject is what a real terminal does under a real gesture, so it does the
+  // gesture.
+  await drag(ctx.win, { x: x0, y }, { x: x1, y })
   await sleep(200)
 
   const sel = await probe<{ text: string; has: boolean }>(ctx.win, { op: 'selectionText' })

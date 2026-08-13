@@ -107,6 +107,37 @@ export function parseGitStatus(stdout: string): GitState {
   return state
 }
 
+/**
+ * The branch name alone, for a caller that has somebody waiting on it.
+ *
+ * `readGitState` above answers this too, and is deliberately not what a session
+ * launch uses. That one is `git status --untracked-files=all`, whose cost is the
+ * size of the working tree - fine on a background refresh, and unbounded work in
+ * front of a person who has just clicked "Start session here". `symbolic-ref`
+ * reads one file and answers in single-digit milliseconds however large the repo
+ * is.
+ *
+ * `symbolic-ref` rather than `rev-parse --abbrev-ref HEAD` because it is honest
+ * about both edge cases at once: it exits 1 on a detached HEAD instead of
+ * printing the literal string `HEAD` as a branch name, and it still answers on
+ * an unborn branch, where `rev-parse` fails because there is no commit for HEAD
+ * to resolve to. Every failure - no git, not a repository, detached, unreadable
+ * - is the same answer here: null, which the caller paints as nothing.
+ */
+export async function readGitBranch(cwd: string): Promise<string | null> {
+  try {
+    const { stdout } = await run('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+      cwd,
+      timeout: TIMEOUT_MS,
+      windowsHide: true
+    })
+    const branch = stdout.trim()
+    return branch === '' ? null : branch
+  } catch {
+    return null
+  }
+}
+
 /** Reads many repos at once. Bounded so a root holding fifty repos does not
  * spawn fifty git processes into the same disk at the same moment. */
 export async function readGitStates(

@@ -11,9 +11,13 @@ export {
   overlayPluginName,
   overlayPluginNames,
   planOverlays,
+  probeProcess,
   syncOverlay,
   OVERLAY_DIRS,
   type OverlayPlan,
+  type OwnerLiveness,
+  type ShimOwner,
+  type ShimWorld,
   type SyncedOverlay
 } from './overlay'
 export {

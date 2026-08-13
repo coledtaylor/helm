@@ -1,5 +1,7 @@
 import type {
   AppSettings,
+  ArchiveStats,
+  ArchivedConversation,
   CachedProject,
   ConfigFileContent,
   ConfigScope,
@@ -53,7 +55,13 @@ import type { ProbeOp, TermCreateOptions } from './protocol'
  *   Events   - main pushes to the renderer  (webContents.send)
  */
 
-export type AppMode = 'dev' | 'portable' | 'installed'
+/**
+ * `dev-live` is the unpackaged run with **no data directory of its own**, which
+ * shares `%APPDATA%\Helm` with the installed app. It is a mode rather than the
+ * absence of one because the status bar has to be able to name it: everything
+ * that makes it dangerous is invisible from inside the window.
+ */
+export type AppMode = 'dev' | 'dev-live' | 'portable' | 'installed'
 
 export interface AppInfo {
   version: string
@@ -74,6 +82,17 @@ export interface AppInfo {
   claudeVersion: string | null
   /** Windows build number; xterm uses it to pick ConPTY quirk handling. */
   windowsBuild: number | null
+  /**
+   * The releases page, so a window can offer it without having asked GitHub
+   * anything.
+   *
+   * `UpdateCheck.url` carries the same address but only arrives with an answer,
+   * and the three states where somebody most wants this link - up to date, the
+   * setting off, no network - are exactly the three that produce no answer.
+   * Read once at startup with the rest of the app's identity; opened through
+   * `shell:openExternal`, never fetched.
+   */
+  releasesUrl: string
 }
 
 /**
@@ -296,6 +315,24 @@ export interface CloseSessionResult {
 }
 
 /**
+ * Renaming a session's tab.
+ *
+ * The label goes to main rather than being held in the window because it has to
+ * outlive the window: a renderer reload adopts the sessions back from main
+ * (`session:list`), and a rename that lived in React state would be forgotten by
+ * the reload while the session it named carried on running. It is written to
+ * `sessions.label` and nothing touches `sessions.name` - see that column's
+ * comment in `schema.ts` for why the divergence from `/resume` is on purpose.
+ *
+ * Null, or a string that is only whitespace, clears the label and the tab goes
+ * back to reading the name the CLI was given.
+ */
+export interface RenameSessionRequest {
+  id: number
+  label: string | null
+}
+
+/**
  * Which file the config editor currently has open.
  *
  * The main process watches it so that a change made in another editor reaches
@@ -424,8 +461,10 @@ export interface IpcRequests {
    * anything. No artefact is fetched, nothing is replaced, nothing restarts.
    *
    * This channel keeps no throttle of its own. It is a person pressing
-   * something, and a deliberate act that silently did nothing would be worse
-   * than no button.
+   * something - Check now, in Settings under Updates - and a deliberate act
+   * that silently did nothing would be worse than no button. It is also the
+   * only route to an answer when `updateCheck` is off: the setting governs
+   * whether Helm asks by itself, not whether the user may.
    *
    * The pull-request surface reaches GitHub as well, but through the user's own
    * `gh` CLI on a schedule the user sets (default every 5 minutes, `0` turns it
@@ -452,6 +491,12 @@ export interface IpcRequests {
   'session:close': { request: CloseSessionRequest; response: CloseSessionResult }
   /** Sessions this main process is currently hosting, for a renderer reload. */
   'session:list': { request: void; response: SessionRecord[] }
+  /**
+   * Rename a session's tab. Answers with the row as main now holds it, which is
+   * what the window adopts - the same shape `settings:write` uses, so a label a
+   * validator normalised cannot drift from what was stored.
+   */
+  'session:rename': { request: RenameSessionRequest; response: SessionRecord }
 
   /**
    * The project shell - a plain terminal under the project pane, opened in
@@ -520,6 +565,29 @@ export interface IpcRequests {
    * rather than opening a tab that prints "No conversation found" and exits.
    */
   'history:resume': { request: ResumeSessionRequest; response: ResumedSession }
+
+  /**
+   * The transcript archive: the conversations Helm kept after Claude Code
+   * deleted them.
+   *
+   * Read-only in both directions, and in two senses. Helm never writes to
+   * `~/.claude` to build this - `main/archive.ts` only ever reads - and the
+   * window can only read it back: there is no channel here that captures,
+   * deletes or re-runs anything, because none of those is the window's to
+   * decide. What the window may change is the ceiling, and that is an ordinary
+   * `settings:write`.
+   *
+   * This is what CLAUDE.md's Scope paragraph was amended for. Helm still
+   * renders nothing for a **live** session; an archived transcript is a record
+   * on disk that Claude Code is about to remove, and nothing on this channel is
+   * ever in the path of a running session.
+   */
+  'archive:conversation': {
+    request: { sessionId: string }
+    response: ArchivedConversation | null
+  }
+  /** Sessions, messages and bytes against the ceiling. What Settings states. */
+  'archive:stats': { request: void; response: ArchiveStats }
 
   /**
    * The config console. This is the one surface that *writes* to a
@@ -746,6 +814,14 @@ export interface IpcEvents {
   'history:changed': HistorySummary
 
   /**
+   * The transcript archive moved: a conversation was captured, or the ceiling
+   * dropped one. Pushed for the reason `history:changed` is - the writes that
+   * matter are the ones Helm did not cause, and a settings pane that reported a
+   * figure only while somebody was looking at it would be reporting nothing.
+   */
+  'archive:changed': ArchiveStats
+
+  /**
    * Claude Code refreshed its usage figures. Pushed for the same reason
    * `history:changed` is: the file belongs to every `claude` on the machine,
    * and the refresh that matters is the one Helm did not cause.
@@ -892,6 +968,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'session:start': true,
   'session:close': true,
   'session:list': true,
+  'session:rename': true,
   'pterm:open': true,
   'pterm:close': true,
   'pterm:shells': true,
@@ -908,6 +985,8 @@ export const REQUEST_CHANNELS = Object.keys({
   'history:projects': true,
   'history:refresh': true,
   'history:resume': true,
+  'archive:conversation': true,
+  'archive:stats': true,
   'config:scopes': true,
   'config:tree': true,
   'config:read': true,
@@ -965,6 +1044,7 @@ export const EVENT_CHANNELS = Object.keys({
   'profiles:changed': true,
   'theme:changed': true,
   'history:changed': true,
+  'archive:changed': true,
   'usage:changed': true,
   'update:checked': true,
   'pr:changed': true,

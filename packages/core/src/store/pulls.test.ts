@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { PullDetail, PullSummary } from '../github/types'
+import { heldReviewThreads } from '../github/parse'
 import { openStore, type Store } from './db'
 import {
   forgetPrRepos,
@@ -273,6 +274,59 @@ describe('replaceRepoPulls', () => {
     // Explicit null is the other thing entirely, and does erase it.
     writePullDetail(store, 'acme/web', 42, detail(), { diff: null })
     expect(readPull(store, 'acme/web', 42)?.diff).toBeNull()
+  })
+
+  it('tells a detail cached before threads existed from one that has none', () => {
+    // The distinction this whole surface turns on, asserted through the real
+    // column rather than through `JSON.stringify` alone: SQLite holds the
+    // detail as text and drizzle parses it back, and if that round trip turned
+    // an absent key into `[]` then every pull request cached by an earlier Helm
+    // would repaint as one nobody wrote a line of review on.
+    replaceRepoPulls(store, 'acme/web', [pull({ number: 42 }), pull({ number: 43 })])
+
+    // A row an older Helm wrote: the key was not in the type, so it is not in
+    // the JSON.
+    writePullDetail(store, 'acme/web', 42, detail())
+    // A row this Helm wrote after asking GitHub and being told there are none.
+    writePullDetail(store, 'acme/web', 43, detail({ reviewThreads: [] }))
+
+    const older = readPull(store, 'acme/web', 42)?.detail
+    const asked = readPull(store, 'acme/web', 43)?.detail
+    expect(older?.reviewThreads).toBeUndefined()
+    expect(heldReviewThreads(older)).toBeUndefined()
+    expect(asked?.reviewThreads).toEqual([])
+    expect(heldReviewThreads(asked)).toEqual([])
+  })
+
+  it('round-trips a thread whole, hunk and replies included', () => {
+    replaceRepoPulls(store, 'acme/web', [pull({ number: 42 })])
+    const thread = {
+      id: 'PRRT_1',
+      path: 'packages/core/src/github/gh.ts',
+      line: null,
+      originalLine: 118,
+      diffHunk: '@@ -110,4 +110,6 @@ export async function fetchOpenPulls(\n+  const paged = true',
+      isResolved: true,
+      isOutdated: true,
+      comments: [
+        { id: 'PRRC_1', author: 'reviewer', authorIsBot: false, association: 'MEMBER', body: 'Page this.', createdAt: Date.parse('2026-08-10T12:00:00Z'), url: 'https://github.com/acme/web/pull/42#discussion_r1' },
+        { id: 'PRRC_2', author: 'coledtaylor', authorIsBot: false, association: 'OWNER', body: 'Done.', createdAt: Date.parse('2026-08-10T12:30:00Z'), url: 'https://github.com/acme/web/pull/42#discussion_r2' }
+      ]
+    }
+    writePullDetail(
+      store,
+      'acme/web',
+      42,
+      detail({ reviewThreads: [thread], reviewThreadsFetchedAt: Date.parse('2026-08-10T13:00:00Z') })
+    )
+
+    const read = readPull(store, 'acme/web', 42)?.detail
+    expect(read?.reviewThreads).toEqual([thread])
+    // `line: null` has to survive as null rather than becoming absent: on an
+    // outdated thread it is the difference between "no current position" and
+    // "position unknown", and the pane paints `originalLine` for the first.
+    expect(read?.reviewThreads?.[0]?.line).toBeNull()
+    expect(read?.reviewThreadsFetchedAt).toBe(Date.parse('2026-08-10T13:00:00Z'))
   })
 
   it('has no patch until one has been fetched', () => {
