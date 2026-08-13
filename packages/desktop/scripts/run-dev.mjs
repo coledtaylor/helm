@@ -42,16 +42,36 @@ const require = createRequire(import.meta.url)
 
 const argv = process.argv.slice(2)
 const fresh = argv.includes('--fresh')
-const passthrough = argv.filter((arg) => arg !== '--fresh')
+const driveArg = argv.find((arg) => arg === '--drive' || arg.startsWith('--drive='))
+const passthrough = argv.filter((arg) => arg !== '--fresh' && arg !== driveArg)
 
 const { root, dataDir, env } = isolate('dev', { seed: !fresh, concurrent: true, group: null })
 const gh = writeDevGh(root)
+
+/**
+ * Chromium's remote debugging port, for `scripts/drive-dev.mjs`.
+ *
+ * **Off unless asked for.** An open debugging port is a door into a process
+ * that can reach the real `~/.claude` and spawn real sessions, and this
+ * repository's habit with doors is not to build the ones nothing needs - the
+ * artifact scheme is `corsEnabled: false` for the same reason. One flag is a
+ * small price for the port not existing the rest of the time.
+ *
+ * `electron-vite` reads it from the environment and passes
+ * `--remote-debugging-port` to the app it starts, including across a `--watch`
+ * restart.
+ */
+const drivePort = driveArg === undefined ? null : (driveArg.split('=')[1] ?? '9333')
+if (drivePort !== null) env.REMOTE_DEBUGGING_PORT = drivePort
 
 console.log('')
 console.log(`Helm dev is isolated: ${dataDir}`)
 console.log(`  database   ${fresh ? 'none - this is the first-run state' : 'a copy of the real one, taken just now'}`)
 console.log(`  gh         ${gh} (synthetic; no network, and it refuses pr checkout)`)
 console.log(`  ~/.claude  the real one, so sessions are real sessions`)
+if (drivePort !== null) {
+  console.log(`  drive      127.0.0.1:${drivePort} - node scripts/drive-dev.mjs text`)
+}
 console.log('')
 
 // What the real directory looked like on the way in, so the claim this whole

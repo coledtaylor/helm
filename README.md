@@ -209,6 +209,7 @@ shape.
 pnpm install
 pnpm dev               # the app, with hot reload, isolated
 pnpm dev --fresh       # ...against no database at all, which is first run
+pnpm dev --drive       # ...with the port scripts/drive-dev.mjs clicks through
 pnpm dev:live          # ...against %APPDATA%\Helm, the installed app's own
 pnpm check             # typecheck + lint + unit tests (what CI runs)
 pnpm dist:win          # portable exe + NSIS installer

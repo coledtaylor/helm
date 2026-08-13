@@ -19,6 +19,10 @@ using while it runs. A UI change is not done until you have looked at one, and
 measuring a suspect edge in the PNG beats eyeballing it. `--only=` narrows the
 walk; the **`checks`** skill has the groups.
 
+For the question design-shot's fixed itinerary does not reach - what happens
+two clicks in - `pnpm dev --drive` and `scripts/drive-dev.mjs` click through
+the window you have open, and take the same capture. The **`dev`** skill has it.
+
 ## Where the rest of this lives
 
 This file is the part that has to be in mind while doing *anything*. Everything
@@ -28,6 +32,7 @@ true when the code moves.
 
 | skill | read it before |
 |---|---|
+| **`dev`** | launching the app to look at a change, or driving the window you have open |
 | **`checks`** | running or writing a real-window check, or deciding which one a change owes |
 | **`surfaces`** | editing the terminal, the usage figures, the pull-request pane, or anything touching a `.claude` tree |
 | **`procedures`** | adding an app setting, changing the schema, or building a release |
