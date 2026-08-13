@@ -13,6 +13,7 @@ import {
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
   THEME_PREFERENCES,
+  TRANSCRIPT_ARCHIVE_BYTES,
   USAGE_DISPLAY_MODES,
   WORKSPACE_TABS_MAX,
   type AppSettings
@@ -309,6 +310,17 @@ export const SETTING_VALIDATORS: SettingValidators = {
     if (!isAbsolute(value)) return `expected an absolute path, got ${JSON.stringify(value)}`
     return null
   },
+
+  /**
+   * The transcript archive's ceiling, in bytes.
+   *
+   * A plain bounded integer, with no "off" value beside it - unlike
+   * `prPollMinutes`, where zero is a real state. Turning the archive off is not
+   * something this key expresses, because the archive is not optional: see the
+   * field's comment in `types.ts`. The floor is low enough for a check to drive
+   * eviction, which is the whole reason it is not something respectable.
+   */
+  transcriptArchiveMaxBytes: boundedInteger(TRANSCRIPT_ARCHIVE_BYTES),
 
   /** Null means "find it"; anything else is absolute, exactly as `claudePath`. */
   ghPath: (value) => {

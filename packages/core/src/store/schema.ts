@@ -1,5 +1,13 @@
 import { sql } from 'drizzle-orm'
-import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import {
+  blob,
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex
+} from 'drizzle-orm/sqlite-core'
 import type { PullDetail, PullPatch, PullSummary } from '../github/types'
 
 /**
@@ -237,6 +245,131 @@ export const usageIndex = sqliteTable('usage_index', {
   rows: integer('rows').notNull().default(0),
   indexedAt: text('indexed_at').notNull().default(now)
 })
+
+/**
+ * One archived conversation, keyed by the session id `history_sessions` uses so
+ * the two join.
+ *
+ * The row outlives the transcript it was read from, which is the entire point:
+ * Claude Code reaps transcripts on its own schedule and 91% of the
+ * conversations behind `history.jsonl` were already gone when this was measured
+ * (744 sessions recorded, 68 transcripts surviving, 2026-08-08).
+ *
+ * `state` is what makes "we had this and dropped it to stay under your limit" a
+ * different sentence from "this was reaped before Helm ever saw it". An evicted
+ * row keeps every figure it had - the message count, the bytes, when it was
+ * captured - and loses only its messages, so the surface can say which happened
+ * and the archive cannot re-capture what the ceiling just threw away.
+ */
+export const transcriptSessions = sqliteTable(
+  'transcript_sessions',
+  {
+    /** Lower-cased, because `history.jsonl` and the file names disagree on case. */
+    sessionId: text('session_id').primaryKey(),
+    /** The transcript this was read from. May no longer exist; that is expected. */
+    sourceFile: text('source_file').notNull(),
+    /** `archived` while the messages are here, `evicted` once the ceiling took them. */
+    state: text('state', { enum: ['archived', 'evicted'] })
+      .notNull()
+      .default('archived'),
+    /** Epoch ms of the first and last message captured. */
+    firstAt: integer('first_at'),
+    lastAt: integer('last_at'),
+    messageCount: integer('message_count').notNull().default(0),
+    /** Message text as it was read, in bytes, before compression. */
+    rawBytes: integer('raw_bytes').notNull().default(0),
+    /** What is actually in this database for it. The ceiling is enforced on this. */
+    storedBytes: integer('stored_bytes').notNull().default(0),
+    capturedAt: text('captured_at').notNull().default(now),
+    /** When the ceiling dropped it. Null while `state` is `archived`. */
+    evictedAt: text('evicted_at')
+  },
+  // Eviction asks one question - which archived session is oldest - and the
+  // settings pane asks the other, which is how much is stored.
+  (t) => [index('transcript_sessions_oldest_idx').on(t.state, t.lastAt)]
+)
+
+/**
+ * The messages, one row each.
+ *
+ * `uuid` is the dedup key for the reason `usage_messages` gives: a forked
+ * conversation copies its parent's history into a new file, so the same message
+ * genuinely is on disk twice, and re-reading a file from zero re-offers every
+ * row it has ever had. It is a UNIQUE column rather than the primary key
+ * because the FTS index below is keyed by rowid, and an integer `id` is the
+ * rowid rather than an alias for a 36-character string.
+ *
+ * `body` is compressed (`node:zlib` raw deflate) unless compressing it made it
+ * bigger, which happens for the short ones - hence `compressed`, and hence
+ * `stored_bytes` being recorded rather than derived. The ceiling is enforced
+ * against what is on disk, so what is on disk is what gets counted.
+ */
+export const transcriptMessages = sqliteTable(
+  'transcript_messages',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    uuid: text('uuid').notNull(),
+    sessionId: text('session_id').notNull(),
+    /** `user` or `assistant`. Stored as text; a transcript has two speakers. */
+    role: text('role', { enum: ['user', 'assistant'] }).notNull(),
+    /** Epoch ms. Ordering within a session, and the archive's own time axis. */
+    at: integer('at').notNull(),
+    body: blob('body').notNull(),
+    compressed: integer('compressed', { mode: 'boolean' }).notNull().default(false),
+    rawBytes: integer('raw_bytes').notNull().default(0),
+    storedBytes: integer('stored_bytes').notNull().default(0)
+  },
+  (t) => [
+    uniqueIndex('transcript_messages_uuid_unique').on(t.uuid),
+    index('transcript_messages_session_idx').on(t.sessionId, t.at, t.id)
+  ]
+)
+
+/**
+ * How much of each transcript has been archived. Keyed by path, like
+ * `usage_index` and `history_index`, so pointing `CLAUDE_CONFIG_DIR` at a
+ * different tree is a different cursor rather than a corrupt one.
+ *
+ * Separate from `usage_index` deliberately, even though both are cursors into
+ * the same files: that one records bytes whose *tokens* have been counted, and
+ * a database that already has it at EOF would otherwise mean the archive could
+ * only ever capture what was appended after this feature shipped.
+ */
+export const transcriptIndex = sqliteTable('transcript_index', {
+  file: text('file').primaryKey(),
+  bytes: integer('bytes').notNull(),
+  /** Messages taken from this file. Lets a pass report progress without a COUNT. */
+  messages: integer('messages').notNull().default(0),
+  indexedAt: text('indexed_at').notNull().default(now)
+})
+
+/*
+ * THERE IS A FOURTH ARCHIVE TABLE AND IT IS NOT IN THIS FILE.
+ *
+ * `transcript_fts` is an FTS5 virtual table, and drizzle-kit does not model
+ * virtual tables at all - it cannot generate one and it cannot see one that
+ * exists. So the table, its trigger and its `PRAGMA` live as hand-written SQL
+ * appended to the end of the generated migration that created the three tables
+ * above (`drizzle/0007_*.sql`). `pnpm db:generate` re-runs
+ * `scripts/embed-migrations.mjs` over whatever is in that folder, so a
+ * hand-edited migration survives regeneration; a *new* migration that needs to
+ * touch the FTS table has to carry its own hand-written SQL the same way.
+ *
+ * Two things about it will trip up the next schema change here:
+ *
+ *   It is **contentless** (`content=''`). The message text is not in it - the
+ *   text lives compressed in `transcript_messages.body`, and there is no column
+ *   a trigger could read it out of. So an INSERT into the index is done in code,
+ *   beside the INSERT into `transcript_messages` and inside the same
+ *   transaction (`store/archive.ts`). A search returns rowids and the text is
+ *   decompressed to show it.
+ *
+ *   The DELETE *is* a trigger (`AFTER DELETE ON transcript_messages`), because
+ *   it needs only `old.id`, and because eviction is the path that would
+ *   otherwise silently leak index entries for messages that no longer exist.
+ *   That needs `contentless_delete=1`, which is SQLite 3.43+; better-sqlite3 13
+ *   bundles 3.53.
+ */
 
 /** Single-row-per-key JSON blobs. See `AppSettings` for the key space. */
 export const appSettings = sqliteTable('app_settings', {

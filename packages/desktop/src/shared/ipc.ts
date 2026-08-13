@@ -1,5 +1,7 @@
 import type {
   AppSettings,
+  ArchiveStats,
+  ArchivedConversation,
   CachedProject,
   ConfigFileContent,
   ConfigScope,
@@ -541,6 +543,29 @@ export interface IpcRequests {
   'history:resume': { request: ResumeSessionRequest; response: ResumedSession }
 
   /**
+   * The transcript archive: the conversations Helm kept after Claude Code
+   * deleted them.
+   *
+   * Read-only in both directions, and in two senses. Helm never writes to
+   * `~/.claude` to build this - `main/archive.ts` only ever reads - and the
+   * window can only read it back: there is no channel here that captures,
+   * deletes or re-runs anything, because none of those is the window's to
+   * decide. What the window may change is the ceiling, and that is an ordinary
+   * `settings:write`.
+   *
+   * This is what CLAUDE.md's Scope paragraph was amended for. Helm still
+   * renders nothing for a **live** session; an archived transcript is a record
+   * on disk that Claude Code is about to remove, and nothing on this channel is
+   * ever in the path of a running session.
+   */
+  'archive:conversation': {
+    request: { sessionId: string }
+    response: ArchivedConversation | null
+  }
+  /** Sessions, messages and bytes against the ceiling. What Settings states. */
+  'archive:stats': { request: void; response: ArchiveStats }
+
+  /**
    * The config console. This is the one surface that *writes* to a
    * `.claude` tree, which is why every write goes through `config:write` and
    * nothing else - the snapshot is taken there, and a second path into the
@@ -765,6 +790,14 @@ export interface IpcEvents {
   'history:changed': HistorySummary
 
   /**
+   * The transcript archive moved: a conversation was captured, or the ceiling
+   * dropped one. Pushed for the reason `history:changed` is - the writes that
+   * matter are the ones Helm did not cause, and a settings pane that reported a
+   * figure only while somebody was looking at it would be reporting nothing.
+   */
+  'archive:changed': ArchiveStats
+
+  /**
    * Claude Code refreshed its usage figures. Pushed for the same reason
    * `history:changed` is: the file belongs to every `claude` on the machine,
    * and the refresh that matters is the one Helm did not cause.
@@ -927,6 +960,8 @@ export const REQUEST_CHANNELS = Object.keys({
   'history:projects': true,
   'history:refresh': true,
   'history:resume': true,
+  'archive:conversation': true,
+  'archive:stats': true,
   'config:scopes': true,
   'config:tree': true,
   'config:read': true,
@@ -984,6 +1019,7 @@ export const EVENT_CHANNELS = Object.keys({
   'profiles:changed': true,
   'theme:changed': true,
   'history:changed': true,
+  'archive:changed': true,
   'usage:changed': true,
   'update:checked': true,
   'pr:changed': true,

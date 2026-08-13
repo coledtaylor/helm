@@ -1,6 +1,7 @@
 import { basename } from 'node:path'
 import type { TranscriptFile, HistoryTail } from '../discovery/history'
 import type {
+  ArchiveSessionState,
   HistoryPage,
   HistoryProject,
   HistoryPrompt,
@@ -8,6 +9,7 @@ import type {
   HistorySession,
   HistorySummary
 } from '../types'
+import { searchArchive, type ArchiveMatch } from './archive'
 import type { Store } from './db'
 
 /**
@@ -204,6 +206,8 @@ interface SessionRow {
   transcript_file: string | null
   transcript_bytes: number | null
   project_exists: number
+  archive_state: ArchiveSessionState | null
+  archived_messages: number | null
   match?: string | null
 }
 
@@ -218,11 +222,27 @@ function toSession(row: SessionRow): HistorySession {
     firstPrompt: row.first_prompt,
     transcriptFile: row.transcript_file,
     transcriptBytes: row.transcript_bytes,
-    projectExists: row.project_exists === 1
+    projectExists: row.project_exists === 1,
+    archive: row.archive_state,
+    archivedMessages: row.archived_messages
   }
   if (row.match !== undefined && row.match !== null) session.match = row.match
   return session
 }
+
+/**
+ * The archive columns, joined onto every session read.
+ *
+ * A LEFT JOIN rather than a second query, because the list needs this on every
+ * row it paints: which of the three states a session is in - resumable, kept
+ * here, dropped for space - is a property of the row, not something to fetch
+ * per selection. `history_sessions` is a table of ~800 rows and
+ * `transcript_sessions` is keyed by the same id, so the join is an index lookup
+ * per row.
+ */
+const ARCHIVE_JOIN = 'LEFT JOIN transcript_sessions a ON a.session_id = lower(s.session_id)'
+const ARCHIVE_COLUMNS = `, a.state AS archive_state,
+              CASE WHEN a.session_id IS NULL THEN NULL ELSE a.message_count END AS archived_messages`
 
 /**
  * A substring of a prompt or a project path, as a LIKE pattern.
@@ -242,15 +262,30 @@ function likePattern(search: string): string {
 interface Filters {
   where: string
   params: Record<string, string | number>
+  /** Bound positionally, ahead of the named parameters. See `readHistorySessions`. */
+  ids: string[]
   searching: boolean
 }
 
-function buildFilters(query: HistoryQuery): Filters {
+function buildFilters(query: HistoryQuery, archived: Map<string, ArchiveMatch> | null): Filters {
   const clauses: string[] = []
   const params: Record<string, string | number> = {}
+  const ids: string[] = []
 
   const search = query.search?.trim() ?? ''
-  if (search !== '') {
+
+  if (search !== '' && archived !== null) {
+    // The archive's answer, as a list of ids. Empty is a real answer - nothing
+    // said that - and it has to produce no rows rather than no filter, hence
+    // the `IN ()` that a zero-length list would not express: the impossible
+    // clause is written explicitly.
+    ids.push(...archived.keys())
+    clauses.push(
+      ids.length === 0
+        ? '0'
+        : `lower(s.session_id) IN (${ids.map(() => '?').join(', ')})`
+    )
+  } else if (search !== '') {
     params['like'] = likePattern(search)
     // The project counts as well as the prompt. "Every session in that
     // repository" is the same gesture as "the session where I asked about X",
@@ -279,44 +314,70 @@ function buildFilters(query: HistoryQuery): Filters {
   return {
     where: clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '',
     params,
+    ids,
     searching: search !== ''
   }
 }
 
-/** Most recently active first. `total` is the match count before `limit`. */
+/**
+ * Most recently active first. `total` is the match count before `limit`.
+ *
+ * `scope: 'messages'` searches the archive instead of the prompts: FTS5 answers
+ * with session ids, and this filters the list to them. The two scopes are kept
+ * apart rather than unioned - see `HistorySearchScope` - and the shape of the
+ * query is what enforces it, so a caller cannot accidentally get both.
+ */
 export function readHistorySessions(store: Store, query: HistoryQuery = {}): HistoryPage {
   const started = performance.now()
-  const { where, params, searching } = buildFilters(query)
+  const search = query.search?.trim() ?? ''
+  const overMessages = query.scope === 'messages' && search !== ''
+  const archived = overMessages ? searchArchive(store, search) : null
+
+  const { where, params, ids, searching } = buildFilters(query, archived)
   const limit = Math.max(1, query.limit ?? DEFAULT_LIMIT)
 
-  // Only computed when there is a search to have matched: an unfiltered
-  // listing pays nothing for a column it would not show.
-  const matchColumn = searching
-    ? `, (SELECT p.text FROM history_prompts p
+  // Only computed when there is a prompt search to have matched: an unfiltered
+  // listing pays nothing for a column it would not show, and a message search
+  // already has its match in hand from FTS5.
+  const matchColumn =
+    searching && archived === null
+      ? `, (SELECT p.text FROM history_prompts p
           WHERE p.session_id = s.session_id AND p.text LIKE @like ESCAPE '\\'
           ORDER BY p.seq LIMIT 1) AS match`
-    : ''
+      : ''
 
+  // Anonymous parameters first, then the named ones as the final argument -
+  // better-sqlite3's own convention for a statement that carries both. The
+  // anonymous ones are the archive's session ids, which cannot be named because
+  // there is an unknown number of them.
   const rows = store.raw
     .prepare(
       `SELECT s.session_id, s.project, s.prompt_count, s.first_at, s.last_at,
-              s.first_prompt, s.transcript_file, s.transcript_bytes, s.project_exists${matchColumn}
+              s.first_prompt, s.transcript_file, s.transcript_bytes,
+              s.project_exists${ARCHIVE_COLUMNS}${matchColumn}
        FROM history_sessions s
+       ${ARCHIVE_JOIN}
        ${where}
        ORDER BY s.last_at DESC, s.session_id
        LIMIT @limit`
     )
-    .all({ ...params, limit }) as SessionRow[]
+    .all(...ids, { ...params, limit }) as SessionRow[]
 
   const { total } = store.raw
-    .prepare(`SELECT COUNT(*) AS total FROM history_sessions s ${where}`)
-    .get(params) as { total: number }
+    .prepare(
+      `SELECT COUNT(*) AS total FROM history_sessions s ${ARCHIVE_JOIN} ${where}`
+    )
+    .get(...ids, params) as { total: number }
 
-  return {
-    sessions: rows.map(toSession),
-    total,
-    tookMs: performance.now() - started
+  const sessions = rows.map(toSession)
+  if (archived !== null) {
+    for (const session of sessions) {
+      const hit = archived.get(session.sessionId.toLowerCase())
+      if (hit !== undefined) session.match = hit.text
+    }
   }
+
+  return { sessions, total, tookMs: performance.now() - started }
 }
 
 /** Every prompt of one session, in submission order. */
@@ -406,9 +467,9 @@ export function historySummary(store: Store, file: string): HistorySummary {
 export function readHistorySession(store: Store, sessionId: string): HistorySession | null {
   const row = store.raw
     .prepare(
-      `SELECT session_id, project, prompt_count, first_at, last_at, first_prompt,
-              transcript_file, transcript_bytes, project_exists
-       FROM history_sessions WHERE session_id = ?`
+      `SELECT s.session_id, s.project, s.prompt_count, s.first_at, s.last_at, s.first_prompt,
+              s.transcript_file, s.transcript_bytes, s.project_exists${ARCHIVE_COLUMNS}
+       FROM history_sessions s ${ARCHIVE_JOIN} WHERE s.session_id = ?`
     )
     .get(sessionId) as SessionRow | undefined
   return row ? toSession(row) : null

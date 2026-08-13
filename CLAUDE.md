@@ -48,7 +48,7 @@ check disagree, the check is right.
 
 ```
 packages/
-├── core/     # headless: discovery/, launch/, config/, content/, github/, usage/, store/
+├── core/     # headless: discovery/, launch/, config/, content/, github/, usage/, archive/, store/
 ├── ui/       # React components
 └── desktop/  # Electron main + preload + renderer + the spike harness
 ```
@@ -144,7 +144,10 @@ is in the **`surfaces`** skill.
   the request that would correct it (`PR-20`).
 - **`~/.claude` is Claude Code's and Helm only reads it**, with exactly one
   exception: the config console writes, through a snapshot taken *before* the
-  file is touched that aborts the write if the row cannot be taken.
+  file is touched that aborts the write if the row cannot be taken. The
+  transcript archive is **not** a second exception - it reads those files and
+  copies what it reads into `helm.db`, and `pnpm transcript-check`'s T-5 hashes
+  the whole tree either side of a full pass to say so.
 - **`CLAUDE_CONFIG_DIR` moves credentials too**, so a session pointed at a
   fixture home cannot log in. Measuring the user settings layer means using the
   real `~/.claude/settings.json`, snapshotted and put back.
@@ -175,9 +178,19 @@ and how to narrow a re-run. Two rules belong here rather than there:
 - **Do not use `@anthropic-ai/claude-agent-sdk`.** Helm shells out to the
   `claude` CLI - see SPEC "Supersedes the SDK draft". The app hosts the TUI, it
   does not reimplement the client.
-- Helm renders no session messages, parses no session output and handles no
-  permission prompts. A feature that seems to need that belongs in the
-  transcript-archive backlog or is out of scope.
+- **Helm renders nothing for a live session.** It parses no session output,
+  handles no permission prompts, and puts nothing of its own between the user
+  and the TUI it hosts. A feature that seems to need that is out of scope.
+
+  **Amended when the transcript archive landed**, and the line is worth stating
+  rather than deleting. Claude Code writes a transcript per session and reaps it
+  on its own schedule - 744 sessions recorded on this machine, 68 transcripts
+  surviving, 91% of the conversations already gone. Helm now reads those files
+  before they are deleted and can render an **archived** one. That is not
+  hosting a client: it is read-only, retrospective, over a record on disk, and
+  never in the path of a running session. The boundary is *live*, not *messages*
+  - while a session is running Helm still shows a terminal and gets out of the
+  way. See `core/archive/`, `main/archive.ts` and `pnpm transcript-check`.
 - Windows-first: junctions (`mklink /J`) not symlinks, no elevation
   assumptions, test paths with spaces.
 

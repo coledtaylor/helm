@@ -156,6 +156,88 @@ async function shootIgnored(
   return shot.file
 }
 
+/**
+ * The transcript viewer, and the state where there is nothing to view.
+ *
+ * Two shots because the pane now has two answers for a session Claude Code has
+ * reaped, and they look nothing alike: a conversation Helm kept before the reap
+ * (a read-only transcript, which is the longest run of prose anywhere in the
+ * app and the one place a list of mixed-length paragraphs has to hold a rhythm),
+ * and a session that was gone before Helm ever saw it (a panel of explanation,
+ * with the prompts underneath it).
+ *
+ * Both are found by asking the database which sessions are in each state rather
+ * than by clicking down the list, because which sessions those are is a
+ * property of the machine and not of the walk. Either returns null out loud
+ * where the machine has none - a fresh install has no archive yet, and a shot
+ * of the wrong state is worse than a missing one.
+ *
+ * Waits for the archive first. On a machine with 311 MB of transcripts the
+ * first catch-up is twenty chunks over as many ticks, and a shot taken during
+ * it is a photograph of a progress state nobody will ever see twice.
+ */
+async function shootTranscript(
+  win: BrowserWindow,
+  outDir: string,
+  theme: string,
+  store: Store
+): Promise<string[]> {
+  const files: string[] = []
+
+  const archived = await (async () => {
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const row = store.raw
+        .prepare(
+          `SELECT session_id FROM transcript_sessions
+           WHERE state = 'archived' AND message_count BETWEEN 6 AND 40
+           ORDER BY message_count DESC LIMIT 1`
+        )
+        .get() as { session_id: string } | undefined
+      if (row !== undefined) return row.session_id
+      await sleep(500)
+    }
+    return null
+  })()
+
+  // A session the archive never had: reaped before Helm ever looked at it.
+  const never = store.raw
+    .prepare(
+      `SELECT s.session_id FROM history_sessions s
+       LEFT JOIN transcript_sessions a ON a.session_id = lower(s.session_id)
+       WHERE s.transcript_file IS NULL AND a.session_id IS NULL AND s.prompt_count BETWEEN 3 AND 12
+       ORDER BY s.last_at DESC LIMIT 1`
+    )
+    .get() as { session_id: string } | undefined
+
+  const open = async (sessionId: string, wait: string): Promise<boolean> => {
+    if (!(await click(win, '[data-open-history]'))) return false
+    await sleep(400)
+    if (!(await click(win, `button[data-session="${sessionId}"]`))) return false
+    return pollJs(win, wait, 8000)
+  }
+
+  if (archived === null) {
+    console.error('design-shot: nothing archived yet, so no transcript to photograph')
+  } else if (await open(archived, `document.querySelector('[data-transcript]')`)) {
+    await js<void>(
+      win,
+      `(() => { const el = document.querySelector('[data-transcript]');
+        if (el) el.scrollIntoView({ block: 'start' }) })()`
+    )
+    await sleep(400)
+    files.push((await screenshot(win, outDir, `history-transcript-${theme}.png`)).file)
+  }
+
+  if (never === undefined) {
+    console.error('design-shot: no session on this machine was reaped before Helm saw it')
+  } else if (await open(never.session_id, `document.querySelector('[data-unavailable]')`)) {
+    await sleep(300)
+    files.push((await screenshot(win, outDir, `history-archive-empty-${theme}.png`)).file)
+  }
+
+  return files
+}
+
 /** The pinned list, written the way the sidebar's star writes it. */
 async function writePinned(win: BrowserWindow, paths: string[]): Promise<void> {
   await js<void>(
@@ -781,6 +863,16 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
         if (repoShot !== null) files.push(repoShot)
       }
 
+      // The history pane again, two clicks in: the archived transcript, and a
+      // session whose conversation was gone before Helm existed. Neither is
+      // reachable from the list shot above, which is the list.
+      if (view.name === 'history') {
+        files.push(...(await shootTranscript(win, outDir, theme, ctx.services.store)))
+        // Back to the list, so the next view starts from a clean pane.
+        await click(win, '[data-open-history]')
+        await sleep(300)
+      }
+
       // The Pulls pane again with a repository ignored. A design state nothing
       // else photographs: a section that only exists when the setting is not
       // empty, and the app's only dashed border - which is exactly the kind of
@@ -810,6 +902,18 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
     await sleep(400)
     const updatesShot = await screenshot(win, outDir, `settings-updates-${theme}.png`)
     files.push(updatesShot.file)
+
+    // The Transcript archive group, which is the one group in the pane made
+    // entirely of *figures* - four numbers and a select - and the one that has
+    // to read as reassurance rather than as a warning. Below the fold like the
+    // two around it.
+    await js<void>(
+      win,
+      `(() => { const el = document.querySelector('[data-settings-group="archive"]');
+        if (el) el.scrollIntoView({ block: 'center' }) })()`
+    )
+    await sleep(400)
+    files.push((await screenshot(win, outDir, `settings-archive-${theme}.png`)).file)
 
     // The settings pane scrolled to the end, because the Terminal group sits
     // below the fold on a default-sized window - and it is the group made of

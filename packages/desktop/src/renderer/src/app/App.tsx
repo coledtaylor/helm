@@ -1145,6 +1145,9 @@ export function App(): JSX.Element {
               error={historyState.error}
               search={historyState.search}
               onSearchChange={historyState.setSearch}
+              scope={historyState.scope}
+              onScopeChange={historyState.setScope}
+              archiveStats={historyState.archiveStats}
               grouping={historyState.grouping}
               onGroupingChange={historyState.setGrouping}
               resumableOnly={historyState.resumableOnly}
@@ -1155,6 +1158,8 @@ export function App(): JSX.Element {
               onSelect={historyState.select}
               prompts={historyState.prompts}
               promptsLoading={historyState.promptsLoading}
+              conversation={historyState.conversation}
+              conversationLoading={historyState.conversationLoading}
               onRefresh={historyState.refresh}
               refreshing={historyState.refreshing}
               onResume={(session) => void resumeSession(session)}
@@ -1399,6 +1404,17 @@ export function App(): JSX.Element {
               terminalFontStack={terminalFontStack(terminalSettings.terminalFontFamily)}
               shells={shells}
               onLocateShell={locateShell}
+              // The archive's own figures, out of the same state the history
+              // pane reads them from - one subscription to `archive:changed`,
+              // so the pane and the settings group cannot disagree about how
+              // much is stored.
+              archiveStats={historyState.archiveStats}
+              transcriptArchiveMaxBytes={
+                settings?.transcriptArchiveMaxBytes ?? DEFAULT_SETTINGS.transcriptArchiveMaxBytes
+              }
+              onTranscriptArchiveMaxBytesChange={(transcriptArchiveMaxBytes) =>
+                writeSettings({ transcriptArchiveMaxBytes })
+              }
               // What `gh` actually resolved to, out of the same snapshot the
               // Pulls pane paints - so the pane cannot report one executable
               // while the fetches use another.

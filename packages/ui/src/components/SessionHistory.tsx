@@ -1,6 +1,15 @@
 import type { JSX, KeyboardEvent, ReactNode } from 'react'
 import { Fragment, useMemo } from 'react'
-import type { HistoryPage, HistoryPrompt, HistorySession, HistorySummary } from '@helm/core'
+import type {
+  ArchiveMessage,
+  ArchiveStats,
+  ArchivedConversation,
+  HistoryPage,
+  HistoryPrompt,
+  HistorySearchScope,
+  HistorySession,
+  HistorySummary
+} from '@helm/core'
 import { cn } from '../lib/cn'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes, formatMoment } from '../lib/time'
@@ -18,6 +27,14 @@ export interface SessionHistoryProps {
 
   search: string
   onSearchChange: (value: string) => void
+  /**
+   * What the box searches. Two scopes rather than one that quietly does both -
+   * see `HistorySearchScope`, which is where the reasoning lives.
+   */
+  scope: HistorySearchScope
+  onScopeChange: (value: HistorySearchScope) => void
+  /** What the archive holds, so the scope switch can say what it would search. */
+  archiveStats: ArchiveStats | null
   grouping: HistoryGrouping
   onGroupingChange: (value: HistoryGrouping) => void
   resumableOnly: boolean
@@ -29,6 +46,13 @@ export interface SessionHistoryProps {
   onSelect: (session: HistorySession | null) => void
   prompts: HistoryPrompt[]
   promptsLoading: boolean
+  /**
+   * The archived conversation for the selected session, or null when there has
+   * never been one. Read-only in the strongest sense available to a component:
+   * there is no callback here that could write anything back.
+   */
+  conversation: ArchivedConversation | null
+  conversationLoading: boolean
 
   onRefresh: () => void
   refreshing: boolean
@@ -52,23 +76,68 @@ export interface SessionHistoryProps {
 /**
  * Why a session cannot be reopened, or null when it can.
  *
- * The same two conditions the main process checks before it will spawn
- * anything, kept apart rather than collapsed into a boolean: a reaped
- * transcript is permanent and a missing folder is not, and telling the user
- * which one they are looking at is the difference between an explanation and a
- * shrug.
+ * The same conditions the main process checks before it will spawn anything,
+ * kept apart rather than collapsed into a boolean: a reaped transcript is
+ * permanent and a missing folder is not, and telling the user which one they
+ * are looking at is the difference between an explanation and a shrug.
+ *
+ * `archived` and `evicted` are the transcript archive's two answers, and they
+ * are sub-kinds of `reaped` rather than a second vocabulary beside it: all
+ * three mean `--resume` has nothing to open, and they differ in what is left.
+ * Archived means Helm kept the conversation before Claude Code deleted it.
+ * Evicted means Helm had it and dropped it to stay under the storage ceiling
+ * the user set - which is a different sentence from "this was reaped before
+ * Helm ever saw it", and the pane has to be able to say which.
  */
-type Blocked = 'reaped' | 'folder-gone' | null
+type Blocked = 'reaped' | 'archived' | 'evicted' | 'folder-gone' | null
 
 function blockedBy(session: HistorySession): Blocked {
   if (!session.projectExists) return 'folder-gone'
-  if (session.transcriptFile === null) return 'reaped'
+  if (session.transcriptFile === null) {
+    if (session.archive === 'archived') return 'archived'
+    if (session.archive === 'evicted') return 'evicted'
+    return 'reaped'
+  }
   return null
 }
 
 const BADGE: Record<Exclude<Blocked, null>, string> = {
   reaped: 'history only',
+  archived: 'archived',
+  evicted: 'dropped',
   'folder-gone': 'folder gone'
+}
+
+/**
+ * The three states a row's mark distinguishes.
+ *
+ * Deliberately not the same question as `blockedBy`. That one answers "can this
+ * be reopened"; this one answers "is there anything here", which is what the
+ * dot is scanned for - so a session whose folder has gone but whose
+ * conversation Helm kept reads as archived rather than as empty, while its
+ * badge still names the thing that would have to be fixed to resume it.
+ */
+type Mark = 'resumable' | 'archived' | 'gone'
+
+function markOf(session: HistorySession): Mark {
+  if (session.transcriptFile !== null && session.projectExists) return 'resumable'
+  if (session.archive === 'archived') return 'archived'
+  return 'gone'
+}
+
+/** Filled, ringed, hollow. Three shapes, not three shades of one. */
+const MARK_CLASS: Record<Mark, string> = {
+  resumable: 'bg-accent',
+  archived: 'border-[1.5px] border-accent',
+  gone: 'border border-fg-subtle opacity-60'
+}
+
+/** Neutral hairline pills, except the archive's own, which is a kind badge. */
+const BADGE_CLASS: Record<Exclude<Blocked, null>, string> = {
+  reaped: 'border border-border text-fg-subtle',
+  archived: 'bg-accent-soft text-accent-text',
+  evicted: 'border border-border text-fg-subtle',
+  'folder-gone': 'border border-border text-fg-subtle'
 }
 
 /**
@@ -93,6 +162,9 @@ export function SessionHistory({
   error = null,
   search,
   onSearchChange,
+  scope,
+  onScopeChange,
+  archiveStats,
   grouping,
   onGroupingChange,
   resumableOnly,
@@ -103,6 +175,8 @@ export function SessionHistory({
   onSelect,
   prompts,
   promptsLoading,
+  conversation,
+  conversationLoading,
   onRefresh,
   refreshing,
   onResume,
@@ -215,9 +289,17 @@ export function SessionHistory({
                 data-history-search
                 value={search}
                 onChange={(event) => onSearchChange(event.target.value)}
-                placeholder="Search prompts and projects"
+                placeholder={
+                  scope === 'messages'
+                    ? 'Search archived conversations'
+                    : 'Search prompts and projects'
+                }
                 spellCheck={false}
-                aria-label="Search prompts and projects"
+                aria-label={
+                  scope === 'messages'
+                    ? 'Search archived conversations'
+                    : 'Search prompts and projects'
+                }
                 className={cn(
                   'h-7 w-full rounded-well border border-border bg-surface-sunken pr-7 pl-7',
                   'text-[12px] text-fg select-text placeholder:text-fg-subtle',
@@ -237,21 +319,67 @@ export function SessionHistory({
               )}
             </div>
 
+            {/* Directly under the box, because it is about the box. The
+                caption on the right is what makes the row worth its height: it
+                says what "Conversations" would actually be searching, which is
+                the one thing a person cannot tell by reading the two words. */}
+            <div className="flex items-center gap-2">
+              <div
+                role="group"
+                aria-label="What to search"
+                className="flex gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
+              >
+                <Segment
+                  active={scope === 'prompts'}
+                  onClick={() => onScopeChange('prompts')}
+                  label="Prompts"
+                  data-history-scope="prompts"
+                />
+                <Segment
+                  active={scope === 'messages'}
+                  onClick={() => onScopeChange('messages')}
+                  label="Conversations"
+                  data-history-scope="messages"
+                />
+              </div>
+              <span className="flex-1" />
+              <span
+                data-history-archive-count
+                className="shrink-0 truncate text-[10.5px] tabular-nums text-fg-subtle"
+                title={
+                  archiveStats
+                    ? `${archiveStats.messages.toLocaleString()} archived messages, ${formatBytes(archiveStats.storedBytes)} stored`
+                    : undefined
+                }
+              >
+                {archiveStats === null
+                  ? ''
+                  : `${archiveStats.sessions.toLocaleString()} archived`}
+              </span>
+            </div>
+
             <div className="flex items-center gap-2">
               <div
                 role="group"
                 aria-label="Grouping"
                 className="flex gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
               >
+                {/* Named, like the scope segments above them. Two segmented
+                    groups now sit in this pane, and `aria-pressed` alone cannot
+                    say which group a button belongs to - `pnpm history-check`
+                    was clicking the first unpressed button it found, which
+                    became the wrong one the moment the second group arrived. */}
                 <Segment
                   active={grouping === 'recent'}
                   onClick={() => onGroupingChange('recent')}
                   label="Recent"
+                  data-history-grouping="recent"
                 />
                 <Segment
                   active={grouping === 'project'}
                   onClick={() => onGroupingChange('project')}
                   label="By project"
+                  data-history-grouping="project"
                 />
               </div>
               <label className="flex items-center gap-1.5 text-[11px] text-fg-muted">
@@ -371,12 +499,14 @@ export function SessionHistory({
           )}
           <div className="min-h-0 flex-1 overflow-y-auto">
           {selected === null ? (
-            <NothingSelected summary={summary} />
+            <NothingSelected summary={summary} archiveStats={archiveStats} />
           ) : (
             <Detail
               session={selected}
               prompts={prompts}
               promptsLoading={promptsLoading}
+              conversation={conversation}
+              conversationLoading={conversationLoading}
               onResume={onResume}
               resuming={resuming === selected.sessionId}
               resumeError={resumeError}
@@ -413,6 +543,7 @@ function Row({
   showProject: boolean
 }): JSX.Element {
   const blocked = blockedBy(session)
+  const mark = markOf(session)
   // The searched-for text if this row matched on something other than its
   // opening prompt, so a hit deep in a conversation is visible from the list.
   const headline = session.match ?? session.firstPrompt
@@ -424,6 +555,7 @@ function Row({
       aria-current={selected}
       data-session={session.sessionId}
       data-resumable={blocked === null}
+      data-archive={session.archive ?? 'none'}
       onClick={() => onSelect(session)}
       title={`${session.projectName} · ${formatMoment(session.lastAt)}`}
       className={cn(
@@ -432,15 +564,13 @@ function Row({
         selected ? 'bg-accent-soft' : 'hover:bg-hover'
       )}
     >
-      {/* Resumability, drawn twice on purpose: a filled mark here for scanning
-          the list, and the word on the badge for anyone who cannot use the
-          difference between a filled and a hollow dot. */}
+      {/* What is left of this session, drawn twice on purpose: a mark here for
+          scanning the list - filled, ringed or hollow, three shapes rather than
+          three shades - and the word on the badge for anyone who cannot use the
+          difference between them. */}
       <span
         aria-hidden
-        className={cn(
-          'absolute top-[9px] left-1.5 size-1.5 rounded-full',
-          blocked === null ? 'bg-accent' : 'border border-fg-subtle opacity-60'
-        )}
+        className={cn('absolute top-[9px] left-1.5 size-1.5 rounded-full', MARK_CLASS[mark])}
       />
       <span
         className={cn(
@@ -463,7 +593,13 @@ function Row({
         {isMatch && <span className="shrink-0 text-accent">matched</span>}
         <span className="flex-1" />
         {blocked !== null && (
-          <span className="shrink-0 rounded-sm border border-border px-1 text-[9px] tracking-wide text-fg-subtle uppercase">
+          <span
+            data-badge={blocked}
+            className={cn(
+              'shrink-0 rounded-sm px-1 text-[9px] tracking-wide uppercase',
+              BADGE_CLASS[blocked]
+            )}
+          >
             {BADGE[blocked]}
           </span>
         )}
@@ -504,19 +640,26 @@ function Highlight({ text, needle }: { text: string; needle: string }): JSX.Elem
   return <>{parts}</>
 }
 
+/**
+ * Takes further `data-*` attributes, the same shape `SettingsPane`'s `Verdict`
+ * does and for the same reason: two segmented groups sit in this pane and
+ * `aria-pressed` alone cannot tell a driver which group a button belongs to.
+ */
 function Segment({
   active,
   onClick,
-  label
+  label,
+  ...rest
 }: {
   active: boolean
   onClick: () => void
   label: string
-}): JSX.Element {
+} & Record<`data-${string}`, unknown>): JSX.Element {
   return (
     <button
       type="button"
       onClick={onClick}
+      {...rest}
       aria-pressed={active}
       className={cn(
         'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
@@ -543,7 +686,13 @@ function EmptyList({ loading, filtering }: { loading: boolean; filtering: boolea
 // Detail
 // ---------------------------------------------------------------------------
 
-function NothingSelected({ summary }: { summary: HistorySummary | null }): JSX.Element {
+function NothingSelected({
+  summary,
+  archiveStats
+}: {
+  summary: HistorySummary | null
+  archiveStats: ArchiveStats | null
+}): JSX.Element {
   return (
     <div className="grid h-full place-items-center p-8">
       <div className="max-w-md text-center">
@@ -556,6 +705,32 @@ function NothingSelected({ summary }: { summary: HistorySummary | null }): JSX.E
             ? `${summary.sessions.toLocaleString()} sessions across ${String(summary.projects)} projects. ${summary.resumable.toLocaleString()} still have a transcript and can be reopened; the rest are a record of what was asked.`
             : 'Reading the history file…'}
         </p>
+        {/* The archive's own sentence, and the empty one is written out rather
+            than hidden: "Helm has not kept anything yet" is the state a fresh
+            install is in, and a figure that only appears once it is non-zero is
+            a figure nobody can tell from a broken one. */}
+        <p data-archive-summary className="mt-2 text-[12px] leading-relaxed text-fg-subtle">
+          {archiveStats === null ? (
+            ''
+          ) : archiveStats.sessions === 0 ? (
+            <>
+              Helm has not archived a conversation yet. It keeps the ones it finds before Claude
+              Code deletes them, up to {formatBytes(archiveStats.maxBytes)}.
+            </>
+          ) : (
+            <>
+              {archiveStats.sessions.toLocaleString()} conversations kept here -{' '}
+              {archiveStats.messages.toLocaleString()} messages, {formatBytes(archiveStats.storedBytes)}{' '}
+              of {formatBytes(archiveStats.maxBytes)}.
+              {archiveStats.evictedSessions > 0 && (
+                <>
+                  {' '}
+                  {archiveStats.evictedSessions.toLocaleString()} were dropped to stay under it.
+                </>
+              )}
+            </>
+          )}
+        </p>
       </div>
     </div>
   )
@@ -565,6 +740,8 @@ function Detail({
   session,
   prompts,
   promptsLoading,
+  conversation,
+  conversationLoading,
   onResume,
   resuming,
   resumeError,
@@ -577,6 +754,8 @@ function Detail({
   session: HistorySession
   prompts: HistoryPrompt[]
   promptsLoading: boolean
+  conversation: ArchivedConversation | null
+  conversationLoading: boolean
   onResume: (session: HistorySession) => void
   resuming: boolean
   resumeError: string | null | undefined
@@ -631,15 +810,30 @@ function Detail({
           hint={`${formatAge(session.lastAt)} ago`}
         />
         <Meta label="Prompts" value={session.promptCount.toLocaleString()} />
-        <Meta
-          label="Transcript"
-          value={
-            session.transcriptFile === null
-              ? 'removed'
-              : formatBytes(session.transcriptBytes ?? 0)
-          }
-          muted={session.transcriptFile === null}
-        />
+        {/* Two different facts, and the second only replaces the first once the
+            first has run out. While Claude Code still has the transcript, its
+            size is what the resume will read; once it has gone, the only
+            question left is whether Helm kept the conversation. */}
+        {session.transcriptFile !== null ? (
+          <Meta label="Transcript" value={formatBytes(session.transcriptBytes ?? 0)} />
+        ) : (
+          <Meta
+            label="Transcript"
+            value={
+              session.archive === 'archived'
+                ? 'archived here'
+                : session.archive === 'evicted'
+                  ? 'dropped'
+                  : 'removed'
+            }
+            hint={
+              session.archive === 'archived'
+                ? `${(session.archivedMessages ?? 0).toLocaleString()} messages`
+                : undefined
+            }
+            muted={session.archive !== 'archived'}
+          />
+        )}
       </dl>
 
       <div className="mt-5">
@@ -691,6 +885,8 @@ function Detail({
         </div>
       )}
 
+      <Conversation conversation={conversation} loading={conversationLoading} />
+
       <section className="mt-7">
         <h3 className="mb-2 flex items-baseline gap-2 text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
           Prompts
@@ -730,13 +926,27 @@ function Detail({
   )
 }
 
+const UNAVAILABLE_TITLE: Record<Exclude<Blocked, null>, string> = {
+  reaped: 'This conversation cannot be reopened',
+  archived: 'This conversation cannot be reopened, but Helm kept it',
+  evicted: 'Helm had this conversation and dropped it',
+  'folder-gone': 'The folder this ran in is gone'
+}
+
 /**
  * What is left of a session that cannot be reopened.
  *
  * Deliberately not an error. Nothing has gone wrong - Claude Code reaps
  * transcripts and keeps prompts, and that ratio is a fact about the machine
- * worth stating rather than a failure to apologise for. The prompts below this
- * panel are the point: they are what survived.
+ * worth stating rather than a failure to apologise for.
+ *
+ * Four sentences, and the difference between the middle two is the one this
+ * feature exists to make sayable: `archived` means Helm captured the
+ * conversation before the CLI deleted it and it is on this page; `evicted`
+ * means Helm captured it and then dropped it to stay under a ceiling the user
+ * set, which is a decision they can revisit; `reaped` means it was gone before
+ * Helm ever looked. Collapsing any two of those into "not available" would be
+ * telling the user a number instead of a fact.
  */
 function Unavailable({
   reason,
@@ -749,43 +959,217 @@ function Unavailable({
   totalSessions: number
   totalResumable: number
 }): JSX.Element {
+  const kept = reason === 'archived'
   return (
     <div data-unavailable={reason} className="rounded-raised border border-border bg-surface-sunken p-4">
       <p className="flex items-center gap-2 text-[12px] font-medium text-fg">
         <span
           aria-hidden
-          className="size-1.5 shrink-0 rounded-full border border-fg-subtle opacity-60"
+          className={cn(
+            'size-1.5 shrink-0 rounded-full',
+            kept ? 'border-[1.5px] border-accent' : 'border border-fg-subtle opacity-60'
+          )}
         />
-        {reason === 'reaped'
-          ? 'This conversation cannot be reopened'
-          : 'The folder this ran in is gone'}
+        {UNAVAILABLE_TITLE[reason]}
       </p>
       <p className="mt-2 text-[12px] leading-relaxed text-fg-muted">
-        {reason === 'reaped' ? (
+        {reason === 'folder-gone' ? (
+          <>
+            The transcript is still on disk, but{' '}
+            <code className="font-mono break-all">{session.project}</code> is not. Claude Code
+            resolves a session id against the working directory, so this conversation can only be
+            reopened from that folder - restoring it is enough to make this row resumable again.
+          </>
+        ) : kept ? (
           <>
             Claude Code has removed the transcript, so there is nothing for{' '}
-            <code className="font-mono">--resume</code> to restore. It keeps prompts in{' '}
+            <code className="font-mono">--resume</code> to restore. Helm read the conversation
+            before that happened and it is below, read-only - the messages, not the tool traffic.
+          </>
+        ) : reason === 'evicted' ? (
+          <>
+            Helm archived this conversation and later dropped it whole to stay under the storage
+            limit set in Settings. Nothing partial was kept, because half a transcript is a
+            transcript that lies about being complete. Raising the limit does not bring it back -
+            the transcript it was read from is gone too - but it stops the next one going the same
+            way.
+          </>
+        ) : (
+          <>
+            Claude Code had already removed the transcript before Helm saw this session, so there
+            is nothing for <code className="font-mono">--resume</code> to restore and nothing in
+            the archive either. It keeps prompts in{' '}
             <code className="font-mono">history.jsonl</code> indefinitely and reaps the
             conversations behind them
             {totalSessions > 0 && (
               <>
                 {' '}
-                — {totalResumable.toLocaleString()} of {totalSessions.toLocaleString()} sessions on
+                - {totalResumable.toLocaleString()} of {totalSessions.toLocaleString()} sessions on
                 this machine still have one
               </>
             )}
             . The prompts below are what is left of this session.
           </>
-        ) : (
-          <>
-            The transcript is still on disk, but{' '}
-            <code className="font-mono break-all">{session.project}</code> is not. Claude Code
-            resolves a session id against the working directory, so this conversation can only be
-            reopened from that folder — restoring it is enough to make this row resumable again.
-          </>
         )}
       </p>
     </div>
+  )
+}
+
+/**
+ * The archived conversation, rendered read-only.
+ *
+ * Read-only is the whole design. There is no editor, no re-send, no callback
+ * that could write a byte back - this is a record of something that already
+ * happened, and Helm's rule that it renders no session messages still holds
+ * for every **live** session. What is on screen is a row out of Helm's own
+ * database, read long after the process that produced it exited.
+ *
+ * A `<ul>` rather than an `<ol>`, and that is not cosmetic: the prompts list
+ * below is an `<ol>`, and `pnpm history-check`'s HIST-6 counts `ol li` to check
+ * a reaped session still shows every prompt it had. A second ordered list in
+ * the same pane would silently inflate that count.
+ */
+function Conversation({
+  conversation,
+  loading
+}: {
+  conversation: ArchivedConversation | null
+  loading: boolean
+}): JSX.Element | null {
+  if (conversation === null || conversation.state !== 'archived') return null
+
+  return (
+    <section className="mt-7" data-transcript={conversation.sessionId}>
+      <h3 className="mb-2 flex items-baseline gap-2 text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
+        Conversation
+        <span data-transcript-count className="tabular-nums normal-case">
+          {conversation.messageCount}
+        </span>
+        <span className="flex-1" />
+        <span className="tabular-nums normal-case" title={`Captured ${conversation.capturedAt}`}>
+          {formatBytes(conversation.storedBytes)} stored
+        </span>
+      </h3>
+      {loading && conversation.messages.length === 0 ? (
+        <p className="text-[12px] text-fg-subtle">Reading&hellip;</p>
+      ) : (
+        <ul className="overflow-hidden rounded-raised border border-border bg-surface-raised">
+          {readAsTurns(conversation.messages).map((entry, index) =>
+            entry.kind === 'tools' ? (
+              <ToolRun key={entry.key} names={entry.names} first={index === 0} />
+            ) : (
+              <Message key={entry.message.uuid} message={entry.message} first={index === 0} />
+            )
+          )}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+/**
+ * A message that is nothing but tool calls, or null when it is anything else.
+ *
+ * The archive stores a tool call as `[tool: Name]` and drops its input and its
+ * result - `core/archive/transcript.ts` has the reasoning - so a turn spent
+ * entirely on tools arrives here as a message whose whole text is markers.
+ */
+const TOOL_MARKER = /^\[tool(?::\s*(.+))?\]$/
+
+function toolNames(text: string): string[] | null {
+  const names: string[] = []
+  for (const part of text.split('\n\n')) {
+    const matched = TOOL_MARKER.exec(part.trim())
+    if (matched === null) return null
+    names.push(matched[1] ?? 'tool')
+  }
+  return names.length > 0 ? names : null
+}
+
+type Turn =
+  | { kind: 'message'; message: ArchiveMessage }
+  | { kind: 'tools'; key: string; names: string[] }
+
+/**
+ * The messages, with runs of tool calls folded into one line each.
+ *
+ * A photograph of the first version of this view was nine consecutive
+ * full-height rows reading CLAUDE / `[tool: PowerShell]`, with the answer they
+ * were working towards pushed off the bottom of the pane. A tool call is part
+ * of the record and is kept, but it is not something anybody said, and giving
+ * each one the same weight as a paragraph of prose makes a conversation
+ * unreadable in exactly the surface built to make it readable again.
+ */
+function readAsTurns(messages: readonly ArchiveMessage[]): Turn[] {
+  const turns: Turn[] = []
+  for (const message of messages) {
+    const names = toolNames(message.text)
+    if (names === null) {
+      turns.push({ kind: 'message', message })
+      continue
+    }
+    const previous = turns.at(-1)
+    if (previous?.kind === 'tools') previous.names.push(...names)
+    else turns.push({ kind: 'tools', key: message.uuid, names })
+  }
+  return turns
+}
+
+/** `Read ×3 · Bash` - consecutive repeats counted rather than listed. */
+function summariseTools(names: readonly string[]): string {
+  const runs: Array<{ name: string; n: number }> = []
+  for (const name of names) {
+    const last = runs.at(-1)
+    if (last?.name === name) last.n++
+    else runs.push({ name, n: 1 })
+  }
+  return runs.map((run) => (run.n === 1 ? run.name : `${run.name} ×${String(run.n)}`)).join(' · ')
+}
+
+/** One recessive line for a stretch of tool work. Machine data, so mono. */
+function ToolRun({ names, first }: { names: string[]; first: boolean }): JSX.Element {
+  return (
+    <li
+      data-transcript-tools={String(names.length)}
+      className={cn(
+        'flex items-baseline gap-2 bg-surface-sunken px-3 py-1',
+        !first && 'border-t border-border'
+      )}
+    >
+      <span className="shrink-0 text-[10px] tracking-[.07em] text-fg-subtle uppercase">Tools</span>
+      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg-subtle select-text">
+        {summariseTools(names)}
+      </span>
+    </li>
+  )
+}
+
+/** Who said it, then what they said. Two speakers, told apart by a label. */
+function Message({ message, first }: { message: ArchiveMessage; first: boolean }): JSX.Element {
+  return (
+    <li
+      data-transcript-message={message.role}
+      className={cn('px-3 py-2 text-[12px]', !first && 'border-t border-border')}
+    >
+      <p className="flex items-baseline gap-2">
+        <span
+          className={cn(
+            'text-[10px] font-semibold tracking-[.07em] uppercase',
+            message.role === 'user' ? 'text-accent-text' : 'text-fg-subtle'
+          )}
+        >
+          {message.role === 'user' ? 'You' : 'Claude'}
+        </span>
+        <span className="flex-1" />
+        <span className="shrink-0 text-[10px] tabular-nums text-fg-subtle" title={formatMoment(message.at)}>
+          {formatAge(message.at)}
+        </span>
+      </p>
+      <p className="mt-1 break-words whitespace-pre-wrap text-fg-muted select-text">
+        {message.text}
+      </p>
+    </li>
   )
 }
 

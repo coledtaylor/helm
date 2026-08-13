@@ -299,11 +299,88 @@ export interface HistorySession {
   /** False when the recorded working directory is no longer there. */
   projectExists: boolean
   /**
+   * What Helm's own archive holds for this session, or null when it has never
+   * held anything.
+   *
+   * The third fact about a session, alongside the transcript and the folder,
+   * and it does not follow from either: a conversation Claude Code reaped can
+   * still be readable here, and one that is still on disk may never have been
+   * captured. `'evicted'` is deliberately not folded into null - see
+   * `ArchiveSessionState`.
+   */
+  archive: ArchiveSessionState | null
+  /** Messages in the archive for it. Zero once the ceiling has dropped them. */
+  archivedMessages: number | null
+  /**
    * The first prompt that matched the search, when the query had one. Absent
    * for an unfiltered listing rather than set to the opening prompt, so the UI
    * can tell "matched here" from "this is just the start of it".
    */
   match?: string | undefined
+}
+
+// ---------------------------------------------------------------------------
+// Transcript archive
+// ---------------------------------------------------------------------------
+
+/**
+ * What Helm's archive holds for a session.
+ *
+ * Two values and no third for "never captured", which is the absence of a row.
+ * The distinction that has to survive every refactor is `'evicted'` against
+ * null: "we had this conversation and dropped it to stay under your limit" and
+ * "this was reaped before Helm ever saw it" are different facts about the same
+ * missing text, and only one of them is something the user chose.
+ */
+export type ArchiveSessionState = 'archived' | 'evicted'
+
+/** One message of an archived conversation, as the viewer renders it. */
+export interface ArchiveMessage {
+  uuid: string
+  role: 'user' | 'assistant'
+  /** Epoch ms. */
+  at: number
+  text: string
+}
+
+/**
+ * One archived conversation.
+ *
+ * `messages` is empty for an evicted one, and the row is still returned: the
+ * pane has something to say about a conversation Helm dropped, and nothing to
+ * say about one it never had.
+ */
+export interface ArchivedConversation {
+  sessionId: string
+  /** The transcript it was read from. Usually gone by the time this is read. */
+  sourceFile: string
+  state: ArchiveSessionState
+  firstAt: number | null
+  lastAt: number | null
+  messageCount: number
+  /** Message text as read, before compression. */
+  rawBytes: number
+  /** What it costs in the database now. Zero once evicted. */
+  storedBytes: number
+  capturedAt: string
+  evictedAt: string | null
+  messages: ArchiveMessage[]
+}
+
+/** What the archive holds, for the settings pane to state rather than imply. */
+export interface ArchiveStats {
+  sessions: number
+  /** Sessions the ceiling dropped. Counted separately; they are not gone-gone. */
+  evictedSessions: number
+  messages: number
+  rawBytes: number
+  /** Compressed message bodies. The figure the ceiling is enforced against. */
+  storedBytes: number
+  /** The ceiling in force, from `transcriptArchiveMaxBytes`. */
+  maxBytes: number
+  /** Last-message time of the oldest and newest archived conversation. */
+  oldestAt: number | null
+  newestAt: number | null
 }
 
 /**
@@ -345,9 +422,27 @@ export interface HistorySummary {
   error?: string | undefined
 }
 
+/**
+ * What a search is over.
+ *
+ * `prompts` is the historic behaviour and the default: a substring of a prompt
+ * or a project path, matched with `LIKE`. `messages` is the archive - every
+ * word of every conversation Helm captured, through FTS5.
+ *
+ * Two scopes rather than one box that searches both, and that is a decision.
+ * They answer different questions and return wildly different counts, and the
+ * counts are the point: "sessions where I typed this" and "conversations where
+ * this was said" are not the same list, and a box that quietly returned the
+ * union would make the smaller of the two unreachable.
+ */
+export const HISTORY_SEARCH_SCOPES = ['prompts', 'messages'] as const
+export type HistorySearchScope = (typeof HISTORY_SEARCH_SCOPES)[number]
+
 export interface HistoryQuery {
   /** Case-insensitive substring of a prompt. Empty means no filter. */
   search?: string | undefined
+  /** What `search` is matched against. Defaults to `prompts`. */
+  scope?: HistorySearchScope | undefined
   /** One recorded working directory, compared case-insensitively. */
   project?: string | undefined
   /** Drop sessions that could not be resumed. */
@@ -489,6 +584,29 @@ export const TERMINAL_FONT_SIZE = { min: 8, max: 32, default: 14 } as const
 /** Lines of history a terminal keeps. The ceiling is memory: a line is roughly
  * a kilobyte of cell data, so a million of them per pane is not a setting. */
 export const TERMINAL_SCROLLBACK = { min: 500, max: 200_000, default: 10_000 } as const
+
+/**
+ * How much of `helm.db` the transcript archive may take, in bytes.
+ *
+ * A gigabyte by default, and both halves of that are deliberate. Unbounded is
+ * not an option: `helm.db` is the user's file, and a feature that grows it
+ * without limit is one they find out about from their disk rather than from
+ * Helm. A gigabyte is enormous for what this actually stores - the conversation
+ * text out of one 3.9 MB transcript on this machine is 54 KB before
+ * compression, a 71x difference, because tool traffic is not archived - so on
+ * any ordinary machine the ceiling is a guard rail rather than a budget.
+ *
+ * The floor is a kilobyte rather than something respectable, because a bound
+ * that no check can drive past is a bound nothing has ever tested: the eviction
+ * rule is the interesting part of this feature, and `pnpm transcript-check`
+ * makes it fire by setting a ceiling smaller than what it just archived. The
+ * settings pane offers sensible sizes; the validator only enforces the shape.
+ */
+export const TRANSCRIPT_ARCHIVE_BYTES = {
+  min: 1024,
+  max: 64 * 1024 ** 3,
+  default: 1024 ** 3
+} as const
 
 /**
  * A shell Helm found on this machine, offered in the shell pickers.
@@ -680,6 +798,20 @@ export interface AppSettings {
   terminalShell: string | null
 
   /**
+   * How many bytes of `helm.db` the transcript archive may occupy.
+   *
+   * The archive itself has no on/off switch, and that is the decision rather
+   * than an omission. 91% of the conversations behind `history.jsonl` were
+   * already gone when this was measured, and a default-off setting would go on
+   * losing them while it sat off - the cost of capturing is a few kilobytes per
+   * conversation and the cost of not capturing is the conversation. What *is*
+   * a setting is the ceiling, because that is the part with a real trade-off in
+   * it: bounded by `TRANSCRIPT_ARCHIVE_BYTES`, enforced after every pass by
+   * dropping the oldest archived session whole. See `evictToCeiling` - the
+   * ceiling is adjustable and the eviction rule is not.
+   */
+  transcriptArchiveMaxBytes: number
+  /**
    * A `gh` executable the user picked by hand, for the machine where it is not
    * on PATH and not in the usual install directory. Null means "find it".
    *
@@ -820,6 +952,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalCursorBlink: true,
   terminalScrollback: TERMINAL_SCROLLBACK.default,
   terminalShell: null,
+  transcriptArchiveMaxBytes: TRANSCRIPT_ARCHIVE_BYTES.default,
   ghPath: null,
   prPollMinutes: PR_POLL_MINUTES.default,
   prIgnoredRepos: [],

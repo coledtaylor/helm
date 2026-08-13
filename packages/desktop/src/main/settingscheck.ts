@@ -2270,6 +2270,16 @@ export async function runSettingsChecks(
         why: 'a bare name is resolved against whatever PATH Helm was started with'
       },
       {
+        key: 'transcriptArchiveMaxBytes',
+        good: 512 * 1024 * 1024,
+        // Not "too small" - the floor is deliberately a kilobyte so a check can
+        // drive eviction. Too *large* is the interesting rejection: this bounds
+        // how much of the user's `helm.db` one feature may take, and an
+        // unbounded archive is the state the whole ceiling exists to prevent.
+        bad: 1024 ** 4,
+        why: 'a terabyte is not a ceiling, and a ceiling is the point of the key'
+      },
+      {
         key: 'ghPath',
         good: whereIs('gh.exe')[0] ?? fixtures.stubCli,
         bad: 'gh',
@@ -3605,7 +3615,12 @@ export async function runSettingsChecks(
     // no default could produce and the checkout mode is the non-default half of
     // a two-value enum, which is the strongest either can be parked on.
     prReviewPrompt: '/security-review {number} in {slug}',
-    prCheckout: 'checkout'
+    prCheckout: 'checkout',
+    // The archive's ceiling, parked well *above* its default rather than below
+    // it. Below would evict from this run's database on the way past, which is
+    // a copy of the user's and holds their real archive - and a restart check
+    // has no business destroying the thing it is checking the setting for.
+    transcriptArchiveMaxBytes: 4 * 1024 ** 3
   }
 
   const applied = await sendWrite(win, parked as Record<string, unknown>)

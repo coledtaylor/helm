@@ -13,6 +13,7 @@ import {
   TERMINAL_SCROLLBACK,
   USAGE_DISPLAY_MODES,
   type AppSettings,
+  type ArchiveStats,
   type DetectedShell,
   withRepoIgnored,
   type EffortLevel,
@@ -26,7 +27,7 @@ import {
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { SEGMENT_ON } from '../lib/segmented'
-import { formatAge } from '../lib/time'
+import { formatAge, formatBytes } from '../lib/time'
 import { Checkbox } from './Checkbox'
 import { CaretIcon, CheckIcon, CloseIcon, RefreshIcon, WarnIcon } from './icons'
 import type { SetupClaudeStatus } from './SetupPane'
@@ -135,6 +136,17 @@ export interface SettingsPaneProps {
   shells: DetectedShell[]
   /** Native file picker, for a shell installed somewhere `where.exe` misses. */
   onLocateShell: () => void
+
+  /**
+   * What the transcript archive holds. Null until the first read lands.
+   *
+   * Passed in rather than derived from the settings, because the interesting
+   * half of this group is not the ceiling - it is how much is actually stored
+   * against it, which only the main process knows.
+   */
+  archiveStats: ArchiveStats | null
+  transcriptArchiveMaxBytes: number
+  onTranscriptArchiveMaxBytesChange: (bytes: number) => void
 
   /**
    * What Helm found out about `gh`, out of the pull-request snapshot. Null
@@ -286,6 +298,9 @@ export function SettingsPane({
   terminalFontStack,
   shells,
   onLocateShell,
+  archiveStats,
+  transcriptArchiveMaxBytes,
+  onTranscriptArchiveMaxBytesChange,
   gh,
   onLocateGh,
   onClearGhOverride,
@@ -571,6 +586,12 @@ export function SettingsPane({
           onLocateShell={onLocateShell}
         />
 
+        <ArchiveGroup
+          stats={archiveStats}
+          maxBytes={transcriptArchiveMaxBytes}
+          onMaxBytesChange={onTranscriptArchiveMaxBytesChange}
+        />
+
         <GitHubGroup
           gh={gh}
           onLocate={onLocateGh}
@@ -590,6 +611,125 @@ export function SettingsPane({
         />
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Transcript archive
+// ---------------------------------------------------------------------------
+
+/**
+ * The ceilings this pane offers.
+ *
+ * Not the validator's range, which runs from a kilobyte so that a check can
+ * drive eviction. These are the sizes a person would choose, and the smallest
+ * of them is still four hundred times the whole archive on the machine this was
+ * written against (1.47 MB for 21,952 messages out of 311 MB of transcripts).
+ */
+const ARCHIVE_CEILINGS = [
+  { bytes: 256 * 1024 * 1024, label: '256 MB' },
+  { bytes: 512 * 1024 * 1024, label: '512 MB' },
+  { bytes: 1024 ** 3, label: '1 GB' },
+  { bytes: 2 * 1024 ** 3, label: '2 GB' },
+  { bytes: 4 * 1024 ** 3, label: '4 GB' },
+  { bytes: 8 * 1024 ** 3, label: '8 GB' }
+] as const
+
+/**
+ * What Helm has kept, and the one knob over it.
+ *
+ * The figures are stated rather than drawn. A bar with no number on it would
+ * be exactly the wrong answer here: the whole reason this group exists is that
+ * `helm.db` is the user's file and a feature that grows it silently is one they
+ * find out about from their disk. So the sentence says how many conversations,
+ * how many messages, how many bytes, and how many bytes out of how many - and,
+ * when the ceiling has actually bitten, how many conversations it dropped.
+ *
+ * There is no on/off switch and that is deliberate; the field's comment in
+ * `types.ts` has the argument. What can be turned down is the ceiling.
+ */
+function ArchiveGroup({
+  stats,
+  maxBytes,
+  onMaxBytesChange
+}: {
+  stats: ArchiveStats | null
+  maxBytes: number
+  onMaxBytesChange: (bytes: number) => void
+}): JSX.Element {
+  const used = stats?.storedBytes ?? 0
+  const percent = maxBytes > 0 ? (used / maxBytes) * 100 : 0
+  // Two significant figures below 1%, so a real archive on a default ceiling
+  // reads "0.00014%" rather than "0%" - which would say "nothing is stored"
+  // about something that is.
+  const percentText = percent === 0 ? '0%' : percent < 1 ? `${percent.toPrecision(2)}%` : `${percent.toFixed(1)}%`
+
+  // A ceiling set outside the offered list - by a check, or by a build that
+  // offered different sizes - is added to the list rather than silently
+  // replaced by the nearest one, which would make the select lie about what is
+  // in force the moment it painted.
+  const choices = ARCHIVE_CEILINGS.some((choice) => choice.bytes === maxBytes)
+    ? ARCHIVE_CEILINGS
+    : [{ bytes: maxBytes, label: formatBytes(maxBytes) }, ...ARCHIVE_CEILINGS]
+
+  return (
+    <Group
+      name="archive"
+      title="Transcript archive"
+      hint="Claude Code deletes conversation transcripts on its own schedule and keeps the prompts for ever. Helm reads each one before that happens and stores the messages here, compressed. It never writes to Claude's files."
+    >
+      <div className="pb-1">
+        <Verdict
+          data-settings-archive-state={stats === null ? 'reading' : stats.sessions === 0 ? 'empty' : 'holding'}
+          tone={stats === null ? 'todo' : 'ok'}
+          text={
+            stats === null
+              ? 'Reading…'
+              : stats.sessions === 0
+                ? 'Nothing archived yet'
+                : `${stats.sessions.toLocaleString()} conversations kept`
+          }
+        />
+        <dl className="mt-2.5 space-y-1.5">
+          <Fact label="Kept">
+            <span data-settings-archive-sessions={String(stats?.sessions ?? 0)}>
+              {(stats?.sessions ?? 0).toLocaleString()} sessions ·{' '}
+              {(stats?.messages ?? 0).toLocaleString()} messages
+            </span>
+          </Fact>
+          <Fact label="Stored">
+            <span data-settings-archive-stored={String(used)}>
+              {formatBytes(used)} of {formatBytes(maxBytes)} ({percentText})
+            </span>
+          </Fact>
+          <Fact label="Dropped">
+            <span data-settings-archive-evicted={String(stats?.evictedSessions ?? 0)}>
+              {(stats?.evictedSessions ?? 0).toLocaleString()} sessions
+            </span>
+          </Fact>
+        </dl>
+      </div>
+
+      <Divider />
+
+      <Row
+        label="Keep at most"
+        hint="Reached, Helm drops the oldest archived conversation whole and marks it dropped - never half of one. Lowering this can evict immediately."
+      >
+        <Select
+          value={String(maxBytes)}
+          label="How much of the database the archive may use"
+          data-settings-archive-max={String(maxBytes)}
+          onChange={(value) => onMaxBytesChange(Number(value))}
+        >
+          {choices.map((choice) => (
+            <option key={choice.bytes} value={String(choice.bytes)}>
+              {choice.label}
+            </option>
+          ))}
+        </Select>
+      </Row>
+    </Group>
   )
 }
 

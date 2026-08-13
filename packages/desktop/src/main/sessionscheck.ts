@@ -5,6 +5,7 @@ import { screenshot, sleep, squash, stripAnsi, waitFor } from './bridge'
 import type { ConfigService } from './config'
 import type { ContentService } from './content'
 import type { Check } from './fidelity'
+import type { ArchiveService } from './archive'
 import type { HistoryService } from './history'
 import type { PtermHost } from './pterm'
 import type { PullsService } from './pulls'
@@ -36,6 +37,8 @@ export interface CheckContext {
   pterm: PtermHost
   /** history-check reads and forces passes through this; sessions-check ignores it. */
   history: HistoryService
+  /** transcript-check drives the archive's passes and its ceiling through this. */
+  archive: ArchiveService
   /** config-check reads and writes config through this; nothing else uses it. */
   config: ConfigService
   /** content-check reads, renders and searches content through this. */

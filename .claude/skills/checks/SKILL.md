@@ -33,6 +33,7 @@ A change to a surface named here is not done until its check is green.
 | `pnpm packaging-check` | first run, packaging, personal-path audit | setup, portable mode, the installer |
 | `pnpm usage-check` | the status bar's usage figures | `core/usage/`, the status bar |
 | `pnpm settings-check` | the settings pane, every app setting, terminal/shell preferences | `core/store/settings.ts`, `SettingsPane`, `terminal.ts`, `estimateGrid`, `main/pterm.ts` |
+| `pnpm transcript-check` | the transcript archive: capture, search, the ceiling, read-only | `core/archive/`, `core/store/archive.ts`, `main/archive.ts`, the session-history pane's archive states, anything that reads `projects/*.jsonl` |
 | `pnpm pr-check` | the pull-request surface end to end | `core/github/`, `main/pulls.ts`, `main/gh-cli.ts`, `PullsPane`, `PullRow`, `PullRequestPane`, the project pane's pull-request panel and its Config/Content links, `SessionHost.review` |
 | `pnpm affordance-check` | every clickable control looks clickable | `theme.css`, `lib/segmented.ts`, `Checkbox`, any shared control recipe, any new pane |
 | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
@@ -186,6 +187,22 @@ each terminal setting on a value of its own on the way past. And a `<select>`
 is checked for having taken the value **before** the change event is dispatched:
 React flushes a discrete event synchronously and re-renders from props the write
 has not come back and changed yet, which puts the old value back.
+
+**`transcript-check`** - the transcript archive. The one check that runs against a
+`.claude` tree of its own, pointed at with the real **`CLAUDE_CONFIG_DIR`** rather
+than a flag, so "that variable is honoured" is exercised rather than simulated.
+Plants transcripts, lets the watch notice them, and compares the archived text
+against its own naive parse of the fixture bytes. Four things it does that are
+worth copying: it hashes the whole fixture tree either side of a full pass and
+requires the digest to be identical (T-5), having first planted a canary file to
+prove the hash can move; it computes the storage ceiling from what is actually
+stored, so the set of evicted sessions is *exact* rather than "at least one"
+(T-4); it asserts a token planted mid-conversation is findable by content **and**
+absent from `history_prompts`, which is what says the search is over messages
+(T-3); and it is two-phase, because "the archive outlives the transcript" is not
+a claim the process that wrote the rows can make - `run-transcript.mjs` deletes
+the transcript between the phases and a second real app start has to find the
+conversation still there (T-7). No sessions, no network, about ninety seconds.
 
 **`fidelity` and `claude-check`** - TUI fidelity inside xterm. These render
 `spike.html`, a separate page from the app, so app layout changes cannot move

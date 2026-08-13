@@ -253,14 +253,32 @@ async function typeSearch(win: BrowserWindow, term: string): Promise<string> {
    * to be positive, so the DOM is compared against what the query for that
    * exact text returns. What the answer should *be* is still settled against
    * `history.jsonl` by the caller; this only decides when to look.
+   *
+   * The comparison is over the **session ids**, and it used to be over the row
+   * count. That was the same mistake one level down: two different searches
+   * returning the same number of rows agree on the count while showing entirely
+   * different sessions, and this machine has a term matching four sessions and
+   * a project matching four others. The check reported the pane as returning
+   * the wrong rows for a search it had not run yet. Ids, in order, cannot do
+   * that.
    */
   for (let attempt = 0; attempt < 30; attempt++) {
     const agreed = await js<boolean>(
       win,
       `(async () => {
         const box = document.querySelector('input[data-history-search]');
-        const page = await window.helm.invoke('history:sessions', { search: box.value });
-        return page.sessions.length === document.querySelectorAll('button[data-session]').length;
+        // The scope the pane is actually on, not an assumption about it: this
+        // comparison decides *when* to look, and asking the wrong question
+        // would answer "not yet" for ever.
+        const on = document.querySelector('[data-history-scope][aria-pressed="true"]');
+        const page = await window.helm.invoke('history:sessions', {
+          search: box.value,
+          scope: on ? on.dataset.historyScope : 'prompts'
+        });
+        const painted = [...document.querySelectorAll('button[data-session]')]
+          .map((el) => el.dataset.session);
+        return page.sessions.length === painted.length &&
+          page.sessions.every((s, i) => s.sessionId === painted[i]);
       })()`
     ).catch(() => false)
     if (agreed) return typeable
@@ -406,7 +424,12 @@ export async function runHistoryChecks(
   // -------------------------------------------------------------------------
   // HIST-2: grouped by project
   // -------------------------------------------------------------------------
-  await click(win, 'button[aria-pressed="false"]')
+  // Named rather than "the first unpressed button": this pane now holds two
+  // segmented groups - grouping, and what the search box searches - and the
+  // positional selector started clicking the wrong one the moment the second
+  // arrived. It reported zero group headers and then a search over the wrong
+  // scope, which looked like two unrelated regressions.
+  await click(win, '[data-history-grouping="project"]')
   await sleep(500)
   const headers = await groupHeaders(win)
   const groupedRows = await paintedRows(win)
@@ -434,7 +457,7 @@ export async function runHistoryChecks(
   })
 
   // Back to the flat list for everything that follows.
-  await click(win, 'button[aria-pressed="false"]')
+  await click(win, '[data-history-grouping="recent"]')
   await sleep(400)
 
   // -------------------------------------------------------------------------
@@ -442,9 +465,14 @@ export async function runHistoryChecks(
   // -------------------------------------------------------------------------
   const resumableRows = rows.filter((row) => row.resumable)
   const reapedRows = rows.filter((row) => !row.resumable)
-  const badged = reapedRows.filter((row) =>
-    /history only|folder gone/i.test(row.text)
-  ).length
+  // Four words now, not two. The transcript archive gave the pane a third and a
+  // fourth state - `archived` for a conversation Helm kept before Claude Code
+  // deleted it, `dropped` for one the storage ceiling later took - and they are
+  // sub-kinds of "cannot be reopened" rather than a second vocabulary beside it.
+  // `pnpm transcript-check` is what asserts the *right* one is on each row; this
+  // one still asserts that every unreopenable row carries one at all.
+  const BADGES = /history only|folder gone|archived|dropped/i
+  const badged = reapedRows.filter((row) => BADGES.test(row.text)).length
   const wronglyMarked = rows.filter(
     (row) => row.resumable !== resumableTruth.has(row.sessionId)
   ).length
@@ -460,11 +488,14 @@ export async function runHistoryChecks(
       resumableOnDisk: resumableTruth.size,
       wronglyMarked,
       reapedRowsCarryingABadge: badged,
+      badgeVocabulary: BADGES.source.split('|'),
       retention: `${String(Math.round((resumableTruth.size / truth.sessions.size) * 1000) / 10)}%`
     },
     notes: [
       'The badge matters as much as the dot: a difference only in colour is not a',
-      'difference for everyone reading it.'
+      'difference for everyone reading it.',
+      'Resumability is still the thing the *dot* answers. What the badge says has grown with',
+      'the archive, so the words are listed here rather than left in a regex nobody reads.'
     ]
   })
 
@@ -525,7 +556,13 @@ export async function runHistoryChecks(
       expected.size > 0 &&
       rows.length === expected.size &&
       rows.every((row) => expected.has(row.sessionId))
-    projectSearch = { term: projectTerm, painted: rows.length, expected: expected.size }
+    projectSearch = {
+      term: projectTerm,
+      painted: rows.length,
+      expected: expected.size,
+      paintedNotExpected: rows.filter((row) => !expected.has(row.sessionId)).map((r) => r.sessionId),
+      expectedNotPainted: [...expected].filter((id) => !rows.some((row) => row.sessionId === id))
+    }
     await typeSearch(win, TYPED)
     await sleep(300)
   }
@@ -554,7 +591,20 @@ export async function runHistoryChecks(
           medianMs: Math.round((runs[Math.floor(runs.length / 2)]?.tookMs ?? 0) * 1000) / 1000
         }
       }),
-      throughTheUi: { typed: TYPED, rows: searched.length, expected: expectedIds.size },
+      throughTheUi: {
+        typed: TYPED,
+        rows: searched.length,
+        expected: expectedIds.size,
+        // The ids, not only the counts. Two sets of four that do not overlap
+        // report as "4 and 4" and fail on the `every` below, which is a
+        // failure with nothing in the report to explain it.
+        paintedNotExpected: searched
+          .filter((row) => !expectedIds.has(row.sessionId))
+          .map((row) => row.sessionId),
+        expectedNotPainted: [...expectedIds].filter(
+          (id) => !searched.some((row) => row.sessionId === id)
+        )
+      },
       screenshot: shotSearch.file
     },
     notes: [

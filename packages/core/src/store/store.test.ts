@@ -135,6 +135,7 @@ describe('settings', () => {
       terminalCursorBlink: false,
       terminalScrollback: 2500,
       terminalShell: join(dir, 'pwsh.exe'),
+      transcriptArchiveMaxBytes: 256 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 15,
       prIgnoredRepos: ['acme/noisy', 'other/quiet'],
@@ -350,6 +351,14 @@ describe('settings validation', () => {
       bad: ['pwsh.exe', 'bin\\pwsh.exe', '', 42, {}]
     },
     {
+      // A byte count, and null is in the *bad* column deliberately: there is no
+      // "no ceiling" for this key. The archive is always on and always bounded,
+      // and an unbounded one is the state `helm.db` is not allowed to reach.
+      key: 'transcriptArchiveMaxBytes',
+      good: [1024, 1024 ** 3, 64 * 1024 ** 3],
+      bad: [1023, 0, -1, 64 * 1024 ** 3 + 1, 1024.5, '1073741824', null, {}]
+    },
+    {
       key: 'ghPath',
       good: [null, join(tmpdir(), 'gh.exe')],
       bad: ['gh', 'bin\\gh.exe', '', 42, {}]
@@ -508,6 +517,7 @@ describe('settings validation', () => {
       terminalCursorBlink: false,
       terminalScrollback: 50_000,
       terminalShell: join(dir, 'cmd.exe'),
+      transcriptArchiveMaxBytes: 512 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 0,
       prIgnoredRepos: ['acme/noisy'],
@@ -540,6 +550,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   terminalCursorBlink: false,
   terminalScrollback: 50_000,
   terminalShell: join(dir, 'cmd.exe'),
+  transcriptArchiveMaxBytes: 512 * 1024 * 1024,
   ghPath: join(dir, 'gh.exe'),
   prPollMinutes: 0,
   prIgnoredRepos: ['acme/noisy'],

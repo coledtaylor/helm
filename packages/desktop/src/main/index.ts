@@ -8,7 +8,13 @@ import {
   protocol,
   shell
 } from 'electron'
-import { writeSetting, writeSettings, type AppSettings } from '@helm/core'
+import {
+  claudeHome,
+  projectsDirIn,
+  writeSetting,
+  writeSettings,
+  type AppSettings
+} from '@helm/core'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -30,6 +36,7 @@ import {
   createContentService,
   registerContentProtocol
 } from './content'
+import { createArchiveService } from './archive'
 import { createHistoryService } from './history'
 import { createPullsService } from './pulls'
 import { createUsageService } from './usage'
@@ -48,6 +55,7 @@ import { runContentChecks } from './contentcheck'
 import { runUsageChecks } from './usagecheck'
 import { runSettingsChecks } from './settingscheck'
 import { runPrChecks } from './prcheck'
+import { runTranscriptChecks, runTranscriptRestartChecks } from './transcriptcheck'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -86,6 +94,8 @@ type Mode =
   | 'settings-check'
   | 'settings-restart'
   | 'pr-check'
+  | 'transcript-check'
+  | 'transcript-restart'
   | 'shim-sweep'
   | 'shim-hold'
   | 'design-shot'
@@ -109,6 +119,8 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--settings-check')) return 'settings-check'
   if (process.argv.includes('--settings-restart')) return 'settings-restart'
   if (process.argv.includes('--pr-check')) return 'pr-check'
+  if (process.argv.includes('--transcript-check')) return 'transcript-check'
+  if (process.argv.includes('--transcript-restart')) return 'transcript-restart'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
   if (process.argv.includes('--shim-hold')) return 'shim-hold'
   if (process.argv.includes('--claude')) return 'claude'
@@ -131,6 +143,8 @@ const isSpikeMode =
   mode !== 'usage-check' &&
   mode !== 'settings-check' &&
   mode !== 'pr-check' &&
+  mode !== 'transcript-check' &&
+  mode !== 'transcript-restart' &&
   mode !== 'shim-hold' &&
   mode !== 'design-shot' &&
   mode !== 'affordance-check'
@@ -337,9 +351,27 @@ function startApp(options: AppOptions = {}): void {
     defaultShell: () => services.settings.terminalShell
   })
 
+  /*
+   * The archive, and the session index that feeds it.
+   *
+   * Declared in this order and wired in the other: the archive is a **second
+   * consumer of the walk the session index already does** rather than a second
+   * walk, so `createHistoryService` hands it the transcript map it has just
+   * built. `archive.start` is given the index's own `refresh` for the same
+   * reason - the watch over `projects/` wakes one pass that serves both.
+   * `main/archive.ts` explains why it is this walk and not the usage index's.
+   */
+  const archive = createArchiveService({
+    store: services.store,
+    projectsDir: projectsDirIn(options.claudeHome ?? claudeHome()),
+    maxBytes: () => services.settings.transcriptArchiveMaxBytes,
+    onChange: (stats) => emit(win, 'archive:changed', stats)
+  })
+
   const history = createHistoryService({
     store: services.store,
     home: options.claudeHome,
+    onTranscripts: (transcripts) => archive.consume(transcripts),
     onChange: (summary) => emit(win, 'history:changed', summary)
   })
 
@@ -388,6 +420,7 @@ function startApp(options: AppOptions = {}): void {
     sessions,
     pterm,
     history,
+    archive,
     usage,
     pulls,
     config,
@@ -432,6 +465,15 @@ function startApp(options: AppOptions = {}): void {
           console.warn(`history index could not be built: ${String(err)}`)
         }
         history.start()
+        // The archive rides that same first pass - `onTranscripts` has already
+        // run by the time `refresh()` returned - so this only arms the watch
+        // over `projects/`, which is the trigger a session appending to its
+        // transcript without submitting a prompt would otherwise not have.
+        // A session that ended while Helm was closed was caught by the pass
+        // above, which is what makes the start-up sweep a sweep.
+        archive.start(() => {
+          history.refresh()
+        })
 
         // Cheap by comparison - one 134 KB file, parsed - but it is on the
         // same "after the first paint" footing: the status bar has everything
@@ -466,7 +508,18 @@ function startApp(options: AppOptions = {}): void {
       })
 
       if (win) {
-        options.onReady?.({ win, services, sessions, pterm, history, usage, pulls, config, content })
+        options.onReady?.({
+          win,
+          services,
+          sessions,
+          pterm,
+          history,
+          archive,
+          usage,
+          pulls,
+          config,
+          content
+        })
       }
     }
   })
@@ -1382,6 +1435,58 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`pr-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  /**
+   * The transcript archive, driven through the real window in two phases.
+   *
+   * Both phases run against a `.claude` tree of the runner's own, pointed at
+   * with the real `CLAUDE_CONFIG_DIR` rather than a flag - which is what makes
+   * T-0 an assertion about the criterion instead of a statement about a hook.
+   * The second phase exists because "the archive survives the transcript being
+   * deleted and the app restarting" is not a claim the process that wrote the
+   * rows can make: `scripts/run-transcript.mjs` deletes the transcript between
+   * them.
+   */
+  if (mode === 'transcript-check' || mode === 'transcript-restart') {
+    const restart = mode === 'transcript-restart'
+    startApp({
+      onReady: (ctx) => {
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        const options = {
+          dataDir,
+          shotDir: join(dataDir, 'screenshots'),
+          ...(onlyArg ? { only: onlyArg.slice('--only='.length).split(',') } : {})
+        }
+        void (restart ? runTranscriptRestartChecks(ctx, options) : runTranscriptChecks(ctx, options))
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport(
+              restart ? 'transcript-restart-report.json' : 'transcript-report.json',
+              {
+                startedAt: new Date().toISOString(),
+                mode: appMode,
+                dataDir,
+                claudeConfigDir: process.env['CLAUDE_CONFIG_DIR'] ?? null,
+                versions: process.versions,
+                pass,
+                checks
+              }
+            )
+            console.log(`${mode} report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`${mode} crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

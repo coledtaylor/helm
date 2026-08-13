@@ -1,4 +1,22 @@
 export {
+  archiveCursor,
+  archiveSearchQuery,
+  archiveStateOf,
+  archiveTranscriptFile,
+  archivedBytes,
+  clearArchive,
+  evictToCeiling,
+  forgetArchiveFiles,
+  indexedArchiveFiles,
+  readArchiveStats,
+  readArchivedConversation,
+  searchArchive,
+  type ArchiveInput,
+  type ArchiveMatch,
+  type ArchiveWrite,
+  type Eviction
+} from './archive'
+export {
   countConfigSnapshots,
   insertConfigSnapshot,
   readAllConfigSnapshots,
