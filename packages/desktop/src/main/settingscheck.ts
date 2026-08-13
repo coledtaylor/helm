@@ -1240,6 +1240,24 @@ export async function runSettingsChecks(
     const rowWithGone = rowValue(dbFile, 'pinnedProjects') as string[] | undefined
     const shotPinned = await screenshot(win, shotDir, 'settings-19-pinned.png')
 
+    // A rescan, through the sidebar's own button. It replaces the tree the
+    // section resolves against, so "the pins are still there afterwards" is a
+    // claim about two stores staying out of each other's way - the list is in
+    // `app_settings` and the projects are in `projects` - and that is worth a
+    // scan rather than an argument. The unresolvable one is the interesting
+    // half: a scan is exactly the moment something could decide to tidy away a
+    // path it did not find.
+    const rescanned = await click(win, 'aside button[aria-label="Rescan all roots"]')
+    await sleep(500)
+    await pollJs(
+      win,
+      `!document.querySelector('aside button[aria-label="Rescan all roots"]').disabled`,
+      45_000
+    )
+    await sleep(600)
+    const afterRescan = await pinState(win, fixtures.pinGone)
+    const rowAfterRescan = rowValue(dbFile, 'pinnedProjects') as string[] | undefined
+
     // The filter. A pinned section that ignored it would sit above the tree
     // still showing what the query just excluded.
     const needle = (second ?? '').split(/[\\/]+/).pop() ?? ''
@@ -1308,6 +1326,14 @@ export async function runSettingsChecks(
         afterGone.goneRow?.badge === true &&
         afterGone.goneRow.launchable === false &&
         !afterGone.rows.includes(fixtures.pinGone.toLowerCase()) &&
+        // And a scan does not disturb any of it, the unresolvable one included.
+        rescanned &&
+        afterRescan.pinned.length === 3 &&
+        lower(rowAfterRescan).length === 3 &&
+        afterRescan.goneRow?.badge === true &&
+        afterRescan.goneRow.launchable === false &&
+        onceInTree(afterRescan, first ?? '') &&
+        onceInTree(afterRescan, second ?? '') &&
         // Filtered like everything else. One pin matches the needle, the other
         // does not, and the unresolvable one does not either.
         whileFiltering.pinned.length === 1 &&
@@ -1341,6 +1367,7 @@ export async function runSettingsChecks(
           state: afterGone,
           screenshot: shotPinned.file
         },
+        afterARescan: { pressed: rescanned, state: afterRescan, databaseRow: rowAfterRescan },
         filter: { typed: needle, state: whileFiltering, cleared: filterCleared, afterClearing: afterFilter },
         afterUnpinning: {
           goneWasListedInThePane: goneListedInPane,
@@ -1362,6 +1389,9 @@ export async function runSettingsChecks(
         'the entry survives, that the row says `folder gone`, and that the row',
         'is not a button: it carries no `title`, so no selector that reaches a',
         'launchable project row reaches it.',
+        'Then a real rescan, because "the pins survive one" is a claim about the',
+        'settings row and the projects table staying out of each other`s way -',
+        'and a scan is the moment a path nothing found could get tidied away.',
         'Whether the pin survives a *restart* is S-9`s, from the parked value.'
       ]
     })
