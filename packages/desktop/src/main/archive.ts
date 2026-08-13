@@ -60,13 +60,45 @@ import {
  */
 
 /**
- * How much a single catch-up pass will read before yielding.
+ * How much a single pass will read before yielding.
  *
- * The usage index's number, for the same reason and over the same bytes: the
- * first pass reads 311 MB, and doing that in one turn would freeze the window
- * at startup.
+ * A quarter of the usage index's 16 MB, over the same bytes, and the difference
+ * was measured rather than guessed. The first index here reads 311 MB, and the
+ * archive parses *every* line where the usage reader gates on `"assistant"` -
+ * so a 16 MB chunk is 60-80 ms of synchronous main-thread work per tick, and
+ * twenty of them back to back at start-up were enough to make
+ * `pnpm settings-check`'s terminal group fail: pty resizes and IPC replies
+ * queue behind a chunk, and that group measures exactly those. Four megabytes
+ * is under 20 ms a tick, which the event loop absorbs.
  */
-const CHUNK_BYTES = 16 * 1024 * 1024
+const CHUNK_BYTES = 4 * 1024 * 1024
+
+/**
+ * How long the backlog drain waits before it starts.
+ *
+ * The first launch after this ships has a whole tree to read and no user
+ * waiting for it - what they are waiting for is the window. Everything else in
+ * `rendererReady` is already "after the first paint"; this is "and after the
+ * first few seconds of using it", which is the right priority for work that has
+ * been outstanding since before the app was opened.
+ */
+const CATCH_UP_AFTER_MS = 3000
+
+/**
+ * How long the backlog drain waits *between* chunks.
+ *
+ * Back to back was wrong, and the checks said so twice before this number
+ * existed. A chunk is only ~20 ms of work, but seventy-odd of them in
+ * consecutive ticks still owns the main thread for a second and a half, and the
+ * app is doing real things during it - `pnpm settings-check` lost a rescan
+ * (S-3) and a pty resize (S-10) to exactly that.
+ *
+ * There is no reason for the drain to be fast. It is reading a backlog that has
+ * been sitting on disk since before Helm was opened, against a criterion of
+ * "within minutes"; spread like this the tree on this machine takes about
+ * twenty seconds and the main thread is idle for ninety per cent of it.
+ */
+const CATCH_UP_EVERY_MS = 250
 
 /**
  * How long a burst of transcript writes is allowed to settle.
@@ -130,11 +162,12 @@ export interface ArchiveService {
   /** What the archive holds right now. */
   stats: () => ArchiveStats
   /**
-   * Begins watching `projects/` for transcripts that have grown.
+   * Begins watching `projects/` for transcripts that have grown, and drains
+   * whatever backlog the start-up pass did not reach.
    *
-   * `wake` is what the watch calls, and it is the session index's refresh
-   * rather than this service's `sweep`: one walk, two consumers. Safe to call
-   * twice.
+   * `wake` is what the *watch* calls, and it is the session index's refresh
+   * rather than this service's `sweep`: one walk, two consumers. The backlog
+   * drain does not go through it - see `scheduleCatchUp`. Safe to call twice.
    */
   start: (wake: () => void) => void
   stop: () => void
@@ -154,40 +187,50 @@ export function createArchiveService({
   let debounceSince = 0
   let lastPassAt = 0
   let lastSignature = ''
-  let wake: (() => void) | null = null
-  let catchUp: NodeJS.Immediate | null = null
+  let catchUp: NodeJS.Timeout | null = null
+  let started = false
+  /** The last walk, so the backlog drain does not have to repeat it. */
+  let lastWalk: Map<string, TranscriptFile> = new Map()
 
   /**
    * Works the backlog forward one chunk per tick until it is gone.
    *
    * The usage index's shape and for the same reason: a first index over this
-   * machine's 311 MB of transcripts is twenty chunks, and waiting for the
-   * session index's own once-a-minute sweep to deliver them would mean twenty
-   * minutes before the archive held anything. `setImmediate` rather than a loop
-   * so the window keeps painting through it.
+   * machine's 311 MB of transcripts is a long run of chunks, and waiting for
+   * the session index's once-a-minute sweep to deliver them would mean an hour
+   * before the archive held anything.
    *
-   * It calls `wake` rather than `sweep`, so the catch-up rides the same walk
-   * every other pass does. And it deliberately ignores `MIN_PASS_MS`: that
-   * floor is there to stop a live session's writes driving passes, and a
-   * backlog is not a live session - it happens once, on the first launch after
-   * this shipped, and then never again.
+   * It calls `pass` directly, on the walk the last pass already did, and that
+   * is the correction to a version that called `wake` instead. `wake` is the
+   * *session index's* refresh - `readHistoryTail`, `scanTranscripts`,
+   * `applyTranscripts` over 229 rows and a `statSync` per distinct project -
+   * which is right for an ordinary pass and absurd twenty times in a row for a
+   * backlog nothing else is waiting on. Doing it that way made
+   * `pnpm settings-check`'s terminal group fail on timing. The steady-state
+   * "one walk, two consumers" property is untouched: this is the transient, it
+   * happens once per install, and transcripts do not appear fast enough for a
+   * three-second-old walk to matter to it.
+   *
+   * `MIN_PASS_MS` is deliberately ignored here. That floor exists to stop a
+   * live session's writes driving passes; a backlog is not a live session.
    */
-  function scheduleCatchUp(): void {
-    if (catchUp !== null || wake === null || caughtUp) return
-    const run = wake
-    catchUp = setImmediate(() => {
+  function scheduleCatchUp(delayMs: number): void {
+    if (catchUp !== null || !started || caughtUp) return
+    catchUp = setTimeout(() => {
       catchUp = null
       try {
-        run()
+        pass(lastWalk)
       } catch (err) {
         console.warn(`transcript archive catch-up failed: ${String(err)}`)
       }
-    })
+    }, delayMs)
+    catchUp.unref()
   }
 
   function pass(transcripts: Map<string, TranscriptFile>): ArchivePass {
-    const started = performance.now()
+    const begun = performance.now()
     lastPassAt = Date.now()
+    lastWalk = transcripts
 
     const known = indexedArchiveFiles(store)
     const present = new Set([...transcripts.values()].map((t) => t.file))
@@ -252,7 +295,7 @@ export function createArchiveService({
       evicted: eviction.sessions,
       storedBytes: eviction.storedBytes,
       caughtUp,
-      ms: performance.now() - started
+      ms: performance.now() - begun
     }
 
     const stats = readArchiveStats(store, ceiling)
@@ -269,7 +312,7 @@ export function createArchiveService({
     }
     // More on disk than this chunk's budget covered. Come back on the next tick
     // rather than waiting for whatever would have driven the pass after this.
-    if (!caughtUp) scheduleCatchUp()
+    if (!caughtUp) scheduleCatchUp(CATCH_UP_EVERY_MS)
     return result
   }
 
@@ -311,11 +354,12 @@ export function createArchiveService({
     ready: () => caughtUp,
 
     start(onWake) {
-      if (watcher !== null) return
-      wake = onWake
+      if (started) return
+      started = true
       // The first pass has already run by now - it rode the session index's
-      // start-up refresh - so this is only about the rest of the backlog.
-      scheduleCatchUp()
+      // start-up refresh - so this is only about the rest of the backlog, and
+      // it can wait a few seconds for the window to settle first.
+      scheduleCatchUp(CATCH_UP_AFTER_MS)
       try {
         /*
          * Recursive, and this is the one place in Helm that watches `projects/`
@@ -358,9 +402,9 @@ export function createArchiveService({
     stop() {
       if (debounce) clearTimeout(debounce)
       debounce = null
-      if (catchUp) clearImmediate(catchUp)
+      if (catchUp) clearTimeout(catchUp)
       catchUp = null
-      wake = null
+      started = false
       watcher?.close()
       watcher = null
     }
