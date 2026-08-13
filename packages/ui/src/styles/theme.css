@@ -322,22 +322,31 @@ select:focus-visible {
 }
 
 /**
- * The tab strip scrolls and does not say so with a bar.
+ * The tab strip keeps its scrollbar.
  *
- * Every other scroll container in Helm is a pane with room for one. This one is
- * 40px tall and the tabs are 34 of them, so Chromium's thin bar - which on
- * Windows still carries two arrow buttons - lands in the 6px where the active
- * tab overlaps the pane island below it, and draws a grey rule straight through
- * the seam that makes a tab read as part of its pane. The tabs run to the edge
- * of the strip when there are more of them than fit, which is the same thing
- * every other tab strip uses to say so.
+ * It was hidden once, on the argument that a 40px strip has no room for one and
+ * that the bar drew a rule through the seam where the active tab meets its pane.
+ * Half of that was wrong and the other half was the wrong trade. The bar carries
+ * no arrow buttons - nothing in this app does, `scrollbar-width: thin` above
+ * sees to that - and it is the only thing on screen that says there are more
+ * tabs than fit. Hiding it did not make the strip cleaner, it made two open
+ * tabs invisible and unreachable.
+ *
+ * So it stays, at the same `thin` every other scroll container in Helm uses -
+ * 10px, measured, against 15px for `auto`. It only appears when the tabs
+ * actually overflow, which is the only time it has anything to say.
+ *
+ * The rule is kept rather than deleted because the class is what the wheel
+ * handler in `TabBar.tsx` is named for, and because the next person to find a
+ * bar in a 40px strip inconvenient should find this note before they hide it
+ * again. `::-webkit-scrollbar` is not the lever: Chromium ignores those
+ * pseudo-elements once `scrollbar-width` is set, which the `*` rule above does
+ * for every element in the app, so the block of webkit rules there is doing
+ * nothing on a current Chromium and the only real controls are
+ * `scrollbar-width` and `scrollbar-color`.
  */
 .tab-scroll {
-  scrollbar-width: none;
-}
-
-.tab-scroll::-webkit-scrollbar {
-  display: none;
+  scrollbar-width: thin;
 }
 
 /**
