@@ -559,7 +559,7 @@ function Row({
       onClick={() => onSelect(session)}
       title={`${session.projectName} · ${formatMoment(session.lastAt)}`}
       className={cn(
-        'relative flex w-full flex-col gap-0.5 rounded-well py-1.5 pr-2 pl-4 text-left',
+        'session-row relative flex w-full flex-col gap-0.5 rounded-well py-1.5 pr-2 pl-4 text-left',
         'transition-colors',
         selected ? 'bg-accent-soft' : 'hover:bg-hover'
       )}

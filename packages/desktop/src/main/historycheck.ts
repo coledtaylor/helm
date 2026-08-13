@@ -422,6 +422,143 @@ export async function runHistoryChecks(
   })
 
   // -------------------------------------------------------------------------
+  // HIST-8: the list off screen costs nothing, and says its true length
+  // -------------------------------------------------------------------------
+  // Two claims: that a resize is cheap, and that the scrollbar is honest.
+  //
+  // The cost one is measured **against itself**, with the rule turned off and
+  // on again in the same window on the same list in the same second, and the
+  // assertion is the ratio. An absolute millisecond bound would be a claim
+  // about the machine the check is running on, and this suite already has two
+  // probes that fail on a developer's machine for reasons that have nothing to
+  // do with what they measure (868kqvrn4); adding a third would be worse than
+  // adding none. A ratio is the same number on a fast machine and a slow one.
+  //
+  // The first draft of this probe asserted the *mechanism* - that rows below
+  // the fold have unrendered subtrees - and it failed, correctly, because that
+  // is not what is happening. `content-visibility: auto` also applies
+  // `contain: layout style paint` unconditionally, and on Chromium 150 that
+  // containment is the whole of the win: 0 of 965 rows were ever observed
+  // skipped, scrolled to the bottom and back. The lesson is in the assertion
+  // now - measure what the user complained about, which was a stutter, not the
+  // implementation detail that was supposed to fix it.
+  //
+  // The second claim has a bug already behind it. `contain-intrinsic-size`
+  // describes a **content box**, and writing the height a ruler reports gives a
+  // skipped row its own padding twice: 47px instead of 35px turned a 45,718px
+  // list into a 56,824px one. Every row still correct, the search still
+  // working, and a scrollbar describing a list that does not exist. Nothing
+  // else in this file would ever have caught it.
+  const layout = await js<{
+    rows: number
+    withRule: number
+    msWithRule: number
+    msWithoutRule: number
+    msRestored: number
+    speedup: number
+    scrollHeight: number
+    rowHeight: number
+    predicted: number
+    errorPct: number
+  }>(
+    win,
+    `(() => {
+      const list = document.querySelector('[role=group][aria-label=Sessions]')
+      const rows = [...list.querySelectorAll('button[data-session]')]
+      // One resize tick's worth of work: change the width the rows lay out
+      // against, then force the layout the next frame would have done anyway.
+      const once = (w) => {
+        const t = performance.now()
+        list.style.width = w
+        void list.offsetHeight
+        return performance.now() - t
+      }
+      // Median of seven, alternating widths so no run can be answered from the
+      // last one's cached layout. Median rather than mean: one GC pause in the
+      // middle of a sample should not decide a check.
+      const sample = () => {
+        const runs = []
+        for (let i = 0; i < 7; i++) runs.push(once(i % 2 ? '99.5%' : '99%'))
+        list.style.width = ''
+        void list.offsetHeight
+        runs.sort((a, b) => a - b)
+        return runs[3]
+      }
+      const withRule = sample()
+      const off = document.createElement('style')
+      off.textContent =
+        '.session-row { content-visibility: visible !important; contain: none !important; }'
+      document.head.appendChild(off)
+      void list.offsetHeight
+      const withoutRule = sample()
+      off.remove()
+      void list.offsetHeight
+      const restored = sample()
+
+      const rowHeight = rows.length ? rows[0].getBoundingClientRect().height : 0
+      const predicted = rowHeight * rows.length
+      return {
+        rows: rows.length,
+        withRule: rows.filter((r) => getComputedStyle(r).contentVisibility === 'auto').length,
+        msWithRule: withRule,
+        msWithoutRule: withoutRule,
+        msRestored: restored,
+        speedup: withRule === 0 ? 0 : withoutRule / withRule,
+        scrollHeight: list.scrollHeight,
+        rowHeight,
+        predicted,
+        errorPct: predicted === 0 ? 0 : ((list.scrollHeight - predicted) / predicted) * 100
+      }
+    })()`
+  )
+
+  // 3x against a measured 8.4-9.2x. Far enough below to survive a noisy
+  // machine, far enough above 1x that losing the rule is caught.
+  const cheapToResize = layout.speedup >= 3
+  // Turning it back on has to restore the win, which is what says the
+  // measurement was of the rule rather than of warm-up.
+  const restoredWin = layout.msRestored <= layout.msWithRule * 2
+  // 2% of a list this long is a row and a half - tight enough to catch the
+  // padding mistake (24%) and loose enough to survive the half pixel a row
+  // differs by depending on where it lands on the device grid.
+  const scrollbarHonest = Math.abs(layout.errorPct) < 2
+
+  if (running('list')) checks.push({
+    id: 'HIST-8',
+    criterion: 'All sessions from history.jsonl visible, grouped and searchable, with project and age',
+    title: 'A resize does not pay for every row in the history, and the scrollbar still describes the whole list',
+    ok:
+      layout.rows > 0 &&
+      layout.withRule === layout.rows &&
+      cheapToResize &&
+      restoredWin &&
+      scrollbarHonest,
+    detail: {
+      rows: layout.rows,
+      rowsCarryingTheRule: layout.withRule,
+      relayoutMs: {
+        withRule: Number(layout.msWithRule.toFixed(2)),
+        withoutRule: Number(layout.msWithoutRule.toFixed(2)),
+        restored: Number(layout.msRestored.toFixed(2))
+      },
+      speedup: Number(layout.speedup.toFixed(1)),
+      scrollHeight: layout.scrollHeight,
+      rowHeight: layout.rowHeight,
+      predicted: Math.round(layout.predicted),
+      errorPct: Number(layout.errorPct.toFixed(2))
+    },
+    notes: [
+      'The rule is turned off and back on inside one measurement, so the two',
+      'numbers come from the same window, the same list and the same second.',
+      'That is what makes a ratio meaningful where a millisecond would not be.',
+      'Restoring it has to restore the win as well, which is what separates',
+      'the rule from a warm cache.',
+      'The scrollbar assertion is here because nothing else would catch it -',
+      'every row can be correct while the bar describes a different list.'
+    ]
+  })
+
+  // -------------------------------------------------------------------------
   // HIST-2: grouped by project
   // -------------------------------------------------------------------------
   // Named rather than "the first unpressed button": this pane now holds two

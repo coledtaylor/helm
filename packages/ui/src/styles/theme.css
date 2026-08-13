@@ -339,3 +339,46 @@ select:focus-visible {
 .tab-scroll::-webkit-scrollbar {
   display: none;
 }
+
+/**
+ * A session row is isolated from every other row's layout.
+ *
+ * The session list is the one place in Helm where the number of rows is the
+ * user's history rather than a screenful of anything. Measured on a machine
+ * with 964 of them: 8,516 DOM nodes and a 45,718px scroll height in a 649px
+ * viewport. Changing the width the list lays out against - which is what a
+ * window resize does, on every tick it delivers - cost a **15.8ms** relayout,
+ * because each of those 964 rows had to be laid out again to answer it. Against
+ * a 16.7ms frame that is the jitter, and it was spent on rows nobody could see.
+ *
+ * With this it is **1.8ms**, a measured 8.4-9.2x over three runs.
+ *
+ * Where that comes from is worth stating precisely, because the obvious reading
+ * of this property is not what was observed. `content-visibility: auto` does two
+ * things: it applies `contain: layout style paint` **always**, and it *may* skip
+ * a subtree entirely when the browser judges it far from the viewport. All of
+ * the measured win here is the first one - the containment, which stops one
+ * row's internals participating in any other row's layout. The skipping was
+ * looked for and not found: on Chromium 150, with the list scrolled to the
+ * bottom and back, `checkVisibility({contentVisibilityAuto: true})` reported 0
+ * of 965 rows skipped. So do not describe this as virtualisation and do not
+ * expect the DOM to shrink.
+ *
+ * `contain-intrinsic-size` is still correct and still load-bearing, because the
+ * browser is free to start skipping at any time and did so during an earlier
+ * measurement. It is a **content box**, which is the trap in this property: a
+ * row measures 47px, but 12px of that is its own `py-1.5`, which is added back
+ * on top of whatever is declared here. Writing the 47px a ruler reports gave
+ * every skipped row 59px and turned a 45,718px list into a 56,824px one - a
+ * scrollbar describing a list that does not exist, which is a worse bug than
+ * the stutter. So 35px, and it moves if the row's leading or padding does.
+ *
+ * This rather than windowing or paging because every row stays in the DOM: the
+ * search, the arrow keys, `scrollIntoView` and find-in-page all still reach a
+ * row that is off screen, and a virtual list would have had to reimplement all
+ * four. Paging would have answered a resize problem by taking sessions away.
+ */
+.session-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 35px;
+}
