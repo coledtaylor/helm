@@ -1,5 +1,5 @@
 import type { DragEvent, JSX, KeyboardEvent, ReactNode } from 'react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { cn } from '../lib/cn'
 import { CloseIcon } from './icons'
 
@@ -105,6 +105,24 @@ export function TabBar({
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   /** The tab being renamed, or null. One at a time - there is one caret. */
   const [editing, setEditing] = useState<string | null>(null)
+  const stripRef = useRef<HTMLDivElement>(null)
+
+  /**
+   * An activated tab is scrolled back into view.
+   *
+   * The other half of a strip that scrolls: Ctrl+Tab, a notification click and
+   * a freshly launched session can all make a tab active while it is past the
+   * edge, and without this the pane below would change to something whose tab
+   * cannot be seen. `nearest` rather than `center` so a tab already on screen
+   * is left where it is - scrolling the strip under a person who just clicked
+   * something on it would be its own bug.
+   */
+  useEffect(() => {
+    if (activeId === null) return
+    const strip = stripRef.current
+    const tab = strip?.querySelector(`[data-tab="${CSS.escape(activeId)}"]`)
+    tab?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeId])
 
   const canReorder = onReorder !== undefined
 
@@ -158,6 +176,26 @@ export function TabBar({
           const entering = event.relatedTarget
           if (entering instanceof Node && event.currentTarget.contains(entering)) return
           setDropIndex(null)
+        }}
+        ref={stripRef}
+        // A wheel over the strip scrolls it sideways.
+        //
+        // This is not a nicety, it is the other half of hiding the bar.
+        // `tab-scroll` takes the scrollbar away for the reason theme.css gives,
+        // and a container with `overflow-x-auto` and no bar is one Chromium
+        // gives no way to reach: a vertical wheel does nothing to it unless
+        // Shift is held, so hiding the bar on its own left the tabs past the
+        // edge unreachable by any gesture a person would try. Every tab strip
+        // that hides its bar - the browser's own included - translates the
+        // wheel like this, and it is why they can get away with hiding it.
+        //
+        // `deltaX` is left alone: a trackpad's sideways swipe already arrives
+        // on the right axis and doubling it would make the strip skid.
+        onWheel={(event) => {
+          if (event.deltaY === 0) return
+          const strip = event.currentTarget
+          if (strip.scrollWidth <= strip.clientWidth) return
+          strip.scrollLeft += event.deltaY
         }}
         // `tab-scroll` hides the bar itself; see theme.css for why a strip this
         // short cannot carry one.
