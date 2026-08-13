@@ -612,6 +612,25 @@ export const TERMINAL_FONT_SIZE = { min: 8, max: 32, default: 14 } as const
 export const TERMINAL_SCROLLBACK = { min: 500, max: 200_000, default: 10_000 } as const
 
 /**
+ * How much of the project page's column the shell may take, as a percentage.
+ *
+ * The default is where the shell used to be pinned, and the argument that put
+ * it there is still the argument for the default: about a third of the page
+ * gives a tall display 15+ rows - PSReadLine's ListView threshold - while a
+ * small window keeps most of its height for the project pane. What that
+ * argument never justified was being the *only* value, which is what a fixed
+ * class made it.
+ *
+ * The ceiling is half, and it is the user's own ask: past half the project
+ * pane would be the smaller part of the page it names. The floor here is
+ * proportional and is deliberately not the whole floor - the pane carries a
+ * pixel floor too (`PROJECT_SHELL_MIN_PX`), which is the binding one on any
+ * window this app opens. This bound is what stops a percentage chosen on a
+ * short window describing a four-row terminal on a tall one.
+ */
+export const PROJECT_SHELL_HEIGHT_PCT = { min: 10, max: 50, default: 30 } as const
+
+/**
  * How much of `helm.db` the transcript archive may take, in bytes.
  *
  * A gigabyte by default, and both halves of that are deliberate. Unbounded is
@@ -822,6 +841,25 @@ export interface AppSettings {
    * `claude` executable its own pty and this setting never reaches it.
    */
   terminalShell: string | null
+  /**
+   * How tall a project page's shell is, as a percentage of that page's column.
+   * Bounded by `PROJECT_SHELL_HEIGHT_PCT`, dragged by the handle above the
+   * shell, and settable in the Terminal group for when a drag lands somewhere
+   * silly.
+   *
+   * **One value for every project rather than one per project.** The question
+   * being answered is "how much terminal do I want", and that is about the
+   * person and the monitor in front of them, not about the repository: someone
+   * who wants a tall shell to read a `pnpm dev` in wants it in every checkout
+   * they read one in. Per-project heights would also mean the page's
+   * proportions moved as you moved between projects, which is furniture
+   * rearranging itself.
+   *
+   * Not a terminal preference, whatever the settings group it is shown in says:
+   * it never reaches `applyPrefs` and no session pane has one. It is the
+   * project page's layout.
+   */
+  projectShellHeightPct: number
 
   /**
    * How many bytes of `helm.db` the transcript archive may occupy.
@@ -978,6 +1016,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalCursorBlink: true,
   terminalScrollback: TERMINAL_SCROLLBACK.default,
   terminalShell: null,
+  projectShellHeightPct: PROJECT_SHELL_HEIGHT_PCT.default,
   transcriptArchiveMaxBytes: TRANSCRIPT_ARCHIVE_BYTES.default,
   ghPath: null,
   prPollMinutes: PR_POLL_MINUTES.default,

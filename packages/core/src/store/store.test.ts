@@ -137,6 +137,7 @@ describe('settings', () => {
       terminalCursorBlink: false,
       terminalScrollback: 2500,
       terminalShell: join(dir, 'pwsh.exe'),
+      projectShellHeightPct: 42,
       transcriptArchiveMaxBytes: 256 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 15,
@@ -353,6 +354,16 @@ describe('settings validation', () => {
       bad: ['pwsh.exe', 'bin\\pwsh.exe', '', 42, {}]
     },
     {
+      // A percentage of the project page's column. 51 is in the bad column
+      // because the ceiling is the user's own ask - the project pane is never
+      // the smaller half of its own page - and the non-finite cases are there
+      // because this number becomes a `height`, where `NaN%` is a declaration
+      // the style parser drops without a word.
+      key: 'projectShellHeightPct',
+      good: [10, 30, 50],
+      bad: [9, 51, 0, -30, 100, 30.5, '30', null, Number.NaN, Number.POSITIVE_INFINITY]
+    },
+    {
       // A byte count, and null is in the *bad* column deliberately: there is no
       // "no ceiling" for this key. The archive is always on and always bounded,
       // and an unbounded one is the state `helm.db` is not allowed to reach.
@@ -519,6 +530,7 @@ describe('settings validation', () => {
       terminalCursorBlink: false,
       terminalScrollback: 50_000,
       terminalShell: join(dir, 'cmd.exe'),
+      projectShellHeightPct: 45,
       transcriptArchiveMaxBytes: 512 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 0,
@@ -552,6 +564,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   terminalCursorBlink: false,
   terminalScrollback: 50_000,
   terminalShell: join(dir, 'cmd.exe'),
+  projectShellHeightPct: 45,
   transcriptArchiveMaxBytes: 512 * 1024 * 1024,
   ghPath: join(dir, 'gh.exe'),
   prPollMinutes: 0,

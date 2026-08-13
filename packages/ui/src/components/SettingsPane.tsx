@@ -8,6 +8,7 @@ import {
   PR_POLL_MINUTES,
   PR_PROMPT_PLACEHOLDERS,
   PR_REVIEW_PROMPT_MAX_LENGTH,
+  PROJECT_SHELL_HEIGHT_PCT,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
@@ -247,7 +248,17 @@ export function pullRepoChoices(
   )
 }
 
-/** The six the Terminal group owns, named once so nothing has to list them twice. */
+/**
+ * The seven the Terminal group owns, named once so nothing has to list them
+ * twice.
+ *
+ * `projectShellHeightPct` is the odd one: it is not a terminal preference and
+ * never reaches `applyPrefs`, it is how tall a project page's shell is. It is
+ * shown here because this is the group somebody looks in for the shell under a
+ * project - the shell picker is already here - and a settings pane organised by
+ * where a person would look for a thing beats one organised by which module
+ * consumes it.
+ */
 export type TerminalSettings = Pick<
   AppSettings,
   | 'terminalFontFamily'
@@ -256,6 +267,7 @@ export type TerminalSettings = Pick<
   | 'terminalCursorBlink'
   | 'terminalScrollback'
   | 'terminalShell'
+  | 'projectShellHeightPct'
 >
 
 /** What a fact reads when there is nothing to put in it. */
@@ -1536,6 +1548,27 @@ function TerminalGroup({
             Choose…
           </Action>
         </div>
+      </Row>
+
+      <Divider />
+
+      {/* The drag handle above the shell is the control for this; the row is
+          here so the value is findable and so a drag that landed somewhere
+          silly can be typed back. Which is also why it is a field rather than a
+          stepper: nobody nudges this while watching it, because the thing it
+          moves is on a different tab. */}
+      <Row
+        label="Shell height"
+        hint="Percent of a project page the shell takes. Drag the handle above it to change it there; a project page never gives the shell more than half."
+      >
+        <NumberField
+          value={terminal.projectShellHeightPct}
+          min={PROJECT_SHELL_HEIGHT_PCT.min}
+          max={PROJECT_SHELL_HEIGHT_PCT.max}
+          label="Project shell height"
+          data-settings-shell-height={String(terminal.projectShellHeightPct)}
+          onCommit={(projectShellHeightPct) => onChange({ projectShellHeightPct })}
+        />
       </Row>
 
       {/* Plain DOM at the chosen font, not an xterm instance: the point is to

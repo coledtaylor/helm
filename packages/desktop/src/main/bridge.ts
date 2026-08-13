@@ -69,14 +69,32 @@ export async function sendMouse(
   win: BrowserWindow,
   type: 'mouseDown' | 'mouseUp' | 'mouseMove',
   x: number,
-  y: number
+  y: number,
+  /**
+   * Two things a plain click does not need and two other gestures do.
+   *
+   * `clickCount`: Chromium makes a `dblclick` out of the count, not out of two
+   * clicks arriving close together, so a driver that wants one has to say 2 on
+   * the second press and release.
+   *
+   * `modifiers`: without `leftbuttondown` the moves of a drag arrive in the
+   * page as `buttons: 0` - a hover, not a drag. A handler that reads `clientX`
+   * off whatever move turns up never notices, which is why the workspace
+   * divider has been driven this way for as long as it has. One that takes
+   * pointer capture on the press does notice: measured on the project shell's
+   * handle, the identical gesture moved nothing at all without this and moved
+   * the pane with it, `document` reporting eight moves at `buttons: 1` and the
+   * handle holding the capture through them.
+   */
+  opts: { clickCount?: number; modifiers?: Array<'leftbuttondown'> } = {}
 ): Promise<void> {
   win.webContents.sendInputEvent({
     type,
     x: Math.round(x),
     y: Math.round(y),
     button: 'left',
-    clickCount: 1
+    clickCount: opts.clickCount ?? 1,
+    ...(opts.modifiers ? { modifiers: opts.modifiers } : {})
   })
   await sleep(20)
 }

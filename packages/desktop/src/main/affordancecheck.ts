@@ -32,6 +32,11 @@ import { screenshot, sendMouse, sleep } from './bridge'
  * one that must pass, on the packaging-check principle that an auditor is not
  * believed until it has been made to fail.
  *
+ * One thing here is not clickable and is measured anyway: a drag handle. It
+ * takes a resize cursor rather than a pointer, so it is outside the claim
+ * above by what it is - but "outside the claim" and "measured by nothing" are
+ * different states, and AFF-6 is the second one closed.
+ *
  * Costs: no `claude` sessions, no network, roughly a minute and a half. It
  * navigates the app and stamps a `data-aff-id` on what it measures; both are
  * undone before it returns.
@@ -40,7 +45,7 @@ import { screenshot, sendMouse, sleep } from './bridge'
  */
 
 /** The groups `--only=` can name. The one authority for the list. */
-const GROUPS = ['cursor', 'hover', 'quiet'] as const
+const GROUPS = ['cursor', 'hover', 'quiet', 'resize'] as const
 type Group = (typeof GROUPS)[number]
 
 /**
@@ -80,6 +85,33 @@ const QUIET: Array<{ name: string; sel: string; want: readonly string[] }> = [
   { name: 'disabled button', sel: 'button:disabled', want: ['default', 'not-allowed', 'auto'] },
   { name: 'disabled select', sel: 'select:disabled', want: ['default', 'not-allowed', 'auto'] }
 ]
+
+/**
+ * Things you drag rather than click, and the cursor each one owes.
+ *
+ * A resize handle is not in `CLICKABLE` and must not be: `cursor: pointer` on
+ * one would be a wrong cursor adopted to satisfy this file, which is the
+ * failure `quiet` exists to catch pointing the other way. But leaving it out
+ * and stopping there would put it in the coverage gap AFF-2 is named for -
+ * measured by nothing, reported by nothing - so the claim is made here instead,
+ * in the only form that is true of it: a separator shows the resize cursor its
+ * own orientation calls for, and responds to the pointer like everything else.
+ *
+ * The orientation is the separator's own, not the drag's. `aria-orientation`
+ * describes the line - a vertical line between two side-by-side panes, which
+ * is dragged left and right (`col-resize`); a horizontal line between two
+ * stacked ones, dragged up and down (`ns-resize`). Written out here rather
+ * than read from the app, so this is a second opinion about the pairing and
+ * not the app agreeing with itself.
+ */
+const RESIZE_CURSOR: Record<string, readonly string[]> = {
+  vertical: ['col-resize', 'ew-resize'],
+  horizontal: ['row-resize', 'ns-resize']
+}
+
+/** What a drag handle looks like in the DOM. Two of them exist: the session
+ * split's divider, and the project shell's. */
+const RESIZERS = '[role="separator"][aria-orientation]'
 
 /**
  * The views to walk, and the clicks that reach each from the chrome.
@@ -136,6 +168,8 @@ interface Spot {
   path: string
   tag: string
   disabled: boolean
+  /** `aria-orientation`, for the separators. Empty for everything else. */
+  orient: string
 }
 
 interface Reading {
@@ -211,8 +245,21 @@ const READ_FN = `
   }
 `
 
-/** Enumerate the controls on screen, stamping each so it can be found again. */
-async function collect(win: BrowserWindow, view: string, seen: string[]): Promise<Spot[]> {
+/**
+ * Enumerate what `selector` matches on screen, stamping each so it can be found
+ * again after the pointer has moved.
+ *
+ * Takes the selector rather than assuming `CLICKABLE` because the walk asks two
+ * different questions of two different sets - what claims to be clickable, and
+ * what claims to be draggable - and the enumeration, the visibility filter and
+ * the dedupe are the same job for both.
+ */
+async function collect(
+  win: BrowserWindow,
+  view: string,
+  seen: string[],
+  selector: string = CLICKABLE
+): Promise<Spot[]> {
   return js<Spot[]>(
     win,
     `(() => {
@@ -227,7 +274,7 @@ async function collect(win: BrowserWindow, view: string, seen: string[]): Promis
         }
         return parts.join('>')
       }
-      for (const el of document.querySelectorAll(${JSON.stringify(CLICKABLE)})) {
+      for (const el of document.querySelectorAll(${JSON.stringify(selector)})) {
         const cs = getComputedStyle(el)
         if (cs.display === 'none' || cs.visibility === 'hidden' || cs.pointerEvents === 'none') continue
         const r = el.getBoundingClientRect()
@@ -249,7 +296,8 @@ async function collect(win: BrowserWindow, view: string, seen: string[]): Promis
           view: ${JSON.stringify(view)},
           label, path,
           tag: el.tagName.toLowerCase() + (el.getAttribute('role') ? '[' + el.getAttribute('role') + ']' : ''),
-          disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true'
+          disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true',
+          orient: el.getAttribute('aria-orientation') || ''
         })
       }
       return out
@@ -410,6 +458,8 @@ export async function runAffordanceChecks(
   // -------------------------------------------------------------------------
 
   const seen: string[] = []
+  const seenResizers: string[] = []
+  const resizers: Array<Spot & { cursor: string; tier: Tier; want: string }> = []
   const perView: Array<{ view: string; found: number }> = []
   const noPointer: Array<Spot & { cursor: string }> = []
   const noHover: Array<Spot & { tier: Tier }> = []
@@ -469,40 +519,69 @@ export async function runAffordanceChecks(
       }
     }
 
-    if (!wanted.has('cursor') && !wanted.has('hover')) continue
+    const unstamp = (): Promise<void> =>
+      js<void>(
+        win,
+        `(() => { for (const el of document.querySelectorAll('[data-aff-id]')) el.removeAttribute('data-aff-id') })()`
+      )
 
-    const spots = await collect(win, view.name, seen)
-    for (const s of spots) seen.push(`${s.path}|${s.label}`)
-    perView.push({ view: view.name, found: spots.length })
-    console.log(`affordance-check: ${view.name} - ${spots.length} new controls`)
+    if (wanted.has('cursor') || wanted.has('hover')) {
+      const spots = await collect(win, view.name, seen)
+      for (const s of spots) seen.push(`${s.path}|${s.label}`)
+      perView.push({ view: view.name, found: spots.length })
+      console.log(`affordance-check: ${view.name} - ${spots.length} new controls`)
 
-    for (const spot of spots) {
-      const m = await measure(win, spot.id)
-      if (m === null) {
-        vanished.push(spot)
-        continue
+      for (const spot of spots) {
+        const m = await measure(win, spot.id)
+        if (m === null) {
+          vanished.push(spot)
+          continue
+        }
+        if (!m.hover.hot || !m.hover.onTop) {
+          // Covered by something, scrolled under a sticky header, or moved. Not
+          // a finding about the app, and not a pass either - counted and named.
+          blocked.push(spot)
+          continue
+        }
+        measured++
+        if (wanted.has('cursor') && m.hover.cursor !== 'pointer' && !spot.disabled) {
+          noPointer.push({ ...spot, cursor: m.hover.cursor })
+        }
+        if (wanted.has('hover')) {
+          const tier = tierOf(m.rest, m.hover)
+          if (tier === 'none') noHover.push({ ...spot, tier })
+          else if (tier === 'near') nearOnly.push({ ...spot, tier })
+        }
       }
-      if (!m.hover.hot || !m.hover.onTop) {
-        // Covered by something, scrolled under a sticky header, or moved. Not a
-        // finding about the app, and not a pass either - counted and named.
-        blocked.push(spot)
-        continue
-      }
-      measured++
-      if (wanted.has('cursor') && m.hover.cursor !== 'pointer' && !spot.disabled) {
-        noPointer.push({ ...spot, cursor: m.hover.cursor })
-      }
-      if (wanted.has('hover')) {
-        const tier = tierOf(m.rest, m.hover)
-        if (tier === 'none') noHover.push({ ...spot, tier })
-        else if (tier === 'near') nearOnly.push({ ...spot, tier })
-      }
+
+      await unstamp()
     }
 
-    await js<void>(
-      win,
-      `(() => { for (const el of document.querySelectorAll('[data-aff-id]')) el.removeAttribute('data-aff-id') })()`
-    )
+    // The drag handles, stamped after the controls have given their ids back so
+    // the two passes cannot claim the same one.
+    if (wanted.has('resize')) {
+      const handles = await collect(win, view.name, seenResizers, RESIZERS)
+      for (const s of handles) seenResizers.push(`${s.path}|${s.label}`)
+      for (const spot of handles) {
+        const m = await measure(win, spot.id)
+        if (m === null) {
+          vanished.push(spot)
+          continue
+        }
+        if (!m.hover.hot || !m.hover.onTop) {
+          blocked.push(spot)
+          continue
+        }
+        const want = RESIZE_CURSOR[spot.orient] ?? []
+        resizers.push({
+          ...spot,
+          cursor: m.hover.cursor,
+          tier: tierOf(m.rest, m.hover),
+          want: want.join('|')
+        })
+      }
+      await unstamp()
+    }
   }
 
   const shot = await screenshot(win, shotDir, 'affordance-last-view.png').catch(() => null)
@@ -571,6 +650,36 @@ export async function runAffordanceChecks(
         quiet.length === 0
           ? ['text inputs read "text", disabled controls do not read "pointer"']
           : quiet.slice(0, 30).map((q) => `${q.view}  ${q.name}  "${q.label}"  cursor: ${q.cursor}  want: ${q.want}`)
+    })
+  }
+
+  if (wanted.has('resize')) {
+    const wrong = resizers.filter(
+      (r) => !(RESIZE_CURSOR[r.orient] ?? []).includes(r.cursor) || r.tier === 'none'
+    )
+    checks.push({
+      id: 'AFF-6',
+      criterion: 'A drag handle shows the resize cursor its orientation calls for, and responds to the pointer',
+      title: `Resize handles carry a resize cursor (${String(resizers.length)} found, ${String(wrong.length)} wrong)`,
+      // The floor is the discriminating half. `[role="separator"]` matching
+      // nothing is exactly what a handle that stopped being one looks like,
+      // and a check reporting green over an empty set is the shape CLAUDE.md
+      // names: worse than no check.
+      ok: wrong.length === 0 && resizers.length > 0,
+      detail: { handles: resizers, expected: RESIZE_CURSOR, selector: RESIZERS },
+      notes: [
+        ...resizers.map(
+          (r) => `${r.view}  ${r.orient}  "${r.label}"  cursor: ${r.cursor} (want ${r.want})  hover: ${r.tier}`
+        ),
+        resizers.length === 0
+          ? `NOTHING MATCHED ${RESIZERS} - either the handles are gone or they stopped being separators`
+          : 'a handle is deliberately not in the clickable set: `cursor: pointer` on one would be',
+        'the wrong cursor adopted to satisfy this file, which is the failure the',
+        '`quiet` group exists for pointing the other way. This is the claim that',
+        'is true of it instead, so it is measured rather than merely exempt.',
+        'The walk never opens a session, so the split divider is usually absent',
+        'and the project shell’s handle is the one this finds.'
+      ]
     })
   }
 

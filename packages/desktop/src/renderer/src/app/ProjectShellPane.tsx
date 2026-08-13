@@ -1,9 +1,24 @@
-import type { JSX } from 'react'
+import type { JSX, Ref } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DetectedShell } from '@helm/core'
 import { CaretIcon, cn, WarnIcon } from '@helm/ui'
 import { estimateGrid } from './terminals'
 import { getShell, mountShell, reopenShell, type MountedShell } from './pterms'
+
+/**
+ * The shortest this pane is ever drawn, whatever percentage it is asked for.
+ *
+ * The PSReadLine number, kept as a pixel floor rather than folded into the
+ * percentage: 180px is about 15 rows at the default point size, which is the
+ * threshold below which PSReadLine's ListView stops being usable, and 15 rows
+ * is 15 rows on every window. A percentage cannot say that - the same 12% is a
+ * usable shell on one monitor and four lines on another.
+ *
+ * Exported because the drag has to clamp to it as well (`App.tsx`): a handle
+ * that goes on moving after the pane has stopped is a handle that has come off
+ * what it is holding.
+ */
+export const PROJECT_SHELL_MIN_PX = 180
 
 export interface ProjectShellPaneProps {
   /** The project directory the shell runs in - also the registry key. */
@@ -13,6 +28,19 @@ export interface ProjectShellPaneProps {
   visible: boolean
   /** Shells this machine has, for the header's override picker. */
   shells: DetectedShell[]
+  /**
+   * Height as a percentage of the page's column - `projectShellHeightPct`,
+   * already bounded by `PROJECT_SHELL_HEIGHT_PCT` on the way in.
+   */
+  heightPct: number
+  /**
+   * The island, for the drag handle above it.
+   *
+   * A drag happens between two renders, so it moves this element's height
+   * itself and writes the setting once at the end (`App.tsx`). Every other
+   * change to the height arrives as `heightPct` and is rendered normally.
+   */
+  ref?: Ref<HTMLDivElement>
 }
 
 /**
@@ -31,7 +59,9 @@ export function ProjectShellPane({
   path,
   windowsBuild,
   visible,
-  shells
+  shells,
+  heightPct,
+  ref
 }: ProjectShellPaneProps): JSX.Element {
   const boxRef = useRef<HTMLDivElement>(null)
   const [running, setRunning] = useState<MountedShell | null>(null)
@@ -51,6 +81,31 @@ export function ProjectShellPane({
     if (!visible) return
     getShell(path)?.refit()
   }, [visible, path])
+
+  /**
+   * A height that arrived as a render re-measures the terminal.
+   *
+   * A grid still describing the old box is the whole failure a resizable pane
+   * can ship: the shell paints into rows the pty does not know it has, and
+   * whatever is running in it wraps against a width that is not there. So the
+   * pane re-measures whenever its own height changes - the same claim the
+   * `visible` effect above makes, for the same reason.
+   *
+   * `terminal.ts` keeps a `ResizeObserver` on the container as well, and a
+   * height change was measured to reach the grid through it with this taken
+   * out. It stays for the reason the `visible` effect and `park` do: a pane
+   * that moved its own box is the thing that knows the grid is stale, and
+   * `refit` reports to the pty only when the answer changed.
+   *
+   * This covers every route except one. The drag does not come through here:
+   * it sets the height on this element itself between renders and calls
+   * `refit` as it goes (`App.tsx`), because a settings write per frame is a
+   * database write per frame. What is left for this effect is the settings
+   * row, the handle's double-click, and the height a restart comes back with.
+   */
+  useEffect(() => {
+    getShell(path)?.refit()
+  }, [heightPct, path])
 
   /**
    * Switching shells is a kill and a respawn - a running shell cannot become a
@@ -80,10 +135,31 @@ export function ProjectShellPane({
   const current = running?.shell ?? null
 
   return (
-    // Proportional rather than fixed: ~a third of the pane gives a tall
-    // display 15+ rows (PSReadLine's ListView threshold) while a small window
-    // keeps most of its height for the project pane.
-    <div className="flex h-[30%] max-h-[420px] min-h-[180px] shrink-0 flex-col overflow-hidden rounded-island border border-border bg-terminal">
+    // Proportional rather than fixed, and now the user's rather than only ours.
+    //
+    // A third of the pane is where it starts, and for the reason it always
+    // was: it gives a tall display 15+ rows (PSReadLine's ListView threshold)
+    // while a small window keeps most of its height for the project pane. That
+    // is the default and, as `PROJECT_SHELL_MIN_PX`, the floor. What it never
+    // justified was being the only value - somebody reading a `pnpm dev` on a
+    // tall monitor wants the terminal, and resizing the whole window was the
+    // only lever they had. The handle above this pane is the lever now; the
+    // ceiling is half the column (`PROJECT_SHELL_HEIGHT_PCT`).
+    //
+    // The old `max-h-[420px]` is gone with it. A fixed pixel ceiling is exactly
+    // what made a tall monitor useless: past about 1400px of column the shell
+    // stopped growing and the extra height all went to a project pane that had
+    // nothing more to say. Half the column replaces it and scales.
+    //
+    // Where the two bounds disagree - a column short enough that 180px is more
+    // than half of it - the floor wins, because a terminal too short to use is
+    // worse than a project pane pushed slightly past half.
+    <div
+      ref={ref}
+      data-project-shell={String(heightPct)}
+      style={{ height: `${String(heightPct)}%`, minHeight: `${String(PROJECT_SHELL_MIN_PX)}px` }}
+      className="flex shrink-0 flex-col overflow-hidden rounded-island border border-border bg-terminal"
+    >
       <div className="flex items-center gap-2 border-b border-border px-2.5 py-1.5">
         <span className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
           Shell

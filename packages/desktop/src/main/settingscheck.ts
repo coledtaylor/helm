@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readSettings, type AppSettings } from '@helm/core'
-import { screenshot, sendKey, sleep, typeText } from './bridge'
+import { screenshot, sendKey, sendMouse, sleep, typeText } from './bridge'
 import type { Check } from './fidelity'
 import type { CheckContext } from './sessionscheck'
 import { answerPicker } from './packagingcheck'
@@ -77,6 +77,18 @@ const DEFAULT_TERMINAL = {
   cursorBlink: true,
   scrollback: 10000
 } as const
+
+/**
+ * The project shell's own bounds, restated here rather than imported.
+ *
+ * The same reason `DEFAULT_FONT_STACK` is written out: importing
+ * `PROJECT_SHELL_HEIGHT_PCT` would make "the pane stops at half" a claim
+ * checked against the constant the pane stops at, which is the code agreeing
+ * with itself. The floor is a pixel figure because that is what the pane
+ * actually enforces - a percentage cannot say "still a usable terminal".
+ */
+const SHELL_HEIGHT_BOUNDS = { min: 10, max: 50, default: 30 } as const
+const SHELL_MIN_PX = 180
 
 /**
  * The shells this driver goes looking for itself, and the arguments it expects
@@ -637,6 +649,154 @@ async function sendWrite(
        .catch((err) => ({ accepted: false, error: String(err && err.message ? err.message : err) }))`
   )
 }
+
+/**
+ * The project shell island, its handle, the column they share, and the grid
+ * the terminal in it is at - all measured in one read, so the box and the grid
+ * describe the same instant.
+ *
+ * `screen` and `container` are the two halves of "the grid matches its box":
+ * `.xterm-screen` is exactly `rows` cells tall, and the element it sits in is
+ * what `FitAddon` measures. The difference between them can only be less than
+ * one cell, and a terminal still describing an old box is where that stops
+ * being true.
+ */
+interface ShellPaneReading {
+  pane: { top: number; bottom: number; height: number; left: number; width: number }
+  handle: { top: number; height: number }
+  column: { top: number; bottom: number; height: number }
+  /** The percentage the pane was rendered with, off its own `data-` hook. */
+  pct: number
+  rows: number
+  cols: number
+  /** `.xterm-screen`, which is `rows` cells tall and nothing else. */
+  screen: number
+  /** The box the fit is measured against. */
+  container: number
+}
+
+async function readShellPane(win: BrowserWindow, path: string): Promise<ShellPaneReading | null> {
+  return js<ShellPaneReading | null>(
+    win,
+    `(() => {
+      const pane = document.querySelector('[data-project-shell]')
+      const handle = document.querySelector('[role="separator"][aria-orientation="horizontal"]')
+      if (!pane || !handle || !pane.parentElement) return null
+      const box = (el) => {
+        const b = el.getBoundingClientRect()
+        return { top: b.top, bottom: b.bottom, height: b.height, left: b.left, width: b.width }
+      }
+      const term = window.__helmTerminals().shells.find(
+        (s) => s.path.toLowerCase() === ${JSON.stringify(path.toLowerCase())} && s.attached
+      )
+      const screen = pane.querySelector('.xterm-screen')
+      const holder = pane.querySelector('.xterm')
+      return {
+        pane: box(pane),
+        handle: box(handle),
+        column: box(pane.parentElement),
+        pct: Number(pane.dataset.projectShell),
+        rows: term ? term.rows : -1,
+        cols: term ? term.cols : -1,
+        screen: screen ? screen.getBoundingClientRect().height : -1,
+        container: holder && holder.parentElement
+          ? holder.parentElement.getBoundingClientRect().height
+          : -1
+      }
+    })()`
+  ).catch(() => null)
+}
+
+/**
+ * Count what main broadcasts, not what the window believes it sent.
+ *
+ * `settings:changed` is emitted once per accepted `settings:write`, so this is
+ * the honest witness for "one write for the whole gesture" - the claim that
+ * separates a drag that saves its answer from a drag that saves sixty of them.
+ * Subscribed through the real bridge; the returned detach is kept so the tap
+ * comes off again.
+ */
+async function armSettingsCounter(win: BrowserWindow): Promise<void> {
+  await js<string>(
+    win,
+    `(() => {
+      if (window.__settingsWrites) window.__settingsWrites.off()
+      const seen = { n: 0, values: [], off: () => undefined }
+      seen.off = window.helm.on('settings:changed', (s) => {
+        seen.n++
+        seen.values.push(s.projectShellHeightPct)
+      })
+      window.__settingsWrites = seen
+      return 'armed'
+    })()`
+  )
+}
+
+const readSettingsCounter = (win: BrowserWindow): Promise<{ n: number; values: number[] }> =>
+  js<{ n: number; values: number[] }>(
+    win,
+    `({ n: window.__settingsWrites.n, values: window.__settingsWrites.values })`
+  )
+
+const disarmSettingsCounter = (win: BrowserWindow): Promise<void> =>
+  js<void>(
+    win,
+    `(() => { if (window.__settingsWrites) { window.__settingsWrites.off(); delete window.__settingsWrites } })()`
+  )
+
+/**
+ * What the handle actually received, counted on `document`.
+ *
+ * Without this a drag that moves nothing is one failure with two very
+ * different causes: the app ignored the gesture, or the gesture never arrived.
+ * The listeners go on `document` in the bubble phase, which is after React's
+ * own handler at the root, so `hasPointerCapture` here is what the app left it
+ * as rather than what it found.
+ */
+interface PointerTrace {
+  down: number
+  move: number
+  up: number
+  /** Whether the handle held the capture, sampled on the last move. */
+  captured: boolean | null
+  /** `buttons` on the last move - 0 is a hover, 1 is a drag. */
+  buttons: number | null
+}
+
+const tracePointer = (win: BrowserWindow, selector: string): Promise<void> =>
+  js<void>(
+    win,
+    `(() => {
+      if (window.__pointerTrace) window.__pointerTrace.off()
+      const el = document.querySelector(${JSON.stringify(selector)})
+      const t = { down: 0, move: 0, up: 0, captured: null, buttons: null, off: () => undefined }
+      const on = (type, key) => {
+        const fn = (e) => {
+          t[key]++
+          if (type === 'pointermove' && el) {
+            t.captured = el.hasPointerCapture(e.pointerId)
+            t.buttons = e.buttons
+          }
+        }
+        document.addEventListener(type, fn)
+        return () => { document.removeEventListener(type, fn) }
+      }
+      const offs = [on('pointerdown', 'down'), on('pointermove', 'move'), on('pointerup', 'up')]
+      t.off = () => { for (const o of offs) o() }
+      window.__pointerTrace = t
+      return undefined
+    })()`
+  )
+
+const readPointerTrace = (win: BrowserWindow): Promise<PointerTrace> =>
+  js<PointerTrace>(
+    win,
+    `(() => { const t = window.__pointerTrace
+      const answer = { down: t.down, move: t.move, up: t.up, captured: t.captured, buttons: t.buttons }
+      t.off()
+      delete window.__pointerTrace
+      return answer })()`
+  )
 
 /** Opens the settings pane if it is not already the pane on screen. */
 async function openSettings(win: BrowserWindow): Promise<boolean> {
@@ -2270,6 +2430,15 @@ export async function runSettingsChecks(
         why: 'a bare name is resolved against whatever PATH Helm was started with'
       },
       {
+        key: 'projectShellHeightPct',
+        good: 40,
+        // Above the ceiling rather than below the floor, because the ceiling is
+        // the half of this bound somebody asked for: past 50 the project pane
+        // is the smaller part of the page it names.
+        bad: 51,
+        why: 'the project pane may not be given less than half of its own page'
+      },
+      {
         key: 'transcriptArchiveMaxBytes',
         good: 512 * 1024 * 1024,
         // Not "too small" - the floor is deliberately a kilobyte so a check can
@@ -3284,6 +3453,241 @@ export async function runSettingsChecks(
         ]
       })
 
+      // ---------------------------------------------------------------------
+      // S-20: the shell's height is the user's, and its terminal follows it
+      // ---------------------------------------------------------------------
+      //
+      // The claim a resizable pane has to make is not "the box moved" - that is
+      // visible - it is that the grid inside it moved with it. A shell whose
+      // terminal still describes the old box paints into rows the pty does not
+      // know it has, and nothing on screen says so until something wraps in the
+      // wrong place. So every reading here carries `.xterm-screen`'s height and
+      // the box the fit is measured against, and the verdict is arithmetic on
+      // those rather than a screenshot.
+      await clickProject(win, projectOne)
+      await pollJs(win, `document.querySelector('[data-project-shell]')`, 15_000)
+      await sendWrite(win, { projectShellHeightPct: SHELL_HEIGHT_BOUNDS.default })
+      await sleep(900)
+
+      const HANDLE = '[role="separator"][aria-orientation="horizontal"]'
+
+      interface DragResult {
+        before: ShellPaneReading | null
+        after: ShellPaneReading | null
+        writes: { n: number; values: number[] }
+        resizes: Array<{ id: number; cols: number; rows: number }>
+        pointer: PointerTrace
+        row: unknown
+      }
+
+      /**
+       * One pointer drag on the handle, `dy` pixels, with everything it moved.
+       *
+       * Eight moves rather than one, because the thing being measured is a
+       * gesture: a single jump would be satisfied by a build that wrote the
+       * setting on `pointerdown`, and the count of writes is only interesting
+       * when there were frames it could have written on.
+       */
+      const dragShell = async (dy: number): Promise<DragResult> => {
+        const before = await readShellPane(win, projectOne)
+        await armSettingsCounter(win)
+        await tracePointer(win, HANDLE)
+        shellResizes.length = 0
+        if (before !== null) {
+          const x = before.pane.left + before.pane.width / 2
+          const y = before.handle.top + before.handle.height / 2
+          // `leftbuttondown` on the moves, because a move without it is a
+          // hover: see `sendMouse`. The press and the release carry it too, so
+          // the whole gesture reads as one button being held and let go.
+          const held = { modifiers: ['leftbuttondown' as const] }
+          await sendMouse(win, 'mouseDown', x, y, held)
+          for (let step = 1; step <= 8; step++) {
+            await sendMouse(win, 'mouseMove', x, y + (dy * step) / 8, held)
+          }
+          await sendMouse(win, 'mouseUp', x, y + dy, held)
+          await sleep(900)
+        }
+        return {
+          before,
+          after: await readShellPane(win, projectOne),
+          writes: await readSettingsCounter(win),
+          resizes: [...shellResizes],
+          pointer: await readPointerTrace(win),
+          row: rowValue(dbFile, 'projectShellHeightPct')
+        }
+      }
+
+      const atRest = await readShellPane(win, projectOne)
+      // Far past the ceiling in one gesture, so "it stopped at half" is the
+      // pane refusing rather than the pointer running out of travel.
+      const up = await dragShell(-600)
+      const shotUp = await screenshot(win, shotDir, 'settings-20-shell-ceiling.png')
+      const down = await dragShell(600)
+      const shotDown = await screenshot(win, shotDir, 'settings-20-shell-floor.png')
+
+      // And the double-click, which is the only way back to the default that
+      // does not involve typing a number into another pane.
+      await armSettingsCounter(win)
+      shellResizes.length = 0
+      const beforeReset = await readShellPane(win, projectOne)
+      if (beforeReset !== null) {
+        const x = beforeReset.pane.left + beforeReset.pane.width / 2
+        const y = beforeReset.handle.top + beforeReset.handle.height / 2
+        for (const clickCount of [1, 2]) {
+          await sendMouse(win, 'mouseDown', x, y, { clickCount })
+          await sendMouse(win, 'mouseUp', x, y, { clickCount })
+        }
+        await sleep(900)
+      }
+      const reset = await readShellPane(win, projectOne)
+      const resetWrites = await readSettingsCounter(win)
+      const resetRow = rowValue(dbFile, 'projectShellHeightPct')
+      const resetResizes = [...shellResizes]
+      await disarmSettingsCounter(win)
+
+      /**
+       * One cell, taken from the terminal before anything was dragged.
+       *
+       * Nothing about the font changes across these drags, so a cell measured
+       * once is the constant every later grid is checked against - and it is
+       * measured from what xterm painted (`.xterm-screen` over `rows`) rather
+       * than from anything Helm computed.
+       */
+      const shellCell = atRest !== null && atRest.rows > 0 ? atRest.screen / atRest.rows : 0
+
+      /** The grid describes the box it is in, to within the one cell it must. */
+      const gridFitsBox = (r: ShellPaneReading | null): boolean =>
+        r !== null &&
+        r.rows > 0 &&
+        shellCell > 0 &&
+        Math.abs(r.screen - r.rows * shellCell) < 1 &&
+        r.container - r.screen >= 0 &&
+        r.container - r.screen < shellCell
+
+      const halfOf = (r: ShellPaneReading): number =>
+        (r.column.height * SHELL_HEIGHT_BOUNDS.max) / 100
+
+      const ceilingHeld =
+        up.after !== null &&
+        up.after.pct === SHELL_HEIGHT_BOUNDS.max &&
+        up.row === SHELL_HEIGHT_BOUNDS.max &&
+        Math.abs(up.after.pane.height - halfOf(up.after)) <= 1 &&
+        up.before !== null &&
+        up.after.rows > up.before.rows
+
+      // The floor is a pixel figure, so it is checked in pixels. The row is
+      // checked separately and loosely: it is that same height expressed as a
+      // whole percentage, so it can only be a rounding away from it.
+      const floorHeld =
+        down.after !== null &&
+        Math.abs(down.after.pane.height - SHELL_MIN_PX) <= 1 &&
+        up.after !== null &&
+        down.after.rows < up.after.rows &&
+        typeof down.row === 'number' &&
+        Math.abs((down.row / 100) * down.after.column.height - SHELL_MIN_PX) <=
+          down.after.column.height / 100
+
+      const resetHeld =
+        reset !== null &&
+        reset.pct === SHELL_HEIGHT_BOUNDS.default &&
+        resetRow === SHELL_HEIGHT_BOUNDS.default &&
+        Math.abs(
+          reset.pane.height - (reset.column.height * SHELL_HEIGHT_BOUNDS.default) / 100
+        ) <= 1
+
+      // One write for each gesture. Not zero - which is what a handle that
+      // moved nothing would report - and not one a frame, which is a database
+      // write per `pointermove`.
+      const oneWriteEach =
+        up.writes.n === 1 && down.writes.n === 1 && resetWrites.n === 1
+
+      // The pty was told, and told the grid the terminal actually settled at.
+      const ptyToldLast = (r: DragResult, at: ShellPaneReading | null): boolean =>
+        r.resizes.length > 0 && at !== null && (r.resizes.at(-1)?.rows ?? -1) === at.rows
+
+      // The positive control, in AFF-1's spirit: a gesture that never reached
+      // the handle produces exactly the readings a handle nobody wired up
+      // produces, and "the height did not move" would be a finding about this
+      // driver rather than about Helm.
+      const gestureArrived = (r: DragResult): boolean =>
+        r.pointer.down === 1 && r.pointer.move >= 8 && r.pointer.up === 1
+
+      checks.push({
+        id: 'S-20',
+        criterion:
+          'The project shell can be dragged between its floor and half the page, the height persists as one write per drag, and the terminal’s grid follows its box',
+        title:
+          'A drag past the ceiling stops at half the column, a drag past the floor stops at 180px, the double-click returns to the default, and every grid still describes the box it is in',
+        ok:
+          atRest !== null &&
+          atRest.pct === SHELL_HEIGHT_BOUNDS.default &&
+          gridFitsBox(atRest) &&
+          gestureArrived(up) &&
+          gestureArrived(down) &&
+          ceilingHeld &&
+          gridFitsBox(up.after) &&
+          ptyToldLast(up, up.after) &&
+          floorHeld &&
+          gridFitsBox(down.after) &&
+          ptyToldLast(down, down.after) &&
+          resetHeld &&
+          gridFitsBox(reset) &&
+          oneWriteEach,
+        detail: {
+          cellHeightFromXterm: shellCell,
+          bounds: { ...SHELL_HEIGHT_BOUNDS, floorPx: SHELL_MIN_PX },
+          atRest,
+          draggedUp: {
+            ...up,
+            halfTheColumn: up.after === null ? null : halfOf(up.after),
+            held: ceilingHeld,
+            gridFitsBox: gridFitsBox(up.after)
+          },
+          draggedDown: {
+            ...down,
+            held: floorHeld,
+            gridFitsBox: gridFitsBox(down.after)
+          },
+          doubleClicked: {
+            before: beforeReset,
+            after: reset,
+            row: resetRow,
+            writes: resetWrites,
+            resizes: resetResizes,
+            held: resetHeld,
+            gridFitsBox: gridFitsBox(reset)
+          },
+          screenshots: [shotUp.file, shotDown.file]
+        },
+        notes: [
+          'The grid is read, not looked at. `.xterm-screen` is exactly `rows`',
+          'cells tall and the element around it is what FitAddon measures, so',
+          'the difference between them can only be under one cell - and a',
+          'terminal still describing the box it had before the drag is where',
+          'that stops being true. The cell itself comes from what xterm painted',
+          'before any of this, not from anything Helm computed.',
+          'Every pointer event is counted on `document` as well, because a',
+          'drag the app ignored and a drag that was never delivered produce',
+          'identical readings otherwise - and the first time this ran, the',
+          'gesture was being sent without `leftbuttondown` and Helm never saw',
+          'a single move of it.',
+          'Each drag is eight moves, so "one write" is a claim about a gesture',
+          'that had frames to write on. The count is `settings:changed` events,',
+          'which main emits once per accepted write - the app broadcasting,',
+          'rather than the window’s account of what it sent.',
+          'Zero writes would fail it too: that is what a handle nothing is',
+          'listening to reports.',
+          'Both bounds are driven past rather than up to. Half is checked',
+          'against half of the column measured in the same read, and the floor',
+          'in pixels, because a pixel is what the floor is: a percentage cannot',
+          'say "still enough rows to be a terminal".',
+          'Every pty resize is captured by the same wrapper S-10 uses, and the',
+          'last one has to name the grid the terminal ended at - a pane that',
+          'refit itself and never told the pty would pass every box measurement',
+          'above and still be the bug this feature could ship.'
+        ]
+      })
+
       // Put the pane back the way a person left it, so the run does not end
       // with a maximised workspace and two fixture shells running.
       await click(win, '[data-maximize="workspace"]')
@@ -3601,6 +4005,10 @@ export async function runSettingsChecks(
     terminalCursorBlink: false,
     terminalScrollback: 12345,
     terminalShell: whereIs('cmd.exe')[0] ?? original.terminalShell,
+    // Off the default in the one direction that is unambiguous: the ceiling.
+    // A shell at half the page is a state no default and no fresh database
+    // produces, so finding it after a restart is evidence.
+    projectShellHeightPct: SHELL_HEIGHT_BOUNDS.max,
     // The real gh rather than the fixture, for the reason `claudePath` uses the
     // real claude: a restore that somehow does not happen must leave the app
     // pointed at a working program, not at a stub that refuses to sign in.

@@ -1,8 +1,9 @@
-import type { JSX } from 'react'
+import type { JSX, PointerEvent as ReactPointerEvent } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_SETTINGS,
   isProjectPinned,
+  PROJECT_SHELL_HEIGHT_PCT,
   sessionLabel,
   withProjectPinned,
   withRepoIgnored,
@@ -56,9 +57,9 @@ import {
 } from '@helm/ui'
 import type { AppMode, SessionConfirmRequest } from '../../../shared/ipc'
 import { helm } from './bridge'
-import { ProjectShellPane } from './ProjectShellPane'
+import { PROJECT_SHELL_MIN_PX, ProjectShellPane } from './ProjectShellPane'
 import { PullRequestTab } from './PullRequestTab'
-import { disposeShell } from './pterms'
+import { disposeShell, getShell } from './pterms'
 import { estimateGrid } from './terminals'
 import { TerminalPane } from './TerminalPane'
 import { terminalFontStack } from '../terminal'
@@ -167,6 +168,25 @@ const EMPTY_STRIP: PaneRef[] = []
 const sessionTabId = (id: number): string => `session:${String(id)}`
 const sessionIdFromTab = (tab: string): number => Number(tab.slice('session:'.length))
 
+/**
+ * The shell's height as a percentage of `column`, for a drag that has put the
+ * shell's top edge at `top`.
+ *
+ * Clamped in pixels first and in percent second, and that order is the whole
+ * of it. The pixel floor is the bound with a measurement behind it
+ * (`PROJECT_SHELL_MIN_PX`), and converting an already-clamped pixel height
+ * into a percentage is what keeps the stored number a description of the
+ * height on screen. Clamping the percentage alone would let the setting read
+ * 10 while CSS drew 180px - a handle that has stopped moving under a number
+ * that has not, and a settings row reporting a height the app is not at.
+ */
+function shellHeightFor(column: DOMRect, top: number): number {
+  const ceiling = (column.height * PROJECT_SHELL_HEIGHT_PCT.max) / 100
+  const px = Math.min(ceiling, Math.max(PROJECT_SHELL_MIN_PX, column.bottom - top))
+  const pct = Math.round((px / column.height) * 100)
+  return Math.min(PROJECT_SHELL_HEIGHT_PCT.max, Math.max(PROJECT_SHELL_HEIGHT_PCT.min, pct))
+}
+
 export function App(): JSX.Element {
   const launcher = useLauncher()
   const { discovery, settings, info } = launcher
@@ -203,6 +223,8 @@ export function App(): JSX.Element {
   const [launching, setLaunching] = useState(false)
   /** The pane box, measured to open a pty at roughly the right grid. */
   const paneRef = useRef<HTMLDivElement>(null)
+  /** The project page's column, measured by its shell's drag handle. */
+  const projectColumnRef = useRef<HTMLDivElement>(null)
 
   const activateSession = useCallback((id: number) => {
     setRequestedSession(id)
@@ -244,13 +266,18 @@ export function App(): JSX.Element {
   const shells = useShells()
 
   /**
-   * The six terminal settings, and one writer for them.
+   * What the Terminal group shows, and one writer for them.
    *
    * Written through `settings:write` like everything else, which is also what
    * pushes them to the terminals: the main process answers with the whole
    * settings object, `useLauncher` adopts it, and the registries that own the
    * live terminals are told from there (termprefs.ts). Nothing here reaches a
    * terminal directly.
+   *
+   * Six of the seven are terminal preferences and travel that route.
+   * `projectShellHeightPct` is not one - it is the project page's layout, it
+   * reaches no terminal, and it is in this group because it is where somebody
+   * looks for the shell under a project.
    */
   const terminalSettings = useMemo(
     () => ({
@@ -259,7 +286,9 @@ export function App(): JSX.Element {
       terminalCursorStyle: settings?.terminalCursorStyle ?? DEFAULT_SETTINGS.terminalCursorStyle,
       terminalCursorBlink: settings?.terminalCursorBlink ?? DEFAULT_SETTINGS.terminalCursorBlink,
       terminalScrollback: settings?.terminalScrollback ?? DEFAULT_SETTINGS.terminalScrollback,
-      terminalShell: settings?.terminalShell ?? null
+      terminalShell: settings?.terminalShell ?? null,
+      projectShellHeightPct:
+        settings?.projectShellHeightPct ?? DEFAULT_SETTINGS.projectShellHeightPct
     }),
     [settings]
   )
@@ -270,6 +299,8 @@ export function App(): JSX.Element {
       if (path !== null) writeSettings({ terminalShell: path })
     })
   }, [writeSettings])
+
+  const savedShellHeight = settings?.projectShellHeightPct ?? DEFAULT_SETTINGS.projectShellHeightPct
 
   /**
    * Point Helm at a `gh` it did not find. Written straight through
@@ -896,6 +927,104 @@ export function App(): JSX.Element {
   const activeProject =
     activePane?.kind === 'project' ? (projectsByPath.get(activePane.path) ?? null) : null
   const selectedPath = activeProject?.path ?? null
+
+  // -------------------------------------------------------------------------
+  // The project shell's drag handle
+  // -------------------------------------------------------------------------
+  //
+  // The setting is the state, and while a drag is in flight the DOM is ahead of
+  // it: a `pointermove` sets the pane's height itself and `pointerup` writes it
+  // once. Two things fall out of that and both are the point. A settings write
+  // per frame is a database write per frame, which is what the criterion for
+  // this feature forbids. And re-rendering the page sixty times a second to
+  // move one edge would re-render the project pane and the terminal with it -
+  // React state is the wrong home for a value in flight.
+  //
+  // The shell pane still renders its height from `savedShellHeight`, so once
+  // the write lands React and the DOM agree on a value they already both hold
+  // and nothing moves. That is also what makes the settings row and this handle
+  // the same control rather than two that fight.
+  const shellPaneRef = useRef<HTMLDivElement>(null)
+  /**
+   * Where inside the handle it was grabbed, and what the drag has reached.
+   *
+   * The grab offset is why the shell does not jump on the first move: the
+   * pointer lands anywhere in the handle's 8px, and without remembering where,
+   * the first `pointermove` would snap the top edge onto the pointer.
+   */
+  const shellGrab = useRef(0)
+  const shellDragged = useRef<number | null>(null)
+
+  /**
+   * Pointer capture rather than the window listeners the session split's
+   * divider uses. That divider predates this one and has the bug capture
+   * exists to prevent: let go outside the window and no `mouseup` ever
+   * arrives, so the drag is still running when the pointer comes back.
+   */
+  const startShellDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    shellGrab.current = event.clientY - event.currentTarget.getBoundingClientRect().bottom
+    shellDragged.current = null
+    document.body.style.userSelect = 'none'
+  }, [])
+
+  const moveShellDrag = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const column = projectColumnRef.current
+      const pane = shellPaneRef.current
+      if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+      if (column === null || pane === null || selectedPath === null) return
+      const box = column.getBoundingClientRect()
+      if (box.height < 1) return
+
+      const next = shellHeightFor(box, event.clientY - shellGrab.current)
+      if (next === shellDragged.current) return
+      shellDragged.current = next
+      pane.style.height = `${String(next)}%`
+      // The pane re-measures because the pane moved its own box - the same
+      // contract `park` keeps in pterms.ts, and the same one the height effect
+      // in ProjectShellPane keeps for every route that is not this one.
+      //
+      // Measured, so it is not claimed to be more than it is: `terminal.ts`
+      // observes the container too, and a drag with this line taken out still
+      // took the grid from 12 rows to 22 while the button was down. It stays
+      // because the observer is the terminal's and this is the pane's: the
+      // code that changed the box is the code that knows the grid is stale,
+      // and `refit` tells the pty only when the answer actually changed.
+      getShell(selectedPath)?.refit()
+    },
+    [selectedPath]
+  )
+
+  const endShellDrag = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+      document.body.style.userSelect = ''
+      const landed = shellDragged.current
+      shellDragged.current = null
+      // One write for the whole gesture, and none at all for a pointer that
+      // never moved: a click on the handle is not a decision about anything.
+      if (landed !== null && landed !== savedShellHeight) {
+        writeSettings({ projectShellHeightPct: landed })
+      }
+    },
+    [savedShellHeight, writeSettings]
+  )
+
+  /**
+   * Double-click puts it back to the third of the page it starts at.
+   *
+   * Written through the setting like any other change, and the pane's height
+   * follows from the render rather than from here - a drag is the only thing
+   * that gets to touch the style directly, because a drag is the only thing
+   * that happens between two renders.
+   */
+  const resetShellHeight = useCallback(() => {
+    writeSettings({ projectShellHeightPct: DEFAULT_SETTINGS.projectShellHeightPct })
+  }, [writeSettings])
   const runningSessions = sessions.filter((session) => session.status === 'running').length
   /**
    * Which sidebar rows get a live dot, and what those sessions are called.
@@ -1486,7 +1615,10 @@ export function App(): JSX.Element {
         )}
 
         {activeProject && (
-          <div className="absolute inset-0 flex flex-col gap-2">
+          // No `gap-2`: the handle below is the gutter, exactly as the session
+          // split's divider is the gutter of its row. Two children with a gap
+          // and a handle between them would be 8px of nothing either side of it.
+          <div ref={projectColumnRef} className="absolute inset-0 flex flex-col">
             <div className="min-h-0 flex-1">
               <ProjectPane
                 key={activeProject.path}
@@ -1533,12 +1665,56 @@ export function App(): JSX.Element {
                 one project's shell, and handing the same component a different
                 project made it re-mount someone else's terminal into a box that
                 still held the last one. */}
+            {/* The shell's drag handle, living in the gutter it replaces.
+                Dragging up grows the shell, down shrinks it, double-click puts
+                it back to the default.
+
+                `cursor: ns-resize`, and it is a `separator` rather than a
+                button. `pnpm affordance-check` asserts `cursor: pointer` on
+                every *control* it can reach - buttons, links, selects, tabs,
+                checkboxes - and a separator is not one, so this sits outside
+                that claim by what it is rather than by an exemption granted to
+                it. Making it a pointer to satisfy the walk would be adopting a
+                wrong cursor to please a checker, and DESIGN.md already records
+                the cursor being asked to carry more of an argument than it
+                should. What the walk does say about it is AFF-6, which is the
+                converse claim over the set the pointer rule does not cover: a
+                separator has to compute the resize cursor its own orientation
+                calls for, and a `ns-resize` on the vertical divider or a
+                `default` here would be caught there. */}
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize the shell"
+              title="Drag to resize the shell, double-click to reset"
+              onPointerDown={startShellDrag}
+              onPointerMove={moveShellDrag}
+              onPointerUp={endShellDrag}
+              onPointerCancel={endShellDrag}
+              onDoubleClick={resetShellHeight}
+              className="group flex h-2 shrink-0 cursor-ns-resize items-center justify-center"
+            >
+              {/* The session split's divider recipe, rotated: a 3px
+                  `border-strong` grip that goes accent on hover (DESIGN.md
+                  "Split view"). The grip is a mark and the row is the target -
+                  the whole 8px is draggable.
+
+                  It was a full-width hairline first, which is what a horizontal
+                  divider wants to be. The screenshot says otherwise: the gutter
+                  is 8px, so a line down the middle of it lands 4px under the
+                  project pane's bottom edge and 4px above the shell's top one,
+                  and three hairlines in nine pixels read as a doubled border
+                  rather than as something to hold. */}
+              <span className="h-[3px] w-10 rounded-full bg-border-strong transition-colors group-hover:bg-accent" />
+            </div>
             <ProjectShellPane
               key={activeProject.path}
+              ref={shellPaneRef}
               path={activeProject.path}
               windowsBuild={info?.windowsBuild ?? null}
               visible
               shells={shells}
+              heightPct={savedShellHeight}
             />
           </div>
         )}

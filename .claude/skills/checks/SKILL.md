@@ -273,6 +273,15 @@ and a disabled control does not read `pointer`, since `* { cursor: pointer }`
 would pass AFF-3 and is the same lie pointing the other way. No sessions, no
 network, about a minute and a half.
 
+AFF-6 is the one claim here about something that is *not* clickable. A drag
+handle takes a resize cursor, so making it pass AFF-3 would mean putting a
+wrong cursor on it to satisfy this file - but leaving it out and stopping there
+would drop it into the coverage gap AFF-2 is named for. So a
+`[role="separator"]` is measured against the cursor its own `aria-orientation`
+calls for, from a table written in the driver rather than read from the app.
+The floor is that it found one: an empty set reporting green is the shape
+CLAUDE.md rules out.
+
 Three things about it are worth knowing before touching it. It **plants two
 controls first** (AFF-1) - one with no hover rule and an inline `cursor: default`
 that no stylesheet can outrank, one with both - and refuses to run the walk

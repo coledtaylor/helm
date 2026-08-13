@@ -9,6 +9,7 @@ import {
   PR_IGNORED_REPOS_MAX,
   PR_POLL_MINUTES,
   PR_REVIEW_PROMPT_MAX_LENGTH,
+  PROJECT_SHELL_HEIGHT_PCT,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
@@ -310,6 +311,21 @@ export const SETTING_VALIDATORS: SettingValidators = {
     if (!isAbsolute(value)) return `expected an absolute path, got ${JSON.stringify(value)}`
     return null
   },
+
+  /**
+   * A percentage of the project page's column, bounded at both ends.
+   *
+   * The non-finite case is the one worth naming. This number is divided into a
+   * layout - it becomes a `height` - and `NaN%` is a declaration the style
+   * parser drops silently, so the pane would keep whatever height it happened
+   * to have and nothing on screen would say the setting was broken. The bound
+   * that refuses it is the same one that refuses 900.
+   *
+   * Whole numbers only, because that is what the drag writes: a percentage is
+   * rounded before it is stored, so the settings row shows the number a person
+   * can retype rather than 31.4159.
+   */
+  projectShellHeightPct: boundedInteger(PROJECT_SHELL_HEIGHT_PCT),
 
   /**
    * The transcript archive's ceiling, in bytes.

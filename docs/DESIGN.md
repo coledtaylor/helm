@@ -320,9 +320,36 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   a 3px `border-strong` grip that goes accent on hover, drag-bounded 20-80%.
   Each strip ends in a ⤢/⇱ maximize toggle.
 - **Project shell**: a project pane carries a plain shell (PowerShell, cwd at
-  the project) as a terminal island below it - roughly a third of the pane,
-  hidden while the session split is open. It is furniture, not a session: no
-  row, no history, no notification.
+  the project) as a terminal island below it. It is furniture, not a session:
+  no row, no history, no notification. It stays on screen while the session
+  split is open - the session has its own column and takes nothing from the
+  project's, and dropping the shell took a second terminal away at the moment
+  one is most useful.
+
+  **A third of the page is where its height starts, not what it is.** The
+  proportion is the default and the argument for it is a row count: about a
+  third gives a tall display the 15 rows PSReadLine needs before it will draw
+  its ListView, while a small window keeps most of its height for the project
+  pane. What that never justified was being the only value, so the gutter
+  between the two carries a **drag handle** - the split view's divider recipe
+  rotated, a 3px `border-strong` grip that goes accent on hover, in a full-width
+  8px row that is the whole target. Dragging moves the shell's top edge,
+  double-clicking returns it to the default.
+
+  It is bounded at both ends and the two bounds are different in kind. The
+  ceiling is **half the column**, so the project pane is never the smaller part
+  of the page it names. The floor is **180px**, a pixel figure rather than a
+  percentage because "still enough rows to be a terminal" is not something a
+  percentage can say - the same 12% is a working shell on one monitor and four
+  lines on another. Where a window is short enough that the two disagree, the
+  floor wins. There is no pixel *ceiling*: a fixed one is what made a tall
+  monitor useless, the extra height going to a project pane with nothing more
+  to say.
+
+  The height is **one setting for every project** (`projectShellHeightPct`),
+  because the question it answers - how much terminal do I want - is about the
+  person and their monitor, not the repository. Per-project heights would also
+  mean the page's proportions moved as you moved between projects.
 - **Narrow panes**: the config console, the content viewer and the session
   history are all a bounded list beside a detail, and that needs roughly 700px
   before both are readable. Docked next to the session split none of them get

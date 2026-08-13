@@ -333,6 +333,79 @@ async function shootProjectRepo(
   return shot.file
 }
 
+/** The project shell's height, written the way its drag handle writes it. */
+async function writeShellHeight(win: BrowserWindow, pct: number): Promise<void> {
+  await js<void>(
+    win,
+    `window.helm.invoke('settings:write', { projectShellHeightPct: ${String(pct)} }).then(() => undefined)`
+  ).catch(() => undefined)
+}
+
+/**
+ * The project page at each end of what the shell's handle can reach.
+ *
+ * The `project` shots above are the default third, which is the state the page
+ * was designed around and the only one anything used to be able to be in. The
+ * two ends are where the page has to still look like a page: at half, a
+ * project pane holding the same six panels in half the room, and at the floor,
+ * a terminal island short enough that its own header is a third of it. Neither
+ * is reachable by clicking through the walk, and both are now one drag away
+ * from anybody.
+ *
+ * The floor is written as the *percentage* floor and drawn at the pixel one -
+ * 10% of any ordinary column is under 180px, so what this photographs is the
+ * clamp rather than the number.
+ *
+ * It prints the numbers beside the files for the reason `responsive` does. The
+ * argument the default rests on is a row count - 15 is where PSReadLine turns
+ * its ListView off - and a row count is exactly what a thumbnail cannot be
+ * measured for.
+ *
+ * Write/shoot/restore, like the pinned sidebar and the ignore list: a design
+ * run must not leave the user's shell at half the page.
+ */
+async function shootShellHeights(
+  win: BrowserWindow,
+  outDir: string,
+  theme: string,
+  before: number
+): Promise<string[]> {
+  const files: string[] = []
+  for (const [name, pct] of [
+    ['floor', 10],
+    ['half', 50],
+    ['default', 30]
+  ] as const) {
+    await writeShellHeight(win, pct)
+    await sleep(700)
+    const at = await js<{ pane: number; column: number; rows: number; cols: number } | null>(
+      win,
+      `(() => {
+        const pane = document.querySelector('[data-project-shell]')
+        if (!pane || !pane.parentElement) return null
+        const term = window.__helmTerminals().shells.find((s) => s.attached)
+        return {
+          pane: Math.round(pane.getBoundingClientRect().height),
+          column: Math.round(pane.parentElement.getBoundingClientRect().height),
+          rows: term ? term.rows : -1,
+          cols: term ? term.cols : -1
+        }
+      })()`
+    ).catch(() => null)
+    console.log(
+      `design-shot: shell ${name.padEnd(7)} (${theme}) ` +
+        (at === null
+          ? 'no project shell on screen'
+          : `${String(at.pane)}px of ${String(at.column)} - ${String(at.cols)}x${String(at.rows)}` +
+            `${at.rows >= 15 ? '' : '  (under PSReadLine’s 15-row ListView threshold)'}`)
+    )
+    files.push((await screenshot(win, outDir, `project-shell-${name}-${theme}.png`)).file)
+  }
+  await writeShellHeight(win, before)
+  await sleep(400)
+  return files
+}
+
 /**
  * A pull request's Conversation, with review threads in it.
  *
@@ -1058,6 +1131,7 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
   const before = ctx.services.settings.theme
   const ignoredBefore = [...ctx.services.settings.prIgnoredRepos]
   const pinnedBefore = [...ctx.services.settings.pinnedProjects]
+  const shellHeightBefore = ctx.services.settings.projectShellHeightPct
 
   for (const theme of ['dark', 'light'] as const) {
     // Through the real toggle, so the shot proves the control too.
@@ -1095,6 +1169,12 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
       if (view.name === 'project') {
         const repoShot = await shootProjectRepo(win, outDir, theme)
         if (repoShot !== null) files.push(repoShot)
+        // And the same page with its shell dragged to each end of what the
+        // handle allows. Taken after the repository shot deliberately: the
+        // question is what a *full* project pane does when it is given half
+        // the room, and the harness row the walk opens first has no branch,
+        // no git stats and no pull-request panel to squeeze.
+        files.push(...(await shootShellHeights(win, outDir, theme, shellHeightBefore)))
       }
 
       // The history pane again, two clicks in: the archived transcript, and a
@@ -1149,19 +1229,35 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
     await sleep(400)
     files.push((await screenshot(win, outDir, `settings-archive-${theme}.png`)).file)
 
-    // The settings pane scrolled to the end, because the Terminal group sits
-    // below the fold on a default-sized window - and it is the group made of
-    // controls the rest of the app does not use (a stepper, a preview well on
-    // the terminal's own fixed ground inside a themed card), so it is the most
-    // likely place for something to stop matching the system in one theme only.
+    // The Terminal group, which is below the fold on a default-sized window and
+    // is the group made of controls the rest of the app does not use (a
+    // stepper, a preview well on the terminal's own fixed ground inside a
+    // themed card), so it is the most likely place for something to stop
+    // matching the system in one theme only.
+    //
+    // Scrolled *to the group*, like the two above. It used to scroll to the
+    // end of the pane, which was the Terminal group until the GitHub group was
+    // added under it - after which the file called `settings-terminal` was a
+    // photograph of the review-prompt rows and nothing was looking at the
+    // group it is named for.
+    await js<void>(
+      win,
+      `(() => { const el = document.querySelector('[data-settings-group="terminal"]');
+        if (el) el.scrollIntoView({ block: 'center' }) })()`
+    )
+    await sleep(400)
+    const terminalShot = await screenshot(win, outDir, `settings-terminal-${theme}.png`)
+    files.push(terminalShot.file)
+
+    // And the end of the pane, which is where a group added later lands and
+    // where the page has to stop cleanly.
     await js<void>(
       win,
       `(() => { const el = document.querySelector('[data-settings-pane]');
         if (el) el.scrollTop = el.scrollHeight })()`
     )
     await sleep(400)
-    const terminalShot = await screenshot(win, outDir, `settings-terminal-${theme}.png`)
-    files.push(terminalShot.file)
+    files.push((await screenshot(win, outDir, `settings-end-${theme}.png`)).file)
   }
 
   await click(win, `button[aria-label="${THEME_LABEL[before]}"]`)
