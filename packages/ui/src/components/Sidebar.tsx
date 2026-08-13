@@ -51,8 +51,17 @@ export interface SidebarProps {
   scanning: boolean
   scanError?: string | undefined
   selectedPath: string | null
-  /** Lower-cased project paths with a running session - the green dots. */
-  livePaths?: ReadonlySet<string> | undefined
+  /**
+   * Lower-cased project path -> what the sessions running there are called: the
+   * green dots, and the names behind them.
+   *
+   * A map rather than the set of paths this used to be, because the dot is the
+   * one place the tree admits a session exists and "a session is running here"
+   * is no answer at all once three of them are. The names come from the caller
+   * already resolved through `sessionLabel`, so a session renamed in the strip
+   * is renamed here too rather than in one place out of two.
+   */
+  liveSessions?: ReadonlyMap<string, readonly string[]> | undefined
   /**
    * `pinnedProjects`, straight off the settings. Projects only - a harness is
    * not pinnable, and nothing here offers to make one so.
@@ -204,7 +213,7 @@ export function Sidebar({
   scanning,
   scanError,
   selectedPath,
-  livePaths,
+  liveSessions,
   pinnedPaths,
   onTogglePin,
   onSelect,
@@ -397,7 +406,7 @@ export function Sidebar({
                     project={pin.project}
                     pinned
                     selected={pin.project.path === selectedPath}
-                    live={livePaths?.has(pin.project.path.toLowerCase()) ?? false}
+                    liveNames={liveSessions?.get(pin.project.path.toLowerCase())}
                     onSelect={onSelect}
                     onTogglePin={(project) => onTogglePin(project.path)}
                   />
@@ -418,9 +427,12 @@ export function Sidebar({
           )
         ) : (
           filtered.map((group, index) => {
+            // Sessions, not projects-with-a-session. The count's own tooltip has
+            // always said "N sessions running here", and with the labels in hand
+            // it can be that rather than an undercount of it.
             const live = group.members
               .concat(group.root ? [group.root] : [])
-              .filter((p) => livePaths?.has(p.path.toLowerCase()) ?? false).length
+              .reduce((n, p) => n + (liveSessions?.get(p.path.toLowerCase())?.length ?? 0), 0)
             return (
               <HarnessGroup
                 key={group.key}
@@ -436,7 +448,7 @@ export function Sidebar({
                 selectedPath={selectedPath}
                 onSelect={onSelect}
                 onTogglePin={onTogglePin}
-                {...(livePaths ? { livePaths } : {})}
+                {...(liveSessions ? { liveSessions } : {})}
               />
             )
           })
@@ -467,7 +479,7 @@ function HarnessGroup({
   running,
   onToggle,
   selectedPath,
-  livePaths,
+  liveSessions,
   onSelect,
   onTogglePin
 }: {
@@ -477,7 +489,7 @@ function HarnessGroup({
   running: number
   onToggle: () => void
   selectedPath: string | null
-  livePaths?: ReadonlySet<string> | undefined
+  liveSessions?: ReadonlyMap<string, readonly string[]> | undefined
   onSelect: (project: Project) => void
   onTogglePin: (path: string) => void
 }): JSX.Element {
@@ -522,7 +534,7 @@ function HarnessGroup({
             <ProjectRow
               project={group.root}
               selected={group.root.path === selectedPath}
-              live={livePaths?.has(group.root.path.toLowerCase()) ?? false}
+              liveNames={liveSessions?.get(group.root.path.toLowerCase())}
               onSelect={onSelect}
               onTogglePin={(project) => onTogglePin(project.path)}
             />
@@ -532,7 +544,7 @@ function HarnessGroup({
               key={project.path}
               project={project}
               selected={project.path === selectedPath}
-              live={livePaths?.has(project.path.toLowerCase()) ?? false}
+              liveNames={liveSessions?.get(project.path.toLowerCase())}
               onSelect={onSelect}
               onTogglePin={(p) => onTogglePin(p.path)}
             />

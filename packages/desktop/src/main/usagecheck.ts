@@ -1422,7 +1422,7 @@ export async function runUsageChecks(
     // started from `packages/desktop`, hence the two levels up. The gates are
     // answered anyway - this only makes it quicker.
     const cwd = resolve(process.cwd(), '..', '..')
-    const record = ctx.sessions.start({
+    const record = await ctx.sessions.start({
       cwd,
       name: 'usage check',
       cols: 120,

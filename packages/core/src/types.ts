@@ -238,9 +238,15 @@ export type SessionStatus = 'running' | 'exited' | 'lost'
 export interface SessionRecord {
   id: number
   /** The `-n` name handed to the CLI, so the session is identifiable in
-   * `/resume` later (SPEC 4.1, and the session index reads these rows). */
+   * `/resume` later (SPEC 4.1, and the session index reads these rows). Never
+   * rewritten - a rename writes `label`. See the column comment in `schema.ts`. */
   name: string
+  /** What Helm calls it on screen, or null for "use `name`". `sessionLabel`. */
+  label: string | null
   cwd: string
+  /** The branch `cwd` was on when this was spawned. Null for a non-repo cwd, a
+   * detached HEAD, or a read that failed. Captured, never followed. */
+  branch: string | null
   /** The discovered project it was launched against, if it was one. */
   projectPath: string | null
   /** The profile it was launched from, if it was one. Not a foreign key: the
@@ -254,6 +260,26 @@ export interface SessionRecord {
   durationMs: number | null
   /** Null while running, and for a session whose exit code was never observed. */
   exitCode: number | null
+}
+
+/**
+ * What to call a session on screen: its label if it has one, its `-n` name if
+ * not.
+ *
+ * One function rather than `label ?? name` at each call site, and that is the
+ * whole reason it exists. A session is named in four places - the tab, the tab's
+ * hover hint, the sidebar's live-session tooltip, and the confirmation before it
+ * is ended - and the failure a shared helper prevents is the one where the tab
+ * says "PR review", the dialog asking to end it says "dev 2", and the user has
+ * to work out that those are the same session before answering a question whose
+ * cost is whatever the session had not finished saying.
+ *
+ * In `types.ts` because the renderer imports it, and a value import into the
+ * browser bundle comes from `@helm/core/types` and not the package root
+ * (CLAUDE.md "Boundaries").
+ */
+export function sessionLabel(session: Pick<SessionRecord, 'name' | 'label'>): string {
+  return session.label ?? session.name
 }
 
 /**

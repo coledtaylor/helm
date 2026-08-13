@@ -776,7 +776,10 @@ export async function runHistoryChecks(
     // The pane will not offer it, but the main process is what actually spawns
     // - so it has to refuse on its own rather than trust the window.
     try {
-      ctx.sessions.resume({ sessionId: reapedTarget.sessionId, cols: 100, rows: 30 })
+      // Awaited inside the `try`: the refusal is a rejected promise now that a
+      // launch reads the branch first, and an unawaited one would sail past
+      // this catch and report that nothing refused.
+      await ctx.sessions.resume({ sessionId: reapedTarget.sessionId, cols: 100, rows: 30 })
       refusal = null
     } catch (err) {
       refusal = err instanceof Error ? err.message : String(err)

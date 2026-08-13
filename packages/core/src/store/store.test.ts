@@ -8,6 +8,7 @@ import {
   EMPTY_INVENTORY,
   PINNED_PROJECTS_MAX,
   isProjectPinned,
+  sessionLabel,
   withProjectPinned,
   type AppSettings,
   type Project
@@ -19,6 +20,7 @@ import {
   finishSession,
   readSessions,
   reconcileRunningSessions,
+  renameSession,
   runningSessionNames,
   startSession
 } from './sessions'
@@ -727,5 +729,64 @@ describe('session log', () => {
     finishSession(store, one.id, { exitCode: 0 })
 
     expect(runningSessionNames(store)).toEqual(['alpha 2'])
+  })
+
+  it('records the branch the cwd was on, and null for a cwd that is not on one', () => {
+    const onBranch = startSession(store, { name: 'alpha', cwd: dir, branch: 'feat/tabs' })
+    const noBranch = startSession(store, { name: 'beta', cwd: dir })
+
+    expect(onBranch.branch).toBe('feat/tabs')
+    expect(noBranch.branch).toBeNull()
+  })
+
+  it('starts with no label, so a session is called what the CLI was told', () => {
+    const session = started()
+    expect(session.label).toBeNull()
+    expect(sessionLabel(session)).toBe('alpha')
+  })
+
+  it('renames a session without touching the name that went to the CLI', () => {
+    const session = started()
+    const renamed = renameSession(store, session.id, 'PR review')
+
+    expect(renamed).toMatchObject({ id: session.id, label: 'PR review', name: 'alpha' })
+    expect(sessionLabel(renamed!)).toBe('PR review')
+    // And it is in the row, not only in the answer.
+    expect(readSessions(store)[0]).toMatchObject({ label: 'PR review', name: 'alpha' })
+  })
+
+  it('treats an empty or whitespace label as clearing it, not as an empty title', () => {
+    const session = started()
+    renameSession(store, session.id, 'PR review')
+
+    expect(renameSession(store, session.id, '   ')?.label).toBeNull()
+    expect(sessionLabel(readSessions(store)[0]!)).toBe('alpha')
+    expect(renameSession(store, session.id, null)?.label).toBeNull()
+  })
+
+  it('trims a label rather than storing the spaces around it', () => {
+    const session = started()
+    expect(renameSession(store, session.id, '  PR review  ')?.label).toBe('PR review')
+  })
+
+  it('answers null for a session id that is not in this database', () => {
+    expect(renameSession(store, 9999, 'nope')).toBeNull()
+  })
+
+  it('keeps the label through the session ending, so a dead tab stays named', () => {
+    const session = started()
+    renameSession(store, session.id, 'PR review')
+
+    expect(finishSession(store, session.id, { exitCode: 0 })?.label).toBe('PR review')
+  })
+
+  it('gives a new session none of a finished one’s label', () => {
+    const first = started('alpha')
+    renameSession(store, first.id, 'PR review')
+    finishSession(store, first.id, { exitCode: 0 })
+
+    // A label belongs to a row. Nothing recycles it onto the next session, which
+    // is the failure the `-n` counter had.
+    expect(started('alpha').label).toBeNull()
   })
 })

@@ -63,6 +63,7 @@ export {
   finishSession,
   readSessions,
   reconcileRunningSessions,
+  renameSession,
   runningSessionNames,
   startSession,
   type NewSession,

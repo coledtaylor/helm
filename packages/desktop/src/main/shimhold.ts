@@ -82,7 +82,7 @@ export async function runShimHold(ctx: ProfilesContext, dataDir: string): Promis
 
   try {
     const before = ctx.sessions.list().length
-    ctx.sessions.launchProfile({ profileId: profile.id, cols: 100, rows: 30 })
+    await ctx.sessions.launchProfile({ profileId: profile.id, cols: 100, rows: 30 })
     await waitFor(() => ctx.sessions.list().length > before, 60_000)
     const session = ctx.sessions.list().at(-1)
     detail['sessionId'] = session?.id ?? null

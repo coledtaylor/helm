@@ -29,6 +29,11 @@ export interface SessionsState {
   adopt: (record: SessionRecord) => void
   /** Asks main to end and forget it. Main may ask the user first. */
   close: (id: number) => Promise<boolean>
+  /**
+   * Helm's own label for a tab. Null clears it, and the tab goes back to the
+   * name the CLI was given - which this never changes.
+   */
+  rename: (id: number, label: string | null) => Promise<void>
   /** Moves a session tab to `toIndex` within the session tabs. */
   reorder: (id: number, toIndex: number) => void
   /** Tells main which pane is on screen, for the exit notification. */
@@ -107,6 +112,17 @@ export function useSessions(onActivate: (id: number) => void): SessionsState {
     return true
   }, [])
 
+  /**
+   * The row main answers with is adopted, not the label that was sent - the
+   * same shape `settings:write` uses and for the same reason: main normalises
+   * (a label of spaces becomes null), and a window that trusted its own input
+   * would paint something the database does not hold.
+   */
+  const rename = useCallback(async (id: number, label: string | null): Promise<void> => {
+    const record = await helm.invoke('session:rename', { id, label })
+    setSessions((current) => current.map((s) => (s.id === record.id ? record : s)))
+  }, [])
+
   const reorder = useCallback((id: number, toIndex: number) => {
     setSessions((current) => {
       const from = current.findIndex((s) => s.id === id)
@@ -125,5 +141,15 @@ export function useSessions(onActivate: (id: number) => void): SessionsState {
 
   const dismissLaunchError = useCallback(() => setLaunchError(null), [])
 
-  return { sessions, launchError, dismissLaunchError, launch, adopt, close, reorder, reportFocus }
+  return {
+    sessions,
+    launchError,
+    dismissLaunchError,
+    launch,
+    adopt,
+    close,
+    rename,
+    reorder,
+    reportFocus
+  }
 }

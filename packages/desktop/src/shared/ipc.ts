@@ -315,6 +315,24 @@ export interface CloseSessionResult {
 }
 
 /**
+ * Renaming a session's tab.
+ *
+ * The label goes to main rather than being held in the window because it has to
+ * outlive the window: a renderer reload adopts the sessions back from main
+ * (`session:list`), and a rename that lived in React state would be forgotten by
+ * the reload while the session it named carried on running. It is written to
+ * `sessions.label` and nothing touches `sessions.name` - see that column's
+ * comment in `schema.ts` for why the divergence from `/resume` is on purpose.
+ *
+ * Null, or a string that is only whitespace, clears the label and the tab goes
+ * back to reading the name the CLI was given.
+ */
+export interface RenameSessionRequest {
+  id: number
+  label: string | null
+}
+
+/**
  * Which file the config editor currently has open.
  *
  * The main process watches it so that a change made in another editor reaches
@@ -473,6 +491,12 @@ export interface IpcRequests {
   'session:close': { request: CloseSessionRequest; response: CloseSessionResult }
   /** Sessions this main process is currently hosting, for a renderer reload. */
   'session:list': { request: void; response: SessionRecord[] }
+  /**
+   * Rename a session's tab. Answers with the row as main now holds it, which is
+   * what the window adopts - the same shape `settings:write` uses, so a label a
+   * validator normalised cannot drift from what was stored.
+   */
+  'session:rename': { request: RenameSessionRequest; response: SessionRecord }
 
   /**
    * The project shell - a plain terminal under the project pane, opened in
@@ -944,6 +968,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'session:start': true,
   'session:close': true,
   'session:list': true,
+  'session:rename': true,
   'pterm:open': true,
   'pterm:close': true,
   'pterm:shells': true,

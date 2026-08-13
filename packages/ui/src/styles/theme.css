@@ -320,3 +320,22 @@ select:focus-visible {
   background-color: var(--helm-fg-subtle);
   background-clip: content-box;
 }
+
+/**
+ * The tab strip scrolls and does not say so with a bar.
+ *
+ * Every other scroll container in Helm is a pane with room for one. This one is
+ * 40px tall and the tabs are 34 of them, so Chromium's thin bar - which on
+ * Windows still carries two arrow buttons - lands in the 6px where the active
+ * tab overlaps the pane island below it, and draws a grey rule straight through
+ * the seam that makes a tab read as part of its pane. The tabs run to the edge
+ * of the strip when there are more of them than fit, which is the same thing
+ * every other tab strip uses to say so.
+ */
+.tab-scroll {
+  scrollbar-width: none;
+}
+
+.tab-scroll::-webkit-scrollbar {
+  display: none;
+}

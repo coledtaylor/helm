@@ -77,5 +77,12 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "-- Everything below this line is HAND-WRITTEN and drizzle-kit did not produce it.\n-- drizzle-kit does not model virtual tables: it cannot generate an FTS5 table\n-- and it cannot see one that already exists, so it will neither recreate nor\n-- drop what follows. `pnpm db:generate` re-embeds whatever is in this folder,\n-- so this survives regeneration - but a later migration that needs to touch\n-- `transcript_fts` has to carry its own hand-written SQL in the same way. The\n-- reasoning is in `schema.ts`, under the three tables above.\n--\n-- `content=''` because the message text is not stored in plain form anywhere:\n-- `transcript_messages.body` is a compressed blob, so there is no column for an\n-- external-content FTS table to read and no column an INSERT trigger could read\n-- either. The index is written in code, beside the row it indexes and inside\n-- the same transaction (`store/archive.ts`).\n--\n-- `contentless_delete=1` is what makes the DELETE below legal - without it\n-- SQLite refuses to delete from a contentless FTS5 table, because it does not\n-- hold the text it would need to un-index. SQLite 3.43+; better-sqlite3 13\n-- bundles 3.53.\n--\n-- `unicode61 remove_diacritics 2` is the default tokenizer stated rather than\n-- assumed, so a future SQLite changing its default cannot silently re-tokenize\n-- an index nothing rebuilds.\nCREATE VIRTUAL TABLE `transcript_fts` USING fts5(\n  text,\n  content='',\n  contentless_delete=1,\n  tokenize=\"unicode61 remove_diacritics 2\"\n);",
       "-- The DELETE is a trigger and the INSERT is not, and the asymmetry is the\n-- design. A delete needs only `old.id`, and eviction is the one path that would\n-- otherwise leave index entries pointing at messages that no longer exist - a\n-- search that returned rowids the message table cannot resolve. Putting it in\n-- the schema means it cannot be forgotten by a caller.\nCREATE TRIGGER `transcript_fts_delete` AFTER DELETE ON `transcript_messages` BEGIN\n  DELETE FROM `transcript_fts` WHERE rowid = old.`id`;\nEND;"
     ]
+  },
+  {
+    "tag": "0008_lyrical_yellow_claw",
+    "statements": [
+      "ALTER TABLE `sessions` ADD `label` text;",
+      "ALTER TABLE `sessions` ADD `branch` text;"
+    ]
   }
 ]

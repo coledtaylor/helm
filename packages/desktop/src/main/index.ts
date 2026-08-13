@@ -42,7 +42,12 @@ import { createPullsService } from './pulls'
 import { createUsageService } from './usage'
 import { maybeCheckForUpdate } from './update'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
-import { createCollector, runSessionsChecks, type CheckContext } from './sessionscheck'
+import {
+  createCollector,
+  runSessionsChecks,
+  runSessionsRestartChecks,
+  type CheckContext
+} from './sessionscheck'
 import { TITLEBAR_OVERLAY } from './chrome'
 import { createPtermHost } from './pterm'
 import { runDesignShot } from './designshot'
@@ -83,6 +88,7 @@ type Mode =
   | 'claude-check'
   | 'claude'
   | 'sessions-check'
+  | 'sessions-restart'
   | 'profiles-check'
   | 'history-check'
   | 'config-check'
@@ -108,6 +114,7 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--fidelity')) return 'fidelity'
   if (process.argv.includes('--claude-check')) return 'claude-check'
   if (process.argv.includes('--sessions-check')) return 'sessions-check'
+  if (process.argv.includes('--sessions-restart')) return 'sessions-restart'
   if (process.argv.includes('--profiles-check')) return 'profiles-check'
   if (process.argv.includes('--history-check')) return 'history-check'
   if (process.argv.includes('--config-check')) return 'config-check'
@@ -134,6 +141,7 @@ const mode = modeFromArgv()
 const isSpikeMode =
   mode !== 'app' &&
   mode !== 'sessions-check' &&
+  mode !== 'sessions-restart' &&
   mode !== 'profiles-check' &&
   mode !== 'history-check' &&
   mode !== 'config-check' &&
@@ -977,13 +985,48 @@ app.whenReady().then(() => {
     return
   }
 
+  /**
+   * The second half of sessions-check: a real second app start, reading back
+   * the label phase one gave a tab. "It survived a restart" is not a claim the
+   * process that set it can make - see `runSessionsRestartChecks`.
+   */
+  if (mode === 'sessions-restart') {
+    startApp({
+      onReady: (ctx) => {
+        void runSessionsRestartChecks(ctx, dataDir)
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('sessions-restart-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`sessions-restart report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 30_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`sessions-restart crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
   if (mode === 'sessions-check') {
     const collector = createCollector()
     startApp({
       observer: collector,
       confirm: collector.confirm,
       onReady: (ctx) => {
-        void runSessionsChecks(ctx, collector, join(dataDir, 'screenshots'))
+        void runSessionsChecks(ctx, collector, join(dataDir, 'screenshots'), dataDir)
           .then((checks) => {
             const pass = checks.every((c) => c.ok)
             const file = writeReport('sessions-report.json', {

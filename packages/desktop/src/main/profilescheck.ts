@@ -1089,7 +1089,7 @@ async function probeFixture(
   skillOnDisk: string
   reachedPrompt: boolean
 }> {
-  const launched = ctx.sessions.launchProfile({ profileId, cols: 100, rows: 30 })
+  const launched = await ctx.sessions.launchProfile({ profileId, cols: 100, rows: 30 })
   const id = launched.session.id
 
   // Read back through the shim rather than from the source, so a failure says

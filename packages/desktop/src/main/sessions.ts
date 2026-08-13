@@ -5,10 +5,13 @@ import {
   finishSession,
   launchRequestFromProfile,
   prepareLaunch,
+  readGitBranch,
   readHistorySession,
   readProfile,
+  renameSession,
   runningSessionNames,
   sanitizeSessionName,
+  sessionLabel,
   startSession,
   uniqueSessionName,
   type LaunchedReviewPlan,
@@ -25,6 +28,7 @@ import type {
   CloseSessionResult,
   LaunchedProfile,
   LaunchProfileRequest,
+  RenameSessionRequest,
   ResumedSession,
   ResumeSessionRequest,
   StartSessionRequest
@@ -144,7 +148,10 @@ function rendererConfirm(window: () => BrowserWindow | null, native: Confirm): C
         message: request.message,
         detail: request.detail,
         confirmLabel: request.confirmLabel,
-        sessionNames: request.sessions.map((record) => record.name)
+        // What the tab says, not the `-n` name: this dialog is asking about the
+        // sessions on screen, and a list naming them something else is a list
+        // the user has to translate before answering.
+        sessionNames: request.sessions.map(sessionLabel)
       })
     })
 
@@ -172,11 +179,11 @@ function nativeConfirm(window: () => BrowserWindow | null): Confirm {
 }
 
 export interface SessionHost {
-  start: (req: StartSessionRequest) => SessionRecord
+  start: (req: StartSessionRequest) => Promise<SessionRecord>
   /** Synthesises the profile's overlays, then spawns against them. */
-  launchProfile: (req: LaunchProfileRequest) => LaunchedProfile
+  launchProfile: (req: LaunchProfileRequest) => Promise<LaunchedProfile>
   /** Reopens a conversation from the history index in a new tab. */
-  resume: (req: ResumeSessionRequest) => ResumedSession
+  resume: (req: ResumeSessionRequest) => Promise<ResumedSession>
   /**
    * Starts a session on a pull request, with a prompt composed by the caller.
    *
@@ -185,8 +192,13 @@ export interface SessionHost {
    * checkout` - all of which belong to `pulls.ts`. What this file owns is what
    * it owns for every other launch: turning a plan into argv and a process.
    */
-  review: (plan: LaunchedReviewPlan, grid: { cols: number; rows: number }) => SessionRecord
+  review: (
+    plan: LaunchedReviewPlan,
+    grid: { cols: number; rows: number }
+  ) => Promise<SessionRecord>
   close: (req: CloseSessionRequest) => Promise<CloseSessionResult>
+  /** Helm's own label for a tab. Never rewrites the `-n` name. */
+  rename: (req: RenameSessionRequest) => SessionRecord
   /** Sessions this process is hosting, running or exited-but-not-yet-closed. */
   list: () => SessionRecord[]
   input: (id: number, data: string) => void
@@ -226,6 +238,30 @@ export function createSessionHost({
   /** Still alive *and* still in a tab. */
   const running = (): Hosted[] => [...hosted.values()].filter((h) => isRunning(h) && !h.closed)
 
+  /**
+   * The names a new launch must not collide with.
+   *
+   * Wider than "what is running", and that is a fix rather than caution. The
+   * counter used to be computed against the running rows alone, so ending
+   * `dev 2` and starting another session produced a second `dev 2` - a label
+   * pointing at different work, sitting in the strip beside the dead tab still
+   * wearing it. A tab survives its process (the scrollback is the record of what
+   * happened), so the set that matters is the set of tabs, which is exactly the
+   * entries this host has not been asked to forget.
+   *
+   * The running rows stay in the union because they are a fact about the
+   * database rather than about this process, and two Helms sharing a data
+   * directory is a state `paths.ts` allows.
+   *
+   * Labels are deliberately not in here. This produces the `-n` name, and `-n`
+   * is what `/resume` lists; what someone has since renamed a *tab* to has no
+   * bearing on which session names Claude Code will show side by side.
+   */
+  const takenNames = (): string[] => [
+    ...runningSessionNames(services.store),
+    ...[...hosted.values()].filter((h) => !h.closed).map((h) => h.record.name)
+  ]
+
   function onExit(id: number, exitCode: number): void {
     // The row is the source of truth for the duration - it measures against the
     // clock that wrote `started_at`. `finishSession` returns null if this exit
@@ -253,7 +289,9 @@ export function createSessionHost({
     const outcome =
       record.exitCode === 0 ? 'finished' : `exited with code ${String(record.exitCode ?? '?')}`
     const notification = new Notification({
-      title: `${record.name} ${outcome}`,
+      // The tab's label: this notification's job is to send someone back to a
+      // tab, so it has to name the one they will be looking for.
+      title: `${sessionLabel(record)} ${outcome}`,
       body: record.cwd
     })
     notification.on('click', () => {
@@ -272,12 +310,15 @@ export function createSessionHost({
    * The one path a session is spawned by, whether it came from a project row or
    * from a profile. Both produce a `LaunchPlan` first - the only difference
    * between them is how many flags ended up in it.
+   *
+   * Async only because of the branch read below, which is why every caller of
+   * this is async too.
    */
-  function spawn(
+  async function spawn(
     plan: LaunchPlan,
     grid: { cols: number; rows: number },
     origin: { projectPath?: string | null | undefined; profileId?: number | null | undefined }
-  ): SessionRecord {
+  ): Promise<SessionRecord> {
     const command = resolveClaudeCommand()
     if (!command) {
       throw new Error(
@@ -287,11 +328,41 @@ export function createSessionHost({
 
     const argv = [...command.prefixArgs, ...plan.argv]
 
+    /**
+     * The branch the tab's subtitle carries, read once, here, and never again.
+     *
+     * **Captured, not followed**, and both halves of that are the decision.
+     *
+     * Following HEAD would defeat the subtitle it feeds. Two sessions in one
+     * working tree share a HEAD by construction, so a live reading would put the
+     * same branch on both of them - and the moment somebody checked out a second
+     * branch to run the second session on, it would relabel the first tab to
+     * match. Telling those two apart is the whole reason the subtitle exists.
+     * Captured, they read `main` and `feat/x`, which is what happened.
+     *
+     * And a tab is a position you learn: a strip that quietly relabels itself
+     * mid-work is one you have to re-read every time you look at it, which is
+     * worse than one that is occasionally a checkout behind.
+     *
+     * Read from git here rather than taken from the `GitState` the sidebar
+     * already holds - that cache is refreshed on window *focus*, and the way a
+     * second session on a second branch actually gets started is a `git checkout`
+     * inside a session Helm is already hosting, during which the window never
+     * loses focus and the cache never moves. The one case this feature is for is
+     * the one case the cache is stale for.
+     *
+     * Before the row rather than after: a session that dies in its first second
+     * still gets a complete row, and a second UPDATE would be a second way for
+     * this to be half-written.
+     */
+    const branch = await readGitBranch(plan.cwd)
+
     // The row goes in before the spawn so that a session which dies in its
     // first second is still a session that happened, with a reason.
     const record = startSession(services.store, {
       name: plan.name,
       cwd: plan.cwd,
+      branch,
       projectPath: origin.projectPath ?? null,
       profileId: origin.profileId ?? null,
       argv
@@ -323,30 +394,30 @@ export function createSessionHost({
   }
 
   return {
-    start(req) {
+    async start(req) {
       const base = req.name?.trim() || basename(req.cwd) || 'session'
       const plan = prepareLaunch({
         root: req.cwd,
-        name: uniqueSessionName(base, runningSessionNames(services.store)),
+        name: uniqueSessionName(base, takenNames()),
         shimRoot
       })
       return spawn(plan, req, { projectPath: req.projectPath })
     },
 
-    launchProfile(req) {
+    async launchProfile(req) {
       const profile = readProfile(services.store, req.profileId)
       if (!profile) throw new Error('That profile no longer exists.')
 
-      // Named after the profile, uniqued against what is running: three
+      // Named after the profile, uniqued against every tab in the strip: three
       // sessions from one profile is the normal case, and `/resume` shows only
       // the name.
-      const name = uniqueSessionName(profile.name, runningSessionNames(services.store))
+      const name = uniqueSessionName(profile.name, takenNames())
       const plan = prepareLaunch(launchRequestFromProfile(profile, shimRoot, name))
 
       // The overlay work happens before the row exists, so a profile pointing
       // at a repo that has been deleted fails here rather than as a session
       // that starts and quietly composes nothing.
-      const session = spawn(plan, req, { profileId: profile.id })
+      const session = await spawn(plan, req, { profileId: profile.id })
 
       return {
         session,
@@ -368,7 +439,7 @@ export function createSessionHost({
      * milestone is about. A sentence the pane can show is better than a tab
      * that dies in front of the user.
      */
-    resume(req) {
+    async resume(req) {
       const history = readHistorySession(services.store, req.sessionId)
       if (!history) {
         throw new Error('That session is not in the history index any more.')
@@ -389,10 +460,10 @@ export function createSessionHost({
       // makes a conversation recognisable in a strip of tabs.
       const label = uniqueSessionName(
         sanitizeSessionName(history.firstPrompt) || history.projectName,
-        runningSessionNames(services.store)
+        takenNames()
       )
 
-      const session = spawn(
+      const session = await spawn(
         {
           cwd: history.project,
           name: label,
@@ -422,16 +493,13 @@ export function createSessionHost({
      * `projectPath` is the repository, so the session appears against the
      * project it reviewed rather than as an orphan.
      */
-    review(plan, grid) {
+    async review(plan, grid) {
       const repo = plan.slug.split('/')[1] ?? basename(plan.repoPath)
       const launch = prepareLaunch({
         root: plan.repoPath,
         // Named for what it is, and uniqued like every other launch: reviewing
         // two pull requests at once is the normal case.
-        name: uniqueSessionName(
-          `PR #${String(plan.number)} review - ${repo}`,
-          runningSessionNames(services.store)
-        ),
+        name: uniqueSessionName(`PR #${String(plan.number)} review - ${repo}`, takenNames()),
         shimRoot,
         openingPrompt: plan.prompt,
         // Null for either of these passes no flag at all, which is what keeps a
@@ -442,6 +510,27 @@ export function createSessionHost({
       return spawn(launch, grid, { projectPath: plan.repoPath })
     },
 
+    /**
+     * Helm's label for the tab, written to `sessions.label`.
+     *
+     * The hosted copy is updated alongside the row because `list()` is what a
+     * renderer reload adopts and what the confirmation dialog is composed from -
+     * a rename that reached the database and not this map would come back at the
+     * next reload and would name the session by its old label in the dialog
+     * asking to end it.
+     *
+     * A session this process is not hosting is still renamed. The row is the
+     * record, and refusing would make the answer depend on which tab happened to
+     * be open.
+     */
+    rename(req) {
+      const record = renameSession(services.store, req.id, req.label)
+      if (!record) throw new Error('That session is not in this database.')
+      const entry = hosted.get(req.id)
+      if (entry) entry.record = record
+      return record
+    },
+
     async close(req) {
       const entry = hosted.get(req.id)
       if (!entry) return { closed: true }
@@ -449,7 +538,7 @@ export function createSessionHost({
       if (isRunning(entry) && req.force !== true) {
         const agreed = await confirm({
           kind: 'close-session',
-          message: `“${entry.record.name}” is still running.`,
+          message: `“${sessionLabel(entry.record)}” is still running.`,
           detail: `Closing the tab ends the Claude Code session in ${entry.record.cwd}.`,
           confirmLabel: 'End session',
           sessions: [entry.record]
@@ -498,7 +587,7 @@ export function createSessionHost({
         kind: 'quit',
         message:
           live.length === 1
-            ? `“${live[0]?.record.name ?? ''}” is still running.`
+            ? `“${live[0] ? sessionLabel(live[0].record) : ''}” is still running.`
             : `${String(live.length)} Claude Code sessions are still running.`,
         detail: 'Quitting Helm ends them.',
         confirmLabel: live.length > 1 ? `End ${String(live.length)} sessions` : 'End session',

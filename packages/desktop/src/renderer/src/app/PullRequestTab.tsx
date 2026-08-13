@@ -1,7 +1,12 @@
 import type { JSX } from 'react'
 import { useCallback, useState } from 'react'
 import { PullRequestPane, type LaunchedReviewNote } from '@helm/ui'
-import { renderPullPrompt, type EffortLevel, type PrCheckoutMode } from '@helm/core/types'
+import {
+  renderPullPrompt,
+  sessionLabel,
+  type EffortLevel,
+  type PrCheckoutMode
+} from '@helm/core/types'
 import type { LaunchedReview } from '../../../shared/ipc'
 import { usePullDetail } from './usePullDetail'
 
@@ -93,7 +98,11 @@ export function PullRequestTab({
     void onReview(repoPath, number)
       .then((launched) => {
         setReviewed({
-          session: launched.session.name,
+          // Through the helper like every other place a session is named, even
+          // though a launch this line is reporting cannot have a label yet: the
+          // note says which tab to go and look at, and one function deciding
+          // that is the point of having one.
+          session: sessionLabel(launched.session),
           prompt: launched.prompt,
           checkedOut: launched.checkedOut,
           warnings: launched.warnings

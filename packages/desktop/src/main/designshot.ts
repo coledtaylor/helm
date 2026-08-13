@@ -20,7 +20,7 @@ import { screenshot, sendMouse, sleep } from './bridge'
  */
 
 /** The groups `--only=` can name. The one authority for the list. */
-const GROUPS = ['views', 'states', 'responsive', 'split'] as const
+const GROUPS = ['views', 'states', 'responsive', 'split', 'tabs'] as const
 type Group = (typeof GROUPS)[number]
 
 function wantedGroups(): ReadonlySet<Group> {
@@ -801,6 +801,240 @@ async function dragSplit(win: BrowserWindow, target: number): Promise<boolean> {
   return true
 }
 
+/** How many session tabs the strip is photographed holding. */
+const CROWDED_TABS = 6
+
+/** The window's own `minWidth` - the narrowest a person can make it. */
+const NARROWEST_WINDOW = 900
+
+/**
+ * Rename a tab the way a person does: double-click the title, type, Enter.
+ *
+ * The value is set through `HTMLInputElement`'s own `value` setter rather than
+ * by assigning `el.value`. React installs a setter of its own on the element to
+ * track what it last rendered, and assigning through it leaves React's copy
+ * equal to the new text - so the `input` event that follows looks like a change
+ * from "PR review" to "PR review" and the handler never runs. The prototype's
+ * setter is the one that writes the DOM without telling React it already knew.
+ */
+async function openRename(win: BrowserWindow, tabId: string): Promise<boolean> {
+  return js<boolean>(
+    win,
+    `(() => { const el = document.querySelector('[data-tab=${JSON.stringify(tabId)}]');
+      if (!el) return false;
+      el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      return true })()`
+  ).catch(() => false)
+}
+
+async function renameTab(win: BrowserWindow, tabId: string, label: string): Promise<boolean> {
+  if (!(await openRename(win, tabId))) return false
+  await sleep(300)
+
+  return js<boolean>(
+    win,
+    `(() => { const el = document.querySelector('[data-tab-rename=${JSON.stringify(tabId)}]');
+      if (!el) return false;
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      set.call(el, ${JSON.stringify(label)});
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      return true })()`
+  ).catch(() => false)
+}
+
+/**
+ * What the crowded strip actually measured, printed beside the shot.
+ *
+ * For the reason the `responsive` group prints its header numbers: a tab whose
+ * subtitle has been ellipsised does not look wrong in a thumbnail, it looks
+ * slightly shorter - and "the distinguishing part of a label survives
+ * truncation" is a claim about `scrollWidth` against `clientWidth`, not
+ * something an eye can settle at 10px. Each line is one tab: how wide it is,
+ * and whether its title and its subtitle are being cut.
+ */
+async function reportStrip(win: BrowserWindow, theme: string): Promise<void> {
+  const strip = await js<{
+    scrollWidth: number
+    clientWidth: number
+    tabs: Array<{ title: string; subtitle: string; width: number; titleCut: boolean; subCut: boolean }>
+  } | null>(
+    win,
+    `(() => {
+       const list = document.querySelector('[role="tablist"]');
+       if (!list) return null;
+       const tabs = [...document.querySelectorAll('[role="tab"][data-tab^="session:"]')].map((t) => {
+         const sub = t.querySelector('[data-tab-subtitle]');
+         const title = sub ? sub.previousElementSibling : t.querySelector('span span');
+         const cut = (el) => el ? el.scrollWidth > el.clientWidth + 1 : false;
+         return {
+           title: title ? title.textContent : '',
+           subtitle: sub ? sub.textContent : '',
+           width: Math.round(t.getBoundingClientRect().width),
+           titleCut: cut(title),
+           subCut: cut(sub)
+         }
+       });
+       return { scrollWidth: list.scrollWidth, clientWidth: list.clientWidth, tabs }
+     })()`
+  ).catch(() => null)
+
+  if (strip === null) {
+    console.error('design-shot: no tab strip to measure')
+    return
+  }
+  console.log(
+    `design-shot: session strip (${theme}) ${String(strip.tabs.length)} tabs, ` +
+      `${String(strip.scrollWidth)}px of content in ${String(strip.clientWidth)}px`
+  )
+  for (const tab of strip.tabs) {
+    console.log(
+      `      ${String(tab.width).padStart(4)}px  ${tab.titleCut ? 'CUT ' : '    '}${tab.title}` +
+        `  /  ${tab.subCut ? 'CUT ' : '    '}${tab.subtitle}`
+    )
+  }
+}
+
+/** Every session tab ended and forgotten, without six confirmations. */
+async function closeAllSessions(win: BrowserWindow): Promise<void> {
+  await js<void>(
+    win,
+    `(async () => {
+       for (const s of await window.helm.invoke('session:list')) {
+         await window.helm.invoke('session:close', { id: s.id, force: true })
+       }
+     })()`
+  ).catch(() => undefined)
+  await sleep(1500)
+}
+
+/**
+ * The tab strip carrying as many sessions as anyone actually opens on one
+ * project, at the narrowest window the app allows.
+ *
+ * The state this walk had no shot of, and the one the whole session-tab-label
+ * work is about: several sessions against a single project is the normal case -
+ * that is what tabs are for - and until now they were `dev`, `dev 2`, `dev 3`
+ * with an empty second line, three tabs saying nothing about which was which. So
+ * the shot has to *be* the crowded case, at `minWidth`, in both themes, or it is
+ * photographing the easy state and calling it the answer.
+ *
+ * Two of the six are renamed through the real gesture rather than through the
+ * channel, so the picture includes what a named tab looks like beside unnamed
+ * ones and the double-click is exercised on the way past. One shot is taken with
+ * the editor open, because a text field on the terminal's fixed ground is the
+ * one control here that could plausibly arrive wearing the app's light-mode
+ * input styling, and no assertion would notice.
+ *
+ * Write/shoot/restore, like the pinned sidebar and the ignore list: the window's
+ * bounds and the theme go back, and the six sessions are ended - a design run
+ * must not leave the machine six `claude` processes.
+ */
+async function shootCrowdedTabs(
+  win: BrowserWindow,
+  outDir: string,
+  themeBefore: 'system' | 'light' | 'dark'
+): Promise<string[]> {
+  const files: string[] = []
+
+  // A git repository by preference: the subtitle under each title is the branch
+  // its session started on, and a folder that is not a repo photographs the
+  // fallback rather than the feature.
+  const repo = await js<string | null>(
+    win,
+    `window.helm.invoke('pr:snapshot').then((s) => s.repos[0] ? s.repos[0].path : null)`
+  ).catch(() => null)
+  const opened = repo !== null ? await clickProjectRow(win, repo) : false
+  if (!opened && !(await click(win, 'aside nav button[title]'))) {
+    console.error('design-shot: no project row to launch sessions from')
+    return files
+  }
+  await sleep(500)
+
+  for (let n = 0; n < CROWDED_TABS; n++) {
+    const started = await js<boolean>(
+      win,
+      `(() => { const el = [...document.querySelectorAll('button')]
+          .find((b) => (b.textContent ?? '').includes('Start session here'));
+        if (!el) return false; el.click(); return true })()`
+    )
+    if (!started) break
+    await pollJs(
+      win,
+      `document.querySelectorAll('[data-tab^="session:"]').length >= ${String(n + 1)}`,
+      20_000
+    )
+  }
+
+  const tabs = await js<string[]>(
+    win,
+    `[...document.querySelectorAll('[data-tab^="session:"]')].map((t) => t.dataset.tab)`
+  )
+  console.log(`design-shot: ${String(tabs.length)} session tabs open on one project`)
+  if (tabs.length === 0) return files
+
+  // Two named, four left as they launched - the mixture the strip actually ends
+  // up in, rather than a row of six renamed tabs that proves nothing about the
+  // default state.
+  if (tabs[1]) await renameTab(win, tabs[1], 'PR review')
+  if (tabs[3]) await renameTab(win, tabs[3], 'flaky test hunt')
+  await sleep(400)
+
+  // Long enough for the TUIs behind the strip to have painted; a pane still
+  // blank makes the shot look like a bug that is not there.
+  await sleep(8000)
+
+  const bounds = win.getBounds()
+  if (win.isMaximized()) win.unmaximize()
+  win.setBounds({ ...win.getBounds(), width: NARROWEST_WINDOW })
+  await sleep(600)
+
+  for (const theme of ['dark', 'light'] as const) {
+    await click(win, `button[aria-label="${THEME_LABEL[theme]}"]`)
+    await sleep(500)
+
+    // Launching from a project row leaves the split up, which gives the strip
+    // about 250px and answers a different question. Both are worth having: the
+    // split is what someone is actually looking at while they work, and the
+    // maximised one is the only place six tabs can be judged against each other.
+    files.push((await screenshot(win, outDir, `session-tabs-split-w900-${theme}.png`)).file)
+
+    const maximized = await click(win, 'button[aria-label="Maximize the session pane"]')
+    if (maximized) await sleep(600)
+    files.push((await screenshot(win, outDir, `session-tabs-crowded-w900-${theme}.png`)).file)
+    await reportStrip(win, theme)
+    if (maximized) await click(win, 'button[aria-label="Restore the split"]')
+    await sleep(400)
+
+    // And the same strip with a rename open on the active tab.
+    const active = await js<string | null>(
+      win,
+      `(() => { const el = document.querySelector('[role="tab"][data-tab^="session:"][aria-selected="true"]');
+        return el ? el.dataset.tab : null })()`
+    )
+    if (active !== null) {
+      await openRename(win, active)
+      await sleep(500)
+      files.push(
+        (await screenshot(win, outDir, `session-tab-rename-${theme}.png`)).file
+      )
+      // Escape, so the next theme starts from the strip rather than the editor.
+      await js<void>(
+        win,
+        `(() => { const el = document.querySelector('[data-tab-rename]');
+          if (el) el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })()`
+      ).catch(() => undefined)
+      await sleep(300)
+    }
+  }
+
+  await click(win, `button[aria-label="${THEME_LABEL[themeBefore]}"]`)
+  win.setBounds(bounds)
+  await sleep(400)
+  await closeAllSessions(win)
+  return files
+}
+
 export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<string[]> {
   const { win } = ctx
   const files: string[] = []
@@ -974,6 +1208,15 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
     console.log(
       `design-shot: config section rows ${String(before1)} -> ${String(after)} -> ${String(reopened)}`
     )
+  }
+
+  // The crowded strip, before `split` opens a session of its own: this group
+  // ends by closing every session it started, so the two do not photograph each
+  // other's tabs.
+  if (want.has('tabs')) {
+    await closeAllTabs(win)
+    await sleep(400)
+    files.push(...(await shootCrowdedTabs(win, outDir, before)))
   }
 
   if (!want.has('split')) return files

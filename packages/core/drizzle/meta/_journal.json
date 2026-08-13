@@ -57,6 +57,13 @@
       "when": 1786608600478,
       "tag": "0007_pink_tinkerer",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786613982813,
+      "tag": "0008_lyrical_yellow_claw",
+      "breakpoints": true
     }
   ]
 }

@@ -365,6 +365,7 @@ export function registerIpc(ctx: IpcContext): void {
     'session:start': (request) => ctx.sessions.start(request),
     'session:close': (request) => ctx.sessions.close(request),
     'session:list': () => ctx.sessions.list(),
+    'session:rename': (request) => ctx.sessions.rename(request),
 
     'pterm:open': (request) => ctx.pterm.open(request),
     'pterm:close': ({ id }) => {
@@ -474,7 +475,7 @@ export function registerIpc(ctx: IpcContext): void {
      */
     'pr:review': async ({ repoPath, number, cols, rows }) => {
       const plan = await ctx.pulls.prepareReview({ repoPath, number })
-      const session = ctx.sessions.review(plan, { cols, rows })
+      const session = await ctx.sessions.review(plan, { cols, rows })
       return {
         session,
         prompt: plan.prompt,

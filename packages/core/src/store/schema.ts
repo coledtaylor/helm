@@ -110,7 +110,41 @@ export const sessions = sqliteTable(
     id: integer('id').primaryKey({ autoIncrement: true }),
     /** Passed to the CLI as `-n`; what `/resume` shows later. */
     name: text('name').notNull(),
+    /**
+     * What Helm calls this session on screen. Null means "no label, use `name`".
+     *
+     * A SECOND COLUMN, AND THE DIVERGENCE IS THE POINT. `name` was handed to a
+     * process that is already running - it is in that session's argv, it is what
+     * Claude Code's own `/resume` list prints, and rewriting it here would make
+     * this table disagree with a fact about a spawned process that nothing can
+     * go back and change. So a rename writes here and `name` is never touched.
+     *
+     * The consequence is deliberate and one-directional: a session the user
+     * renamed to "PR review" is still `dev 2` in `/resume`. That is the honest
+     * shape. Helm's tab is Helm's own label for a conversation, `/resume`'s row
+     * is Claude Code's, and the alternative - passing a rename back to the CLI -
+     * is not available for a process that was spawned an hour ago, so the only
+     * way to keep the two identical would be to refuse to rename at all.
+     *
+     * Nothing derives this from what the session printed (CLAUDE.md "Helm
+     * renders nothing for a live session"): it is null until a person types
+     * something into the tab.
+     */
+    label: text('label'),
     cwd: text('cwd').notNull(),
+    /**
+     * The git branch `cwd` was on **when this session was spawned**, or null for
+     * a cwd that is not a repository, is on a detached HEAD, or could not be
+     * read.
+     *
+     * A column rather than a lookup through `project_path`, because a working
+     * tree has one branch at a time and the whole question this answers is how
+     * two sessions *in that same tree* differ. Deriving it live would paint the
+     * same subtitle on both of them the moment the branch moved, which is the
+     * case the subtitle exists for. See `readGitBranch`'s call site in
+     * `main/sessions.ts` for why it is captured and not followed.
+     */
+    branch: text('branch'),
     /** Path of the discovered project, or null for a cwd chosen another way. */
     projectPath: text('project_path'),
     /** The profile this was launched from. Deliberately not a foreign key - a

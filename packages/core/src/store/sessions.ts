@@ -16,6 +16,8 @@ import { sessions } from './schema'
 export interface NewSession {
   name: string
   cwd: string
+  /** The branch `cwd` was on at spawn, if it was a repository on one. */
+  branch?: string | null
   projectPath?: string | null
   profileId?: number | null
   /** Argv after the executable, as spawned. */
@@ -28,7 +30,9 @@ function toRecord(row: Row): SessionRecord {
   return {
     id: row.id,
     name: row.name,
+    label: row.label,
     cwd: row.cwd,
+    branch: row.branch,
     projectPath: row.projectPath,
     profileId: row.profileId,
     argv: row.argv,
@@ -46,6 +50,7 @@ export function startSession(store: Store, input: NewSession): SessionRecord {
     .values({
       name: input.name,
       cwd: input.cwd,
+      branch: input.branch ?? null,
       projectPath: input.projectPath ?? null,
       profileId: input.profileId ?? null,
       argv: input.argv ?? [],
@@ -85,6 +90,32 @@ export function finishSession(
       )`
     })
     .where(and(eq(sessions.id, id), eq(sessions.status, 'running')))
+    .returning()
+    .get()
+  return row ? toRecord(row) : null
+}
+
+/**
+ * Renames a session - Helm's label for it, not the `-n` name it was spawned
+ * with, which this deliberately does not touch (see `sessions.label` in
+ * `schema.ts` for why the two are separate columns).
+ *
+ * Null clears the label, which is not the same as an empty string: an empty
+ * label would be a tab with no title at all, so it is normalised back to null
+ * and the tab goes back to reading the CLI name. The trim is here rather than at
+ * the caller because every route in - the tab, and anything that comes later -
+ * has the same answer for a field with a space typed into it.
+ *
+ * Returns null for an id that is not there. Rows are not deleted, so that means
+ * a session from a database this build has never seen, and the caller's job is
+ * to say so rather than to write a row.
+ */
+export function renameSession(store: Store, id: number, label: string | null): SessionRecord | null {
+  const trimmed = label?.trim()
+  const row = store.db
+    .update(sessions)
+    .set({ label: trimmed === undefined || trimmed === '' ? null : trimmed })
+    .where(eq(sessions.id, id))
     .returning()
     .get()
   return row ? toRecord(row) : null

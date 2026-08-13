@@ -1415,7 +1415,7 @@ async function effectiveChecks(
 
   // ---- against a live session --------------------------------------------
   const before = ctx.sessions.list().length
-  const launched = ctx.sessions.launchProfile({ profileId: profile.id, cols: 100, rows: 30 })
+  const launched = await ctx.sessions.launchProfile({ profileId: profile.id, cols: 100, rows: 30 })
   await waitFor(() => ctx.sessions.list().length > before, 30_000)
   const id = launched.session.id
 

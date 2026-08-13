@@ -11,7 +11,19 @@ export interface Tab {
   title: string
   /** Shown before the title; the launcher uses the project's kind icon. */
   icon?: ReactNode | undefined
+  /**
+   * A second line under the title, with its own truncation budget.
+   *
+   * Its own *line* is the point rather than a stylistic choice. The strip caps a
+   * tab at 240px, and a scheme where what distinguishes two tabs shares a line
+   * with what they have in common is a scheme that truncates back to identical
+   * tabs at exactly the width where telling them apart starts to matter. Two
+   * lines means the branch on a session tab gets the full width whatever the
+   * title in front of it is doing.
+   */
   subtitle?: string | undefined
+  /** Mono for the subtitle - branches and paths, per DESIGN.md's machine data. */
+  subtitleMono?: boolean | undefined
   closable?: boolean | undefined
   indicator?: TabIndicator | undefined
   /** Hover text. The launcher puts the working directory here. */
@@ -26,6 +38,12 @@ export interface Tab {
    * island-coloured tab on top of it would show a seam.
    */
   ground?: 'island' | 'terminal' | undefined
+  /**
+   * Whether double-clicking the title opens an inline rename. Needs `onRename`
+   * on the bar as well - a tab that says it is renamable and a strip with
+   * nowhere to send the answer is not a state worth having.
+   */
+  renamable?: boolean | undefined
 }
 
 export interface TabBarProps {
@@ -35,6 +53,11 @@ export interface TabBarProps {
   onClose: (id: string) => void
   /** Called with the tab's new index within `tabs`. Omit to disable dragging. */
   onReorder?: ((id: string, toIndex: number) => void) | undefined
+  /**
+   * A tab was renamed. Null means the label was cleared and the caller should go
+   * back to whatever it calls the thing by default. Omit to disable renaming.
+   */
+  onRename?: ((id: string, label: string | null) => void) | undefined
   /** Trailing controls - theme switch, about. Kept out of the tab strip's
    * scroll so they stay reachable when tabs overflow. */
   actions?: ReactNode | undefined
@@ -75,10 +98,13 @@ export function TabBar({
   onActivate,
   onClose,
   onReorder,
+  onRename,
   actions
 }: TabBarProps): JSX.Element | null {
   const [dragging, setDragging] = useState<string | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
+  /** The tab being renamed, or null. One at a time - there is one caret. */
+  const [editing, setEditing] = useState<string | null>(null)
 
   const canReorder = onReorder !== undefined
 
@@ -133,12 +159,19 @@ export function TabBar({
           if (entering instanceof Node && event.currentTarget.contains(entering)) return
           setDropIndex(null)
         }}
-        className="-mb-px flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto overflow-y-hidden pb-px"
+        // `tab-scroll` hides the bar itself; see theme.css for why a strip this
+        // short cannot carry one.
+        className="tab-scroll -mb-px flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto overflow-y-hidden pb-px"
       >
         {tabs.map((tab, index) => {
           const active = tab.id === activeId
-          const reorderable = canReorder && tab.draggable !== false
+          const renaming = editing === tab.id
+          // Not while the caret is in the title: a drag that starts on a focused
+          // input takes the focus with it and commits the edit halfway through
+          // the gesture.
+          const reorderable = canReorder && tab.draggable !== false && !renaming
           const terminalGround = tab.ground === 'terminal'
+          const canRename = onRename !== undefined && tab.renamable === true
           return (
             <div
               key={tab.id}
@@ -188,61 +221,99 @@ export function TabBar({
                 <span aria-hidden className="absolute inset-y-1 right-0 w-[2px] rounded bg-accent" />
               )}
 
-              <button
-                type="button"
-                role="tab"
-                data-tab={tab.id}
-                aria-selected={active}
-                // The state dot is drawn, not written, so the name it would
-                // otherwise be missing is spelled out here instead of hidden in
-                // a visually-hidden span - which would land inside the tab's
-                // own text and glue itself to the title, reading as
-                // "runningapi-server" for a tab called "api-server".
-                aria-label={
-                  tab.indicator === undefined
-                    ? undefined
-                    : `${tab.title}, ${INDICATOR_LABEL[tab.indicator]}`
-                }
-                title={tab.hint}
-                onClick={() => onActivate(tab.id)}
-                onKeyDown={(event) => moveWithKeyboard(event, index)}
-                className={cn(
-                  'flex min-w-0 max-w-[240px] items-center gap-1.5 py-0 pl-3 text-[12px]',
-                  tab.closable === false ? 'pr-3' : 'pr-1',
-                  active
-                    ? // The terminal's ground is fixed in both modes, so the
-                      // text on it is too - fg would go near-black in light
-                      // mode on a surface that stayed dark.
-                      terminalGround
-                      ? 'text-[#dde1ea]'
-                      : 'text-fg'
-                    : 'text-fg-muted group-hover:text-fg'
-                )}
-              >
-                {tab.indicator !== undefined ? (
-                  <span
-                    aria-hidden
-                    className={cn('size-1.5 shrink-0 rounded-full', INDICATOR_CLASS[tab.indicator])}
-                  />
-                ) : (
-                  tab.icon && (
-                    <span className={cn('shrink-0', active ? 'text-accent' : 'text-fg-subtle')}>
-                      {tab.icon}
-                    </span>
-                  )
-                )}
-                <span className="min-w-0 truncate">{tab.title}</span>
-                {tab.subtitle !== undefined && (
-                  <span
-                    className={cn(
-                      'min-w-0 shrink truncate text-[10px]',
-                      active && !terminalGround ? 'text-accent-text' : 'text-fg-subtle'
-                    )}
-                  >
-                    {tab.subtitle}
+              {renaming ? (
+                // Not a `<button role="tab">` for the length of the edit: a text
+                // field inside a button is invalid, and every click meant for
+                // the caret would activate the tab underneath it. The dot and
+                // the subtitle stay put, so the strip does not move.
+                <div
+                  className={cn(
+                    'flex min-w-0 max-w-[240px] items-center gap-1.5 py-0 pl-3 text-[12px]',
+                    tab.closable === false ? 'pr-3' : 'pr-1'
+                  )}
+                >
+                  {tab.indicator !== undefined && (
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'size-1.5 shrink-0 rounded-full',
+                        INDICATOR_CLASS[tab.indicator]
+                      )}
+                    />
+                  )}
+                  <span className="flex min-w-0 flex-col items-stretch">
+                    <TabRename
+                      tabId={tab.id}
+                      initial={tab.title}
+                      terminalGround={terminalGround}
+                      onDone={(label) => {
+                        setEditing(null)
+                        if (label !== undefined) onRename?.(tab.id, label)
+                      }}
+                    />
+                    <Subtitle tab={tab} active={active} terminalGround={terminalGround} />
                   </span>
-                )}
-              </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  role="tab"
+                  data-tab={tab.id}
+                  aria-selected={active}
+                  // The state dot is drawn, not written, so the name it would
+                  // otherwise be missing is spelled out here instead of hidden in
+                  // a visually-hidden span - which would land inside the tab's
+                  // own text and glue itself to the title, reading as
+                  // "runningapi-server" for a tab called "api-server".
+                  aria-label={
+                    tab.indicator === undefined
+                      ? undefined
+                      : `${tab.title}, ${INDICATOR_LABEL[tab.indicator]}`
+                  }
+                  title={tab.hint}
+                  onClick={() => onActivate(tab.id)}
+                  // Double-click, not a menu and not a pencil that appears on
+                  // hover: the tab is the thing being named, so the gesture is
+                  // the one every other strip of renamable labels uses, and it
+                  // costs the strip no pixels at rest.
+                  onDoubleClick={canRename ? () => setEditing(tab.id) : undefined}
+                  onKeyDown={(event) => moveWithKeyboard(event, index)}
+                  className={cn(
+                    'flex min-w-0 max-w-[240px] items-center gap-1.5 py-0 pl-3 text-[12px]',
+                    tab.closable === false ? 'pr-3' : 'pr-1',
+                    active
+                      ? // The terminal's ground is fixed in both modes, so the
+                        // text on it is too - fg would go near-black in light
+                        // mode on a surface that stayed dark.
+                        terminalGround
+                        ? 'text-[#dde1ea]'
+                        : 'text-fg'
+                      : 'text-fg-muted group-hover:text-fg'
+                  )}
+                >
+                  {tab.indicator !== undefined ? (
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'size-1.5 shrink-0 rounded-full',
+                        INDICATOR_CLASS[tab.indicator]
+                      )}
+                    />
+                  ) : (
+                    tab.icon && (
+                      <span className={cn('shrink-0', active ? 'text-accent' : 'text-fg-subtle')}>
+                        {tab.icon}
+                      </span>
+                    )
+                  )}
+                  {/* Title over subtitle, each with the tab's whole width to
+                      truncate in. See `Tab.subtitle`. */}
+                  <span className="flex min-w-0 flex-col items-start">
+                    <span className="min-w-0 max-w-full truncate leading-[15px]">{tab.title}</span>
+                    <Subtitle tab={tab} active={active} terminalGround={terminalGround} />
+                  </span>
+                </button>
+              )}
 
               {tab.closable !== false && (
                 <button
@@ -267,5 +338,124 @@ export function TabBar({
 
       {actions && <div className="mb-1 flex shrink-0 items-center gap-1 self-center px-2">{actions}</div>}
     </div>
+  )
+}
+
+/**
+ * The tab's second line.
+ *
+ * Its own component only because the edit renders it too: the branch a session
+ * is on is the context for what you are about to call it, so it stays on screen
+ * while the title is being typed.
+ *
+ * On an active session tab the colour is pinned rather than a token, for the
+ * reason the title beside it is: that tab's ground is the terminal's fixed
+ * `#11121A` in both modes, and `#9397ab` is the dim value DESIGN.md par. 6
+ * already sanctions on it - the same one the shell pane's header uses for the
+ * running executable.
+ */
+function Subtitle({
+  tab,
+  active,
+  terminalGround
+}: {
+  tab: Tab
+  active: boolean
+  terminalGround: boolean
+}): JSX.Element | null {
+  if (tab.subtitle === undefined) return null
+  return (
+    <span
+      data-tab-subtitle
+      className={cn(
+        'min-w-0 max-w-full truncate text-[10px] leading-[12px]',
+        tab.subtitleMono === true && 'font-mono',
+        active
+          ? terminalGround
+            ? 'text-[#9397ab]'
+            : 'text-accent-text'
+          : 'text-fg-subtle group-hover:text-fg-muted'
+      )}
+    >
+      {tab.subtitle}
+    </span>
+  )
+}
+
+/**
+ * The rename field, open for as long as it has the caret.
+ *
+ * Three rules, and each is about a keystroke going where it was not meant to.
+ *
+ * **It takes the focus, and that is what keeps the terminal out of it.** A
+ * session's terminal only receives what is typed while it holds focus, so an
+ * open edit is already the answer to "does this swallow what the terminal
+ * wants": the two cannot both have the caret. What would break that is the pane
+ * grabbing focus back underneath the edit - `TerminalPane` focuses its terminal
+ * when it *becomes* the visible one, and not on output, so a session printing
+ * into the pane behind this does not disturb it.
+ *
+ * **Escape abandons, Enter and blur commit.** Losing the field by clicking
+ * elsewhere is the commonest way out of an inline edit and must not be the one
+ * that quietly discards what was typed; the deliberate cancel is the key that
+ * means cancel everywhere else in the app.
+ *
+ * **The keys stop here.** `stopPropagation` on the field's own keydown, so the
+ * strip's Ctrl+Shift+Arrow reorder never sees the arrows someone is using to
+ * move the caret. Ctrl+Tab is bound on `window` in capture and still cycles
+ * tabs, which is the right answer: it is a request to leave.
+ *
+ * An empty field commits null rather than an empty string - a tab with no title
+ * is not a state to allow, and clearing the field is the natural way to ask for
+ * the CLI's own name back.
+ */
+function TabRename({
+  tabId,
+  initial,
+  terminalGround,
+  onDone
+}: {
+  tabId: string
+  initial: string
+  terminalGround: boolean
+  /** `undefined` means cancelled and nothing should be written. */
+  onDone: (label: string | null | undefined) => void
+}): JSX.Element {
+  const [value, setValue] = useState(initial)
+
+  return (
+    <input
+      // Keyed by the tab so switching which tab is being renamed remounts the
+      // field rather than carrying the previous tab's text into it.
+      key={tabId}
+      data-tab-rename={tabId}
+      aria-label="Rename this tab"
+      value={value}
+      autoFocus
+      onFocus={(event) => event.currentTarget.select()}
+      onChange={(event) => setValue(event.target.value)}
+      onKeyDown={(event) => {
+        event.stopPropagation()
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          onDone(undefined)
+        } else if (event.key === 'Enter') {
+          event.preventDefault()
+          onDone(value.trim() === '' ? null : value.trim())
+        }
+      }}
+      onBlur={() => onDone(value.trim() === '' ? null : value.trim())}
+      className={cn(
+        'w-full min-w-0 rounded-[4px] border px-1 py-0 text-[12px] leading-[15px] outline-none',
+        // A themed input on a tab whose ground stays `#11121A` in both modes
+        // would drop a white field onto a dark tab in light mode. Every value
+        // here is pinned for that reason and no other - DESIGN.md par. 6, the
+        // foreign-ground hex exception, the same one the shell pane's picker
+        // takes. `#0d0e17` is the dark ramp's sunken value.
+        terminalGround
+          ? 'border-[#9184d9] bg-[#0d0e17] text-[#dde1ea] selection:bg-[#9184d9]/30'
+          : 'border-accent bg-surface-sunken text-fg'
+      )}
+    />
   )
 }

@@ -88,7 +88,19 @@ packaging phase runs outside the app.
 
 **`sessions-check`** - sessions, tabs, teardown. Drives the window: sidebar rows, the
 launch button, tabs and their close buttons, asserting on processes, xterm grids
-and database rows. Then `scripts/verify-orphans.mjs` confirms nothing survived.
+and database rows. **Three phases** now, orchestrated by `run-sessions.mjs`: the
+driver, a second real app start (`--sessions-restart`), then
+`scripts/verify-orphans.mjs`, which confirms nothing survived and which reads the
+report so it has to be told where that is.
+
+Two things in it are worth copying. SESS-11 counts **pty writes** while the
+rename field has the caret, by wrapping `sessions.input` on the host - "the
+terminal did not get that keystroke" has no other witness, and the mutation that
+proves the counter is live puts nine of them in the pty. And SESS-14 is the
+second phase, because "the name someone gave a tab survived a restart" is not a
+claim the process that set it can make: the session itself does not survive
+either - `before-quit` ends it - so what phase two goes looking for is the
+`sessions.label` row, read by a process that never saw the rename happen.
 
 **`profiles-check`** - profiles and overlay composition. Builds a profile through the
 real form, launches it, and asks the live session whether the overlays' skills
@@ -215,18 +227,28 @@ gets looked at rather than reasoned about. Measure a suspect edge in the PNG
 rather than eyeballing it - `System.Drawing` from PowerShell is enough to scan a
 column for an island's top and bottom edge.
 
-Four groups, `--only=` like the checks (`GROUPS` in `designshot.ts` is the
+Five groups, `--only=` like the checks (`GROUPS` in `designshot.ts` is the
 authority): **views** is the walk itself, **states** the collapsed section and
 the five hover probes,
-**responsive** a width sweep over the two scoped pane headers, and **split** a
-pane docked beside a real session at four widths. Two of them are worth knowing
-about. `responsive` **prints numbers** - each header's `overflow` and `spill`,
-the second being how far a child reaches past the padding box, which is the
-failure a thumbnail does not show and the one the header bug was found by.
-And `split` is the only group that spawns a session, and the only one that
-reaches pane widths below the ~596px the window's own `minWidth` leaves: the
-divider is bounded at a *fraction* of the row, so it docks far narrower than
+**responsive** a width sweep over the two scoped pane headers, **split** a
+pane docked beside a real session at four widths, and **tabs** the session strip
+holding six sessions on one project at the window's `minWidth`. Three of them are
+worth knowing about. `responsive` **prints numbers** - each header's `overflow`
+and `spill`, the second being how far a child reaches past the padding box, which
+is the failure a thumbnail does not show and the one the header bug was found by.
+`split` reaches pane widths below the ~596px the window's own `minWidth` leaves:
+the divider is bounded at a *fraction* of the row, so it docks far narrower than
 any window can be made.
+
+And `tabs` is the crowded strip, which is a *state* rather than a view and is not
+reachable by clicking through the walk: it launches six real sessions on one
+project, renames two of them through the real double-click, and shoots the strip
+split and maximised in both themes. It prints numbers for the same reason
+`responsive` does - a tab whose branch has been ellipsised looks slightly
+shorter, not wrong, so each line reports the tab's width and whether either of
+its two lines is being cut. It and `split` are the two groups that spawn
+sessions; `tabs` closes its own before it returns, so the two do not photograph
+each other's tabs.
 
 `states` **prints numbers too**. Five named probes: each moves the pointer away,
 moves it onto the element that carries the class, and reports background, border

@@ -14,8 +14,16 @@ export interface ProjectRowProps {
   project: Project
   selected: boolean
   onSelect: (project: Project) => void
-  /** A session is running in this project - the green dot beside the name. */
-  live?: boolean | undefined
+  /**
+   * What the sessions running in this project are called - the green dot beside
+   * the name, and what its tooltip says.
+   *
+   * Names rather than a boolean, because the dot is the tree's only admission
+   * that a session exists and "a session is running here" stops being an answer
+   * at the second one. They arrive already resolved through `sessionLabel`, so
+   * this row calls a session what its tab calls it.
+   */
+  liveNames?: readonly string[] | undefined
   /** In the Pinned section rather than under its harness. */
   pinned?: boolean | undefined
   /** Omitted, the row carries no star at all. */
@@ -47,11 +55,12 @@ export function ProjectRow({
   project,
   selected,
   onSelect,
-  live = false,
+  liveNames,
   pinned = false,
   onTogglePin
 }: ProjectRowProps): JSX.Element {
   const KindIcon = KIND_ICON[project.kind]
+  const live = liveNames !== undefined && liveNames.length > 0
 
   return (
     <div className="group relative">
@@ -104,7 +113,12 @@ export function ProjectRow({
             {live && (
               <span
                 aria-hidden
-                title="A session is running here"
+                data-live-sessions={liveNames?.join(', ')}
+                title={
+                  liveNames?.length === 1
+                    ? `${liveNames[0] ?? ''} is running here`
+                    : `${String(liveNames?.length ?? 0)} sessions running here: ${liveNames?.join(', ') ?? ''}`
+                }
                 className="size-[5px] shrink-0 rounded-full bg-success"
               />
             )}

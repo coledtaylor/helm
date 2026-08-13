@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_SETTINGS,
   isProjectPinned,
+  sessionLabel,
   withProjectPinned,
   withRepoIgnored,
   type HistorySession,
@@ -852,16 +853,42 @@ export function App(): JSX.Element {
     const indicator: TabIndicator =
       session.status === 'running' ? 'running' : session.exitCode ? 'failed' : 'ended'
     const project = session.projectPath ? projectsByPath.get(session.projectPath) : undefined
+    const label = sessionLabel(session)
+    /**
+     * The branch first, and the project's name only when there is no branch.
+     *
+     * Several sessions against one project is the normal case - that is what
+     * tabs are for - and in that case the titles are `dev`, `dev 2`, `dev 3`,
+     * none of which says what the session is doing. The branch is what those
+     * sessions actually differ by, and the subtitle slot is empty in precisely
+     * that case, because the old rule only painted when the project's name
+     * differed from the session's.
+     *
+     * `session.branch` is the branch the cwd was on **when the session was
+     * spawned**, captured on the row - not a live reading. The argument for
+     * that is at the capture site in `main/sessions.ts`; the short version is
+     * that two sessions in one working tree share a HEAD, so a live reading
+     * would give them the same subtitle.
+     *
+     * A cwd that is not a repository has no branch, and there the old rule
+     * keeps its turn: the project's name, when it is not already the title.
+     */
+    const subtitle =
+      session.branch ?? (project && project.name !== label ? project.name : undefined)
     return [
       {
         id: sessionTabId(id),
-        title: session.name,
-        hint: `${session.name} · ${session.cwd}`,
-        ...(project && project.name !== session.name ? { subtitle: project.name } : {}),
+        title: label,
+        hint: `${label} · ${session.cwd}`,
+        ...(subtitle === undefined ? {} : { subtitle }),
+        // A branch is machine data and reads in mono (DESIGN.md); a project's
+        // name is a name.
+        subtitleMono: session.branch !== null,
         indicator,
         // A session tab lifts into the terminal's fixed ground, not the
         // island's - see Tab.ground.
-        ground: 'terminal' as const
+        ground: 'terminal' as const,
+        renamable: true
       }
     ]
   })
@@ -870,15 +897,24 @@ export function App(): JSX.Element {
     activePane?.kind === 'project' ? (projectsByPath.get(activePane.path) ?? null) : null
   const selectedPath = activeProject?.path ?? null
   const runningSessions = sessions.filter((session) => session.status === 'running').length
-  // Which sidebar rows get a live dot: the projects with a running session.
-  const livePaths = useMemo(() => {
-    const paths = new Set<string>()
+  /**
+   * Which sidebar rows get a live dot, and what those sessions are called.
+   *
+   * The labels travel with the paths rather than the sidebar being handed a
+   * count, so the row's tooltip names the sessions running there the same way
+   * their tabs do - through `sessionLabel`, the one helper, so a renamed session
+   * cannot be one thing in the strip and another in the tree.
+   */
+  const liveSessions = useMemo(() => {
+    const byPath = new Map<string, string[]>()
     for (const session of sessions) {
-      if (session.status === 'running' && session.projectPath !== null) {
-        paths.add(session.projectPath.toLowerCase())
-      }
+      if (session.status !== 'running' || session.projectPath === null) continue
+      const key = session.projectPath.toLowerCase()
+      const names = byPath.get(key)
+      if (names) names.push(sessionLabel(session))
+      else byPath.set(key, [sessionLabel(session)])
     }
-    return paths
+    return byPath
   }, [sessions])
 
   /**
@@ -998,7 +1034,7 @@ export function App(): JSX.Element {
       sidebar={
         !showWorkspace ? null : (
         <Sidebar
-          livePaths={livePaths}
+          liveSessions={liveSessions}
           profiles={
             <ProfileList
               profiles={profileState.profiles}
@@ -1548,6 +1584,7 @@ export function App(): JSX.Element {
               onActivate={(id) => setRequestedSession(sessionIdFromTab(id))}
               onClose={(id) => closeSession(sessionIdFromTab(id))}
               onReorder={reorderSessions}
+              onRename={(id, label) => void sessionState.rename(sessionIdFromTab(id), label)}
               actions={
                 <PaneMaxButton
                   maximized={effectiveMaximize === 'sessions'}
