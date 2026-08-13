@@ -92,6 +92,7 @@ export {
   type PullComment,
   type PullCommit,
   type PullConversationEntry,
+  type PullConversationItem,
   type PullDetail,
   type PullDetailView,
   type PullDiff,
@@ -105,9 +106,15 @@ export {
   type PullRepo,
   type PullReview,
   type PullReviewDecision,
+  type PullReviewThread,
   type PullSummary,
   type PullsSnapshot,
+  type PullThreadComment,
+  type PullThreadEntry,
   type RenderedPullEntry,
+  type RenderedPullItem,
+  type RenderedPullThread,
+  type RenderedThreadComment,
   type RepoRemote
 } from './github/types'
 /**

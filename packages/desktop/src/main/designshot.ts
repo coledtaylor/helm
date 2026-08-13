@@ -1,4 +1,5 @@
 import type { BrowserWindow } from 'electron'
+import { readPull, writePullDetail, type PullDetail, type Store } from '@helm/core'
 import type { CheckContext } from './sessionscheck'
 import { screenshot, sendMouse, sleep } from './bridge'
 
@@ -248,6 +249,192 @@ async function shootProjectRepo(
   await sleep(600)
   const shot = await screenshot(win, outDir, `project-repo-${theme}.png`)
   return shot.file
+}
+
+/**
+ * A pull request's Conversation, with review threads in it.
+ *
+ * Two clicks past everything else in this walk, and the one view whose hardest
+ * design question - does a thread *read* as one entity - cannot be answered
+ * from any of the shots above. It carries the states worth arguing over at
+ * once: an open thread with replies indented under a hairline, a resolved one
+ * collapsed to its header, an outdated one whose header shows the original line
+ * because it has no current one, and a review with a verdict and no body, which
+ * is what a review made entirely of inline notes looks like.
+ *
+ * The threads are **planted in the cache and taken out again**, the same
+ * write/shoot/restore the pinned sidebar and the ignore list use. Nothing else
+ * would do: this run's `gh` is the real one, so what is on the machine is
+ * whatever the developer's own repositories happen to have, and a shot that is
+ * empty on most machines is a shot nobody looks at. Planting is also the honest
+ * code path - `pr:detail` paints a held detail without running gh at all, which
+ * is exactly what a person opening a cached pull request gets.
+ */
+async function shootPullThreads(
+  win: BrowserWindow,
+  outDir: string,
+  theme: string,
+  store: Store
+): Promise<string | null> {
+  const found = await js<{ path: string; slug: string; number: number } | null>(
+    win,
+    `window.helm.invoke('pr:snapshot').then((s) => {
+       const repo = s.repos.find((r) => r.pulls.length > 0)
+       return repo ? { path: repo.path, slug: repo.slug, number: repo.pulls[0].number } : null
+     })`
+  ).catch(() => null)
+  if (found === null) {
+    console.error('design-shot: no cached pull request to open, so no thread shot')
+    return null
+  }
+
+  const row = readPull(store, found.slug, found.number)
+  if (row === null) {
+    console.error(`design-shot: ${found.slug}#${String(found.number)} is not in the cache`)
+    return null
+  }
+  const before = row.detail
+
+  writePullDetail(store, found.slug, found.number, threadFixture(before))
+  await click(win, '[data-open-pulls]')
+  await sleep(400)
+  await click(win, `[data-pull="${found.slug}#${String(found.number)}"]`)
+  const opened = await pollJs(win, `document.querySelector('[data-pr-thread]')`, 20_000)
+  if (!opened) console.error('design-shot: the planted threads never painted')
+  await sleep(700)
+  const shot = await screenshot(win, outDir, `pr-threads-${theme}.png`)
+
+  // The tab goes, then the row goes back. The tab first, because the pane holds
+  // what it painted and would put the planted threads back on screen otherwise.
+  await closeAllTabs(win)
+  await sleep(300)
+  if (before !== null) writePullDetail(store, found.slug, found.number, before)
+  return shot.file
+}
+
+/**
+ * A detail with three threads on it, built onto whatever was cached.
+ *
+ * Built **onto** rather than instead of: the body, the commits and the file
+ * list are the pull request's real ones, so the shot is of Helm's layout rather
+ * than of a mock. Only the threads are invented, and they are invented because
+ * this machine's pull requests may have none.
+ */
+function threadFixture(held: PullDetail | null): PullDetail {
+  const base: PullDetail = held ?? {
+    body: '',
+    comments: [],
+    reviews: [],
+    commits: [],
+    files: [],
+    checks: null,
+    mergeStateStatus: ''
+  }
+  const path = base.files[0]?.path ?? 'packages/core/src/github/gh.ts'
+  const at = (hours: number): number => Date.now() - hours * 3_600_000
+  const person = (
+    id: string,
+    author: string,
+    association: string,
+    body: string,
+    hours: number
+  ): PullDetail['comments'][number] => ({
+    id,
+    author,
+    authorIsBot: false,
+    association,
+    body,
+    createdAt: at(hours),
+    url: ''
+  })
+
+  return {
+    ...base,
+    // A review with a verdict and no body: the shape a review made entirely of
+    // inline notes has, and the one this change stopped being a dead end.
+    reviews: [
+      ...base.reviews,
+      {
+        id: 'design-shot-review',
+        author: 'reviewer-two',
+        authorIsBot: false,
+        association: 'COLLABORATOR',
+        state: 'CHANGES_REQUESTED',
+        body: '',
+        submittedAt: at(3)
+      }
+    ],
+    reviewThreads: [
+      {
+        id: 'design-shot-thread-1',
+        path,
+        line: 118,
+        originalLine: 118,
+        diffHunk: [
+          '@@ -110,6 +110,9 @@ export async function fetchReviewThreads(',
+          '   const threads: PullReviewThread[] = []',
+          '   let cursor: string | null = null',
+          '+  for (let page = 0; page < MAX_THREAD_PAGES; page++) {'
+        ].join('\n'),
+        isResolved: false,
+        isOutdated: false,
+        comments: [
+          person(
+            'design-shot-c1',
+            'reviewer-two',
+            'COLLABORATOR',
+            'This walks `reviewThreads`, but the comments **inside** a thread page too - a thread somebody argued in would stop at fifty.',
+            3.5
+          ),
+          person(
+            'design-shot-c2',
+            'coledtaylor',
+            'OWNER',
+            'Good catch. Continuing by node id now, so reaching reply 51 does not re-fetch the fifty threads beside it.',
+            3.2
+          ),
+          person('design-shot-c3', 'reviewer-one', 'MEMBER', 'Reads right to me.', 3)
+        ]
+      },
+      {
+        id: 'design-shot-thread-2',
+        path,
+        line: 47,
+        originalLine: 47,
+        diffHunk: '@@ -45,3 +45,4 @@\n   const said = firstMeaningfulLine(run.stderr)\n+  throw new Error(said)',
+        isResolved: true,
+        isOutdated: false,
+        comments: [
+          person(
+            'design-shot-c4',
+            'reviewer-one',
+            'MEMBER',
+            'Settled - this one was already handled upstream.',
+            2.5
+          )
+        ]
+      },
+      {
+        id: 'design-shot-thread-3',
+        path: base.files[1]?.path ?? 'README.md',
+        line: null,
+        originalLine: 88,
+        diffHunk: '@@ -86,2 +86,3 @@\n-  A paragraph that has since moved.\n+  A paragraph that has since moved, twice.',
+        isResolved: false,
+        isOutdated: true,
+        comments: [
+          person(
+            'design-shot-c5',
+            'reviewer-three',
+            'MEMBER',
+            'The diff moved under this one - leaving the note for the record.',
+            2
+          )
+        ]
+      }
+    ],
+    reviewThreadsFetchedAt: at(1.5)
+  }
 }
 
 /**
@@ -601,6 +788,12 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
       if (view.name === 'pulls') {
         const ignored = await shootIgnored(win, outDir, theme, ignoredBefore)
         if (ignored !== null) files.push(ignored)
+
+        // And a pull request's own tab, two clicks past everything else in the
+        // walk - the one place a review thread is drawn, and the one design
+        // question here a list of pull requests cannot answer.
+        const threads = await shootPullThreads(win, outDir, theme, ctx.services.store)
+        if (threads !== null) files.push(threads)
       }
     }
 

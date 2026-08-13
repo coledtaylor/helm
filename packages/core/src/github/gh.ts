@@ -2,14 +2,18 @@ import { execFile } from 'node:child_process'
 import {
   PR_LIST_FIELDS,
   PR_LIST_LIMIT,
+  PR_THREAD_COMMENTS_QUERY,
+  PR_THREADS_QUERY,
   PR_VIEW_FIELDS,
   parseGhAuth,
   parseGhVersion,
   parsePullDetail,
+  parseReviewThreadPage,
+  parseThreadCommentPage,
   parsePullList
 } from './parse'
 import type { GhAuthReading } from './parse'
-import type { PullDetail, PullPatch, PullSummary } from './types'
+import type { PullDetail, PullPatch, PullReviewThread, PullSummary } from './types'
 
 /**
  * Running the user's own `gh`.
@@ -194,6 +198,145 @@ export async function fetchPullDetail(
     throw new Error(said)
   }
   return parsePullDetail(run.stdout)
+}
+
+/**
+ * How many pages of each connection the thread fetch will walk.
+ *
+ * A ceiling and not a page size - the page sizes are in the queries. Twenty
+ * pages of fifty is a thousand threads and a thousand replies to any one of
+ * them, which is far past any pull request a person reads and far short of an
+ * unbounded loop against somebody's rate limit. A pull request that goes over
+ * it keeps what was read; the alternative is a fetch that never returns.
+ */
+const MAX_THREAD_PAGES = 20
+
+/**
+ * Every comment left on a line of the diff, threads and all.
+ *
+ * A **second call** beside `fetchPullDetail` rather than more fields on it, and
+ * not by choice: `gh pr view --json` cannot see these at all. Its `comments`
+ * are the issue-level ones from the conversation tab and its `reviews` are each
+ * review's summary body; the notes people leave on individual lines are review
+ * threads and are absent from that surface entirely. So this asks GitHub's
+ * GraphQL API - through `gh api graphql`, which means it is still the user's
+ * own `gh` on the user's own token, and nothing here handles a credential any
+ * more than the rest of this file does.
+ *
+ * Not the REST `pulls/{n}/comments` endpoint, which `gh api` could equally have
+ * called. REST hands over `in_reply_to_id`, which is enough to rebuild the
+ * threading, and it carries **neither `isResolved` nor `isOutdated`** - and a
+ * resolved thread painted identically to a live one reads as an objection
+ * nobody ever answered, which is a worse answer than no threads at all.
+ *
+ * **Both connections page**, and both are walked. `reviewThreads` pages, and so
+ * do the comments *inside* each thread - a pull request with a long review is
+ * exactly the case where the first matters and a thread somebody argued in is
+ * where the second does. The inner walk is per thread and by node id, so
+ * reaching reply 51 of one thread does not re-fetch the fifty threads beside
+ * it.
+ *
+ * Rejects with gh's own first line of complaint, like every other fetch here.
+ * The caller keeps whatever threads it had and says the age of them.
+ */
+export async function fetchReviewThreads(
+  command: GhCommand,
+  slug: string,
+  number: number,
+  options: { timeoutMs?: number } = {}
+): Promise<PullReviewThread[]> {
+  const [owner, name] = slug.split('/')
+  if (owner === undefined || name === undefined || owner === '' || name === '') {
+    throw new Error(`${slug} is not an owner/name repository`)
+  }
+
+  const threads: PullReviewThread[] = []
+  let cursor: string | null = null
+
+  for (let page = 0; page < MAX_THREAD_PAGES; page++) {
+    const stdout = await graphql(
+      command,
+      PR_THREADS_QUERY,
+      [
+        // `-f` for the two strings and `-F` for the one Int, which is what the
+        // query declares them as. `-F` on the owner would type-convert a
+        // repository whose name is a number into a JSON number and the query
+        // would be refused.
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `name=${name}`,
+        '-F',
+        `number=${String(number)}`,
+        // Omitted rather than sent as null on the first page: a nullable
+        // variable nobody supplies is an argument that is not there, which is
+        // exactly "start at the beginning", and it needs no agreement with gh
+        // about how it spells a JSON null on a command line.
+        ...(cursor === null ? [] : ['-f', `cursor=${cursor}`])
+      ],
+      options
+    )
+
+    const answer = parseReviewThreadPage(stdout)
+    for (const parsed of answer.threads) {
+      threads.push({
+        ...parsed.thread,
+        comments: parsed.comments.hasNextPage
+          ? [
+              ...parsed.thread.comments,
+              ...(await restOfThread(command, parsed.thread.id, parsed.comments.endCursor, options))
+            ]
+          : parsed.thread.comments
+      })
+    }
+
+    if (!answer.page.hasNextPage || answer.page.endCursor === null) break
+    cursor = answer.page.endCursor
+  }
+
+  return threads
+}
+
+/** Replies 51 and on of one thread, by node id. */
+async function restOfThread(
+  command: GhCommand,
+  id: string,
+  from: string | null,
+  options: { timeoutMs?: number }
+): Promise<PullReviewThread['comments']> {
+  const rest: PullReviewThread['comments'] = []
+  let cursor = from
+  for (let page = 0; page < MAX_THREAD_PAGES && cursor !== null; page++) {
+    const stdout = await graphql(
+      command,
+      PR_THREAD_COMMENTS_QUERY,
+      ['-f', `id=${id}`, '-f', `cursor=${cursor}`],
+      options
+    )
+    const answer = parseThreadCommentPage(stdout)
+    rest.push(...answer.comments)
+    cursor = answer.page.hasNextPage ? answer.page.endCursor : null
+  }
+  return rest
+}
+
+/** One `gh api graphql`, with the query passed as a raw string field. */
+async function graphql(
+  command: GhCommand,
+  query: string,
+  fields: string[],
+  options: { timeoutMs?: number }
+): Promise<string> {
+  const run = await runGh(
+    command,
+    ['api', 'graphql', '-f', `query=${query}`, ...fields],
+    options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}
+  )
+  if (!run.ok) {
+    const said = firstMeaningfulLine(run.stderr) ?? run.error ?? 'gh failed with no output'
+    throw new Error(said)
+  }
+  return run.stdout
 }
 
 /**

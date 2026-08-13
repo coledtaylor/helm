@@ -5,23 +5,33 @@
 export { parseGitHubRemote } from './remote'
 export {
   classifyGhFailure,
+  heldReviewThreads,
   parseGhAuth,
   parseGhVersion,
   parsePullDetail,
   parsePullList,
+  parseReviewThreadPage,
+  parseThreadCommentPage,
   pullConversation,
   reduceChecks,
   PR_LIST_FIELDS,
   PR_LIST_LIMIT,
+  PR_THREAD_COMMENTS_QUERY,
+  PR_THREADS_QUERY,
   PR_VIEW_FIELDS,
   type GhAuthReading,
-  type GhFailureKind
+  type GhFailureKind,
+  type PageCursor,
+  type ParsedReviewThread,
+  type ReviewThreadPage,
+  type ThreadCommentPage
 } from './parse'
 export {
   checkoutPull,
   fetchOpenPulls,
   fetchPullDetail,
   fetchPullDiff,
+  fetchReviewThreads,
   readGhAuth,
   readGhVersion,
   runGh,

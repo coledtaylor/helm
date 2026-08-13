@@ -542,12 +542,13 @@ session is a feature that belongs somewhere else.
 > [!note] Built 2026-08-11 - pull requests
 > Four v1 limits, flagged rather than discovered later.
 >
-> **Inline diff-thread comments are invisible to `gh --json`.** The JSON surface
-> exposes issue-level comments and each review's summary body; the notes people
-> leave on individual lines live on a review thread and are not in it at all. A
-> `gh api` GraphQL query would reach them. The conversation says so at the
-> bottom, because a conversation missing half its replies with no explanation
-> reads as a bug.
+> **~~Inline diff-thread comments are invisible to `gh --json`.~~** *Superseded
+> 2026-08-13 - see "The conversation carries the diff-line threads" below.* The
+> JSON surface exposes issue-level comments and each review's summary body; the
+> notes people leave on individual lines live on a review thread and are not in
+> it at all. A `gh api` GraphQL query would reach them. The conversation said so
+> at the bottom, because a conversation missing half its replies with no
+> explanation reads as a bug.
 >
 > **`origin` only.** `upstream` and renamed remotes are unmapped - a cheap later
 > extension, and one nobody has asked for yet.
@@ -569,8 +570,9 @@ session is a feature that belongs somewhere else.
 > read. Null and `{total: 0}` are different facts and only one of them is safe
 > to show as a green tick.
 >
-> `pnpm pr-check` is the regression test: 16 checks in five phases, four of them
-> against a `gh` the repository wrote and one against the real one.
+> `pnpm pr-check` is the regression test: five phases, four of them against a
+> `gh` the repository wrote and one against the real one. The driver's own list
+> of ids is the count.
 
 > [!note] The Files view shows the patch (2026-08-11)
 > Supersedes "No diff viewer" above, which was right about the reason and wrong
@@ -580,9 +582,12 @@ session is a feature that belongs somewhere else.
 > **no syntax highlighting** - a diff row is plain mono text with a tint, which
 > also keeps the tint the loudest thing in the row; **no whitespace modes**; **no
 > side-by-side**; and **no review threads**, which is the `gh --json` limit above
-> and is why the Files view still ends in a link to GitHub. What is left after
-> those is a patch, which is text: `gh pr diff` prints the whole of one, and
-> turning it into rows is a parser with a test suite rather than a subsystem.
+> and is why the Files view still ends in a link to GitHub. (The threads half of
+> that was lifted on 2026-08-13 - they are fetched and they are in Conversation.
+> What the *Files* view still does not do is anchor a thread marker into the diff
+> row it belongs to.) What is left after those is a patch, which is text: `gh pr
+> diff` prints the whole of one, and turning it into rows is a parser with a test
+> suite rather than a subsystem.
 >
 > Three decisions the shape rests on:
 >
@@ -604,6 +609,71 @@ session is a feature that belongs somewhere else.
 > `statusCheckRollup` moved onto the **list** fetch in the same change, so a row
 > can say which branch is green without being opened. It costs payload rather
 > than requests - the rollups come back inside the query the poll already makes.
+
+> [!note] The conversation carries the diff-line threads (2026-08-13)
+> Supersedes "Inline diff-thread comments are invisible to `gh --json`" above.
+> The limit was real and the follow-up it named is this one.
+>
+> Most of a review's substance is left on lines of the diff, and a `claude`
+> review's output lands there almost entirely - so a Conversation without them
+> painted a review as a bare verdict and a pull request as one nobody had said
+> anything on. They are now a **third fetch**, beside `pr view` and `pr diff`
+> and running with them: `gh api graphql` over `pullRequest.reviewThreads`.
+> Still `gh`, still the user's own token, still no credential anywhere near Helm.
+>
+> **GraphQL and not the REST `pulls/{n}/comments` endpoint**, which `gh api`
+> could equally have called. REST gives `in_reply_to_id` - enough to rebuild the
+> threading - and carries neither `isResolved` nor `isOutdated`. A resolved
+> thread painted identically to a live one reads as an objection nobody ever
+> answered, which is a worse answer than no threads at all.
+>
+> **Both connections page and both are walked.** `reviewThreads` pages, and so do
+> the comments inside each thread; the inner one is per thread and by node id, so
+> reaching reply 51 of one thread does not re-fetch the fifty beside it. A pull
+> request with a long review is exactly the case that breaks a fetch which takes
+> the first page and stops.
+>
+> **The query is one line, and that is load-bearing.** On Windows a `gh`
+> installed by scoop or npm is a batch file, so it is run through `cmd.exe /c` -
+> and cmd ends its command line at the first newline whatever the quoting.
+> Measured on 2.86 against a `.cmd` shim: a pretty-printed query arrived
+> truncated at `query($owner: String!,` with every `-f` after it gone, the
+> request was still made, and it exited 0.
+>
+> **`undefined` and `[]` are different facts and may never collapse.** The
+> threads ride inside `PullDetail`, so every row cached before this shipped has
+> no key for them - and `[]` on such a row would be Helm stating, about a pull
+> request it has never asked the question of, that nobody annotated the diff.
+> Absent is "not fetched" and paints a sentence naming the remedy; `[]` is
+> "asked, and there are none" and paints nothing. `JSON.stringify` drops an
+> undefined value, so the distinction survives the cache by construction, and
+> `heldReviewThreads` is the one place it is read - anything that is not an array
+> collapses to *not fetched*, which is the safe direction.
+>
+> **It degrades the PR way.** A thread query that fails keeps the threads it had
+> with their age painted beside the reason, and leaves the body, the comments and
+> the reviews alone. This is the opposite call to the one the patch makes, and
+> the difference is what each is anchored to: a patch describes a file list that
+> has just been replaced, while a thread is anchored to a path and a line and
+> carries the hunk it was written against. Only a missing `gh` binary stops a
+> pass (`PR-20`).
+>
+> A thread is **one entity** on screen - `path:line` in mono, its hunk as
+> collapsed context and painted as text like every other diff on this surface,
+> and the replies visibly subordinate to the note that started them. Threads
+> merge into the conversation's chronology at their **first** comment, because a
+> thread opened on Monday and replied to on Friday is a Monday remark. Resolved
+> threads start collapsed; outdated ones do not, since outdated only means the
+> diff moved.
+>
+> Still not done, and its own piece of work: **anchoring a thread marker into the
+> Files view's diff rows**. It needs a thread's line matched onto a hunk whose
+> numbering came from a different fetch, and the Files footer points at
+> Conversation meanwhile.
+>
+> `pnpm pr-check` grew five checks for it (`PR-25` to `PR-29`), including a
+> fixture of 120 threads one of which has 130 replies - past both page sizes,
+> and asserted to be past them before the probe's pass is believed.
 
 ---
 

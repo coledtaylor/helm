@@ -25,7 +25,14 @@
 //     list/<owner>__<name>.json          `gh pr list --json ...` output
 //     view/<owner>__<name>__<n>.json     `gh pr view <n> --json ...` output
 //     diff/<owner>__<name>__<n>.patch    `gh pr diff <n>` output
+//     threads/<owner>__<name>__<n>.json  the review threads, as GraphQL nodes
 //     invocations.jsonl                  every call: argv, cwd, exit code
+//
+// The threads fixture is the one that is **paged rather than handed over**. It
+// holds every thread as one array, and this script cuts it into pages at
+// whatever `first:` the shipped query asks for - so a driver that wants to
+// prove the pagination loop writes 120 threads and lets the page size come
+// from the code under test rather than from an agreement with it.
 //
 // The second mode, `HELM_FAKE_GH_SYNTHETIC=1`, has no fixture directory and is
 // what `pnpm dev` runs against. See `synthesise` at the bottom of this file for
@@ -33,7 +40,7 @@
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { appendFileSync, existsSync, readFileSync, writeSync } from 'node:fs'
+import { appendFileSync, existsSync, readdirSync, readFileSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 
 const home = process.env.HELM_FAKE_GH_HOME ?? ''
@@ -87,6 +94,55 @@ function fail(text, code = 1) {
 function flag(name) {
   const at = args.indexOf(name)
   return at >= 0 ? (args[at + 1] ?? '') : ''
+}
+
+/**
+ * Every `-f key=value` / `-F key=value` on the line, as a map.
+ *
+ * `flag()` cannot do this: `gh api graphql` repeats `-f` once per variable and
+ * `indexOf` finds only the first, which would read every query's variables as
+ * whatever the query string happened to be called.
+ */
+function fields() {
+  const found = {}
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== '-f' && args[i] !== '-F') continue
+    const pair = args[i + 1] ?? ''
+    const at = pair.indexOf('=')
+    if (at > 0) found[pair.slice(0, at)] = pair.slice(at + 1)
+  }
+  return found
+}
+
+/**
+ * The page size the **query** asked for, read out of the query text.
+ *
+ * Read rather than agreed, so a fixture proves the pagination loop that ships
+ * rather than one written to match it: if the query is changed to ask for a
+ * hundred at a time, this fake starts handing over a hundred at a time and the
+ * driver's count still has to come out right.
+ */
+function firstOf(query, connection, fallback) {
+  const found = new RegExp(`${connection}\\(first:\\s*(\\d+)`).exec(query ?? '')
+  return found === null ? fallback : Number(found[1])
+}
+
+/** One `nodes`/`pageInfo` slice of an array, cut at `after`. */
+function connectionOf(all, size, after) {
+  const from = after === '' || after === undefined ? 0 : Number(after)
+  const start = Number.isFinite(from) ? from : 0
+  const nodes = all.slice(start, start + size)
+  const next = start + nodes.length
+  return {
+    pageInfo: {
+      hasNextPage: next < all.length,
+      // The cursor is an offset written as a string. GitHub's is an opaque
+      // base64 blob and Helm treats it as opaque, which is exactly what makes
+      // any stable string do here.
+      endCursor: all.length === 0 ? null : String(next)
+    },
+    nodes
+  }
 }
 
 const how = behaviour()
@@ -156,6 +212,85 @@ if (args[0] === 'pr' && args[1] === 'diff') {
   const file = join(home, 'diff', `${slug.replace('/', '__')}__${number}.patch`)
   if (!existsSync(file)) fail(`no pull requests found for ${slug}#${number}`)
   out(readFileSync(file, 'utf8'))
+}
+
+if (args[0] === 'api' && args[1] === 'graphql') {
+  const vars = fields()
+  if (how.threads === 'error') fail(how.threadsError ?? 'HTTP 502: the fixture is unwell')
+  // A `data` with the connection missing from it - the shape GitHub returns
+  // for a pull request it will not resolve, which Helm must read as "the query
+  // did not run" rather than as "there are no threads".
+  if (how.threads === 'absent') {
+    out(`${JSON.stringify({ data: { repository: { pullRequest: null } } })}\n`)
+  }
+
+  // The continuation query names a thread by node id; the page query names a
+  // repository and a number. Which one this is, is which variables arrived.
+  if (vars.id !== undefined) {
+    const all = threadById(vars.id)
+    if (all === null) fail(`Could not resolve to a node with the global id of '${vars.id}'`)
+    out(
+      `${JSON.stringify({
+        data: {
+          node: {
+            comments: connectionOf(all, firstOf(vars.query, 'comments', 50), vars.cursor ?? '')
+          }
+        }
+      })}\n`
+    )
+  }
+
+  const slug = `${vars.owner ?? ''}/${vars.name ?? ''}`
+  const file = join(home, 'threads', `${slug.replace('/', '__')}__${vars.number ?? ''}.json`)
+  // Absent is "no threads", not an error: most pull requests have none, and a
+  // fixture that had to write an empty file per pull request would make the
+  // commonest case the one most easily got wrong.
+  const all = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : []
+  const size = firstOf(vars.query, 'reviewThreads', 50)
+  const commentSize = firstOf(vars.query, 'comments', 50)
+  const page = connectionOf(all, size, vars.cursor ?? '')
+
+  out(
+    `${JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: page.pageInfo,
+              // Each thread's comments are a connection too, cut at the same
+              // page size the query asked for - so a thread with more replies
+              // than fit really does report `hasNextPage` and really does have
+              // to be continued by node id.
+              nodes: page.nodes.map((thread) => ({
+                ...thread,
+                comments: connectionOf(thread.comments ?? [], commentSize, '')
+              }))
+            }
+          }
+        }
+      }
+    })}\n`
+  )
+}
+
+/**
+ * Every thread of every fixture pull request, so a node id can be resolved
+ * without knowing which pull request it came from.
+ *
+ * GitHub's node ids are global and the continuation query carries nothing else,
+ * so this is the same lookup a real API does - and it is a scan of a handful of
+ * files rather than an index, because a fixture directory is a handful of files.
+ */
+function threadById(id) {
+  const dir = join(home, 'threads')
+  if (!existsSync(dir)) return null
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.json')) continue
+    const threads = JSON.parse(readFileSync(join(dir, name), 'utf8'))
+    const found = threads.find((thread) => thread.id === id)
+    if (found !== undefined) return found.comments ?? []
+  }
+  return null
 }
 
 if (args[0] === 'pr' && args[1] === 'checkout') {
@@ -228,6 +363,46 @@ function synthesise() {
       'This is Helm\'s development mode, whose pull requests are synthetic - there is no ' +
         'branch to fetch, and checking one out would move a real working tree. Run `pnpm dev:live` ' +
         'against the real gh to exercise checkout.'
+    )
+  }
+
+  // The threads, derived like everything else here. Answered before the
+  // `--repo` guard below, because a GraphQL call names its repository in
+  // variables rather than in a flag.
+  if (args[0] === 'api' && args[1] === 'graphql') {
+    const vars = fields()
+    if (vars.id !== undefined) {
+      // Synthetic threads are short enough to fit one page, so a continuation
+      // is a question about a page that does not exist. Answering with an empty
+      // one is the honest reply and keeps the loop terminating.
+      out(
+        `${JSON.stringify({
+          data: { node: { comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } }
+        })}\n`
+      )
+    }
+    const named = `${vars.owner ?? ''}/${vars.name ?? ''}`
+    const pull = pullsFor(named).find((entry) => String(entry.number) === String(vars.number ?? ''))
+    const threads = pull === undefined ? [] : threadsFor(named, pull)
+    out(
+      `${JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: threads.length === 0 ? null : '1' },
+                nodes: threads.map((thread) => ({
+                  ...thread,
+                  comments: {
+                    pageInfo: { hasNextPage: false, endCursor: '1' },
+                    nodes: thread.comments
+                  }
+                }))
+              }
+            }
+          }
+        }
+      })}\n`
     )
   }
 
@@ -458,6 +633,81 @@ function detailFor(slug, pull) {
     statusCheckRollup: pull.statusCheckRollup,
     mergeStateStatus: (seed & 16) === 16 ? 'BLOCKED' : 'CLEAN'
   }
+}
+
+/**
+ * The threads left on lines of a synthetic pull request's diff.
+ *
+ * Here for the same reason the comments and the rollup are: `pnpm dev` has to
+ * be able to reach every state the pane can paint without arranging one on a
+ * real repository. Three threads per pull request, and they are deliberately
+ * not three of the same thing - an open one with a reply chain, a resolved one
+ * (which the pane starts collapsed) and an outdated one whose current `line` is
+ * null, which is the case a pane that assumed a number would paint as `:null`.
+ *
+ * The paths and the hunks come from `pull.__files`, so a thread names a file the
+ * pull request actually changed. A thread anchored to a path the detail does
+ * not list is a state a real GitHub cannot produce.
+ */
+function threadsFor(slug, pull) {
+  const seed = hashOf(`${slug}#${String(pull.number)}#threads`)
+  const files = pull.__files
+  const at = (hours) =>
+    new Date(Date.parse('2026-08-01T09:00:00Z') + hours * 3_600_000).toISOString()
+
+  const shapes = [
+    { resolved: false, outdated: false, replies: 2 },
+    { resolved: true, outdated: false, replies: 0 },
+    { resolved: false, outdated: true, replies: 1 }
+  ]
+
+  return shapes.slice(0, Math.max(1, Math.min(files.length, 3))).map((shape, i) => {
+    const file = files[i % files.length]
+    const line = 4 + ((seed + i) % 20)
+    const authors = ['mona', 'hubot', 'app/claude-review']
+    const comments = [
+      {
+        id: `PRRC_${String(seed)}_${String(i)}_0`,
+        author: { login: pick(authors, seed + i), __typename: 'User' },
+        authorAssociation: 'MEMBER',
+        body: `This is a **synthetic** note on line ${String(line)} of \`${file.path}\`. Helm derived it from the repository's name so the Conversation view has a thread to paint with no network.`,
+        createdAt: at(-5 - i),
+        url: `${pull.url}#discussion_r${String(seed + i)}`,
+        // The `@@` header and a few lines, as GitHub sends it: leading context
+        // with the commented line last. Painted as text and never as HTML,
+        // which is why one of them carries a tag.
+        diffHunk: [
+          `@@ -${String(line - 2)},4 +${String(line - 2)},5 @@ function compute()`,
+          ' const before = 1',
+          ' // <b>not markup</b>, and the pane must not make it any',
+          `+  const step = compute(${String(line)})`
+        ].join('\n')
+      }
+    ]
+    for (let r = 0; r < shape.replies; r++) {
+      comments.push({
+        id: `PRRC_${String(seed)}_${String(i)}_${String(r + 1)}`,
+        author: { login: pick(authors, seed + i + r + 1), __typename: 'User' },
+        authorAssociation: r === 0 ? 'OWNER' : 'CONTRIBUTOR',
+        body: r === 0 ? 'Good catch - pushed a fix.' : 'Confirmed on my side too.',
+        createdAt: at(-4 - i + r),
+        url: `${pull.url}#discussion_r${String(seed + i + r + 1)}`,
+        diffHunk: comments[0].diffHunk
+      })
+    }
+
+    return {
+      id: `PRRT_${String(seed)}_${String(i)}`,
+      path: file.path,
+      // Null on the outdated one, which is what GitHub answers when the lines a
+      // thread was written against have moved out from under it.
+      line: shape.outdated ? null : line,
+      originalLine: line,
+      isResolved: shape.resolved,
+      isOutdated: shape.outdated,
+      comments
+    }
+  })
 }
 
 /**

@@ -80,11 +80,11 @@ export interface PullSummary {
  *
  * Issue-level is the whole of what `gh --json comments` can see: the comments
  * written in the conversation tab. Comments attached to a line of the diff live
- * on a review thread, which the JSON surface does not expose at all, and a
- * `gh api` GraphQL query is what would be needed to reach them. That is a known
- * and accepted v1 limitation rather than an oversight, and it is recorded here
- * because a conversation missing half its replies with no explanation reads as
- * a bug.
+ * on a review thread, which the JSON surface does not expose at all - those
+ * come from a second fetch, `gh api graphql` over `pullRequest.reviewThreads`,
+ * and arrive as `PullReviewThread`. The split is GitHub's rather than Helm's,
+ * and it is recorded here because the two lists have to be merged into one
+ * chronology by whatever paints them (`pullConversation` does it).
  */
 export interface PullComment {
   /** GitHub's node id. Identity for a list key, never parsed. */
@@ -106,11 +106,12 @@ export interface PullComment {
 /**
  * One review, meaning its **summary** body and verdict.
  *
- * The same limitation as `PullComment` and from the same cause: a review's
- * inline notes are diff-thread comments, and what arrives here is only the text
- * written in the box above them. A review that was nothing but inline notes
- * therefore has an empty body, which is why an entry with no body is still
- * shown - the verdict is the information.
+ * The same split as `PullComment` and from the same cause: a review's inline
+ * notes are diff-thread comments and arrive separately, as `PullReviewThread`,
+ * so what is here is only the text written in the box above them. A review that
+ * was nothing but inline notes therefore has an empty body, which is why an
+ * entry with no body is still shown - the verdict is the information, and the
+ * notes themselves are in the threads beside it.
  */
 export interface PullReview {
   id: string
@@ -121,6 +122,74 @@ export interface PullReview {
   state: string
   body: string
   submittedAt: number | null
+}
+
+/**
+ * One comment on a review thread - a note left against a line of the diff.
+ *
+ * Deliberately not `PullComment`, though the fields overlap almost entirely.
+ * They come from different fetches with different vocabularies - `gh --json`
+ * for one, GraphQL for the other - and the one field that differs is the one
+ * that matters: an issue comment has nowhere to be, and this one is *at* a
+ * place in a file. Folding them into one type would put a `diffHunk` on the
+ * comments that have never had one.
+ */
+export interface PullThreadComment {
+  /** GitHub's node id. Identity for a list key, never parsed. */
+  id: string
+  author: string
+  authorIsBot: boolean
+  /** `MEMBER`, `CONTRIBUTOR`, `OWNER`, `NONE`, ... as on `PullComment`. */
+  association: string
+  /** Markdown as written. Rendering happens in the host, never here. */
+  body: string
+  createdAt: number | null
+  /** The `#discussion_r...` permalink. */
+  url: string
+}
+
+/**
+ * One conversation against a line of the diff, comments and all.
+ *
+ * A **thread** and not n loose comments, because that is what it is on GitHub
+ * and what it has to read as here: a note and its replies are one exchange
+ * about one line, and a conversation that listed them as five top-level entries
+ * would be five people apparently talking past each other.
+ *
+ * Reached with `gh api graphql` over `pullRequest.reviewThreads` rather than
+ * with the REST `pulls/{n}/comments` endpoint. REST gives `in_reply_to_id`,
+ * which is enough to rebuild the threading, and carries **neither `isResolved`
+ * nor `isOutdated`** - and a resolved thread painted identically to an open one
+ * is a worse answer than no threads at all, because it reads as an objection
+ * nobody ever dealt with. Still `gh`, so no token is handled here either.
+ */
+export interface PullReviewThread {
+  id: string
+  /** The head-side path the thread is anchored to. */
+  path: string
+  /**
+   * The line in the head file, or null when the thread no longer has one.
+   *
+   * Null is the normal state of an outdated thread: the lines it was written
+   * against have moved or gone, GitHub stops claiming a current position, and
+   * `originalLine` is then the only honest number to show.
+   */
+  line: number | null
+  /** The line as it was when the first comment was written. */
+  originalLine: number | null
+  /**
+   * The `@@` run the first comment was left against, as GitHub wrote it.
+   *
+   * Verbatim text and painted as text, never as HTML - the same rule the Files
+   * view follows, and for the same reason: this is a fragment of somebody's
+   * branch, and no part of a branch may be markup on this surface.
+   */
+  diffHunk: string
+  isResolved: boolean
+  /** The diff has moved on since it was written. */
+  isOutdated: boolean
+  /** In the order they were written; the first is the note and the rest replies. */
+  comments: PullThreadComment[]
 }
 
 /** One commit on the branch, as the Commits view lists it. */
@@ -253,6 +322,34 @@ export interface PullDetail {
   commits: PullCommit[]
   files: PullFile[]
   /**
+   * The diff-line conversations, or **undefined when they were never fetched**.
+   *
+   * The optionality is the whole point and is not tidiness. Threads arrive from
+   * a second call that did not exist when this cache was first written, so
+   * every row cached by an earlier Helm has no key here at all - and `[]` on
+   * that row would be Helm stating, about a pull request it has never asked the
+   * question of, that nobody wrote anything on the diff. `undefined` is "not
+   * fetched" and paints a sentence saying so; `[]` is "asked, and there are
+   * none" and paints nothing. **The two may never collapse into each other.**
+   *
+   * The distinction survives the cache by construction: `JSON.stringify` drops
+   * an undefined value, so a detail written without threads round-trips as an
+   * object with no such key. Reading one back goes through
+   * `heldReviewThreads`, which is where the rule is enforced once.
+   */
+  reviewThreads?: PullReviewThread[]
+  /**
+   * When `reviewThreads` was last fetched. Epoch ms; undefined when never.
+   *
+   * Its own moment rather than `detailFetchedAt`, because the two really do
+   * come apart: a refresh whose thread query failed keeps the threads it had -
+   * this surface degrades stale-with-age, not to nothing - while everything
+   * else on the tab is a second old. One timestamp for both would caption the
+   * old threads with the new fetch's age, which is the caption being wrong in
+   * the one case it exists for.
+   */
+  reviewThreadsFetchedAt?: number | null
+  /**
    * Null when the rollup could not be read at all.
    *
    * Null rather than zeroes, and the distinction is the point: `{total: 0}`
@@ -268,7 +365,7 @@ export interface PullDetail {
 /**
  * A comment and a review, flattened into the one thing they are on screen.
  *
- * GitHub returns two lists and shows one conversation, and the merge is by
+ * GitHub returns three lists and shows one conversation, and the merge is by
  * time: a review left between two comments happened between them, and three
  * separate stacks sorted only within themselves would be three chronologies
  * that disagree. `kind` survives the merge because a review carries a verdict
@@ -289,11 +386,56 @@ export interface PullConversationEntry {
   url: string
 }
 
+/**
+ * A review thread taking its place in that chronology.
+ *
+ * Its own member of the union rather than n `PullConversationEntry`s, because
+ * the thread is the entity: it has one position in time - its first comment's -
+ * one file and line, one hunk, and one resolved state that belongs to the whole
+ * exchange rather than to any comment in it. Flattening it would lose all four.
+ */
+export interface PullThreadEntry extends Omit<PullReviewThread, 'id'> {
+  kind: 'thread'
+  id: string
+  /**
+   * The **first** comment's moment, which is when this exchange started.
+   *
+   * The first and not the last: a thread opened on Monday and replied to on
+   * Friday is a Monday remark, and sorting by the reply would move a week of
+   * conversation to the bottom of the page every time somebody answered it.
+   */
+  at: number | null
+}
+
+/** Everything the Conversation view paints, in one time order. */
+export type PullConversationItem = PullConversationEntry | PullThreadEntry
+
 /** A conversation entry whose markdown the host has already rendered. */
 export interface RenderedPullEntry extends PullConversationEntry {
   /** Sanitised HTML, or `''` when the entry had no body. */
   html: string
 }
+
+/** One thread comment, rendered. */
+export interface RenderedThreadComment extends PullThreadComment {
+  /** Sanitised HTML, or `''` when the comment had no body. */
+  html: string
+}
+
+/** A thread whose every comment the host has already rendered. */
+export interface RenderedPullThread extends Omit<PullThreadEntry, 'comments'> {
+  comments: RenderedThreadComment[]
+}
+
+/**
+ * One item of the rendered conversation, discriminated by `kind`.
+ *
+ * The union is resolved in **main**, not in the window: the chronology is a
+ * fact about the pull request and the pane's job is to paint it. A renderer
+ * handed three arrays and told to interleave them would be a second copy of the
+ * ordering rule, in the place least able to be unit-tested.
+ */
+export type RenderedPullItem = RenderedPullEntry | RenderedPullThread
 
 /**
  * A changed file with its patch attached, as the Files view paints it.
@@ -333,8 +475,30 @@ export interface PullDetailView {
   detail: PullDetail
   /** The description rendered; `''` when there is none to render. */
   bodyHtml: string
-  /** Reviews and comments in one time order. */
-  conversation: RenderedPullEntry[]
+  /** Reviews, comments and diff-line threads in one time order. */
+  conversation: RenderedPullItem[]
+  /**
+   * Why the conversation is missing its diff-line threads, or has old ones, as
+   * a sentence - and null when it is showing the threads GitHub has.
+   *
+   * A sentence rather than a flag, exactly like `diffNote`, because the three
+   * reasons are not the same shape: a pull request cached before Helm fetched
+   * threads at all, a thread query that failed just now on a tab that has older
+   * threads to fall back on, and one that failed with nothing behind it. A view
+   * that showed no threads and said nothing would read as a pull request nobody
+   * annotated - which is the bug this whole fetch exists to fix, put back one
+   * level up.
+   */
+  threadsNote: string | null
+  /**
+   * When the threads on screen were fetched. Epoch ms; null when never.
+   *
+   * Carried as a moment rather than baked into `threadsNote`, because the age
+   * beside that sentence has to keep counting: every caption on this surface is
+   * computed in the pane off a live clock, and one rendered in the main process
+   * stops being true the second after it is sent.
+   */
+  threadsFetchedAtMs: number | null
   /** The changed files, each carrying whatever patch was fetched for it. */
   files: PullFileView[]
   /**

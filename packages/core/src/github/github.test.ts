@@ -1,15 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import {
   classifyGhFailure,
+  heldReviewThreads,
   parseGhAuth,
   parseGhVersion,
   parsePullDetail,
   parsePullList,
+  parseReviewThreadPage,
+  parseThreadCommentPage,
   pullConversation,
   reduceChecks,
   PR_LIST_FIELDS,
+  PR_THREAD_COMMENTS_QUERY,
+  PR_THREADS_QUERY,
   PR_VIEW_FIELDS
 } from './parse'
+import type { PullDetail, PullReviewThread } from './types'
 import { renderPullPrompt, DEFAULT_PR_REVIEW_PROMPT, PR_PROMPT_PLACEHOLDERS } from './prompt'
 import { parseGitHubRemote } from './remote'
 import { indexDiffByPath, parseUnifiedDiff } from './diff'
@@ -535,6 +541,361 @@ describe('reduceChecks', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+
+/**
+ * A `gh api graphql` answer in the shape GitHub actually returns it.
+ *
+ * Copied from a live fetch against `cli/cli#14003` with the query this module
+ * ships, bodies abridged and the rest left exactly as it arrived - the `Bot`
+ * `__typename` on an actor, the `line: null` of an outdated thread, the em dash
+ * inside a body, and the `@@` header at the top of a `diffHunk`. A parser
+ * tested only against a payload written to suit it is a parser that has never
+ * seen the one it will get.
+ */
+const LIVE_THREADS = {
+  data: {
+    repository: {
+      pullRequest: {
+        reviewThreads: {
+          pageInfo: { hasNextPage: false, endCursor: 'Y3Vyc29yOnYyOpK0Mj' },
+          nodes: [
+            {
+              id: 'PRRT_kwDODKw3uc6Uj0GH',
+              path: 'AGENTS.md',
+              line: 146,
+              originalLine: 146,
+              isResolved: true,
+              isOutdated: false,
+              comments: {
+                pageInfo: { hasNextPage: false, endCursor: 'Y3Vyc29yOnYyOpK0MjA' },
+                nodes: [
+                  {
+                    id: 'PRRC_kwDODKw3uc7at0BJ',
+                    author: { login: 'copilot-pull-request-reviewer', __typename: 'Bot' },
+                    authorAssociation: 'CONTRIBUTOR',
+                    body: 'The wording is grammatically incorrect here.',
+                    createdAt: '2026-07-28T21:52:42Z',
+                    url: 'https://github.com/cli/cli/pull/14003#discussion_r3669442633',
+                    diffHunk:
+                      '@@ -138,6 +143,7 @@ for _, tt := range tests {\n \n - Add godoc comments to all exported functions\n - Avoid unnecessary code comments — only comment when the *why* is not obvious\n+- Comments that carry context from your conversation are very valuable.'
+                  },
+                  {
+                    id: 'PRRC_kwDODKw3uc7at1Xc',
+                    author: { login: 'BagToad', __typename: 'User' },
+                    authorAssociation: 'MEMBER',
+                    body: "I don't think it matters.",
+                    createdAt: '2026-07-28T21:53:36Z',
+                    url: 'https://github.com/cli/cli/pull/14003#discussion_r3669448156',
+                    diffHunk: '@@ -138,6 +143,7 @@ for _, tt := range tests {\n \n - Add godoc comments'
+                  }
+                ]
+              }
+            },
+            {
+              id: 'PRRT_kwDODKw3uc6Uj0Gf',
+              path: 'AGENTS.md',
+              line: null,
+              originalLine: 184,
+              isResolved: true,
+              isOutdated: true,
+              comments: {
+                pageInfo: { hasNextPage: false, endCursor: 'Y3Vyc29yOnYyOpK0MjB' },
+                nodes: [
+                  {
+                    id: 'PRRC_kwDODKw3uc7at0Br',
+                    author: { login: 'copilot-pull-request-reviewer', __typename: 'Bot' },
+                    authorAssociation: 'CONTRIBUTOR',
+                    body: 'This line uses an em dash even though the Code Style section says not to.',
+                    createdAt: '2026-07-28T21:52:43Z',
+                    url: 'https://github.com/cli/cli/pull/14003#discussion_r3669442667',
+                    diffHunk: '@@ -180,3 +184,4 @@\n+- Never use an em dash — like this one.'
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+
+describe('parseReviewThreadPage', () => {
+  it('asks GraphQL for every field a thread is painted from', () => {
+    for (const field of [
+      'reviewThreads',
+      'isResolved',
+      'isOutdated',
+      'originalLine',
+      'diffHunk',
+      'authorAssociation',
+      'pageInfo',
+      'endCursor'
+    ]) {
+      expect(PR_THREADS_QUERY).toContain(field)
+    }
+    // Both connections page, and both page sizes are under GitHub's ceiling of
+    // 100 - `first: 100` twice over is 10,000 nodes and a request that GitHub
+    // refuses on the first pull request with a long review.
+    expect(PR_THREADS_QUERY).toContain('reviewThreads(first: 50, after: $cursor)')
+    expect(PR_THREADS_QUERY).toContain('comments(first: 50)')
+    expect(PR_THREAD_COMMENTS_QUERY).toContain('comments(first: 50, after: $cursor)')
+    // The continuation is by node id. Re-walking the pull request to reach one
+    // thread's fifty-first reply would re-fetch every thread beside it.
+    expect(PR_THREAD_COMMENTS_QUERY).toContain('PullRequestReviewThread')
+  })
+
+  it('keeps both queries to one line and off cmd.exe’s special characters', () => {
+    // Not formatting. A `gh` installed by scoop or npm is a batch file, so
+    // `resolveGhCommand` runs it through `cmd.exe /c` - and cmd ends its
+    // command line at the first newline whatever the quoting. Measured on 2.86
+    // against a `.cmd` shim: a pretty-printed query arrived truncated at
+    // `query($owner: String!,` with every `-f` after it gone, the request was
+    // still made, and it exited 0. This is the assertion that stops somebody
+    // reformatting the constant above and finding out on Windows only.
+    for (const query of [PR_THREADS_QUERY, PR_THREAD_COMMENTS_QUERY]) {
+      expect(query).not.toMatch(/[\r\n]/)
+      expect(query).not.toMatch(/[&|<>^%]/)
+    }
+  })
+
+  it('reads a page in the shape GitHub actually returns it', () => {
+    const page = parseReviewThreadPage(JSON.stringify(LIVE_THREADS))
+
+    expect(page.page).toEqual({ hasNextPage: false, endCursor: 'Y3Vyc29yOnYyOpK0Mj' })
+    expect(page.threads).toHaveLength(2)
+    expect(page.threads[0]?.thread.id).toBe('PRRT_kwDODKw3uc6Uj0GH')
+    expect(page.threads[0]?.thread.path).toBe('AGENTS.md')
+    expect(page.threads[0]?.thread.line).toBe(146)
+    expect(page.threads[0]?.thread.isResolved).toBe(true)
+    expect(page.threads[0]?.thread.isOutdated).toBe(false)
+    expect(page.threads[0]?.thread.comments.map((c) => c.id)).toEqual([
+      'PRRC_kwDODKw3uc7at0BJ',
+      'PRRC_kwDODKw3uc7at1Xc'
+    ])
+    expect(page.threads[0]?.thread.comments[1]).toEqual({
+      id: 'PRRC_kwDODKw3uc7at1Xc',
+      author: 'BagToad',
+      authorIsBot: false,
+      association: 'MEMBER',
+      body: "I don't think it matters.",
+      createdAt: Date.parse('2026-07-28T21:53:36Z'),
+      url: 'https://github.com/cli/cli/pull/14003#discussion_r3669448156'
+    })
+  })
+
+  it('reads a bot from the GraphQL typename, which has no is_bot flag', () => {
+    // The two fetches on this surface describe a bot in two different
+    // vocabularies: `gh --json` says `is_bot`, GraphQL answers with an actor
+    // whose `__typename` is `Bot`. A parser that only knew the first would
+    // paint a review bot as a person.
+    const [first] = parseReviewThreadPage(JSON.stringify(LIVE_THREADS)).threads
+    expect(first?.thread.comments[0]?.authorIsBot).toBe(true)
+    expect(first?.thread.comments[1]?.authorIsBot).toBe(false)
+  })
+
+  it('keeps the original line of an outdated thread, whose current line is null', () => {
+    // The normal state of an outdated thread: the lines it was written against
+    // have moved, GitHub stops claiming a current position, and the original is
+    // then the only honest number there is.
+    const [, outdated] = parseReviewThreadPage(JSON.stringify(LIVE_THREADS)).threads
+    expect(outdated?.thread.line).toBeNull()
+    expect(outdated?.thread.originalLine).toBe(184)
+    expect(outdated?.thread.isOutdated).toBe(true)
+  })
+
+  it('takes the hunk off the first comment, which is where GitHub puts it', () => {
+    // There is no thread-level `diffHunk` in the schema. The thread's hunk is
+    // the one its opening note was written against, and taking the last
+    // comment's would show the reply's view of a diff that has since moved.
+    const [first] = parseReviewThreadPage(JSON.stringify(LIVE_THREADS)).threads
+    expect(first?.thread.diffHunk.startsWith('@@ -138,6 +143,7 @@')).toBe(true)
+    expect(first?.thread.diffHunk.split('\n')).toHaveLength(5)
+  })
+
+  it('carries the comments cursor so a long thread can be continued', () => {
+    const payload = structuredClone(LIVE_THREADS)
+    const thread = payload.data.repository.pullRequest.reviewThreads.nodes[0]
+    if (thread !== undefined) {
+      thread.comments.pageInfo = { hasNextPage: true, endCursor: 'CURSOR_51' }
+    }
+    const [first] = parseReviewThreadPage(JSON.stringify(payload)).threads
+    expect(first?.comments).toEqual({ hasNextPage: true, endCursor: 'CURSOR_51' })
+  })
+
+  it('drops a thread with no comments left in it and one with no id', () => {
+    // GitHub keeps a thread whose every comment has been deleted. It has no
+    // author, no body and no moment to sit at in the chronology - a card with a
+    // file name on it and nothing underneath.
+    const page = parseReviewThreadPage(
+      JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  { id: 'T_empty', path: 'a.ts', comments: { nodes: [] } },
+                  { path: 'b.ts', comments: { nodes: [{ id: 'C1', body: 'x' }] } },
+                  { id: 'T_ok', path: 'c.ts', comments: { nodes: [{ id: 'C2', body: 'y' }] } }
+                ]
+              }
+            }
+          }
+        }
+      })
+    )
+    expect(page.threads.map((t) => t.thread.id)).toEqual(['T_ok'])
+  })
+
+  it('fills a missing field rather than losing the thread', () => {
+    const page = parseReviewThreadPage(
+      JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                nodes: [{ id: 'T1', comments: { nodes: [{ id: 'C1' }] } }]
+              }
+            }
+          }
+        }
+      })
+    )
+    expect(page.threads[0]?.thread).toEqual({
+      id: 'T1',
+      path: '',
+      line: null,
+      originalLine: null,
+      diffHunk: '',
+      isResolved: false,
+      isOutdated: false,
+      comments: [
+        { id: 'C1', author: '', authorIsBot: false, association: '', body: '', createdAt: null, url: '' }
+      ]
+    })
+    expect(page.page).toEqual({ hasNextPage: false, endCursor: null })
+  })
+
+  it('refuses an answer with no threads connection rather than reading it as none', () => {
+    // The whole `undefined` versus `[]` rule, made at the point the answer
+    // arrives: "the query did not run" must never become "this pull request has
+    // no diff-line comments".
+    expect(() => parseReviewThreadPage('')).toThrow(/printed nothing/)
+    expect(() => parseReviewThreadPage('<html>a login page</html>')).toThrow(/not JSON/)
+    expect(() => parseReviewThreadPage('[]')).toThrow(/where a page of review threads/)
+    expect(() =>
+      parseReviewThreadPage(JSON.stringify({ data: { repository: { pullRequest: {} } } }))
+    ).toThrow(/no review threads connection/)
+    expect(() =>
+      parseReviewThreadPage(JSON.stringify({ data: { repository: { pullRequest: null } } }))
+    ).toThrow(/no review threads connection/)
+  })
+
+  it('reports GitHub’s own message when the answer is errors and no data', () => {
+    expect(() =>
+      parseReviewThreadPage(
+        JSON.stringify({
+          errors: [{ type: 'NOT_FOUND', message: 'Could not resolve to a PullRequest with 9.' }]
+        })
+      )
+    ).toThrow(/Could not resolve to a PullRequest with 9\./)
+  })
+})
+
+describe('parseThreadCommentPage', () => {
+  it('reads a continuation page and its cursor', () => {
+    const page = parseThreadCommentPage(
+      JSON.stringify({
+        data: {
+          node: {
+            comments: {
+              pageInfo: { hasNextPage: true, endCursor: 'CURSOR_101' },
+              nodes: [
+                {
+                  id: 'PRRC_51',
+                  author: { login: 'mona', __typename: 'User' },
+                  authorAssociation: 'OWNER',
+                  body: 'Reply fifty-one.',
+                  createdAt: '2026-08-01T10:00:00Z',
+                  url: 'https://github.com/o/n/pull/1#discussion_r51'
+                }
+              ]
+            }
+          }
+        }
+      })
+    )
+    expect(page.page).toEqual({ hasNextPage: true, endCursor: 'CURSOR_101' })
+    expect(page.comments).toEqual([
+      {
+        id: 'PRRC_51',
+        author: 'mona',
+        authorIsBot: false,
+        association: 'OWNER',
+        body: 'Reply fifty-one.',
+        createdAt: Date.parse('2026-08-01T10:00:00Z'),
+        url: 'https://github.com/o/n/pull/1#discussion_r51'
+      }
+    ])
+  })
+
+  it('refuses an answer with no comments connection', () => {
+    expect(() => parseThreadCommentPage(JSON.stringify({ data: { node: null } }))).toThrow(
+      /no comments connection/
+    )
+  })
+})
+
+describe('heldReviewThreads', () => {
+  const detail = (extra: Partial<PullDetail>): PullDetail => ({
+    body: '',
+    comments: [],
+    reviews: [],
+    commits: [],
+    files: [],
+    checks: null,
+    mergeStateStatus: '',
+    ...extra
+  })
+
+  it('reads a row cached before threads existed as not fetched, never as none', () => {
+    // The single correctness rule of this feature. A detail with no key is a
+    // pull request nobody has asked the question of, and answering `[]` would
+    // be Helm stating as a fact that nobody annotated the diff.
+    expect(heldReviewThreads(detail({}))).toBeUndefined()
+    expect(heldReviewThreads(null)).toBeUndefined()
+    expect(heldReviewThreads(undefined)).toBeUndefined()
+  })
+
+  it('reads an empty answer that actually came back as none', () => {
+    expect(heldReviewThreads(detail({ reviewThreads: [] }))).toEqual([])
+  })
+
+  it('survives the round trip through the cache in both directions', () => {
+    // How the distinction is kept: `JSON.stringify` drops an undefined value,
+    // so a detail written with no threads comes back as an object with no key -
+    // and one written with `[]` comes back as `[]`.
+    // `exactOptionalPropertyTypes` is on, so the "never fetched" detail cannot
+    // even be spelled with an explicit undefined - which is the type system
+    // holding the same line: the key is absent or it is an array.
+    const never = JSON.parse(JSON.stringify(detail({}))) as PullDetail
+    const asked = JSON.parse(JSON.stringify(detail({ reviewThreads: [] }))) as PullDetail
+
+    expect('reviewThreads' in never).toBe(false)
+    expect(heldReviewThreads(never)).toBeUndefined()
+    expect(heldReviewThreads(asked)).toEqual([])
+  })
+
+  it('collapses anything that is not an array to not-fetched, not to none', () => {
+    // The safe direction. A sentence telling somebody to refresh costs a click;
+    // a pull request reported as one nobody annotated costs the review.
+    const reshaped = JSON.parse('{"reviewThreads":null}') as PullDetail
+    expect(heldReviewThreads(reshaped)).toBeUndefined()
+  })
+})
+
 describe('pullConversation', () => {
   const entry = (
     kind: 'comment' | 'review',
@@ -587,7 +948,7 @@ describe('pullConversation', () => {
   it('carries the verdict of a review and nothing for a comment', () => {
     const merged = pullConversation(parsePullDetail(JSON.stringify(LIVE_DETAIL)))
 
-    expect(merged.map((e) => [e.kind, e.state])).toEqual([
+    expect(merged.map((e) => [e.kind, e.kind === 'thread' ? '' : e.state])).toEqual([
       ['review', 'COMMENTED'],
       ['comment', '']
     ])
@@ -599,7 +960,74 @@ describe('pullConversation', () => {
     )
 
     expect(merged).toHaveLength(1)
-    expect(merged[0]?.body).toBe('')
+    expect(merged[0]?.kind === 'thread' ? null : merged[0]?.body).toBe('')
+  })
+
+  const thread = (id: string, at: string | null, replyAt?: string): PullReviewThread => ({
+    id,
+    path: 'packages/core/src/github/parse.ts',
+    line: 42,
+    originalLine: 42,
+    diffHunk: '@@ -1,2 +1,3 @@\n+const x = 1',
+    isResolved: false,
+    isOutdated: false,
+    comments: [
+      { id: `${id}c1`, author: 'a', authorIsBot: false, association: '', body: 'note', createdAt: at === null ? null : Date.parse(at), url: '' },
+      ...(replyAt === undefined
+        ? []
+        : [{ id: `${id}c2`, author: 'b', authorIsBot: false, association: '', body: 'reply', createdAt: Date.parse(replyAt), url: '' }])
+    ]
+  })
+
+  const withThreads = (threads: PullReviewThread[], payload: Record<string, unknown> = {}): PullDetail => ({
+    ...parsePullDetail(JSON.stringify(payload)),
+    reviewThreads: threads
+  })
+
+  it('puts a thread into the chronology at its first comment', () => {
+    expect(
+      pullConversation(
+        withThreads([thread('t1', '2026-08-02T10:00:00Z')], {
+          comments: [
+            entry('comment', 'c1', '2026-08-01T10:00:00Z'),
+            entry('comment', 'c2', '2026-08-03T10:00:00Z')
+          ]
+        })
+      ).map((e) => e.id)
+    ).toEqual(['c1', 't1', 'c2'])
+  })
+
+  it('sorts by the first comment and not by the last reply', () => {
+    // A thread opened on Monday and replied to on Friday is a Monday remark.
+    // Sorting by the reply would move a week of conversation to the bottom of
+    // the page every time somebody answered it.
+    expect(
+      pullConversation(
+        withThreads([thread('t1', '2026-08-01T10:00:00Z', '2026-08-09T10:00:00Z')], {
+          comments: [entry('comment', 'c1', '2026-08-05T10:00:00Z')]
+        })
+      ).map((e) => e.id)
+    ).toEqual(['t1', 'c1'])
+  })
+
+  it('carries the thread whole rather than flattening it into its comments', () => {
+    const [item] = pullConversation(withThreads([thread('t1', '2026-08-01T10:00:00Z', '2026-08-02T10:00:00Z')]))
+
+    expect(item?.kind).toBe('thread')
+    if (item?.kind !== 'thread') throw new Error('the thread did not survive the merge')
+    expect(item.comments).toHaveLength(2)
+    expect(item.path).toBe('packages/core/src/github/parse.ts')
+    expect(item.line).toBe(42)
+    expect(item.diffHunk).toContain('@@ -1,2 +1,3 @@')
+  })
+
+  it('contributes nothing at all when the threads were never fetched', () => {
+    // Not an empty run of entries and not a placeholder: "never fetched" is a
+    // statement about the fetch, and the sentence that says so belongs to the
+    // view rather than to the chronology.
+    const never = parsePullDetail(JSON.stringify({ comments: [entry('comment', 'c1', null)] }))
+    expect(pullConversation(never).map((e) => e.kind)).toEqual(['comment'])
+    expect(pullConversation({ ...never, reviewThreads: [] }).map((e) => e.kind)).toEqual(['comment'])
   })
 })
 
