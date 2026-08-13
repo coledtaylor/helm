@@ -94,6 +94,27 @@ function versionOf(command) {
 }
 
 const env = { ...process.env }
+
+/**
+ * The key this environment actually spells PATH with.
+ *
+ * `process.env` is a case-insensitive proxy on Windows; `{ ...process.env }` is
+ * a plain object and is not, and it keeps whatever casing the parent used.
+ * Launched from PowerShell that is `Path`, so `env.PATH` reads `undefined` -
+ * and `env.PATH = shim + delimiter + (env.PATH ?? '')` then wrote a *second*
+ * key holding the shim directory and nothing else, while the real PATH sat
+ * beside it under `Path`. Node collapses the pair case-insensitively when it
+ * builds the child's environment block, the shim-only one won, and
+ * electron-builder died with `spawn powershell.exe ENOENT` - having lost
+ * System32 - every time this branch was taken.
+ *
+ * Invisible from a POSIX-style shell, where the key is already `PATH` and the
+ * assignment lands on it. That is why it survived: the branch only runs on a
+ * machine with a shadowing pnpm, and the bug only bites from the shell that
+ * machine's owner uses.
+ */
+const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') ?? 'PATH'
+
 const declared = declaredPnpmVersion()
 const candidates = pnpmCandidates()
 const first = candidates[0] ?? null
@@ -114,7 +135,7 @@ if (declared !== null && first !== null && firstVersion !== declared) {
   // shim in every *other* directory too, which is the problem being fixed.
   const shimDir = mkdtempSync(join(tmpdir(), 'helm-pnpm-shim-'))
   writeFileSync(join(shimDir, 'pnpm.cmd'), `@"${working}" %*\r\n`, 'utf8')
-  env.PATH = `${shimDir}${delimiter}${env.PATH ?? ''}`
+  env[pathKey] = `${shimDir}${delimiter}${env[pathKey] ?? ''}`
   console.log(
     `pnpm on PATH is ${firstVersion ?? 'unreadable'} (${first}); this workspace declares ${declared}.\n` +
       `Using ${working} through a shim in ${shimDir} for this build only.`

@@ -53,6 +53,78 @@ const checks = []
 
 const say = (line) => console.log(line)
 
+const repoRoot = resolve(desktopDir, '..', '..')
+
+/**
+ * Everything the packaged artefacts are built out of.
+ *
+ * The three source trees, the manifest that carries the version and the
+ * dependency list, the electron-builder configuration, the script that drives
+ * it, and the lockfile. Written out rather than derived from `git ls-files` so
+ * that an uncommitted edit counts too - the question is what is on disk, not
+ * what has been committed.
+ */
+const PACKAGE_INPUTS = [
+  join(repoRoot, 'packages', 'core', 'src'),
+  join(repoRoot, 'packages', 'ui', 'src'),
+  join(desktopDir, 'src'),
+  join(desktopDir, 'package.json'),
+  join(desktopDir, 'electron-builder.yml'),
+  join(desktopDir, 'scripts', 'dist-win.mjs'),
+  join(repoRoot, 'pnpm-lock.yaml')
+]
+
+/**
+ * The newest **file** mtime under a path, and the file carrying it.
+ *
+ * Directories are walked but never timed, and that is the whole of the care
+ * needed here. A directory's mtime moves whenever an entry is added or removed
+ * inside it, which has nothing to do with whether its contents went into the
+ * package - and `electron-vite build`, which runs at the head of every
+ * `packaging-check`, moves several of them. Timing directories made the rule
+ * self-fulfilling: build, watch the build touch a source directory, decide the
+ * source is newer than the artefact just written, rebuild. Measured with the
+ * first cut of this: `packages/core/src` stamped 15:17:34 against a setup.exe
+ * written at 15:17:00, while the newest file under it was from 14:41.
+ */
+function newestUnder(path) {
+  let stat
+  try {
+    stat = statSync(path)
+  } catch {
+    return null
+  }
+  if (!stat.isDirectory()) return { path, mtimeMs: stat.mtimeMs }
+
+  let best = null
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    const found = newestUnder(join(path, entry.name))
+    if (found && (best === null || found.mtimeMs > best.mtimeMs)) best = found
+  }
+  return best
+}
+
+/**
+ * The source file newer than the oldest artefact, or null if none is.
+ *
+ * Compared against the *oldest* of them, because both have to be current: a
+ * portable exe rebuilt on its own would otherwise vouch for a stale installer.
+ */
+function newerThanArtefacts(artefacts) {
+  const times = artefacts.map((file) => (existsSync(file) ? statSync(file).mtimeMs : 0))
+  const oldest = Math.min(...times)
+  if (oldest === 0) return null // missing; the caller builds anyway
+
+  let newest = null
+  for (const input of PACKAGE_INPUTS) {
+    const found = newestUnder(input)
+    if (found && found.mtimeMs > oldest && (newest === null || found.mtimeMs > newest.mtimeMs)) {
+      newest = found
+    }
+  }
+  return newest === null ? null : newest.path.slice(repoRoot.length + 1)
+}
+
 // ---------------------------------------------------------------------------
 // Phase 1: this machine
 // ---------------------------------------------------------------------------
@@ -164,7 +236,26 @@ if (wants('package')) {
   const portableExe = join(distDir, `Helm-${version}-portable.exe`)
   const setupExe = join(distDir, `Helm-${version}-setup.exe`)
 
-  if (!existsSync(portableExe) || !existsSync(setupExe)) {
+  /**
+   * Build if the artefacts are missing **or older than the source**.
+   *
+   * Existence alone was the test, and it is not one. The artefact is named for
+   * the version - `Helm-0.2.3-setup.exe` - and the version does not move
+   * between commits, so once a package exists any number of commits can land
+   * behind it while this phase goes on installing the old one and reporting
+   * green. Measured: a run of this phase installed a package built 22 minutes
+   * before the commit that fixed this very script, and PKG-2 passed. This is
+   * the only check that proves the installer works, and it was proving it
+   * about a build nobody had asked about.
+   *
+   * The dependency is a `make` rule and nothing cleverer: newer source than
+   * artefact means rebuild. `out/` is deliberately not in the set - the
+   * `electron-vite build` at the head of every run rewrites it, so comparing
+   * against it would mean rebuilding the installer every time.
+   */
+  const stale = newerThanArtefacts([portableExe, setupExe])
+  if (!existsSync(portableExe) || !existsSync(setupExe) || stale !== null) {
+    if (stale !== null) say(`${stale} is newer than the packaged artefacts; rebuilding.`)
     say('building (electron-builder --win); this takes a few minutes...')
     const built = spawnSync('pnpm', ['run', 'dist:win'], {
       cwd: desktopDir,
