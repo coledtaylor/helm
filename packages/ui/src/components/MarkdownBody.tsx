@@ -32,6 +32,7 @@ export function MarkdownBody({
   toc: wantsToc = true,
   highlight = null,
   surface = 'content',
+  gutter,
   onOpenPath,
   onOpenExternal
 }: {
@@ -39,6 +40,13 @@ export function MarkdownBody({
   rendered: RenderedMarkdown | null
   stale?: boolean
   compact?: boolean
+  /**
+   * The horizontal gutter, as a class. Given where the pane above this has a
+   * gutter of its own to line up with: a body four pixels to the right of the
+   * title it belongs to reads as a rendering mistake, and four pixels is
+   * exactly what `px-6` under a `px-5` header produces.
+   */
+  gutter?: string
   /** A contents column, where there is both something to list and room for it. */
   toc?: boolean
   /** A term to mark and scroll to - the search hit a document was opened from. */
@@ -155,7 +163,7 @@ export function MarkdownBody({
       data-content-scroll
       className="min-w-0 flex-1 overflow-y-auto overscroll-contain"
     >
-      <div className={cn('flex gap-8 py-6', compact ? 'px-6' : 'px-8')}>
+      <div className={cn('flex gap-8 py-6', gutter ?? (compact ? 'px-6' : 'px-8'))}>
         <div
           ref={bodyRef}
           data-content-body

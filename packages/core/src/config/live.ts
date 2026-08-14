@@ -450,8 +450,22 @@ function instructionLive(file: ConfigFile, view: EffectiveView): ConfigLive {
 
 function hookLive(file: ConfigFile, view: EffectiveView): ConfigLive {
   const bindings = hookBindings(file, view)
-  const base = { ...empty('inert', null, ''), hooks: bindings }
+  const references = settingReferences(file, view)
+  const base = { ...empty('inert', null, ''), hooks: bindings, references }
   if (bindings.length === 0) {
+    // A program under `hooks/` that no `hooks` block runs may still be run by
+    // something else - a status line's command is the one this was found by.
+    // Its directory is a convention, and a convention is not a claim about
+    // what reads it.
+    if (references.length > 0) {
+      const first = references[0]
+      return {
+        ...base,
+        state: 'live',
+        note: `run by ${first?.key ?? 'a setting'}`,
+        reason: `No hooks block runs this, but ${first?.key ?? 'a setting'} in the ${first?.layer ?? ''} layer names it, so a session in ${view.cwd} runs it.`
+      }
+    }
     return {
       ...base,
       state: 'inert',

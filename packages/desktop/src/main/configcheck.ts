@@ -61,6 +61,27 @@ const TOKENS = {
 
 const MCP_SERVER = 'helm-config-probe'
 
+/**
+ * The live-state fixtures, and where they live.
+ *
+ * In `alpha` - an overlay - rather than in the workspace, deliberately. The
+ * workspace's settings are read by a *real session* in the effective group and
+ * its files are edited and restored by the edit group, so a hooks block planted
+ * there would be a hook a live `claude` could run and a file two groups would
+ * be rewriting underneath each other. An overlay is a scope the switcher offers
+ * (the profile puts it there), and nothing else in this driver reads its
+ * settings: an overlay contributes skills, commands, agents and a CLAUDE.md to
+ * a session, never a settings layer.
+ *
+ * The matcher names no tool that exists, so even a session pointed here could
+ * not fire it. What the pane has to say about the hook does not depend on the
+ * matcher matching anything.
+ */
+const HOOK_FILE = 'probe-hook.js'
+const HOOK_EVENT = 'PreToolUse'
+const HOOK_MATCHER = 'HelmConfigProbeNoSuchTool'
+const BUNDLED_FILE = 'probe-resource.md'
+
 // ---------------------------------------------------------------------------
 // A second opinion about what is on disk
 // ---------------------------------------------------------------------------

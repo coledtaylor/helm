@@ -406,6 +406,23 @@ export function ConfigConsole({
                         ? `${total} ${total === 1 ? 'file' : 'files'}`
                         : `${rows} entries · ${total} files`}
                 </span>
+                {/* Whose session the states on these rows are about.
+                    A resolution is a working directory, not a scope: the same
+                    `~/.claude/settings.json` is wholly live under one directory
+                    and half shadowed under another. Said only where it is not
+                    the scope already on screen - under a project it would be
+                    the header repeated. */}
+                {live !== null &&
+                  scope !== null &&
+                  live.cwd.toLowerCase() !== scope.path.toLowerCase() && (
+                    <span
+                      data-live-cwd={live.cwd}
+                      className="min-w-0 truncate"
+                      title={`These states are what a session in ${live.cwd} would resolve. Point the Effective view somewhere else to ask about a different directory.`}
+                    >
+                      · resolved for {live.cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? live.cwd}
+                    </span>
+                  )}
                 <span className="flex-1" />
                 {tree !== null && tree.errors.length > 0 && (
                   <span className="text-danger" title={tree.errors.join('\n')}>

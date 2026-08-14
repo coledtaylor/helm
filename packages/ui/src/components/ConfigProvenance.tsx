@@ -1,8 +1,8 @@
 import type { JSX } from 'react'
 import type { ConfigFile, ConfigLive } from '@helm/core'
 import { cn } from '../lib/cn'
-import { formatAge, formatBytes } from '../lib/time'
-import { HookIcon, SparkIcon } from './icons'
+import { formatBytes } from '../lib/time'
+import { DocIcon, HookIcon } from './icons'
 
 /**
  * Why a file that is not read as prose is here at all.
@@ -28,7 +28,7 @@ export function HookProvenance({
     return (
       <div
         data-hook-provenance="0"
-        className="mx-5 mt-4 rounded-raised border border-border bg-surface-raised px-3.5 py-2.5"
+        className="mx-5 mt-4 rounded-raised border border-border bg-surface-raised px-4 py-2.5"
       >
         <p className="flex items-center gap-2 text-[11.5px] text-fg-muted">
           <HookIcon width={12} height={12} className="shrink-0 text-fg-subtle" />
@@ -44,14 +44,14 @@ export function HookProvenance({
       data-hook-provenance={rows.length}
       className="mx-5 mt-4 overflow-hidden rounded-raised border border-border bg-surface-raised"
     >
-      <p className="border-b border-border px-3.5 py-1.5 text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
+      <p className="border-b border-border px-4 py-1.5 text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
         {rows.length > 0 ? 'What runs this' : 'Referenced by'}
       </p>
       {rows.map((binding, at) => (
         <div
           key={`${binding.event}-${binding.file}-${String(at)}`}
           data-hook-event={binding.event}
-          className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b border-border px-3.5 py-2 last:border-b-0"
+          className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b border-border px-4 py-2 last:border-b-0"
         >
           <span className="rounded-full border border-border-strong px-2 py-px font-mono text-[10.5px] text-fg">
             {binding.event}
@@ -73,7 +73,7 @@ export function HookProvenance({
           <div
             key={`${reference.key}-${reference.file}`}
             data-setting-reference={reference.key}
-            className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b border-border px-3.5 py-2 last:border-b-0"
+            className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b border-border px-4 py-2 last:border-b-0"
           >
             <span className="font-mono text-[11px] text-fg">{reference.key}</span>
             <SourceLink file={reference.file} layer={reference.layer} onOpenFile={onOpenFile} />
@@ -130,7 +130,7 @@ export function BundledResources({
   return (
     <div
       data-bundled={files.length}
-      className="mx-5 mb-4 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-raised border border-border bg-surface-raised px-3.5 py-2.5"
+      className="mx-5 mb-4 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-raised border border-border bg-surface-raised px-4 py-2.5"
     >
       <span className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
         Bundled with this skill
@@ -168,11 +168,9 @@ export function BundledResources({
  * sentence rather than a file.
  */
 export function ConfigOpaquePane({
-  file,
   live,
   note
 }: {
-  file: ConfigFile
   live: ConfigLive | null
   /** What Helm knows about this file, when it is one the CLI owns. */
   note: string | null
@@ -180,13 +178,12 @@ export function ConfigOpaquePane({
   return (
     <div className="grid h-full place-items-center px-8 py-10">
       <div data-config-opaque className="max-w-96 text-center">
-        <SparkIcon width={18} height={18} className="mx-auto text-fg-subtle opacity-70" />
+        {/* A plain document, not the skill spark: the glyph on this pane must
+            not be the one that means "a skill" three rows up the list. */}
+        <DocIcon width={18} height={18} className="mx-auto text-fg-subtle opacity-70" />
         <p className="mt-2 text-[12.5px] font-medium text-fg">Not part of a session</p>
         <p className="mt-1.5 text-[11.5px] leading-relaxed text-fg-muted">
           {note ?? live?.reason ?? 'Nothing in this scope’s configuration refers to this file.'}
-        </p>
-        <p className="mt-2.5 font-mono text-[10px] tabular-nums text-fg-subtle">
-          {formatBytes(file.size)} · updated {formatAge(file.mtimeMs)}
         </p>
       </div>
     </div>

@@ -326,3 +326,31 @@ describe('computeConfigLive: everything else', () => {
     expect(computeConfigLive(files.get('.claude/settings.json') as ConfigFile, null)).toBeNull()
   })
 })
+
+describe('computeConfigLive: a hook run by something other than a hooks block', () => {
+  it('is live when a settings value names it, even with no hooks block', () => {
+    // Found on a real tree: `hooks/statusline.cjs` is run by `statusLine`, not
+    // by an event. The directory is a convention, not a claim about what reads
+    // the file.
+    const project = mkdtempSync(join(tmpdir(), 'helm-live-hook-'))
+    try {
+      const path = join(project, '.claude', 'hooks', 'statusline.cjs')
+      mkdirSync(join(path, '..'), { recursive: true })
+      writeFileSync(path, 'module.exports = () => ""\n')
+      writeFileSync(
+        join(project, '.claude', 'settings.json'),
+        JSON.stringify({ statusLine: { type: 'command', command: 'node .claude/hooks/statusline.cjs' } })
+      )
+      const tree = readConfigTree(projectConfigScope(project))
+      const view = computeEffectiveView({ cwd: project, userHome: home })
+      const file = tree.files.find((candidate) => candidate.kind === 'hook')
+      expect(file).toBeDefined()
+      const live = computeConfigLive(file as ConfigFile, view)
+      expect(live?.state).toBe('live')
+      expect(live?.references[0]?.key).toBe('statusLine.command')
+      expect(live?.hooks).toEqual([])
+    } finally {
+      rmSync(project, { recursive: true, force: true })
+    }
+  })
+})

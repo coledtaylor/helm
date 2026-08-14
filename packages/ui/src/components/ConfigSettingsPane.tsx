@@ -6,7 +6,6 @@ import type { ConfigLive, ConfigSettingLive, SettingHint } from '@helm/core'
 import { SETTING_HINTS, settingHint, topLevelKey } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { Checkbox } from './Checkbox'
-import { PlusIcon } from './icons'
 
 /**
  * A `settings.json`, as the settings rather than as the JSON.
@@ -280,8 +279,8 @@ function SettingsForm({
       ))}
 
       {unset.length > 0 && (
-        <div className="flex items-center gap-2 border-t border-border pt-3">
-          <label className="flex min-w-0 flex-1 items-center gap-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border pt-3">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="sr-only">Add a setting</span>
             <select
               data-add-setting
@@ -307,8 +306,11 @@ function SettingsForm({
               ))}
             </select>
           </label>
-          <PlusIcon width={12} height={12} className="shrink-0 text-fg-subtle" />
-          <span className="min-w-0 flex-1 truncate text-[10.5px] text-fg-subtle">
+          {/* The schema is a table of hints, not a validator, so the sentence
+              beside the picker is load-bearing rather than decorative: it is
+              what says the picker is a convenience and the source is the
+              complete way in. */}
+          <span className="min-w-0 flex-1 text-[10.5px] text-fg-subtle">
             Every key Claude Code documents. Anything else goes in the source.
           </span>
         </div>

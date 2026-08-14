@@ -28,6 +28,19 @@
   max-width: var(--md-measure);
 }
 
+/* A pane whose whole subject is one program.
+ *
+ * The measure below is for prose - a paragraph is unreadable past about 70
+ * characters, and a code block inside a document is part of that reading. A
+ * source *view* is not: the file is the subject, the pane exists to show it,
+ * and capping it at the prose measure would put a hook's own source in a
+ * column a third of the width of the pane it is alone in. Used by the config
+ * console, which borrows these rules for the shiki colours and nothing else.
+ */
+.markdown-source > * {
+  max-width: none;
+}
+
 /* The one thing that earns the full width.
  *
  * A seven-column table of measurements is evidence and wants the room. A
@@ -300,8 +313,21 @@
   tab-size: 2;
 }
 
+/*
+ * A grid, and that is not a layout choice - it is what makes a code block one
+ * line high per line.
+ *
+ * Shiki emits `<span class="line">` blocks with the source's own newline
+ * *between* them. Inside a `block` those newlines are text in a `pre`, so each
+ * one gets an anonymous line box of its own and every block renders at double
+ * height - measured at 41px per line where the line-height is 19.2. A grid has
+ * no anonymous boxes for whitespace-only text, so the lines are the rows.
+ *
+ * `min-width: max-content` still governs the horizontal overflow, so a long
+ * line still scrolls inside the block rather than wrapping.
+ */
 .markdown pre code {
-  display: block;
+  display: grid;
   min-width: max-content;
   padding: 0;
   border: 0;
