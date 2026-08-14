@@ -534,7 +534,11 @@ function ScannedFolder({
           <CloseIcon width={12} height={12} />
           Remove from Helm
         </button>
-        <p className="min-w-0 flex-1 text-[11px] leading-[1.55] text-fg-subtle">
+        {/* `basis-80` rather than `flex-1`, so the sentence takes its own line
+            the moment the row cannot hold both. Left to flex-1 it kept its
+            place beside the button and turned into a six-line column 180px
+            wide - which is what a docked pane at 370px does to it. */}
+        <p className="min-w-0 grow basis-80 text-[11px] leading-[1.55] text-fg-subtle">
           Helm scans this folder. Removing it takes this folder - and anything Helm found inside
           it - out of the launcher. <span className="text-fg-muted">Nothing on disk is deleted</span>
           , and adding it again brings it all back.

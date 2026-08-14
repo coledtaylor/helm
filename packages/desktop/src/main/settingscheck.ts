@@ -1,7 +1,7 @@
 import { app, nativeTheme, type BrowserWindow } from 'electron'
 import Database from 'better-sqlite3'
 import { execFileSync } from 'node:child_process'
-import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readSettings, type AppSettings } from '@helm/core'
 import {
@@ -186,6 +186,26 @@ function rawRow(dbFile: string, key: keyof AppSettings): string | undefined {
       | { value: string }
       | undefined
     return row?.value
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * Every path in the discovery cache, read by this driver's own connection.
+ *
+ * The `projects` table rather than `app_settings`, and it is a different claim
+ * from the settings one: a root can leave the setting and leave the tree while
+ * its rows sit in the cache, and those rows are what the launcher paints from
+ * before the first scan of the next start lands. "Removed" that leaves them
+ * behind is removed until you restart.
+ */
+function cachedProjectPaths(dbFile: string): string[] {
+  const db = new Database(dbFile, { readonly: true, fileMustExist: true })
+  try {
+    return (db.prepare('SELECT path FROM projects').all() as Array<{ path: string }>).map(
+      (row) => row.path
+    )
   } finally {
     db.close()
   }
@@ -801,6 +821,16 @@ interface Fixtures {
   pinProjects: string[]
   /** A path under `pinRoot` that was never created. Pinnable, never found. */
   pinGone: string
+  /**
+   * A folder somebody would add meaning *this one*: subdirectories, and not a
+   * project among them. The shape the folder-root bug turned into four rows.
+   *
+   * `leafChildren` is what the old rule would have listed, and S-22 asserts it
+   * is non-empty before believing "exactly one row" - a folder with nothing in
+   * it would pass that claim without discriminating anything.
+   */
+  leafRoot: string
+  leafChildren: string[]
 }
 
 function buildFixtures(dataDir: string): Fixtures {
@@ -834,6 +864,15 @@ function buildFixtures(dataDir: string): Fixtures {
   }
   // Deliberately not created. This is the pinned path whose folder has gone.
   const pinGone = join(pinRoot, 'pin harness one', 'repos', 'unplugged drive')
+
+  // A tool directory, with a space in its name like the rest of these. Nothing
+  // in it carries `.git`, `.claude` or a `CLAUDE.md`, which is what makes it a
+  // folder rather than a folder *of* projects - and what the four rows in the
+  // bug report were.
+  const leafRoot = join(dir, 'leaf tool')
+  const leafChildren = ['data', 'src', 'tests'].map((name) => join(leafRoot, name))
+  for (const path of leafChildren) mkdirSync(path, { recursive: true })
+  writeFileSync(join(leafRoot, 'pyproject.toml'), '[project]\nname = "leaf tool"\n')
 
   const stubDir = join(dir, 'stub')
   mkdirSync(stubDir, { recursive: true })
@@ -878,7 +917,9 @@ function buildFixtures(dataDir: string): Fixtures {
     termProjects,
     pinRoot,
     pinProjects,
-    pinGone
+    pinGone,
+    leafRoot,
+    leafChildren
   }
 }
 
@@ -1435,6 +1476,129 @@ export async function runSettingsChecks(
         'losing exactly the removed roots two projects is the thing worth proving.',
         'The fixture is asserted to have been contributing those projects first.',
         'Both fixture roots contain a path with a space in it - Windows-first.'
+      ]
+    })
+
+    // -----------------------------------------------------------------------
+    // S-22: the folder you add is the row you get, and its own pane takes it
+    // back out
+    // -----------------------------------------------------------------------
+    //
+    // Two failures in one report, and they are asserted end to end here rather
+    // than one level down, because both of them were invisible one level down:
+    // `scan` was doing exactly what it said, the setting held exactly the path
+    // that was picked, and what the user got was four rows named after a Python
+    // source tree and no way to be rid of them.
+    //
+    // The fixture has to discriminate. `leafChildren` is what the old rule
+    // listed, so it is asserted non-empty first: a folder with nothing under it
+    // would satisfy "exactly one row" while proving nothing at all.
+    const leafSubdirs = readdirSync(fixtures.leafRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(fixtures.leafRoot, entry.name).toLowerCase())
+
+    answerPicker('directory', fixtures.leafRoot)
+    await click(win, '[data-settings-add-root]')
+    await pollJs(win, byData('settings-root', fixtures.leafRoot), 20_000)
+    await pollJs(
+      win,
+      `[...document.querySelectorAll('aside nav button[title]')]
+        .some((b) => b.title.toLowerCase() === ${JSON.stringify(fixtures.leafRoot.toLowerCase())})`,
+      45_000
+    )
+    await sleep(600)
+
+    const leafRows = (await sidebarPaths(win)).filter((path) =>
+      path.toLowerCase().startsWith(fixtures.leafRoot.toLowerCase())
+    )
+
+    // The pane, and the control that is only on it because this project is a
+    // root. The converse matters as much: the same pane opened on a project
+    // that is *inside* a root must not offer it, or "the panel is on every
+    // pane" would pass this.
+    const paneOpened = await clickProject(win, fixtures.leafRoot)
+    await pollJs(win, `document.querySelector('[data-project-panel="scan-root"]')`, 15_000)
+    const removeOnRoot = await js<boolean>(
+      win,
+      `document.querySelector('[data-project-remove-root]') !== null`
+    ).catch(() => false)
+    const leafShot = await screenshot(win, shotDir, 'settings-22-scanned-folder.png')
+
+    const insideRoot = fixtures.aProjects[0] ?? ''
+    await clickProject(win, insideRoot)
+    await pollJs(win, `document.querySelector('[data-project-pane]')`, 15_000)
+    await sleep(400)
+    const removeOnChild = await js<boolean>(
+      win,
+      `document.querySelector('[data-project-remove-root]') !== null`
+    ).catch(() => true)
+
+    // Back to the folder, and out through its own button.
+    await clickProject(win, fixtures.leafRoot)
+    await pollJs(win, `document.querySelector('[data-project-remove-root]')`, 15_000)
+    const cachedBefore = cachedProjectPaths(dbFile).filter((path) =>
+      path.toLowerCase().startsWith(fixtures.leafRoot.toLowerCase())
+    )
+    const removedFromPane = await click(win, '[data-project-remove-root]')
+    const leafRowGone = await pollJs(
+      win,
+      `[...document.querySelectorAll('aside nav button[title]')]
+        .every((b) => !b.title.toLowerCase().startsWith(${JSON.stringify(
+          fixtures.leafRoot.toLowerCase()
+        )}))`,
+      45_000
+    )
+    await sleep(800)
+
+    const rootsAfterPaneRemove = rowValue(dbFile, 'scanRoots') as string[] | undefined
+    const cachedAfter = cachedProjectPaths(dbFile).filter((path) =>
+      path.toLowerCase().startsWith(fixtures.leafRoot.toLowerCase())
+    )
+
+    checks.push({
+      id: 'S-22',
+      criterion: 'A folder added as a root is itself the row, and its pane can remove it',
+      title: `One row for a folder with ${String(leafSubdirs.length)} subdirectories, removed again from its own pane`,
+      ok:
+        leafSubdirs.length > 1 &&
+        leafRows.length === 1 &&
+        leafRows[0]?.toLowerCase() === fixtures.leafRoot.toLowerCase() &&
+        paneOpened &&
+        removeOnRoot &&
+        !removeOnChild &&
+        cachedBefore.length === 1 &&
+        removedFromPane &&
+        leafRowGone &&
+        !(rootsAfterPaneRemove ?? []).some(
+          (root) => root.toLowerCase() === fixtures.leafRoot.toLowerCase()
+        ) &&
+        cachedAfter.length === 0 &&
+        // The folder is still there. Removal is a change to a setting and
+        // nothing else, and the panel says so in those words.
+        existsSync(fixtures.leafRoot) &&
+        leafSubdirs.every((path) => existsSync(path)),
+      detail: {
+        leafRoot: fixtures.leafRoot,
+        subdirectoriesTheOldRuleWouldHaveListed: leafSubdirs,
+        sidebarRowsForIt: leafRows,
+        removeControl: { onTheRoot: removeOnRoot, onAProjectInsideARoot: removeOnChild },
+        cachedRows: { before: cachedBefore, after: cachedAfter },
+        rootsAfterPaneRemove,
+        stillOnDisk: existsSync(fixtures.leafRoot),
+        screenshot: leafShot.file
+      },
+      notes: [
+        'The reported bug: a folder added as a scan root listed its subdirectories',
+        'and never itself. The fixture is a directory of three ordinary folders,',
+        'asserted to exist first - "exactly one row" over an empty folder is a',
+        'claim about nothing.',
+        'Removal goes through the button on the project pane, and the verdict is',
+        'read from the database file by this driver: the setting lost the root,',
+        'and the `projects` rows under it - what the launcher paints from before',
+        'the next scan lands - are gone with it. Both are asserted to have been',
+        'there beforehand.',
+        'The folder and every subdirectory are still on disk afterwards, which is',
+        'what the panel promises in the words next to the button.'
       ]
     })
   }
