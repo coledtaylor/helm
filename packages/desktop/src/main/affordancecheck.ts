@@ -564,7 +564,15 @@ export async function runAffordanceChecks(
         if (wanted.has('cursor') && m.hover.cursor !== 'pointer' && !spot.disabled) {
           noPointer.push({ ...spot, cursor: m.hover.cursor })
         }
-        if (wanted.has('hover')) {
+        // Disabled is exempt here for the same reason it is exempt from the
+        // cursor above, and the exemption is not a softening: `quiet` already
+        // makes the claim that belongs to a disabled button - it must *not*
+        // read as clickable. Requiring it to answer the pointer as well would
+        // be requiring one element to satisfy both halves of a contradiction,
+        // and the only way to pass both is to look pressable while doing
+        // nothing. Nothing had ever enumerated one until the config editor's
+        // Rename, which is disabled on a file the CLI finds by its exact name.
+        if (wanted.has('hover') && !spot.disabled) {
           const tier = tierOf(m.rest, m.hover)
           if (tier === 'none') noHover.push({ ...spot, tier })
           else if (tier === 'near') nearOnly.push({ ...spot, tier })
@@ -713,7 +721,8 @@ export async function runAffordanceChecks(
     const peerNotATab = nearOnly.filter((spot) => spot.tag !== 'button[tab]')
     checks.push({
       id: 'AFF-4',
-      criterion: 'Every clickable control changes appearance under the pointer, and on itself',
+      criterion:
+        'Every clickable control changes appearance under the pointer, and on itself. A disabled one is `quiet`’s, not this check’s',
       title: `Hover response on all ${measured} measured controls (${noHover.length} dead, ${peerNotATab.length} answering only on a peer)`,
       // `measured` is the floor, by AFF-6's argument: nothing dead and nothing
       // peer-only is also what a walk that reached no controls at all reports.
