@@ -28,7 +28,15 @@ interface SnapshotRow {
   content?: string
 }
 
-const REASONS = new Set<ConfigWriteReason>(['edit', 'create', 'restore', 'mcp', 'approve'])
+const REASONS = new Set<ConfigWriteReason>([
+  'edit',
+  'create',
+  'restore',
+  'mcp',
+  'approve',
+  'rename',
+  'delete'
+])
 
 function toReason(value: string): ConfigWriteReason {
   return REASONS.has(value as ConfigWriteReason) ? (value as ConfigWriteReason) : 'edit'

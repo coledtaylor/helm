@@ -12,6 +12,10 @@ import type {
   ContentScope,
   ContentSearchResult,
   ContentTree,
+  CreateConfigRequest,
+  CreateConfigResult,
+  DeleteConfigRequest,
+  DeleteConfigResult,
   DetectedShell,
   DiscoveryResult,
   DoctorReport,
@@ -31,6 +35,8 @@ import type {
   ProfileDraft,
   PullDetailView,
   PullsSnapshot,
+  RenameConfigRequest,
+  RenameConfigResult,
   RenderedMarkdown,
   SessionRecord,
   ThemePreference,
@@ -611,6 +617,23 @@ export interface IpcRequests {
   /** Tells main which file to watch for changes made outside the app. */
   'config:watch': { request: WatchConfigRequest; response: void }
 
+  /**
+   * The three things a directory supports that replacing one file's bytes does
+   * not. They are separate channels rather than modes of `config:write` because
+   * each takes a different question - a kind and a name, a new name, or nothing
+   * at all - and because a delete that arrived as a write of zero bytes would
+   * be a delete with no way to tell it from an emptied file.
+   *
+   * All three go through the same snapshot-first path `config:write` does, and
+   * through the same `assertWritable`: a new channel here is a new *question*,
+   * never a second route into the filesystem.
+   */
+  'config:create': { request: CreateConfigRequest; response: CreateConfigResult }
+  /** Moves a skill's whole directory, or a command across its namespace path. */
+  'config:rename': { request: RenameConfigRequest; response: RenameConfigResult }
+  /** Snapshots first, then removes. Each row is restorable through `config:restore`. */
+  'config:delete': { request: DeleteConfigRequest; response: DeleteConfigResult }
+
   'config:effective': { request: EffectiveViewRequest; response: EffectiveView }
 
   'config:mcpPreview': { request: McpAddRequest; response: McpPreview }
@@ -1022,6 +1045,9 @@ export const REQUEST_CHANNELS = Object.keys({
   'config:snapshot': true,
   'config:restore': true,
   'config:watch': true,
+  'config:create': true,
+  'config:rename': true,
+  'config:delete': true,
   'config:effective': true,
   'config:mcpPreview': true,
   'config:mcpAdd': true,

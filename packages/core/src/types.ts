@@ -13,6 +13,8 @@
 // Imported as well as re-exported: `AppSettings` below names it, and a
 // re-export alone does not bring a name into this file's scope.
 import type { UsageDisplayMode } from './usage/shape'
+// The same, for `CreateConfigRequest` below.
+import type { CreatableKind } from './config/names'
 // The same, for a value: `DEFAULT_SETTINGS` reads the polling default off it.
 import { PR_POLL_MINUTES, PR_STALE_DAYS, type PrCheckoutMode } from './github/types'
 // And for the review template's default, which is the prompt module's to state.
@@ -25,6 +27,28 @@ export {
   type Frontmatter,
   type JsonProblem
 } from './config/validate'
+/**
+ * The naming rules, for the same reason and by the same argument: the New and
+ * Rename dialogs have to refuse a name the CLI could not address *as it is
+ * typed*, which means the check runs in the renderer. `create-rename-delete.ts`
+ * runs it again on the main side, where it is the guarantee rather than the
+ * courtesy.
+ */
+export {
+  checkConfigName,
+  configUnit,
+  isRenamable,
+  planConfigFile,
+  renameRefusal,
+  CREATABLE_KINDS,
+  RENAMABLE_KINDS,
+  type ConfigFilePlan,
+  type CreatableKind,
+  type CreatableKindSpec,
+  type NameCheck,
+  type PlanInput,
+  type PlanResult
+} from './config/names'
 export {
   settingHint,
   topLevelKey,
@@ -1181,8 +1205,22 @@ export interface ConfigFileContent {
   binary: boolean
 }
 
-/** Why a snapshot was taken. Stored on the row and shown in the file's history. */
-export type ConfigWriteReason = 'edit' | 'create' | 'restore' | 'mcp' | 'approve'
+/**
+ * Why a snapshot was taken. Stored on the row and shown in the file's history.
+ *
+ * `rename` and `delete` are ordinary rows and are deliberately not a second
+ * mechanism: a `delete` row holds the bytes that were there, so restoring it
+ * puts the file back the same way restoring an `edit` row does. That is what
+ * makes "undo this delete" and "restore this version" the same button.
+ */
+export type ConfigWriteReason =
+  | 'edit'
+  | 'create'
+  | 'restore'
+  | 'mcp'
+  | 'approve'
+  | 'rename'
+  | 'delete'
 
 export interface ConfigSnapshotMeta {
   id: number
@@ -1231,6 +1269,80 @@ export interface WriteConfigResult {
   }
   /** Set when the write was refused for a reason other than a conflict. */
   error?: string
+}
+
+// --- Create, rename, delete -------------------------------------------------
+
+/**
+ * The three things a directory supports that replacing one file's bytes does
+ * not. All three take the scope by path and the entry by absolute path, the
+ * same way `config:write` does, and all three are answered with a structured
+ * result rather than a throw: every one of them has failure modes the *user*
+ * caused - a name the CLI could not address, a collision, a bundled file Helm
+ * cannot record - and those have to be shown in the dialog that asked.
+ */
+export interface CreateConfigRequest {
+  scopePath: string
+  kind: CreatableKind
+  /** Ignored for the fixed-name kinds; see `CREATABLE_KINDS`. */
+  name: string
+}
+
+export interface CreateConfigResult {
+  ok: boolean
+  /** Absolute path of the file that now exists, so the console can open it. */
+  path: string | null
+  /** Relative to the scope base, forward-slashed - the tree's own key. */
+  relPath: string | null
+  /** The `create` row taken before the file was touched. */
+  snapshotId: number | null
+  error: string | null
+}
+
+export interface RenameConfigRequest {
+  scopePath: string
+  /** The addressed file - a skill's `SKILL.md`, not its directory. */
+  path: string
+  name: string
+}
+
+export interface RenameConfigResult {
+  ok: boolean
+  /** The addressed file at its new location. Null when nothing moved. */
+  path: string | null
+  relPath: string | null
+  /** Every file that moved. A skill's whole directory, one file for the rest. */
+  moved: Array<{ from: string; to: string }>
+  /** Every row taken - the destinations' `create`s and the sources' `rename`s. */
+  snapshotIds: number[]
+  /**
+   * The moved file's frontmatter `name:` was updated to match.
+   *
+   * Only ever true when it named the *old* address exactly - a file declaring
+   * anything else is not claiming to be the thing being renamed, and Helm does
+   * not edit a field somebody set on purpose.
+   */
+  frontmatterRenamed: boolean
+  error: string | null
+}
+
+export interface DeleteConfigRequest {
+  scopePath: string
+  path: string
+}
+
+export interface DeletedConfigFile {
+  path: string
+  /** Relative to the scope base - the key this file's history is listed under. */
+  relPath: string
+  snapshotId: number
+}
+
+export interface DeleteConfigResult {
+  ok: boolean
+  /** What came off the disk, each with the row that can put it back. */
+  removed: DeletedConfigFile[]
+  error: string | null
 }
 
 // --- Effective view --------------------------------------------------------

@@ -12,6 +12,7 @@ import type {
   McpResult,
   McpScope
 } from '@helm/core'
+import type { CreatableKind } from '@helm/core/types'
 import type { ConfigViewKind } from '@helm/ui'
 import { helm } from './bridge'
 
@@ -34,6 +35,23 @@ export interface ConfigMcpDraft {
   name: string
   scope: McpScope
   json: string
+}
+
+/** Which of the three dialogs is open. `null` is none, which is the resting state. */
+export type ConfigEntryDialog = 'new' | 'rename' | 'delete' | null
+
+/**
+ * A delete that has happened, held until it is undone or dismissed.
+ *
+ * The file is gone from the tree, so its version history has no row in the list
+ * to be reached from - and the delete's own snapshots are that history. Holding
+ * them here is what makes "restorable from the per-file history" reachable by
+ * clicking rather than only by an IPC call somebody would have to write.
+ */
+export interface DeletedEntry {
+  /** How it was addressed, for the strip's sentence. */
+  label: string
+  files: Array<{ path: string; snapshotId: number }>
 }
 
 export interface ConfigState {
@@ -65,6 +83,23 @@ export interface ConfigState {
   /** The editor's text differs from the file. Marks the row in the list. */
   dirty: boolean
   setDirty: (dirty: boolean) => void
+
+  /**
+   * New, Rename and Delete. Which dialog is open, if any, plus the state the
+   * three of them share: one busy flag and one error, because only one can be
+   * open at a time and an error belongs to the dialog that caused it.
+   */
+  entryDialog: ConfigEntryDialog
+  openEntryDialog: (dialog: ConfigEntryDialog) => void
+  entryBusy: boolean
+  entryError: string | null
+  createFile: (kind: CreatableKind, name: string) => void
+  renameFile: (name: string) => void
+  deleteFile: () => void
+  /** What a delete left behind: the rows that can bring it back. */
+  deleted: DeletedEntry | null
+  undoDelete: () => void
+  dismissDeleted: () => void
 
   effectiveProfileId: number | null
   setEffectiveProfileId: (id: number | null) => void
@@ -366,6 +401,137 @@ export function useConfig(): ConfigState {
     setExternal(null)
   }, [])
 
+  // -------------------------------------------------------------------------
+  // New, rename, delete
+  // -------------------------------------------------------------------------
+  const [entryDialog, setEntryDialog] = useState<ConfigEntryDialog>(null)
+  const [entryBusy, setEntryBusy] = useState(false)
+  const [entryError, setEntryError] = useState<string | null>(null)
+  const [deletedEntry, setDeletedEntry] = useState<
+    (DeletedEntry & { scopePath: string }) | null
+  >(null)
+
+  /**
+   * A delete belongs to the scope it happened in.
+   *
+   * Switching scope leaves the strip behind rather than offering an undo above
+   * a list it is not about - and the rows stay in the history either way.
+   * Derived from the scope on screen rather than cleared by an effect: the two
+   * are the same outcome, and a `useState` that a `useEffect` resets is a state
+   * that is briefly wrong on every scope change.
+   */
+  const deleted =
+    deletedEntry !== null && deletedEntry.scopePath.toLowerCase() === scopePath.toLowerCase()
+      ? deletedEntry
+      : null
+
+  const openEntryDialog = useCallback((dialog: ConfigEntryDialog) => {
+    setEntryDialog(dialog)
+    setEntryError(null)
+  }, [])
+
+  /** Selects a path the tree has not been re-read for yet, and forces the re-read. */
+  const landOn = useCallback((path: string | null) => {
+    setTreeVersion((n) => n + 1)
+    setFileVersion((n) => n + 1)
+    setSelectedPath(path)
+    setEditorError(null)
+    setExternal(null)
+  }, [])
+
+  const createFile = useCallback(
+    (kind: CreatableKind, name: string) => {
+      if (scope === null) return
+      setEntryBusy(true)
+      setEntryError(null)
+      void helm
+        .invoke('config:create', { scopePath: scope.path, kind, name })
+        .then((result) => {
+          if (!result.ok) {
+            setEntryError(result.error ?? 'Nothing was created.')
+            return
+          }
+          setEntryDialog(null)
+          // Opened straight away: every scaffold below is a placeholder with a
+          // sentence in it saying what to replace, and a New that left you
+          // looking at the list would have written a file nobody read.
+          landOn(result.path)
+        })
+        .catch((err: unknown) => setEntryError(readable(err)))
+        .finally(() => setEntryBusy(false))
+    },
+    [scope, landOn]
+  )
+
+  const renameFile = useCallback(
+    (name: string) => {
+      if (scope === null || selectedPath === null) return
+      setEntryBusy(true)
+      setEntryError(null)
+      void helm
+        .invoke('config:rename', { scopePath: scope.path, path: selectedPath, name })
+        .then((result) => {
+          if (!result.ok) {
+            setEntryError(result.error ?? 'Nothing was renamed.')
+            return
+          }
+          setEntryDialog(null)
+          landOn(result.path)
+        })
+        .catch((err: unknown) => setEntryError(readable(err)))
+        .finally(() => setEntryBusy(false))
+    },
+    [scope, selectedPath, landOn]
+  )
+
+  const deleteFile = useCallback(() => {
+    if (scope === null || selectedPath === null || selected === null) return
+    const label = selected.name
+    setEntryBusy(true)
+    setEntryError(null)
+    void helm
+      .invoke('config:delete', { scopePath: scope.path, path: selectedPath })
+      .then((result) => {
+        if (!result.ok) {
+          setEntryError(result.error ?? 'Nothing was deleted.')
+          return
+        }
+        setEntryDialog(null)
+        setDeletedEntry({
+          scopePath: scope.path,
+          label,
+          files: result.removed.map((row) => ({ path: row.path, snapshotId: row.snapshotId }))
+        })
+        landOn(null)
+      })
+      .catch((err: unknown) => setEntryError(readable(err)))
+      .finally(() => setEntryBusy(false))
+  }, [scope, selectedPath, selected, landOn])
+
+  /**
+   * Puts a deleted entry back, one `config:restore` per file.
+   *
+   * The same channel the version list uses, over the same rows - a delete's
+   * undo is not a fourth mechanism, it is the history the delete wrote. In
+   * order, so a skill's `SKILL.md` is the file the console lands on.
+   */
+  const undoDelete = useCallback(() => {
+    if (deleted === null) return
+    setEntryBusy(true)
+    const restoreAll = deleted.files.reduce<Promise<unknown>>(
+      (chain, row) =>
+        chain.then(() => helm.invoke('config:restore', { id: row.snapshotId, path: row.path })),
+      Promise.resolve()
+    )
+    void restoreAll
+      .then(() => {
+        setDeletedEntry(null)
+        landOn(deleted.files[0]?.path ?? null)
+      })
+      .catch((err: unknown) => setEditorError(readable(err)))
+      .finally(() => setEntryBusy(false))
+  }, [deleted, landOn])
+
   /**
    * Opens a file by path, from a link somewhere that is not the list - the
    * effective view's entries, or the file an MCP server was defined in.
@@ -595,6 +761,16 @@ export function useConfig(): ConfigState {
     restore,
     dirty,
     setDirty,
+    entryDialog,
+    openEntryDialog,
+    entryBusy,
+    entryError,
+    createFile,
+    renameFile,
+    deleteFile,
+    deleted,
+    undoDelete,
+    dismissDeleted: useCallback(() => setDeletedEntry(null), []),
     effectiveProfileId,
     setEffectiveProfileId,
     effectiveCwd,

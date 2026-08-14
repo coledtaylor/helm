@@ -135,6 +135,23 @@ const VIEWS: Array<{ name: string; open: readonly string[] | null; anchor: strin
   { name: 'welcome', open: null, anchor: 'aside nav button[title]' },
   { name: 'project', open: ['aside nav button[title]'], anchor: '[data-project-pane]' },
   { name: 'config', open: ['[data-open-config]'], anchor: '[data-config-scope]' },
+  /**
+   * The console with a file picked, which is where the editor's own controls
+   * are - Save, Revert, the version list, the path, Rename and Delete.
+   *
+   * A separate row rather than a deeper `config`, because none of them exists
+   * until something is selected: without this step they sit in exactly the
+   * coverage gap AFF-2 is named for, measured by nothing and reported by
+   * nothing. The first row is taken whatever it is, so on a scope whose first
+   * file is a `settings.json` this measures Rename *disabled* - which AFF-5
+   * then has an opinion about, and which is the honest state of that control
+   * on that file.
+   */
+  {
+    name: 'config:file',
+    open: ['[data-open-config]', 'button[data-config-file]'],
+    anchor: '[data-delete-config]'
+  },
   // The config console's other three views. One click further in, and the pane
   // that holds the app's only two label-wrapped checkboxes and its MCP form -
   // which is to say, the controls least like the ones on the seven top views.
@@ -638,7 +655,15 @@ export async function runAffordanceChecks(
         if (wanted.has('cursor') && m.hover.cursor !== 'pointer' && !spot.disabled) {
           noPointer.push({ ...spot, cursor: m.hover.cursor })
         }
-        if (wanted.has('hover')) {
+        // Disabled is exempt here for the same reason it is exempt from the
+        // cursor above, and the exemption is not a softening: `quiet` already
+        // makes the claim that belongs to a disabled button - it must *not*
+        // read as clickable. Requiring it to answer the pointer as well would
+        // be requiring one element to satisfy both halves of a contradiction,
+        // and the only way to pass both is to look pressable while doing
+        // nothing. Nothing had ever enumerated one until the config editor's
+        // Rename, which is disabled on a file the CLI finds by its exact name.
+        if (wanted.has('hover') && !spot.disabled) {
           const tier = tierOf(m.rest, m.hover)
           if (tier === 'none') noHover.push({ ...spot, tier })
           else if (tier === 'near') nearOnly.push({ ...spot, tier })
@@ -817,7 +842,8 @@ export async function runAffordanceChecks(
     const peerNotATab = nearOnly.filter((spot) => spot.tag !== 'button[tab]')
     checks.push({
       id: 'AFF-4',
-      criterion: 'Every clickable control changes appearance under the pointer, and on itself',
+      criterion:
+        'Every clickable control changes appearance under the pointer, and on itself. A disabled one is `quiet`’s, not this check’s',
       title: `Hover response on all ${measured} measured controls (${noHover.length} dead, ${peerNotATab.length} answering only on a peer)`,
       // `measured` is the floor, by AFF-6's argument: nothing dead and nothing
       // peer-only is also what a walk that reached no controls at all reports.

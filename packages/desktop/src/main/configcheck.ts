@@ -501,7 +501,19 @@ function skillToken(file: string): string {
 // The checks
 // ---------------------------------------------------------------------------
 
-const GROUPS = ['browse', 'edit', 'snapshot', 'json', 'external', 'mcp', 'effective', 'doctor'] as const
+const GROUPS = [
+  'browse',
+  'edit',
+  'snapshot',
+  'json',
+  'external',
+  'create',
+  'rename',
+  'delete',
+  'mcp',
+  'effective',
+  'doctor'
+] as const
 type Group = (typeof GROUPS)[number]
 
 export async function runConfigChecks(
@@ -626,6 +638,12 @@ export async function runConfigChecks(
     await group('snapshot', async () => [await snapshotCheck(ctx, fixtures)])
     await group('json', async () => [await jsonCheck(ctx, shotDir, fixtures)])
     await group('external', async () => [await externalCheck(ctx, shotDir, fixtures)])
+    // The three that change what is *in* the tree rather than what is in a
+    // file. Each plants and removes its own fixtures, so any one of them is
+    // runnable on its own with `--only=`.
+    await group('create', () => createChecks(ctx, shotDir, fixtures, userHome))
+    await group('rename', () => renameChecks(ctx, shotDir, fixtures))
+    await group('delete', () => deleteChecks(ctx, shotDir, fixtures))
     await group('mcp', async () => [await mcpCheck(ctx, shotDir, fixtures)])
     await group('effective', () =>
       effectiveChecks(ctx, collector, shotDir, fixtures, userHome, profile, running('mcp'))
@@ -1657,4 +1675,703 @@ async function doctorCheck(ctx: CheckContext, shotDir: string): Promise<Check> {
       'below them for the ones the parse did not recognise.'
     ]
   }
+}
+
+// ---------------------------------------------------------------------------
+// CFG-12 / CFG-13 / CFG-14: creating, renaming and deleting an entry
+// ---------------------------------------------------------------------------
+
+/**
+ * The three things a directory supports that replacing one file's bytes does
+ * not, driven through the dialogs a user reaches them from.
+ *
+ * Each group plants what it needs with this file's own `writeFileSync` and
+ * removes it again, so any one of them survives `--only=`. Nothing here is
+ * asserted against the console's own answer: the tree is re-read with
+ * `readdirSync`, the bytes with `readFileSync`, the frontmatter with a regex
+ * written below rather than with `parseFrontmatter`, and the restores against a
+ * `sha256` taken here before anything was touched.
+ */
+
+/** Every file under a directory, relative and forward-slashed, sorted. */
+function listUnder(dir: string): string[] {
+  const out: string[] = []
+  const walk = (at: string, prefix: string): void => {
+    let entries
+    try {
+      entries = readdirSync(at, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const child = join(at, entry.name)
+      if (entry.isDirectory()) walk(child, `${prefix}${entry.name}/`)
+      else if (entry.isFile()) out.push(`${prefix}${entry.name}`)
+    }
+  }
+  walk(dir, '')
+  return out.sort()
+}
+
+/**
+ * A frontmatter field, read by a regex written here.
+ *
+ * Deliberately not `parseFrontmatter`: the scaffold is produced by code that
+ * shares that parser, and a scaffold checked with the parser it was written
+ * against is a parser agreeing with itself.
+ */
+function frontmatterValue(text: string, key: string): string | null {
+  const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
+  if (!block) return null
+  const line = new RegExp(`^${key}:[ \\t]*(.+)$`, 'm').exec(block[1] ?? '')
+  return line?.[1]?.trim() ?? null
+}
+
+/** Escape hatch out of a dialog the driver deliberately could not complete. */
+async function dismissDialog(win: BrowserWindow): Promise<void> {
+  await js<boolean>(
+    win,
+    `(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); return true })()`
+  )
+  await sleep(300)
+}
+
+/** Re-reads the scope after the driver has changed the disk behind the app. */
+async function refreshScope(win: BrowserWindow): Promise<void> {
+  await click(win, 'button[data-config-refresh]')
+  await sleep(800)
+}
+
+/**
+ * The state on screen, in both themes.
+ *
+ * A UI change is not done until it has been looked at in both, and these
+ * dialogs are exactly what `design-shot`'s itinerary does not reach: each is
+ * two clicks in, behind a state the walk would have to create and then unwind.
+ * The preference is put back, because a check does not get to park a setting.
+ *
+ * Clicked through `el.click()` rather than a pointer, which is what lets it
+ * reach the title bar while a modal backdrop covers the window - and which
+ * dispatches no `mousedown`, so the backdrop's own dismiss never fires.
+ */
+async function shootBothThemes(
+  win: BrowserWindow,
+  outDir: string,
+  name: string
+): Promise<{ files: string[]; applied: boolean }> {
+  const before = await js<string>(
+    win,
+    `(() => {
+      const on = document.querySelector('[role="radiogroup"][aria-label="Theme"] [aria-checked="true"]');
+      return on?.getAttribute('aria-label') ?? 'Match the system theme' })()`
+  )
+  const files: string[] = []
+  let applied = true
+  for (const [theme, label] of [
+    ['dark', 'Dark theme'],
+    ['light', 'Light theme']
+  ] as const) {
+    await click(win, `button[aria-label="${label}"]`)
+    /**
+     * Waited for rather than slept through, and reported when it does not
+     * happen.
+     *
+     * The preference goes to main and comes back as `theme:resolved`, so a
+     * capture taken on a fixed timer can photograph the previous theme - which
+     * had already happened here: two PNGs, one called `-dark` and one `-light`,
+     * byte-for-byte identical. Two pictures of the same thing is a design
+     * review with no evidence behind it, and it looks exactly like one with.
+     */
+    const landed = await pollJs(
+      win,
+      `document.documentElement.classList.contains('dark') === ${String(theme === 'dark')}`,
+      8_000
+    )
+    if (!landed) applied = false
+    await sleep(400)
+    /**
+     * One frame is captured and thrown away first.
+     *
+     * `capturePage` can hand back the frame the compositor last committed, and
+     * on a window nobody is looking at that is the *previous* state - which is
+     * how a shot of the rename dialog and a shot of the delete dialog came out
+     * byte-for-byte identical here. Asking twice forces a current one.
+     */
+    await win.webContents.capturePage()
+    await sleep(250)
+    files.push((await screenshot(win, outDir, `${name}-${theme}.png`)).file)
+  }
+
+  // And the belt to that pair of braces: two files with the same bytes are two
+  // pictures of one thing, whatever the names on them say.
+  const [dark, light] = files
+  if (dark !== undefined && light !== undefined && sha256File(dark) === sha256File(light)) {
+    applied = false
+  }
+
+  await click(win, `button[aria-label="${before}"]`)
+  await sleep(350)
+  return { files, applied }
+}
+
+interface NewDialogRun {
+  opened: boolean
+  /** The path the dialog says it will write, read off its own preview. */
+  target: string
+  problem: string
+  createDisabled: boolean
+  closed: boolean
+}
+
+/** Opens New, fills it in, and presses Create. */
+async function createThrough(
+  win: BrowserWindow,
+  kind: string,
+  name: string | null
+): Promise<NewDialogRun> {
+  const opened =
+    (await click(win, 'button[data-config-new]')) &&
+    (await pollJs(win, `document.querySelector('[data-config-new-dialog]')`, 10_000))
+  if (!opened) {
+    return { opened: false, target: '', problem: '', createDisabled: true, closed: false }
+  }
+
+  await setValue(win, 'select[data-config-new-kind]', kind)
+  await sleep(250)
+  if (name !== null) await setValue(win, 'input[data-config-new-name]', name)
+  await sleep(400)
+
+  const state = await js<{ target: string; problem: string; createDisabled: boolean }>(
+    win,
+    `(() => {
+      const create = document.querySelector('button[data-config-new-create]');
+      return {
+        target: (document.querySelector('[data-config-new-target]')?.textContent ?? '').trim(),
+        problem: (document.querySelector('[data-config-dialog-problem]')?.textContent ?? '')
+          .replace(/\\s+/g, ' ').trim(),
+        createDisabled: Boolean(create && create.disabled)
+      } })()`
+  )
+
+  await click(win, 'button[data-config-new-create]')
+  await sleep(1000)
+  const closed = !(await js<boolean>(
+    win,
+    `Boolean(document.querySelector('[data-config-new-dialog]'))`
+  ))
+  return { opened, ...state, closed }
+}
+
+async function createChecks(
+  ctx: CheckContext,
+  shotDir: string,
+  fixtures: Fixtures,
+  userHome: string
+): Promise<Check[]> {
+  const { win } = ctx
+  const skillDir = join(fixtures.workspace, '.claude', 'skills', 'helm-probe-skill')
+  const skillFile = join(skillDir, 'SKILL.md')
+  const namespaceDir = join(fixtures.workspace, '.claude', 'commands', 'helm-ns')
+  const commandFile = join(namespaceDir, 'cmd.md')
+
+  // Nothing is planted: the point of this group is that the *app* makes these,
+  // so the pre-state has to be their absence - and it is asserted, because "the
+  // file is there afterwards" passes trivially against a file that already was.
+  rmSync(skillDir, { recursive: true, force: true })
+  rmSync(namespaceDir, { recursive: true, force: true })
+  const absentBefore = !existsSync(skillFile) && !existsSync(commandFile)
+
+  await selectScope(win, fixtures.workspace)
+  await refreshScope(win)
+
+  const snapshotsBefore = countConfigSnapshots(ctx.services.store)
+  const skillRun = await createThrough(win, 'skill', 'helm-probe-skill')
+  // The pane as the create leaves it: the new file open in the editor, the `+`
+  // beside the filter, and the two controls on the editor's header.
+  const createdShots = await shootBothThemes(win, shotDir, 'config-new-created')
+
+  // Read back with this file's own reader, parsed with the regex above.
+  const skillBody = existsSync(skillFile) ? readFileSync(skillFile, 'utf8') : ''
+  const skillName = frontmatterValue(skillBody, 'name')
+  const skillDescription = frontmatterValue(skillBody, 'description')
+
+  // The editor is opened on what was created, because every scaffold is a
+  // placeholder whose text says what to replace.
+  const editorHas = await js<string>(
+    win,
+    `(document.querySelector('textarea[data-config-editor]')?.value ?? '').slice(0, 400)`
+  )
+
+  const commandRun = await createThrough(win, 'command', 'helm-ns:cmd')
+  const commandBody = existsSync(commandFile) ? readFileSync(commandFile, 'utf8') : ''
+
+  // The same name again. Refused in the dialog, before anything is sent.
+  const skillHashAfterFirst = sha256File(skillFile)
+  const snapshotsAfterCreates = countConfigSnapshots(ctx.services.store)
+  const collision = await createThrough(win, 'skill', 'helm-probe-skill')
+  // The dialog is still open here, which is what makes this the shot of the
+  // dialog itself - refusing, with the reason under the field.
+  const collisionShots = await shootBothThemes(win, shotDir, 'config-new-dialog')
+  await dismissDialog(win)
+
+  // And a name the CLI could not address, refused the same way.
+  const badName = await createThrough(win, 'skill', 'Not A Name')
+  await dismissDialog(win)
+
+  const checks: Check[] = [
+    {
+      id: 'CFG-12',
+      criterion:
+        'New scaffolds by kind; the name is validated against how the CLI addresses it and a collision is refused before anything is written',
+      title:
+        'A skill and a namespaced command were created through the dialog, and a repeat of each was refused with nothing written',
+      ok:
+        absentBefore &&
+        // Both themes were actually on screen when they were photographed.
+        createdShots.applied && collisionShots.applied &&
+        skillRun.opened &&
+        skillRun.closed &&
+        // The dialog's own preview named the file that then appeared.
+        skillRun.target === '.claude/skills/helm-probe-skill/SKILL.md' &&
+        existsSync(skillFile) &&
+        skillName === 'helm-probe-skill' &&
+        (skillDescription ?? '').length > 20 &&
+        editorHas.includes('description:') &&
+        commandRun.closed &&
+        existsSync(commandFile) &&
+        (frontmatterValue(commandBody, 'description') ?? '').includes('/helm-ns:cmd') &&
+        // Two files, two `create` rows, and nothing else.
+        snapshotsAfterCreates === snapshotsBefore + 2 &&
+        // Both refusals happen in the dialog: the button is disabled, a reason
+        // is on screen, the dialog stays open, and nothing moved on disk.
+        collision.createDisabled &&
+        /already/i.test(collision.problem) &&
+        !collision.closed &&
+        badName.createDisabled &&
+        badName.problem !== '' &&
+        !badName.closed &&
+        sha256File(skillFile) === skillHashAfterFirst &&
+        countConfigSnapshots(ctx.services.store) === snapshotsAfterCreates,
+      detail: {
+        absentBeforeTheRun: absentBefore,
+        skill: {
+          previewedTarget: skillRun.target,
+          onDisk: skillFile,
+          frontmatterName: skillName,
+          frontmatterDescriptionChars: (skillDescription ?? '').length,
+          openedInTheEditor: editorHas.includes('description:')
+        },
+        command: {
+          previewedTarget: commandRun.target,
+          onDisk: commandFile,
+          // `commands/helm-ns/cmd.md` is `/helm-ns:cmd`, which is the whole
+          // point of a namespaced file and unguessable from a flat listing.
+          description: frontmatterValue(commandBody, 'description')
+        },
+        snapshots: {
+          before: snapshotsBefore,
+          afterTwoCreates: snapshotsAfterCreates,
+          afterTheTwoRefusals: countConfigSnapshots(ctx.services.store)
+        },
+        refusals: {
+          collision: { disabled: collision.createDisabled, said: collision.problem },
+          badName: { disabled: badName.createDisabled, said: badName.problem }
+        },
+        screenshots: [...createdShots.files, ...collisionShots.files],
+        bothThemesActuallyRendered: createdShots.applied && collisionShots.applied
+      },
+      notes: [
+        'The frontmatter is read back with a regex written in configcheck.ts, not with',
+        'parseFrontmatter - the scaffold is produced by code that shares that parser, and a',
+        'scaffold checked with its own parser proves nothing.',
+        'Absence beforehand is asserted, because "the file is there afterwards" passes',
+        'trivially against a file that was already there.'
+      ]
+    }
+  ]
+
+  // ---- the user scope, which is the one Helm otherwise only reads ----------
+  /**
+   * Creating in `~/.claude` and removing it again, with the directory around it
+   * listed either side.
+   *
+   * The posture criterion made concrete: the user scope is writable through the
+   * console and through nothing else, by the same guard and the same
+   * snapshot-first path, and a run that exercises it leaves the tree as it
+   * found it. Through the service rather than the window so the cleanup below
+   * is unconditional.
+   */
+  const probeSkill = join(userHome, 'skills', 'helm-config-probe-only')
+  const skillsBefore = listUnder(join(userHome, 'skills')).join(',')
+  const takenAlready = existsSync(probeSkill)
+  let userCreated = false
+  let userRemoved = false
+  let userScopeError: string | null = null
+  try {
+    if (!takenAlready) {
+      const created = ctx.config.create({
+        scopePath: userHome,
+        kind: 'skill',
+        name: 'helm-config-probe-only'
+      })
+      userCreated = created.ok && existsSync(join(probeSkill, 'SKILL.md'))
+      userScopeError = created.error
+      if (created.ok && created.path !== null) {
+        const removed = ctx.config.remove({ scopePath: userHome, path: created.path })
+        userRemoved = removed.ok && !existsSync(probeSkill)
+        userScopeError = userScopeError ?? removed.error
+      }
+    }
+  } finally {
+    // The backstop, for the case where this process dies between the two. A
+    // driver does not get to leave a directory in somebody's `~/.claude`.
+    rmSync(probeSkill, { recursive: true, force: true })
+  }
+  const skillsAfter = listUnder(join(userHome, 'skills')).join(',')
+
+  checks.push({
+    id: 'CFG-12B',
+    criterion: '`~/.claude` stays read-only apart from the console, and the posture is unchanged',
+    title:
+      'A skill created and removed in the real user scope left its skills directory listing identical',
+    ok: !takenAlready && userCreated && userRemoved && skillsBefore === skillsAfter,
+    detail: {
+      scope: userHome,
+      probe: probeSkill,
+      nameWasFree: !takenAlready,
+      created: userCreated,
+      removedAgain: userRemoved,
+      skillsListingBefore: skillsBefore === '' ? '(no skills directory)' : skillsBefore,
+      skillsListingAfter: skillsAfter === '' ? '(no skills directory)' : skillsAfter,
+      error: userScopeError
+    },
+    notes: [
+      'The listing either side is this file’s own recursive readdirSync, so a create that',
+      'touched anything but its own directory comes out as a different string.',
+      'Every new path reaches the disk through the same assertWritable the editor’s save does,',
+      'so the set of files Helm may write is what it was.'
+    ]
+  })
+
+  rmSync(skillDir, { recursive: true, force: true })
+  rmSync(namespaceDir, { recursive: true, force: true })
+  return checks
+}
+
+// ---------------------------------------------------------------------------
+// CFG-13: renaming
+// ---------------------------------------------------------------------------
+
+async function renameChecks(
+  ctx: CheckContext,
+  shotDir: string,
+  fixtures: Fixtures
+): Promise<Check[]> {
+  const { win } = ctx
+  const claude = join(fixtures.workspace, '.claude')
+  const fromDir = join(claude, 'skills', 'helm-rename-me')
+  const toDir = join(claude, 'skills', 'helm-renamed')
+  const fromCommand = join(claude, 'commands', 'helm-old', 'thing.md')
+  const toCommand = join(claude, 'commands', 'helm-new', 'thing.md')
+
+  for (const dir of [fromDir, toDir, join(claude, 'commands', 'helm-old'), join(claude, 'commands', 'helm-new')]) {
+    rmSync(dir, { recursive: true, force: true })
+  }
+
+  // Planted by this driver, not by the app. A skill *and* a file bundled beside
+  // it, because "moves the directory rather than the SKILL.md" is the criterion
+  // and a one-file skill cannot tell the two apart.
+  const skillBody = '---\nname: helm-rename-me\ndescription: A probe skill.\n---\n# Rename me\n'
+  const resourceBody = '# A resource this skill bundles\n\nHELMRENAMERESOURCE\n'
+  mkdirSync(fromDir, { recursive: true })
+  writeFileSync(join(fromDir, 'SKILL.md'), skillBody)
+  writeFileSync(join(fromDir, 'reference.md'), resourceBody)
+  mkdirSync(join(claude, 'commands', 'helm-old'), { recursive: true })
+  writeFileSync(fromCommand, '# A probe command\n\nHELMRENAMECOMMAND\n')
+
+  // The fixture has to be there and has to discriminate before any pass is
+  // believed: two files in the skill, with different bytes.
+  const plantedFiles = listUnder(fromDir)
+  const fixtureOk =
+    plantedFiles.join(',') === 'SKILL.md,reference.md' &&
+    sha256(skillBody) !== sha256(resourceBody) &&
+    existsSync(fromCommand)
+  const skillHash = sha256(skillBody)
+  const resourceHash = sha256(resourceBody)
+  const commandHash = sha256File(fromCommand)
+
+  await selectScope(win, fixtures.workspace)
+  await refreshScope(win)
+
+  const renameThrough = async (
+    relPath: string,
+    name: string
+  ): Promise<{ opened: boolean; target: string; closed: boolean; disabled: boolean }> => {
+    const picked = await click(win, `button[data-config-file="${cssEscape(relPath)}"]`)
+    await pollJs(win, `document.querySelector('button[data-rename-config]')`, 10_000)
+    await sleep(300)
+    const disabled = await js<boolean>(
+      win,
+      `Boolean(document.querySelector('button[data-rename-config]')?.disabled)`
+    )
+    const opened =
+      picked &&
+      (await click(win, 'button[data-rename-config]')) &&
+      (await pollJs(win, `document.querySelector('[data-config-rename-dialog]')`, 10_000))
+    if (!opened) return { opened: false, target: '', closed: false, disabled }
+    await setValue(win, 'input[data-config-rename-name]', name)
+    await sleep(400)
+    const target = await js<string>(
+      win,
+      `(document.querySelector('[data-config-rename-target]')?.textContent ?? '').replace(/^→\\s*/, '').trim()`
+    )
+    await click(win, 'button[data-config-rename-apply]')
+    await sleep(1100)
+    const closed = !(await js<boolean>(
+      win,
+      `Boolean(document.querySelector('[data-config-rename-dialog]'))`
+    ))
+    return { opened, target, closed, disabled }
+  }
+
+  const skillRun = await renameThrough('.claude/skills/helm-rename-me/SKILL.md', 'helm-renamed')
+  const commandRun = await renameThrough('.claude/commands/helm-old/thing.md', 'helm-new:thing')
+
+  // The dialog itself, opened again on the renamed skill and left open. Shot
+  // rather than asserted - what it says is CFG-13's business, what it looks
+  // like is nobody's until somebody looks.
+  await click(win, `button[data-config-file="${cssEscape('.claude/skills/helm-renamed/SKILL.md')}"]`)
+  await pollJs(win, `document.querySelector('button[data-rename-config]')`, 10_000)
+  await click(win, 'button[data-rename-config]')
+  await pollJs(win, `document.querySelector('[data-config-rename-dialog]')`, 10_000)
+  await sleep(400)
+  const shots = await shootBothThemes(win, shotDir, 'config-rename-dialog')
+  await dismissDialog(win)
+
+  // A file the CLI finds by its exact name cannot be renamed, and the control
+  // says so rather than being missing.
+  await click(win, `button[data-config-file="${cssEscape('.claude/settings.json')}"]`)
+  await pollJs(win, `document.querySelector('button[data-rename-config]')`, 10_000)
+  await sleep(300)
+  const settingsRename = await js<{ disabled: boolean; title: string }>(
+    win,
+    `(() => {
+      const el = document.querySelector('button[data-rename-config]');
+      return { disabled: Boolean(el && el.disabled), title: el?.title ?? '' } })()`
+  )
+
+  const movedFiles = listUnder(toDir)
+  const movedSkill = existsSync(join(toDir, 'SKILL.md'))
+    ? readFileSync(join(toDir, 'SKILL.md'), 'utf8')
+    : ''
+  // A skill's `name` and its directory have to agree, so the one line that is
+  // *expected* to differ is checked for differing, and the rest for not: the
+  // body is compared with the `name:` line swapped back to what it was.
+  const skillBodyUnchanged =
+    sha256(movedSkill.replace(/^name: helm-renamed$/m, 'name: helm-rename-me')) === skillHash
+
+  const ok =
+    fixtureOk && shots.applied &&
+    skillRun.closed &&
+    skillRun.target === '.claude/skills/helm-renamed/SKILL.md' &&
+    // The whole directory moved, keeping its layout, and the old one is gone.
+    movedFiles.join(',') === 'SKILL.md,reference.md' &&
+    frontmatterValue(movedSkill, 'name') === 'helm-renamed' &&
+    skillBodyUnchanged &&
+    // A file that declares no name is moved untouched.
+    sha256File(join(toDir, 'reference.md')) === resourceHash &&
+    !existsSync(fromDir) &&
+    // A command's name is its path, so a rename crosses the namespace and the
+    // directory it emptied goes with it.
+    commandRun.closed &&
+    existsSync(toCommand) &&
+    sha256File(toCommand) === commandHash &&
+    !existsSync(join(claude, 'commands', 'helm-old')) &&
+    settingsRename.disabled &&
+    settingsRename.title.length > 20
+
+  for (const dir of [fromDir, toDir, join(claude, 'commands', 'helm-old'), join(claude, 'commands', 'helm-new')]) {
+    rmSync(dir, { recursive: true, force: true })
+  }
+
+  return [
+    {
+      id: 'CFG-13',
+      criterion:
+        'Rename moves a skill’s directory rather than its SKILL.md, and renames a command across its namespace path',
+      title:
+        'A skill arrived with the file it bundles and its frontmatter name following it; a command crossed its namespace and the emptied one was pruned',
+      ok,
+      detail: {
+        fixture: {
+          planted: plantedFiles,
+          discriminating: sha256(skillBody) !== sha256(resourceBody),
+          ok: fixtureOk
+        },
+        skill: {
+          previewedTarget: skillRun.target,
+          filesAtTheNewName: movedFiles,
+          frontmatterNameFollowed: frontmatterValue(movedSkill, 'name'),
+          everythingElseInTheSkillMdUnchanged: skillBodyUnchanged,
+          bundledFileHashMatches: sha256File(join(toDir, 'reference.md')) === resourceHash,
+          oldDirectoryGone: !existsSync(fromDir)
+        },
+        command: {
+          previewedTarget: commandRun.target,
+          from: fromCommand,
+          to: toCommand,
+          bytesUnchanged: sha256File(toCommand) === commandHash,
+          emptiedNamespacePruned: !existsSync(join(claude, 'commands', 'helm-old'))
+        },
+        settingsJson: settingsRename,
+        screenshots: shots.files,
+        bothThemesActuallyRendered: shots.applied
+      },
+      notes: [
+        'The hashes are computed in configcheck.ts over the bytes it planted, so this is a claim',
+        'about the file’s contents surviving the move rather than about the move being reported.',
+        'The SKILL.md is the one file expected to differ, by exactly one line: a skill whose',
+        'frontmatter name and whose directory disagree has been half-renamed. So the assertion',
+        'is that the name followed *and* that swapping that line back reproduces the original',
+        'hash - a rename that rewrote anything else would fail the second half.',
+        'The bundled file is what makes the criterion checkable: a skill with one file in it',
+        'cannot distinguish "moved the directory" from "moved the SKILL.md".',
+        'settings.json is the converse - the CLI finds it by that exact name, so the control is',
+        'disabled with the reason in its title rather than absent.'
+      ]
+    }
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// CFG-14: deleting, and undoing it from the same history
+// ---------------------------------------------------------------------------
+
+async function deleteChecks(
+  ctx: CheckContext,
+  shotDir: string,
+  fixtures: Fixtures
+): Promise<Check[]> {
+  const { win } = ctx
+  const claude = join(fixtures.workspace, '.claude')
+  const dir = join(claude, 'skills', 'helm-delete-me')
+  rmSync(dir, { recursive: true, force: true })
+
+  const skillBody = '---\nname: helm-delete-me\ndescription: A probe skill.\n---\n# Delete me\n'
+  const resourceBody = '# Bundled\n\nHELMDELETERESOURCE\n'
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'SKILL.md'), skillBody)
+  writeFileSync(join(dir, 'reference.md'), resourceBody)
+
+  const planted = listUnder(dir)
+  const fixtureOk =
+    planted.join(',') === 'SKILL.md,reference.md' && sha256(skillBody) !== sha256(resourceBody)
+  const skillHash = sha256(skillBody)
+  const resourceHash = sha256(resourceBody)
+
+  await selectScope(win, fixtures.workspace)
+  await refreshScope(win)
+
+  const picked = await click(
+    win,
+    `button[data-config-file="${cssEscape('.claude/skills/helm-delete-me/SKILL.md')}"]`
+  )
+  await pollJs(win, `document.querySelector('button[data-delete-config]')`, 10_000)
+  await sleep(300)
+
+  const snapshotsBefore = countConfigSnapshots(ctx.services.store)
+  const dialogOpened =
+    (await click(win, 'button[data-delete-config]')) &&
+    (await pollJs(win, `document.querySelector('[data-config-delete-dialog]')`, 10_000))
+  await sleep(400)
+
+  // What the confirmation *says* it will remove, read off its own list. The
+  // claim a destructive control makes has to be the thing it then does.
+  const promised = await js<string[]>(
+    win,
+    `[...document.querySelectorAll('[data-config-delete-files] li')]
+       .map((li) => (li.querySelector('span')?.textContent ?? '').trim())`
+  )
+  const saysRestorable = await js<string>(
+    win,
+    `(document.querySelector('[data-config-delete-dialog]')?.textContent ?? '')
+       .replace(/\\s+/g, ' ').trim()`
+  )
+  const dialogShots = await shootBothThemes(win, shotDir, 'config-delete-confirm')
+  // Cancel is what the keyboard would press, because the two answers do not
+  // cost the same.
+  const cancelFocused = await js<boolean>(
+    win,
+    `document.activeElement === document.querySelector('button[data-config-delete-cancel]')`
+  )
+
+  await click(win, 'button[data-config-delete-confirm]')
+  await sleep(1200)
+
+  const goneNow = !existsSync(dir)
+  const snapshotsAfter = countConfigSnapshots(ctx.services.store)
+  const noticeShown = await pollJs(win, `document.querySelector('[data-config-deleted-notice]')`, 10_000)
+  const afterShots = await shootBothThemes(win, shotDir, 'config-deleted-notice')
+
+  // Undo, which is `config:restore` over the rows the delete took - the same
+  // per-file history the editor's version list restores from.
+  const undone = await click(win, 'button[data-config-undo-delete]')
+  await sleep(1500)
+
+  const restored = listUnder(dir)
+  const ok =
+    fixtureOk && dialogShots.applied && afterShots.applied &&
+    picked &&
+    dialogOpened &&
+    cancelFocused &&
+    // Promised exactly the two files, and no others.
+    promised.join(',') === '.claude/skills/helm-delete-me/SKILL.md,.claude/skills/helm-delete-me/reference.md' &&
+    /Undo puts them back/i.test(saysRestorable) &&
+    goneNow &&
+    // One row per file, taken before anything came off the disk.
+    snapshotsAfter === snapshotsBefore + 2 &&
+    noticeShown &&
+    undone &&
+    restored.join(',') === 'SKILL.md,reference.md' &&
+    sha256File(join(dir, 'SKILL.md')) === skillHash &&
+    sha256File(join(dir, 'reference.md')) === resourceHash
+
+  rmSync(dir, { recursive: true, force: true })
+
+  return [
+    {
+      id: 'CFG-14',
+      criterion: 'Delete is snapshotted first and restorable from the existing per-file history',
+      title:
+        'A skill’s two files were named in the confirmation, removed, and put back byte-identical from the rows the delete took',
+      ok,
+      detail: {
+        fixture: { planted, discriminating: fixtureOk },
+        confirmation: {
+          promisedToRemove: promised,
+          cancelHadFocus: cancelFocused,
+          saysWhatBringsItBack: /Undo puts them back/i.test(saysRestorable)
+        },
+        removed: goneNow,
+        snapshots: { before: snapshotsBefore, after: snapshotsAfter, expected: snapshotsBefore + 2 },
+        undo: {
+          stripShown: noticeShown,
+          filesBack: restored,
+          skillMdHashMatches: sha256File(join(dir, 'SKILL.md')) === skillHash,
+          bundledFileHashMatches: sha256File(join(dir, 'reference.md')) === resourceHash
+        },
+        screenshots: [...dialogShots.files, ...afterShots.files],
+        bothThemesActuallyRendered: dialogShots.applied && afterShots.applied
+      },
+      notes: [
+        'The hashes are taken in configcheck.ts over the bytes it planted, before the delete, and',
+        'again after the undo - so this is a claim about the exact prior bytes rather than about',
+        'a file of the right name existing.',
+        'Undo goes through config:restore over the rows the delete wrote, which is the same',
+        'per-file history the editor’s version list restores from. It is not a fourth mechanism.',
+        'The confirmation is compared against what was actually removed: a destructive control',
+        'that names one set and acts on another is the failure this is here for.'
+      ]
+    }
+  ]
 }

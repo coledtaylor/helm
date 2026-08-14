@@ -7,10 +7,17 @@ import type {
 } from '@helm/core'
 // Values, not types, so they come from `@helm/core/types` - the one entry point
 // with no `node:` imports behind it (CLAUDE.md, hard rules).
-import { parseFrontmatter, settingHint, topLevelKey, validateJson } from '@helm/core/types'
+import {
+  isRenamable,
+  parseFrontmatter,
+  renameRefusal,
+  settingHint,
+  topLevelKey,
+  validateJson
+} from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { formatAge, formatBytes, formatMoment } from '../lib/time'
-import { CheckIcon, RestoreIcon, SaveIcon, WarnIcon } from './icons'
+import { CheckIcon, PencilIcon, RestoreIcon, SaveIcon, TrashIcon, WarnIcon } from './icons'
 
 export interface ConfigEditorProps {
   file: ConfigFile
@@ -32,6 +39,17 @@ export interface ConfigEditorProps {
   onReveal: (path: string) => void
   /** Told the editor's current text so a parent can warn before switching away. */
   onDirtyChange: (dirty: boolean) => void
+
+  /**
+   * Renaming and deleting this entry. Both open a dialog rather than acting -
+   * a rename has a destination to show and a delete has a list to name.
+   *
+   * They live here, on the pane that is already about *this* file, rather than
+   * on its row: a row carries no buttons, and the row's own click is what opens
+   * the thing they act on (DESIGN.md, list rows).
+   */
+  onRename?: (() => void) | undefined
+  onDelete?: (() => void) | undefined
 }
 
 const JSON_KINDS = new Set(['settings', 'settings-local', 'mcp'])
@@ -63,7 +81,9 @@ export function ConfigEditor({
   onReload,
   onRestore,
   onReveal,
-  onDirtyChange
+  onDirtyChange,
+  onRename,
+  onDelete
 }: ConfigEditorProps): JSX.Element {
   const [draft, setDraft] = useState('')
   const [caret, setCaret] = useState({ line: 1, column: 1 })
@@ -87,6 +107,10 @@ export function ConfigEditor({
 
   const isJson = JSON_KINDS.has(file.kind)
   const isMarkdown = MARKDOWN_KINDS.has(file.kind)
+  // Shown disabled rather than hidden, with the reason in its title: "why can I
+  // not rename settings.json" is a real question, and a control that is simply
+  // absent answers it with nothing.
+  const renamable = isRenamable(file.kind)
 
   const problem = useMemo(() => (isJson ? validateJson(draft) : null), [isJson, draft])
   const frontmatter = useMemo(
@@ -150,6 +174,42 @@ export function ConfigEditor({
               {file.relPath}
             </button>
           </div>
+          {/* Rename and Delete, then the kind pill. The two controls sit before
+              it so the pill stays the last thing on the line, where it was. */}
+          {(onRename || onDelete) && (
+            <div className="flex shrink-0 items-center gap-1">
+              {onRename && (
+                <button
+                  type="button"
+                  data-rename-config
+                  onClick={onRename}
+                  disabled={!renamable}
+                  title={renamable ? `Rename ${file.name}` : (renameRefusal(file.kind) ?? '')}
+                  aria-label={`Rename ${file.name}`}
+                  className={cn(
+                    'grid size-6 place-items-center rounded transition-colors',
+                    renamable
+                      ? 'text-fg-subtle hover:bg-hover hover:text-fg'
+                      : 'cursor-default text-fg-subtle opacity-40'
+                  )}
+                >
+                  <PencilIcon width={12} height={12} />
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  type="button"
+                  data-delete-config
+                  onClick={onDelete}
+                  title={`Delete ${file.name}`}
+                  aria-label={`Delete ${file.name}`}
+                  className="grid size-6 place-items-center rounded text-fg-subtle transition-colors hover:bg-danger/10 hover:text-danger"
+                >
+                  <TrashIcon width={12} height={12} />
+                </button>
+              )}
+            </div>
+          )}
           <span className="shrink-0 rounded-full bg-accent-soft px-2.5 py-0.5 text-[10px] tracking-[.05em] text-accent-text uppercase">
             {file.kind === 'settings-local' ? 'settings.local' : file.kind}
           </span>
