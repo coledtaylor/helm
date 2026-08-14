@@ -1604,11 +1604,33 @@ export interface RenderedMarkdown {
   tookMs: number
 }
 
+/**
+ * A file shown as source, highlighted.
+ *
+ * The source view is what every kind that is not markdown or HTML opens in, and
+ * once source files are listed at all - which is the point of the split - that
+ * view is where an agent's `tools/` scripts are read. A `<pre>` of undifferen-
+ * tiated grey is a worse answer than the one the markdown renderer already
+ * gives a fenced block, and it is the same machinery: one `highlightCode` call,
+ * both themes in the output as custom properties.
+ */
+export interface ContentSource {
+  /** Shiki's HTML, or `''` when there is none and the plain text should show. */
+  html: string
+  /** The grammar used. `plaintext` when nothing matched the extension. */
+  language: string
+  highlighted: boolean
+  /** True when the file was past the ceiling; `html` is empty and that is why. */
+  tooLarge: boolean
+}
+
 /** A file, its bytes, and - for markdown - what they render to. */
 export interface ContentDocument {
   file: ContentFile
   content: ConfigFileContent
   rendered: RenderedMarkdown | null
+  /** Set for anything shown as source: data, text, and an agent's own scripts. */
+  source: ContentSource | null
   /** Set when the file could not be rendered at all; the source still shows. */
   error: string | null
 }

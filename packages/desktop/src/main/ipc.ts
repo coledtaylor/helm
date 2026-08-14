@@ -486,13 +486,17 @@ export function registerIpc(ctx: IpcContext): void {
 
     'content:scopes': () => ctx.content.scopes(),
     'content:tree': ({ scopePath, refresh }) => ctx.content.tree(scopePath, refresh ?? false),
+    'content:dir': ({ scopePath, relPath }) => ctx.content.dir(scopePath, relPath),
     'content:document': ({ scopePath, path }) => ctx.content.document(scopePath, path),
     'content:render': ({ scopePath, path, source }) => ctx.content.render(scopePath, path, source),
     'content:search': ({ scopePath, query }) => ctx.content.search(scopePath, query),
     'content:write': (request) => ctx.content.write(request),
     'content:snapshots': ({ scopePath, path }) => ctx.content.snapshots(scopePath, path),
     'content:restore': ({ id, path }) => ctx.content.restore(id, path),
-    'content:artifact': ({ path }) => ctx.content.artifact(path),
+    'content:artifact': ({ scopePath, path }) => ctx.content.artifact(scopePath, path),
+    'content:wikilink': ({ scopePath, target, from }) => ({
+      path: ctx.content.wikilink(scopePath, target, from)
+    }),
 
     // A link in a note is the user's, not Helm's, so it opens where they expect
     // links to open. The scheme check is the whole security of this handler:

@@ -24,6 +24,7 @@ export {
   type ReadContentDirOptions
 } from './filetree'
 export {
+  WIKILINK_RE,
   buildWikiIndex,
   headingSlug,
   parseWikilink,
@@ -32,7 +33,13 @@ export {
   type WikiIndex
 } from './wikilinks'
 export { renderMarkdown, type RenderMarkdownOptions } from './markdown'
-export { DARK_THEME, LIGHT_THEME, ensureLanguage, normaliseLanguage } from './highlight'
+export {
+  DARK_THEME,
+  LIGHT_THEME,
+  ensureLanguage,
+  highlightCode,
+  normaliseLanguage
+} from './highlight'
 export {
   buildCorpus,
   corpusIsCurrent,

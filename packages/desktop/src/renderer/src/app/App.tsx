@@ -1560,12 +1560,22 @@ export function App(): JSX.Element {
               onScopeChange={contentState.setScopePath}
               tree={contentState.tree}
               treeLoading={contentState.treeLoading}
+              view={contentState.view}
+              onViewChange={contentState.setView}
+              viewIsDefault={contentState.viewIsDefault}
+              dirs={contentState.dirs}
+              expanded={contentState.expanded}
+              onToggleDir={contentState.toggleDir}
+              loadingDirs={contentState.loadingDirs}
               query={contentState.query}
               onQueryChange={contentState.setQuery}
               search={contentState.search}
               searching={contentState.searching}
               selected={contentState.selected}
+              selectedPath={contentState.selectedPath}
               onSelect={contentState.select}
+              onOpenPath={contentState.openPath}
+              onReveal={launcher.reveal}
               dirty={contentState.dirty}
               onRefresh={contentState.refresh}
               refreshing={contentState.refreshing}
@@ -1603,6 +1613,7 @@ export function App(): JSX.Element {
                   onDirtyChange={contentState.setDirty}
                   onDraftChange={contentState.setDraft}
                   onOpenPath={contentState.openPath}
+                  onOpenWikilink={contentState.openWikilink}
                   onOpenExternal={(url) => void helmOpenExternal(url)}
                 />
               )}

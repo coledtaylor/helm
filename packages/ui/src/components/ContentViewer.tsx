@@ -1,16 +1,20 @@
 import type { JSX, KeyboardEvent, ReactNode } from 'react'
 import { Fragment, useMemo, useState } from 'react'
 import type {
+  ContentDirListing,
   ContentFile,
   ContentRootKind,
   ContentScope,
   ContentSearchHit,
   ContentSearchResult,
-  ContentTree
+  ContentTree,
+  ContentViewMode
 } from '@helm/core'
 import { cn } from '../lib/cn'
 import { ROW_SELECTED } from '../lib/rows'
+import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes } from '../lib/time'
+import { ContentTreeList } from './ContentTreeList'
 import { PaneBack } from './PaneBack'
 import { PaneHeader } from './PaneHeader'
 import {
@@ -25,6 +29,20 @@ import {
   SparkIcon
 } from './icons'
 
+/**
+ * What each mode promises, in the header, in the words the rule is written in.
+ *
+ * The caption is the whole reason the control is not just two buttons. A mode
+ * that is *chosen* rather than implied needs to say what it does, and the two
+ * rules are short enough to fit: without it the reader is back to inferring a
+ * heuristic from what happens to be on the list, which is the complaint this
+ * surface was rebuilt to answer.
+ */
+const VIEW_RULE: Record<ContentViewMode, string> = {
+  curated: 'curated roots',
+  tree: 'every file, lazy per directory, gitignore-aware'
+}
+
 export interface ContentViewerProps {
   scopes: ContentScope[]
   scopePath: string
@@ -33,13 +51,28 @@ export interface ContentViewerProps {
   tree: ContentTree | null
   treeLoading: boolean
 
+  view: ContentViewMode
+  onViewChange: (view: ContentViewMode) => void
+  /** True while the mode is still the one the scope's kind chose. */
+  viewIsDefault: boolean
+  dirs: ReadonlyMap<string, ContentDirListing>
+  expanded: ReadonlySet<string>
+  onToggleDir: (relPath: string) => void
+  loadingDirs: ReadonlySet<string>
+
   query: string
   onQueryChange: (query: string) => void
   search: ContentSearchResult | null
   searching: boolean
 
   selected: ContentFile | null
+  /** What the list marks as current - known before the document has loaded. */
+  selectedPath: string | null
   onSelect: (file: ContentFile, line?: number) => void
+  /** Opens by absolute path, which is how a tree row opens a file. */
+  onOpenPath: (path: string) => void
+  /** Shows a file in Explorer - the only thing to do with a binary. */
+  onReveal: (path: string) => void
   /** The open file has unsaved changes. Marked on its row. */
   dirty?: boolean | undefined
 
@@ -89,12 +122,22 @@ export function ContentViewer({
   onScopeChange,
   tree,
   treeLoading,
+  view,
+  onViewChange,
+  viewIsDefault,
+  dirs,
+  expanded,
+  onToggleDir,
+  loadingDirs,
   query,
   onQueryChange,
   search,
   searching,
   selected,
+  selectedPath,
   onSelect,
+  onOpenPath,
+  onReveal,
   dirty = false,
   onRefresh,
   refreshing,
@@ -109,16 +152,23 @@ export function ContentViewer({
   const showList = !compact || selected === null
   const showDetail = !compact || selected !== null
 
+  // Every root, including the ones that turned out to be empty. An empty
+  // `docs/` is present-and-empty and says so on its own row; filtering it out
+  // here would undo the decision `readContentTree` makes to keep it.
   const groups = useMemo(() => {
     if (!tree) return []
     const byRoot = new Map<string, ContentFile[]>()
     for (const file of tree.files) {
       byRoot.set(file.root, [...(byRoot.get(file.root) ?? []), file])
     }
-    return tree.roots
-      .map((root) => ({ root, files: byRoot.get(root.relPath) ?? [] }))
-      .filter((group) => group.files.length > 0)
+    return tree.roots.map((root) => ({ root, files: byRoot.get(root.relPath) ?? [] }))
   }, [tree])
+
+  const rootListing = dirs.get('')
+  const emptyNamed = useMemo(
+    () => (tree?.roots ?? []).filter((root) => root.files === 0).map((root) => root.relPath),
+    [tree]
+  )
 
   const filesByPath = useMemo(() => {
     const map = new Map<string, ContentFile>()
@@ -196,26 +246,106 @@ export function ContentViewer({
         {...(scope
           ? {
               caption: (
-                // Titled, because what a truncated path drops is its tail, and
-                // the tail is the half that identifies a scope.
-                <p className="truncate font-mono text-[11px] text-fg-subtle" title={scope.path}>
-                  {scope.path}
-                </p>
+                <div className="min-w-0">
+                  {/* Titled, because what a truncated path drops is its tail,
+                      and the tail is the half that identifies a scope. */}
+                  <p className="truncate font-mono text-[11px] text-fg-subtle" title={scope.path}>
+                    {scope.path}
+                  </p>
+                  {/* The rule the mode is following, named. `viewIsDefault`
+                      says whose choice it was, so "harness default" is a fact
+                      about this scope rather than a label that keeps claiming
+                      the default after somebody has switched. */}
+                  <p data-content-view-rule={view} className="truncate text-[10.5px] text-fg-subtle">
+                    {viewIsDefault ? `${scope.kind} default - ` : ''}
+                    {VIEW_RULE[view]}
+                  </p>
+                </div>
               )
             }
           : {})}
-        {...(tree && tree.roots.length > 0
-          ? {
-              meta: (
-                <p className="flex items-baseline gap-1.5 text-[11px] text-fg-subtle">
-                  <span className="tabular-nums">{total}</span>
-                  <span>files in</span>
-                  <span className="tabular-nums">{tree.roots.length}</span>
-                  <span>{tree.roots.length === 1 ? 'place' : 'places'}</span>
-                </p>
-              )
-            }
-          : {})}
+        {...(view === 'curated'
+          ? tree && tree.roots.length > 0
+            ? {
+                meta: (
+                  <p
+                    data-content-count="curated"
+                    className="flex items-baseline gap-1.5 text-[11px] text-fg-subtle"
+                  >
+                    <span className="tabular-nums">{total}</span>
+                    <span>{total === 1 ? 'file in' : 'files in'}</span>
+                    <span className="tabular-nums">{tree.roots.length}</span>
+                    <span>{tree.roots.length === 1 ? 'root' : 'roots'}</span>
+                    {emptyNamed.length > 0 && (
+                      <>
+                        <span aria-hidden>·</span>
+                        <span
+                          className="truncate"
+                          title={`Named roots that exist and hold nothing: ${emptyNamed.join(', ')}`}
+                        >
+                          {emptyNamed.length === 1 ? `${emptyNamed[0]}/ empty` : `${emptyNamed.length} empty`}
+                        </span>
+                      </>
+                    )}
+                  </p>
+                )
+              }
+            : {}
+          : rootListing
+            ? {
+                meta: (
+                  <p
+                    data-content-count="tree"
+                    className="flex items-baseline gap-1.5 text-[11px] text-fg-subtle"
+                  >
+                    <span className="tabular-nums">{rootListing.entries.length}</span>
+                    <span>
+                      {rootListing.entries.length === 1 ? 'top-level entry' : 'top-level entries'}
+                    </span>
+                    <span aria-hidden>·</span>
+                    <span
+                      className="tabular-nums"
+                      title={
+                        rootListing.ignoreSource === 'gitignore'
+                          ? 'Ignored by this repository’s own rules, as git reports them'
+                          : 'No repository here, so Helm’s built-in list decided'
+                      }
+                    >
+                      {rootListing.ignored} ignored
+                    </span>
+                  </p>
+                )
+              }
+            : {})}
+        controls={
+          <div
+            role="group"
+            aria-label="View"
+            // A segmented control (DESIGN.md 4): sunken well, chosen segment
+            // lifted to the raised surface with a hairline ring. The same
+            // recipe the config console's view switcher uses, because it is the
+            // same gesture.
+            className="flex min-w-0 gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
+          >
+            {(['curated', 'tree'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                data-content-view={option}
+                aria-pressed={view === option}
+                onClick={() => onViewChange(option)}
+                title={VIEW_RULE[option]}
+                className={cn(
+                  'min-w-0 truncate rounded-[5px] px-1.5 py-0.5 text-[11px] transition-colors',
+                  '@[560px]:px-2.5',
+                  view === option ? SEGMENT_ON : 'text-fg-muted hover:text-fg'
+                )}
+              >
+                {option === 'curated' ? 'Curated' : 'Tree'}
+              </button>
+            ))}
+          </div>
+        }
         action={
           <button
             type="button"
@@ -253,9 +383,12 @@ export function ContentViewer({
                 data-content-search
                 value={query}
                 onChange={(event) => onQueryChange(event.target.value)}
-                placeholder="Search this scope"
+                // Says which corpus before the search rather than after it.
+                // The box is the same in both modes and searches the same set
+                // in both - see the note on the status row below.
+                placeholder={view === 'tree' ? 'Search the curated roots' : 'Search this scope'}
                 spellCheck={false}
-                aria-label="Search the markdown in this scope"
+                aria-label="Search the text of this scope’s content"
                 className={cn(
                   'h-7 w-full rounded-well border border-border bg-surface-sunken pr-2 pl-7',
                   'text-[12px] text-fg select-text placeholder:text-fg-subtle',
@@ -263,48 +396,83 @@ export function ContentViewer({
                 )}
               />
             </div>
-            <p
-              data-content-status
-              className="mt-2 flex items-baseline gap-1.5 text-[11px] text-fg-subtle"
-            >
-              {searchingNow ? (
-                search === null ? (
-                  <span>Searching&hellip;</span>
+            <div data-content-status className="mt-2 text-[11px] text-fg-subtle">
+              <p className="flex items-baseline gap-1.5">
+                {searchingNow ? (
+                  search === null ? (
+                    <span>Searching&hellip;</span>
+                  ) : (
+                    <>
+                      <span className="tabular-nums">
+                        {search.hits.length} {search.hits.length === 1 ? 'file' : 'files'}
+                      </span>
+                      <span aria-hidden>·</span>
+                      <span className="tabular-nums" data-search-matches={search.totalMatches}>
+                        {search.totalMatches} {search.totalMatches === 1 ? 'match' : 'matches'}
+                      </span>
+                      <span className="flex-1" />
+                      {/* The measurement, on screen. A search budget nobody can
+                          see is a search budget nobody notices missing. */}
+                      <span
+                        className="tabular-nums"
+                        data-search-took={search.tookMs.toFixed(2)}
+                        title={`${String(search.filesSearched)} files, ${formatBytes(search.bytesSearched)}${search.cold ? ', first search in this scope read them from disk' : ''}`}
+                      >
+                        {search.tookMs < 1 ? '<1' : Math.round(search.tookMs)} ms
+                      </span>
+                    </>
+                  )
+                ) : view === 'tree' ? (
+                  <>
+                    <span>
+                      {rootListing === undefined
+                        ? 'Reading…'
+                        : `${rootListing.entries.length} ${rootListing.entries.length === 1 ? 'entry' : 'entries'} here`}
+                    </span>
+                    <span className="flex-1" />
+                    {rootListing?.error != null && (
+                      <span className="text-danger" title={rootListing.error}>
+                        unreadable
+                      </span>
+                    )}
+                  </>
                 ) : (
                   <>
                     <span className="tabular-nums">
-                      {search.hits.length} {search.hits.length === 1 ? 'file' : 'files'}
-                    </span>
-                    <span aria-hidden>·</span>
-                    <span className="tabular-nums" data-search-matches={search.totalMatches}>
-                      {search.totalMatches} {search.totalMatches === 1 ? 'match' : 'matches'}
+                      {tree === null ? 'Reading…' : `${total} ${total === 1 ? 'file' : 'files'}`}
                     </span>
                     <span className="flex-1" />
-                    {/* The measurement, on screen. A search budget nobody can
-                        see is a search budget nobody notices missing. */}
-                    <span
-                      className="tabular-nums"
-                      data-search-took={search.tookMs.toFixed(2)}
-                      title={`${String(search.filesSearched)} files, ${formatBytes(search.bytesSearched)}${search.cold ? ', first search in this scope read them from disk' : ''}`}
-                    >
-                      {search.tookMs < 1 ? '<1' : Math.round(search.tookMs)} ms
-                    </span>
+                    {tree !== null && tree.errors.length > 0 && (
+                      <span className="text-danger" title={tree.errors.join('\n')}>
+                        {tree.errors.length} unreadable
+                      </span>
+                    )}
                   </>
-                )
-              ) : (
-                <>
-                  <span className="tabular-nums">
-                    {tree === null ? 'Reading…' : `${total} ${total === 1 ? 'file' : 'files'}`}
-                  </span>
-                  <span className="flex-1" />
-                  {tree !== null && tree.errors.length > 0 && (
-                    <span className="text-danger" title={tree.errors.join('\n')}>
-                      {tree.errors.length} unreadable
-                    </span>
-                  )}
-                </>
+                )}
+              </p>
+
+              {/* What the search actually read.
+                  The scope of the search is one set in both modes - the curated
+                  roots - and this line is where that is said rather than left
+                  to be discovered. Full-text search is the *vault's* feature:
+                  the corpus is a harness's own directories, and extending it to
+                  every file a tree can reach would make it a code search engine
+                  over `node_modules`, which is a different product. Which kinds
+                  had their bytes read is main's decision (`SEARCHED_BODY_KINDS`
+                  in `core/content/search.ts`) and arrives with the result, so
+                  this cannot drift from it. */}
+              {searchingNow && search !== null && (
+                <p
+                  data-search-scope={search.bodyKinds.join(',')}
+                  className="mt-1 truncate text-[10.5px] text-fg-subtle"
+                  title={`Text read for: ${search.bodyKinds.join(', ')}. Every file is matched on its name, whatever its kind. Binary is never read.`}
+                >
+                  {view === 'tree' ? 'curated roots · ' : ''}
+                  text in <span className="tabular-nums">{search.filesWithText}</span>, names in{' '}
+                  <span className="tabular-nums">{search.filesSearched}</span>
+                </p>
               )}
-            </p>
+            </div>
           </div>
 
           <div
@@ -313,9 +481,7 @@ export function ContentViewer({
             onKeyDown={onListKeyDown}
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1"
           >
-            {tree === null || treeLoading ? (
-              <p className="px-2 py-6 text-center text-[12px] text-fg-subtle">Reading&hellip;</p>
-            ) : searchingNow ? (
+            {searchingNow ? (
               <SearchResults
                 result={search}
                 searching={searching}
@@ -323,21 +489,35 @@ export function ContentViewer({
                 selected={selected}
                 onSelect={onSelect}
               />
+            ) : view === 'tree' ? (
+              <ContentTreeList
+                scopeLabel={scope?.label ?? ''}
+                dirs={dirs}
+                expandedDirs={expanded}
+                loadingDirs={loadingDirs}
+                selectedPath={selectedPath}
+                onToggleDir={onToggleDir}
+                onOpenPath={onOpenPath}
+                onReveal={onReveal}
+              />
+            ) : tree === null || treeLoading ? (
+              <p className="px-2 py-6 text-center text-[12px] text-fg-subtle">Reading&hellip;</p>
             ) : groups.length === 0 ? (
               <Empty scope={scope} />
             ) : (
               groups.map(({ root, files }) => {
                 const Icon = ROOT_ICON[root.kind]
-                const expanded = !collapsed.has(root.relPath)
+                const open = !collapsed.has(root.relPath)
                 return (
                   <Fragment key={root.relPath}>
                     <button
                       type="button"
                       onClick={() => toggleSection(root.relPath)}
-                      aria-expanded={expanded}
+                      aria-expanded={open}
                       data-content-section={root.relPath}
+                      data-content-root-offer={root.offer}
                       className={cn(
-                        'sticky top-0 z-10 mt-3 flex w-full items-center gap-2 bg-surface px-2 py-1',
+                        'sticky top-0 z-10 mt-3 flex w-full items-center gap-1.5 bg-surface px-2 py-1',
                         'text-left text-[11px] font-medium tracking-wide text-fg-subtle uppercase',
                         'transition-colors first:mt-0 hover:text-fg'
                       )}
@@ -345,21 +525,53 @@ export function ContentViewer({
                       <CaretIcon
                         width={8}
                         height={8}
-                        className={cn('shrink-0 transition-transform', expanded && 'rotate-90')}
+                        className={cn('shrink-0 transition-transform', open && 'rotate-90')}
                       />
                       <Icon width={11} height={11} className="shrink-0" />
                       <span className="min-w-0 truncate">{root.label}</span>
-                      <span className="tabular-nums">{files.length}</span>
+                      {/* Why this directory is on the list, on the row. The
+                          curation model is the thing the old pane asked the
+                          reader to infer, and one word per root is what makes
+                          it visible instead. */}
+                      <span
+                        className={cn(
+                          'shrink-0 rounded-full border px-1.5 text-[9px] leading-[15px] tracking-[.06em]',
+                          root.offer === 'named'
+                            ? 'border-border text-fg-subtle'
+                            : 'border-accent/30 text-accent-text'
+                        )}
+                        title={
+                          root.offer === 'named'
+                            ? 'Offered by rule: the spec names this directory, so it is listed whether or not it holds anything'
+                            : 'Found: this directory is here because walking it turned up something readable'
+                        }
+                      >
+                        {root.offer === 'named' ? 'NAMED' : 'DISCOVERED'}
+                      </span>
+                      <span className="flex-1" />
+                      <span className="shrink-0 tabular-nums">{files.length}</span>
                     </button>
-                    {expanded &&
-                      files.map((file) => (
-                        <Row
-                          key={file.path}
-                          file={file}
-                          selected={selected?.path === file.path}
-                          dirty={dirty && selected?.path === file.path}
-                          onSelect={onSelect}
-                        />
+                    {open &&
+                      (files.length === 0 ? (
+                        // Present and empty, which is a finding rather than a
+                        // reason to drop the row.
+                        <p
+                          data-content-root-empty={root.relPath}
+                          className="px-2 py-1.5 pl-[30px] text-[11px] text-fg-subtle italic"
+                        >
+                          empty
+                        </p>
+                      ) : (
+                        files.map((file) => (
+                          <Row
+                            key={file.path}
+                            file={file}
+                            selected={selectedPath === file.path}
+                            dirty={dirty && selectedPath === file.path}
+                            onSelect={onSelect}
+                            onReveal={onReveal}
+                          />
+                        ))
                       ))}
                   </Fragment>
                 )
@@ -386,14 +598,21 @@ function Row({
   file,
   selected,
   dirty,
-  onSelect
+  onSelect,
+  onReveal
 }: {
   file: ContentFile
   selected: boolean
   dirty: boolean
   onSelect: (file: ContentFile) => void
+  onReveal: (path: string) => void
 }): JSX.Element {
   const Icon = file.kind === 'html' ? ArtifactIcon : file.kind === 'markdown' ? DocIcon : SlidersIcon
+  // Listed, but not readable here. Greyed and sent to Explorer rather than
+  // hidden: the whole complaint this pane answers is a file that is on the disk
+  // and not on the screen, and "Helm cannot render this" is not a reason to
+  // repeat it.
+  const unopenable = file.kind === 'binary'
   return (
     <button
       type="button"
@@ -404,8 +623,8 @@ function Row({
       // the first list row's state and calling it the editor's.
       data-content-row-dirty={dirty}
       aria-current={selected}
-      onClick={() => onSelect(file)}
-      title={file.path}
+      onClick={() => (unopenable ? onReveal(file.path) : onSelect(file))}
+      title={unopenable ? `${file.path}\nNot a file Helm reads - opens in Explorer` : file.path}
       className={cn(
         'relative flex w-full items-start gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
         selected ? ROW_SELECTED : 'hover:bg-hover'
@@ -420,11 +639,32 @@ function Row({
       <Icon
         width={13}
         height={13}
-        className={cn('mt-0.5 shrink-0', selected ? 'text-accent' : 'text-fg-subtle')}
+        className={cn(
+          'mt-0.5 shrink-0',
+          selected ? 'text-accent' : unopenable ? 'text-fg-subtle/60' : 'text-fg-subtle'
+        )}
       />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate text-[12px] text-fg">{file.title}</span>
+          <span
+            className={cn(
+              'min-w-0 flex-1 truncate text-[12px]',
+              unopenable ? 'text-fg-subtle' : 'text-fg'
+            )}
+          >
+            {file.title}
+          </span>
+          {/* The extension, for anything that is not prose or an artifact.
+              Machine data, so mono (DESIGN.md 2). It is what says a row will
+              open as source rather than as a document. */}
+          {file.ext !== '' && file.kind !== 'markdown' && file.kind !== 'html' && (
+            <span
+              data-content-ext={file.ext}
+              className="shrink-0 rounded-sm bg-surface-sunken px-1 font-mono text-[9.5px] text-fg-subtle"
+            >
+              {file.ext}
+            </span>
+          )}
           {dirty ? (
             <span className="flex shrink-0 items-center gap-1 text-[10px] text-warn">
               <span aria-hidden className="size-1.5 rounded-full bg-warn" />
