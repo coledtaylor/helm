@@ -181,7 +181,11 @@ function TreeRow({
 
   const onClick = (): void => {
     if (walkable) return onToggleDir(entry.relPath)
-    if (entry.directory || unopenable) return onReveal(entry.path)
+    // A directory Helm will not read has nothing to open onto, so Explorer is
+    // the only answer left. A *file* always opens - a binary onto the pane that
+    // says what it is and offers Explorer from there, which is a click the
+    // reader chooses rather than one that throws them out of the app.
+    if (entry.directory) return onReveal(entry.path)
     onOpenPath(entry.path)
   }
 
@@ -200,7 +204,7 @@ function TreeRow({
           : entry.link
             ? `${entry.path}\nA link. Helm lists it and does not follow it.`
             : unopenable
-              ? `${entry.path}\nNot a file Helm reads - opens in Explorer`
+              ? `${entry.path}\nNot a kind Helm reads`
               : entry.path
       }
       style={{ paddingLeft: `${String(depth * INDENT + 8)}px` }}

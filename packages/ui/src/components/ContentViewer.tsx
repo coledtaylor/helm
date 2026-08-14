@@ -569,7 +569,6 @@ export function ContentViewer({
                             selected={selectedPath === file.path}
                             dirty={dirty && selectedPath === file.path}
                             onSelect={onSelect}
-                            onReveal={onReveal}
                           />
                         ))
                       ))}
@@ -598,20 +597,18 @@ function Row({
   file,
   selected,
   dirty,
-  onSelect,
-  onReveal
+  onSelect
 }: {
   file: ContentFile
   selected: boolean
   dirty: boolean
   onSelect: (file: ContentFile) => void
-  onReveal: (path: string) => void
 }): JSX.Element {
   const Icon = CONTENT_KIND_ICON[file.kind]
-  // Listed, but not readable here. Greyed and sent to Explorer rather than
-  // hidden: the whole complaint this pane answers is a file that is on the disk
-  // and not on the screen, and "Helm cannot render this" is not a reason to
-  // repeat it.
+  // Listed and greyed, but not readable here. It still *opens* - onto a pane
+  // that says what it is and offers Explorer - rather than throwing the reader
+  // out of the app on a single click. Every row in this list behaves the same
+  // way; what differs is what it opens onto.
   const unopenable = file.kind === 'binary'
   return (
     <button
@@ -623,8 +620,8 @@ function Row({
       // the first list row's state and calling it the editor's.
       data-content-row-dirty={dirty}
       aria-current={selected}
-      onClick={() => (unopenable ? onReveal(file.path) : onSelect(file))}
-      title={unopenable ? `${file.path}\nNot a file Helm reads - opens in Explorer` : file.path}
+      onClick={() => onSelect(file)}
+      title={unopenable ? `${file.path}\nNot a kind Helm reads` : file.path}
       className={cn(
         'relative flex w-full items-start gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
         selected ? ROW_SELECTED : 'hover:bg-hover'
