@@ -94,6 +94,39 @@ function skillDirectory(relPath: string): string {
   return relPath.slice(0, relPath.lastIndexOf('/'))
 }
 
+/**
+ * What a skill bundles: the files beside its `SKILL.md`, and nothing deeper.
+ *
+ * Exported because the list and the detail pane have to agree exactly - the
+ * list stops showing these rows and the pane starts showing them, so a second
+ * implementation of "which files are the skill's" would be a set of files
+ * reachable from neither.
+ */
+export function bundledWith(skill: ConfigFile, files: readonly ConfigFile[]): ConfigFile[] {
+  if (skill.kind !== 'skill') return []
+  const prefix = `${skillDirectory(skill.relPath).toLowerCase()}/`
+  return files.filter(
+    (file) =>
+      file.kind === 'other' &&
+      file.relPath.toLowerCase().startsWith(prefix) &&
+      // Directly inside the skill, not inside a nested skill of its own, which
+      // has its own row and its own bundle.
+      !file.relPath.slice(prefix.length).includes('/')
+  )
+}
+
+/** The skill a bundled resource belongs to, for the backlink on its own pane. */
+export function skillHolding(file: ConfigFile, files: readonly ConfigFile[]): ConfigFile | null {
+  if (file.kind !== 'other') return null
+  return (
+    files.find(
+      (candidate) =>
+        candidate.kind === 'skill' &&
+        bundledWith(candidate, files).some((child) => child.path === file.path)
+    ) ?? null
+  )
+}
+
 const VIEWS: Array<{ id: ConfigViewKind; label: string }> = [
   { id: 'files', label: 'Files' },
   { id: 'effective', label: 'Effective' },
@@ -153,16 +186,7 @@ export function ConfigConsole({
     const adopted = new Map<string, ConfigFile[]>()
     const claimed = new Set<string>()
     for (const skill of files) {
-      if (skill.kind !== 'skill') continue
-      const prefix = `${skillDirectory(skill.relPath).toLowerCase()}/`
-      const bundled = files.filter(
-        (file) =>
-          file.kind === 'other' &&
-          file.relPath.toLowerCase().startsWith(prefix) &&
-          // Directly inside the skill, not inside a nested skill of its own,
-          // which has its own row and its own bundle.
-          !file.relPath.slice(prefix.length).includes('/')
-      )
+      const bundled = bundledWith(skill, files)
       if (bundled.length === 0) continue
       adopted.set(skill.path, bundled)
       for (const file of bundled) claimed.add(file.path)
