@@ -1966,39 +1966,131 @@ async function artifactChecks(
   const checks: Check[] = []
 
   /**
-   * A real artifact out of the real vault - and a *document*, not whichever
-   * HTML file happens to be newest.
+   * The criterion, against an artifact the **driver planted**.
    *
-   * This used to take the first HTML file in the tree, which is the newest one
-   * in `notes/`. That made the probe hostage to whatever was written last: a
-   * design tool dropped a 36 KB fragment into the vault with no `<title>`, no
-   * heading and its scripts beside it, and CONT-5 went red asserting a document
-   * about something that is not one. The criterion is that an artifact opens
-   * *rendered*, so the file this is asked of is one that claims to be a
-   * document, decided from its own bytes and named in the detail. If the vault
-   * holds none, that is reported rather than failed - and the fixture artifact
-   * below covers the criterion either way.
+   * This used to be asserted against a file out of the developer's own vault,
+   * and it broke twice for the same reason: the corpus was a directory other
+   * people write to. First it took the newest HTML file, which a design tool
+   * made a 36 KB fragment with no `<title>` and no heading; narrowing it to
+   * "a file that claims to be a document" made that instance go away without
+   * touching the fault. A probe whose corpus is somebody's working directory
+   * will keep going red for reasons that are not about the code, and each time
+   * it will look exactly like a regression - there is a closed ClickUp task
+   * about this same surface doing this same thing.
+   *
+   * So the claim is made about `lessons/artifact.html`, which this file writes:
+   * a title, a heading, inline CSS and an inline script that mutates the DOM.
+   * That exercises the whole path - the protocol, the frame, scripts running
+   * under the sandbox, and the console staying quiet - over bytes the check
+   * owns, so the only thing that can turn it red is Helm.
+   *
+   * It now also guards the wikilink bootstrap the protocol injects into every
+   * artifact: that script runs in this document, and anything it threw would
+   * arrive in the same console this asserts is clean.
+   *
+   * The real vault is still read, in `CONT-5b`, and is still worth reading -
+   * see the note there for what it does and does not claim.
+   */
+  clearArtifactConsole()
+  const planted = await openArtifact(ctx, fixtures.root, 'lessons/artifact.html')
+  const plantedRendered = planted.frame
+    ? await planted.frame
+        .executeJavaScript(
+          `({ title: document.title, headings: document.querySelectorAll('h1,h2,h3').length,
+              ran: document.getElementById('out')?.textContent ?? null,
+              text: (document.body?.innerText ?? '').length,
+              painted: document.body ? document.body.scrollHeight : 0 })`
+        )
+        .catch(() => null)
+    : null
+  await sleep(700)
+  const plantedLogged = artifactConsoleEntries()
+  const plantedShot = await tryShot(win, shotDir, 'content-artifact-planted.png')
+
+  const plantedShape = plantedRendered as {
+    title?: string
+    headings?: number
+    ran?: string | null
+    painted?: number
+  } | null
+  const plantedErrors = plantedLogged.filter(
+    (entry) => entry.level === 'error' || entry.level === 'warning'
+  )
+
+  checks.push({
+    id: 'CONT-5',
+    criterion: 'An HTML artifact opens rendered, sandboxed, with no console errors',
+    title: 'A planted artifact rendered in the frame, ran its script, and logged nothing',
+    ok:
+      planted.opened &&
+      planted.frame !== null &&
+      // The fixture has to be there and be discriminating before any of this
+      // means anything: it declares a title, a heading and a script whose
+      // effect is readable back out of the DOM.
+      readFileSync(fixtures.artifact, 'utf8').includes('HELMM6ARTIFACT') &&
+      plantedShape?.title === 'Fixture artifact' &&
+      (plantedShape.headings ?? 0) > 0 &&
+      (plantedShape.painted ?? 0) > 200 &&
+      // The inline script ran, which is what says the sandbox allows scripts
+      // rather than that the document merely parsed.
+      plantedShape.ran === 'ran' &&
+      plantedErrors.length === 0,
+    detail: {
+      file: fixtures.artifact,
+      bytesOnDisk: statSync(fixtures.artifact).size,
+      frameUrl: planted.frame?.url ?? null,
+      rendered: plantedRendered,
+      consoleEntries: plantedLogged,
+      screenshot: plantedShot.file,
+      screenshotError: plantedShot.error
+    },
+    notes: [
+      'Against a fixture this file writes, deliberately. The same claim used to be made about',
+      'a file from the developer’s vault and went red twice for reasons that were not about',
+      'Helm - a corpus other people write to is not a fixture, however real it is.',
+      'The console is read from the main process, which is the only place it can be read - the',
+      'frame has an opaque origin, so the window hosting it cannot reach its console.',
+      '"Rendered" is `document.body.scrollHeight` measured inside the frame, so an empty',
+      'document that loaded successfully still fails; `ran` is the inline script’s own effect,',
+      'so a document that parsed but was not allowed to execute fails too.',
+      'This also covers the wikilink bootstrap the protocol injects: it runs in this document,',
+      'and anything it threw would land in the console asserted clean here.'
+    ]
+  })
+
+  // ---- CONT-5b: the same thing, over a file Helm did not write -------------
+
+  /**
+   * A real artifact out of the real vault, reported rather than gated.
+   *
+   * Worth keeping and worth *not* asserting on. A planted fixture can only
+   * contain what the driver thought to write, and the one thing a real artifact
+   * has that a fixture never will is surprises - so this still opens one, and
+   * the report names it and says what came back.
+   *
+   * What it asserts is the half that is about **Helm**: that a file the check
+   * did not write can be served and framed at all. What it does not assert is
+   * anything about that file's *contents* - no heading count, no height, no
+   * console threshold - because those are facts about somebody else's file, and
+   * gating on them is precisely the thing that made this probe go red twice for
+   * reasons that were not about the code.
+   *
+   * That is not a check softened until it cannot fail: the criterion is carried
+   * whole by `CONT-5` above, against bytes this file owns. This is additional
+   * coverage, and it fails when the protocol cannot serve a real file.
    */
   const realArtifact =
     harnessPath !== null
       ? ctx.content
           .tree(harnessPath, true)
-          .files.find((file) => {
-            if (file.kind !== 'html' || !HTML.test(file.path)) return false
-            try {
-              const head = readFileSync(file.path, 'utf8').slice(0, 64 * 1024)
-              return /<title[^>]*>\s*\S/i.test(head) && /<h[1-3][\s>]/i.test(head)
-            } catch {
-              return false
-            }
-          })
+          .files.find((file) => file.kind === 'html' && HTML.test(file.path))
       : undefined
 
   if (realArtifact) {
     clearArtifactConsole()
-    const { opened, frame } = await openArtifact(ctx, harnessPath ?? '', realArtifact.relPath)
-    const rendered = frame
-      ? await frame
+    const real = await openArtifact(ctx, harnessPath ?? '', realArtifact.relPath)
+    const realRendered = real.frame
+      ? await real.frame
           .executeJavaScript(
             `({ title: document.title, headings: document.querySelectorAll('h1,h2,h3').length,
                 text: (document.body?.innerText ?? '').length,
@@ -2007,61 +2099,48 @@ async function artifactChecks(
           .catch(() => null)
       : null
     await sleep(700)
-    const logged = artifactConsoleEntries()
-    const shot = await screenshot(win, shotDir, 'content-artifact-real.png')
-
-    const painted = (rendered as { painted?: number } | null)?.painted ?? 0
-    const errors = logged.filter((entry) => entry.level === 'error' || entry.level === 'warning')
+    const realLogged = artifactConsoleEntries()
+    const realShot = await tryShot(win, shotDir, 'content-artifact-real.png')
 
     checks.push({
-      id: 'CONT-5',
+      id: 'CONT-5b',
       criterion: 'An HTML artifact opens rendered, sandboxed, with no console errors',
-      title: `${realArtifact.relPath} rendered in the frame and logged nothing`,
-      ok:
-        opened &&
-        frame !== null &&
-        painted > 200 &&
-        ((rendered as { headings?: number } | null)?.headings ?? 0) > 0 &&
-        errors.length === 0,
+      title: `A real artifact from the vault (${realArtifact.relPath}) was served and framed`,
+      ok: real.opened && real.frame !== null,
       detail: {
         file: realArtifact.path,
         bytesOnDisk: statSync(realArtifact.path).size,
-        frameUrl: frame?.url ?? null,
-        rendered,
-        consoleEntries: logged,
-        screenshot: shot.file
+        frameUrl: real.frame?.url ?? null,
+        rendered: realRendered,
+        // Reported, not asserted. A real artifact that logs is a fact about
+        // that file; the console claim is CONT-5's, over a document this check
+        // wrote.
+        consoleEntries: realLogged,
+        screenshot: realShot.file,
+        screenshotError: realShot.error
       },
       notes: [
-        'A real artifact from the user’s harness, not a fixture: the criterion is about the',
-        'files Claude actually produces.',
-        'The console is read from the main process, which is the only place it can be read -',
-        'the frame has an opaque origin, so the window hosting it cannot reach its console.',
-        '"Rendered" is `document.body.scrollHeight` measured inside the frame, so an empty',
-        'document that loaded successfully still fails.',
-        'The file is chosen from its own bytes - a `<title>` and a heading - rather than by',
-        'being the newest HTML in the vault, so a fragment dropped in by a design tool cannot',
-        'become the thing this criterion is asked about.'
+        'The one probe here that opens a file Claude actually produced, kept for exactly that.',
+        'It asserts only that Helm could serve and frame it - what is *inside* somebody else’s',
+        'file is reported and never gated on, because gating on it is what made this go red',
+        'twice for reasons that had nothing to do with the code.',
+        'A reader comparing runs should read `rendered` and `consoleEntries` here as findings',
+        'about the vault, not as a verdict on Helm.'
       ]
     })
   } else if (harnessPath !== null) {
-    // Said out loud rather than skipped. A criterion with no real artifact
-    // behind it is a criterion carried entirely by a fixture, and that is worth
-    // knowing about - `PROF-4` is what happens when nobody is told.
+    // Said out loud rather than skipped, so nobody infers coverage that is not
+    // there - `PROF-4` is what happens when nobody is told.
     checks.push({
-      id: 'CONT-5',
+      id: 'CONT-5b',
       criterion: 'An HTML artifact opens rendered, sandboxed, with no console errors',
-      title: 'No HTML file in this harness claims to be a document, so this ran against no real artifact',
+      title: 'This harness holds no HTML at all, so nothing real was opened',
       ok: true,
-      detail: {
-        scope: harnessPath,
-        htmlFilesInTheScope: ctx.content
-          .tree(harnessPath, true)
-          .files.filter((file) => file.kind === 'html').length
-      },
+      detail: { scope: harnessPath },
       notes: [
-        'Not a failure: a harness legitimately holds no generated report. But it does mean the',
-        'criterion below is carried by the fixture artifact alone on this machine, and a reader',
-        'of this report should know that rather than infer coverage that is not there.'
+        'Not a failure: a harness legitimately holds no generated report. The criterion is',
+        'carried by CONT-5 against a planted artifact either way; this only means the extra',
+        'coverage over a real one did not happen on this machine.'
       ]
     })
   }
