@@ -1471,6 +1471,7 @@ export function App(): JSX.Element {
               onViewChange={configState.setView}
               tree={configState.tree}
               treeLoading={configState.treeLoading}
+              live={configState.live}
               selected={configState.selected}
               onSelect={configState.select}
               dirty={configState.dirty}

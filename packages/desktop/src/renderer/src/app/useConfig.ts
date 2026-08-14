@@ -73,6 +73,8 @@ export interface ConfigState {
   effective: EffectiveView | null
   effectiveLoading: boolean
   effectiveError: string | null
+  /** The resolution the Files view reads live state from; null while it is stale. */
+  live: EffectiveView | null
 
   mcpServers: EffectiveMcpServer[]
   mcpDraft: ConfigMcpDraft
@@ -410,8 +412,18 @@ export function useConfig(): ConfigState {
 
   const effectiveKey = `${String(effectiveProfileId)}:${effectiveCwd}:${String(treeVersion)}`
   const effectiveSeq = useRef(0)
+  /**
+   * Computed for the Files view as well, and deliberately the *same* answer.
+   *
+   * A row saying a skill resolves, or that a settings key is outranked, is
+   * reading this view - so if Files computed its own, the two tabs could
+   * disagree about one file while both were right about their own question.
+   * One resolution per console, named on screen, is the whole point: the
+   * Effective tab becomes the deep dive rather than the corrective.
+   */
+  const wantsEffective = view === 'effective' || view === 'files'
   useEffect(() => {
-    if (view !== 'effective') return
+    if (!wantsEffective) return
     if (effectiveProfileId === null && effectiveCwd.trim() === '') return
     const ticket = ++effectiveSeq.current
     void helm
@@ -428,10 +440,21 @@ export function useConfig(): ConfigState {
         if (ticket !== effectiveSeq.current) return
         setEffectiveError(readable(err))
       })
-  }, [view, effectiveProfileId, effectiveCwd, effectiveKey])
+  }, [wantsEffective, effectiveProfileId, effectiveCwd, effectiveKey])
 
   const effective = effectiveAnswer?.value ?? null
-  const effectiveLoading = view === 'effective' && effectiveAnswer?.key !== effectiveKey
+  const effectiveLoading = wantsEffective && effectiveAnswer?.key !== effectiveKey
+
+  /**
+   * The same view, withheld while it is the answer to a different question.
+   *
+   * The Effective tab shows a stale answer with a loading flag beside it, which
+   * is right for a page of prose. A file row cannot do that: joined with a tree
+   * that has already switched scope, last scope's resolution says "not resolved
+   * here" about every file on screen. That is not a lag, it is a wrong claim,
+   * so the rows go quiet instead.
+   */
+  const live = effectiveAnswer?.key === effectiveKey ? effectiveAnswer.value : null
 
   // -------------------------------------------------------------------------
   // MCP
@@ -602,6 +625,7 @@ export function useConfig(): ConfigState {
     effective,
     effectiveLoading,
     effectiveError,
+    live,
     mcpServers: mcpAnswer?.value?.mcpServers ?? [],
     mcpDraft,
     setMcpDraft,
