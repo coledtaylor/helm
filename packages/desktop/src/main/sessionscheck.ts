@@ -2,7 +2,7 @@ import { type BrowserWindow } from 'electron'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readSessions, type Project, type SessionRecord } from '@helm/core'
+import { readSessions, SESSION_SPLIT_PCT, type Project, type SessionRecord } from '@helm/core'
 import {
   drag,
   readPointerTrace,
@@ -972,6 +972,22 @@ export async function runSessionsChecks(
       win,
       `document.querySelectorAll('button[data-session]').length`
     )
+
+    // The split is put back to its default before the divider is measured.
+    //
+    // The seeded database carries the developer's own `sessionSplitPct`, and
+    // the drag below is a fixed 15% of the row - so on a machine where somebody
+    // has parked the split at 75 the pane has 5 points of headroom, hits
+    // `SESSION_SPLIT_PCT.max` a third of the way through, and the probe reports
+    // a divider that stopped following the pointer. Measured here at exactly
+    // that: 726px to 774.4px against 146px of travel, with the app behaving
+    // perfectly. The starting position is not what this probe is about, so it
+    // is chosen rather than inherited.
+    await js<unknown>(
+      win,
+      `window.helm.invoke('settings:write', { sessionSplitPct: ${String(SESSION_SPLIT_PCT.default)} })`
+    ).catch(() => null)
+    await sleep(400)
 
     const grip = await js<{ x: number; y: number; width: number; left: number } | null>(
       win,
