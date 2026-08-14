@@ -2,7 +2,7 @@ import { ipcMain, type BrowserWindow } from 'electron'
 import Database from 'better-sqlite3'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import {
   fetchOpenPulls,
   forgetPrRepos,
@@ -49,7 +49,7 @@ import { resolveGhCommand } from './gh-cli'
  * `pnpm pr-check` -> helm-data/pr-report.json
  */
 
-const GROUPS = ['fixture', 'detail', 'review', 'degrade', 'live'] as const
+const GROUPS = ['fixture', 'triage', 'detail', 'review', 'degrade', 'live'] as const
 type Group = (typeof GROUPS)[number]
 
 /**
@@ -1137,6 +1137,13 @@ export async function runPrChecks(
       // Off: a tick landing in the middle of a phase would refresh underneath
       // an assertion. Every fetch in this run is one this driver asked for.
       prPollMinutes: 0,
+      // The ACTIVE/STALE split off, so every phase but `triage` sees the flat
+      // `Open` list it was written against. Not laziness: the fixtures below
+      // carry fixed dates, so which side of a cutoff they fall on would depend
+      // on what day this is run, and a check whose shape drifts with the
+      // calendar is a check that goes red for a reason unrelated to the app.
+      // The `triage` phase sets its own cutoff over timestamps of its own.
+      prStaleDays: 0,
       prReviewPrompt: '/code-review {number}',
       prCheckout: 'none'
     })
@@ -1202,6 +1209,10 @@ export async function runPrChecks(
       [fixtures.real]: `https://github.com/${SLUG_REAL}.git`
     })
     await refreshNow(pulls)
+
+    if (run('triage')) {
+      checks.push(...(await triageChecks({ win, pulls, fixtures, shotDir })))
+    }
 
     if (run('detail')) {
       checks.push(...(await detailChecks({ win, fixtures, dbFile, shotDir })))
@@ -1870,6 +1881,815 @@ async function fixtureChecks({
   })
 
   // Everything after this phase wants the hook back; the caller re-points it.
+  return checks
+}
+
+// ---------------------------------------------------------------------------
+// triage - the Open section's toolbar, its ACTIVE/STALE split, and its counts
+// ---------------------------------------------------------------------------
+
+/** Where the fake gh keeps one repository's `pr list` answer. */
+function listPathFor(home: string, slug: string): string {
+  return join(home, 'list', `${slug.replace('/', '__')}.json`)
+}
+
+/** One fixture pull request, as **this driver** reads the file gh answers from. */
+interface FixturePull {
+  slug: string
+  number: number
+  title: string
+  /** The login as written, `app/` prefix and all. */
+  author: string
+  isBot: boolean
+  head: string
+  /** Epoch ms, or null where the fixture wrote something no clock can parse. */
+  updatedAt: number | null
+}
+
+/**
+ * The fixture parsed here rather than read back out of Helm.
+ *
+ * Including the timestamp, which is the whole point: the split under test is a
+ * comparison between `updatedAt` and a cutoff, so an expectation derived from
+ * what the app already decided would be the app agreeing with itself.
+ */
+function readListFixture(home: string, slug: string): FixturePull[] {
+  const rows = JSON.parse(readFileSync(listPathFor(home, slug), 'utf8')) as Array<
+    Record<string, unknown>
+  >
+  return rows.map((row) => {
+    const author = row['author'] as { login?: unknown; is_bot?: unknown } | undefined
+    const at = Date.parse(String(row['updatedAt']))
+    return {
+      slug,
+      number: Number(row['number']),
+      title: String(row['title']),
+      author: String(author?.login ?? ''),
+      isBot: author?.is_bot === true,
+      head: String(row['headRefName']),
+      updatedAt: Number.isNaN(at) ? null : at
+    }
+  })
+}
+
+const HOUR_MS = 3_600_000
+const DAY_MS = 24 * HOUR_MS
+
+/**
+ * A busy repository, timed against the clock this run is actually on.
+ *
+ * Relative rather than dated, and that is not a detail: "stale" is a claim
+ * about *now*, so a fixture carrying 2026-08-10 means one thing the week it is
+ * written and another thing a year later. A check whose verdict depends on how
+ * long ago somebody wrote it is not a check.
+ *
+ * Nothing here sits near the two-day boundary the phase sets - the youngest
+ * stale row is three days old and the oldest active one thirty hours - so no
+ * amount of drift between writing the file and reading the pane can move a row
+ * across it. Eleven rows in one repository is the complaint this whole task
+ * came from: one busy repository burying everything else.
+ *
+ * Two of them are load-bearing rather than filler. `#57` is stale **and** has
+ * failing checks, which is the row the "no second rule" decision is about - it
+ * must stay in STALE and must still paint its tally. `#366` has a timestamp
+ * `Date.parse` refuses, which is the null `updatedAt` that must land in ACTIVE.
+ */
+function densePulls(now: number): Array<Record<string, unknown>> {
+  const ago = (ms: number): string => new Date(now - ms).toISOString()
+  return [
+    listEntry({
+      number: 418,
+      title: 'Fix session-restore race on cold start',
+      slug: SLUG_A,
+      head: 'fix/session-restore-race',
+      author: 'busy-dev',
+      updatedAt: ago(40 * 60_000),
+      additions: 61,
+      deletions: 12,
+      changedFiles: 4,
+      rollup: [5, 0, 0]
+    }),
+    listEntry({
+      number: 417,
+      title: 'Persist harness filter across restarts',
+      slug: SLUG_A,
+      head: 'feat/harness-filter-persist',
+      author: 'busy-dev',
+      updatedAt: ago(5 * HOUR_MS),
+      additions: 24,
+      deletions: 3,
+      changedFiles: 2,
+      rollup: [3, 2, 0]
+    }),
+    listEntry({
+      number: 402,
+      title: 'Overnight digest: summarize failed runs first',
+      slug: SLUG_A,
+      head: 'digest/failed-first',
+      author: 'app/overnight-bot',
+      updatedAt: ago(26 * HOUR_MS),
+      additions: 118,
+      deletions: 40,
+      changedFiles: 9,
+      rollup: [2, 0, 0]
+    }),
+    listEntry({
+      number: 390,
+      title: 'Batch time-entry sync writes',
+      slug: SLUG_A,
+      head: 'perf/batched-sync',
+      author: 'second-dev',
+      updatedAt: ago(3 * HOUR_MS),
+      additions: 210,
+      deletions: 96,
+      changedFiles: 14,
+      rollup: [1, 0, 3]
+    }),
+    listEntry({
+      number: 388,
+      title: 'Offline queue: retry with backoff',
+      slug: SLUG_A,
+      head: 'fix/offline-retry',
+      author: 'second-dev',
+      updatedAt: ago(30 * HOUR_MS),
+      additions: 44,
+      deletions: 9,
+      changedFiles: 5,
+      rollup: [4, 0, 0]
+    }),
+    listEntry({
+      number: 377,
+      title: 'Teach the sweeper about forks',
+      slug: SLUG_A,
+      head: 'feature/forks',
+      author: 'busy-dev',
+      updatedAt: ago(8 * HOUR_MS),
+      additions: 412,
+      deletions: 96,
+      changedFiles: 7,
+      reviewDecision: 'CHANGES_REQUESTED',
+      rollup: [2, 1, 0]
+    }),
+    listEntry({
+      number: 370,
+      title: 'A draft nobody has finished',
+      slug: SLUG_A,
+      head: 'wip/draft',
+      author: 'third-dev',
+      isDraft: true,
+      updatedAt: ago(12 * HOUR_MS),
+      additions: 12,
+      deletions: 3,
+      changedFiles: 2
+    }),
+    listEntry({
+      number: 366,
+      title: 'The row whose timestamp gh would not print',
+      slug: SLUG_A,
+      head: 'edge/no-timestamp',
+      author: 'busy-dev',
+      // Not a timestamp, deliberately: `asMoment` gives null, and a null
+      // `updatedAt` must land in ACTIVE rather than being filed away on the
+      // strength of a field nothing could read.
+      updatedAt: 'sometime last week',
+      additions: 3,
+      deletions: 1,
+      changedFiles: 1,
+      rollup: [1, 0, 0]
+    }),
+    listEntry({
+      number: 203,
+      title: 'Report builder: custom date ranges',
+      slug: SLUG_A,
+      head: 'report/date-ranges',
+      author: 'third-dev',
+      updatedAt: ago(3 * DAY_MS),
+      additions: 88,
+      deletions: 12,
+      changedFiles: 6,
+      rollup: [2, 0, 0]
+    }),
+    listEntry({
+      number: 57,
+      title: 'Dark-surface token ramp cleanup',
+      slug: SLUG_A,
+      head: 'design/dark-ramp',
+      author: 'second-dev',
+      updatedAt: ago(5 * DAY_MS),
+      additions: 30,
+      deletions: 140,
+      changedFiles: 11,
+      rollup: [1, 2, 0]
+    }),
+    listEntry({
+      number: 12,
+      title: 'Pathfinding avoids lit tiles at night',
+      slug: SLUG_A,
+      head: 'ai/lit-tiles',
+      author: 'busy-dev',
+      updatedAt: ago(9 * DAY_MS),
+      additions: 260,
+      deletions: 40,
+      changedFiles: 12
+    })
+  ]
+}
+
+/** Every pull-request row on screen, in the order the pane painted them. */
+async function rowsIn(win: BrowserWindow, section: string): Promise<string[]> {
+  return js<string[]>(
+    win,
+    `[...document.querySelectorAll('[data-pulls-section="${section}"] [data-pull]')]
+       .map((el) => el.getAttribute('data-pull') ?? '')`
+  )
+}
+
+/**
+ * What every pull-request section's heading claims, beside what is under it.
+ *
+ * The claim and the rows in one read, because the criterion is about the two
+ * agreeing: a heading saying `ACTIVE 6` over two rows is the failure, and it is
+ * only visible when both numbers come from the same instant.
+ */
+async function paintedSections(
+  win: BrowserWindow
+): Promise<Array<{ name: string; painted: number; rows: number }>> {
+  return js(
+    win,
+    `[...document.querySelectorAll('[data-pulls-section]')]
+       .filter((el) => ['open', 'active', 'stale'].includes(el.getAttribute('data-pulls-section') ?? ''))
+       .map((el) => ({
+         name: el.getAttribute('data-pulls-section') ?? '',
+         painted: Number((el.querySelector('[data-pulls-count]')?.textContent ?? '').trim()),
+         rows: el.querySelectorAll('[data-pull]').length
+       }))`
+  )
+}
+
+/** The group headings one section is showing, with the count on each. */
+async function groupHeadings(
+  win: BrowserWindow,
+  section: string
+): Promise<Array<{ label: string; count: number }>> {
+  return js(
+    win,
+    `[...document.querySelectorAll('[data-pulls-section="${section}"] [data-pulls-group-heading]')]
+       .map((el) => ({
+         label: el.getAttribute('data-pulls-group-heading') ?? '',
+         count: Number((el.querySelector('[data-pulls-group-count]')?.textContent ?? '').trim())
+       }))`
+  )
+}
+
+/** Type into the pane's filter field the way a person fills one in. */
+async function filterFor(win: BrowserWindow, value: string): Promise<string[]> {
+  await typeInto(win, '[data-pulls-filter]', value)
+  await sleep(250)
+  return dataValues(win, 'pull')
+}
+
+/** Open the Pulls pane after something else, which unmounts and remounts it. */
+async function reopenPulls(win: BrowserWindow): Promise<void> {
+  await click(win, '[data-open-history]')
+  await sleep(400)
+  await click(win, '[data-open-pulls]')
+  await sleep(500)
+}
+
+async function triageChecks({
+  win,
+  pulls,
+  fixtures,
+  shotDir
+}: {
+  win: BrowserWindow
+  pulls: CheckContext['pulls']
+  fixtures: Fixtures
+  shotDir: string
+}): Promise<Check[]> {
+  const checks: Check[] = []
+  const alphaFile = listPathFor(fixtures.home, SLUG_A)
+  const betaFile = listPathFor(fixtures.home, SLUG_B)
+  const alphaAsBuilt = readFileSync(alphaFile, 'utf8')
+  const betaAsBuilt = readFileSync(betaFile, 'utf8')
+
+  try {
+    // The dense repository, and one fresh pull request in a second one so that
+    // grouping has more than a single group to draw on either side of the
+    // split. The third repository keeps the date it was built with, which puts
+    // it in the stale half - two repositories on each side.
+    const now = Date.now()
+    writeFileSync(alphaFile, JSON.stringify(densePulls(now), null, 2))
+    writeFileSync(
+      betaFile,
+      JSON.stringify(
+        [
+          listEntry({
+            number: PR_PAGED,
+            title: 'One pull request, in a second repository',
+            slug: SLUG_B,
+            head: 'beta/one',
+            author: 'beta-dev',
+            updatedAt: new Date(now - 2 * HOUR_MS).toISOString(),
+            additions: 30,
+            deletions: 1,
+            changedFiles: 3,
+            rollup: [4, 0, 0]
+          })
+        ],
+        null,
+        2
+      )
+    )
+
+    const fixture = [
+      ...readListFixture(fixtures.home, SLUG_A),
+      ...readListFixture(fixtures.home, SLUG_B),
+      ...readListFixture(fixtures.home, SLUG_REAL)
+    ]
+    const rowId = (pull: FixturePull): string => `${pull.slug}#${String(pull.number)}`
+    const total = fixture.length
+
+    // -------------------------------------------------------------------
+    // PR-31: `prStaleDays: 0` is the pane as it was
+    // -------------------------------------------------------------------
+    await sendWrite(win, { prStaleDays: 0 })
+    await refreshNow(pulls)
+    await click(win, '[data-open-pulls]')
+    await pollJs(win, `document.querySelector('[data-pulls-caption]')`, 10_000)
+    await sleep(500)
+
+    // The pane's documented order, restated here rather than imported: most
+    // recently updated first, and a row with no timestamp sorts as the oldest
+    // thing there is rather than being dropped.
+    const byRecency = [...fixture]
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      .map(rowId)
+    const flatRows = await rowsIn(win, 'open')
+    const flatSections = await paintedSections(win)
+    const flatSplitAbsent =
+      !(await exists(win, '[data-pulls-section="active"]')) &&
+      !(await exists(win, '[data-pulls-section="stale"]'))
+    const flatChips = (await dataValues(win, 'pull-stale')).length
+    const flatCaption = await text(win, '[data-pulls-caption]')
+    const flatShot = await screenshot(win, shotDir, 'pr-triage-cutoff-off.png')
+
+    checks.push({
+      id: 'PR-31',
+      criterion: '`prStaleDays: 0` renders the single Open section exactly as it does today',
+      title: `${String(flatRows.length)} rows in one Open section, in the flat recency order, no split anywhere`,
+      ok:
+        // The fixture has to discriminate before any of this is believed: two
+        // empty lists agree with each other.
+        total === 13 &&
+        flatRows.length === total &&
+        JSON.stringify(flatRows) === JSON.stringify(byRecency) &&
+        flatSplitAbsent &&
+        flatChips === 0 &&
+        flatSections.length === 1 &&
+        flatSections[0]?.name === 'open' &&
+        flatSections[0]?.painted === total &&
+        flatSections[0]?.rows === total &&
+        flatCaption.includes(`${String(total)} open`),
+      detail: {
+        fixtureRows: total,
+        expectedOrder: byRecency,
+        paintedOrder: flatRows,
+        sections: flatSections,
+        staleChips: flatChips,
+        caption: flatCaption,
+        screenshot: flatShot.file
+      },
+      notes: [
+        'Off is the no-regression state and is asserted first, because everything else in',
+        'this phase is a change to what it renders. The order is compared against this',
+        "driver's own sort of its own parse of the fixture files - most recently updated",
+        'first, with an unparseable timestamp sorting last rather than vanishing.',
+        'The other four phases of this run also sit at 0, so the flat list is exercised by',
+        'every assertion they make rather than only by this one.'
+      ]
+    })
+
+    // -------------------------------------------------------------------
+    // PR-32: the split, a null timestamp in ACTIVE, and red staying stale
+    // -------------------------------------------------------------------
+    await sendWrite(win, { prStaleDays: 2 })
+    await sleep(600)
+    // Read after the write, so the cutoff this driver compares against is the
+    // one the pane could have been using rather than one from a minute ago.
+    const cutoff = Date.now() - 2 * DAY_MS
+    const expectedActive = fixture
+      .filter((pull) => pull.updatedAt === null || pull.updatedAt >= cutoff)
+      .map(rowId)
+      .sort()
+    const expectedStale = fixture
+      .filter((pull) => pull.updatedAt !== null && pull.updatedAt < cutoff)
+      .map(rowId)
+      .sort()
+
+    const activeRows = (await rowsIn(win, 'active')).sort()
+    const staleRows = (await rowsIn(win, 'stale')).sort()
+    const splitSections = await paintedSections(win)
+    const staleCaption = await text(win, '[data-pulls-section="stale"] h2')
+    const splitCaption = await text(win, '[data-pulls-caption]')
+    // The stale row with failing checks: it keeps its dot and its tally, and it
+    // is not promoted out of the section by being red.
+    const redChip = await js<{ state: string | null; checks: string | null } | null>(
+      win,
+      `(() => { const el = document.querySelector('[data-pulls-section="stale"] [data-pull="${SLUG_A}#57"]');
+        return el === null ? null : {
+          state: el.querySelector('[data-pull-state]')?.getAttribute('data-pull-state') ?? null,
+          checks: el.querySelector('[data-pull-checks]')?.getAttribute('data-pull-checks') ?? null
+        } })()`
+    )
+    const splitShot = await screenshot(win, shotDir, 'pr-triage-split.png')
+
+    checks.push({
+      id: 'PR-32',
+      criterion:
+        'ACTIVE / STALE split on updatedAt, a null updatedAt in ACTIVE, and no row promoted out of STALE by failing checks',
+      title: `${String(activeRows.length)} active and ${String(staleRows.length)} stale against a 2-day cutoff, ${SLUG_A}#57 red and still stale`,
+      ok:
+        expectedActive.length > 0 &&
+        expectedStale.length > 0 &&
+        JSON.stringify(activeRows) === JSON.stringify(expectedActive) &&
+        JSON.stringify(staleRows) === JSON.stringify(expectedStale) &&
+        // The row whose timestamp would not parse, named rather than implied.
+        activeRows.includes(`${SLUG_A}#366`) &&
+        redChip !== null &&
+        redChip.state === 'open' &&
+        // 3 checks, 2 failing, 0 pending - the same three numbers a row paints.
+        redChip.checks === '3/2/0' &&
+        staleCaption.includes('No motion in 2+ days') &&
+        splitSections.every((section) => section.painted === section.rows) &&
+        // The header is a fact about GitHub and does not move with Helm's
+        // arrangement of it.
+        splitCaption.includes(`${String(total)} open`),
+      detail: {
+        cutoffDays: 2,
+        cutoffAt: new Date(cutoff).toISOString(),
+        expected: { active: expectedActive, stale: expectedStale },
+        painted: { active: activeRows, stale: staleRows },
+        nullTimestampRow: `${SLUG_A}#366`,
+        redStaleChip: redChip,
+        sections: splitSections,
+        staleHeading: staleCaption,
+        caption: splitCaption,
+        screenshot: splitShot.file
+      },
+      notes: [
+        'The expected sets are computed here, from this driver\'s own `Date.parse` of the',
+        'fixture files against a cutoff it works out itself. Nothing in the expectation',
+        'comes from the app.',
+        '`#366` carries a timestamp `Date.parse` refuses. It is in ACTIVE because this',
+        'surface never files a row out of sight on the strength of a field it could not',
+        'read - and it is asserted by name, because "the sets match" would also pass if',
+        'both this driver and the pane dropped it.',
+        '`#57` is stale and has two failing checks. It stays stale: one rule decides the',
+        'split and the signal rides on the chip, so which section a row is in stays',
+        'predictable. The tally is read off the chip to prove the signal actually survived',
+        'the collapse to one line.'
+      ]
+    })
+
+    // -------------------------------------------------------------------
+    // PR-33: STALE collapses and expands, and the state is per pane
+    // -------------------------------------------------------------------
+    const beforeCollapse = await rowsIn(win, 'active')
+    const collapsed = await click(win, '[data-pulls-stale-toggle]')
+    await sleep(300)
+    const chipsWhenHidden = (await rowsIn(win, 'stale')).length
+    const headingWhenHidden = await text(win, '[data-pulls-section="stale"] h2')
+    const activeWhenHidden = await rowsIn(win, 'active')
+    const captionWhenHidden = await text(win, '[data-pulls-caption]')
+    const collapsedShot = await screenshot(win, shotDir, 'pr-triage-stale-hidden.png')
+    const expanded = await click(win, '[data-pulls-stale-toggle]')
+    await sleep(300)
+    const chipsWhenShown = (await rowsIn(win, 'stale')).length
+    await click(win, '[data-pulls-stale-toggle]')
+    await sleep(300)
+    await reopenPulls(win)
+    const chipsAfterReopen = (await rowsIn(win, 'stale')).length
+
+    checks.push({
+      id: 'PR-33',
+      criterion: 'STALE collapses and expands, and the state is per pane rather than remembered',
+      title: `Hide left ${String(chipsWhenHidden)} chips and kept the heading; reopening the pane brought ${String(chipsAfterReopen)} back`,
+      ok:
+        collapsed &&
+        expanded &&
+        chipsWhenHidden === 0 &&
+        chipsWhenShown === expectedStale.length &&
+        // Shut, the section still says how many it is holding - which is what a
+        // collapsed section is for - and still names what stale means.
+        headingWhenHidden.includes(String(expectedStale.length)) &&
+        headingWhenHidden.includes('No motion') &&
+        // Collapsing one section may not disturb the other, nor the header.
+        JSON.stringify(activeWhenHidden) === JSON.stringify(beforeCollapse) &&
+        captionWhenHidden.includes(`${String(total)} open`) &&
+        // Left collapsed, then reopened: a fresh pane is expanded again, so
+        // nothing wrote it down.
+        chipsAfterReopen === expectedStale.length,
+      detail: {
+        activeBefore: beforeCollapse,
+        chipsWhenHidden,
+        headingWhenHidden,
+        activeWhenHidden,
+        captionWhenHidden,
+        chipsWhenShown,
+        chipsAfterReopen,
+        screenshot: collapsedShot.file
+      },
+      notes: [
+        'The count stays on the heading while the section is shut, deliberately: that is',
+        'what a collapsed section is for, and it is the one place a count may differ from',
+        'the number of rows visible - the user is the one who shut it.',
+        'The pane is left collapsed and then reopened through the sidebar, which unmounts',
+        'and remounts it. A section that came back shut would be one somebody had written',
+        'down, and this is a reaction to a minute rather than a preference.'
+      ]
+    })
+
+    // -------------------------------------------------------------------
+    // PR-34: the filter, and the counts that may not contradict it
+    // -------------------------------------------------------------------
+    const byNumber = await filterFor(win, '418')
+    const numberSections = await paintedSections(win)
+    const numberCaption = await text(win, '[data-pulls-caption]')
+    const byHash = await filterFor(win, '#418')
+    const byAuthor = (await filterFor(win, 'second-dev')).sort()
+    const byBranch = await filterFor(win, 'lit-tiles')
+    const byTitle = await filterFor(win, 'Pathfinding')
+    const byRepo = (await filterFor(win, 'beta')).sort()
+    const noMatch = await filterFor(win, 'zzq-nothing-is-called-this')
+    const emptyFilterState = await exists(win, '[data-pulls-empty="filter"]')
+    const emptyOpenState = await exists(win, '[data-pulls-empty="open"]')
+    const noMatchCaption = await text(win, '[data-pulls-caption]')
+    const noMatchShot = await screenshot(win, shotDir, 'pr-triage-filter-empty.png')
+    const filterCount = await attr(win, '[data-pulls-filter-count]', 'data-pulls-filter-count')
+    await filterFor(win, 'second-dev')
+    const filteredShot = await screenshot(win, shotDir, 'pr-triage-filter.png')
+    const cleared = await filterFor(win, '')
+    const clearedSections = await paintedSections(win)
+
+    // What this driver expects each query to find, from its own read.
+    const expectAuthor = fixture
+      .filter((pull) => pull.author === 'second-dev')
+      .map(rowId)
+      .sort()
+    const expectRepo = fixture
+      .filter((pull) => pull.slug === SLUG_B)
+      .map(rowId)
+      .sort()
+
+    checks.push({
+      id: 'PR-34',
+      criterion:
+        'The filter matches title, number, branch, author and repo, and no visible count contradicts what is on screen while it is on',
+      title: `418 found one row, second-dev found ${String(byAuthor.length)}, and a query nothing matches says so`,
+      ok:
+        JSON.stringify(byNumber) === JSON.stringify([`${SLUG_A}#418`]) &&
+        JSON.stringify(byHash) === JSON.stringify([`${SLUG_A}#418`]) &&
+        expectAuthor.length === 3 &&
+        JSON.stringify(byAuthor) === JSON.stringify(expectAuthor) &&
+        JSON.stringify(byBranch) === JSON.stringify([`${SLUG_A}#12`]) &&
+        JSON.stringify(byTitle) === JSON.stringify([`${SLUG_A}#12`]) &&
+        JSON.stringify(byRepo) === JSON.stringify(expectRepo) &&
+        // Nothing matched, and it says which of the two nothings it is.
+        noMatch.length === 0 &&
+        emptyFilterState &&
+        !emptyOpenState &&
+        // Every heading on screen agrees with the rows under it, in both the
+        // filtered state and the cleared one.
+        numberSections.every((section) => section.painted === section.rows) &&
+        clearedSections.every((section) => section.painted === section.rows) &&
+        clearedSections.reduce((sum, section) => sum + section.rows, 0) === total &&
+        cleared.length === total &&
+        // `0/13` beside the field, read in the state where the pane has the
+        // most to lie about. It is the other half of the same rule: the pane
+        // says a filter is on rather than merely showing fewer rows than it has.
+        filterCount === `0/${String(total)}` &&
+        // And the header's own count never moves.
+        numberCaption.includes(`${String(total)} open`) &&
+        noMatchCaption.includes(`${String(total)} open`),
+      detail: {
+        queries: {
+          '418': byNumber,
+          '#418': byHash,
+          'second-dev': { painted: byAuthor, expected: expectAuthor },
+          'lit-tiles': byBranch,
+          Pathfinding: byTitle,
+          beta: { painted: byRepo, expected: expectRepo },
+          'zzq-nothing-is-called-this': noMatch
+        },
+        emptyStates: { filter: emptyFilterState, nothingOpen: emptyOpenState },
+        sectionsWhileFiltered: numberSections,
+        sectionsAfterClearing: clearedSections,
+        filterCountAttribute: filterCount,
+        captions: { whileFiltered: numberCaption, whenNothingMatched: noMatchCaption },
+        screenshots: [filteredShot.file, noMatchShot.file]
+      },
+      notes: [
+        'Both `418` and `#418` are tried: the number is the name people use for a pull',
+        'request and they type it both ways.',
+        'The author and repository queries are compared against sets this driver derives',
+        'from the fixture, not against a number written down here - a query returning one',
+        'row would otherwise pass a check expecting "some rows".',
+        'A query nothing matches has its own empty state, and the "nothing open" one is',
+        'asserted absent: reporting a query the user typed as a fact about GitHub is the',
+        'failure that distinction exists to prevent.',
+        'Every section heading is compared with the rows beneath it in each state. This is',
+        'the `ACTIVE 6` over two rows failure, and it is checked structurally rather than',
+        'by reading one number.'
+      ]
+    })
+
+    // -------------------------------------------------------------------
+    // PR-35: GROUP, and what None means
+    // -------------------------------------------------------------------
+    const noneHeadings = await groupHeadings(win, 'active')
+    const groupedByRepo = await click(win, '[data-pulls-group="repo"]')
+    await sleep(300)
+    const repoActive = await groupHeadings(win, 'active')
+    const repoStale = await groupHeadings(win, 'stale')
+    // Grouped by repository the heading names it, so the rows under it must not
+    // (DESIGN.md's source-pill rule).
+    const pillsWhileGrouped = await js<number>(
+      win,
+      `document.querySelectorAll('[data-pulls-section="active"] [data-pull-repo]').length`
+    )
+    const repoShot = await screenshot(win, shotDir, 'pr-triage-group-repo.png')
+    const groupedByAuthor = await click(win, '[data-pulls-group="author"]')
+    await sleep(300)
+    const authorActive = await groupHeadings(win, 'active')
+    const pillsWhileByAuthor = await js<number>(
+      win,
+      `document.querySelectorAll('[data-pulls-section="active"] [data-pull-repo]').length`
+    )
+    const authorShot = await screenshot(win, shotDir, 'pr-triage-group-author.png')
+    const rowsWhileGrouped = (await rowsIn(win, 'active')).sort()
+
+    // The same two tallies, counted here from the fixture. Repository order is
+    // `repos`' own - busiest first - and authors are counted, most first.
+    const activeSet = fixture.filter((pull) => expectedActive.includes(rowId(pull)))
+    // A repository's heading is the folder's name, which this driver knows
+    // because it made the folders.
+    const folderFor: Record<string, string> = {
+      [SLUG_A]: basename(fixtures.alpha),
+      [SLUG_B]: basename(fixtures.beta),
+      [SLUG_REAL]: basename(fixtures.real)
+    }
+    const expectRepoGroups = [SLUG_A, SLUG_B, SLUG_REAL]
+      .map((slug) => ({
+        label: folderFor[slug] ?? '',
+        count: activeSet.filter((pull) => pull.slug === slug).length
+      }))
+      .filter((group) => group.count > 0)
+    const expectAuthorGroups = [...new Set(activeSet.map((pull) => pull.author))]
+      .map((author) => ({
+        // The `app/` prefix is a bot's marking, not part of its name - the same
+        // reduction a row makes, restated.
+        label: author.replace(/^app\//, ''),
+        count: activeSet.filter((pull) => pull.author === author).length
+      }))
+      .sort((a, b) => (a.count === b.count ? a.label.localeCompare(b.label) : b.count - a.count))
+
+    checks.push({
+      id: 'PR-35',
+      criterion:
+        'GROUP: Repo and GROUP: Author render labelled, counted groups, and None is the default a fresh pane shows',
+      title: `None drew no headings; Repo drew ${String(repoActive.length)} and Author ${String(authorActive.length)}, counts and order from the fixture`,
+      ok:
+        // None is the default and this pane was remounted a moment ago, so its
+        // group control is at whatever a fresh launch shows.
+        noneHeadings.length === 0 &&
+        groupedByRepo &&
+        groupedByAuthor &&
+        expectRepoGroups.length > 1 &&
+        repoActive.length === expectRepoGroups.length &&
+        repoActive.every(
+          (heading, at) =>
+            heading.label === (expectRepoGroups[at]?.label ?? '') &&
+            heading.count === (expectRepoGroups[at]?.count ?? -1)
+        ) &&
+        // Honoured literally, one-row groups included: the second repository
+        // contributes exactly one active pull request and still gets a heading.
+        repoActive.some((heading) => heading.count === 1) &&
+        repoStale.length > 0 &&
+        pillsWhileGrouped === 0 &&
+        expectAuthorGroups.length > 2 &&
+        authorActive.length === expectAuthorGroups.length &&
+        authorActive.every(
+          (heading, at) =>
+            heading.label === (expectAuthorGroups[at]?.label ?? '') &&
+            heading.count === (expectAuthorGroups[at]?.count ?? -1)
+        ) &&
+        // Grouped by author the rows are still flattened across repositories,
+        // so the pill comes back.
+        pillsWhileByAuthor === rowsWhileGrouped.length &&
+        // Rearranged, not filtered: the same rows either way.
+        JSON.stringify(rowsWhileGrouped) === JSON.stringify(expectedActive),
+      detail: {
+        headingsUnderNone: noneHeadings,
+        repo: { painted: repoActive, expected: expectRepoGroups, stale: repoStale },
+        author: { painted: authorActive, expected: expectAuthorGroups },
+        sourcePills: { whileGroupedByRepo: pillsWhileGrouped, whileGroupedByAuthor: pillsWhileByAuthor },
+        rowsWhileGrouped,
+        screenshots: [repoShot.file, authorShot.file]
+      },
+      notes: [
+        'The counts and the order are worked out here from the fixture: repositories in the',
+        "order core hands them over - busiest first - and authors counted, most first with",
+        'ties by name.',
+        'A group of one is asserted rather than tolerated. The argument against grouping',
+        'this pane by default is about height spent on headings *nobody asked for*; a mode',
+        'somebody chose shows them what they chose, one-row groups and all.',
+        'The source pill is counted in both modes and the two answers are opposites, which',
+        "is DESIGN.md's rule for it: grouped by repository the heading names it and the",
+        'pill would be the heading said once per row, and grouped by author the rows are',
+        'still flattened across repositories, so it must come back.'
+      ]
+    })
+
+    // -------------------------------------------------------------------
+    // PR-36: neither the filter nor the arrangement survives the pane
+    // -------------------------------------------------------------------
+    await filterFor(win, 'second-dev')
+    await click(win, '[data-pulls-group="author"]')
+    await sleep(300)
+    const beforeReopen = await js<{ filter: string; group: string | null; rows: number }>(
+      win,
+      `(() => ({
+         filter: document.querySelector('[data-pulls-filter]')?.value ?? '',
+         group: [...document.querySelectorAll('[data-pulls-group]')]
+           .filter((el) => el.getAttribute('aria-pressed') === 'true')
+           .map((el) => el.getAttribute('data-pulls-group'))[0] ?? null,
+         rows: document.querySelectorAll('[data-pull]').length
+       }))()`
+    )
+    await reopenPulls(win)
+    const afterReopen = await js<{ filter: string; group: string | null; rows: number }>(
+      win,
+      `(() => ({
+         filter: document.querySelector('[data-pulls-filter]')?.value ?? '',
+         group: [...document.querySelectorAll('[data-pulls-group]')]
+           .filter((el) => el.getAttribute('aria-pressed') === 'true')
+           .map((el) => el.getAttribute('data-pulls-group'))[0] ?? null,
+         rows: document.querySelectorAll('[data-pull]').length
+       }))()`
+    )
+    const settingsKeys = await js<string[]>(
+      win,
+      `window.helm.invoke('settings:read').then((s) => Object.keys(s).sort())`
+    )
+    const leaked = settingsKeys.filter((key) => /filter|group/i.test(key))
+
+    checks.push({
+      id: 'PR-36',
+      criterion:
+        'Neither the filter text nor the group choice survives, and neither appears in Settings',
+      title: `A pane left filtered and grouped by author came back empty and None, with no such key in settings`,
+      ok:
+        beforeReopen.filter === 'second-dev' &&
+        beforeReopen.group === 'author' &&
+        beforeReopen.rows < total &&
+        afterReopen.filter === '' &&
+        afterReopen.group === 'none' &&
+        afterReopen.rows === total &&
+        // The settings row set is read in full and searched: a setting for
+        // either of these would be the shape this criterion rules out.
+        settingsKeys.length > 0 &&
+        leaked.length === 0 &&
+        // The cutoff is the opposite and is a setting, so it *is* there.
+        settingsKeys.includes('prStaleDays'),
+      detail: {
+        beforeReopening: beforeReopen,
+        afterReopening: afterReopen,
+        settingsKeys,
+        keysMatchingFilterOrGroup: leaked
+      },
+      notes: [
+        'Reopening the pane is what a restart would prove and is the strongest claim this',
+        'process can make about state that only lives in a component - the pane is',
+        'unmounted when another one is shown, so a value that came back would have had to',
+        'be written somewhere.',
+        'The other half is read out of the database through `settings:read`: the whole key',
+        'set is fetched and searched for either word, and `prStaleDays` is asserted present',
+        'in the same breath - a search that found nothing because the read failed would',
+        'otherwise look identical to one that found nothing because nothing leaked.'
+      ]
+    })
+  } finally {
+    // The fixtures back, byte for byte, and the cutoff off - everything after
+    // this phase was written against the flat list.
+    writeFileSync(alphaFile, alphaAsBuilt)
+    writeFileSync(betaFile, betaAsBuilt)
+    await sendWrite(win, { prStaleDays: 0 }).catch(() => null)
+    // Caught, like every other restore in this file: a failure here would
+    // otherwise replace whatever went wrong above with a fetch error.
+    await refreshNow(pulls).catch(() => undefined)
+  }
+
   return checks
 }
 

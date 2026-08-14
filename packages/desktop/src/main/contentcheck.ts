@@ -712,6 +712,8 @@ export async function runContentChecks(
       await group('scroll', () => scrollChecks(ctx, shotDir, harness.path, fixtures))
     } else {
       checks.push({
+        // audit: optional - the branch for a machine with no harness vault, so
+        // a healthy run on one that has a vault does not produce it.
         id: 'CONT-NO-HARNESS',
         criterion: 'setup',
         title: 'Discovery found no harness, so the criteria about the real vault could not run',

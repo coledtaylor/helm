@@ -1460,6 +1460,10 @@ export function App(): JSX.Element {
               // the setting lives; this is the undo standing beside the thing
               // it undoes.
               onUnignoreRepo={unignoreRepo}
+              // The one piece of this pane's triage that is a preference. The
+              // filter and the grouping beside it are the pane's own state and
+              // are deliberately nowhere near settings.
+              staleDays={settings?.prStaleDays ?? DEFAULT_SETTINGS.prStaleDays}
               compact={showSessions}
             />
           </div>
@@ -1699,6 +1703,8 @@ export function App(): JSX.Element {
               onClearGhOverride={() => writeSettings({ ghPath: null })}
               prPollMinutes={settings?.prPollMinutes ?? DEFAULT_SETTINGS.prPollMinutes}
               onPrPollMinutesChange={(prPollMinutes) => writeSettings({ prPollMinutes })}
+              prStaleDays={settings?.prStaleDays ?? DEFAULT_SETTINGS.prStaleDays}
+              onPrStaleDaysChange={(prStaleDays) => writeSettings({ prStaleDays })}
               // Built from the snapshot rather than from the setting, because
               // the choices are the repositories discovery found - and it is
               // the same snapshot the Pulls pane paints, so the two surfaces

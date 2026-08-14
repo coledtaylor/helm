@@ -14,7 +14,7 @@
 // re-export alone does not bring a name into this file's scope.
 import type { UsageDisplayMode } from './usage/shape'
 // The same, for a value: `DEFAULT_SETTINGS` reads the polling default off it.
-import { PR_POLL_MINUTES, type PrCheckoutMode } from './github/types'
+import { PR_POLL_MINUTES, PR_STALE_DAYS, type PrCheckoutMode } from './github/types'
 // And for the review template's default, which is the prompt module's to state.
 import { DEFAULT_PR_REVIEW_PROMPT } from './github/prompt'
 
@@ -82,6 +82,7 @@ export {
   PR_CHECKOUT_MODES,
   PR_IGNORED_REPOS_MAX,
   PR_POLL_MINUTES,
+  PR_STALE_DAYS,
   type GhProblem,
   type GhProblemKind,
   type GhStatus,
@@ -939,6 +940,21 @@ export interface AppSettings {
    */
   prPollMinutes: number
   /**
+   * How long a pull request may go untouched before the Pulls pane files it
+   * under STALE rather than ACTIVE, in days. `0` is off - one flat Open list,
+   * exactly as that section rendered before the split existed.
+   *
+   * A **preference** rather than a constant, and it is the only piece of that
+   * pane's triage controls that is one: where a pull request stops being work
+   * in flight is a judgement about the user's own working rhythm, and a week's
+   * silence on a repository with one contributor means something different from
+   * a week's silence on a busy one. The filter and the grouping beside it are
+   * the opposite - reactions to a list that changes hourly - so they live in
+   * the pane's own state and deliberately not here. Bounded by `PR_STALE_DAYS`,
+   * whose comment argues the default.
+   */
+  prStaleDays: number
+  /**
    * Repositories whose pull requests Helm does not fetch or show, as
    * `owner/name` slugs.
    *
@@ -1065,6 +1081,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   transcriptArchiveMaxBytes: TRANSCRIPT_ARCHIVE_BYTES.default,
   ghPath: null,
   prPollMinutes: PR_POLL_MINUTES.default,
+  prStaleDays: PR_STALE_DAYS.default,
   prIgnoredRepos: [],
   prReviewPrompt: DEFAULT_PR_REVIEW_PROMPT,
   prCheckout: 'none',

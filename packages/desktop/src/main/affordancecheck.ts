@@ -515,6 +515,8 @@ export async function runAffordanceChecks(
   for (const n of proof.notes) console.log(`      ${n}`)
   if (!proof.ok) {
     checks.push({
+      // audit: optional - only reached when the planted probe failed, so a
+      // healthy run has no AFF-0 and `report-audit.mjs` must not want one.
       id: 'AFF-0',
       criterion: 'The walk ran',
       title: 'The audit was skipped: the probe did not prove itself',

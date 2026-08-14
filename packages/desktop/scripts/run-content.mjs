@@ -19,6 +19,7 @@ import { copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { isolate } from './isolate.mjs'
+import { auditReport, reportAudit } from './report-audit.mjs'
 
 // Its own data directory, seeded from a consistent copy of the real one, so a
 // run cannot disturb the Helm the user is using. See scripts/isolate.mjs.
@@ -71,6 +72,19 @@ for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.tit
 
 if (checks.length === 0 || failed.length > 0) {
   console.error(`\nFAIL  ${String(failed.length)} of ${String(checks.length)} checks`)
+  process.exit(1)
+}
+
+// Nothing that ran failed. Whether *everything* ran is a different question,
+// and it is the one this asks - a phase that returned early leaves a short
+// report that every check above passes.
+const auditOnly = process.argv.slice(2).find((a) => a.startsWith('--only='))
+if (
+  !reportAudit(
+    'content-check',
+    auditReport({ driver: 'contentcheck.ts', checks, only: auditOnly?.slice('--only='.length) })
+  )
+) {
   process.exit(1)
 }
 

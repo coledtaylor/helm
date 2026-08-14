@@ -9,6 +9,7 @@ import {
   PR_IGNORED_REPOS_MAX,
   PR_POLL_MINUTES,
   PR_REVIEW_PROMPT_MAX_LENGTH,
+  PR_STALE_DAYS,
   PROJECT_SHELL_HEIGHT_PCT,
   SESSION_SPLIT_PCT,
   TERMINAL_CURSOR_STYLES,
@@ -378,6 +379,22 @@ export const SETTING_VALIDATORS: SettingValidators = {
     return problem === null
       ? null
       : `${problem} (or ${String(PR_POLL_MINUTES.off)} to poll not at all)`
+  },
+
+  /**
+   * Days, or zero for no split at all.
+   *
+   * The same two-step as `prPollMinutes` above, for the same reason: zero is
+   * not the bottom of the range, it is the absence of one. A cutoff of a day
+   * and no cutoff at all are different states - the second is the Open section
+   * reverting to the single flat list it was before ACTIVE/STALE existed - and
+   * a validator that accepted `0` as an ordinary member of the range would also
+   * have to accept the half-day cutoffs the unit cannot express.
+   */
+  prStaleDays: (value) => {
+    if (value === PR_STALE_DAYS.off) return null
+    const problem = boundedInteger(PR_STALE_DAYS)(value)
+    return problem === null ? null : `${problem} (or ${String(PR_STALE_DAYS.off)} for no split)`
   },
 
   /**
