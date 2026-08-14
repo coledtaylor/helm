@@ -132,6 +132,22 @@ const VIEWS: Array<{ name: string; open: readonly string[] | null; anchor: strin
   { name: 'welcome', open: null, anchor: 'aside nav button[title]' },
   { name: 'project', open: ['aside nav button[title]'], anchor: '[data-project-pane]' },
   { name: 'config', open: ['[data-open-config]'], anchor: '[data-config-scope]' },
+  /**
+   * A file open in the Files view, which is a *pane* rather than a view: the
+   * console's detail column paints nothing until a row is clicked, so its
+   * controls - the read/edit/source segments, the reveal button, the version
+   * list - were reachable by no walk at all. That is the coverage gap AFF-2 is
+   * named for, and the remedy the checks skill gives is a row here.
+   *
+   * The first row of whatever scope opens first, rather than a named file: the
+   * user scope's contents are the machine's. It is empty only on a machine
+   * where `claude` has never run, which every other config check assumes too.
+   */
+  {
+    name: 'config:file',
+    open: ['[data-open-config]', 'button[data-config-file]'],
+    anchor: '[data-config-mode="read"]'
+  },
   // The config console's other three views. One click further in, and the pane
   // that holds the app's only two label-wrapped checkboxes and its MCP form -
   // which is to say, the controls least like the ones on the seven top views.
