@@ -297,6 +297,25 @@ describe('readContentTree', () => {
       expect(tree.files.find((f) => f.relPath === 'tools/rebuild.py')?.kind).toBe('source')
       expect(tree.files.find((f) => f.relPath === 'tools/notes.png')?.kind).toBe('binary')
       expect(tree.files.find((f) => f.relPath === 'tools/rebuild.py')?.ext).toBe('py')
+      // A file that is not prose keeps its whole name: "rebuild" is a viewer
+      // editing the name of a file somebody is looking for by its full one.
+      expect(tree.files.find((f) => f.relPath === 'tools/rebuild.py')?.title).toBe('rebuild.py')
+      expect(tree.files.find((f) => f.relPath === 'tools/notes.png')?.title).toBe('notes.png')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('gives a dotfile a name rather than an empty one', () => {
+    const root = fixture()
+    try {
+      writeFileSync(join(root, 'tools', '.gitignore'), 'out/\n')
+      const tree = readContentTree(contentScope(root, 'harness', 'fixture'))
+      const dotfile = tree.files.find((f) => f.relPath === 'tools/.gitignore')
+      expect(dotfile).toBeDefined()
+      expect(dotfile?.title).toBe('.gitignore')
+      expect(dotfile?.slug).toBe('.gitignore')
+      expect(dotfile?.kind).toBe('source')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

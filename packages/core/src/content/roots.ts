@@ -237,10 +237,24 @@ function firstHeading(body: string): string | null {
 function describeFile(path: string, relPath: string, root: ContentRoot, stat: { size: number; mtimeMs: number }): ContentFile {
   const name = basename(path)
   const kind = contentFileKind(name)
-  const slug = name.replace(/\.[^.]+$/, '')
-  const ext = contentExtension(name).replace(/^\./, '')
+  const rawExt = contentExtension(name)
+  // The name without its extension - and the whole name when the "extension" is
+  // the whole name. `.gitignore` used to slug to the empty string, which put a
+  // row on screen with a size, a date and no name at all: the failure this
+  // surface is about, arriving through the fix for it.
+  const slug = rawExt === '' || rawExt === name.toLowerCase() ? name : name.slice(0, -rawExt.length)
+  const ext = rawExt.replace(/^\./, '')
 
-  let title = slug
+  /**
+   * The name, unless the file carries a better one inside it.
+   *
+   * Prose has a title - frontmatter, or the first heading - and stripping `.md`
+   * off the fallback reads better than keeping it. A `package.json` has no
+   * title, and calling it "package" is a viewer editing the name of a file
+   * somebody is looking for by its full name. So the default is the filename,
+   * and only the two rendered kinds go looking for something better.
+   */
+  let title = kind === 'markdown' || kind === 'html' ? slug : name
   let noteType: string | null = null
   let date: string | null = null
   let tags: string[] = []

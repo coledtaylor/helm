@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join, relative, sep } from 'node:path'
 import {
+  CURATED_SKIPPED_DIRS,
   countConfigSnapshots,
   createProfile,
   deleteProfile,
@@ -1092,7 +1093,7 @@ async function curationChecks(ctx: CheckContext, fixtures: Fixtures): Promise<Ch
  * directory fails the second.
  */
 async function treeChecks(ctx: CheckContext, shotDir: string, fixtures: Fixtures): Promise<Check[]> {
-  const { win, content } = ctx
+  const { win } = ctx
 
   await selectScope(win, fixtures.project)
   await click(win, '[data-content-view="tree"]')
@@ -1112,6 +1113,21 @@ async function treeChecks(ctx: CheckContext, shotDir: string, fixtures: Fixtures
   await click(win, '[data-content-tree-entry="src"]')
   await sleep(900)
   const after = await readRows()
+
+  /**
+   * The shot, and the scope it is a shot *of*.
+   *
+   * Taken here rather than at the end, and paired with a read of the switcher
+   * in the same moment, because the first run of this probe wrote a PNG of a
+   * different scope mid-transition and reported green beside it. A screenshot
+   * nobody can tie to the assertion it illustrates is the `PROF-4` shape with
+   * a picture attached.
+   */
+  const shot = await screenshot(win, shotDir, 'content-project-tree.png')
+  const shotScope = await js<string>(
+    win,
+    `document.querySelector('select[data-content-scope]')?.value ?? ''`
+  )
 
   const badged = await js<string[]>(
     win,
@@ -1150,14 +1166,19 @@ async function treeChecks(ctx: CheckContext, shotDir: string, fixtures: Fixtures
     }
   }
 
-  // The fallback has to disagree, or "gitignore respected" is also what a
-  // built-in list would report. `secrets/` is in no built-in list anywhere.
-  const fallback = await content.dir(fixtures.project, '')
-  const fallbackSecrets = fallback.entries.find((entry) => entry.name === 'secrets')
+  /**
+   * The discriminator: `secrets/` is in no built-in list.
+   *
+   * "gitignore respected" is also what a run that quietly fell back would
+   * report about `node_modules/` and `dist/`, because those are in Helm's own
+   * list too. `secrets/` is in neither list, so its being greyed can only have
+   * come from the repository - and this asserts the list really does not hold
+   * it, rather than taking that on trust from the name.
+   */
+  const notInHelmsList = !CURATED_SKIPPED_DIRS.has('secrets')
 
   const listed = new Set(before.map((row) => row.rel))
   const ignoredOnScreen = new Set(before.filter((row) => row.ignored === 'true').map((row) => row.rel))
-  const shot = await screenshot(win, shotDir, 'content-project-tree.png')
 
   return [
     {
@@ -1182,14 +1203,17 @@ async function treeChecks(ctx: CheckContext, shotDir: string, fixtures: Fixtures
         source === 'gitignore' &&
         caption.includes('.gitignore respected') &&
         count.includes('ignored') &&
-        // The fallback would not have called `secrets/` ignored, so a pass here
-        // is git answering rather than the built-in list under another name.
-        fallbackSecrets?.ignoredBy === 'gitignore' &&
+        notInHelmsList &&
+        // The shot is of the thing that was asserted, not of whatever the
+        // window happened to be showing by the time it was taken.
+        shotScope.toLowerCase() === fixtures.project.toLowerCase() &&
         // Unsupported kinds are rows, not omissions.
         listed.has('LICENSE'),
       detail: {
         project: fixtures.project,
         isRepo: fixtures.projectIsRepo,
+        secretsIsInHelmsOwnList: !notInHelmsList,
+        scopeTheScreenshotShows: shotScope,
         onDisk,
         listed: [...listed],
         ignoredOnScreen: [...ignoredOnScreen],

@@ -656,8 +656,11 @@ function Row({
           </span>
           {/* The extension, for anything that is not prose or an artifact.
               Machine data, so mono (DESIGN.md 2). It is what says a row will
-              open as source rather than as a document. */}
-          {file.ext !== '' && file.kind !== 'markdown' && file.kind !== 'html' && (
+              open as source rather than as a document.
+              Not for a dotfile whose whole name *is* its extension: a
+              `.gitignore` row wearing a `gitignore` chip is the same word
+              twice. */}
+          {file.ext !== '' && file.ext !== file.title.replace(/^\./, '') && file.kind !== 'markdown' && file.kind !== 'html' && (
             <span
               data-content-ext={file.ext}
               className="shrink-0 rounded-sm bg-surface-sunken px-1 font-mono text-[9.5px] text-fg-subtle"
