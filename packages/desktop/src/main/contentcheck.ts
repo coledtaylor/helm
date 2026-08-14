@@ -1999,6 +1999,9 @@ async function artifactChecks(
           `({ title: document.title, headings: document.querySelectorAll('h1,h2,h3').length,
               ran: document.getElementById('out')?.textContent ?? null,
               text: (document.body?.innerText ?? '').length,
+              // The fixture's own marker, read back out of the laid-out text.
+              // This is what "rendered" means here - see the note below.
+              marker: (document.body?.innerText ?? '').includes('HELMM6ARTIFACT'),
               painted: document.body ? document.body.scrollHeight : 0 })`
         )
         .catch(() => null)
@@ -2011,6 +2014,7 @@ async function artifactChecks(
     title?: string
     headings?: number
     ran?: string | null
+    marker?: boolean
     painted?: number
   } | null
   const plantedErrors = plantedLogged.filter(
@@ -2030,7 +2034,17 @@ async function artifactChecks(
       readFileSync(fixtures.artifact, 'utf8').includes('HELMM6ARTIFACT') &&
       plantedShape?.title === 'Fixture artifact' &&
       (plantedShape.headings ?? 0) > 0 &&
-      (plantedShape.painted ?? 0) > 200 &&
+      // "Rendered" is the fixture's own marker read back out of the *laid-out
+      // text*, not a height threshold. The height one was inherited from when
+      // this probe measured a real lesson page and was calibrated for it: a
+      // 409-byte fixture is legitimately about 100px tall, so `> 200` failed a
+      // document that had rendered perfectly. Inflating the fixture to clear
+      // the number would have been fitting the fixture to the test. The marker
+      // is the stronger claim anyway - it says the bytes on disk reached the
+      // DOM and were laid out as text, which a blank or unloaded document
+      // cannot fake at any height.
+      plantedShape.marker === true &&
+      (plantedShape.painted ?? 0) > 0 &&
       // The inline script ran, which is what says the sandbox allows scripts
       // rather than that the document merely parsed.
       plantedShape.ran === 'ran' &&
@@ -2050,9 +2064,9 @@ async function artifactChecks(
       'Helm - a corpus other people write to is not a fixture, however real it is.',
       'The console is read from the main process, which is the only place it can be read - the',
       'frame has an opaque origin, so the window hosting it cannot reach its console.',
-      '"Rendered" is `document.body.scrollHeight` measured inside the frame, so an empty',
-      'document that loaded successfully still fails; `ran` is the inline script’s own effect,',
-      'so a document that parsed but was not allowed to execute fails too.',
+      '"Rendered" is the fixture’s own marker token read back out of the laid-out text inside',
+      'the frame, so a document that loaded but painted nothing still fails; `ran` is the',
+      'inline script’s own effect, so one that parsed but was not allowed to execute fails too.',
       'This also covers the wikilink bootstrap the protocol injects: it runs in this document,',
       'and anything it threw would land in the console asserted clean here.'
     ]
