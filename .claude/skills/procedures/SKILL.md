@@ -52,6 +52,35 @@ runtime, so a packaged exe carries its own migrations rather than needing files
 shipped beside it. Skipping `db:generate` therefore produces a build whose code
 expects a column its migrations never create.
 
+## Cutting a release
+
+Two edits and a merge:
+
+1. **The version** in `packages/desktop/package.json`. That bump is the whole
+   trigger - merging it to `main` tags it, builds on a clean runner and
+   publishes. No tag to push, no button.
+2. **A `## <version>` section in `CHANGELOG.md`**, which becomes the release
+   body. **Without one the release fails**, deliberately: writing it is the step
+   a person can skip.
+
+Then run `pnpm packaging-check` green **with Helm closed** before merging. CI
+runs only the fast tier - typecheck, lint, tests, build - so nothing else covers
+the artefact somebody actually downloads.
+
+**The changelog is for somebody deciding whether to download an exe.** Not a
+commit log: no probe ids, no check names, no `pnpm` commands, no refactors, no
+fixtures. The commits are one click away under "Full changelog" on every release
+page. Group entries by what a reader would look for - the surface that changed -
+and say what is different for them, not what was done to the repository.
+
+This was learned the expensive way. Through 0.4.0 the body was `git log`
+subjects, which put fifty-nine lines on the page, most of them naming a probe,
+and three identical lines from one cherry-pick onto three branches. Deriving it
+by path was tried and cannot work: the same file is touched for a reason a
+reader sees and for a reason they never will. The workflow now refuses a section
+carrying those fingerprints, but the guard only catches a pasted commit log -
+whether an entry is worth telling anyone about is still yours to judge.
+
 ## Building a Windows release
 
 `pnpm dist:win` goes through `scripts/dist-win.mjs`, never straight to

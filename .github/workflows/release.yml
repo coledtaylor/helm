@@ -186,6 +186,23 @@ jobs:
             exit 1
           fi
 
+          # Whether an entry is worth telling somebody about is a judgement and
+          # this cannot make it. What it can do is catch the one failure that
+          # actually happened - a commit log pasted in - because that leaves
+          # fingerprints nothing written for a reader ever has: a probe id, a
+          # `pnpm` invocation, the name of a check.
+          #
+          # The prefixes are listed rather than matched as `[A-Z]+-[0-9]+`, which
+          # would refuse a release for saying UTF-8 or SHA-256.
+          noise=$(echo "$section" \
+            | grep -nEi '\b(CFG|AFF|SESS|PKG|PROF|HIST|CONT|PR|USE|S|T)-[0-9]+[a-z]?\b|pnpm |[a-z]+-check\b' \
+            || true)
+          if [[ -n $noise ]]; then
+            echo "::error file=CHANGELOG.md::the '## $VERSION' section reads like a commit log, not a changelog. A release page is read by somebody deciding whether to download an exe; probe ids, checks and pnpm commands mean nothing to them and the commits are one click away under Full changelog. Offending lines:"
+            echo "$noise"
+            exit 1
+          fi
+
           {
             echo
             echo "$section"
