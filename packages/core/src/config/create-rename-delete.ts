@@ -18,6 +18,7 @@ import {
   renameRefusal,
   type CreatableKind
 } from './names'
+import { parseFrontmatter } from './validate'
 import {
   assertWritable,
   readConfigFileContent,
@@ -256,6 +257,42 @@ export function createConfigFile(
 // ---------------------------------------------------------------------------
 
 /**
+ * Makes a `name:` follow the rename that moved the file it is in.
+ *
+ * A skill's frontmatter `name` and its directory have to agree, and an agent's
+ * has to name the agent - so a rename that moved the file and left it declaring
+ * its old self has half-renamed the thing, which is the failure this scaffold's
+ * own comment warns about at the other end.
+ *
+ * **Only when the declared name is exactly the old one.** A file whose
+ * frontmatter says something else is not claiming to be the thing being
+ * renamed, and rewriting it would be Helm editing a field the user set on
+ * purpose. That condition is why this can be done at all without it counting as
+ * a surprise edit - and the dialog states it before the button is pressed.
+ */
+function retitleFrontmatter(content: string, fromLeaf: string, toLeaf: string): string {
+  const parsed = parseFrontmatter(content)
+  if (parsed === null) return content
+  if (parsed.fields.find((field) => field.key === 'name')?.value !== fromLeaf) return content
+
+  // `endLine` is the 1-based line the closing fence is on, so the block is
+  // everything between it and the opening one.
+  const lines = content.split('\n')
+  for (let i = 1; i < parsed.endLine - 1; i++) {
+    const line = lines[i] ?? ''
+    if (!/^name\s*:/.test(line)) continue
+    lines[i] = `name: ${toLeaf}${line.endsWith('\r') ? '\r' : ''}`
+    break
+  }
+  return lines.join('\n')
+}
+
+/** The last step of an address - a skill's directory, an agent's file name. */
+function leafOf(name: string): string {
+  return name.split('/').at(-1) ?? name
+}
+
+/**
  * Moves an entry to a new name.
  *
  * The two shapes are different and both are the criterion:
@@ -284,6 +321,7 @@ export function renameConfigEntry(
     relPath: null,
     moved: [],
     snapshotIds: [],
+    frontmatterRenamed: false,
     error
   })
 
@@ -293,6 +331,7 @@ export function renameConfigEntry(
 
   let moves: Array<{ from: string; to: string }>
   let addressedTo: string
+  let newLeaf: string
 
   if (file.kind === 'skill') {
     const checked = checkConfigName('skill', name)
@@ -310,6 +349,7 @@ export function renameConfigEntry(
       to: join(toDir, relative(fromDir, resolve(member.path)))
     }))
     addressedTo = join(toDir, relative(fromDir, resolve(file.path)))
+    newLeaf = leaf
   } else {
     const planned = planConfigFile({
       kind: file.kind as CreatableKind,
@@ -324,10 +364,30 @@ export function renameConfigEntry(
     if (existsSync(to)) return refuse(`${planned.plan.relPath} is already there.`)
     moves = [{ from: resolve(file.path), to }]
     addressedTo = to
+    newLeaf = leafOf(planned.plan.address.replace(/^\//, '').replace(/:/g, '/'))
   }
 
   const read = readAll(scope, moves.map((move) => move.from))
   if (read.error !== null) return refuse(read.error)
+
+  /**
+   * The addressed file's own `name:` follows it, for the two kinds that declare
+   * one.
+   *
+   * Computed into a *separate* list rather than by editing what was read. The
+   * rows that record the sources have to hold the bytes that were on disk, or
+   * restoring a rename would give back a file somebody else's edit had already
+   * been applied to.
+   */
+  const addressedFrom = resolve(file.path)
+  const declaresName = file.kind === 'skill' || file.kind === 'agent'
+  let frontmatterRenamed = false
+  const contentFor = (source: ReadFile): string => {
+    if (!declaresName || source.path !== addressedFrom) return source.content
+    const retitled = retitleFrontmatter(source.content, leafOf(file.name), newLeaf)
+    frontmatterRenamed = retitled !== source.content
+    return retitled
+  }
 
   // The destinations first. Every one is a real write with a `create` row
   // behind it, so an interrupted rename leaves files that can be un-created
@@ -341,7 +401,7 @@ export function renameConfigEntry(
       {
         scopePath: scope.path,
         path: move.to,
-        content: source.content,
+        content: contentFor(source),
         expectedHash: null,
         reason: 'create'
       },
@@ -365,6 +425,7 @@ export function renameConfigEntry(
     relPath: relPathOf(scope, addressedTo),
     moved: moves,
     snapshotIds,
+    frontmatterRenamed,
     error: null
   }
 }

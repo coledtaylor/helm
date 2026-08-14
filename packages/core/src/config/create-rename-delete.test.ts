@@ -237,14 +237,56 @@ describe('renameConfigEntry', () => {
     expect(result.ok).toBe(true)
     expect(result.moved).toHaveLength(2)
     expect(existsSync(join(root, '.claude/skills/ponder/SKILL.md'))).toBe(true)
-    // The bundled resource came with it - a skill that arrives without its
-    // references is a skill that has been broken by being renamed.
+    // The bundled resource came with it, byte for byte - a skill that arrives
+    // without its references is a skill that has been broken by being renamed.
     expect(readFileSync(join(root, '.claude/skills/ponder/reference.md'), 'utf8')).toBe(
       '# Reference\n'
     )
     // And the old directory is gone, rather than left behind empty.
     expect(existsSync(join(root, '.claude/skills/think'))).toBe(false)
     expect(fileNamed('ponder').kind).toBe('skill')
+
+    // The frontmatter followed it. A skill whose `name` and whose directory
+    // disagree has been half-renamed, and the CLI resolves it by the directory.
+    const moved = readFileSync(join(root, '.claude/skills/ponder/SKILL.md'), 'utf8')
+    expect(parseFrontmatter(moved)?.fields).toContainEqual({ key: 'name', value: 'ponder' })
+    expect(result.frontmatterRenamed).toBe(true)
+    // Nothing else in the file moved.
+    expect(moved).toBe(
+      '---\nname: ponder\ndescription: Ponder.\n---\n# Think\n'
+    )
+  })
+
+  it('leaves a frontmatter name alone when it does not name the old address', () => {
+    // Somebody set this on purpose - it is not the thing being renamed, so Helm
+    // does not touch it. The rename still happens.
+    write('.claude/skills/think/SKILL.md', '---\nname: something-else\n---\n# Think\n')
+    const result = renameConfigEntry(
+      store,
+      projectConfigScope(root),
+      scopeAndTree().files,
+      fileNamed('think'),
+      'ponder'
+    )
+    expect(result.ok).toBe(true)
+    expect(result.frontmatterRenamed).toBe(false)
+    expect(readFileSync(join(root, '.claude/skills/ponder/SKILL.md'), 'utf8')).toBe(
+      '---\nname: something-else\n---\n# Think\n'
+    )
+  })
+
+  it('records the source’s original bytes, not the retitled ones', () => {
+    const before = '---\nname: think\ndescription: Ponder.\n---\n# Think\n'
+    write('.claude/skills/think/SKILL.md', before)
+    const scope = projectConfigScope(root)
+    renameConfigEntry(store, scope, scopeAndTree().files, fileNamed('think'), 'ponder')
+
+    // The whole point of the copy-then-delete shape: undoing a rename has to
+    // give back what was on disk, not what the rename would have written.
+    const rows = readConfigSnapshots(store, root, '.claude/skills/think/SKILL.md')
+    expect(rows[0]?.reason).toBe('rename')
+    restoreConfigSnapshot(store, rows[0]?.id ?? 0, join(root, '.claude/skills/think/SKILL.md'))
+    expect(readFileSync(join(root, '.claude/skills/think/SKILL.md'), 'utf8')).toBe(before)
   })
 
   it('renames a command across its namespace path and prunes what it emptied', () => {

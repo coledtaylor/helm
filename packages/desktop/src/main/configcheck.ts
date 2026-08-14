@@ -1742,6 +1742,78 @@ async function refreshScope(win: BrowserWindow): Promise<void> {
   await sleep(800)
 }
 
+/**
+ * The state on screen, in both themes.
+ *
+ * A UI change is not done until it has been looked at in both, and these
+ * dialogs are exactly what `design-shot`'s itinerary does not reach: each is
+ * two clicks in, behind a state the walk would have to create and then unwind.
+ * The preference is put back, because a check does not get to park a setting.
+ *
+ * Clicked through `el.click()` rather than a pointer, which is what lets it
+ * reach the title bar while a modal backdrop covers the window - and which
+ * dispatches no `mousedown`, so the backdrop's own dismiss never fires.
+ */
+async function shootBothThemes(
+  win: BrowserWindow,
+  outDir: string,
+  name: string
+): Promise<{ files: string[]; applied: boolean }> {
+  const before = await js<string>(
+    win,
+    `(() => {
+      const on = document.querySelector('[role="radiogroup"][aria-label="Theme"] [aria-checked="true"]');
+      return on?.getAttribute('aria-label') ?? 'Match the system theme' })()`
+  )
+  const files: string[] = []
+  let applied = true
+  for (const [theme, label] of [
+    ['dark', 'Dark theme'],
+    ['light', 'Light theme']
+  ] as const) {
+    await click(win, `button[aria-label="${label}"]`)
+    /**
+     * Waited for rather than slept through, and reported when it does not
+     * happen.
+     *
+     * The preference goes to main and comes back as `theme:resolved`, so a
+     * capture taken on a fixed timer can photograph the previous theme - which
+     * had already happened here: two PNGs, one called `-dark` and one `-light`,
+     * byte-for-byte identical. Two pictures of the same thing is a design
+     * review with no evidence behind it, and it looks exactly like one with.
+     */
+    const landed = await pollJs(
+      win,
+      `document.documentElement.classList.contains('dark') === ${String(theme === 'dark')}`,
+      8_000
+    )
+    if (!landed) applied = false
+    await sleep(400)
+    /**
+     * One frame is captured and thrown away first.
+     *
+     * `capturePage` can hand back the frame the compositor last committed, and
+     * on a window nobody is looking at that is the *previous* state - which is
+     * how a shot of the rename dialog and a shot of the delete dialog came out
+     * byte-for-byte identical here. Asking twice forces a current one.
+     */
+    await win.webContents.capturePage()
+    await sleep(250)
+    files.push((await screenshot(win, outDir, `${name}-${theme}.png`)).file)
+  }
+
+  // And the belt to that pair of braces: two files with the same bytes are two
+  // pictures of one thing, whatever the names on them say.
+  const [dark, light] = files
+  if (dark !== undefined && light !== undefined && sha256File(dark) === sha256File(light)) {
+    applied = false
+  }
+
+  await click(win, `button[aria-label="${before}"]`)
+  await sleep(350)
+  return { files, applied }
+}
+
 interface NewDialogRun {
   opened: boolean
   /** The path the dialog says it will write, read off its own preview. */
@@ -1814,7 +1886,9 @@ async function createChecks(
 
   const snapshotsBefore = countConfigSnapshots(ctx.services.store)
   const skillRun = await createThrough(win, 'skill', 'helm-probe-skill')
-  const shot = await screenshot(win, shotDir, 'config-new-skill.png')
+  // The pane as the create leaves it: the new file open in the editor, the `+`
+  // beside the filter, and the two controls on the editor's header.
+  const createdShots = await shootBothThemes(win, shotDir, 'config-new-created')
 
   // Read back with this file's own reader, parsed with the regex above.
   const skillBody = existsSync(skillFile) ? readFileSync(skillFile, 'utf8') : ''
@@ -1835,7 +1909,9 @@ async function createChecks(
   const skillHashAfterFirst = sha256File(skillFile)
   const snapshotsAfterCreates = countConfigSnapshots(ctx.services.store)
   const collision = await createThrough(win, 'skill', 'helm-probe-skill')
-  const collisionShot = await screenshot(win, shotDir, 'config-new-collision.png')
+  // The dialog is still open here, which is what makes this the shot of the
+  // dialog itself - refusing, with the reason under the field.
+  const collisionShots = await shootBothThemes(win, shotDir, 'config-new-dialog')
   await dismissDialog(win)
 
   // And a name the CLI could not address, refused the same way.
@@ -1851,6 +1927,8 @@ async function createChecks(
         'A skill and a namespaced command were created through the dialog, and a repeat of each was refused with nothing written',
       ok:
         absentBefore &&
+        // Both themes were actually on screen when they were photographed.
+        createdShots.applied && collisionShots.applied &&
         skillRun.opened &&
         skillRun.closed &&
         // The dialog's own preview named the file that then appeared.
@@ -1899,7 +1977,8 @@ async function createChecks(
           collision: { disabled: collision.createDisabled, said: collision.problem },
           badName: { disabled: badName.createDisabled, said: badName.problem }
         },
-        screenshots: [shot.file, collisionShot.file]
+        screenshots: [...createdShots.files, ...collisionShots.files],
+        bothThemesActuallyRendered: createdShots.applied && collisionShots.applied
       },
       notes: [
         'The frontmatter is read back with a regex written in configcheck.ts, not with',
@@ -2056,8 +2135,18 @@ async function renameChecks(
   }
 
   const skillRun = await renameThrough('.claude/skills/helm-rename-me/SKILL.md', 'helm-renamed')
-  const shot = await screenshot(win, shotDir, 'config-rename.png')
   const commandRun = await renameThrough('.claude/commands/helm-old/thing.md', 'helm-new:thing')
+
+  // The dialog itself, opened again on the renamed skill and left open. Shot
+  // rather than asserted - what it says is CFG-13's business, what it looks
+  // like is nobody's until somebody looks.
+  await click(win, `button[data-config-file="${cssEscape('.claude/skills/helm-renamed/SKILL.md')}"]`)
+  await pollJs(win, `document.querySelector('button[data-rename-config]')`, 10_000)
+  await click(win, 'button[data-rename-config]')
+  await pollJs(win, `document.querySelector('[data-config-rename-dialog]')`, 10_000)
+  await sleep(400)
+  const shots = await shootBothThemes(win, shotDir, 'config-rename-dialog')
+  await dismissDialog(win)
 
   // A file the CLI finds by its exact name cannot be renamed, and the control
   // says so rather than being missing.
@@ -2072,13 +2161,24 @@ async function renameChecks(
   )
 
   const movedFiles = listUnder(toDir)
+  const movedSkill = existsSync(join(toDir, 'SKILL.md'))
+    ? readFileSync(join(toDir, 'SKILL.md'), 'utf8')
+    : ''
+  // A skill's `name` and its directory have to agree, so the one line that is
+  // *expected* to differ is checked for differing, and the rest for not: the
+  // body is compared with the `name:` line swapped back to what it was.
+  const skillBodyUnchanged =
+    sha256(movedSkill.replace(/^name: helm-renamed$/m, 'name: helm-rename-me')) === skillHash
+
   const ok =
-    fixtureOk &&
+    fixtureOk && shots.applied &&
     skillRun.closed &&
     skillRun.target === '.claude/skills/helm-renamed/SKILL.md' &&
     // The whole directory moved, keeping its layout, and the old one is gone.
     movedFiles.join(',') === 'SKILL.md,reference.md' &&
-    sha256File(join(toDir, 'SKILL.md')) === skillHash &&
+    frontmatterValue(movedSkill, 'name') === 'helm-renamed' &&
+    skillBodyUnchanged &&
+    // A file that declares no name is moved untouched.
     sha256File(join(toDir, 'reference.md')) === resourceHash &&
     !existsSync(fromDir) &&
     // A command's name is its path, so a rename crosses the namespace and the
@@ -2100,7 +2200,7 @@ async function renameChecks(
       criterion:
         'Rename moves a skill’s directory rather than its SKILL.md, and renames a command across its namespace path',
       title:
-        'A skill arrived with the file it bundles, byte-identical; a command crossed its namespace and the emptied one was pruned',
+        'A skill arrived with the file it bundles and its frontmatter name following it; a command crossed its namespace and the emptied one was pruned',
       ok,
       detail: {
         fixture: {
@@ -2111,7 +2211,8 @@ async function renameChecks(
         skill: {
           previewedTarget: skillRun.target,
           filesAtTheNewName: movedFiles,
-          skillMdHashMatches: sha256File(join(toDir, 'SKILL.md')) === skillHash,
+          frontmatterNameFollowed: frontmatterValue(movedSkill, 'name'),
+          everythingElseInTheSkillMdUnchanged: skillBodyUnchanged,
           bundledFileHashMatches: sha256File(join(toDir, 'reference.md')) === resourceHash,
           oldDirectoryGone: !existsSync(fromDir)
         },
@@ -2123,11 +2224,16 @@ async function renameChecks(
           emptiedNamespacePruned: !existsSync(join(claude, 'commands', 'helm-old'))
         },
         settingsJson: settingsRename,
-        screenshot: shot.file
+        screenshots: shots.files,
+        bothThemesActuallyRendered: shots.applied
       },
       notes: [
         'The hashes are computed in configcheck.ts over the bytes it planted, so this is a claim',
         'about the file’s contents surviving the move rather than about the move being reported.',
+        'The SKILL.md is the one file expected to differ, by exactly one line: a skill whose',
+        'frontmatter name and whose directory disagree has been half-renamed. So the assertion',
+        'is that the name followed *and* that swapping that line back reproduces the original',
+        'hash - a rename that rewrote anything else would fail the second half.',
         'The bundled file is what makes the criterion checkable: a skill with one file in it',
         'cannot distinguish "moved the directory" from "moved the SKILL.md".',
         'settings.json is the converse - the CLI finds it by that exact name, so the control is',
@@ -2191,7 +2297,7 @@ async function deleteChecks(
     `(document.querySelector('[data-config-delete-dialog]')?.textContent ?? '')
        .replace(/\\s+/g, ' ').trim()`
   )
-  const dialogShot = await screenshot(win, shotDir, 'config-delete-confirm.png')
+  const dialogShots = await shootBothThemes(win, shotDir, 'config-delete-confirm')
   // Cancel is what the keyboard would press, because the two answers do not
   // cost the same.
   const cancelFocused = await js<boolean>(
@@ -2205,7 +2311,7 @@ async function deleteChecks(
   const goneNow = !existsSync(dir)
   const snapshotsAfter = countConfigSnapshots(ctx.services.store)
   const noticeShown = await pollJs(win, `document.querySelector('[data-config-deleted-notice]')`, 10_000)
-  const afterShot = await screenshot(win, shotDir, 'config-deleted-notice.png')
+  const afterShots = await shootBothThemes(win, shotDir, 'config-deleted-notice')
 
   // Undo, which is `config:restore` over the rows the delete took - the same
   // per-file history the editor's version list restores from.
@@ -2214,7 +2320,7 @@ async function deleteChecks(
 
   const restored = listUnder(dir)
   const ok =
-    fixtureOk &&
+    fixtureOk && dialogShots.applied && afterShots.applied &&
     picked &&
     dialogOpened &&
     cancelFocused &&
@@ -2254,7 +2360,8 @@ async function deleteChecks(
           skillMdHashMatches: sha256File(join(dir, 'SKILL.md')) === skillHash,
           bundledFileHashMatches: sha256File(join(dir, 'reference.md')) === resourceHash
         },
-        screenshots: [dialogShot.file, afterShot.file]
+        screenshots: [...dialogShots.files, ...afterShots.files],
+        bothThemesActuallyRendered: dialogShots.applied && afterShots.applied
       },
       notes: [
         'The hashes are taken in configcheck.ts over the bytes it planted, before the delete, and',

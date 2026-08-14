@@ -294,7 +294,12 @@ export function ConfigNewDialog({
                     Claude Code addresses it as{' '}
                     <span className="font-mono text-fg-muted">{planned.plan.address}</span>.
                   </p>
-                  <pre className="mt-2 max-h-32 overflow-auto font-mono text-[10.5px] leading-[1.5] text-fg-subtle">
+                  {/* The scaffold itself, wrapped rather than scrolled sideways:
+                      a horizontal bar under a preview turns "what gets written"
+                      into a thing to operate. The vertical cap is behind a rule
+                      so a part-shown last line reads as more below rather than
+                      as a clipped box. */}
+                  <pre className="mt-2 max-h-28 overflow-y-auto border-t border-border pt-2 font-mono text-[10.5px] leading-[1.5] break-words whitespace-pre-wrap text-fg-subtle">
                     {planned.plan.content.trimEnd()}
                   </pre>
                 </>
@@ -402,6 +407,8 @@ export function ConfigRenameDialog({
 
   const unit = useMemo(() => configUnit(files, file), [files, file])
   const preview = useMemo(() => renamePreview(file, name, userScope), [file, name, userScope])
+  /** The two kinds whose frontmatter carries the name as well as the path. */
+  const declaresName = file.kind === 'skill' || file.kind === 'agent'
 
   const unchanged = name.trim() === file.name
   const collision = useMemo(() => {
@@ -450,10 +457,23 @@ export function ConfigRenameDialog({
           <p className="text-[11px] leading-[1.55] text-fg-muted">
             {file.kind === 'skill'
               ? unit.length > 1
-                ? `The whole folder moves - the SKILL.md and the ${String(unit.length - 1)} file${unit.length === 2 ? '' : 's'} beside it.`
+                ? `The whole folder moves - the SKILL.md and the ${unit.length === 2 ? 'file' : `${String(unit.length - 1)} files`} beside it.`
                 : 'A skill is its folder, so the folder is what moves.'
               : 'A command, agent or rule is addressed by its path, so the name is the path.'}{' '}
             Every file is snapshotted on the way, at both ends.
+            {/* Stated as a condition, not as a fact: the dialog has the file's
+                description but not its frontmatter, and the write path only
+                rewrites a `name:` that is exactly the old address. */}
+            {declaresName && (
+              <>
+                {' '}
+                If its frontmatter still reads{' '}
+                <span className="font-mono text-fg-subtle">
+                  name: {file.name.split('/').at(-1)}
+                </span>
+                , that follows the rename too.
+              </>
+            )}
           </p>
 
           <label className="mt-4 block">
@@ -480,18 +500,30 @@ export function ConfigRenameDialog({
               <p className="truncate font-mono text-[11px] text-fg-subtle" title={file.relPath}>
                 {file.relPath}
               </p>
-              <p
-                className="mt-1 truncate font-mono text-[11px] text-fg-muted"
-                data-config-rename-target
-                title={preview.relPath ?? ''}
-              >
-                {preview.relPath === null ? '…' : `→ ${preview.relPath}`}
-              </p>
-              {preview.address !== null && !unchanged && (
-                <p className="mt-1.5 text-[11px] leading-[1.55] text-fg-subtle">
-                  Addressed as{' '}
-                  <span className="font-mono text-fg-muted">{preview.address}</span> afterwards.
+              {/* The destination line only once there *is* one. Printing the
+                  same path twice under an arrow reads as a rendering fault, and
+                  the field opens holding the current name - so that is the
+                  state the dialog is in every time it is opened. */}
+              {unchanged || preview.relPath === null ? (
+                <p className="mt-1 text-[11px] text-fg-subtle" data-config-rename-target>
+                  Type a different name to see where it would go.
                 </p>
+              ) : (
+                <>
+                  <p
+                    className="mt-1 truncate font-mono text-[11px] text-fg-muted"
+                    data-config-rename-target
+                    title={preview.relPath}
+                  >
+                    &rarr; {preview.relPath}
+                  </p>
+                  {preview.address !== null && (
+                    <p className="mt-1.5 text-[11px] leading-[1.55] text-fg-subtle">
+                      Addressed as{' '}
+                      <span className="font-mono text-fg-muted">{preview.address}</span> afterwards.
+                    </p>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -577,7 +609,7 @@ export function ConfigDeleteDialog({
           <p className="mt-2 text-[12px] leading-[1.55] text-fg-muted">
             {unit.length === 1
               ? 'This file comes off the disk.'
-              : `A skill is its folder, so all ${String(unit.length)} files in it come off the disk.`}{' '}
+              : `A skill is its folder, so ${unit.length === 2 ? 'both files' : `all ${String(unit.length)} files`} in it come off the disk.`}{' '}
             Helm records every one of them first, and{' '}
             <strong className="font-medium text-fg">Undo puts them back</strong> - the same version
             history the editor restores from.

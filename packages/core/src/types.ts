@@ -1298,6 +1298,14 @@ export interface RenameConfigResult {
   moved: Array<{ from: string; to: string }>
   /** Every row taken - the destinations' `create`s and the sources' `rename`s. */
   snapshotIds: number[]
+  /**
+   * The moved file's frontmatter `name:` was updated to match.
+   *
+   * Only ever true when it named the *old* address exactly - a file declaring
+   * anything else is not claiming to be the thing being renamed, and Helm does
+   * not edit a field somebody set on purpose.
+   */
+  frontmatterRenamed: boolean
   error: string | null
 }
 
