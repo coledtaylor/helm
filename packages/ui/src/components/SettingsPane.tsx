@@ -8,6 +8,7 @@ import {
   PR_POLL_MINUTES,
   PR_PROMPT_PLACEHOLDERS,
   PR_REVIEW_PROMPT_MAX_LENGTH,
+  PR_STALE_DAYS,
   PROJECT_SHELL_HEIGHT_PCT,
   SESSION_SPLIT_PCT,
   TERMINAL_CURSOR_STYLES,
@@ -161,6 +162,18 @@ export interface SettingsPaneProps {
   onClearGhOverride: () => void
   prPollMinutes: number
   onPrPollMinutesChange: (minutes: number) => void
+  /**
+   * Where the Pulls pane draws the line between ACTIVE and STALE, in days.
+   * `0` is off - that pane goes back to one flat Open list.
+   *
+   * A row here rather than a control on the pane itself for the reason the
+   * poll interval is here: settings for Helm live in one place, and the pane's
+   * own controls - its filter and its grouping - are deliberately *not*
+   * settings, so a strip inside it would mix the two kinds of state on one
+   * line.
+   */
+  prStaleDays: number
+  onPrStaleDaysChange: (days: number) => void
   /**
    * Every github.com repository Helm knows of and whether each is ignored, out
    * of the same snapshot the Pulls pane paints.
@@ -325,6 +338,8 @@ export function SettingsPane({
   onClearGhOverride,
   prPollMinutes,
   onPrPollMinutesChange,
+  prStaleDays,
+  onPrStaleDaysChange,
   prRepos,
   onPrIgnoredReposChange,
   prReviewPrompt,
@@ -617,6 +632,8 @@ export function SettingsPane({
           onClearOverride={onClearGhOverride}
           pollMinutes={prPollMinutes}
           onPollMinutesChange={onPrPollMinutesChange}
+          staleDays={prStaleDays}
+          onStaleDaysChange={onPrStaleDaysChange}
           repos={prRepos}
           onIgnoredChange={onPrIgnoredReposChange}
           reviewPrompt={prReviewPrompt}
@@ -968,6 +985,32 @@ const POLL_CHOICES: Array<{ minutes: number; label: string }> = [
 ]
 
 /**
+ * The cutoffs this pane offers, which are not the validator's range.
+ *
+ * Six shortcuts over 1-90, exactly as the poll row offers seven over 5-1440:
+ * the validator says what is *legal*, this list says what anybody would
+ * actually pick, and a select with ninety options is a select nobody reads.
+ * Off is first and is worded as what it does rather than as a number, because
+ * it is not the small end of the scale - it is the split switched off.
+ */
+const STALE_CHOICES: Array<{ days: number; label: string }> = [
+  { days: 0, label: 'Off - one Open list' },
+  { days: 1, label: 'A day' },
+  { days: 2, label: '2 days' },
+  { days: 3, label: '3 days' },
+  { days: 7, label: 'A week' },
+  { days: 14, label: '2 weeks' }
+]
+
+/** "2 days", or "a day" - the cutoff as the hint below the row says it. */
+function staleWording(days: number): string {
+  if (days === 1) return 'a day'
+  if (days === 7) return 'a week'
+  if (days === 14) return 'two weeks'
+  return `${String(days)} days`
+}
+
+/**
  * The GitHub CLI, and how often Helm asks it anything.
  *
  * Two rows and a status, and it is the *status* that carries the rule: Helm
@@ -986,6 +1029,8 @@ function GitHubGroup({
   onClearOverride,
   pollMinutes,
   onPollMinutesChange,
+  staleDays,
+  onStaleDaysChange,
   repos,
   onIgnoredChange,
   reviewPrompt,
@@ -1002,6 +1047,8 @@ function GitHubGroup({
   onClearOverride: () => void
   pollMinutes: number
   onPollMinutesChange: (minutes: number) => void
+  staleDays: number
+  onStaleDaysChange: (days: number) => void
   repos: PrRepoChoice[]
   onIgnoredChange: (slugs: string[]) => void
   reviewPrompt: string
@@ -1020,6 +1067,13 @@ function GitHubGroup({
   const choices = POLL_CHOICES.some((choice) => choice.minutes === pollMinutes)
     ? POLL_CHOICES
     : [...POLL_CHOICES, { minutes: pollMinutes, label: `Every ${String(pollMinutes)} minutes` }]
+  // The same fallback, for the same reason: the validator takes any whole
+  // number of days from `PR_STALE_DAYS.min` up, and a value this list does not
+  // happen to hold would otherwise be a select showing something other than
+  // what is in force.
+  const staleChoices = STALE_CHOICES.some((choice) => choice.days === staleDays)
+    ? STALE_CHOICES
+    : [...STALE_CHOICES, { days: staleDays, label: `${String(staleDays)} days` }]
 
   return (
     <Group
@@ -1084,6 +1138,35 @@ function GitHubGroup({
         >
           {choices.map((choice) => (
             <option key={choice.minutes} value={String(choice.minutes)}>
+              {choice.label}
+            </option>
+          ))}
+        </Select>
+      </Row>
+
+      <Divider />
+
+      {/* Beside the interval because they are the two knobs over the same
+          list - one is how often it is re-read, the other is where that list
+          stops being about now. Nothing outside the database reads this: it
+          reaches the Pulls pane as a prop, so there is no `settings:write`
+          branch for it (see the `procedures` skill). */}
+      <Row
+        label="Call a pull request stale after"
+        hint={
+          staleDays === PR_STALE_DAYS.off
+            ? 'Off. The Pulls pane lists everything open in one section, most recently updated first.'
+            : `The Pulls pane splits its Open section in two: anything untouched for ${staleWording(staleDays)} collapses to one line under STALE. Nothing is hidden, and a stale row keeps its state and its checks.`
+        }
+      >
+        <Select
+          value={String(staleDays)}
+          label="When the Pulls pane calls a pull request stale"
+          data-settings-pr-stale={String(staleDays)}
+          onChange={(value) => onStaleDaysChange(Number(value))}
+        >
+          {staleChoices.map((choice) => (
+            <option key={choice.days} value={String(choice.days)}>
               {choice.label}
             </option>
           ))}

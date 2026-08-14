@@ -1675,6 +1675,8 @@ export function App(): JSX.Element {
               onClearGhOverride={() => writeSettings({ ghPath: null })}
               prPollMinutes={settings?.prPollMinutes ?? DEFAULT_SETTINGS.prPollMinutes}
               onPrPollMinutesChange={(prPollMinutes) => writeSettings({ prPollMinutes })}
+              prStaleDays={settings?.prStaleDays ?? DEFAULT_SETTINGS.prStaleDays}
+              onPrStaleDaysChange={(prStaleDays) => writeSettings({ prStaleDays })}
               // Built from the snapshot rather than from the setting, because
               // the choices are the repositories discovery found - and it is
               // the same snapshot the Pulls pane paints, so the two surfaces
