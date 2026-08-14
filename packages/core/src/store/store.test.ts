@@ -15,7 +15,7 @@ import {
 } from '../types'
 import { openStore, type Store } from './db'
 import { knownMigrations } from './migrate'
-import { cacheProjects, readCachedProjects } from './projects'
+import { cacheProjects, forgetProjects, readCachedProjects } from './projects'
 import {
   finishSession,
   readSessions,
@@ -142,6 +142,7 @@ describe('settings', () => {
       transcriptArchiveMaxBytes: 256 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 15,
+      prStaleDays: 7,
       prIgnoredRepos: ['acme/noisy', 'other/quiet'],
       prReviewPrompt: 'review {slug}#{number} on {branch}',
       prCheckout: 'checkout',
@@ -398,6 +399,16 @@ describe('settings validation', () => {
       bad: [1, 4, 1441, -5, 5.5, '5', null, Number.NaN]
     },
     {
+      key: 'prStaleDays',
+      // 0 is off - one Open list and no split - and it is outside the range
+      // rather than at the bottom of it, so 1 is the smallest cutoff there is.
+      good: [0, 1, 2, 90],
+      // A day and a half is the interesting rejection: the unit is days, the
+      // pane's caption says "days", and a fractional cutoff would put a row in
+      // a bucket no sentence on the surface describes.
+      bad: [-1, 91, 1.5, '2', null, {}, Number.NaN, Number.POSITIVE_INFINITY]
+    },
+    {
       key: 'prIgnoredRepos',
       // A set of `owner/name`. The duplicate cases are the interesting ones:
       // the matcher is case-insensitive, so two spellings of one repository
@@ -549,6 +560,7 @@ describe('settings validation', () => {
       transcriptArchiveMaxBytes: 512 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 0,
+      prStaleDays: 3,
       prIgnoredRepos: ['acme/noisy'],
       prReviewPrompt: '/code-review {number}',
       prCheckout: 'none',
@@ -584,6 +596,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   transcriptArchiveMaxBytes: 512 * 1024 * 1024,
   ghPath: join(dir, 'gh.exe'),
   prPollMinutes: 0,
+  prStaleDays: 3,
   prIgnoredRepos: ['acme/noisy'],
   prReviewPrompt: '/code-review {number}',
   prCheckout: 'none',
@@ -664,6 +677,20 @@ describe('project cache', () => {
   it('stores a null git state for a directory that is not a repo', () => {
     cacheProjects(store, [project({ git: null })])
     expect(readCachedProjects(store)[0]?.git).toBeNull()
+  })
+
+  it('forgets rows by path, however they were spelled, and only those', () => {
+    const alpha = join(dir, 'repos', 'alpha')
+    const beta = join(dir, 'repos', 'beta')
+    cacheProjects(store, [project(), project({ path: beta, name: 'beta' })])
+
+    expect(forgetProjects(store, [alpha.toUpperCase()])).toBe(1)
+    expect(readCachedProjects(store).map((p) => p.path)).toEqual([beta])
+    // Idempotent, because the caller works out what to forget from a list that
+    // may already have been reconciled by the scan that preceded it.
+    expect(forgetProjects(store, [alpha])).toBe(0)
+    expect(forgetProjects(store, [])).toBe(0)
+    expect(readCachedProjects(store)).toHaveLength(1)
   })
 })
 

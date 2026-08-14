@@ -1,6 +1,8 @@
 import {
   cacheProjects,
   cleanStaleShims,
+  disprovedProjectPaths,
+  forgetProjects,
   openStore,
   readCachedProjects,
   readGitStates,
@@ -128,6 +130,19 @@ export async function runScan(
   const roots = await ensureScanRoots(services)
   const result = await scan({ roots, includeGit: opts.includeGit ?? true })
   cacheProjects(services.store, result.projects)
+  // The cache is written to on every pass and read from at every start, so a
+  // row a scan can *disprove* has to go: otherwise a project that has been
+  // deleted, or one an older Helm listed by a rule since corrected, paints for
+  // a second at every launch for the rest of the install's life. Only where
+  // this pass walked the root without error - `disprovedProjectPaths` is where
+  // that argument lives, and where the unplugged drive is kept.
+  forgetProjects(
+    services.store,
+    disprovedProjectPaths(
+      readCachedProjects(services.store).map((project) => project.path),
+      result
+    )
+  )
   services.lastScan = result
   return result
 }

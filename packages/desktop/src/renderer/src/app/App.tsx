@@ -20,8 +20,12 @@ import {
   BookIcon,
   cn,
   ConfigConsole,
+  ConfigDeleteDialog,
+  ConfigDeletedNotice,
   ConfigEditor,
+  ConfigNewDialog,
   ConfigNothingSelected,
+  ConfigRenameDialog,
   ConfirmSessionDialog,
   ContentDocumentPane,
   ContentNothingSelected,
@@ -1018,6 +1022,30 @@ export function App(): JSX.Element {
     activePane?.kind === 'project' ? (projectsByPath.get(activePane.path) ?? null) : null
   const selectedPath = activeProject?.path ?? null
 
+  /**
+   * Whether the open project is itself one of the scanned folders, which is
+   * what decides whether its pane offers to remove it.
+   *
+   * Case-insensitively, like every other path comparison the window makes: the
+   * root was typed into a picker and the project's path came out of a directory
+   * listing, and two spellings of one Windows directory are one directory.
+   *
+   * A `useMemo` for a two-line comparison, and not for the cost of it.
+   * `selectedPath` is what the shell drag's `useCallback` is keyed on, and
+   * calling a method on it in the render body is enough for the React Compiler
+   * to treat it as possibly mutated and give up preserving that memoization -
+   * `react-hooks/preserve-manual-memoization`, an error in this repo. Inside a
+   * memo whose dependencies it can see, the same lines are fine.
+   */
+  const activeProjectIsRoot = useMemo(
+    () =>
+      selectedPath !== null &&
+      (settings?.scanRoots ?? []).some(
+        (root) => root.toLowerCase() === selectedPath.toLowerCase()
+      ),
+    [settings, selectedPath]
+  )
+
   // -------------------------------------------------------------------------
   // The project shell's drag handle
   // -------------------------------------------------------------------------
@@ -1192,6 +1220,47 @@ export function App(): JSX.Element {
         busy={setup.creating}
         onCreate={setup.createHarness}
         onCancel={setup.closeDialog}
+      />
+    )
+
+  /**
+   * New, Rename and Delete for one entry in a `.claude` tree.
+   *
+   * Only one is ever open, so they share the busy flag and the error - and the
+   * error is the dialog's own, because every refusal these three have is about
+   * what was typed into the box that is still on screen. Rendered beside the
+   * other modals rather than inside the console: a dialog nested in a pane that
+   * a split can narrow to 119px is a dialog that gets clipped.
+   */
+  const configEntryDialog =
+    configState.scope === null || configState.entryDialog === null ? null : configState
+      .entryDialog === 'new' ? (
+      <ConfigNewDialog
+        scope={configState.scope}
+        files={configState.tree?.files ?? []}
+        busy={configState.entryBusy}
+        error={configState.entryError}
+        onCreate={configState.createFile}
+        onCancel={() => configState.openEntryDialog(null)}
+      />
+    ) : configState.selected === null ? null : configState.entryDialog === 'rename' ? (
+      <ConfigRenameDialog
+        scope={configState.scope}
+        file={configState.selected}
+        files={configState.tree?.files ?? []}
+        busy={configState.entryBusy}
+        error={configState.entryError}
+        onRename={configState.renameFile}
+        onCancel={() => configState.openEntryDialog(null)}
+      />
+    ) : (
+      <ConfigDeleteDialog
+        file={configState.selected}
+        files={configState.tree?.files ?? []}
+        busy={configState.entryBusy}
+        error={configState.entryError}
+        onDelete={configState.deleteFile}
+        onCancel={() => configState.openEntryDialog(null)}
       />
     )
 
@@ -1436,6 +1505,10 @@ export function App(): JSX.Element {
               // the setting lives; this is the undo standing beside the thing
               // it undoes.
               onUnignoreRepo={unignoreRepo}
+              // The one piece of this pane's triage that is a preference. The
+              // filter and the grouping beside it are the pane's own state and
+              // are deliberately nowhere near settings.
+              staleDays={settings?.prStaleDays ?? DEFAULT_SETTINGS.prStaleDays}
               compact={showSessions}
             />
           </div>
@@ -1471,6 +1544,7 @@ export function App(): JSX.Element {
               onViewChange={configState.setView}
               tree={configState.tree}
               treeLoading={configState.treeLoading}
+              live={configState.live}
               selected={configState.selected}
               onSelect={configState.select}
               dirty={configState.dirty}
@@ -1478,6 +1552,22 @@ export function App(): JSX.Element {
               refreshing={configState.refreshing}
               compact={showSessions}
               onBack={() => configState.select(null)}
+              onNew={
+                configState.scope === null
+                  ? undefined
+                  : () => configState.openEntryDialog('new')
+              }
+              notice={
+                configState.deleted === null ? null : (
+                  <ConfigDeletedNotice
+                    label={configState.deleted.label}
+                    fileCount={configState.deleted.files.length}
+                    busy={configState.entryBusy}
+                    onUndo={configState.undoDelete}
+                    onDismiss={configState.dismissDeleted}
+                  />
+                )
+              }
             >
               {configState.view === 'files' ? (
                 configState.selected === null ? (
@@ -1492,6 +1582,9 @@ export function App(): JSX.Element {
                     key={configState.selected.path}
                     file={configState.selected}
                     loaded={configState.loaded}
+                    rendered={configState.rendered}
+                    live={configState.live}
+                    siblings={configState.tree?.files ?? []}
                     snapshots={configState.snapshots}
                     saving={configState.saving}
                     error={configState.editorError}
@@ -1500,7 +1593,12 @@ export function App(): JSX.Element {
                     onReload={configState.reload}
                     onRestore={configState.restore}
                     onReveal={launcher.reveal}
+                    onOpenPath={configState.openPath}
+                    onOpenExternal={(url) => void helmOpenExternal(url)}
                     onDirtyChange={configState.setDirty}
+                    onRename={() => configState.openEntryDialog('rename')}
+                    onDelete={() => configState.openEntryDialog('delete')}
+                    justCreated={configState.selected.path === configState.createdPath}
                   />
                 )
               ) : configState.view === 'effective' ? (
@@ -1560,12 +1658,22 @@ export function App(): JSX.Element {
               onScopeChange={contentState.setScopePath}
               tree={contentState.tree}
               treeLoading={contentState.treeLoading}
+              view={contentState.view}
+              onViewChange={contentState.setView}
+              viewIsDefault={contentState.viewIsDefault}
+              dirs={contentState.dirs}
+              expanded={contentState.expanded}
+              onToggleDir={contentState.toggleDir}
+              loadingDirs={contentState.loadingDirs}
               query={contentState.query}
               onQueryChange={contentState.setQuery}
               search={contentState.search}
               searching={contentState.searching}
               selected={contentState.selected}
+              selectedPath={contentState.selectedPath}
               onSelect={contentState.select}
+              onOpenPath={contentState.openPath}
+              onReveal={launcher.reveal}
               dirty={contentState.dirty}
               onRefresh={contentState.refresh}
               refreshing={contentState.refreshing}
@@ -1575,6 +1683,7 @@ export function App(): JSX.Element {
               {contentState.selected === null ? (
                 <ContentNothingSelected
                   scope={contentState.scope}
+                  view={contentState.view}
                   fileCount={contentState.tree?.files.length ?? 0}
                 />
               ) : (
@@ -1603,6 +1712,7 @@ export function App(): JSX.Element {
                   onDirtyChange={contentState.setDirty}
                   onDraftChange={contentState.setDraft}
                   onOpenPath={contentState.openPath}
+                  onOpenWikilink={contentState.openWikilink}
                   onOpenExternal={(url) => void helmOpenExternal(url)}
                 />
               )}
@@ -1675,6 +1785,8 @@ export function App(): JSX.Element {
               onClearGhOverride={() => writeSettings({ ghPath: null })}
               prPollMinutes={settings?.prPollMinutes ?? DEFAULT_SETTINGS.prPollMinutes}
               onPrPollMinutesChange={(prPollMinutes) => writeSettings({ prPollMinutes })}
+              prStaleDays={settings?.prStaleDays ?? DEFAULT_SETTINGS.prStaleDays}
+              onPrStaleDaysChange={(prStaleDays) => writeSettings({ prStaleDays })}
               // Built from the snapshot rather than from the setting, because
               // the choices are the repositories discovery found - and it is
               // the same snapshot the Pulls pane paints, so the two surfaces
@@ -1726,7 +1838,27 @@ export function App(): JSX.Element {
                 }}
                 onOpenConfig={openConfigAt}
                 onOpenContent={openContentAt}
-                // The whole snapshot, not this project's slice of it. The pane
+                // Only where this project *is* a scan root, which is the whole
+                // of what removal can act on. Decided here rather than in the
+                // pane because a root is a setting and the pane is handed
+                // discovery; see `activeProjectIsRoot`.
+                {...(activeProjectIsRoot
+                  ? {
+                      onRemoveRoot: (project: Project) => {
+                        // The shell goes with the pane, exactly as it does in
+                        // `closeTab`. Removing a folder takes it out of
+                        // discovery, which drops its pane from `openPanes`
+                        // without going through the close button - so nothing
+                        // else is going to end the pty, and it would sit in the
+                        // registry with no tab in front of it until Helm quits.
+                        // Measured: settings-check's shell registry still held
+                        // a removed folder's shell three groups later.
+                        void disposeShell(project.path)
+                        launcher.removeRoot(project.path)
+                      }
+                    }
+                  : {})}
+                                // The whole snapshot, not this project's slice of it. The pane
                 // reduces it itself (`projectPulls`), so the project page and
                 // the Pulls pane read one answer rather than two - and the
                 // ignore list, which is structurally absent from `repos`, is
@@ -1885,6 +2017,7 @@ export function App(): JSX.Element {
 
         {harnessDialog}
         {confirmDialog}
+        {configEntryDialog}
 
         {/* What a launch composed, and anything that went wrong doing it.
             Over the pane rather than in it, because a profile is launched from

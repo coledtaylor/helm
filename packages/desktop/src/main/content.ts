@@ -5,20 +5,31 @@ import { dirname, extname, relative, resolve, sep } from 'node:path'
 import {
   buildCorpus,
   buildWikiIndex,
+  contentExtension,
+  contentFileKind,
   contentScope,
   corpusIsCurrent,
+  highlightCode,
+  parseWikilink,
   readConfigFileContent,
   readConfigSnapshots,
+  readContentDir,
   readContentTree,
   renderMarkdown,
+  resolveWikilink,
   restoreContentSnapshot,
   searchCorpus,
   snapshotKey,
   writeContentFile,
+  WIKILINK_RE,
+  type ConfigFileContent,
   type ConfigSnapshotMeta,
   type ContentCorpus,
+  type ContentDirListing,
   type ContentDocument,
+  type ContentFile,
   type ContentScope,
+  type ContentSource,
   type ContentSearchResult,
   type ContentTree,
   type RenderedMarkdown,
@@ -57,6 +68,8 @@ import type { Services } from './services'
 export interface ContentService {
   scopes: () => ContentScope[]
   tree: (scopePath: string, refresh?: boolean) => ContentTree
+  /** One directory of the tree view, read on demand. */
+  dir: (scopePath: string, relPath: string) => Promise<ContentDirListing>
   document: (scopePath: string, path: string) => Promise<ContentDocument>
   /** Renders a draft that is not on disk - the split preview while typing. */
   render: (scopePath: string, path: string, source: string) => Promise<RenderedMarkdown>
@@ -65,7 +78,9 @@ export interface ContentService {
   snapshots: (scopePath: string, path: string) => ConfigSnapshotMeta[]
   restore: (id: number, path: string) => WriteConfigResult
   /** Mints a URL a sandboxed frame may load, pinned to the file's directory. */
-  artifact: (path: string) => { url: string; token: string }
+  artifact: (scopePath: string, path: string) => { url: string; token: string }
+  /** Resolves a `[[wikilink]]` for the one caller that cannot: the artifact frame. */
+  wikilink: (scopePath: string, target: string, from: string) => string | null
 }
 
 export const CONTENT_SCHEME = 'helm-content'
@@ -118,12 +133,151 @@ const MIME: Record<string, string> = {
   '.md': 'text/plain; charset=utf-8'
 }
 
-/** Directories artifacts may be served from, keyed by an unguessable token. */
-const artifacts = new Map<string, { dir: string; file: string }>()
+/**
+ * Directories artifacts may be served from, keyed by an unguessable token.
+ *
+ * `links` is the wikilink table for the entry document, resolved when the token
+ * was minted. It carries no paths - only which targets the vault can answer -
+ * because the frame is untrusted code and a path in it is a path it can read.
+ */
+const artifacts = new Map<
+  string,
+  { dir: string; file: string; links: Array<{ target: string; heading: string | null; resolved: boolean }> }
+>()
 
 function isInside(dir: string, path: string): boolean {
   const rel = relative(dir, path)
   return rel === '' || (!rel.startsWith('..') && !/^[A-Za-z]:/.test(rel))
+}
+
+/**
+ * The `[[wikilink]]` bootstrap injected into an artifact's entry document.
+ *
+ * Wikilinks are a vault convention, not a markdown one. A lesson Claude wrote
+ * as HTML links to the note beside it exactly the way a note does, and a viewer
+ * that resolved the brackets in one file format and printed them literally in
+ * the other would be splitting the vault down a line the author never drew.
+ *
+ * The frame is untrusted code, so this is written for a hostile document:
+ *
+ *   - **No paths cross into the frame.** It is told which targets resolve, not
+ *     what they resolve to. A click posts the *target string* back and the host
+ *     resolves it through its own index.
+ *   - **The host trusts nothing it receives.** An artifact can call
+ *     `parent.postMessage` whether or not this script is there, so the message
+ *     is a request, not an instruction: the worst a forged one achieves is
+ *     opening a note the user could have clicked in the list anyway.
+ *   - **Text nodes only, and never inside a link, a script or an editable.**
+ *     Rewriting markup would match inside attributes; rewriting a link's text
+ *     would nest an anchor inside an anchor.
+ *
+ * `document.currentScript.previousElementSibling` carries the table rather than
+ * a global, so a document that has already defined `window.__helm` cannot
+ * change what this reads.
+ */
+function withWikilinks(
+  html: string,
+  links: ReadonlyArray<{ target: string; heading: string | null; resolved: boolean }>
+): string {
+  if (links.length === 0) return html
+
+  const table = JSON.stringify(
+    Object.fromEntries(links.map((link) => [link.target.toLowerCase(), link.resolved]))
+  )
+    // `</script>` inside a JSON island ends the island. `<!--` opens an HTML
+    // comment inside one. Both are escaped rather than hoped about.
+    .replace(/</g, '\\u003c')
+
+  const bootstrap = `
+<script type="application/json" data-helm-wikilinks>${table}</script>
+<script>
+(function () {
+  var node = document.currentScript && document.currentScript.previousElementSibling
+  if (!node) return
+  var known = {}
+  try { known = JSON.parse(node.textContent || '{}') } catch (e) { return }
+  var RE = /\\[\\[([^\\]\\[\\n|#][^\\]\\[\\n]*?)((?:#[^\\]\\[\\n|]*)?)((?:\\|[^\\]\\[\\n]*)?)\\]\\]/g
+  var SKIP = { A: 1, SCRIPT: 1, STYLE: 1, TEXTAREA: 1, CODE: 1, PRE: 1 }
+  // Raw hex, deliberately, and the one place in Helm where that is right: this
+  // stylesheet is injected into a *foreign* document with an opaque origin, so
+  // none of the app's tokens are reachable from it. The values are the light
+  // theme's accent-text and warn, because the frame paints on white.
+  var style = document.createElement('style')
+  style.textContent = '.helm-wikilink{color:#5A4DA8;text-decoration:underline;text-underline-offset:2px;cursor:pointer}'
+    + '.helm-wikilink-broken{color:#9A6B12;text-decoration:underline dotted;cursor:default}'
+  document.head && document.head.appendChild(style)
+
+  function walk(root) {
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (n) {
+        var p = n.parentElement
+        while (p) {
+          if (SKIP[p.tagName] || p.isContentEditable) return NodeFilter.FILTER_REJECT
+          p = p.parentElement
+        }
+        return (n.nodeValue || '').indexOf('[[') < 0
+          ? NodeFilter.FILTER_REJECT
+          : NodeFilter.FILTER_ACCEPT
+      }
+    })
+    var targets = []
+    for (var n = walker.nextNode(); n; n = walker.nextNode()) targets.push(n)
+    for (var i = 0; i < targets.length; i++) replace(targets[i])
+  }
+
+  function replace(node) {
+    var text = node.nodeValue || ''
+    var frag = document.createDocumentFragment()
+    var at = 0
+    RE.lastIndex = 0
+    for (var m = RE.exec(text); m; m = RE.exec(text)) {
+      if (m.index > at) frag.appendChild(document.createTextNode(text.slice(at, m.index)))
+      var target = (m[1] || '').trim()
+      var heading = (m[2] || '').replace('#', '').trim()
+      var alias = (m[3] || '').replace('|', '').trim()
+      var ok = known[target.toLowerCase()] === true
+      var a = document.createElement('a')
+      a.className = ok ? 'helm-wikilink' : 'helm-wikilink helm-wikilink-broken'
+      a.textContent = alias || (heading ? target + ' \\u00a7 ' + heading : target)
+      a.setAttribute('data-helm-wikilink', target)
+      if (heading) a.setAttribute('data-helm-heading', heading)
+      if (!ok) a.title = 'No note in this scope answers to that name yet'
+      frag.appendChild(a)
+      at = m.index + m[0].length
+    }
+    if (at === 0) return
+    if (at < text.length) frag.appendChild(document.createTextNode(text.slice(at)))
+    node.parentNode && node.parentNode.replaceChild(frag, node)
+  }
+
+  document.addEventListener('click', function (event) {
+    var el = event.target
+    while (el && el !== document.body && !(el.getAttribute && el.getAttribute('data-helm-wikilink'))) {
+      el = el.parentElement
+    }
+    if (!el || !el.getAttribute) return
+    var target = el.getAttribute('data-helm-wikilink')
+    if (!target) return
+    event.preventDefault()
+    if (el.className.indexOf('helm-wikilink-broken') >= 0) return
+    try {
+      parent.postMessage(
+        { helm: 'wikilink', target: target, heading: el.getAttribute('data-helm-heading') || null },
+        '*'
+      )
+    } catch (e) { /* No parent to tell. Nothing else to do. */ }
+  })
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { walk(document.body) })
+  } else {
+    walk(document.body)
+  }
+})()
+</script>
+`
+  const close = html.lastIndexOf('</body>')
+  return close < 0 ? html + bootstrap : html.slice(0, close) + bootstrap + html.slice(close)
 }
 
 /**
@@ -171,6 +325,19 @@ export function registerContentProtocol(): void {
       return new Response('Not found', { status: 404 })
     }
 
+    // The entry document, and only that one, gets the wikilink bootstrap. A
+    // stylesheet or a chart script beside it is served verbatim.
+    //
+    // Compared by *path*, not by the request being for the bare directory. The
+    // URL a frame is handed carries the file's own name as its last segment -
+    // `helm-content://artifact/<token>/lesson.html` - so `rel` is that name and
+    // is never empty for the document itself. Written the other way round this
+    // injected into nothing at all, which is a bootstrap that silently does not
+    // run: CONT-15 read `[[beta]]` still sitting there as literal text.
+    if (target.toLowerCase() === entry.file.toLowerCase() && /\.html?$/i.test(target)) {
+      bytes = Buffer.from(withWikilinks(bytes.toString('utf8'), entry.links), 'utf8')
+    }
+
     return new Response(new Uint8Array(bytes), {
       status: 200,
       headers: {
@@ -192,12 +359,79 @@ interface ScopeCache {
   builtAt: number
 }
 
+/**
+ * The `[[wikilinks]]` an HTML artifact contains, and whether the vault answers
+ * to them.
+ *
+ * Scanned from the file's own bytes rather than from an index of the vault, so
+ * the frame learns nothing except the resolution of the names it already
+ * carries. The same regular expression the markdown pipeline uses, so a link
+ * that resolves in a note resolves in a lesson.
+ */
+function artifactWikilinks(
+  index: WikiIndex,
+  path: string
+): Array<{ target: string; heading: string | null; resolved: boolean }> {
+  let source: string
+  try {
+    source = readFileSync(path, 'utf8')
+  } catch {
+    return []
+  }
+  const out = new Map<string, { target: string; heading: string | null; resolved: boolean }>()
+  WIKILINK_RE.lastIndex = 0
+  for (let match = WIKILINK_RE.exec(source); match; match = WIKILINK_RE.exec(source)) {
+    const link = parseWikilink(`${match[2] ?? ''}${match[3] ?? ''}${match[4] ?? ''}`)
+    if (link.target === '' || out.has(link.target.toLowerCase())) continue
+    out.set(link.target.toLowerCase(), {
+      target: link.target,
+      heading: link.heading,
+      resolved: resolveWikilink(index, link, path) !== null
+    })
+  }
+  return [...out.values()]
+}
+
 export interface ContentServiceDeps {
   services: Services
 }
 
 /** How long a tree is trusted before a fresh open re-walks it. */
 const TREE_TTL_MS = 30_000
+
+/**
+ * The ceiling on highlighting a whole file.
+ *
+ * A fence in a note is a few dozen lines; a source file can be a generated
+ * 3 MB bundle, and TextMate grammars are backtracking regular expressions. Past
+ * this the file still opens - as plain text, saying so - because a source view
+ * that hung on one file would be worse than one that is occasionally grey.
+ */
+const HIGHLIGHT_MAX_BYTES = 512 * 1024
+
+/**
+ * The source view's half of a document.
+ *
+ * Built in the main process for the same reasons the markdown render is: the
+ * grammars are megabytes the browser bundle should never carry, and the
+ * renderer should inject a finished string rather than run a tokeniser on the
+ * thread that has to keep scrolling.
+ */
+async function sourceOf(
+  file: ContentFile,
+  content: ConfigFileContent
+): Promise<ContentSource | null> {
+  if (file.kind === 'markdown' || file.kind === 'html') return null
+  if (file.kind === 'binary' || content.binary || !content.exists) return null
+  if (content.size > HIGHLIGHT_MAX_BYTES) {
+    return { html: '', language: 'plaintext', highlighted: false, tooLarge: true }
+  }
+  // The extension is the language. `normaliseLanguage` already knows `py` is
+  // python and `yml` is yaml, because a fence's info string uses the same
+  // spellings a filename does.
+  const out = await highlightCode(content.content, file.ext)
+  return { html: out.html, language: out.language, highlighted: out.highlighted, tooLarge: false }
+}
 
 export function createContentService({ services }: ContentServiceDeps): ContentService {
   const cache = new Map<string, ScopeCache>()
@@ -274,42 +508,59 @@ export function createContentService({ services }: ContentServiceDeps): ContentS
     }
   }
 
+  /**
+   * A row for a file the curated tree does not list.
+   *
+   * Two callers, and the second is now the common one. A wikilink can point
+   * into a directory the curated walk bounded out; and **the tree view opens
+   * files the curated view never offered at all** - which is the point of it -
+   * so most of a project's files arrive here. Everything below this treats the
+   * result exactly like a listed file: the same kinds, the same renderers. The
+   * only thing missing is the frontmatter the walk reads, and the markdown
+   * render produces that itself.
+   */
+  function describeUnlisted(scopePath: string, absolute: string, content: ConfigFileContent): ContentFile {
+    const name = absolute.split(sep).at(-1) ?? absolute
+    return {
+      path: absolute,
+      relPath: relative(resolve(scopePath), absolute).split(sep).join('/'),
+      root: '',
+      rootKind: 'found',
+      // The real kind, not a flat `text`: this decides which surface opens, and
+      // calling a `.py` text here would have put a script in the plain pane
+      // next to a highlighted one for no reason a reader could see.
+      kind: contentFileKind(name),
+      slug: name.replace(/\.[^.]+$/, ''),
+      ext: contentExtension(name).replace(/^\./, ''),
+      title: name,
+      size: content.size,
+      mtimeMs: content.mtimeMs,
+      noteType: null,
+      date: null,
+      tags: []
+    }
+  }
+
   async function document(scopePath: string, path: string): Promise<ContentDocument> {
     const entry = cached(scopePath)
     const absolute = resolve(path)
-    const file =
-      entry.tree.files.find((candidate) => candidate.path.toLowerCase() === absolute.toLowerCase()) ??
-      // A file the tree does not list - opened through a wikilink into a
-      // directory the walk bounded out, most plausibly. Still readable.
-      cached(scopePath, true).tree.files.find(
-        (candidate) => candidate.path.toLowerCase() === absolute.toLowerCase()
-      )
-
     const content = readConfigFileContent(absolute)
-    if (!file) {
-      return {
-        file: {
-          path: absolute,
-          relPath: relative(resolve(scopePath), absolute).split(sep).join('/'),
-          root: '',
-          rootKind: 'found',
-          kind: 'text',
-          slug: absolute.split(sep).at(-1) ?? absolute,
-          title: absolute.split(sep).at(-1) ?? absolute,
-          size: content.size,
-          mtimeMs: content.mtimeMs,
-          noteType: null,
-          date: null,
-          tags: []
-        },
-        content,
-        rendered: null,
-        error: content.exists ? null : 'That file is not there any more.'
-      }
-    }
+
+    // Looked up once, and not re-walked when it misses. It used to force a
+    // fresh walk of the whole scope on a miss, which was affordable while a
+    // miss meant "a wikilink into a bounded-out directory" - a few times a
+    // session. In the tree view a miss is the *normal* case, so that would be a
+    // full curated walk per file opened. What the re-walk bought was a nicer
+    // title; `describeUnlisted` gives a usable row and, for markdown, the
+    // render reads the frontmatter itself.
+    const listed = entry.tree.files.find(
+      (candidate) => candidate.path.toLowerCase() === absolute.toLowerCase()
+    )
+    const file = listed ?? describeUnlisted(scopePath, absolute, content)
+    const missing = content.exists ? null : 'That file is not there any more.'
 
     if (file.kind !== 'markdown' || content.binary || !content.exists) {
-      return { file, content, rendered: null, error: null }
+      return { file, content, rendered: null, source: await sourceOf(file, content), error: missing }
     }
 
     try {
@@ -317,7 +568,7 @@ export function createContentService({ services }: ContentServiceDeps): ContentS
         index: entry.index,
         path: file.path
       })
-      return { file, content, rendered, error: null }
+      return { file, content, rendered, source: null, error: null }
     } catch (err) {
       // The source still shows. A document that will not render is a bug worth
       // seeing, not a reason to show nothing.
@@ -325,6 +576,7 @@ export function createContentService({ services }: ContentServiceDeps): ContentS
         file,
         content,
         rendered: null,
+        source: await sourceOf(file, content),
         error: err instanceof Error ? err.message : String(err)
       }
     }
@@ -351,6 +603,12 @@ export function createContentService({ services }: ContentServiceDeps): ContentS
   return {
     scopes,
     tree: (scopePath, refresh) => cached(scopePath, refresh ?? false).tree,
+    // Not cached. A directory listing is one `readdir` and one `check-ignore`
+    // against a directory somebody just clicked open, and a cache here would be
+    // a tree that goes on showing a file after it has been deleted - which is
+    // the failure the curated view's 30-second TTL is already the compromise
+    // for, and the tree has no reason to make it.
+    dir: (scopePath, relPath) => readContentDir(scopeFor(scopePath), relPath),
     document,
     render,
     search,
@@ -370,12 +628,21 @@ export function createContentService({ services }: ContentServiceDeps): ContentS
       return result
     },
 
-    artifact: (path) => {
+    wikilink: (scopePath, target, from) => {
+      const entry = cached(scopePath)
+      return resolveWikilink(entry.index, parseWikilink(target), resolve(from))
+    },
+
+    artifact: (scopePath, path) => {
       const absolute = resolve(path)
       // Re-minted per open rather than remembered, so a token cannot outlive
       // the document it was issued for and a stale window cannot re-fetch.
       const token = randomUUID()
-      artifacts.set(token, { dir: dirname(absolute), file: absolute })
+      artifacts.set(token, {
+        dir: dirname(absolute),
+        file: absolute,
+        links: artifactWikilinks(cached(scopePath).index, absolute)
+      })
       // Bounded: a session that opens a hundred artifacts should not keep a
       // hundred directories addressable.
       if (artifacts.size > 32) {

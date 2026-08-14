@@ -2,7 +2,8 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { scan } from './scan'
+import { EMPTY_INVENTORY } from '../types'
+import { disprovedProjectPaths, orphanedProjectPaths, scan } from './scan'
 
 let root: string
 
@@ -81,6 +82,60 @@ describe('scan', () => {
     expect(result.projects.map((p) => p.name).sort()).toEqual(['one', 'two'])
     expect(result.projects.every((p) => p.kind === 'folder')).toBe(true)
     expect(result.projects.find((p) => p.name === 'one')?.inventory.claudeMd).toBe(true)
+  })
+
+  it('lists the folder itself when none of its children looks like a project', async () => {
+    // The reported bug: a project directory added as a root listed its own
+    // source tree as four projects and itself as none.
+    await dir('tool/data')
+    await dir('tool/scripts')
+    await dir('tool/src')
+    await dir('tool/tests')
+    await file('tool/pyproject.toml')
+
+    const result = await scan({ roots: [join(root, 'tool')] })
+
+    expect(result.projects.map((p) => p.name)).toEqual(['tool'])
+    expect(result.projects[0]?.path).toBe(join(root, 'tool'))
+    expect(result.projects[0]?.kind).toBe('folder')
+  })
+
+  it('still lists the children when one of them looks like a project', async () => {
+    // The other half of the same rule, and the reason it is read off the
+    // children: `.git`, `.claude` and `CLAUDE.md` each say "container" on their
+    // own, and the siblings come with it.
+    await dir('repos/alpha')
+    await dir('repos/beta')
+    await dir('repos/gamma')
+
+    const bare = await scan({ roots: [join(root, 'repos')] })
+    expect(bare.projects.map((p) => p.name)).toEqual(['repos'])
+
+    for (const marker of ['alpha/.git', 'alpha/.claude/skills/one/SKILL.md', 'alpha/CLAUDE.md']) {
+      await rm(join(root, 'repos', 'alpha'), { recursive: true, force: true })
+      await file(join('repos', marker))
+
+      const result = await scan({ roots: [join(root, 'repos')] })
+      expect(result.projects.map((p) => p.name).sort()).toEqual(['alpha', 'beta', 'gamma'])
+    }
+  })
+
+  it('sees a git worktree, whose .git is a file rather than a directory', async () => {
+    await dir('checkouts/branch-b')
+    await file('checkouts/branch-a/.git', 'gitdir: ../../real/.git/worktrees/branch-a\n')
+
+    const result = await scan({ roots: [join(root, 'checkouts')] })
+
+    expect(result.projects.map((p) => p.name).sort()).toEqual(['branch-a', 'branch-b'])
+  })
+
+  it('lists an empty root as itself rather than as nothing at all', async () => {
+    await dir('empty')
+
+    const result = await scan({ roots: [join(root, 'empty')] })
+
+    expect(result.projects.map((p) => p.name)).toEqual(['empty'])
+    expect(result.errors).toEqual([])
   })
 
   it('handles a harness whose manifest is malformed', async () => {
@@ -205,5 +260,87 @@ describe('scan', () => {
     await file('dev/harness.yaml', 'name: "dev"\n')
     const result = await scan({ roots: [join(root, 'dev')] })
     expect(result.projects.every((p) => p.git === null)).toBe(true)
+  })
+})
+
+describe('reconciling the discovery cache', () => {
+  const scanned = (
+    roots: string[],
+    projects: string[],
+    errors: Array<{ path: string; message: string }> = []
+  ): Parameters<typeof disprovedProjectPaths>[1] => ({
+    roots,
+    projects: projects.map((path) => ({
+      path,
+      name: path,
+      kind: 'folder' as const,
+      harnessPath: null,
+      hasClaudeDir: false,
+      inventory: EMPTY_INVENTORY,
+      git: null
+    })),
+    errors
+  })
+
+  it('disproves a cached row a completed scan of its own root did not return', () => {
+    const tool = join(root, 'tool')
+    const cached = [join(tool, 'src'), join(tool, 'tests'), tool]
+
+    expect(disprovedProjectPaths(cached, scanned([tool], [tool]))).toEqual([
+      join(tool, 'src'),
+      join(tool, 'tests')
+    ])
+  })
+
+  it('keeps everything under a root the scan could not read', () => {
+    // The unplugged drive. A row is only ever dropped where this pass can prove
+    // it wrong, and a root that errored proves nothing about what is under it.
+    const gone = join(root, 'gone')
+    const cached = [join(gone, 'alpha')]
+
+    expect(
+      disprovedProjectPaths(cached, scanned([gone], [], [{ path: gone, message: 'not a directory' }]))
+    ).toEqual([])
+    // An error *below* the root is the same answer: the walk was incomplete.
+    expect(
+      disprovedProjectPaths(
+        cached,
+        scanned([gone], [], [{ path: join(gone, 'beta'), message: 'EPERM' }])
+      )
+    ).toEqual([])
+  })
+
+  it('keeps a cached row that belongs to no current root at all', () => {
+    // Nothing scanned it, so nothing has an opinion about it. Removal is what
+    // takes these, and it says so itself.
+    const cached = [join(root, 'elsewhere', 'alpha')]
+    expect(disprovedProjectPaths(cached, scanned([join(root, 'here')], []))).toEqual([])
+  })
+
+  it('matches roots and rows across two spellings of one directory', () => {
+    const cached = [join(root, 'Tool', 'SRC')]
+    const tool = join(root, 'tool')
+    expect(disprovedProjectPaths(cached, scanned([tool], [tool]))).toEqual([
+      join(root, 'Tool', 'SRC')
+    ])
+    expect(disprovedProjectPaths(cached, scanned([tool], [join(root, 'tool', 'src')]))).toEqual([])
+  })
+
+  it('orphans the rows a removed root put there, and only those', () => {
+    const removed = join(root, 'tool')
+    const kept = join(root, 'work')
+    const cached = [join(removed, 'src'), removed, join(kept, 'alpha')]
+
+    expect(orphanedProjectPaths(cached, removed, [kept])).toEqual([join(removed, 'src'), removed])
+  })
+
+  it('keeps an orphan that another root still covers', () => {
+    // Two overlapping roots, which the settings pane allows: dropping the inner
+    // one may not take rows the outer one is still scanning.
+    const outer = root
+    const inner = join(root, 'tool')
+    const cached = [join(inner, 'src')]
+
+    expect(orphanedProjectPaths(cached, inner, [outer])).toEqual([])
   })
 })

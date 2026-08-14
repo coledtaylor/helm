@@ -13,8 +13,10 @@
 // Imported as well as re-exported: `AppSettings` below names it, and a
 // re-export alone does not bring a name into this file's scope.
 import type { UsageDisplayMode } from './usage/shape'
+// The same, for `CreateConfigRequest` below.
+import type { CreatableKind } from './config/names'
 // The same, for a value: `DEFAULT_SETTINGS` reads the polling default off it.
-import { PR_POLL_MINUTES, type PrCheckoutMode } from './github/types'
+import { PR_POLL_MINUTES, PR_STALE_DAYS, type PrCheckoutMode } from './github/types'
 // And for the review template's default, which is the prompt module's to state.
 import { DEFAULT_PR_REVIEW_PROMPT } from './github/prompt'
 
@@ -25,12 +27,50 @@ export {
   type Frontmatter,
   type JsonProblem
 } from './config/validate'
+/**
+ * The naming rules, for the same reason and by the same argument: the New and
+ * Rename dialogs have to refuse a name the CLI could not address *as it is
+ * typed*, which means the check runs in the renderer. `create-rename-delete.ts`
+ * runs it again on the main side, where it is the guarantee rather than the
+ * courtesy.
+ */
+export {
+  checkConfigName,
+  configUnit,
+  isRenamable,
+  planConfigFile,
+  renameRefusal,
+  CREATABLE_KINDS,
+  RENAMABLE_KINDS,
+  type ConfigFilePlan,
+  type CreatableKind,
+  type CreatableKindSpec,
+  type NameCheck,
+  type PlanInput,
+  type PlanResult
+} from './config/names'
 export {
   settingHint,
   topLevelKey,
   SETTING_HINTS,
   type SettingHint
 } from './config/settings-schema'
+/**
+ * And the join between a `.claude` tree and what a session would do with it.
+ * Pure by the same rule: it reads no file, only an `EffectiveView` that has
+ * already been computed, so the window can ask it about a row without a
+ * round trip and without a second answer to the question the Effective tab
+ * already answers.
+ */
+export {
+  computeConfigLive,
+  configFileNote,
+  hookBindings,
+  isRedactedConfigFile,
+  samePath,
+  settingReferences,
+  settingsDeclaredBy
+} from './config/live'
 /**
  * The usage reader's pure half, re-exported for the same reason: the status bar
  * re-derives what it may paint on a timer, from the same functions the main
@@ -82,6 +122,7 @@ export {
   PR_CHECKOUT_MODES,
   PR_IGNORED_REPOS_MAX,
   PR_POLL_MINUTES,
+  PR_STALE_DAYS,
   type GhProblem,
   type GhProblemKind,
   type GhStatus,
@@ -939,6 +980,21 @@ export interface AppSettings {
    */
   prPollMinutes: number
   /**
+   * How long a pull request may go untouched before the Pulls pane files it
+   * under STALE rather than ACTIVE, in days. `0` is off - one flat Open list,
+   * exactly as that section rendered before the split existed.
+   *
+   * A **preference** rather than a constant, and it is the only piece of that
+   * pane's triage controls that is one: where a pull request stops being work
+   * in flight is a judgement about the user's own working rhythm, and a week's
+   * silence on a repository with one contributor means something different from
+   * a week's silence on a busy one. The filter and the grouping beside it are
+   * the opposite - reactions to a list that changes hourly - so they live in
+   * the pane's own state and deliberately not here. Bounded by `PR_STALE_DAYS`,
+   * whose comment argues the default.
+   */
+  prStaleDays: number
+  /**
    * Repositories whose pull requests Helm does not fetch or show, as
    * `owner/name` slugs.
    *
@@ -1065,6 +1121,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   transcriptArchiveMaxBytes: TRANSCRIPT_ARCHIVE_BYTES.default,
   ghPath: null,
   prPollMinutes: PR_POLL_MINUTES.default,
+  prStaleDays: PR_STALE_DAYS.default,
   prIgnoredRepos: [],
   prReviewPrompt: DEFAULT_PR_REVIEW_PROMPT,
   prCheckout: 'none',
@@ -1164,8 +1221,22 @@ export interface ConfigFileContent {
   binary: boolean
 }
 
-/** Why a snapshot was taken. Stored on the row and shown in the file's history. */
-export type ConfigWriteReason = 'edit' | 'create' | 'restore' | 'mcp' | 'approve'
+/**
+ * Why a snapshot was taken. Stored on the row and shown in the file's history.
+ *
+ * `rename` and `delete` are ordinary rows and are deliberately not a second
+ * mechanism: a `delete` row holds the bytes that were there, so restoring it
+ * puts the file back the same way restoring an `edit` row does. That is what
+ * makes "undo this delete" and "restore this version" the same button.
+ */
+export type ConfigWriteReason =
+  | 'edit'
+  | 'create'
+  | 'restore'
+  | 'mcp'
+  | 'approve'
+  | 'rename'
+  | 'delete'
 
 export interface ConfigSnapshotMeta {
   id: number
@@ -1214,6 +1285,80 @@ export interface WriteConfigResult {
   }
   /** Set when the write was refused for a reason other than a conflict. */
   error?: string
+}
+
+// --- Create, rename, delete -------------------------------------------------
+
+/**
+ * The three things a directory supports that replacing one file's bytes does
+ * not. All three take the scope by path and the entry by absolute path, the
+ * same way `config:write` does, and all three are answered with a structured
+ * result rather than a throw: every one of them has failure modes the *user*
+ * caused - a name the CLI could not address, a collision, a bundled file Helm
+ * cannot record - and those have to be shown in the dialog that asked.
+ */
+export interface CreateConfigRequest {
+  scopePath: string
+  kind: CreatableKind
+  /** Ignored for the fixed-name kinds; see `CREATABLE_KINDS`. */
+  name: string
+}
+
+export interface CreateConfigResult {
+  ok: boolean
+  /** Absolute path of the file that now exists, so the console can open it. */
+  path: string | null
+  /** Relative to the scope base, forward-slashed - the tree's own key. */
+  relPath: string | null
+  /** The `create` row taken before the file was touched. */
+  snapshotId: number | null
+  error: string | null
+}
+
+export interface RenameConfigRequest {
+  scopePath: string
+  /** The addressed file - a skill's `SKILL.md`, not its directory. */
+  path: string
+  name: string
+}
+
+export interface RenameConfigResult {
+  ok: boolean
+  /** The addressed file at its new location. Null when nothing moved. */
+  path: string | null
+  relPath: string | null
+  /** Every file that moved. A skill's whole directory, one file for the rest. */
+  moved: Array<{ from: string; to: string }>
+  /** Every row taken - the destinations' `create`s and the sources' `rename`s. */
+  snapshotIds: number[]
+  /**
+   * The moved file's frontmatter `name:` was updated to match.
+   *
+   * Only ever true when it named the *old* address exactly - a file declaring
+   * anything else is not claiming to be the thing being renamed, and Helm does
+   * not edit a field somebody set on purpose.
+   */
+  frontmatterRenamed: boolean
+  error: string | null
+}
+
+export interface DeleteConfigRequest {
+  scopePath: string
+  path: string
+}
+
+export interface DeletedConfigFile {
+  path: string
+  /** Relative to the scope base - the key this file's history is listed under. */
+  relPath: string
+  snapshotId: number
+}
+
+export interface DeleteConfigResult {
+  ok: boolean
+  /** What came off the disk, each with the row that can put it back. */
+  removed: DeletedConfigFile[]
+  error: string | null
 }
 
 // --- Effective view --------------------------------------------------------
@@ -1330,6 +1475,84 @@ export interface EffectiveView {
   computedAt: string
 }
 
+// --- Live state, per file --------------------------------------------------
+
+/**
+ * What a resolution has to say about one file in a `.claude` tree.
+ *
+ * Six states rather than live/dead, because "not live" is three different
+ * situations wearing one word: outranked by another layer, empty, or simply
+ * not part of the resolution being looked at. They call for three different
+ * reactions, so they are three different states.
+ *
+ *   - `live` - everything in it reaches a session
+ *   - `partial` - it contributes, and something in it is outranked
+ *   - `shadowed` - it contributes nothing that survives
+ *   - `inert` - it is read, and has nothing to say
+ *   - `absent` - this resolution never looks at it
+ *   - `none` - Helm has no claim to make about it, and makes none
+ */
+export type ConfigLiveState = 'live' | 'partial' | 'shadowed' | 'inert' | 'absent' | 'none'
+
+/** One settings leaf as one file declares it, and what outranked it. */
+export interface ConfigSettingLive {
+  key: string
+  /** JSON encoding of *this file's* value, which may not be the winning one. */
+  value: string
+  layer: SettingsLayerKind
+  wins: boolean
+  outrankedBy: { layer: SettingsLayerKind; file: string; value: string } | null
+}
+
+/** One reason a hook file runs: the event, the matcher, and the layer saying so. */
+export interface HookBinding {
+  /** `PreToolUse`, `Stop`, ... - the key under `hooks`. */
+  event: string
+  /** The tool pattern the block matches, or null for a block with none. */
+  matcher: string | null
+  command: string
+  layer: SettingsLayerKind
+  /** The settings file the block is written in. */
+  file: string
+}
+
+export interface ConfigLive {
+  state: ConfigLiveState
+  /** One line for a row. Null when there is nothing to say. */
+  note: string | null
+  /** The whole sentence, for the pill's title. Empty when the state is `none`. */
+  reason: string
+  /** What a session types to reach it: `dev:think`, `/spec:plan`. */
+  invocation: string | null
+  /** Other files resolving under the same name, each with its own invocation. */
+  alsoDefinedBy: Array<{
+    invocation: string
+    source: EffectiveSource
+    origin: string
+    path: string
+  }>
+  /** Two unprefixed sources landed on one name, so which one wins is unpredicted. */
+  contested: boolean
+  settings: ConfigSettingLive[]
+  hooks: HookBinding[]
+  /** Settings leaves naming this file - a status line's command, and so on. */
+  references: Array<{ key: string; layer: SettingsLayerKind; file: string; value: string }>
+}
+
+/**
+ * A config file rendered as what it is, rather than as its bytes.
+ *
+ * Exactly one half is ever set: markdown for the kinds a session reads as
+ * prose, highlighted source for the ones it runs. Both are null when the file
+ * is neither, which is the case the pane draws as plain mono - and `code` is
+ * null too when shiki has no grammar for the extension, so "not highlighted"
+ * and "highlighted as plain text" stay different answers.
+ */
+export interface ConfigRendered {
+  markdown: RenderedMarkdown | null
+  code: { html: string; language: string; highlighted: boolean } | null
+}
+
 // --- MCP management --------------------------------------------------------
 
 export type McpScope = 'local' | 'user' | 'project'
@@ -1385,14 +1608,26 @@ export interface McpResult {
  * The four the spec names - `notes/`, `context/`, `.claude/skills/`, `docs/` -
  * are always offered when they exist, in that order, because they are the ones
  * a person goes looking for by name. Everything else is *found*: a top-level
- * directory holding markdown or HTML is content whatever it is called, which is
+ * directory holding anything readable is content whatever it is called, which is
  * how `lessons/` and `reference/` - full of artifacts Claude produced - end up
  * reachable without this file knowing they exist.
  */
 export type ContentRootKind = 'notes' | 'context' | 'skills' | 'docs' | 'root' | 'found'
 
+/**
+ * *Why* a root is on screen, which is the thing the curated model was hiding.
+ *
+ * `named` is "offered by rule" - the four the spec names, plus the scope
+ * directory itself, all of which are listed whether or not they turned out to
+ * hold anything. `discovered` is "offered because walking it found content".
+ * The badge is data rather than a UI inference from `kind` so that the pane and
+ * a check are reading the same answer.
+ */
+export type ContentRootOffer = 'named' | 'discovered'
+
 export interface ContentRoot {
   kind: ContentRootKind
+  offer: ContentRootOffer
   /** Relative to the scope, forward-slashed. `''` is the scope directory itself. */
   relPath: string
   path: string
@@ -1403,12 +1638,19 @@ export interface ContentRoot {
 /**
  * What Helm will do with a file.
  *
- * `markdown` is rendered, `html` goes to the sandboxed frame, `data` and `text`
- * are shown as source. The distinction is by extension rather than by content
- * because it decides which *surface* opens, and a surface that changed after
- * the read would flash the wrong one first.
+ * `markdown` is rendered, `html` goes to the sandboxed frame, `data`, `text`
+ * and `source` are shown as source, and `binary` is listed but not opened. The
+ * distinction is by extension rather than by content because it decides which
+ * *surface* opens, and a surface that changed after the read would flash the
+ * wrong one first.
+ *
+ * A kind decides how a file **opens**, never whether it is **shown**. The
+ * config tree already draws that line with `TEXT_EXT`, and the curated view
+ * used to draw it in the wrong place: `contentFileKind` returned null for a
+ * script and the walk then dropped it, so an agent's own `tools/` was invisible
+ * in the pane meant for reading what the agent wrote.
  */
-export type ContentFileKind = 'markdown' | 'html' | 'data' | 'text'
+export type ContentFileKind = 'markdown' | 'html' | 'data' | 'text' | 'source' | 'binary'
 
 export interface ContentFile {
   path: string
@@ -1420,6 +1662,8 @@ export interface ContentFile {
   kind: ContentFileKind
   /** Basename without extension: what `[[a wikilink]]` names. */
   slug: string
+  /** Lower-cased extension without the dot, `''` for a file that has none. */
+  ext: string
   /** Frontmatter `title`, else the first heading, else the slug. */
   title: string
   size: number
@@ -1444,6 +1688,72 @@ export interface ContentTree {
   errors: string[]
   scannedAt: string
   /** How long the walk took, for the pane's own honesty about a cold scope. */
+  tookMs: number
+}
+
+/**
+ * How the content pane is listing a scope.
+ *
+ * `curated` is the vault reading: the named roots, the discovered ones, newest
+ * first inside each. `tree` is an ordinary file tree - every file, read one
+ * directory at a time, with the repository's own ignore rules drawn rather than
+ * applied silently.
+ *
+ * A scope's *kind* picks which one a scope opens on and nothing more. Both work
+ * from either kind, because "a harness with a big `tools/` directory should
+ * still be walkable" and "a project's `docs/` is still a vault" are both true,
+ * and a mode locked to a kind cannot say so.
+ */
+export type ContentViewMode = 'curated' | 'tree'
+
+/** Why a tree entry is greyed. `null` for one that is not. */
+export type ContentIgnoreReason = 'gitignore' | 'default'
+
+/**
+ * One line of a directory listing in the tree view.
+ *
+ * Ignored entries are carried rather than dropped: the complaint this whole
+ * surface answers is "nothing on screen says what was left out", and a tree
+ * that hid `node_modules/` would be making exactly that omission at the top
+ * level of every repository.
+ */
+export interface ContentDirEntry {
+  name: string
+  /** Relative to the scope, forward-slashed. */
+  relPath: string
+  path: string
+  directory: boolean
+  /**
+   * A symlink or junction. Listed, never descended - an overlay shim's junction
+   * points back into a real repository, and a tree that walked one would list
+   * another project's files as this scope's.
+   */
+  link: boolean
+  /** How the file would open. `null` for a directory. */
+  kind: ContentFileKind | null
+  /** Lower-cased extension without the dot. `''` for a directory or no extension. */
+  ext: string
+  size: number
+  mtimeMs: number
+  ignored: boolean
+  ignoredBy: ContentIgnoreReason | null
+}
+
+/** One directory, read on demand. */
+export interface ContentDirListing {
+  scopePath: string
+  /** Relative to the scope, forward-slashed. `''` is the scope directory. */
+  relPath: string
+  entries: ContentDirEntry[]
+  /** How many of `entries` are ignored, so a header can count them. */
+  ignored: number
+  /**
+   * What decided the ignores: the repository's own rules, or Helm's built-in
+   * list where there is no git to ask.
+   */
+  ignoreSource: ContentIgnoreReason
+  /** Set when this directory could not be read at all. */
+  error: string | null
   tookMs: number
 }
 
@@ -1517,11 +1827,33 @@ export interface RenderedMarkdown {
   tookMs: number
 }
 
+/**
+ * A file shown as source, highlighted.
+ *
+ * The source view is what every kind that is not markdown or HTML opens in, and
+ * once source files are listed at all - which is the point of the split - that
+ * view is where an agent's `tools/` scripts are read. A `<pre>` of undifferen-
+ * tiated grey is a worse answer than the one the markdown renderer already
+ * gives a fenced block, and it is the same machinery: one `highlightCode` call,
+ * both themes in the output as custom properties.
+ */
+export interface ContentSource {
+  /** Shiki's HTML, or `''` when there is none and the plain text should show. */
+  html: string
+  /** The grammar used. `plaintext` when nothing matched the extension. */
+  language: string
+  highlighted: boolean
+  /** True when the file was past the ceiling; `html` is empty and that is why. */
+  tooLarge: boolean
+}
+
 /** A file, its bytes, and - for markdown - what they render to. */
 export interface ContentDocument {
   file: ContentFile
   content: ConfigFileContent
   rendered: RenderedMarkdown | null
+  /** Set for anything shown as source: data, text, and an agent's own scripts. */
+  source: ContentSource | null
   /** Set when the file could not be rendered at all; the source still shows. */
   error: string | null
 }
@@ -1555,6 +1887,14 @@ export interface ContentSearchResult {
   query: string
   hits: ContentSearchHit[]
   filesSearched: number
+  /**
+   * The kinds whose bytes were read, so the status row can say what was
+   * searched rather than leaving the reader to infer it. Every file is matched
+   * on its *name* whatever its kind, which is why this is about bodies only.
+   */
+  bodyKinds: ContentFileKind[]
+  /** How many of `filesSearched` had their text read. The rest matched by name. */
+  filesWithText: number
   bytesSearched: number
   totalMatches: number
   /** Measured around the search itself, not around the read. */

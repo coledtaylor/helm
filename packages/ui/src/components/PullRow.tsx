@@ -104,17 +104,7 @@ export function PullRow({
       )}
     >
       <span className="flex w-full items-baseline gap-2">
-        {/* The state, as a 5px mark rather than a word: on these lists every row
-            is open or draft, so the *word* would be the same on all of them and
-            the distinction is the only thing worth a glyph. */}
-        <span
-          aria-hidden
-          data-pull-state={pull.isDraft ? 'draft' : 'open'}
-          className={cn(
-            'size-[5px] shrink-0 translate-y-[-1px] rounded-full',
-            pull.isDraft ? 'bg-fg-subtle/60' : 'bg-success'
-          )}
-        />
+        <PullStateDot isDraft={pull.isDraft} />
         <span className="shrink-0 font-mono text-[11px] tabular-nums text-fg-subtle">
           #{pull.number}
         </span>
@@ -165,9 +155,34 @@ export function PullRow({
           </span>
         )}
         <span className="flex-1" />
-        {pull.checks !== null && pull.checks.total > 0 && <Checks checks={pull.checks} />}
+        {pull.checks !== null && pull.checks.total > 0 && <PullChecksTally checks={pull.checks} />}
       </span>
     </button>
+  )
+}
+
+/**
+ * The state, as a 5px mark rather than a word.
+ *
+ * On these lists every row is open or draft, so the *word* would be the same on
+ * all of them and the distinction is the only thing worth a glyph.
+ *
+ * Exported for the same reason the row itself was: the Pulls pane's stale
+ * chips carry this mark too, and a second copy of the markup is how one list
+ * comes to disagree with another about what a draft looks like. It is also the
+ * one authority for `data-pull-state`, so a driver reads the same attribute
+ * whichever shape the pull request is painted in.
+ */
+export function PullStateDot({ isDraft }: { isDraft: boolean }): JSX.Element {
+  return (
+    <span
+      aria-hidden
+      data-pull-state={isDraft ? 'draft' : 'open'}
+      className={cn(
+        'size-[5px] shrink-0 translate-y-[-1px] rounded-full',
+        isDraft ? 'bg-fg-subtle/60' : 'bg-success'
+      )}
+    />
   )
 }
 
@@ -177,8 +192,15 @@ export function PullRow({
  * The fraction and not a word, because the useful question on a list is "how
  * many of them" - and it is the same reduction the detail header paints, out of
  * the same three numbers, so a row and the tab it opens cannot disagree.
+ *
+ * Exported alongside the dot, and for a reason particular to the stale chips
+ * that use it: a pull request nobody has touched for three days whose CI is red
+ * is the row most worth seeing, so the chip keeps this tally rather than
+ * dropping it. The split is decided by one rule and all the signal rides on the
+ * chip - a second rule promoting red rows back into ACTIVE would mean nobody
+ * could predict which section a row is in.
  */
-function Checks({ checks }: { checks: PullChecks }): JSX.Element {
+export function PullChecksTally({ checks }: { checks: PullChecks }): JSX.Element {
   const failing = checks.failing > 0
   const pending = !failing && checks.pending > 0
   const passed = checks.total - checks.failing - checks.pending

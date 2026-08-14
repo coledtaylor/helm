@@ -24,6 +24,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isolate } from './isolate.mjs'
+import { auditReport, reportAudit } from './report-audit.mjs'
 
 // Its own data directory, seeded from a consistent copy of the real one, so a
 // run cannot disturb the Helm the user is using. See scripts/isolate.mjs.
@@ -125,6 +126,22 @@ for (const c of report.checks ?? []) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c
 // only interesting when it could not do that at all.
 if (failed.length > 0 || verify.status !== 0) {
   console.error(`\nFAIL  ${String(failed.length)} of ${String((report.checks ?? []).length)} checks`)
+  process.exit(1)
+}
+
+// Nothing that ran failed. Whether *everything* ran is a different question,
+// and it is the one this asks - a phase that returned early leaves a short
+// report that every check above passes.
+if (
+  !reportAudit(
+    'profiles-check',
+    auditReport({
+      driver: 'profilescheck.ts',
+      checks: report.checks ?? [],
+      only: groups?.join(',')
+    })
+  )
+) {
   process.exit(1)
 }
 

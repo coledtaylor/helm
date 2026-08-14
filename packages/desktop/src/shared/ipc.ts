@@ -4,13 +4,19 @@ import type {
   ArchivedConversation,
   CachedProject,
   ConfigFileContent,
+  ConfigRendered,
   ConfigScope,
   ConfigSnapshotMeta,
   ConfigTree,
+  ContentDirListing,
   ContentDocument,
   ContentScope,
   ContentSearchResult,
   ContentTree,
+  CreateConfigRequest,
+  CreateConfigResult,
+  DeleteConfigRequest,
+  DeleteConfigResult,
   DetectedShell,
   DiscoveryResult,
   DoctorReport,
@@ -30,6 +36,8 @@ import type {
   ProfileDraft,
   PullDetailView,
   PullsSnapshot,
+  RenameConfigRequest,
+  RenameConfigResult,
   RenderedMarkdown,
   SessionRecord,
   ThemePreference,
@@ -598,6 +606,16 @@ export interface IpcRequests {
   'config:scopes': { request: void; response: ConfigScope[] }
   'config:tree': { request: { scopePath: string }; response: ConfigTree }
   'config:read': { request: { path: string }; response: ConfigFileContent }
+  /**
+   * The same bytes as something other than a textarea: markdown rendered, a
+   * hook highlighted. Takes the source rather than reading the file again, so
+   * one channel serves both the file on disk and a draft being edited - and so
+   * the render can never be of a version the pane is not showing.
+   */
+  'config:render': {
+    request: { path: string; source: string }
+    response: ConfigRendered
+  }
   'config:write': { request: WriteConfigRequest; response: WriteConfigResult }
   /** Versions of one file, newest first, without their contents. */
   'config:snapshots': {
@@ -609,6 +627,23 @@ export interface IpcRequests {
   'config:restore': { request: { id: number; path: string }; response: WriteConfigResult }
   /** Tells main which file to watch for changes made outside the app. */
   'config:watch': { request: WatchConfigRequest; response: void }
+
+  /**
+   * The three things a directory supports that replacing one file's bytes does
+   * not. They are separate channels rather than modes of `config:write` because
+   * each takes a different question - a kind and a name, a new name, or nothing
+   * at all - and because a delete that arrived as a write of zero bytes would
+   * be a delete with no way to tell it from an emptied file.
+   *
+   * All three go through the same snapshot-first path `config:write` does, and
+   * through the same `assertWritable`: a new channel here is a new *question*,
+   * never a second route into the filesystem.
+   */
+  'config:create': { request: CreateConfigRequest; response: CreateConfigResult }
+  /** Moves a skill's whole directory, or a command across its namespace path. */
+  'config:rename': { request: RenameConfigRequest; response: RenameConfigResult }
+  /** Snapshots first, then removes. Each row is restorable through `config:restore`. */
+  'config:delete': { request: DeleteConfigRequest; response: DeleteConfigResult }
 
   'config:effective': { request: EffectiveViewRequest; response: EffectiveView }
 
@@ -692,6 +727,19 @@ export interface IpcRequests {
    */
   'content:scopes': { request: void; response: ContentScope[] }
   'content:tree': { request: { scopePath: string; refresh?: boolean }; response: ContentTree }
+  /**
+   * One directory of the tree view.
+   *
+   * A channel per directory rather than one walk, because the tree is lazy on
+   * purpose: `content:tree` walks a whole scope to decide what to *curate*, and
+   * a project has no ceiling that walk could be given which is not either a
+   * silent truncation or a several-second pause. This one costs a `readdir` and
+   * a `git check-ignore` against a directory somebody just clicked open.
+   */
+  'content:dir': {
+    request: { scopePath: string; relPath: string }
+    response: ContentDirListing
+  }
   /** A file, its bytes, and - for markdown - the HTML it renders to. */
   'content:document': {
     request: { scopePath: string; path: string }
@@ -723,8 +771,21 @@ export interface IpcRequests {
    * the main process pinned to a token it issued for a file the user opened.
    */
   'content:artifact': {
-    request: { path: string }
+    request: { scopePath: string; path: string }
     response: { url: string; token: string }
+  }
+  /**
+   * Resolves a `[[wikilink]]` a *frame* clicked.
+   *
+   * The one caller that cannot resolve its own links. A rendered note has its
+   * links resolved before the HTML reaches the window; an HTML artifact runs in
+   * a sandbox with an opaque origin that is deliberately told no paths, so it
+   * posts the target's name out and this answers with the file. `from` is the
+   * artifact, which is how `[[index]]` prefers the one in its own directory.
+   */
+  'content:wikilink': {
+    request: { scopePath: string; target: string; from: string }
+    response: { path: string | null }
   }
 
   /**
@@ -990,11 +1051,15 @@ export const REQUEST_CHANNELS = Object.keys({
   'config:scopes': true,
   'config:tree': true,
   'config:read': true,
+  'config:render': true,
   'config:write': true,
   'config:snapshots': true,
   'config:snapshot': true,
   'config:restore': true,
   'config:watch': true,
+  'config:create': true,
+  'config:rename': true,
+  'config:delete': true,
   'config:effective': true,
   'config:mcpPreview': true,
   'config:mcpAdd': true,
@@ -1009,6 +1074,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'pr:review': true,
   'content:scopes': true,
   'content:tree': true,
+  'content:dir': true,
   'content:document': true,
   'content:render': true,
   'content:search': true,
@@ -1016,6 +1082,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'content:snapshots': true,
   'content:restore': true,
   'content:artifact': true,
+  'content:wikilink': true,
   'shell:openExternal': true,
   'clipboard:read': true,
   'clipboard:write': true

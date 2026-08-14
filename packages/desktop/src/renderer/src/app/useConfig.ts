@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ConfigFile,
   ConfigFileContent,
+  ConfigRendered,
   ConfigScope,
   ConfigSnapshotMeta,
   ConfigTree,
@@ -12,6 +13,9 @@ import type {
   McpResult,
   McpScope
 } from '@helm/core'
+import type { CreatableKind } from '@helm/core/types'
+// A value, so it comes from the entry point with no `node:` imports behind it.
+import { isRedactedConfigFile } from '@helm/core/types'
 import type { ConfigViewKind } from '@helm/ui'
 import { helm } from './bridge'
 
@@ -36,6 +40,23 @@ export interface ConfigMcpDraft {
   json: string
 }
 
+/** Which of the three dialogs is open. `null` is none, which is the resting state. */
+export type ConfigEntryDialog = 'new' | 'rename' | 'delete' | null
+
+/**
+ * A delete that has happened, held until it is undone or dismissed.
+ *
+ * The file is gone from the tree, so its version history has no row in the list
+ * to be reached from - and the delete's own snapshots are that history. Holding
+ * them here is what makes "restorable from the per-file history" reachable by
+ * clicking rather than only by an IPC call somebody would have to write.
+ */
+export interface DeletedEntry {
+  /** How it was addressed, for the strip's sentence. */
+  label: string
+  files: Array<{ path: string; snapshotId: number }>
+}
+
 export interface ConfigState {
   scopes: ConfigScope[]
   scopePath: string
@@ -55,6 +76,10 @@ export interface ConfigState {
   /** Selects by absolute path, switching scope if the file is in another one. */
   openPath: (path: string) => void
   loaded: ConfigFileContent | null
+  /** The open file as markdown or as highlighted source. Null while rendering. */
+  rendered: ConfigRendered | null
+  /** Helm will not read this file, so nothing asked for its bytes. */
+  redacted: boolean
   snapshots: ConfigSnapshotMeta[]
   saving: boolean
   editorError: string | null
@@ -66,6 +91,25 @@ export interface ConfigState {
   dirty: boolean
   setDirty: (dirty: boolean) => void
 
+  /**
+   * New, Rename and Delete. Which dialog is open, if any, plus the state the
+   * three of them share: one busy flag and one error, because only one can be
+   * open at a time and an error belongs to the dialog that caused it.
+   */
+  entryDialog: ConfigEntryDialog
+  openEntryDialog: (dialog: ConfigEntryDialog) => void
+  entryBusy: boolean
+  entryError: string | null
+  createFile: (kind: CreatableKind, name: string) => void
+  /** The path the New dialog just wrote, which opens ready to type in. */
+  createdPath: string | null
+  renameFile: (name: string) => void
+  deleteFile: () => void
+  /** What a delete left behind: the rows that can bring it back. */
+  deleted: DeletedEntry | null
+  undoDelete: () => void
+  dismissDeleted: () => void
+
   effectiveProfileId: number | null
   setEffectiveProfileId: (id: number | null) => void
   effectiveCwd: string
@@ -73,6 +117,8 @@ export interface ConfigState {
   effective: EffectiveView | null
   effectiveLoading: boolean
   effectiveError: string | null
+  /** The resolution the Files view reads live state from; null while it is stale. */
+  live: EffectiveView | null
 
   mcpServers: EffectiveMcpServer[]
   mcpDraft: ConfigMcpDraft
@@ -261,17 +307,58 @@ export function useConfig(): ConfigState {
     [scopePath]
   )
 
+  /**
+   * The one file in a `.claude` tree Helm will not open.
+   *
+   * `.credentials.json` is a `.json` in a directory of `.json`s, so the console
+   * is exactly the surface that would read it by accident - and CLAUDE.md's
+   * credentials rule is that a sign-in is detected from an artefact's
+   * *existence* and nothing opens one. The row stays, the pane says what the
+   * file is, and no request for its bytes is ever made.
+   */
+  const redacted = selected !== null && isRedactedConfigFile(selected.relPath)
+
   useEffect(() => {
     // Releasing the watch matters on Windows, where a handle on a directory is
     // not free: an app that watches every file it has ever shown is an app that
     // eventually gets in another tool's way.
-    void helm.invoke('config:watch', { path: selectedPath })
-    if (selectedPath === null) return
+    void helm.invoke('config:watch', { path: redacted ? null : selectedPath })
+    if (selectedPath === null || redacted) return
     readSelected(selectedPath, fileKey)
-  }, [selectedPath, fileKey, readSelected])
+  }, [selectedPath, fileKey, readSelected, redacted])
 
   const loaded = fileAnswer?.key === fileKey ? fileAnswer.value : null
   const snapshots = snapshotAnswer?.key === fileKey ? snapshotAnswer.value : []
+
+  /**
+   * The bytes as something other than a textarea, rendered in main.
+   *
+   * Of the file rather than of the draft: the reading view shows what is on
+   * disk, and a preview of unsaved text is a different feature with a different
+   * cost (a render per keystroke). Re-runs when the file's hash changes, which
+   * covers a save, a restore and an external edit alike.
+   */
+  const [renderAnswer, setRenderAnswer] = useState<Answered<ConfigRendered> | null>(null)
+  const renderKey = `${selectedPath ?? ''}:${loaded?.hash ?? ''}`
+  useEffect(() => {
+    if (selectedPath === null || loaded === null || loaded.binary || !loaded.exists) return
+    let live = true
+    void helm
+      .invoke('config:render', { path: selectedPath, source: loaded.content })
+      .then((result) => {
+        if (live) setRenderAnswer({ key: renderKey, value: result })
+      })
+      .catch(() => {
+        // The source view still works, and a file that will not render is a
+        // bug worth seeing rather than a reason to show nothing.
+        if (live) setRenderAnswer({ key: renderKey, value: { markdown: null, code: null } })
+      })
+    return () => {
+      live = false
+    }
+  }, [selectedPath, renderKey, loaded])
+
+  const rendered = renderAnswer?.key === renderKey ? renderAnswer.value : null
 
   // Main's watcher, which fires while the user is still typing rather than when
   // they save. The bytes come with it so "reload" is a decision, not a leap.
@@ -366,6 +453,150 @@ export function useConfig(): ConfigState {
     setExternal(null)
   }, [])
 
+  // -------------------------------------------------------------------------
+  // New, rename, delete
+  // -------------------------------------------------------------------------
+  const [entryDialog, setEntryDialog] = useState<ConfigEntryDialog>(null)
+  /**
+   * The file the New dialog just wrote, so the editor can open it ready to type
+   * in rather than rendered.
+   *
+   * The two halves of this console arrived on separate branches and disagreed
+   * here: creating a file opened it in the editor, because every scaffold is a
+   * placeholder whose text says what to replace, while the redesign opens a
+   * markdown file rendered because that is the right default for reading one.
+   * Both are right, and they are about different moments - so the rendered
+   * default stands everywhere except the one click that just produced the file.
+   */
+  const [createdPath, setCreatedPath] = useState<string | null>(null)
+  const [entryBusy, setEntryBusy] = useState(false)
+  const [entryError, setEntryError] = useState<string | null>(null)
+  const [deletedEntry, setDeletedEntry] = useState<
+    (DeletedEntry & { scopePath: string }) | null
+  >(null)
+
+  /**
+   * A delete belongs to the scope it happened in.
+   *
+   * Switching scope leaves the strip behind rather than offering an undo above
+   * a list it is not about - and the rows stay in the history either way.
+   * Derived from the scope on screen rather than cleared by an effect: the two
+   * are the same outcome, and a `useState` that a `useEffect` resets is a state
+   * that is briefly wrong on every scope change.
+   */
+  const deleted =
+    deletedEntry !== null && deletedEntry.scopePath.toLowerCase() === scopePath.toLowerCase()
+      ? deletedEntry
+      : null
+
+  const openEntryDialog = useCallback((dialog: ConfigEntryDialog) => {
+    setEntryDialog(dialog)
+    setEntryError(null)
+  }, [])
+
+  /** Selects a path the tree has not been re-read for yet, and forces the re-read. */
+  const landOn = useCallback((path: string | null) => {
+    setTreeVersion((n) => n + 1)
+    setFileVersion((n) => n + 1)
+    setSelectedPath(path)
+    setEditorError(null)
+    setExternal(null)
+  }, [])
+
+  const createFile = useCallback(
+    (kind: CreatableKind, name: string) => {
+      if (scope === null) return
+      setEntryBusy(true)
+      setEntryError(null)
+      void helm
+        .invoke('config:create', { scopePath: scope.path, kind, name })
+        .then((result) => {
+          if (!result.ok) {
+            setEntryError(result.error ?? 'Nothing was created.')
+            return
+          }
+          setEntryDialog(null)
+          // Opened straight away: every scaffold below is a placeholder with a
+          // sentence in it saying what to replace, and a New that left you
+          // looking at the list would have written a file nobody read.
+          setCreatedPath(result.path)
+          landOn(result.path)
+        })
+        .catch((err: unknown) => setEntryError(readable(err)))
+        .finally(() => setEntryBusy(false))
+    },
+    [scope, landOn]
+  )
+
+  const renameFile = useCallback(
+    (name: string) => {
+      if (scope === null || selectedPath === null) return
+      setEntryBusy(true)
+      setEntryError(null)
+      void helm
+        .invoke('config:rename', { scopePath: scope.path, path: selectedPath, name })
+        .then((result) => {
+          if (!result.ok) {
+            setEntryError(result.error ?? 'Nothing was renamed.')
+            return
+          }
+          setEntryDialog(null)
+          landOn(result.path)
+        })
+        .catch((err: unknown) => setEntryError(readable(err)))
+        .finally(() => setEntryBusy(false))
+    },
+    [scope, selectedPath, landOn]
+  )
+
+  const deleteFile = useCallback(() => {
+    if (scope === null || selectedPath === null || selected === null) return
+    const label = selected.name
+    setEntryBusy(true)
+    setEntryError(null)
+    void helm
+      .invoke('config:delete', { scopePath: scope.path, path: selectedPath })
+      .then((result) => {
+        if (!result.ok) {
+          setEntryError(result.error ?? 'Nothing was deleted.')
+          return
+        }
+        setEntryDialog(null)
+        setDeletedEntry({
+          scopePath: scope.path,
+          label,
+          files: result.removed.map((row) => ({ path: row.path, snapshotId: row.snapshotId }))
+        })
+        landOn(null)
+      })
+      .catch((err: unknown) => setEntryError(readable(err)))
+      .finally(() => setEntryBusy(false))
+  }, [scope, selectedPath, selected, landOn])
+
+  /**
+   * Puts a deleted entry back, one `config:restore` per file.
+   *
+   * The same channel the version list uses, over the same rows - a delete's
+   * undo is not a fourth mechanism, it is the history the delete wrote. In
+   * order, so a skill's `SKILL.md` is the file the console lands on.
+   */
+  const undoDelete = useCallback(() => {
+    if (deleted === null) return
+    setEntryBusy(true)
+    const restoreAll = deleted.files.reduce<Promise<unknown>>(
+      (chain, row) =>
+        chain.then(() => helm.invoke('config:restore', { id: row.snapshotId, path: row.path })),
+      Promise.resolve()
+    )
+    void restoreAll
+      .then(() => {
+        setDeletedEntry(null)
+        landOn(deleted.files[0]?.path ?? null)
+      })
+      .catch((err: unknown) => setEditorError(readable(err)))
+      .finally(() => setEntryBusy(false))
+  }, [deleted, landOn])
+
   /**
    * Opens a file by path, from a link somewhere that is not the list - the
    * effective view's entries, or the file an MCP server was defined in.
@@ -410,8 +641,18 @@ export function useConfig(): ConfigState {
 
   const effectiveKey = `${String(effectiveProfileId)}:${effectiveCwd}:${String(treeVersion)}`
   const effectiveSeq = useRef(0)
+  /**
+   * Computed for the Files view as well, and deliberately the *same* answer.
+   *
+   * A row saying a skill resolves, or that a settings key is outranked, is
+   * reading this view - so if Files computed its own, the two tabs could
+   * disagree about one file while both were right about their own question.
+   * One resolution per console, named on screen, is the whole point: the
+   * Effective tab becomes the deep dive rather than the corrective.
+   */
+  const wantsEffective = view === 'effective' || view === 'files'
   useEffect(() => {
-    if (view !== 'effective') return
+    if (!wantsEffective) return
     if (effectiveProfileId === null && effectiveCwd.trim() === '') return
     const ticket = ++effectiveSeq.current
     void helm
@@ -428,10 +669,21 @@ export function useConfig(): ConfigState {
         if (ticket !== effectiveSeq.current) return
         setEffectiveError(readable(err))
       })
-  }, [view, effectiveProfileId, effectiveCwd, effectiveKey])
+  }, [wantsEffective, effectiveProfileId, effectiveCwd, effectiveKey])
 
   const effective = effectiveAnswer?.value ?? null
-  const effectiveLoading = view === 'effective' && effectiveAnswer?.key !== effectiveKey
+  const effectiveLoading = wantsEffective && effectiveAnswer?.key !== effectiveKey
+
+  /**
+   * The same view, withheld while it is the answer to a different question.
+   *
+   * The Effective tab shows a stale answer with a loading flag beside it, which
+   * is right for a page of prose. A file row cannot do that: joined with a tree
+   * that has already switched scope, last scope's resolution says "not resolved
+   * here" about every file on screen. That is not a lag, it is a wrong claim,
+   * so the rows go quiet instead.
+   */
+  const live = effectiveAnswer?.key === effectiveKey ? effectiveAnswer.value : null
 
   // -------------------------------------------------------------------------
   // MCP
@@ -586,6 +838,8 @@ export function useConfig(): ConfigState {
     select,
     openPath,
     loaded,
+    rendered,
+    redacted,
     snapshots,
     saving,
     editorError,
@@ -595,6 +849,17 @@ export function useConfig(): ConfigState {
     restore,
     dirty,
     setDirty,
+    entryDialog,
+    openEntryDialog,
+    entryBusy,
+    entryError,
+    createFile,
+    createdPath,
+    renameFile,
+    deleteFile,
+    deleted,
+    undoDelete,
+    dismissDeleted: useCallback(() => setDeletedEntry(null), []),
     effectiveProfileId,
     setEffectiveProfileId,
     effectiveCwd,
@@ -602,6 +867,7 @@ export function useConfig(): ConfigState {
     effective,
     effectiveLoading,
     effectiveError,
+    live,
     mcpServers: mcpAnswer?.value?.mcpServers ?? [],
     mcpDraft,
     setMcpDraft,

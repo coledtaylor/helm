@@ -1,5 +1,12 @@
 import type { BrowserWindow } from 'electron'
-import { readPull, writePullDetail, type PullDetail, type Store } from '@helm/core'
+import {
+  readPull,
+  replaceRepoPulls,
+  writePullDetail,
+  type PullDetail,
+  type PullSummary,
+  type Store
+} from '@helm/core'
 import type { CheckContext } from './sessionscheck'
 import { drag, screenshot, sendMouse, sleep } from './bridge'
 
@@ -90,24 +97,62 @@ async function closeAllTabs(win: BrowserWindow): Promise<void> {
   )
 }
 
-/** The views worth looking at, and how to reach each from the sidebar. */
-const VIEWS: Array<{ name: string; selector: string | null }> = [
+/**
+ * Wait until the window has drawn what the DOM already says.
+ *
+ * `capturePage` hands back the **last frame the compositor produced**, not a
+ * fresh render of the current tree, so a click that has already reconciled can
+ * still be photographed as the view before it - which is how this walk came to
+ * write a Pull requests file holding the Session history pane. Two animation
+ * frames is the ordinary "React has committed and the compositor has drawn it"
+ * wait.
+ *
+ * The `setTimeout` beside it is not belt-and-braces. Chromium throttles
+ * `requestAnimationFrame` to nothing while a window is occluded - which is the
+ * normal state of a window a check is driving on a machine somebody is working
+ * on - and without the timeout this would hang there rather than take the
+ * photograph it was asked for.
+ */
+async function drawn(win: BrowserWindow): Promise<void> {
+  await js<boolean>(
+    win,
+    `new Promise((resolve) => {
+       const done = () => resolve(true)
+       requestAnimationFrame(() => requestAnimationFrame(done))
+       setTimeout(done, 1200)
+     })`
+  ).catch(() => false)
+}
+
+/**
+ * The views worth looking at, how to reach each from the sidebar, and the one
+ * element that proves the walk arrived.
+ *
+ * The anchor is the part that is not decoration. A walk that clicks and then
+ * photographs whatever is on screen writes a file named for a view it may
+ * never have reached, and a wrong screenshot is worse than a missing one - it
+ * is reviewed as though it were the thing it is named after. The anchors are
+ * written out here rather than imported from `affordancecheck.ts`'s table, so
+ * this driver states for itself what "arrived" means.
+ */
+const VIEWS: Array<{ name: string; selector: string | null; anchor: string | null }> = [
   // Nothing open. Reached by the close-everything above rather than a click,
-  // hence the null selector.
-  { name: 'welcome', selector: null },
+  // hence the null selector - and nothing to anchor on either, since the
+  // whole point of it is a window with no pane in it.
+  { name: 'welcome', selector: null, anchor: null },
   // First project row in the tree - the launcher's home view.
-  { name: 'project', selector: 'aside nav button[title]' },
-  { name: 'config', selector: '[data-open-config]' },
-  { name: 'content', selector: '[data-open-content]' },
-  { name: 'history', selector: '[data-open-history]' },
+  { name: 'project', selector: 'aside nav button[title]', anchor: '[data-project-pane]' },
+  { name: 'config', selector: '[data-open-config]', anchor: '[data-config-scope]' },
+  { name: 'content', selector: '[data-open-content]', anchor: '[data-content-scope]' },
+  { name: 'history', selector: '[data-open-history]', anchor: '[data-history-search]' },
   // Painted from the cache, so it has rows whether or not a fetch has happened
   // on this run - and it is the one list in the app whose rows are almost all
   // chips and mono, which is where a tone that only works in one theme shows.
-  { name: 'pulls', selector: '[data-open-pulls]' },
+  { name: 'pulls', selector: '[data-open-pulls]', anchor: '[data-pulls-refresh]' },
   // The gear, not a sidebar row: settings is a window-level place. It is the
   // longest page in the app and the one most likely to grow a control that
   // does not match the others, which is exactly what a shot is for.
-  { name: 'settings', selector: '[data-open-settings]' }
+  { name: 'settings', selector: '[data-open-settings]', anchor: '[data-settings-pane]' }
 ]
 
 const THEME_LABEL = {
@@ -333,6 +378,48 @@ async function shootProjectRepo(
   return shot.file
 }
 
+/**
+ * The content pane as a **file tree**, which the walk cannot reach on its own.
+ *
+ * The walk opens the first scope, which on a machine organised into harnesses
+ * is a harness, and a harness defaults to the curated view - so without this
+ * the second of the pane's two modes is never photographed. It is the same
+ * argument the repository shot makes for the project pane, and the same one the
+ * crowded tab strip makes: the shot that matters is often a *state* rather than
+ * a view.
+ *
+ * `packages/` is expanded when it is there so the shot carries a nested level;
+ * a tree drawn one level deep does not show whether the indent works. The pane
+ * is put back on Curated afterwards, because the next theme's walk starts from
+ * whatever this one left.
+ */
+async function shootContentTree(
+  win: BrowserWindow,
+  outDir: string,
+  theme: string
+): Promise<string | null> {
+  if (!(await click(win, '[data-content-view="tree"]'))) {
+    console.error('design-shot: the content pane has no Tree control')
+    return null
+  }
+  await sleep(900)
+  // Whichever directory the scope actually has, rather than a name written
+  // down here - one level of nesting is the point, not which one.
+  await js<void>(
+    win,
+    `(() => {
+       const rows = [...document.querySelectorAll('[data-content-tree-entry][aria-expanded="false"]')];
+       const first = rows[0];
+       if (first) first.click();
+     })()`
+  ).catch(() => undefined)
+  await sleep(900)
+  const shot = await screenshot(win, outDir, `content-tree-${theme}.png`)
+  await click(win, '[data-content-view="curated"]')
+  await sleep(500)
+  return shot.file
+}
+
 /** The project shell's height, written the way its drag handle writes it. */
 async function writeShellHeight(win: BrowserWindow, pct: number): Promise<void> {
   await js<void>(
@@ -403,6 +490,226 @@ async function shootShellHeights(
   }
   await writeShellHeight(win, before)
   await sleep(400)
+  return files
+}
+
+/** One planted pull request, in the shape the cache holds. */
+function densePull(options: {
+  number: number
+  title: string
+  author: string
+  head: string
+  ageMs: number
+  additions: number
+  deletions: number
+  isDraft?: boolean
+  reviewDecision?: 'APPROVED' | 'CHANGES_REQUESTED'
+  checks?: { total: number; failing: number; pending: number }
+}): PullSummary {
+  const at = Date.now() - options.ageMs
+  return {
+    number: options.number,
+    title: options.title,
+    url: `https://github.com/planted/pull/${String(options.number)}`,
+    author: options.author,
+    authorIsBot: options.author.startsWith('app/'),
+    state: 'OPEN',
+    isDraft: options.isDraft ?? false,
+    headRefName: options.head,
+    baseRefName: 'main',
+    createdAt: at - 6 * 24 * 60 * 60 * 1000,
+    updatedAt: at,
+    additions: options.additions,
+    deletions: options.deletions,
+    changedFiles: 4,
+    reviewDecision: options.reviewDecision ?? null,
+    checks: options.checks ?? { total: 4, failing: 0, pending: 0 },
+    labels: []
+  }
+}
+
+/**
+ * The Pulls pane with a busy GitHub behind it: ACTIVE and STALE both holding
+ * rows, and the same list again under `GROUP: Repo`.
+ *
+ * **Planted in the cache and taken out again**, the same write/shoot/restore
+ * the review threads and the ignore list use, and for the same reason: this
+ * run's `gh` is the real one, so what is on screen is whatever the developer's
+ * own repositories happen to have - one open pull request on the machine this
+ * was written on - and the ACTIVE/STALE split, the chips and the grouping are
+ * then states nobody can look at. Planting is also the honest code path: the
+ * pane paints the cache, which is exactly what a person meets after a fetch.
+ *
+ * The ages are **relative to now and straddle the cutoff on purpose**. The
+ * split is a comparison against a clock, so a fixture carrying dates would
+ * photograph a different pane every month and eventually stop covering the
+ * thing it is named for. The cutoff itself is set here and put back, like every
+ * other setting this walk drives.
+ *
+ * Returns the files it wrote, and says so and returns none when the machine has
+ * fewer than two github.com repositories to plant into - a grouped shot with
+ * one group in it is not the state this exists to show.
+ */
+async function shootPullsDense(
+  win: BrowserWindow,
+  outDir: string,
+  theme: string,
+  ctx: CheckContext,
+  staleBefore: number
+): Promise<string[]> {
+  const files: string[] = []
+  const snapshot = ctx.pulls.snapshot()
+  const targets = snapshot.repos.filter((repo) => repo.slug !== null).slice(0, 3)
+  if (targets.length < 2) {
+    console.error('design-shot: fewer than two github.com repositories, so no dense pulls shot')
+    return files
+  }
+
+  const HOUR = 60 * 60 * 1000
+  const DAY = 24 * HOUR
+  // Two of the three touched repositories get both halves of the split, so
+  // grouping by repository has more than one group on each side of it.
+  const planted: PullSummary[][] = [
+    [
+      densePull({
+        number: 418,
+        title: 'Fix session-restore race on cold start',
+        author: 'busy-dev',
+        head: 'fix/session-restore-race',
+        ageMs: 40 * 60 * 1000,
+        additions: 61,
+        deletions: 12,
+        checks: { total: 5, failing: 0, pending: 0 }
+      }),
+      densePull({
+        number: 417,
+        title: 'Persist harness filter across restarts',
+        author: 'busy-dev',
+        head: 'feat/harness-filter-persist',
+        ageMs: 5 * HOUR,
+        additions: 24,
+        deletions: 3,
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: { total: 5, failing: 2, pending: 0 }
+      }),
+      densePull({
+        number: 402,
+        title: 'Overnight digest: summarize failed runs first',
+        author: 'app/overnight-bot',
+        head: 'digest/failed-first',
+        ageMs: 26 * HOUR,
+        additions: 118,
+        deletions: 40
+      }),
+      densePull({
+        number: 203,
+        title: 'Report builder: custom date ranges',
+        author: 'second-dev',
+        head: 'report/date-ranges',
+        ageMs: 3 * DAY,
+        additions: 88,
+        deletions: 12,
+        checks: { total: 2, failing: 0, pending: 0 }
+      }),
+      densePull({
+        number: 57,
+        title: 'Dark-surface token ramp cleanup',
+        author: 'second-dev',
+        head: 'design/dark-ramp',
+        ageMs: 5 * DAY,
+        additions: 30,
+        deletions: 140,
+        // Stale *and* red, which is the row the whole "one rule, all the signal
+        // on the chip" decision is about. It has to be visible on a chip.
+        checks: { total: 3, failing: 2, pending: 0 }
+      })
+    ],
+    [
+      densePull({
+        number: 86,
+        title: 'Batch time-entry sync writes',
+        author: 'second-dev',
+        head: 'perf/batched-sync',
+        ageMs: 3 * HOUR,
+        additions: 210,
+        deletions: 96,
+        checks: { total: 4, failing: 0, pending: 3 }
+      }),
+      densePull({
+        number: 85,
+        title: 'Offline queue: retry with backoff',
+        author: 'third-dev',
+        head: 'fix/offline-retry',
+        ageMs: 30 * HOUR,
+        additions: 44,
+        deletions: 9,
+        isDraft: true
+      }),
+      densePull({
+        number: 12,
+        title: 'Pathfinding avoids lit tiles at night',
+        author: 'third-dev',
+        head: 'ai/lit-tiles',
+        ageMs: 9 * DAY,
+        additions: 260,
+        deletions: 40,
+        checks: { total: 0, failing: 0, pending: 0 }
+      })
+    ],
+    [
+      densePull({
+        number: 9,
+        title: 'Teach the sweeper about forks',
+        author: 'busy-dev',
+        head: 'feature/forks',
+        ageMs: 8 * HOUR,
+        additions: 412,
+        deletions: 96,
+        reviewDecision: 'APPROVED'
+      })
+    ]
+  ]
+
+  const before = targets.map((repo) => ({ slug: repo.slug ?? '', pulls: repo.pulls }))
+  const fetchedAt = new Date().toISOString()
+  try {
+    // Two days, so the ages above land either side of it whatever the developer
+    // has this set to. Written through the real channel, like the ignore list.
+    await js<void>(
+      win,
+      `window.helm.invoke('settings:write', { prStaleDays: 2 }).then(() => undefined)`
+    ).catch(() => undefined)
+    targets.forEach((repo, at) => {
+      replaceRepoPulls(ctx.services.store, repo.slug ?? '', planted[at] ?? [], fetchedAt)
+    })
+    ctx.pulls.republish()
+    await click(win, '[data-open-pulls]')
+    const split = await pollJs(win, `document.querySelector('[data-pulls-section="stale"]')`, 10_000)
+    if (!split) {
+      console.error('design-shot: the planted pull requests never split into ACTIVE and STALE')
+      return files
+    }
+    await drawn(win)
+    files.push((await screenshot(win, outDir, `pulls-dense-${theme}.png`)).file)
+
+    // The same list arranged by repository, which is the control's whole
+    // point and the one thing a flat shot cannot show.
+    await click(win, '[data-pulls-group="repo"]')
+    const grouped = await pollJs(win, `document.querySelector('[data-pulls-group-heading]')`, 5_000)
+    if (!grouped) console.error('design-shot: GROUP: Repo drew no headings')
+    await drawn(win)
+    files.push((await screenshot(win, outDir, `pulls-dense-grouped-${theme}.png`)).file)
+    await click(win, '[data-pulls-group="none"]')
+    await sleep(200)
+  } finally {
+    for (const repo of before) replaceRepoPulls(ctx.services.store, repo.slug, repo.pulls, fetchedAt)
+    await js<void>(
+      win,
+      `window.helm.invoke('settings:write', { prStaleDays: ${String(staleBefore)} }).then(() => undefined)`
+    ).catch(() => undefined)
+    ctx.pulls.republish()
+    await sleep(300)
+  }
   return files
 }
 
@@ -1113,6 +1420,16 @@ async function shootCrowdedTabs(
 
 export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<string[]> {
   const { win } = ctx
+  // Keep drawing while nobody is looking at the window.
+  //
+  // Chromium throttles rendering, timers and `requestAnimationFrame` in a
+  // window it believes is occluded, and a driver's window is occluded by
+  // definition: it runs behind whatever the developer is actually working in.
+  // `capturePage` then hands back the last frame that *was* drawn, which is how
+  // this walk photographed the previous view under a later view's name. Set on
+  // the driver rather than in the app, where the throttle is right and saves a
+  // laptop's battery.
+  win.webContents.setBackgroundThrottling(false)
   const files: string[] = []
   const want = wantedGroups()
   if (want.size === 0) {
@@ -1135,6 +1452,10 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
   const ignoredBefore = [...ctx.services.settings.prIgnoredRepos]
   const pinnedBefore = [...ctx.services.settings.pinnedProjects]
   const shellHeightBefore = ctx.services.settings.projectShellHeightPct
+  // The stale cutoff is driven too, for the dense pulls shot, and put back the
+  // same way: the split is only photographable when it is switched on, and a
+  // screenshot run must not repaint the developer's own app.
+  const staleBefore = ctx.services.settings.prStaleDays
 
   for (const theme of ['dark', 'light'] as const) {
     // Through the real toggle, so the shot proves the control too.
@@ -1155,6 +1476,24 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
         }
         await sleep(600)
       }
+      // Arrived, and painted, before the shutter. Neither half is optional:
+      // the anchor says the pane the file is named for is the pane on screen,
+      // and `drawn` says the compositor has caught up with it. Without the
+      // second one this walk wrote `pulls-light.png` holding the Session
+      // history pane - the view clicked immediately before it - because
+      // `capturePage` returns the last frame drawn rather than the current
+      // tree. A file named for a view it does not hold is worse than a missing
+      // one: it is reviewed as though it were the thing it is named after.
+      if (view.anchor !== null) {
+        const landed = await pollJs(win, `document.querySelector('${view.anchor}')`, 10_000)
+        if (!landed) {
+          console.error(
+            `design-shot: ${view.name} (${theme}) never showed ${view.anchor} - no shot written`
+          )
+          continue
+        }
+      }
+      await drawn(win)
       const shot = await screenshot(win, outDir, `${view.name}-${theme}.png`)
       files.push(shot.file)
 
@@ -1180,6 +1519,14 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
         files.push(...(await shootShellHeights(win, outDir, theme, shellHeightBefore)))
       }
 
+      // The content pane again, in its other mode. The walk opens a harness,
+      // which defaults to curated, so the file tree is a state rather than a
+      // view and no click in the itinerary reaches it.
+      if (view.name === 'content') {
+        const treeShot = await shootContentTree(win, outDir, theme)
+        if (treeShot !== null) files.push(treeShot)
+      }
+
       // The history pane again, two clicks in: the archived transcript, and a
       // session whose conversation was gone before Helm existed. Neither is
       // reachable from the list shot above, which is the list.
@@ -1195,6 +1542,11 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
       // empty, and the app's only dashed border - which is exactly the kind of
       // hairline that can read as a tone in one theme and as a gap in the other.
       if (view.name === 'pulls') {
+        // The busy pane first, because it is the one this walk could not reach
+        // at all before: a machine with one open pull request never draws the
+        // ACTIVE/STALE split, the stale chips or a group with anything in it.
+        files.push(...(await shootPullsDense(win, outDir, theme, ctx, staleBefore)))
+
         const ignored = await shootIgnored(win, outDir, theme, ignoredBefore)
         if (ignored !== null) files.push(ignored)
 

@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import type { ClaudeInventory, GitState, Project, ProjectKind } from '../types'
 import { EMPTY_INVENTORY } from '../types'
 import type { Store } from './db'
@@ -43,6 +43,34 @@ export function cacheProjects(store: Store, found: Project[]): void {
     }
   })
   write()
+}
+
+/**
+ * Drops rows by path, and the only way a project leaves this table.
+ *
+ * Which paths is not this function's decision - `disprovedProjectPaths` and
+ * `orphanedProjectPaths` in `discovery/scan.ts` are where that argument lives,
+ * because it is a claim about what a scan proved rather than about storage.
+ * Compared case-insensitively for the same reason every other path comparison
+ * here is: the row was written from a picker, and the caller may be holding a
+ * different spelling of the same Windows directory.
+ */
+export function forgetProjects(store: Store, paths: readonly string[]): number {
+  if (paths.length === 0) return 0
+  const wanted = new Set(paths.map((path) => path.toLowerCase()))
+  const doomed = store.db
+    .select({ path: projects.path })
+    .from(projects)
+    .all()
+    .map((row) => row.path)
+    .filter((path) => wanted.has(path.toLowerCase()))
+  if (doomed.length === 0) return 0
+
+  const remove = store.raw.transaction(() => {
+    for (const path of doomed) store.db.delete(projects).where(eq(projects.path, path)).run()
+  })
+  remove()
+  return doomed.length
 }
 
 export interface CachedProject extends Project {

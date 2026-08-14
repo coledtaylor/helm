@@ -25,6 +25,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { isolate } from './isolate.mjs'
+import { auditReport, reportAudit } from './report-audit.mjs'
 
 const { dataDir, env, root } = isolate('sessions')
 console.log(`sessions-check is running against ${root}`)
@@ -65,4 +66,29 @@ const verify = spawnSync(
   { stdio: 'inherit', env }
 )
 
-process.exit(status !== 0 ? status : restartStatus !== 0 ? restartStatus : (verify.status ?? 1))
+// Nothing that ran failed. Whether *everything* ran is a different question,
+// and it is the one this asks - a phase that returned early leaves a short
+// report that every check above passes. Both phases' reports together, because
+// an id only the second start can produce is not missing from the first's.
+const auditOnly = process.argv.slice(2).find((a) => a.startsWith('--only='))
+const bothPhases = [join(dataDir, 'sessions-report.json'), restartPath]
+  .filter((p) => existsSync(p))
+  .flatMap((p) => JSON.parse(readFileSync(p, 'utf8')).checks ?? [])
+const complete = reportAudit(
+  'sessions-check',
+  auditReport({
+    driver: 'sessionscheck.ts',
+    checks: bothPhases,
+    only: auditOnly?.slice('--only='.length)
+  })
+)
+
+process.exit(
+  status !== 0
+    ? status
+    : restartStatus !== 0
+      ? restartStatus
+      : !complete
+        ? 1
+        : (verify.status ?? 1)
+)

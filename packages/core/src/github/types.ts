@@ -694,6 +694,36 @@ export interface PullsSnapshot {
 export const PR_POLL_MINUTES = { min: 5, max: 1440, default: 5, off: 0 } as const
 
 /**
+ * How long a pull request may sit untouched before the Pulls pane files it
+ * under STALE rather than ACTIVE, in days.
+ *
+ * **Two, and the default is a claim about a working day rather than about pull
+ * requests.** A pull request touched today or yesterday is work in flight, and
+ * the question this pane is read to answer - which of these needs attention -
+ * is answered by that set. One that has survived a whole working day with
+ * nothing happening to it has stopped being in flight and become something to
+ * come back to, which is a different kind of row and belongs in a different
+ * bucket. The two neighbouring values are both worse for a reason that can be
+ * stated: at 1 every pull request opened on a Friday afternoon is stale by
+ * Monday morning, so the split would be wrong about the most ordinary week
+ * there is; at 7 almost nothing reaches the stale half and the split buys
+ * nothing. It is a setting rather than a constant because the right answer is a
+ * judgement about the user's own working rhythm - see `prStaleDays`.
+ *
+ * The ceiling is ninety days rather than unbounded: past a quarter, "untouched
+ * for this long" has stopped being a statement about attention and the pane
+ * would be sorting by archaeology. The floor is one day because the unit is
+ * days, and an hours-granularity cutoff is a different setting than this one.
+ *
+ * **`0` is off and sits outside the range, not at the bottom of it** - the same
+ * shape and the same argument as `PR_POLL_MINUTES`: a cutoff and *no cutoff at
+ * all* are different states. Off means the Open section reverts to the single
+ * flat list it was before this split existed, which is also the state that
+ * makes the whole feature's no-regression claim trivially checkable.
+ */
+export const PR_STALE_DAYS = { min: 1, max: 90, default: 2, off: 0 } as const
+
+/**
  * How many repositories the ignore list may name.
  *
  * A ceiling on a setting that is written whole on every toggle rather than a

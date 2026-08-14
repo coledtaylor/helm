@@ -8,10 +8,21 @@ export {
 } from './components/ConfigConsole'
 export { ConfigEditor, type ConfigEditorProps } from './components/ConfigEditor'
 export {
+  ConfigDeleteDialog,
+  ConfigDeletedNotice,
+  ConfigNewDialog,
+  ConfigRenameDialog,
+  type ConfigDeleteDialogProps,
+  type ConfigDeletedNoticeProps,
+  type ConfigNewDialogProps,
+  type ConfigRenameDialogProps
+} from './components/ConfigFileDialogs'
+export {
   ContentViewer,
   ContentNothingSelected,
   type ContentViewerProps
 } from './components/ContentViewer'
+export { ContentTreeList, type ContentTreeListProps } from './components/ContentTreeList'
 export {
   ContentDocumentPane,
   type ArtifactConsoleEntry,

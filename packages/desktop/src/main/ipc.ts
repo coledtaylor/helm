@@ -1,7 +1,9 @@
 import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron'
-import { isAbsolute, relative } from 'node:path'
 import {
   createHarness,
+  forgetProjects,
+  isWithin,
+  orphanedProjectPaths,
   readArchivedConversation,
   readHistoryProjects,
   readHistoryPrompts,
@@ -116,15 +118,6 @@ export interface IpcContext {
    * is simulated without going anywhere near the user's real one.
    */
   claudeHome?: string | undefined
-}
-
-/**
- * Whether `path` is `root` or sits under it, compared case-insensitively
- * because two spellings of the same Windows directory are the same directory.
- */
-function isWithin(root: string, path: string): boolean {
-  const within = relative(root, path)
-  return within === '' || (!within.startsWith('..') && !isAbsolute(within))
 }
 
 export function registerIpc(ctx: IpcContext): void {
@@ -247,6 +240,20 @@ export function registerIpc(ctx: IpcContext): void {
         (existing) => existing.toLowerCase() !== path.toLowerCase()
       )
       const next = updateSettings(services, { scanRoots: merged })
+      // The rows this root put in the discovery cache go with it. Nothing else
+      // can take them: the next scan does not walk a root that is no longer a
+      // root, so a row left here would go on painting at every start, in a tree
+      // that no longer holds it once the scan lands - the flicker being the
+      // small half of it, and "Helm still lists a folder I removed" the rest.
+      // Rows a *remaining* root still covers are kept; see `orphanedProjectPaths`.
+      forgetProjects(
+        services.store,
+        orphanedProjectPaths(
+          cachedProjects(services).map((project) => project.path),
+          path,
+          next.scanRoots
+        )
+      )
       emit(ctx.window(), 'settings:changed', next)
       return next.scanRoots
     },
@@ -422,6 +429,7 @@ export function registerIpc(ctx: IpcContext): void {
     'config:scopes': () => ctx.config.scopes(),
     'config:tree': ({ scopePath }) => ctx.config.tree(scopePath),
     'config:read': ({ path }) => ctx.config.read(path),
+    'config:render': ({ path, source }) => ctx.config.render(path, source),
     // Every byte Helm writes into a `.claude` tree goes through this one
     // handler, which is what makes "no write without a snapshot" a property of
     // the app rather than of whoever remembered to take one.
@@ -432,6 +440,13 @@ export function registerIpc(ctx: IpcContext): void {
     'config:watch': ({ path }) => {
       ctx.config.watch(path)
     },
+
+    // The other three things a directory supports. They reach the same
+    // snapshot-first path `config:write` does; what is new here is the
+    // question, not a second route to the disk.
+    'config:create': (request) => ctx.config.create(request),
+    'config:rename': (request) => ctx.config.rename(request),
+    'config:delete': (request) => ctx.config.remove(request),
 
     'config:effective': (request) => ctx.config.effective(request),
 
@@ -486,13 +501,17 @@ export function registerIpc(ctx: IpcContext): void {
 
     'content:scopes': () => ctx.content.scopes(),
     'content:tree': ({ scopePath, refresh }) => ctx.content.tree(scopePath, refresh ?? false),
+    'content:dir': ({ scopePath, relPath }) => ctx.content.dir(scopePath, relPath),
     'content:document': ({ scopePath, path }) => ctx.content.document(scopePath, path),
     'content:render': ({ scopePath, path, source }) => ctx.content.render(scopePath, path, source),
     'content:search': ({ scopePath, query }) => ctx.content.search(scopePath, query),
     'content:write': (request) => ctx.content.write(request),
     'content:snapshots': ({ scopePath, path }) => ctx.content.snapshots(scopePath, path),
     'content:restore': ({ id, path }) => ctx.content.restore(id, path),
-    'content:artifact': ({ path }) => ctx.content.artifact(path),
+    'content:artifact': ({ scopePath, path }) => ctx.content.artifact(scopePath, path),
+    'content:wikilink': ({ scopePath, target, from }) => ({
+      path: ctx.content.wikilink(scopePath, target, from)
+    }),
 
     // A link in a note is the user's, not Helm's, so it opens where they expect
     // links to open. The scheme check is the whole security of this handler:

@@ -1,7 +1,7 @@
 import { app, nativeTheme, type BrowserWindow } from 'electron'
 import Database from 'better-sqlite3'
 import { execFileSync } from 'node:child_process'
-import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readSettings, type AppSettings } from '@helm/core'
 import {
@@ -186,6 +186,26 @@ function rawRow(dbFile: string, key: keyof AppSettings): string | undefined {
       | { value: string }
       | undefined
     return row?.value
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * Every path in the discovery cache, read by this driver's own connection.
+ *
+ * The `projects` table rather than `app_settings`, and it is a different claim
+ * from the settings one: a root can leave the setting and leave the tree while
+ * its rows sit in the cache, and those rows are what the launcher paints from
+ * before the first scan of the next start lands. "Removed" that leaves them
+ * behind is removed until you restart.
+ */
+function cachedProjectPaths(dbFile: string): string[] {
+  const db = new Database(dbFile, { readonly: true, fileMustExist: true })
+  try {
+    return (db.prepare('SELECT path FROM projects').all() as Array<{ path: string }>).map(
+      (row) => row.path
+    )
   } finally {
     db.close()
   }
@@ -417,6 +437,34 @@ async function clickProject(win: BrowserWindow, path: string): Promise<boolean> 
         .find((b) => b.title === ${JSON.stringify(path)});
       if (!el) return false; el.click(); return true })()`
   )
+}
+
+/**
+ * Close a project's tab, the way a person does: the X beside it.
+ *
+ * A group that opens a project pane has to close it again, and the reason is
+ * not tidiness. A project tab holds a **project shell**, which lives in
+ * `pterms.ts` outside React and outlives every render - so a pane left open is
+ * a pty still in the registry when a later group counts terminals.
+ *
+ * That is how `S-22` broke `S-10`: two panes opened here, two shells left
+ * behind, and `shells.length === 2` was 4 by the time the terminal group asked.
+ * `S-10` was right and the app was right; this is the probe that was wrong. The
+ * same shape is on record in the `checks` skill - "S-10 was counting terminals
+ * it never started" - from the last time inherited workspace state reached it.
+ *
+ * Matched in JavaScript rather than by a CSS attribute selector, like
+ * `clickProject` above: `data-tab` carries a Windows path and a backslash in a
+ * selector is an escape.
+ */
+async function closeProjectTab(win: BrowserWindow, path: string): Promise<boolean> {
+  return js<boolean>(
+    win,
+    `(() => { const tab = [...document.querySelectorAll('[role="tab"]')]
+        .find((t) => t.dataset.tab === 'project:' + ${JSON.stringify(path)});
+      const close = tab?.parentElement?.querySelector('button[aria-label^="Close "]');
+      if (!close) return false; close.click(); return true })()`
+  ).catch(() => false)
 }
 
 /** Focus a field, replace what is in it, and commit with Enter. Real keystrokes. */
@@ -801,6 +849,16 @@ interface Fixtures {
   pinProjects: string[]
   /** A path under `pinRoot` that was never created. Pinnable, never found. */
   pinGone: string
+  /**
+   * A folder somebody would add meaning *this one*: subdirectories, and not a
+   * project among them. The shape the folder-root bug turned into four rows.
+   *
+   * `leafChildren` is what the old rule would have listed, and S-22 asserts it
+   * is non-empty before believing "exactly one row" - a folder with nothing in
+   * it would pass that claim without discriminating anything.
+   */
+  leafRoot: string
+  leafChildren: string[]
 }
 
 function buildFixtures(dataDir: string): Fixtures {
@@ -834,6 +892,15 @@ function buildFixtures(dataDir: string): Fixtures {
   }
   // Deliberately not created. This is the pinned path whose folder has gone.
   const pinGone = join(pinRoot, 'pin harness one', 'repos', 'unplugged drive')
+
+  // A tool directory, with a space in its name like the rest of these. Nothing
+  // in it carries `.git`, `.claude` or a `CLAUDE.md`, which is what makes it a
+  // folder rather than a folder *of* projects - and what the four rows in the
+  // bug report were.
+  const leafRoot = join(dir, 'leaf tool')
+  const leafChildren = ['data', 'src', 'tests'].map((name) => join(leafRoot, name))
+  for (const path of leafChildren) mkdirSync(path, { recursive: true })
+  writeFileSync(join(leafRoot, 'pyproject.toml'), '[project]\nname = "leaf tool"\n')
 
   const stubDir = join(dir, 'stub')
   mkdirSync(stubDir, { recursive: true })
@@ -878,7 +945,9 @@ function buildFixtures(dataDir: string): Fixtures {
     termProjects,
     pinRoot,
     pinProjects,
-    pinGone
+    pinGone,
+    leafRoot,
+    leafChildren
   }
 }
 
@@ -1052,6 +1121,7 @@ export async function runSettingsChecks(
          ghLocate: Boolean(document.querySelector('[data-settings-gh-locate]')),
          ghClear: Boolean(document.querySelector('[data-settings-clear-gh]')),
          prPoll: Boolean(document.querySelector('[data-settings-pr-poll]')),
+         prStale: Boolean(document.querySelector('[data-settings-pr-stale]')),
          // The block, not the count beside it: the count is only there when a
          // github.com repository has been found, and this check runs on
          // whatever machine it runs on.
@@ -1435,6 +1505,159 @@ export async function runSettingsChecks(
         'losing exactly the removed roots two projects is the thing worth proving.',
         'The fixture is asserted to have been contributing those projects first.',
         'Both fixture roots contain a path with a space in it - Windows-first.'
+      ]
+    })
+
+    // -----------------------------------------------------------------------
+    // S-22: the folder you add is the row you get, and its own pane takes it
+    // back out
+    // -----------------------------------------------------------------------
+    //
+    // Two failures in one report, and they are asserted end to end here rather
+    // than one level down, because both of them were invisible one level down:
+    // `scan` was doing exactly what it said, the setting held exactly the path
+    // that was picked, and what the user got was four rows named after a Python
+    // source tree and no way to be rid of them.
+    //
+    // The fixture has to discriminate. `leafChildren` is what the old rule
+    // listed, so it is asserted non-empty first: a folder with nothing under it
+    // would satisfy "exactly one row" while proving nothing at all.
+    const leafSubdirs = readdirSync(fixtures.leafRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(fixtures.leafRoot, entry.name).toLowerCase())
+
+    answerPicker('directory', fixtures.leafRoot)
+    await click(win, '[data-settings-add-root]')
+    await pollJs(win, byData('settings-root', fixtures.leafRoot), 20_000)
+    await pollJs(
+      win,
+      `[...document.querySelectorAll('aside nav button[title]')]
+        .some((b) => b.title.toLowerCase() === ${JSON.stringify(fixtures.leafRoot.toLowerCase())})`,
+      45_000
+    )
+    await sleep(600)
+
+    const leafRows = (await sidebarPaths(win)).filter((path) =>
+      path.toLowerCase().startsWith(fixtures.leafRoot.toLowerCase())
+    )
+
+    // The pane, and the control that is only on it because this project is a
+    // root. The converse matters as much: the same pane opened on a project
+    // that is *inside* a root must not offer it, or "the panel is on every
+    // pane" would pass this.
+    const paneOpened = await clickProject(win, fixtures.leafRoot)
+    await pollJs(win, `document.querySelector('[data-project-panel="scan-root"]')`, 15_000)
+    const removeOnRoot = await js<boolean>(
+      win,
+      `document.querySelector('[data-project-remove-root]') !== null`
+    ).catch(() => false)
+    const leafShot = await screenshot(win, shotDir, 'settings-22-scanned-folder.png')
+
+    const insideRoot = fixtures.aProjects[0] ?? ''
+    await clickProject(win, insideRoot)
+    await pollJs(win, `document.querySelector('[data-project-pane]')`, 15_000)
+    await sleep(400)
+    const removeOnChild = await js<boolean>(
+      win,
+      `document.querySelector('[data-project-remove-root]') !== null`
+    ).catch(() => true)
+
+    // Back to the folder, and out through its own button.
+    await clickProject(win, fixtures.leafRoot)
+    await pollJs(win, `document.querySelector('[data-project-remove-root]')`, 15_000)
+    const cachedBefore = cachedProjectPaths(dbFile).filter((path) =>
+      path.toLowerCase().startsWith(fixtures.leafRoot.toLowerCase())
+    )
+    const removedFromPane = await click(win, '[data-project-remove-root]')
+    const leafRowGone = await pollJs(
+      win,
+      `[...document.querySelectorAll('aside nav button[title]')]
+        .every((b) => !b.title.toLowerCase().startsWith(${JSON.stringify(
+          fixtures.leafRoot.toLowerCase()
+        )}))`,
+      45_000
+    )
+    await sleep(800)
+
+    const rootsAfterPaneRemove = rowValue(dbFile, 'scanRoots') as string[] | undefined
+    const cachedAfter = cachedProjectPaths(dbFile).filter((path) =>
+      path.toLowerCase().startsWith(fixtures.leafRoot.toLowerCase())
+    )
+
+    // The workspace goes back to how this group found it. Opening a project
+    // pane starts a project shell that outlives every render, so a pane left
+    // open here is a pty in the registry when a later group counts them - which
+    // is exactly how this probe broke `S-10`. See `closeProjectTab`.
+    //
+    // The leaf root's own tab is already gone: removing a folder drops it from
+    // discovery and the pane goes with it. `insideRoot` is the one this group
+    // has to put back, and the close is asserted rather than fired and
+    // forgotten, since a cleanup that silently did nothing is how the next
+    // group inherits the same problem.
+    const tidiedUp = await closeProjectTab(win, insideRoot)
+    await sleep(500)
+    const panesLeftOpen = await js<string[]>(
+      win,
+      `[...document.querySelectorAll('[role="tab"]')]
+        .map((t) => t.dataset.tab ?? '')
+        .filter((id) => id.startsWith('project:') &&
+          id.toLowerCase().includes(${JSON.stringify(
+            fixtures.dir.toLowerCase()
+          )}))`
+    ).catch(() => ['<unreadable>'])
+
+    checks.push({
+      id: 'S-22',
+      criterion: 'A folder added as a root is itself the row, and its pane can remove it',
+      title: `One row for a folder with ${String(leafSubdirs.length)} subdirectories, removed again from its own pane`,
+      ok:
+        leafSubdirs.length > 1 &&
+        leafRows.length === 1 &&
+        leafRows[0]?.toLowerCase() === fixtures.leafRoot.toLowerCase() &&
+        paneOpened &&
+        removeOnRoot &&
+        !removeOnChild &&
+        cachedBefore.length === 1 &&
+        removedFromPane &&
+        leafRowGone &&
+        !(rootsAfterPaneRemove ?? []).some(
+          (root) => root.toLowerCase() === fixtures.leafRoot.toLowerCase()
+        ) &&
+        cachedAfter.length === 0 &&
+        // The folder is still there. Removal is a change to a setting and
+        // nothing else, and the panel says so in those words.
+        existsSync(fixtures.leafRoot) &&
+        leafSubdirs.every((path) => existsSync(path)) &&
+        // And this group left the workspace as it found it.
+        tidiedUp &&
+        panesLeftOpen.length === 0,
+      detail: {
+        leafRoot: fixtures.leafRoot,
+        subdirectoriesTheOldRuleWouldHaveListed: leafSubdirs,
+        sidebarRowsForIt: leafRows,
+        removeControl: { onTheRoot: removeOnRoot, onAProjectInsideARoot: removeOnChild },
+        cachedRows: { before: cachedBefore, after: cachedAfter },
+        rootsAfterPaneRemove,
+        stillOnDisk: existsSync(fixtures.leafRoot),
+        leftTheWorkspaceAsItFoundIt: { closedTheProjectPane: tidiedUp, panesLeftOpen },
+        screenshot: leafShot.file
+      },
+      notes: [
+        'The reported bug: a folder added as a scan root listed its subdirectories',
+        'and never itself. The fixture is a directory of three ordinary folders,',
+        'asserted to exist first - "exactly one row" over an empty folder is a',
+        'claim about nothing.',
+        'Removal goes through the button on the project pane, and the verdict is',
+        'read from the database file by this driver: the setting lost the root,',
+        'and the `projects` rows under it - what the launcher paints from before',
+        'the next scan lands - are gone with it. Both are asserted to have been',
+        'there beforehand.',
+        'The folder and every subdirectory are still on disk afterwards, which is',
+        'what the panel promises in the words next to the button.',
+        'The two project panes this opens are closed again before it returns. A',
+        'project tab holds a shell that outlives every render, so a pane left',
+        'open is a pty a later group counts - which is how this probe broke S-10',
+        'the first time it ran in a full pass.'
       ]
     })
   }
@@ -2561,6 +2784,15 @@ export async function runSettingsChecks(
         why: 'a one-minute sweep is one gh per remote against the user’s own rate limit'
       },
       {
+        key: 'prStaleDays',
+        good: 7,
+        // Not "too small" - zero is legal and means no split at all. Past the
+        // ceiling is the interesting rejection: at four months the cutoff has
+        // stopped being a statement about attention.
+        bad: 120,
+        why: 'a cutoff past a quarter is sorting by archaeology rather than by attention'
+      },
+      {
         key: 'prIgnoredRepos',
         good: ['acme/widget'],
         // Two spellings of one repository. The matcher is case-insensitive, so
@@ -3057,6 +3289,16 @@ export async function runSettingsChecks(
           shellStarted: shellUp,
           shellNameInHeader,
           sessionStarted: sessionUp,
+          // Every gate in `ok` is now reported, which four of them were not.
+          // This check failed once with `secondShellUp` false and *every*
+          // scalar in the detail identical to a passing run, because the gate
+          // that went false was not among them - the diagnosis had to start
+          // from two registry dumps and a guess. A conjunction of twenty-two
+          // booleans owes the report all twenty-two.
+          sessionLaunchClicked: launched,
+          everyTerminalTookTheSize: everyTerminalResized,
+          sizeLandedInTheDatabase: sizeLanded,
+          hiddenPaneCameBack: shellVisible,
           hidTheShellByMaximizingTheSession: { clicked: shellHidden0, detached: shellWentAway },
           sizeChangedFrom: DEFAULT_TERMINAL.fontSize,
           sizeChangedTo: bigger,
@@ -3091,7 +3333,17 @@ export async function runSettingsChecks(
             agrees: cellAgrees
           },
           rewritingTheSameValueMovedNothing: idempotent,
-          preSpawnEstimate: { estimate, settledAfterFit: settled, tracks: estimateTracks }
+          preSpawnEstimate: {
+            secondShellUp,
+            // What the registry actually holds, and where each one came from.
+            // `secondShellUp` is a count - `shells.length === 2` - so the way
+            // it fails is a *third* shell somebody else opened, and the only
+            // useful thing to say about that is whose it is.
+            shellsOpen: ctx.pterm.list().map((entry) => entry.path),
+            estimate,
+            settledAfterFit: settled,
+            tracks: estimateTracks
+          }
         },
         notes: [
           'Every resize is captured by wrapping `sessions.resize` and',
@@ -4031,6 +4283,21 @@ export async function runSettingsChecks(
     await sleep(600)
     const rowWhenFifteen = rowValue(dbFile, 'prPollMinutes')
 
+    // The stale cutoff, through its own picker and in the same shape: off
+    // first, because off is the state a select is likeliest to fail to
+    // represent - and here it is also the state that switches a whole section
+    // of the Pulls pane back off.
+    const staleOffered = await js<string[]>(
+      win,
+      `[...(document.querySelector('[data-settings-pr-stale]')?.options ?? [])].map((o) => o.value)`
+    )
+    const pickedStaleOff = await chooseOption(win, '[data-settings-pr-stale]', '0')
+    await sleep(600)
+    const rowWhenStaleOff = rowValue(dbFile, 'prStaleDays')
+    const pickedStaleWeek = await chooseOption(win, '[data-settings-pr-stale]', '7')
+    await sleep(600)
+    const rowWhenStaleWeek = rowValue(dbFile, 'prStaleDays')
+
     // The review launch's two settings, through the pane's own controls.
     // The template is typed rather than written, because a text field that
     // commits on blur has two ways to fail that a row write does not.
@@ -4105,6 +4372,13 @@ export async function runSettingsChecks(
         pickedFifteen.offered &&
         pickedFifteen.set &&
         rowWhenFifteen === 15 &&
+        staleOffered.includes('0') &&
+        pickedStaleOff.offered &&
+        pickedStaleOff.set &&
+        rowWhenStaleOff === 0 &&
+        pickedStaleWeek.offered &&
+        pickedStaleWeek.set &&
+        rowWhenStaleWeek === 7 &&
         typedTemplate &&
         rowAfterTyping === template &&
         resetDisabledWhenCustom === false &&
@@ -4153,6 +4427,11 @@ export async function runSettingsChecks(
           off: { picked: pickedOff, databaseRow: rowWhenOff },
           fifteen: { picked: pickedFifteen, databaseRow: rowWhenFifteen }
         },
+        staleCutoff: {
+          offeredValues: staleOffered,
+          off: { picked: pickedStaleOff, databaseRow: rowWhenStaleOff },
+          aWeek: { picked: pickedStaleWeek, databaseRow: rowWhenStaleWeek }
+        },
         reviewPrompt: {
           typed: typedTemplate,
           templateTyped: template,
@@ -4189,6 +4468,10 @@ export async function runSettingsChecks(
         'alone - nothing here or in the app opens a credential store.',
         'The interval is set through the select, including 0, which is the value',
         'that disarms the timer rather than a small number inside the range.',
+        'The stale cutoff is set the same way and for the same reason: 0 there is',
+        'the Pulls pane reverting to one flat Open list rather than a one-day',
+        'cutoff, so it is the value most worth watching round-trip. What the',
+        'setting then *does* to that pane is `pnpm pr-check`’s triage phase.',
         'The review prompt is typed into the field and committed the way a person',
         'commits it, then put back with Reset - and Reset is checked for being',
         'disabled at the built-in prompt, because a Reset that stays live is one',
@@ -4246,6 +4529,10 @@ export async function runSettingsChecks(
     // pointed at a working program, not at a stub that refuses to sign in.
     ...(whereIs('gh.exe')[0] !== undefined ? { ghPath: whereIs('gh.exe')[0] } : {}),
     prPollMinutes: 30,
+    // Off the default in the direction that is unambiguous. A week is a cutoff
+    // nobody's default produces, and unlike 0 it leaves the split switched on -
+    // so what the restart phase finds is a real value rather than an absence.
+    prStaleDays: 7,
     // A repository nobody has, on purpose. The setting is a list rather than a
     // scalar and JSON round-tripping an array through one `app_settings` row is
     // the half of it worth restarting for; naming a repository that exists

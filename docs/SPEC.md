@@ -265,6 +265,73 @@ Read what Claude writes without a detour through Explorer and a text editor.
 - Full-text search across notes and skills
 - Edit-in-place with a split preview
 
+#### Two modes, because a harness and a project are different questions
+
+> [!note] Amended 2026-08-14 - the scope split
+> The list above describes one surface, and building it produced **two**. Root
+> discovery - the four named directories, then any other top-level directory
+> that turned out to hold something readable - is a **curation** model, and
+> curation is only correct for a harness. A harness's directories *are* the
+> agent's knowledge layer, so "which of these is worth reading" has an answer.
+>
+> In a project the same rule produces neither a curated set nor a complete one.
+> `packages/` appears because one package happens to carry a README; `src/`
+> does not appear at all; and nothing on screen says what was left out. An
+> arbitrary slice of a repository is worse than either extreme, and it is a
+> heuristic that cannot be tuned into rightness - every rule that admits `src/`
+> also admits `node_modules/`.
+>
+> So the pane has two modes and the scope's kind picks **only the default**:
+>
+> | | **Curated** | **Tree** |
+> |---|---|---|
+> | default for | a harness | a project |
+> | offers | the four named roots, plus any other top-level directory a walk found content in | every entry, one directory per expand |
+> | order | newest first inside a root - a notes directory is a journal | directories then names, the way a file tree is read |
+> | bounds | an eager walk, `MAX_DEPTH` and `MAX_FILES` | none; nothing is read until it is opened |
+> | omits | `repos/` - each repo is a scope in its own right | nothing. Ignored paths are listed, greyed and badged |
+> | carries | wikilinks, frontmatter chips, full-text search | - |
+>
+> **Neither mode is locked to a kind.** A harness with a large `tools/` is worth
+> walking as a tree, and a project's `docs/` is still a vault. The mode is a
+> segmented control in the header with a caption naming the active rule, and it
+> is remembered per scope.
+>
+> Three things the split forced, and they are the substance of it:
+>
+> - **Curation decides which *directories* are offered. It never decides which
+>   files inside one are shown.** The old `contentFileKind` returned null for
+>   anything it did not recognise and the walk used that as a filter, so an
+>   agent's own `tools/*.py` was invisible in the pane meant for reading what
+>   the agent wrote. A file's kind now decides how it **opens** - `source` and
+>   `binary` join the four - and never whether it is **listed**. This is the
+>   rule the config tree already drew with `TEXT_EXT`.
+> - **Root discovery counts source as content**, so a directory holding nothing
+>   but scripts is a found root. Binary still does not: a directory of PNGs is
+>   not a place to go reading. And a **named root that is empty stays listed**
+>   and says so, because dropping it would be the same silent omission one level
+>   further down.
+> - **Both modes carry a count in the header** - files and roots for curated,
+>   top-level entries and ignored for the tree. That count is the direct answer
+>   to "nothing on screen says what was left out".
+>
+> What the tree ignores is the **repository's** decision, not Helm's:
+> `git check-ignore` is asked, so nested `.gitignore` files, `.git/info/exclude`
+> and negations are all exactly right without a second implementation of a
+> format that is easy to get subtly wrong. Where there is no git the built-in
+> list takes over, and the pane says which of the two answered. Symlinked
+> directories are listed and never followed, in both modes and for the reason
+> the config tree does not follow them either: an overlay shim's junction points
+> back into a real repository.
+>
+> **Full-text search stays the vault's feature.** Its corpus is the curated
+> roots in both modes, and the status row says so along with which kinds had
+> their bytes read - markdown, data, text and source, with names matched for
+> every file and binary never read. Source is in because "where did the agent
+> define X" is a vault question. Extending the corpus to everything a tree can
+> reach would make it a code search engine over `node_modules`, which is a
+> different product.
+
 ### 4.4 Terminal
 
 `xterm.js` + `node-pty` hosting the **real** `claude` TUI, in tabs. Helm renders no
@@ -327,7 +394,10 @@ the theme toggle, laid out as one scrolling page of titled groups:
 
 - **Claude CLI** - the resolved executable, its version and whether that version
   is inside the tested range, "Locate manually…", and **Clear override**
-- **Workspace** - the scan roots, with add *and remove*
+- **Workspace** - the scan roots, with add *and remove*. Not the only way out
+  any more: a folder that is itself a root carries the same removal on its own
+  project pane - the "Scanned folder" panel, in 5's Portability note - which is
+  where somebody looking at a folder they want gone actually is
 - **Appearance** - theme, and what the status bar's usage segment shows
 - **Updates** - this build's version, the newest release Helm has heard of, one
   sentence saying which of five things is true of the pair, the launch-check
@@ -740,6 +810,29 @@ option open and is what makes the app genuinely portable.
   manifest; its optional `repos:` key names where the repositories are, so a
   folder that already holds repos at its top level can become one without
   hiding them.
+
+  > [!note] Amended 2026-08-14 - what "falls back to plain folders" means
+  > A root with no harness under it used to list its immediate children,
+  > always. That is right for a directory of repositories and wrong for a
+  > directory somebody picked meaning *this one*: adding a single tool
+  > directory put its `data`, `scripts`, `src` and `tests` in the launcher and
+  > nothing named after the folder that was picked.
+  >
+  > The container reading now needs evidence, and it comes off the children: a
+  > child carrying `.git`, `.claude` or `CLAUDE.md` says the root is a
+  > container and its siblings come with it. With none, the root is the
+  > project - **the folder you picked is the thing that appears**. Those three
+  > markers and no more; a list that grew to `package.json`, `pyproject.toml`
+  > and whatever is next would be wrong for every ecosystem not yet in it, and
+  > wrong silently. Every scan test from before the change passes unchanged,
+  > which is what says this only ever narrows the old rule.
+  >
+  > A folder can also be taken back out, from a **Scanned folder** panel on its
+  > own project pane - the Settings list of roots (4.5) was the only way, and
+  > it is not where somebody looking at a folder they want gone goes looking.
+  > Removal is a change to a setting: the rows go from the tree and from the
+  > discovery cache, and nothing on disk is touched, which the panel says in
+  > those words. `pnpm settings-check`'s S-22 is both halves.
 - **Portable install** - single `.exe`, app data beside it when portable,
   `%APPDATA%` when installed. Both install-tested by `pnpm packaging-check --only=package`;
   the NSIS build is per-user and needs no elevation. See [PACKAGING.md](PACKAGING.md).

@@ -1,9 +1,11 @@
 import type { JSX, ReactNode } from 'react'
-import type { PullRepo, PullsSnapshot, PullSummary } from '@helm/core/types'
+import { useState } from 'react'
+import { PR_STALE_DAYS, type PullRepo, type PullsSnapshot, type PullSummary } from '@helm/core/types'
 import { cn } from '../lib/cn'
-import { formatAge } from '../lib/time'
+import { SEGMENT_ON } from '../lib/segmented'
+import { formatAge, formatMoment } from '../lib/time'
 import { PullRequestIcon, RefreshIcon, WarnIcon } from './icons'
-import { PullRow, useNow } from './PullRow'
+import { PullChecksTally, PullRow, PullStateDot, useNow } from './PullRow'
 
 /**
  * Every open pull request across the repositories Helm scans.
@@ -16,6 +18,47 @@ import { PullRow, useNow } from './PullRow'
  * carrying the repository it belongs to as a pill, and the repositories with
  * nothing open are named at the bottom as chips - present, checked, and taking
  * one line instead of eleven.
+ *
+ * That argument is about grouping that happens **on its own**, and it is why
+ * `None` is still the default: grouping by repository is now a control, and a
+ * control only spends height on headings when somebody asks it to. When they
+ * do it is honoured literally, one-row groups included - a mode you chose
+ * showing you a group of one is the mode working, where a threshold picking the
+ * shape for you re-lays the list out between two polls.
+ *
+ * The Open section is split the same way the pane itself is split: by **state
+ * of play**. `ACTIVE` is what has moved inside the `prStaleDays` cutoff and
+ * `STALE` is what has not, collapsed to one-line chips under a caption saying
+ * what stale means here. One rule decides the split and nothing else does -
+ * a pull request with red CI that nobody has touched for three days is exactly
+ * the row worth seeing, so the *signal* moves onto the chip (it keeps its state
+ * dot and its check tally) rather than the *rule* growing a second clause. A
+ * "stale unless red" rule would mean nobody could predict which section a row
+ * is in. `updatedAt` is nullable and a null lands in ACTIVE: this surface never
+ * files a row out of sight because it could not read a field. A cutoff of `0`
+ * is off, and off is the single flat `Open` list this pane rendered before any
+ * of this existed.
+ *
+ * **The filter and the grouping do not persist and are not settings.** They are
+ * reactions to a list that changes hourly - you filter to find the one you came
+ * for and the answer is stale an hour later - so they reset to empty and
+ * `None`. The cutoff is the opposite and is the only piece of this that is a
+ * preference: where a pull request stops being work in flight is a judgement
+ * about your own working rhythm, so it lives in Settings as `prStaleDays`.
+ *
+ * **`compact` keeps the filter and the split and drops the `GROUP` control.**
+ * Docked beside a session there is less height than anywhere else in the app,
+ * grouping is the control that spends height on headings, and the filter is
+ * worth more per pixel than any of the three: it removes rows rather than
+ * rearranging them.
+ *
+ * No count on this pane may contradict what is on screen beside it. Section
+ * counts follow the filter, the toolbar says `shown/total` while one is on, and
+ * a filter matching nothing gets a sentence of its own rather than borrowing
+ * "nothing open" - which would report a query as a fact about GitHub. The one
+ * number that does **not** move is the header's `9 open`: that is a fact about
+ * the server, where ACTIVE/STALE, the filter and the grouping are all Helm's
+ * arrangement of it.
  *
  * Below those sit the repositories being ignored, as dashed chips. They are
  * there because the setting that hides them is not allowed to hide *itself*: a
@@ -63,8 +106,19 @@ export interface PullsPaneProps {
    */
   onUnignoreRepo?: ((slug: string) => void) | undefined
   /**
+   * `prStaleDays`: how long a pull request may go untouched before it belongs
+   * under STALE rather than ACTIVE. `0` is off - one flat `Open` list.
+   *
+   * Required rather than defaulted, deliberately. The default belongs to
+   * `DEFAULT_SETTINGS` and nowhere else; a fallback here would be a second
+   * place for it to be written down, and the one that goes stale silently.
+   */
+  staleDays: number
+  /**
    * Docked beside a session split. The list is the whole pane either way; this
-   * only drops the columns there is no longer room for.
+   * only drops the columns there is no longer room for - and the `GROUP`
+   * control, which is the one that spends height on headings. See the file
+   * comment.
    */
   compact?: boolean | undefined
 }
@@ -121,6 +175,128 @@ interface OpenPull {
   pull: PullSummary
 }
 
+/** What the `GROUP` control offers. Three, so it is a segmented control. */
+const GROUP_MODES = [
+  { id: 'none', label: 'None' },
+  { id: 'repo', label: 'Repo' },
+  { id: 'author', label: 'Author' }
+] as const
+
+type GroupMode = (typeof GROUP_MODES)[number]['id']
+
+/**
+ * The filter, as one predicate over everything a row shows.
+ *
+ * The projects tree's behaviour rather than a second one of this pane's own: a
+ * case-insensitive substring, an empty query matching everything, and no
+ * syntax to learn. What differs is the set of fields, because the rows differ -
+ * a pull request is found by its number at least as often as by its title, so
+ * both `418` and `#418` find pull request 418, and the branch, the author and
+ * the repository are all things somebody types when they know the row exists
+ * and cannot see it.
+ */
+function matchesPull({ repo, pull }: OpenPull, query: string): boolean {
+  const needle = query.trim().toLowerCase()
+  if (needle === '') return true
+  const fields = [
+    pull.title,
+    String(pull.number),
+    `#${String(pull.number)}`,
+    pull.headRefName,
+    pull.baseRefName,
+    pull.author,
+    repo.name,
+    repo.slug ?? ''
+  ]
+  return fields.some((field) => field.toLowerCase().includes(needle))
+}
+
+/** Days as milliseconds. The one place this pane does date arithmetic. */
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/** A labelled division of one section's rows. `label` is null for `None`. */
+interface PullGroup {
+  key: string
+  label: string | null
+  /** The machine spelling beside the name - a slug, or nothing. */
+  sub: string | null
+  /** The group is a bot's, which is a fact about it and not part of its name. */
+  bot: boolean
+  /**
+   * The heading already names the repository, so the rows under it must not.
+   *
+   * DESIGN.md's source-pill rule: the pill appears only where rows have been
+   * flattened out of their groups. Grouping by repository puts them back into
+   * theirs, and a pill on every row would be the heading said once per row.
+   */
+  namesRepo: boolean
+  items: OpenPull[]
+}
+
+/**
+ * The rows, arranged the way the `GROUP` control says.
+ *
+ * `None` returns the flat list as one unlabelled group, so every section below
+ * renders through one path rather than branching on the mode - the difference
+ * between the modes is this function's business and not the pane's.
+ *
+ * Repository order comes from `repos`, which arrives busiest-first from core,
+ * so the grouping needs no second pass to know which repository to put first.
+ * Authors have no such order to borrow, so they are counted here: most pull
+ * requests first, ties by name, which is the same "busiest first" claim made
+ * about the other axis.
+ */
+function groupPulls(open: OpenPull[], mode: GroupMode, repos: readonly PullRepo[]): PullGroup[] {
+  if (mode === 'none' || open.length === 0) {
+    return [{ key: 'all', label: null, sub: null, bot: false, namesRepo: false, items: open }]
+  }
+  if (mode === 'repo') {
+    return repos
+      .map((repo) => ({
+        key: repo.path,
+        label: repo.name,
+        sub: repo.slug,
+        bot: false,
+        namesRepo: true,
+        items: open.filter((entry) => entry.repo.path === repo.path)
+      }))
+      .filter((group) => group.items.length > 0)
+  }
+  const byAuthor = new Map<string, OpenPull[]>()
+  for (const entry of open) {
+    const key = displayAuthor(entry.pull)
+    const held = byAuthor.get(key)
+    if (held === undefined) byAuthor.set(key, [entry])
+    else held.push(entry)
+  }
+  return [...byAuthor.entries()]
+    .sort(([aName, aItems], [bName, bItems]) =>
+      aItems.length === bItems.length
+        ? aName.localeCompare(bName)
+        : bItems.length - aItems.length
+    )
+    .map(([name, items]) => ({
+      key: `author:${name}`,
+      label: name,
+      sub: null,
+      // A bot says so beside its name rather than in it, exactly as the row
+      // does: `app/dependabot` is a login, and "bot" is the fact about it.
+      bot: items[0]?.pull.authorIsBot === true,
+      namesRepo: false,
+      items
+    }))
+}
+
+/** The author as a row paints it - a bot's `app/` prefix is not its name. */
+function displayAuthor(pull: PullSummary): string {
+  return pull.authorIsBot ? pull.author.replace(/^app\//, '') : pull.author
+}
+
+/** What `STALE` means, in the words of the cutoff that decided it. */
+function staleCaption(days: number): string {
+  return days === 1 ? 'No motion in a day or more.' : `No motion in ${String(days)}+ days.`
+}
+
 export function PullsPane({
   snapshot,
   onRefresh,
@@ -128,9 +304,18 @@ export function PullsPane({
   error = null,
   onOpenPull,
   onUnignoreRepo,
+  staleDays,
   compact = false
 }: PullsPaneProps): JSX.Element {
   const now = useNow()
+  // All three are the pane's own and none of them is written anywhere: a
+  // filter and an arrangement are reactions to this hour's list, and the
+  // section a user shut is a fact about the minute they shut it. The pane is
+  // unmounted when another one is shown, so they reset by construction rather
+  // than by anything having to remember to clear them.
+  const [query, setQuery] = useState('')
+  const [group, setGroup] = useState<GroupMode>('none')
+  const [staleShown, setStaleShown] = useState(true)
   const repos = snapshot?.repos ?? []
   const problem = snapshot?.gh.problem ?? null
 
@@ -152,6 +337,21 @@ export function PullsPane({
   // repo's pulls are already sorted, but neither of those orders one repo's
   // pull requests against another's.
   open.sort((a, b) => (b.pull.updatedAt ?? 0) - (a.pull.updatedAt ?? 0))
+
+  // What survives the filter, and then how it divides. In that order, so no
+  // count on screen can be about rows that are not: a section's number is the
+  // number of rows under it, always.
+  const shown = open.filter((entry) => matchesPull(entry, query))
+  const split = staleDays !== PR_STALE_DAYS.off
+  const cutoff = split ? now - staleDays * DAY_MS : null
+  // A null `updatedAt` is a field that could not be read, not a pull request
+  // nothing has happened to - so it stays in ACTIVE. This surface does not file
+  // a row out of sight on the strength of something it does not know.
+  const isStale = ({ pull }: OpenPull): boolean =>
+    cutoff !== null && pull.updatedAt !== null && pull.updatedAt < cutoff
+  const active = split ? shown.filter((entry) => !isStale(entry)) : shown
+  const stale = split ? shown.filter(isStale) : []
+  const filtering = query.trim() !== ''
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
@@ -208,17 +408,99 @@ export function PullsPane({
           </p>
         )}
 
+        {/* Above the list and outside the scroller, because a filter you have
+            to scroll to reach is a filter you lose the moment you use it. It is
+            about the Open section only, so it is absent when there is no list
+            to work on - an empty pane offering two controls over nothing is
+            furniture. */}
+        {repos.length > 0 && (
+          <div className="flex shrink-0 items-center gap-2 px-2 pt-2 pb-1.5">
+            <input
+              data-pulls-filter
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={compact ? 'Filter' : 'Filter by title, number, branch, author or repo'}
+              spellCheck={false}
+              aria-label="Filter pull requests"
+              className={cn(
+                'h-[26px] min-w-0 flex-1 rounded-well border border-border bg-surface-sunken px-2.5',
+                'text-[12px] text-fg placeholder:text-fg-subtle select-text transition-colors',
+                // The border *is* the focus indicator here (DESIGN.md 4), so
+                // there is no offset ring on top of it.
+                'hover:border-border-strong focus:border-accent focus:outline-none'
+              )}
+            />
+            {/* The projects tree's `shown/total`, and it is here for the reason
+                that one is: a filter that removes rows while the numbers around
+                it stay still is a pane quietly lying about what it holds. */}
+            {filtering && (
+              <span
+                data-pulls-filter-count={`${String(shown.length)}/${String(open.length)}`}
+                className="shrink-0 font-mono text-[10.5px] tabular-nums text-fg-subtle"
+              >
+                {shown.length}/{open.length}
+              </span>
+            )}
+            {/* Dropped in `compact` rather than squeezed: grouping is the
+                control that spends height on headings, and height is what a
+                docked pane has least of. See the file comment. */}
+            {!compact && (
+              // A little further from the field than the count beside it: two
+              // pieces of small grey text 8px apart read as one label, and
+              // `3/12` belongs to the field while `GROUP` belongs to what
+              // follows it.
+              <div className="ml-1 flex shrink-0 items-center gap-1.5">
+                <span
+                  id="pulls-group-label"
+                  className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase"
+                >
+                  Group
+                </span>
+                {/* A segmented control (DESIGN.md 4): a sunken well whose
+                    chosen segment lifts. Three choices, which is inside the
+                    two-to-four a segmented control is for. */}
+                <div
+                  role="group"
+                  aria-labelledby="pulls-group-label"
+                  className="flex gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
+                >
+                  {GROUP_MODES.map((mode) => (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      data-pulls-group={mode.id}
+                      aria-pressed={group === mode.id}
+                      onClick={() => setGroup(mode.id)}
+                      className={cn(
+                        'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
+                        group === mode.id ? SEGMENT_ON : 'text-fg-muted hover:text-fg'
+                      )}
+                    >
+                      {mode.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <div
           role="group"
           aria-label="Open pull requests"
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2"
+          className={cn(
+            'min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2',
+            // The toolbar above already stands off the island's edge; a second
+            // 8px under it would read as a gap between two things.
+            repos.length > 0 ? 'pt-0' : 'pt-2'
+          )}
         >
           {repos.length === 0 ? (
             <Empty snapshot={snapshot} ignored={ignored.length} />
           ) : (
             <>
               {failed.length > 0 && (
-                <Section label="Could not fetch" count={failed.length}>
+                <Section name="failed" label="Could not fetch" count={failed.length}>
                   <div className="mt-1 flex flex-col gap-1">
                     {failed.map((repo) => (
                       <button
@@ -240,29 +522,105 @@ export function PullsPane({
                 </Section>
               )}
 
-              <Section label="Open" count={open.length}>
-                {open.length === 0 ? (
-                  <p className="px-2 py-1.5 text-[11.5px] text-fg-subtle">
+              {open.length === 0 ? (
+                <Section name="open" label="Open" count={0}>
+                  <p data-pulls-empty="open" className="px-2 py-1.5 text-[11.5px] text-fg-subtle">
                     Nothing open in {repos.length === 1 ? 'this repository' : 'any of them'}.
                   </p>
-                ) : (
-                  <div className="mt-0.5">
-                    {open.map(({ repo, pull }) => (
-                      <PullRow
-                        key={`${repo.path}#${String(pull.number)}`}
-                        repo={repo}
-                        pull={pull}
+                </Section>
+              ) : shown.length === 0 ? (
+                /* Its own sentence, and not "nothing open" - which would report
+                   a query the user typed as a fact about GitHub. */
+                <Section name="open" label="Open" count={0}>
+                  <p data-pulls-empty="filter" className="px-2 py-1.5 text-[11.5px] text-fg-subtle">
+                    Nothing open matches that.{' '}
+                    <Count n={open.length} one="pull request is" many="pull requests are" /> hidden
+                    by the filter.
+                  </p>
+                </Section>
+              ) : !split ? (
+                /* `prStaleDays: 0`. One section, the same heading, the same
+                   flat recency order - the state this whole surface reverts to
+                   when the cutoff is off. */
+                <Section name="open" label="Open" count={shown.length}>
+                  <PullGroups
+                    groups={groupPulls(shown, group, repos)}
+                    now={now}
+                    compact={compact}
+                    {...(onOpenPull ? { onOpen: onOpenPull } : {})}
+                  />
+                </Section>
+              ) : (
+                <>
+                  <Section name="active" label="Active" count={active.length}>
+                    {active.length === 0 ? (
+                      <p
+                        data-pulls-empty="active"
+                        className="px-2 py-1.5 text-[11.5px] text-fg-subtle"
+                      >
+                        {/* "Everything open is below" is only true when
+                            nothing is filtered out, so it is only said then. A
+                            sentence that keeps claiming to account for the
+                            whole list while a filter is on is the same lie a
+                            count that does not follow the filter would be. */}
+                        {staleDays === 1
+                          ? 'Nothing has moved since yesterday.'
+                          : `Nothing has moved in ${String(staleDays)} days.`}{' '}
+                        {filtering ? 'What matches is below.' : 'Everything open is below.'}
+                      </p>
+                    ) : (
+                      <PullGroups
+                        groups={groupPulls(active, group, repos)}
                         now={now}
                         compact={compact}
                         {...(onOpenPull ? { onOpen: onOpenPull } : {})}
                       />
-                    ))}
-                  </div>
-                )}
-              </Section>
+                    )}
+                  </Section>
+
+                  {stale.length > 0 && (
+                    <Section
+                      name="stale"
+                      label="Stale"
+                      count={stale.length}
+                      caption={staleCaption(staleDays)}
+                      action={
+                        <button
+                          type="button"
+                          data-pulls-stale-toggle={staleShown ? 'shown' : 'hidden'}
+                          aria-expanded={staleShown}
+                          onClick={() => setStaleShown((was) => !was)}
+                          title={
+                            staleShown
+                              ? 'Collapse the stale pull requests'
+                              : 'Show the stale pull requests again'
+                          }
+                          className="rounded-well px-1.5 py-0.5 text-[10.5px] text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+                        >
+                          {staleShown ? 'Hide' : 'Show'}
+                        </button>
+                      }
+                    >
+                      {/* Chips rather than rows, which is the whole point of the
+                          section: a stale pull request is worth a line, not
+                          two. What it keeps is the state dot and the check
+                          tally - see the file comment on why the signal moves
+                          onto the chip instead of the rule growing a clause. */}
+                      {staleShown && (
+                        <StaleGroups
+                          groups={groupPulls(stale, group, repos)}
+                          now={now}
+                          {...(onOpenPull ? { onOpen: onOpenPull } : {})}
+                        />
+                      )}
+                    </Section>
+                  )}
+                </>
+              )}
 
               {quiet.length > 0 && (
                 <Section
+                  name="quiet"
                   label="Quiet repos"
                   count={quiet.length}
                   caption="Checked, nothing open."
@@ -300,6 +658,7 @@ export function PullsPane({
               own emptiness with a list of the reasons for it missing. */}
           {ignored.length > 0 && (
             <Section
+              name="ignored"
               label="Ignored"
               count={ignored.length}
               caption={
@@ -351,29 +710,256 @@ export function PullsPane({
  * at the far end of an empty 1200px line belongs to nothing.
  */
 function Section({
+  name,
   label,
   count,
   caption,
+  action,
   children
 }: {
+  /** Stable identity for a driver, since the labels are prose and move. */
+  name: string
   label: string
   count: number
   caption?: string
+  /**
+   * A control belonging to the whole section, pinned right.
+   *
+   * The count above stays in the label and this does not, and the two are not
+   * in tension: a number is *read*, so it belongs where the reading is, and a
+   * control is *reached*, so it belongs where the pointer expects one. Pinning
+   * the count right would leave a digit at the end of an empty line belonging
+   * to nothing; pinning the control right is where every other row in the app
+   * puts one.
+   */
+  action?: ReactNode
   children: ReactNode
 }): JSX.Element {
   return (
-    <section className="mb-3 last:mb-0">
+    <section data-pulls-section={name} className="mb-3 last:mb-0">
       <h2 className="flex items-baseline gap-2 px-2">
         <span className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
           {label}
         </span>
-        <span className="text-[10px] tabular-nums text-fg-subtle/70">{count}</span>
+        <span data-pulls-count className="text-[10px] tabular-nums text-fg-subtle/70">
+          {count}
+        </span>
         {caption !== undefined && (
           <span className="min-w-0 truncate text-[11px] text-fg-subtle">{caption}</span>
+        )}
+        {action !== undefined && (
+          <>
+            <span className="flex-1" />
+            {action}
+          </>
         )}
       </h2>
       {children}
     </section>
+  )
+}
+
+/**
+ * One section's pull requests as rows, under whatever headings the mode calls
+ * for.
+ *
+ * `None` arrives here as a single unlabelled group, so there is one render path
+ * rather than a branch per mode: which rows go together is `groupPulls`'s
+ * business, and what a group looks like is this one's.
+ */
+function PullGroups({
+  groups,
+  now,
+  compact,
+  onOpen
+}: {
+  groups: PullGroup[]
+  now: number
+  compact: boolean
+  onOpen?: ((repo: PullRepo, pull: PullSummary) => void) | undefined
+}): JSX.Element {
+  return (
+    <div className="mt-0.5">
+      {groups.map((group, at) => (
+        <div key={group.key} className={cn(group.label !== null && at > 0 && 'mt-2')}>
+          {group.label !== null && (
+            <GroupHeading
+              label={group.label}
+              sub={group.sub}
+              bot={group.bot}
+              count={group.items.length}
+            />
+          )}
+          {group.items.map(({ repo, pull }) => (
+            <PullRow
+              key={`${repo.path}#${String(pull.number)}`}
+              repo={repo}
+              pull={pull}
+              now={now}
+              compact={compact}
+              showRepo={!group.namesRepo}
+              {...(onOpen ? { onOpen } : {})}
+            />
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * The same arrangement, painted as one-line chips.
+ *
+ * No `compact` here, unlike the rows: a chip is already the reduced form and
+ * has nothing left to drop. Where the pane is narrow the titles truncate.
+ */
+function StaleGroups({
+  groups,
+  now,
+  onOpen
+}: {
+  groups: PullGroup[]
+  now: number
+  onOpen?: ((repo: PullRepo, pull: PullSummary) => void) | undefined
+}): JSX.Element {
+  return (
+    <div className="mt-1.5">
+      {groups.map((group, at) => (
+        <div key={group.key} className={cn(group.label !== null && at > 0 && 'mt-2')}>
+          {group.label !== null && (
+            <GroupHeading
+              label={group.label}
+              sub={group.sub}
+              bot={group.bot}
+              count={group.items.length}
+            />
+          )}
+          <div className="flex flex-wrap gap-1.5">
+            {group.items.map(({ repo, pull }) => (
+              <StaleChip
+                key={`${repo.path}#${String(pull.number)}`}
+                repo={repo}
+                pull={pull}
+                now={now}
+                // Only a heading naming the repository takes it off the chip.
+                // Not `compact`: this is the flattened list, so the repository
+                // is what says which list a row came out of (DESIGN.md's
+                // source-pill rule), and it is the last thing to drop when the
+                // pane narrows - the title truncates instead. Two repositories
+                // with the same branch convention produce identical titles.
+                showRepo={!group.namesRepo}
+                {...(onOpen ? { onOpen } : {})}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * A group's name, one step quieter than the section heading above it.
+ *
+ * Sentence case rather than the section's caps: these are names of things - a
+ * repository, a person - where ACTIVE and STALE are labels Helm invented, and
+ * the two must not read as the same rank. The count sits immediately after the
+ * name for the reason `Section`'s does, and the slug follows both rather than
+ * coming between them: a number after `owner/name` reads as part of the slug.
+ */
+function GroupHeading({
+  label,
+  sub,
+  bot,
+  count
+}: {
+  label: string
+  sub: string | null
+  bot: boolean
+  count: number
+}): JSX.Element {
+  return (
+    <div data-pulls-group-heading={label} className="flex items-baseline gap-1.5 px-2 pt-1 pb-0.5">
+      <span className="min-w-0 truncate text-[11px] text-fg-muted">{label}</span>
+      {bot && <span className="shrink-0 text-[10px] text-fg-subtle opacity-70">bot</span>}
+      <span data-pulls-group-count className="text-[10px] tabular-nums text-fg-subtle/70">
+        {count}
+      </span>
+      {sub !== null && (
+        <span className="min-w-0 truncate font-mono text-[10px] text-fg-subtle/70">{sub}</span>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A stale pull request, in one line.
+ *
+ * The same record as `PullRow` and deliberately the same identity -
+ * `data-pull`, the state dot, the check tally - because it is the same pull
+ * request and clicking it opens the same tab. What it drops is everything that
+ * is only useful while you are working on one: the diff stat, the branch pair,
+ * the review decision. What it keeps is what says whether it should have been
+ * left alone this long.
+ */
+function StaleChip({
+  repo,
+  pull,
+  now,
+  showRepo,
+  onOpen
+}: {
+  repo: PullRepo
+  pull: PullSummary
+  now: number
+  showRepo: boolean
+  onOpen?: ((repo: PullRepo, pull: PullSummary) => void) | undefined
+}): JSX.Element {
+  const age = pull.updatedAt === null ? null : formatAge(pull.updatedAt, now)
+  return (
+    <button
+      type="button"
+      data-pull={`${repo.slug ?? ''}#${String(pull.number)}`}
+      data-pull-stale=""
+      disabled={onOpen === undefined}
+      onClick={() => onOpen?.(repo, pull)}
+      title={
+        pull.updatedAt === null
+          ? pull.title
+          : `${pull.title} - updated ${formatMoment(pull.updatedAt)}`
+      }
+      className={cn(
+        'flex max-w-[min(100%,28rem)] items-baseline gap-1.5 rounded-well border border-border px-2 py-1',
+        'text-left transition-colors',
+        onOpen === undefined
+          ? 'cursor-default'
+          : 'hover:border-border-strong hover:bg-hover'
+      )}
+    >
+      <PullStateDot isDraft={pull.isDraft} />
+      <span className="shrink-0 font-mono text-[10.5px] tabular-nums text-fg-subtle">
+        #{pull.number}
+      </span>
+      <span className="min-w-0 truncate text-[11.5px] text-fg-muted">{pull.title}</span>
+      {showRepo && (
+        <span className="min-w-0 max-w-[8rem] shrink-0 truncate text-[10.5px] text-fg-subtle">
+          {repo.name}
+        </span>
+      )}
+      {age !== null && (
+        <>
+          <span aria-hidden className="shrink-0 text-[10.5px] text-fg-subtle/50">
+            ·
+          </span>
+          <span className="shrink-0 text-[10.5px] tabular-nums text-fg-subtle">{age}</span>
+        </>
+      )}
+      {pull.checks !== null && pull.checks.total > 0 && (
+        <span className="shrink-0 text-[10.5px]">
+          <PullChecksTally checks={pull.checks} />
+        </span>
+      )}
+    </button>
   )
 }
 

@@ -1,7 +1,10 @@
 import type { BrowserWindow } from 'electron'
+import { mkdirSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Check } from './fidelity'
 import type { CheckContext } from './sessionscheck'
 import { screenshot, sendMouse, sleep } from './bridge'
+import { dataDir } from './paths'
 
 /**
  * Does everything you can click look like something you can click?
@@ -132,6 +135,30 @@ const VIEWS: Array<{ name: string; open: readonly string[] | null; anchor: strin
   { name: 'welcome', open: null, anchor: 'aside nav button[title]' },
   { name: 'project', open: ['aside nav button[title]'], anchor: '[data-project-pane]' },
   { name: 'config', open: ['[data-open-config]'], anchor: '[data-config-scope]' },
+  /**
+   * A file open in the Files view, which is a *pane* rather than a view: the
+   * console's detail column paints nothing until a row is clicked, so its
+   * controls - the read/edit/source segments, the reveal button, the version
+   * list, Save, Revert, the path, Rename and Delete - were reachable by no
+   * walk at all. That is the coverage gap AFF-2 is named for, and the remedy
+   * the checks skill gives is a row here.
+   *
+   * Two branches added this row independently, for the two halves of that set:
+   * the detail pane's own segments and the create/rename/delete controls. One
+   * row measures both, so it is written once here rather than twice.
+   *
+   * The first row of whatever scope opens first, rather than a named file: the
+   * user scope's contents are the machine's. It is empty only on a machine
+   * where `claude` has never run, which every other config check assumes too.
+   * Taking the first row whatever it is means that on a scope whose first file
+   * is a `settings.json` this measures Rename *disabled* - which AFF-5 then has
+   * an opinion about, and which is the honest state of that control there.
+   */
+  {
+    name: 'config:file',
+    open: ['[data-open-config]', 'button[data-config-file]'],
+    anchor: '[data-config-mode="read"]'
+  },
   // The config console's other three views. One click further in, and the pane
   // that holds the app's only two label-wrapped checkboxes and its MCP form -
   // which is to say, the controls least like the ones on the seven top views.
@@ -151,10 +178,46 @@ const VIEWS: Array<{ name: string; open: readonly string[] | null; anchor: strin
     anchor: '[data-run-doctor]'
   },
   { name: 'content', open: ['[data-open-content]'], anchor: '[data-content-scope]' },
+  // The content pane's other mode, and it has to be its own row for the reason
+  // the config console's three do: a file tree's rows are a control recipe that
+  // exists nowhere else in the app, and the pane's default is the curated view,
+  // so the walk above never draws one. AFF-2 is what says a control nothing
+  // measured is uncovered rather than fine.
+  {
+    name: 'content:tree',
+    open: ['[data-open-content]', '[data-content-view="tree"]'],
+    anchor: '[data-content-tree]'
+  },
   { name: 'history', open: ['[data-open-history]'], anchor: '[data-history-search]' },
   { name: 'pulls', open: ['[data-open-pulls]'], anchor: '[data-pulls-refresh]' },
   { name: 'settings', open: ['[data-open-settings]'], anchor: '[data-settings-pane]' }
 ]
+
+/**
+ * The project pane again, on a project that is one of the **scanned folders**.
+ *
+ * A view of its own because the panel that offers to remove a folder from Helm
+ * is only drawn for a project whose own path is a scan root, and whether the
+ * first row in somebody's tree happens to be one is a fact about their machine.
+ * Left to chance, the control would be measured on the developer's machine and
+ * on nobody else's, which is the coverage gap AFF-2 is named for wearing a
+ * disguise: `perView` would say `project=31` either way.
+ *
+ * So the state is planted rather than hoped for. The folder is created under
+ * this check's own data directory and added through the app's own
+ * `roots:accept` - the channel the welcome pane's "add this one" button uses,
+ * so the row arrives the way a user's would - and taken out again afterwards.
+ *
+ * The name has no backslash in it on purpose: the row is reached with a CSS
+ * suffix match on its `title`, and a Windows path in a selector is a string of
+ * escapes.
+ */
+const PLANTED_ROOT_DIRNAME = 'affordance scanned folder'
+const PLANTED_ROOT_VIEW = {
+  name: 'project:root',
+  open: [`aside nav button[title$="${PLANTED_ROOT_DIRNAME}"]`],
+  anchor: '[data-project-remove-root]'
+} as const
 
 /** Where the pointer rests between measurements: a corner of the title bar
  * drag region, which is not a control and never has been. */
@@ -198,6 +261,50 @@ async function click(win: BrowserWindow, selector: string): Promise<boolean> {
     `(() => { const el = document.querySelector(${JSON.stringify(selector)});
       if (!el) return false; el.click(); return true })()`
   )
+}
+
+/**
+ * Plants the scanned folder `PLANTED_ROOT_VIEW` needs, and returns the view.
+ *
+ * Two ordinary subdirectories in it and no project marker anywhere, so
+ * discovery lists the folder itself - one row, which is both what the folder
+ * rule says and what makes the row findable by name. Null if the row never
+ * arrives, and the walk then reports the view as unreached rather than
+ * silently skipping it: a plant that failed is a control nothing measured.
+ */
+async function plantScannedFolder(
+  win: BrowserWindow,
+  dataDir: string
+): Promise<(typeof PLANTED_ROOT_VIEW) | null> {
+  const root = join(dataDir, 'affordance-fixtures', PLANTED_ROOT_DIRNAME)
+  rmSync(join(dataDir, 'affordance-fixtures'), { recursive: true, force: true })
+  for (const child of ['docs', 'src']) mkdirSync(join(root, child), { recursive: true })
+
+  await js<unknown>(win, `window.helm.invoke('roots:accept', { path: ${JSON.stringify(root)} })`)
+  await js<unknown>(win, `window.helm.invoke('discovery:scan', { includeGit: false })`)
+
+  const deadline = Date.now() + 30_000
+  for (;;) {
+    const there = await js<boolean>(
+      win,
+      `document.querySelector(${JSON.stringify(PLANTED_ROOT_VIEW.open[0])}) !== null`
+    ).catch(() => false)
+    if (there) return PLANTED_ROOT_VIEW
+    if (Date.now() > deadline) {
+      console.error(`affordance-check: planted root never appeared in the tree: ${root}`)
+      return null
+    }
+    await sleep(400)
+  }
+}
+
+/** Takes the planted root back out, through the same channel the pane uses. */
+async function unplantScannedFolder(win: BrowserWindow, dataDir: string): Promise<void> {
+  const root = join(dataDir, 'affordance-fixtures', PLANTED_ROOT_DIRNAME)
+  await js<unknown>(win, `window.helm.invoke('roots:remove', { path: ${JSON.stringify(root)} })`).catch(
+    () => null
+  )
+  rmSync(join(dataDir, 'affordance-fixtures'), { recursive: true, force: true })
 }
 
 /** Every open tab closed, so `welcome` is a state the walk can get back to. */
@@ -442,6 +549,8 @@ export async function runAffordanceChecks(
   for (const n of proof.notes) console.log(`      ${n}`)
   if (!proof.ok) {
     checks.push({
+      // audit: optional - only reached when the planted probe failed, so a
+      // healthy run has no AFF-0 and `report-audit.mjs` must not want one.
       id: 'AFF-0',
       criterion: 'The walk ran',
       title: 'The audit was skipped: the probe did not prove itself',
@@ -469,7 +578,13 @@ export async function runAffordanceChecks(
   const quiet: Array<{ view: string; name: string; label: string; cursor: string; want: string }> = []
   let measured = 0
 
-  for (const view of VIEWS) {
+  // The one view whose state has to be arranged rather than clicked to. It is
+  // appended rather than sitting in `VIEWS` because the table is a constant and
+  // this entry only exists once the folder behind it does.
+  const planted = await plantScannedFolder(win, dataDir)
+  const views = planted === null ? [...VIEWS, PLANTED_ROOT_VIEW] : [...VIEWS, planted]
+
+  for (const view of views) {
     if (view.open === null) await closeAllTabs(win)
     else {
       let reached = true
@@ -547,7 +662,15 @@ export async function runAffordanceChecks(
         if (wanted.has('cursor') && m.hover.cursor !== 'pointer' && !spot.disabled) {
           noPointer.push({ ...spot, cursor: m.hover.cursor })
         }
-        if (wanted.has('hover')) {
+        // Disabled is exempt here for the same reason it is exempt from the
+        // cursor above, and the exemption is not a softening: `quiet` already
+        // makes the claim that belongs to a disabled button - it must *not*
+        // read as clickable. Requiring it to answer the pointer as well would
+        // be requiring one element to satisfy both halves of a contradiction,
+        // and the only way to pass both is to look pressable while doing
+        // nothing. Nothing had ever enumerated one until the config editor's
+        // Rename, which is disabled on a file the CLI finds by its exact name.
+        if (wanted.has('hover') && !spot.disabled) {
           const tier = tierOf(m.rest, m.hover)
           if (tier === 'none') noHover.push({ ...spot, tier })
           else if (tier === 'near') nearOnly.push({ ...spot, tier })
@@ -604,12 +727,41 @@ export async function runAffordanceChecks(
    * finding was originally reported as one dead hover and stopped being
    * reported at all when the star arrived, without the row changing.
    */
-  let selectedRow: { tier: Tier; label: string; restBg: string; hoverBg: string } | null = null
+  let selectedRow: {
+    tier: Tier
+    label: string
+    restBg: string
+    hoverBg: string
+    /** Chromium's own answer to "the pointer is on this". The positive control. */
+    hot: boolean
+  } | null = null
   if (wanted.has('hover')) {
     await closeAllTabs(win)
     await sleep(300)
+    // The tree is put back to the top first, and that is not tidiness. The walk
+    // clicks rows wherever they are, `el.click()` scrolls the last one into
+    // view, and a first row left scrolled off the top still answers
+    // `aria-current` and still reports a box - at coordinates the pointer then
+    // lands nowhere near. Both readings come back identical, which is exactly
+    // what a dead hover looks like. Found when a view added to the end of the
+    // walk left the sidebar scrolled to its foot and turned this probe red with
+    // nothing wrong in the app. `hot` below is the second half of the same fix.
+    await js<void>(
+      win,
+      `(() => { const nav = document.querySelector('aside nav'); if (nav) nav.scrollTop = 0 })()`
+    ).catch(() => undefined)
+    await sleep(200)
     await click(win, 'aside nav button[title]')
     await sleep(900)
+    // ...and then the row itself is put where the pointer can reach it. The
+    // scroll above is where the row *was* clicked from; this is about where it
+    // ends up, since opening a project can move the tree under it.
+    await js<void>(
+      win,
+      `(() => { const el = document.querySelector('aside [aria-current="true"]')
+        if (el) el.scrollIntoView({ block: 'center' }) })()`
+    ).catch(() => undefined)
+    await sleep(300)
     const find = `(() => {
       ${READ_FN}
       const el = document.querySelector('aside [aria-current="true"]')
@@ -626,6 +778,7 @@ export async function runAffordanceChecks(
         selectedRow = {
           tier: tierOf(rest, hover),
           label: rest.label,
+          hot: hover.hot && hover.onTop,
           // The first field `props()` joins is `backgroundColor`, which is the
           // property this recipe moves. Named in the report so a failure says
           // "these two are the same colour" rather than "the tier was none".
@@ -643,7 +796,7 @@ export async function runAffordanceChecks(
   checks.push({
     id: 'AFF-2',
     criterion: 'The walk reached every view and measured a real number of controls',
-    title: `Every main view enumerated (${measured} controls measured across ${VIEWS.length} views)`,
+    title: `Every main view enumerated (${measured} controls measured across ${views.length} views)`,
     // The count floor is on the *total*, not per view. It is the guard against
     // the shape of failure PROF-4 had: a walk that reached nothing at all still
     // reports every claim below as passed, having checked nothing.
@@ -696,7 +849,8 @@ export async function runAffordanceChecks(
     const peerNotATab = nearOnly.filter((spot) => spot.tag !== 'button[tab]')
     checks.push({
       id: 'AFF-4',
-      criterion: 'Every clickable control changes appearance under the pointer, and on itself',
+      criterion:
+        'Every clickable control changes appearance under the pointer, and on itself. A disabled one is `quiet`’s, not this check’s',
       title: `Hover response on all ${measured} measured controls (${noHover.length} dead, ${peerNotATab.length} answering only on a peer)`,
       // `measured` is the floor, by AFF-6's argument: nothing dead and nothing
       // peer-only is also what a walk that reached no controls at all reports.
@@ -724,12 +878,19 @@ export async function runAffordanceChecks(
       // `null` fails. Nothing selected means the click never opened a project,
       // and a probe that reports green because it could not find its subject is
       // the shape CLAUDE.md names as worse than no check.
-      ok: selectedRow !== null && selectedRow.tier === 'self',
+      // `hot` is required as well as the tier, so "the pointer never arrived"
+      // cannot go on presenting itself as "the tint is dead" - the two are
+      // indistinguishable from the colours alone, and the walk has carried this
+      // control on every element it measures for exactly that reason.
+      ok: selectedRow !== null && selectedRow.hot && selectedRow.tier === 'self',
       detail: { selectedRow },
       notes: [
         selectedRow === null
           ? 'no [aria-current="true"] row in the sidebar - the project never opened, so nothing was measured'
           : `rest ${selectedRow.restBg} -> hover ${selectedRow.hoverBg}`,
+        ...(selectedRow !== null && !selectedRow.hot
+          ? ['the pointer never landed on the row - this says nothing about the tint']
+          : []),
         'The tier has to be `self`. `near` is what this row scores when it has',
         'no hover recipe of its own, because its pin star fades in beside it.',
         'The recipe is `ROW_SELECTED_GROUP` in ui/src/lib/rows.ts; putting the',
@@ -781,6 +942,12 @@ export async function runAffordanceChecks(
       ]
     })
   }
+
+  // The planted folder goes back out. The data directory is this check's own
+  // and is re-seeded from the real database each run, so this is tidiness
+  // rather than safety - but a run that leaves a root behind is a run whose
+  // next `--only=` invocation starts from a state it did not choose.
+  await unplantScannedFolder(win, dataDir)
 
   if (shot !== null) console.log(`affordance-check: ${shot.file}`)
   return checks
