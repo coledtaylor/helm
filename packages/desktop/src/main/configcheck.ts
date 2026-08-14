@@ -61,6 +61,27 @@ const TOKENS = {
 
 const MCP_SERVER = 'helm-config-probe'
 
+/**
+ * The live-state fixtures, and where they live.
+ *
+ * In `alpha` - an overlay - rather than in the workspace, deliberately. The
+ * workspace's settings are read by a *real session* in the effective group and
+ * its files are edited and restored by the edit group, so a hooks block planted
+ * there would be a hook a live `claude` could run and a file two groups would
+ * be rewriting underneath each other. An overlay is a scope the switcher offers
+ * (the profile puts it there), and nothing else in this driver reads its
+ * settings: an overlay contributes skills, commands, agents and a CLAUDE.md to
+ * a session, never a settings layer.
+ *
+ * The matcher names no tool that exists, so even a session pointed here could
+ * not fire it. What the pane has to say about the hook does not depend on the
+ * matcher matching anything.
+ */
+const HOOK_FILE = 'probe-hook.js'
+const HOOK_EVENT = 'PreToolUse'
+const HOOK_MATCHER = 'HelmConfigProbeNoSuchTool'
+const BUNDLED_FILE = 'probe-resource.md'
+
 // ---------------------------------------------------------------------------
 // A second opinion about what is on disk
 // ---------------------------------------------------------------------------
@@ -316,6 +337,24 @@ async function listedFiles(win: BrowserWindow): Promise<Array<{ relPath: string;
 }
 
 /**
+ * Puts the open file's raw text on screen, whatever kind it is.
+ *
+ * The detail pane opens in its reading view - rendered markdown, a settings
+ * form - so the textarea the write path has always used is behind a segment.
+ * `source` where there is one (a settings file, whose `edit` is the form),
+ * `edit` otherwise; both land on the same textarea and the same save button.
+ */
+async function openSource(win: BrowserWindow): Promise<boolean> {
+  if (await js<boolean>(win, `Boolean(document.querySelector('textarea[data-config-editor]'))`)) {
+    return true
+  }
+  if (!(await click(win, 'button[data-config-mode="source"]'))) {
+    await click(win, 'button[data-config-mode="edit"]')
+  }
+  return pollJs(win, `document.querySelector('textarea[data-config-editor]')`, 10_000)
+}
+
+/**
  * Opens a file in the editor and edits it, through the surface.
  *
  * Returns what the pane reported rather than what the disk says - the caller
@@ -328,7 +367,10 @@ async function editFile(
 ): Promise<{ opened: boolean; saved: boolean; dirtyBeforeSave: boolean; status: string }> {
   const opened = await click(win, `button[data-config-file="${cssEscape(relPath)}"]`)
   if (!opened) return { opened: false, saved: false, dirtyBeforeSave: false, status: '' }
-  await pollJs(win, `document.querySelector('textarea[data-config-editor]')`, 10_000)
+  // Reading is the pane's default now, so the text is one segment away. `edit`
+  // is the textarea for every kind except a settings file, where it is the
+  // schema form and `source` is the raw JSON - which is what this types into.
+  await openSource(win)
   await sleep(300)
 
   await setValue(win, 'textarea[data-config-editor]', content)
@@ -411,6 +453,44 @@ function buildFixtures(dataDir: string): Fixtures {
   writeSkill(alpha, 'think', TOKENS.alphaThink)
   writeSkill(alpha, 'alpha-only', TOKENS.alphaOnly)
   writeSkill(beta, 'think', TOKENS.betaThink)
+
+  // The live-state fixtures. See the constants above for why they are in the
+  // overlay rather than in the workspace.
+  writeFileSync(
+    join(alpha, '.claude', 'skills', 'alpha-only', BUNDLED_FILE),
+    `# Bundled\n\nA resource beside a SKILL.md. Part of the skill, not a file of its own.\n`
+  )
+  mkdirSync(join(alpha, '.claude', 'hooks'), { recursive: true })
+  writeFileSync(
+    join(alpha, '.claude', 'hooks', HOOK_FILE),
+    '#!/usr/bin/env node\n// A Helm config probe. Its matcher names no tool, so nothing fires it.\nprocess.exit(0)\n'
+  )
+  // `model` is set by both layers and disagrees, `cleanupPeriodDays` by one -
+  // so this file is *partly* shadowed and the local one wins outright, which
+  // is the pair the row's live state has to tell apart.
+  writeFileSync(
+    join(alpha, '.claude', 'settings.json'),
+    `${JSON.stringify(
+      {
+        model: 'sonnet',
+        cleanupPeriodDays: 30,
+        hooks: {
+          [HOOK_EVENT]: [
+            {
+              matcher: HOOK_MATCHER,
+              hooks: [{ type: 'command', command: `node .claude/hooks/${HOOK_FILE}` }]
+            }
+          ]
+        }
+      },
+      null,
+      2
+    )}\n`
+  )
+  writeFileSync(
+    join(alpha, '.claude', 'settings.local.json'),
+    `${JSON.stringify({ model: 'opus' }, null, 2)}\n`
+  )
   writeFileSync(join(alpha, 'CLAUDE.md'), '# Alpha instructions\n\nComposed by Helm.\n')
   writeFileSync(join(beta, 'CLAUDE.md'), '# Beta instructions\n\nComposed by Helm.\n')
 
@@ -503,6 +583,7 @@ function skillToken(file: string): string {
 
 const GROUPS = [
   'browse',
+  'files',
   'edit',
   'snapshot',
   'json',
@@ -634,6 +715,7 @@ export async function runConfigChecks(
 
   try {
     await group('browse', () => browseChecks(ctx, shotDir, fixtures, userHome))
+    await group('files', () => filesChecks(ctx, shotDir, fixtures, userHome))
     await group('edit', () => editChecks(ctx, shotDir, fixtures, userHome))
     await group('snapshot', async () => [await snapshotCheck(ctx, fixtures)])
     await group('json', async () => [await jsonCheck(ctx, shotDir, fixtures)])
@@ -750,6 +832,24 @@ async function browseChecks(
   await selectScope(win, harnessPath)
   const painted = await listedFiles(win)
   const paintedTruth = ctx.config.tree(harnessPath)
+
+  /**
+   * The files the list nests inside a skill instead of giving a row of their
+   * own, decided here by asking the filesystem: a file whose own directory
+   * holds a `SKILL.md` is part of that skill.
+   *
+   * The pane's rule is written in `bundledWith`; this one shares no code with
+   * it, which is the point. A row per file stopped being the claim when the
+   * bundle went inside the skill - the claim now is that every file is either a
+   * row or inside the skill that owns it, and CFG-15 is the other half.
+   */
+  const bundled = paintedTruth.files.filter(
+    (file) =>
+      file.kind === 'other' &&
+      file.relPath.includes('/') &&
+      existsSync(join(harnessPath, file.relPath.slice(0, file.relPath.lastIndexOf('/')), 'SKILL.md'))
+  )
+  const expectedRows = paintedTruth.files.length - bundled.length
   const shot = await screenshot(win, shotDir, 'config-files.png')
 
   checks.push({
@@ -758,14 +858,16 @@ async function browseChecks(
     title: 'Each scope’s tree matches an independent walk of the same directory',
     ok:
       allAgree &&
-      painted.length === paintedTruth.files.length &&
+      painted.length === expectedRows &&
       painted.some((row) => row.kind === 'skill'),
     detail: {
       scopes: perScope,
       throughTheWindow: {
         scope: harnessPath,
         rows: painted.length,
-        expected: paintedTruth.files.length,
+        expected: expectedRows,
+        filesInTheTree: paintedTruth.files.length,
+        nestedUnderTheirSkill: bundled.map((file) => file.relPath),
         kinds: [...new Set(painted.map((row) => row.kind))].sort()
       },
       screenshot: shot.file
@@ -773,7 +875,305 @@ async function browseChecks(
     notes: [
       'The second read is a plain readdirSync walk in configcheck.ts, sharing no code with the',
       'tree scanner: skills are directories holding a SKILL.md, commands and agents are .md',
-      'at any depth. Names are compared as well as counts.'
+      'at any depth. Names are compared as well as counts.',
+      'A row per file stopped being the claim when a skill’s bundle went inside it, so the',
+      'expected row count subtracts the files whose own directory holds a SKILL.md - asked of',
+      'the filesystem here rather than of the rule the pane uses. CFG-15 is the other half:',
+      'those files are on the skill’s row and on its pane.'
+    ]
+  })
+
+  return checks
+}
+
+// ---------------------------------------------------------------------------
+// CFG-12 .. CFG-16: the Files view itself
+// ---------------------------------------------------------------------------
+
+/** Every row the list is painting, with what it claims about each. */
+async function paintedRows(
+  win: BrowserWindow
+): Promise<Array<{ relPath: string; kind: string; live: string; note: string; bundled: string }>> {
+  return js(
+    win,
+    `[...document.querySelectorAll('button[data-config-file]')].map((el) => {
+      const lines = [...el.querySelectorAll(':scope > span')];
+      return {
+        relPath: el.dataset.configFile,
+        kind: el.dataset.configKind,
+        live: el.dataset.configLive ?? '',
+        note: (lines[1]?.textContent ?? '').trim(),
+        bundled: (lines[2]?.textContent ?? '').trim()
+      } })`
+  )
+}
+
+/**
+ * The Files view's own criteria: live state on the row, the detail pane a kind
+ * opens in, and a skill's bundle nesting under it.
+ *
+ * Everything is asserted against a second reader in this file. The settings
+ * winner comes from `settingsTruth`, which is this driver's own flatten and its
+ * own precedence chain; the hook binding from a plain `JSON.parse` of the
+ * settings file; the bundle from a `readdirSync` of the skill's directory; the
+ * invocation from `predictSkillNames`, which spells the namespace rule out by
+ * hand. None of them shares code with `computeConfigLive`.
+ *
+ * The scope is the `alpha` overlay, which the profile puts in the switcher. Its
+ * settings are read by nothing else in this driver and by no session, so the
+ * hooks block planted in it is a fixture rather than a hook somebody's `claude`
+ * could run.
+ */
+async function filesChecks(
+  ctx: CheckContext,
+  shotDir: string,
+  fixtures: Fixtures,
+  userHome: string
+): Promise<Check[]> {
+  const { win } = ctx
+  const checks: Check[] = []
+  const settingsFile = join(fixtures.alpha, '.claude', 'settings.json')
+
+  await selectScope(win, fixtures.alpha)
+  // The rows say nothing until the resolution has arrived, which is the design:
+  // a row with no answer paints no dot rather than a wrong one.
+  const resolved = await pollJs(
+    win,
+    `[...document.querySelectorAll('button[data-config-file]')].some((el) => el.dataset.configLive)`,
+    15_000
+  )
+  const rows = await paintedRows(win)
+  const row = (relPath: string): (typeof rows)[number] | undefined =>
+    rows.find((candidate) => candidate.relPath.toLowerCase() === relPath.replace(/\\/g, '/').toLowerCase())
+
+  // ---- CFG-12: the settings rows, against this file's own precedence ----
+  const truth = settingsTruth(fixtures.alpha, userHome)
+  const declared: Map<string, string> = new Map()
+  flattenJson(JSON.parse(readFileSync(settingsFile, 'utf8')), '', declared)
+  const outranked = [...declared].filter(([key, value]) => {
+    const winner = truth.get(key)
+    return winner !== undefined && winner.value !== value
+  })
+  // The fixture has to discriminate, or "1 of 3 outranked" would pass against a
+  // file where nothing is outranked at all (CLAUDE.md, "no evidence behind it").
+  const fixtureDiscriminates = declared.size >= 2 && outranked.length === 1
+
+  const settingsRow = row('.claude/settings.json')
+  const localRow = row('.claude/settings.local.json')
+  const expectedState = outranked.length === 0 ? 'live' : outranked.length === declared.size ? 'shadowed' : 'partial'
+
+  await click(win, `button[data-config-file="${cssEscape('.claude/settings.json')}"]`)
+  await pollJs(win, `document.querySelector('[data-config-settings]')`, 10_000)
+  const painted = await js<Array<{ key: string; wins: string }>>(
+    win,
+    `[...document.querySelectorAll('[data-config-setting]')].map((el) => ({
+      key: el.dataset.configSetting, wins: el.dataset.configSettingWins }))`
+  )
+  const paneAgrees = [...declared.keys()].every((key) => {
+    const seen = painted.find((candidate) => candidate.key === key)
+    const winner = truth.get(key)
+    return seen !== undefined && seen.wins === String(winner?.value === declared.get(key))
+  })
+  const settingsShot = await screenshot(win, shotDir, 'config-settings-live.png')
+
+  checks.push({
+    id: 'CFG-12',
+    criterion: 'Rows carry live state read from the effective view: shadowed by another scope, namespaced under an overlay, or overridden downstream',
+    title: 'A settings file’s row and its pane agree with an independent precedence chain',
+    ok:
+      resolved &&
+      fixtureDiscriminates &&
+      settingsRow?.live === expectedState &&
+      localRow?.live === 'live' &&
+      painted.length === declared.size &&
+      paneAgrees,
+    detail: {
+      scope: fixtures.alpha,
+      independentChain: [...truth].map(([key, winner]) => ({ key, ...winner })),
+      declaredHere: [...declared],
+      outrankedHere: outranked.map(([key]) => key),
+      fixtureDiscriminates,
+      row: settingsRow,
+      localRow,
+      expectedState,
+      paneRows: painted,
+      paneAgrees,
+      screenshot: settingsShot.file
+    },
+    notes: [
+      'The second reader is `settingsTruth` in this file: its own flatten, its own local > project >',
+      'user chain, no code shared with the effective view. The fixture is asserted to be',
+      'discriminating first - one key outranked and one not - because "all keys win" is what a',
+      'pane that read nothing would also report.'
+    ]
+  })
+
+  // ---- CFG-13: a skill's row carries the invocation a session would type ----
+  const predicted = predictSkillNames(fixtures.alpha, [], userHome)
+  const contested = predicted.filter((name) => name === 'alpha-only').length > 1
+  const skillRow = row('.claude/skills/alpha-only/SKILL.md')
+  const skillState = contested ? 'partial' : 'live'
+
+  checks.push({
+    id: 'CFG-13',
+    criterion: 'Rows carry live state read from the effective view',
+    title: 'A skill’s row names the invocation a session in this directory would resolve',
+    ok:
+      predicted.includes('alpha-only') &&
+      skillRow !== undefined &&
+      skillRow.live === skillState &&
+      skillRow.note.includes('alpha-only'),
+    detail: {
+      predictedByHand: predicted,
+      // Two unprefixed sources landing on one name is a contest Helm does not
+      // predict a winner for, so the expectation is derived rather than fixed.
+      alsoInTheUserDirectory: contested,
+      expectedState: skillState,
+      row: skillRow
+    },
+    notes: [
+      '`predictSkillNames` walks the directories itself and spells the `<overlay>:<skill>` rule',
+      'out by hand, so the expected invocation is not borrowed from the code that paints it.'
+    ]
+  })
+
+  // ---- CFG-14: a hook says what runs it, and from which settings block ----
+  const settingsDoc = JSON.parse(readFileSync(settingsFile, 'utf8')) as {
+    hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>
+  }
+  const events = Object.entries(settingsDoc.hooks ?? {})
+    .filter(([, blocks]) =>
+      blocks.some((block) => (block.hooks ?? []).some((step) => (step.command ?? '').includes(HOOK_FILE)))
+    )
+    .map(([event]) => event)
+
+  await click(win, `button[data-config-file="${cssEscape(`.claude/hooks/${HOOK_FILE}`)}"]`)
+  await pollJs(win, `document.querySelector('[data-hook-provenance]')`, 10_000)
+  const provenance = await js<{ count: string; events: string[]; source: string; text: string }>(
+    win,
+    `(() => {
+      const box = document.querySelector('[data-hook-provenance]');
+      return {
+        count: box?.dataset.hookProvenance ?? '',
+        events: [...document.querySelectorAll('[data-hook-event]')].map((el) => el.dataset.hookEvent),
+        source: document.querySelector('[data-open-layer]')?.textContent ?? '',
+        text: (box?.textContent ?? '').replace(/\\s+/g, ' ').trim()
+      } })()`
+  )
+  const hookShot = await screenshot(win, shotDir, 'config-hook-provenance.png')
+
+  checks.push({
+    id: 'CFG-14',
+    criterion: 'A hook file shows which event fires it and from which settings block, above its source',
+    title: 'The hook pane names the event, the matcher and the settings file, read back from the file itself',
+    ok:
+      events.length === 1 &&
+      events[0] === HOOK_EVENT &&
+      provenance.events.join(',') === HOOK_EVENT &&
+      provenance.source.includes('settings.json') &&
+      provenance.text.includes(HOOK_MATCHER),
+    detail: {
+      hook: join(fixtures.alpha, '.claude', 'hooks', HOOK_FILE),
+      eventsInTheFile: events,
+      painted: provenance,
+      screenshot: hookShot.file
+    },
+    notes: [
+      'The expected event comes from a plain JSON.parse of the settings file in this driver, not',
+      'from the effective view the pane reads. The matcher names no real tool, so the fixture',
+      'cannot fire in any session this run starts.'
+    ]
+  })
+
+  // ---- CFG-15: a skill's bundle nests under it instead of landing in Other ----
+  const skillDir = join(fixtures.alpha, '.claude', 'skills', 'alpha-only')
+  const onDisk = readdirSync(skillDir).filter((name) => name.toLowerCase() !== 'skill.md')
+  const bundledRow = row('.claude/skills/alpha-only/SKILL.md')
+  const inOther = rows.filter((candidate) => candidate.relPath.endsWith(`/${BUNDLED_FILE}`))
+  const opened = await click(
+    win,
+    `button[data-config-file="${cssEscape('.claude/skills/alpha-only/SKILL.md')}"]`
+  )
+  await pollJs(win, `document.querySelector('[data-bundled]')`, 10_000)
+  const bundledInPane = await js<string[]>(
+    win,
+    `[...document.querySelectorAll('[data-bundled-file]')].map((el) => el.dataset.bundledFile)`
+  )
+  const bundleShot = await screenshot(win, shotDir, 'config-skill-bundle.png')
+
+  checks.push({
+    id: 'CFG-15',
+    criterion: 'Skill-bundled resources nest under their skill instead of appearing in Other',
+    title: 'The file beside a SKILL.md is on the skill’s row and on its pane, and has no row of its own',
+    ok:
+      onDisk.length === 1 &&
+      onDisk[0] === BUNDLED_FILE &&
+      opened &&
+      inOther.length === 0 &&
+      bundledRow?.bundled.includes(BUNDLED_FILE) === true &&
+      bundledInPane.some((relPath) => relPath.endsWith(BUNDLED_FILE)),
+    detail: {
+      skillDirectory: skillDir,
+      besideTheSkillOnDisk: onDisk,
+      rowsForItInTheList: inOther.map((candidate) => candidate.relPath),
+      skillRowSecondLine: bundledRow?.bundled,
+      onThePane: bundledInPane,
+      screenshot: bundleShot.file
+    },
+    notes: [
+      'The second reader is a readdirSync of the skill directory. The nesting is presentation:',
+      '`readConfigTree` still returns the file, which is why "no row of its own" is asserted',
+      'against the painted list rather than against the tree.'
+    ]
+  })
+
+  // ---- CFG-16: each kind opens in its own pane ----
+  const skillToken = /Its token is ([A-Z0-9]+)\./.exec(
+    readFileSync(join(skillDir, 'SKILL.md'), 'utf8')
+  )?.[1]
+  const markdown = await js<{ body: string; chips: number; textarea: boolean }>(
+    win,
+    `(() => {
+      const body = document.querySelector('[data-markdown-surface="config"]');
+      return {
+        body: (body?.textContent ?? '').replace(/\\s+/g, ' ').trim().slice(0, 400),
+        chips: Number(document.querySelector('[data-frontmatter-chips]')?.dataset.frontmatterChips ?? 0),
+        textarea: Boolean(document.querySelector('textarea[data-config-editor]'))
+      } })()`
+  )
+  // The same file, edited: the raw text is one segment away and is the same
+  // editor the write path has always used.
+  await click(win, 'button[data-config-mode="edit"]')
+  await pollJs(win, `document.querySelector('textarea[data-config-editor]')`, 10_000)
+  const editable = await js<boolean>(
+    win,
+    `Boolean(document.querySelector('textarea[data-config-editor]')?.value.includes('SKILL'))
+     || Boolean(document.querySelector('textarea[data-config-editor]')?.value.length)`
+  )
+  const shot = await screenshot(win, shotDir, 'config-skill-rendered.png')
+
+  checks.push({
+    id: 'CFG-16',
+    criterion: 'Markdown kinds open rendered, frontmatter as chips, with an edit toggle - reusing the content pane’s renderer',
+    title: 'A SKILL.md opens as rendered HTML with its frontmatter as chips, and its source is one click away',
+    ok:
+      skillToken !== undefined &&
+      skillToken !== '' &&
+      markdown.textarea === false &&
+      markdown.chips >= 2 &&
+      markdown.body.includes(skillToken) &&
+      editable,
+    detail: {
+      tokenInTheFile: skillToken,
+      rendered: markdown,
+      textareaAfterEditToggle: editable,
+      screenshot: shot.file
+    },
+    notes: [
+      'The token is read out of the fixture here and required to be non-empty before the rendered',
+      'body is searched for it - PROF-4’s lesson: an expected value that can go empty makes every',
+      'answer match. The absence of a textarea in the reading view is the other half: "rendered"',
+      'has to mean the source is not what is on screen.'
     ]
   })
 
@@ -1041,7 +1441,7 @@ async function jsonCheck(ctx: CheckContext, shotDir: string, fixtures: Fixtures)
 
   await selectScope(win, fixtures.workspace)
   await click(win, `button[data-config-file="${cssEscape(relPath)}"]`)
-  await pollJs(win, `document.querySelector('textarea[data-config-editor]')`, 10_000)
+  await openSource(win)
   await sleep(300)
 
   // A trailing comma on line 3 - the mistake a hand-edited settings file
@@ -1120,7 +1520,7 @@ async function externalCheck(ctx: CheckContext, shotDir: string, fixtures: Fixtu
 
   await selectScope(win, fixtures.workspace)
   await click(win, `button[data-config-file="${cssEscape(relPath)}"]`)
-  await pollJs(win, `document.querySelector('textarea[data-config-editor]')`, 10_000)
+  await openSource(win)
   await sleep(400)
 
   const openedWith = readFileSync(path, 'utf8')

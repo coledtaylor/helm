@@ -1,5 +1,5 @@
-import type { ChangeEvent, JSX, MouseEvent } from 'react'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { ChangeEvent, JSX } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type {
   ConfigSnapshotMeta,
   ContentDocument,
@@ -10,11 +10,13 @@ import type {
 import { cn } from '../lib/cn'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes, formatMoment } from '../lib/time'
+// The rendered body and the frontmatter chips are shared with the config
+// console, which opens the same markdown out of a `.claude` tree.
+import { FrontmatterChips, MarkdownBody } from './MarkdownBody'
 import {
   ArtifactIcon,
   EyeIcon,
   LinkIcon,
-  ListIcon,
   PencilIcon,
   RestoreIcon,
   SaveIcon,
@@ -451,37 +453,12 @@ function Header({
         )}
       </div>
 
-      {/* The frontmatter, as a header rather than as the first eight lines of
-          the file. `type`, `date` and `tags` are this vault's own convention and
-          are what a note is filed under; showing them as YAML would be showing
-          the storage format of the one thing the reader wanted rendered. */}
+      {/* `type`, `date` and `tags` are this vault's own convention and are what
+          a note is filed under; showing them as YAML would be showing the
+          storage format of the one thing the reader wanted rendered. */}
       {chips.length > 0 && (
-        <div data-frontmatter-chips={chips.length} className="mt-3 flex flex-wrap items-center gap-1.5">
-          {chips.map((chip) =>
-            chip.key === 'tags' ? (
-              chip.values.map((value) => (
-                <span
-                  key={`tag-${value}`}
-                  data-chip="tags"
-                  className="rounded-full bg-accent-soft px-2 py-0.5 text-[10.5px] text-accent-text"
-                >
-                  #{value}
-                </span>
-              ))
-            ) : (
-              <span
-                key={chip.key}
-                data-chip={chip.key}
-                title={`${chip.key}: ${chip.value}`}
-                className="flex max-w-[22rem] items-baseline gap-1.5 rounded-full border border-border px-2 py-0.5"
-              >
-                <span className="shrink-0 text-[9.5px] tracking-wide text-fg-subtle uppercase">
-                  {chip.key}
-                </span>
-                <span className="min-w-0 truncate text-[10.5px] text-fg-muted">{chip.value}</span>
-              </span>
-            )
-          )}
+        <div className="mt-3">
+          <FrontmatterChips fields={chips} />
         </div>
       )}
 
@@ -491,198 +468,6 @@ function Header({
         </p>
       )}
     </header>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// The reading view
-// ---------------------------------------------------------------------------
-
-/**
- * The rendered document.
- *
- * `dangerouslySetInnerHTML` is doing what it says, and the reason it is
- * acceptable is upstream: this string was produced by `rehype-sanitize` in the
- * main process over a schema that is GitHub's, and the renderer never evaluates
- * any of it. What the renderer *does* own is the click handling - a wikilink is
- * an `<a>` with a data attribute and no destination, so navigation happens here
- * or not at all.
- */
-function MarkdownBody({
-  path,
-  rendered,
-  stale,
-  compact,
-  highlight,
-  onOpenPath,
-  onOpenExternal
-}: {
-  path: string
-  rendered: RenderedMarkdown | null
-  stale: boolean
-  compact: boolean
-  highlight: string | null
-  onOpenPath: (path: string, heading: string | null) => void
-  onOpenExternal: (url: string) => void
-}): JSX.Element {
-  const bodyRef = useRef<HTMLDivElement>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
-
-  const toc = useMemo(
-    () => (rendered?.headings ?? []).filter((heading) => heading.depth >= 2 && heading.depth <= 3),
-    [rendered]
-  )
-
-  // Scroll back to the top when a different document arrives. Without this a
-  // note opened from halfway down another one starts halfway down itself.
-  useLayoutEffect(() => {
-    scrollRef.current?.scrollTo({ top: 0 })
-  }, [rendered?.html])
-
-  /**
-   * Marks the term the document was opened from, and scrolls to it.
-   *
-   * Done over text nodes rather than by rewriting the HTML: the string has
-   * already been rendered, and a search-and-replace on markup would match
-   * inside attributes and tag names. A TreeWalker sees only text.
-   */
-  useLayoutEffect(() => {
-    const root = bodyRef.current
-    if (!root || highlight === null) return
-    const needle = highlight.trim().toLowerCase()
-    if (needle.length < 2) return
-
-    const walker = window.document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-    const targets: Text[] = []
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      const value = node.nodeValue ?? ''
-      if (value.toLowerCase().includes(needle)) targets.push(node as Text)
-      if (targets.length >= 200) break
-    }
-
-    let first: HTMLElement | null = null
-    for (const node of targets) {
-      const value = node.nodeValue ?? ''
-      const fragment = window.document.createDocumentFragment()
-      let at = 0
-      for (;;) {
-        const found = value.toLowerCase().indexOf(needle, at)
-        if (found < 0) break
-        if (found > at) fragment.append(value.slice(at, found))
-        const mark = window.document.createElement('mark')
-        mark.className = 'md-hit'
-        mark.textContent = value.slice(found, found + needle.length)
-        fragment.append(mark)
-        first ??= mark
-        at = found + needle.length
-      }
-      if (at < value.length) fragment.append(value.slice(at))
-      node.replaceWith(fragment)
-    }
-    first?.scrollIntoView({ block: 'center' })
-  }, [rendered?.html, highlight])
-
-  const onClick = (event: MouseEvent<HTMLDivElement>): void => {
-    const target = event.target as HTMLElement | null
-    const anchor = target?.closest('a')
-    if (!anchor) return
-
-    const path = anchor.getAttribute('data-wikilink-path')
-    if (path !== null) {
-      event.preventDefault()
-      onOpenPath(path, anchor.getAttribute('data-wikilink-heading'))
-      return
-    }
-    if (anchor.hasAttribute('data-wikilink-broken')) {
-      // Nothing to open. The styling has already said so; following it would
-      // either do nothing silently or create a file nobody asked for.
-      event.preventDefault()
-      return
-    }
-
-    const href = anchor.getAttribute('href') ?? ''
-    if (href.startsWith('#')) {
-      event.preventDefault()
-      const slug = href.slice(1).toLowerCase()
-      const heading = bodyRef.current?.querySelector(`[data-heading="${CSS.escape(slug)}"]`)
-      heading?.scrollIntoView({ block: 'start' })
-      return
-    }
-    if (/^https?:|^mailto:/i.test(href)) {
-      event.preventDefault()
-      onOpenExternal(href)
-    }
-  }
-
-  if (rendered === null) {
-    return (
-      <div className="min-w-0 flex-1 px-8 py-6">
-        <p className="text-[12px] text-fg-subtle">Rendering&hellip;</p>
-      </div>
-    )
-  }
-
-  return (
-    <div
-      ref={scrollRef}
-      data-content-scroll
-      className="min-w-0 flex-1 overflow-y-auto overscroll-contain"
-    >
-      <div className={cn('flex gap-8 py-6', compact ? 'px-6' : 'px-8')}>
-        <div
-          ref={bodyRef}
-          data-content-body
-          // The path the painted HTML belongs to. A driver clicking through a
-          // hundred notes has to know the body it is reading is the one it
-          // asked for and not the one still on screen from the click before.
-          data-content-path={path}
-          onClick={onClick}
-          className={cn('markdown min-w-0 flex-1 select-text', stale && 'opacity-70 transition-opacity')}
-          dangerouslySetInnerHTML={{ __html: rendered.html }}
-        />
-
-        {/* A contents column, but only when there is both something to list and
-            room to list it. Below 1280px the pane is narrow enough that the
-            measure and a sidebar cannot both have their width. */}
-        {toc.length >= 3 && !compact && (
-          <nav
-            aria-label="Contents"
-            data-content-toc={toc.length}
-            // Bounded and scrollable: a fifty-section document has a contents
-            // list taller than the window, and a `sticky` element taller than
-            // its viewport stops being sticky.
-            className="sticky top-6 hidden h-fit max-h-[calc(100vh-11rem)] w-52 shrink-0 overflow-y-auto overscroll-contain xl:block"
-          >
-            <p className="flex items-center gap-1.5 bg-surface pb-1.5 text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
-              <ListIcon width={10} height={10} />
-              Contents
-            </p>
-            <ol className="space-y-0.5 border-l border-border">
-              {toc.map((heading) => (
-                <li key={heading.slug}>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      bodyRef.current
-                        ?.querySelector(`[data-heading="${CSS.escape(heading.slug)}"]`)
-                        ?.scrollIntoView({ block: 'start' })
-                    }
-                    className={cn(
-                      '-ml-px block w-full truncate border-l border-transparent py-0.5 text-left',
-                      'text-[11px] text-fg-subtle transition-colors hover:border-accent hover:text-fg',
-                      heading.depth === 2 ? 'pl-2.5' : 'pl-5'
-                    )}
-                    title={heading.text}
-                  >
-                    {heading.text}
-                  </button>
-                </li>
-              ))}
-            </ol>
-          </nav>
-        )}
-      </div>
-    </div>
   )
 }
 

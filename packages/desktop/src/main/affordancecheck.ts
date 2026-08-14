@@ -136,21 +136,28 @@ const VIEWS: Array<{ name: string; open: readonly string[] | null; anchor: strin
   { name: 'project', open: ['aside nav button[title]'], anchor: '[data-project-pane]' },
   { name: 'config', open: ['[data-open-config]'], anchor: '[data-config-scope]' },
   /**
-   * The console with a file picked, which is where the editor's own controls
-   * are - Save, Revert, the version list, the path, Rename and Delete.
+   * A file open in the Files view, which is a *pane* rather than a view: the
+   * console's detail column paints nothing until a row is clicked, so its
+   * controls - the read/edit/source segments, the reveal button, the version
+   * list, Save, Revert, the path, Rename and Delete - were reachable by no
+   * walk at all. That is the coverage gap AFF-2 is named for, and the remedy
+   * the checks skill gives is a row here.
    *
-   * A separate row rather than a deeper `config`, because none of them exists
-   * until something is selected: without this step they sit in exactly the
-   * coverage gap AFF-2 is named for, measured by nothing and reported by
-   * nothing. The first row is taken whatever it is, so on a scope whose first
-   * file is a `settings.json` this measures Rename *disabled* - which AFF-5
-   * then has an opinion about, and which is the honest state of that control
-   * on that file.
+   * Two branches added this row independently, for the two halves of that set:
+   * the detail pane's own segments and the create/rename/delete controls. One
+   * row measures both, so it is written once here rather than twice.
+   *
+   * The first row of whatever scope opens first, rather than a named file: the
+   * user scope's contents are the machine's. It is empty only on a machine
+   * where `claude` has never run, which every other config check assumes too.
+   * Taking the first row whatever it is means that on a scope whose first file
+   * is a `settings.json` this measures Rename *disabled* - which AFF-5 then has
+   * an opinion about, and which is the honest state of that control there.
    */
   {
     name: 'config:file',
     open: ['[data-open-config]', 'button[data-config-file]'],
-    anchor: '[data-delete-config]'
+    anchor: '[data-config-mode="read"]'
   },
   // The config console's other three views. One click further in, and the pane
   // that holds the app's only two label-wrapped checkboxes and its MCP form -

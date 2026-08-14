@@ -3,29 +3,22 @@ import { Fragment, useMemo, useState } from 'react'
 import type {
   ConfigFile,
   ConfigFileKind,
+  ConfigLive,
   ConfigScope,
-  ConfigTree
+  ConfigTree,
+  EffectiveView
 } from '@helm/core'
+// A value, so it comes from `@helm/core/types` - the entry point with no
+// `node:` imports behind it (CLAUDE.md, hard rules).
+import { computeConfigLive } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { ROW_SELECTED } from '../lib/rows'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes } from '../lib/time'
+import { isLiveWarning, LiveDot } from './ConfigLive'
 import { PaneBack } from './PaneBack'
 import { PaneHeader } from './PaneHeader'
-import {
-  AgentIcon,
-  CaretIcon,
-  CommandIcon,
-  DocIcon,
-  FolderIcon,
-  HookIcon,
-  PlugIcon,
-  PlusIcon,
-  RefreshIcon,
-  SearchIcon,
-  SlidersIcon,
-  SparkIcon
-} from './icons'
+import { CaretIcon, FolderIcon, PlusIcon, RefreshIcon, SearchIcon, SlidersIcon } from './icons'
 
 export type ConfigViewKind = 'files' | 'effective' | 'mcp' | 'health'
 
@@ -39,6 +32,13 @@ export interface ConfigConsoleProps {
 
   tree: ConfigTree | null
   treeLoading: boolean
+  /**
+   * What a session in one working directory would resolve, which is where every
+   * row's live state comes from. Null while it is being computed, or while the
+   * one held is the answer to a different question - the rows then say nothing
+   * rather than the wrong thing.
+   */
+  live: EffectiveView | null
   selected: ConfigFile | null
   onSelect: (file: ConfigFile) => void
   /** The open file has unsaved changes. Marked on its row. */
@@ -85,17 +85,59 @@ const KIND_LABEL: Record<ConfigFileKind, string> = {
   other: 'Other'
 }
 
-const KIND_ICON: Record<ConfigFileKind, typeof SparkIcon> = {
-  'claude-md': DocIcon,
-  settings: SlidersIcon,
-  'settings-local': SlidersIcon,
-  mcp: PlugIcon,
-  skill: SparkIcon,
-  command: CommandIcon,
-  agent: AgentIcon,
-  hook: HookIcon,
-  rule: DocIcon,
-  other: DocIcon
+/**
+ * A row, and whatever a skill bundles beside its `SKILL.md`.
+ *
+ * `prompts.md` next to a `SKILL.md` is not a file in the tree - it is part of
+ * the skill, and the skill is what a session addresses. Listed flat it landed
+ * in `Other` beside the CLI's caches, which is where a `.claude` tree's most
+ * relevant files went to be lost.
+ *
+ * The nesting is presentation and nothing else: `readConfigTree` still returns
+ * one flat, kind-ordered list, so the tree, the counts and every check that
+ * walks it are unchanged.
+ */
+interface ConfigRow {
+  file: ConfigFile
+  children: ConfigFile[]
+}
+
+/** `skills/think/SKILL.md` -> `skills/think`, the directory that is the skill. */
+function skillDirectory(relPath: string): string {
+  return relPath.slice(0, relPath.lastIndexOf('/'))
+}
+
+/**
+ * What a skill bundles: the files beside its `SKILL.md`, and nothing deeper.
+ *
+ * Exported because the list and the detail pane have to agree exactly - the
+ * list stops showing these rows and the pane starts showing them, so a second
+ * implementation of "which files are the skill's" would be a set of files
+ * reachable from neither.
+ */
+export function bundledWith(skill: ConfigFile, files: readonly ConfigFile[]): ConfigFile[] {
+  if (skill.kind !== 'skill') return []
+  const prefix = `${skillDirectory(skill.relPath).toLowerCase()}/`
+  return files.filter(
+    (file) =>
+      file.kind === 'other' &&
+      file.relPath.toLowerCase().startsWith(prefix) &&
+      // Directly inside the skill, not inside a nested skill of its own, which
+      // has its own row and its own bundle.
+      !file.relPath.slice(prefix.length).includes('/')
+  )
+}
+
+/** The skill a bundled resource belongs to, for the backlink on its own pane. */
+export function skillHolding(file: ConfigFile, files: readonly ConfigFile[]): ConfigFile | null {
+  if (file.kind !== 'other') return null
+  return (
+    files.find(
+      (candidate) =>
+        candidate.kind === 'skill' &&
+        bundledWith(candidate, files).some((child) => child.path === file.path)
+    ) ?? null
+  )
 }
 
 const VIEWS: Array<{ id: ConfigViewKind; label: string }> = [
@@ -129,6 +171,7 @@ export function ConfigConsole({
   onViewChange,
   tree,
   treeLoading,
+  live,
   selected,
   onSelect,
   dirty = false,
@@ -149,27 +192,47 @@ export function ConfigConsole({
   const scope = scopes.find((s) => s.path.toLowerCase() === scopePath.toLowerCase()) ?? null
 
   const groups = useMemo(() => {
+    const files = tree?.files ?? []
+
+    // Adoption first, filtering second. A child that matches keeps its parent
+    // on screen and a parent that matches keeps its children, which is what
+    // makes the nest a thing rather than a decoration that survives until the
+    // first search.
+    const adopted = new Map<string, ConfigFile[]>()
+    const claimed = new Set<string>()
+    for (const skill of files) {
+      const bundled = bundledWith(skill, files)
+      if (bundled.length === 0) continue
+      adopted.set(skill.path, bundled)
+      for (const file of bundled) claimed.add(file.path)
+    }
+
     const needle = filter.trim().toLowerCase()
-    const files = (tree?.files ?? []).filter(
-      (file) =>
-        needle === '' ||
-        file.name.toLowerCase().includes(needle) ||
-        file.relPath.toLowerCase().includes(needle) ||
-        (file.description ?? '').toLowerCase().includes(needle)
-    )
+    const hit = (file: ConfigFile): boolean =>
+      needle === '' ||
+      file.name.toLowerCase().includes(needle) ||
+      file.relPath.toLowerCase().includes(needle) ||
+      (file.description ?? '').toLowerCase().includes(needle)
 
     // Settings and settings.local are two kinds and one group; everything else
     // maps one to one. Insertion order is the tree's order, which is already
     // the order these should be read in.
-    const byLabel = new Map<string, ConfigFile[]>()
+    const byLabel = new Map<string, ConfigRow[]>()
     for (const file of files) {
+      if (claimed.has(file.path)) continue
+      const children = adopted.get(file.path) ?? []
+      if (!hit(file) && !children.some(hit)) continue
       const label = KIND_LABEL[file.kind]
-      byLabel.set(label, [...(byLabel.get(label) ?? []), file])
+      byLabel.set(label, [...(byLabel.get(label) ?? []), { file, children }])
     }
     return [...byLabel.entries()]
   }, [tree, filter])
 
-  const shown = groups.reduce((n, [, files]) => n + files.length, 0)
+  const rows = groups.reduce((n, [, group]) => n + group.length, 0)
+  const shown = groups.reduce(
+    (n, [, group]) => n + group.reduce((each, row) => each + 1 + row.children.length, 0),
+    0
+  )
   const total = tree?.files.length ?? 0
 
   // Only the sections someone has deliberately shut are in here, so a kind that
@@ -368,13 +431,35 @@ export function ConfigConsole({
                 )}
               </div>
               <p className="mt-2 flex items-baseline gap-1.5 text-[11px] text-fg-subtle">
+                {/* Entries and files are different numbers once a skill's
+                    bundle is inside it, and saying both is what explains where
+                    a file somebody can see in Explorer has gone. */}
                 <span className="tabular-nums">
                   {tree === null
                     ? 'Reading…'
-                    : filter === ''
-                      ? `${total} ${total === 1 ? 'file' : 'files'}`
-                      : `${shown}/${total}`}
+                    : filter !== ''
+                      ? `${shown}/${total}`
+                      : rows === total
+                        ? `${total} ${total === 1 ? 'file' : 'files'}`
+                        : `${rows} entries · ${total} files`}
                 </span>
+                {/* Whose session the states on these rows are about.
+                    A resolution is a working directory, not a scope: the same
+                    `~/.claude/settings.json` is wholly live under one directory
+                    and half shadowed under another. Said only where it is not
+                    the scope already on screen - under a project it would be
+                    the header repeated. */}
+                {live !== null &&
+                  scope !== null &&
+                  live.cwd.toLowerCase() !== scope.path.toLowerCase() && (
+                    <span
+                      data-live-cwd={live.cwd}
+                      className="min-w-0 truncate"
+                      title={`These states are what a session in ${live.cwd} would resolve. Point the Effective view somewhere else to ask about a different directory.`}
+                    >
+                      · resolved for {live.cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? live.cwd}
+                    </span>
+                  )}
                 <span className="flex-1" />
                 {tree !== null && tree.errors.length > 0 && (
                   <span className="text-danger" title={tree.errors.join('\n')}>
@@ -395,7 +480,7 @@ export function ConfigConsole({
               ) : groups.length === 0 ? (
                 <Empty scope={scope} filtering={filter !== '' && total > 0} />
               ) : (
-                groups.map(([label, files]) => {
+                groups.map(([label, group]) => {
                   const expanded = isExpanded(label)
                   return (
                     <Fragment key={label}>
@@ -416,15 +501,18 @@ export function ConfigConsole({
                           className={cn('shrink-0 transition-transform', expanded && 'rotate-90')}
                         />
                         <span className="min-w-0 truncate">{label}</span>
-                        <span className="tabular-nums">{files.length}</span>
+                        <span className="tabular-nums">{group.length}</span>
                       </button>
                       {expanded &&
-                        files.map((file) => (
+                        group.map((row) => (
                           <Row
-                            key={file.path}
-                            file={file}
-                            selected={selected?.path === file.path}
-                            dirty={dirty && selected?.path === file.path}
+                            key={row.file.path}
+                            file={row.file}
+                            bundled={row.children}
+                            live={computeConfigLive(row.file, live)}
+                            selected={selected?.path === row.file.path}
+                            selectedPath={selected?.path ?? null}
+                            dirty={dirty && selected?.path === row.file.path}
                             onSelect={onSelect}
                           />
                         ))}
@@ -450,29 +538,50 @@ export function ConfigConsole({
   )
 }
 
+/**
+ * One entry: what it is called, whether it is live, and what it bundles.
+ *
+ * The kind icon is gone from the head of the row and a state dot is in its
+ * place. The group heading two rows up already says `Skills`, so the icon was
+ * the one fact on the row that was written twice - and whether the thing under
+ * the pointer is actually reaching a session is the fact that was written
+ * nowhere.
+ */
 function Row({
   file,
+  bundled,
+  live,
   selected,
+  selectedPath,
   dirty,
   onSelect
 }: {
   file: ConfigFile
+  bundled: ConfigFile[]
+  live: ConfigLive | null
   selected: boolean
+  /** The open file, so a bundled one that is open can be marked. */
+  selectedPath: string | null
   dirty: boolean
   onSelect: (file: ConfigFile) => void
 }): JSX.Element {
-  const Icon = KIND_ICON[file.kind]
+  // The live note replaces the description rather than joining it: the row has
+  // one second line, and "does this reach a session" outranks "what is it for"
+  // on a row somebody is already looking at because they know what it is for.
+  // The description survives on the row's title and as a chip on the pane.
+  const note = live?.note ?? null
   return (
     <button
       type="button"
       data-config-file={file.relPath}
       data-config-kind={file.kind}
       data-config-dirty={dirty}
+      data-config-live={live?.state ?? ''}
       aria-current={selected}
       onClick={() => onSelect(file)}
-      title={file.path}
+      title={[file.path, file.description, live?.reason].filter(Boolean).join('\n')}
       className={cn(
-        'relative flex w-full items-start gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
+        'relative block w-full rounded-well px-2 py-1.5 text-left transition-colors',
         selected ? ROW_SELECTED : 'hover:bg-hover'
       )}
     >
@@ -482,42 +591,51 @@ function Row({
           className="absolute top-1.5 bottom-1.5 left-0 w-[2px] rounded-full bg-accent"
         />
       )}
-      <Icon
-        width={13}
-        height={13}
-        className={cn('mt-0.5 shrink-0', selected ? 'text-accent' : 'text-fg-subtle')}
-      />
-      <span className="min-w-0 flex-1">
-        <span className="flex items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate text-[12px] text-fg">{file.name}</span>
-          {/* The byte count is replaced rather than joined: an unsaved file's
-              size on disk is the one number that is about to stop being true. */}
-          {dirty ? (
-            <span className="flex shrink-0 items-center gap-1 text-[10px] text-warn">
-              <span aria-hidden className="size-1.5 rounded-full bg-warn" />
-              unsaved
-            </span>
-          ) : (
-            <span className="shrink-0 text-[10px] tabular-nums text-fg-subtle">
-              {formatBytes(file.size)}
-            </span>
-          )}
-        </span>
-        {/* The description when there is one, because that is what decides
-            whether a skill is worth opening. Otherwise the path - unless the
-            path *is* the name, as it is for CLAUDE.md and .mcp.json, where
-            repeating it reads as a rendering bug. */}
-        {file.description !== null ? (
-          <span className="mt-0.5 line-clamp-2 block text-[10px] leading-snug text-fg-subtle">
-            {file.description}
+      <span className="flex items-center gap-2">
+        <LiveDot live={live} />
+        {/* Mono: a name here is what somebody types at a prompt - `spec:plan`,
+            `settings.local.json` - which is machine data, not a title. */}
+        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg">{file.name}</span>
+        {/* The byte count is replaced rather than joined: an unsaved file's
+            size on disk is the one number that is about to stop being true. */}
+        {dirty ? (
+          <span className="flex shrink-0 items-center gap-1 text-[10px] text-warn">
+            <span aria-hidden className="size-1.5 rounded-full bg-warn" />
+            unsaved
           </span>
         ) : (
-          <span className="mt-0.5 block truncate text-[10px] text-fg-subtle">
-            {file.relPath === file.name ? '' : `${file.relPath} · `}
-            {formatAge(file.mtimeMs)}
+          <span className="shrink-0 text-[10px] tabular-nums text-fg-subtle">
+            {formatBytes(file.size)}
           </span>
         )}
       </span>
+
+      {/* Indented past the dot, so the second line starts under the name. */}
+      <span
+        className={cn(
+          'mt-0.5 block truncate pl-[14px] text-[10px]',
+          live !== null && isLiveWarning(live.state) ? 'text-warn' : 'text-fg-subtle'
+        )}
+      >
+        {note ??
+          (file.description !== null
+            ? file.description
+            : `${file.relPath === file.name ? '' : `${file.relPath} · `}${formatAge(file.mtimeMs)}`)}
+      </span>
+
+      {bundled.length > 0 && (
+        <span className="mt-0.5 block truncate pl-[14px] font-mono text-[9.5px] text-fg-subtle">
+          <span aria-hidden>└ </span>
+          {bundled.map((child, at) => (
+            <Fragment key={child.path}>
+              {at > 0 && <span aria-hidden> · </span>}
+              <span className={cn(child.path === selectedPath && 'text-accent-text')}>
+                {child.relPath.slice(child.relPath.lastIndexOf('/') + 1)}
+              </span>
+            </Fragment>
+          ))}
+        </span>
+      )}
     </button>
   )
 }

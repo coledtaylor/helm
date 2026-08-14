@@ -198,7 +198,7 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   GitHub paints these as solid green, grey, purple and red badges, and Helm
   does not, for the reason the accent never floods: a filled badge is the
   loudest object on the pane and a pull request's state is not the loudest fact
-  about it. The mapping, which `PullRequestPane` is the only user of so far:
+  about it. The mapping `PullRequestPane` uses:
 
   | state | tone | why |
   | --- | --- | --- |
@@ -210,12 +210,39 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   Draft is checked *after* the closed states: a draft that was closed is
   closed, and GitHub leaves the draft flag set on it.
 
+  **The second user is the config console's live state** (`ConfigLive`), and it
+  is the same rule with a different vocabulary: whether a file in a `.claude`
+  tree reaches a session. Live is `success`, outranked or partly outranked is
+  `warn`, and read-but-empty or not-in-this-resolution take no tone at all -
+  neither is a problem, so neither gets a colour.
+
+  It adds one thing the pull request's states do not need: **a state that paints
+  nothing**. Helm has no claim to make about most of what sits in a `.claude`
+  directory - a `rules/` file is a convention some instruction file may
+  reference, and nothing in the resolution can see that reference - so those get
+  no chip and no dot rather than a confident grey "not loaded". Same rule as the
+  usage figures: paint nothing rather than a wrong number.
+
 ## 5. Patterns
 
 - **List rows**: two lines - name above, machine data below, counts pinned
   right. Selection is `bg-accent-soft` plus a 2px accent bar down the left
   edge (absolutely positioned, `rounded-full`), never a solid fill. Hover is
   `bg-hover`. Row radius is `rounded-well`.
+
+  **A state dot may take the head of the row, in place of a kind icon.** The
+  config console's rows carry a 6px dot where every other list carries an icon,
+  because the group heading two rows up already says `Skills` - the icon was the
+  one fact on the row written twice, and whether the thing is reaching a session
+  was written nowhere. The dot's slot is held open even when there is nothing to
+  say, so the names stay in one column. Where a row's name is something typed at
+  a prompt (`spec:plan`, `settings.local.json`) that name is **mono**, by §2's
+  rule: it is machine data, not a title.
+
+  **A third line is allowed only for what the row contains**, and there is one:
+  a skill's bundled resources, listed under it as `└ prompts.md · score.py`.
+  Everything else that wanted a third line has been a fact *about* the row,
+  which belongs on the pane it opens.
 
   **A row carries no buttons: the row itself is the action.** Everything else
   about the thing on it is inside it, one click away, on a pane with room to

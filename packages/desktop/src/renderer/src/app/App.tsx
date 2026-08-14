@@ -1544,6 +1544,7 @@ export function App(): JSX.Element {
               onViewChange={configState.setView}
               tree={configState.tree}
               treeLoading={configState.treeLoading}
+              live={configState.live}
               selected={configState.selected}
               onSelect={configState.select}
               dirty={configState.dirty}
@@ -1581,6 +1582,9 @@ export function App(): JSX.Element {
                     key={configState.selected.path}
                     file={configState.selected}
                     loaded={configState.loaded}
+                    rendered={configState.rendered}
+                    live={configState.live}
+                    siblings={configState.tree?.files ?? []}
                     snapshots={configState.snapshots}
                     saving={configState.saving}
                     error={configState.editorError}
@@ -1589,6 +1593,8 @@ export function App(): JSX.Element {
                     onReload={configState.reload}
                     onRestore={configState.restore}
                     onReveal={launcher.reveal}
+                    onOpenPath={configState.openPath}
+                    onOpenExternal={(url) => void helmOpenExternal(url)}
                     onDirtyChange={configState.setDirty}
                     onRename={() => configState.openEntryDialog('rename')}
                     onDelete={() => configState.openEntryDialog('delete')}
