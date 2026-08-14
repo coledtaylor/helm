@@ -31,6 +31,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isolate } from './isolate.mjs'
+import { auditReport, reportAudit } from './report-audit.mjs'
 
 const { dataDir, env, root } = isolate('transcript')
 console.log(`transcript-check is running against ${root}`)
@@ -256,6 +257,19 @@ if (groups !== null) {
 
 if (checks.length === 0 || failed.length > 0) {
   console.error(`\nFAIL  ${String(failed.length)} of ${String(checks.length)} checks`)
+  process.exit(1)
+}
+
+// Nothing that ran failed. Whether *everything* ran is a different question,
+// and it is the one this asks - a phase that returned early leaves a short
+// report that every check above passes.
+const auditOnly = process.argv.slice(2).find((a) => a.startsWith('--only='))
+if (
+  !reportAudit(
+    'transcript-check',
+    auditReport({ driver: 'transcriptcheck.ts', checks, only: auditOnly?.slice('--only='.length) })
+  )
+) {
   process.exit(1)
 }
 

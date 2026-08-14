@@ -438,6 +438,8 @@ export async function runSessionsChecks(
 
   if (!scanned || !painted || projects.length < 3) {
     checks.push({
+      // audit: optional - only reached when the tree never painted three
+      // projects, so a healthy run has no SESS-0.
       id: 'SESS-0',
       criterion: 'setup',
       title: 'Discovery found at least three projects to launch against',
