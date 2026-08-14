@@ -32,6 +32,22 @@ export {
   type SettingHint
 } from './config/settings-schema'
 /**
+ * And the join between a `.claude` tree and what a session would do with it.
+ * Pure by the same rule: it reads no file, only an `EffectiveView` that has
+ * already been computed, so the window can ask it about a row without a
+ * round trip and without a second answer to the question the Effective tab
+ * already answers.
+ */
+export {
+  computeConfigLive,
+  configFileNote,
+  hookBindings,
+  isRedactedConfigFile,
+  samePath,
+  settingReferences,
+  settingsDeclaredBy
+} from './config/live'
+/**
  * The usage reader's pure half, re-exported for the same reason: the status bar
  * re-derives what it may paint on a timer, from the same functions the main
  * process parsed with. Two implementations of "is this reading still good" is
@@ -1328,6 +1344,70 @@ export interface EffectiveView {
   mcpServers: EffectiveMcpServer[]
   warnings: string[]
   computedAt: string
+}
+
+// --- Live state, per file --------------------------------------------------
+
+/**
+ * What a resolution has to say about one file in a `.claude` tree.
+ *
+ * Six states rather than live/dead, because "not live" is three different
+ * situations wearing one word: outranked by another layer, empty, or simply
+ * not part of the resolution being looked at. They call for three different
+ * reactions, so they are three different states.
+ *
+ *   - `live` - everything in it reaches a session
+ *   - `partial` - it contributes, and something in it is outranked
+ *   - `shadowed` - it contributes nothing that survives
+ *   - `inert` - it is read, and has nothing to say
+ *   - `absent` - this resolution never looks at it
+ *   - `none` - Helm has no claim to make about it, and makes none
+ */
+export type ConfigLiveState = 'live' | 'partial' | 'shadowed' | 'inert' | 'absent' | 'none'
+
+/** One settings leaf as one file declares it, and what outranked it. */
+export interface ConfigSettingLive {
+  key: string
+  /** JSON encoding of *this file's* value, which may not be the winning one. */
+  value: string
+  layer: SettingsLayerKind
+  wins: boolean
+  outrankedBy: { layer: SettingsLayerKind; file: string; value: string } | null
+}
+
+/** One reason a hook file runs: the event, the matcher, and the layer saying so. */
+export interface HookBinding {
+  /** `PreToolUse`, `Stop`, ... - the key under `hooks`. */
+  event: string
+  /** The tool pattern the block matches, or null for a block with none. */
+  matcher: string | null
+  command: string
+  layer: SettingsLayerKind
+  /** The settings file the block is written in. */
+  file: string
+}
+
+export interface ConfigLive {
+  state: ConfigLiveState
+  /** One line for a row. Null when there is nothing to say. */
+  note: string | null
+  /** The whole sentence, for the pill's title. Empty when the state is `none`. */
+  reason: string
+  /** What a session types to reach it: `dev:think`, `/spec:plan`. */
+  invocation: string | null
+  /** Other files resolving under the same name, each with its own invocation. */
+  alsoDefinedBy: Array<{
+    invocation: string
+    source: EffectiveSource
+    origin: string
+    path: string
+  }>
+  /** Two unprefixed sources landed on one name, so which one wins is unpredicted. */
+  contested: boolean
+  settings: ConfigSettingLive[]
+  hooks: HookBinding[]
+  /** Settings leaves naming this file - a status line's command, and so on. */
+  references: Array<{ key: string; layer: SettingsLayerKind; file: string; value: string }>
 }
 
 // --- MCP management --------------------------------------------------------
