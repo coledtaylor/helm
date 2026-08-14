@@ -685,9 +685,14 @@ function Row({
             waiting behind an open.
             With neither, the file name: `Helm - session launcher` does not
             say it lives in `journal-2026-08-09-session-launcher.md`.
-            Unless the name *is* the title, as it is for `.mcp.json`, where
-            repeating it reads as a rendering bug. */}
-        {(file.noteType !== null || file.tags.length > 0 || file.slug !== file.title) && (
+            Only for the two kinds that take a title from *inside* the file.
+            Everything else is titled with its own filename, so its slug is that
+            same name with the extension shaved off - "dot mcp" under
+            "dot mcp dot json", which reads as a rendering bug rather than as
+            information. */}
+        {(file.noteType !== null ||
+          file.tags.length > 0 ||
+          (file.slug !== file.title && (file.kind === 'markdown' || file.kind === 'html'))) && (
           <span className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[10px] text-fg-subtle">
             {file.noteType !== null && (
               <span className="shrink-0 rounded-sm bg-surface-sunken px-1 text-fg-muted">

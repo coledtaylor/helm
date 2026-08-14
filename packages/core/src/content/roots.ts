@@ -163,6 +163,11 @@ export function contentFileKind(name: string): ContentFileKind {
   // backstop, and it says "could not read this as text" for the rare case that
   // really is a blob.
   if (ext === '') return 'text'
+  // And the same argument for a dotfile whose whole name is its "extension":
+  // `.gitkeep`, `.prettierrc`, `.babelrc`, `.editorconfig`. These are tooling
+  // configuration, which is to say text, and the named ones above are only the
+  // ones that happened to get written down.
+  if (ext === name.toLowerCase()) return 'source'
   return 'binary'
 }
 

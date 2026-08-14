@@ -259,9 +259,30 @@ export async function readContentDir(
     }
   }
 
+  /**
+   * A junction is a directory, whatever `readdir` calls it.
+   *
+   * Windows reparse points come back from `readdirSync` as symbolic links and
+   * **not** as directories, so an overlay shim's junction was drawn as a file:
+   * a page icon, no trailing slash, no caret. It is a directory - it is just
+   * one Helm will not walk into. `statSync` follows the link, which is a
+   * metadata read and not a walk, and a broken junction keeps the `readdir`
+   * answer.
+   */
   const listed = raw
     .filter((entry) => entry.isDirectory() || entry.isFile() || entry.isSymbolicLink())
-    .map((entry) => ({ name: entry.name, directory: entry.isDirectory(), link: entry.isSymbolicLink() }))
+    .map((entry) => {
+      const link = entry.isSymbolicLink()
+      let directory = entry.isDirectory()
+      if (link && !directory) {
+        try {
+          directory = statSync(join(dir, entry.name)).isDirectory()
+        } catch {
+          // Points at nothing any more. Listed as `readdir` saw it.
+        }
+      }
+      return { name: entry.name, directory, link }
+    })
 
   const forced = options.ignoreSource
   const fromGit =
