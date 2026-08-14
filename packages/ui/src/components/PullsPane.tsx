@@ -218,8 +218,10 @@ const DAY_MS = 24 * 60 * 60 * 1000
 interface PullGroup {
   key: string
   label: string | null
-  /** The machine spelling under the name - a slug, or nothing. */
+  /** The machine spelling beside the name - a slug, or nothing. */
   sub: string | null
+  /** The group is a bot's, which is a fact about it and not part of its name. */
+  bot: boolean
   /**
    * The heading already names the repository, so the rows under it must not.
    *
@@ -246,7 +248,7 @@ interface PullGroup {
  */
 function groupPulls(open: OpenPull[], mode: GroupMode, repos: readonly PullRepo[]): PullGroup[] {
   if (mode === 'none' || open.length === 0) {
-    return [{ key: 'all', label: null, sub: null, namesRepo: false, items: open }]
+    return [{ key: 'all', label: null, sub: null, bot: false, namesRepo: false, items: open }]
   }
   if (mode === 'repo') {
     return repos
@@ -254,6 +256,7 @@ function groupPulls(open: OpenPull[], mode: GroupMode, repos: readonly PullRepo[
         key: repo.path,
         label: repo.name,
         sub: repo.slug,
+        bot: false,
         namesRepo: true,
         items: open.filter((entry) => entry.repo.path === repo.path)
       }))
@@ -275,9 +278,10 @@ function groupPulls(open: OpenPull[], mode: GroupMode, repos: readonly PullRepo[
     .map(([name, items]) => ({
       key: `author:${name}`,
       label: name,
-      // A bot says so under its name rather than in it, exactly as the row
+      sub: null,
+      // A bot says so beside its name rather than in it, exactly as the row
       // does: `app/dependabot` is a login, and "bot" is the fact about it.
-      sub: items[0]?.pull.authorIsBot === true ? 'bot' : null,
+      bot: items[0]?.pull.authorIsBot === true,
       namesRepo: false,
       items
     }))
@@ -441,7 +445,11 @@ export function PullsPane({
                 control that spends height on headings, and height is what a
                 docked pane has least of. See the file comment. */}
             {!compact && (
-              <div className="flex shrink-0 items-center gap-1.5">
+              // A little further from the field than the count beside it: two
+              // pieces of small grey text 8px apart read as one label, and
+              // `3/12` belongs to the field while `GROUP` belongs to what
+              // follows it.
+              <div className="ml-1 flex shrink-0 items-center gap-1.5">
                 <span
                   id="pulls-group-label"
                   className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase"
@@ -550,10 +558,15 @@ export function PullsPane({
                         data-pulls-empty="active"
                         className="px-2 py-1.5 text-[11.5px] text-fg-subtle"
                       >
+                        {/* "Everything open is below" is only true when
+                            nothing is filtered out, so it is only said then. A
+                            sentence that keeps claiming to account for the
+                            whole list while a filter is on is the same lie a
+                            count that does not follow the filter would be. */}
                         {staleDays === 1
                           ? 'Nothing has moved since yesterday.'
                           : `Nothing has moved in ${String(staleDays)} days.`}{' '}
-                        Everything open is below.
+                        {filtering ? 'What matches is below.' : 'Everything open is below.'}
                       </p>
                     ) : (
                       <PullGroups
@@ -597,7 +610,6 @@ export function PullsPane({
                         <StaleGroups
                           groups={groupPulls(stale, group, repos)}
                           now={now}
-                          compact={compact}
                           {...(onOpenPull ? { onOpen: onOpenPull } : {})}
                         />
                       )}
@@ -771,7 +783,12 @@ function PullGroups({
       {groups.map((group, at) => (
         <div key={group.key} className={cn(group.label !== null && at > 0 && 'mt-2')}>
           {group.label !== null && (
-            <GroupHeading label={group.label} sub={group.sub} count={group.items.length} />
+            <GroupHeading
+              label={group.label}
+              sub={group.sub}
+              bot={group.bot}
+              count={group.items.length}
+            />
           )}
           {group.items.map(({ repo, pull }) => (
             <PullRow
@@ -790,16 +807,19 @@ function PullGroups({
   )
 }
 
-/** The same arrangement, painted as one-line chips. */
+/**
+ * The same arrangement, painted as one-line chips.
+ *
+ * No `compact` here, unlike the rows: a chip is already the reduced form and
+ * has nothing left to drop. Where the pane is narrow the titles truncate.
+ */
 function StaleGroups({
   groups,
   now,
-  compact,
   onOpen
 }: {
   groups: PullGroup[]
   now: number
-  compact: boolean
   onOpen?: ((repo: PullRepo, pull: PullSummary) => void) | undefined
 }): JSX.Element {
   return (
@@ -807,7 +827,12 @@ function StaleGroups({
       {groups.map((group, at) => (
         <div key={group.key} className={cn(group.label !== null && at > 0 && 'mt-2')}>
           {group.label !== null && (
-            <GroupHeading label={group.label} sub={group.sub} count={group.items.length} />
+            <GroupHeading
+              label={group.label}
+              sub={group.sub}
+              bot={group.bot}
+              count={group.items.length}
+            />
           )}
           <div className="flex flex-wrap gap-1.5">
             {group.items.map(({ repo, pull }) => (
@@ -816,7 +841,13 @@ function StaleGroups({
                 repo={repo}
                 pull={pull}
                 now={now}
-                showRepo={!group.namesRepo && !compact}
+                // Only a heading naming the repository takes it off the chip.
+                // Not `compact`: this is the flattened list, so the repository
+                // is what says which list a row came out of (DESIGN.md's
+                // source-pill rule), and it is the last thing to drop when the
+                // pane narrows - the title truncates instead. Two repositories
+                // with the same branch convention produce identical titles.
+                showRepo={!group.namesRepo}
                 {...(onOpen ? { onOpen } : {})}
               />
             ))}
@@ -830,31 +861,33 @@ function StaleGroups({
 /**
  * A group's name, one step quieter than the section heading above it.
  *
- * Sentence case and `fg-muted` rather than the section's caps and `fg-subtle`:
- * these are names of things - a repository, a person - where ACTIVE and STALE
- * are labels Helm invented, and the two must not read as the same rank.
+ * Sentence case rather than the section's caps: these are names of things - a
+ * repository, a person - where ACTIVE and STALE are labels Helm invented, and
+ * the two must not read as the same rank. The count sits immediately after the
+ * name for the reason `Section`'s does, and the slug follows both rather than
+ * coming between them: a number after `owner/name` reads as part of the slug.
  */
 function GroupHeading({
   label,
   sub,
+  bot,
   count
 }: {
   label: string
   sub: string | null
+  bot: boolean
   count: number
 }): JSX.Element {
   return (
-    <div
-      data-pulls-group-heading={label}
-      className="flex items-baseline gap-1.5 px-2 pt-1 pb-0.5"
-    >
+    <div data-pulls-group-heading={label} className="flex items-baseline gap-1.5 px-2 pt-1 pb-0.5">
       <span className="min-w-0 truncate text-[11px] text-fg-muted">{label}</span>
-      {sub !== null && (
-        <span className="min-w-0 truncate font-mono text-[10px] text-fg-subtle/70">{sub}</span>
-      )}
+      {bot && <span className="shrink-0 text-[10px] text-fg-subtle opacity-70">bot</span>}
       <span data-pulls-group-count className="text-[10px] tabular-nums text-fg-subtle/70">
         {count}
       </span>
+      {sub !== null && (
+        <span className="min-w-0 truncate font-mono text-[10px] text-fg-subtle/70">{sub}</span>
+      )}
     </div>
   )
 }
