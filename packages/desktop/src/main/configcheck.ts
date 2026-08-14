@@ -813,6 +813,24 @@ async function browseChecks(
   await selectScope(win, harnessPath)
   const painted = await listedFiles(win)
   const paintedTruth = ctx.config.tree(harnessPath)
+
+  /**
+   * The files the list nests inside a skill instead of giving a row of their
+   * own, decided here by asking the filesystem: a file whose own directory
+   * holds a `SKILL.md` is part of that skill.
+   *
+   * The pane's rule is written in `bundledWith`; this one shares no code with
+   * it, which is the point. A row per file stopped being the claim when the
+   * bundle went inside the skill - the claim now is that every file is either a
+   * row or inside the skill that owns it, and CFG-15 is the other half.
+   */
+  const bundled = paintedTruth.files.filter(
+    (file) =>
+      file.kind === 'other' &&
+      file.relPath.includes('/') &&
+      existsSync(join(harnessPath, file.relPath.slice(0, file.relPath.lastIndexOf('/')), 'SKILL.md'))
+  )
+  const expectedRows = paintedTruth.files.length - bundled.length
   const shot = await screenshot(win, shotDir, 'config-files.png')
 
   checks.push({
@@ -821,14 +839,16 @@ async function browseChecks(
     title: 'Each scope’s tree matches an independent walk of the same directory',
     ok:
       allAgree &&
-      painted.length === paintedTruth.files.length &&
+      painted.length === expectedRows &&
       painted.some((row) => row.kind === 'skill'),
     detail: {
       scopes: perScope,
       throughTheWindow: {
         scope: harnessPath,
         rows: painted.length,
-        expected: paintedTruth.files.length,
+        expected: expectedRows,
+        filesInTheTree: paintedTruth.files.length,
+        nestedUnderTheirSkill: bundled.map((file) => file.relPath),
         kinds: [...new Set(painted.map((row) => row.kind))].sort()
       },
       screenshot: shot.file
@@ -836,7 +856,11 @@ async function browseChecks(
     notes: [
       'The second read is a plain readdirSync walk in configcheck.ts, sharing no code with the',
       'tree scanner: skills are directories holding a SKILL.md, commands and agents are .md',
-      'at any depth. Names are compared as well as counts.'
+      'at any depth. Names are compared as well as counts.',
+      'A row per file stopped being the claim when a skill’s bundle went inside it, so the',
+      'expected row count subtracts the files whose own directory holds a SKILL.md - asked of',
+      'the filesystem here rather than of the rule the pane uses. CFG-15 is the other half:',
+      'those files are on the skill’s row and on its pane.'
     ]
   })
 
