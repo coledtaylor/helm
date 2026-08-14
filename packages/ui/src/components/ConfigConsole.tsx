@@ -20,6 +20,7 @@ import {
   FolderIcon,
   HookIcon,
   PlugIcon,
+  PlusIcon,
   RefreshIcon,
   SearchIcon,
   SlidersIcon,
@@ -44,6 +45,19 @@ export interface ConfigConsoleProps {
   dirty?: boolean | undefined
   onRefresh: () => void
   refreshing: boolean
+
+  /**
+   * Opens the New dialog. It sits beside the filter rather than in the header
+   * strip, because "add to this list" belongs to the list and the header's
+   * action is the one that re-reads the whole scope.
+   */
+  onNew?: (() => void) | undefined
+  /**
+   * A strip under the header, for something that has happened to the scope and
+   * that the file list can no longer show - a delete, whose undo is the only
+   * way back to a file that is not in the tree any more.
+   */
+  notice?: ReactNode | undefined
 
   /**
    * Docked beside a session split, where the list and the editor cannot both be
@@ -120,6 +134,8 @@ export function ConfigConsole({
   dirty = false,
   onRefresh,
   refreshing,
+  onNew,
+  notice,
   compact = false,
   onBack,
   children
@@ -291,6 +307,8 @@ export function ConfigConsole({
         }
       />
 
+      {notice}
+
       {view !== 'files' ? (
         <div className="min-h-0 flex-1 overflow-hidden rounded-island border border-border bg-surface">
           {children}
@@ -309,25 +327,45 @@ export function ConfigConsole({
             )}
           >
             <div className="shrink-0 p-2">
-              <div className="relative">
-                <SearchIcon
-                  width={13}
-                  height={13}
-                  className="pointer-events-none absolute top-1/2 left-2 -translate-y-1/2 text-fg-subtle"
-                />
-                <input
-                  data-config-filter
-                  value={filter}
-                  onChange={(event) => setFilter(event.target.value)}
-                  placeholder="Filter this scope"
-                  spellCheck={false}
-                  aria-label="Filter this scope"
-                  className={cn(
-                    'h-[26px] w-full rounded-well border border-border bg-surface-sunken pr-2 pl-7',
-                    'text-[12px] text-fg select-text placeholder:text-fg-subtle',
-                    'focus:border-accent focus:outline-none'
-                  )}
-                />
+              <div className="flex items-center gap-1.5">
+                <div className="relative min-w-0 flex-1">
+                  <SearchIcon
+                    width={13}
+                    height={13}
+                    className="pointer-events-none absolute top-1/2 left-2 -translate-y-1/2 text-fg-subtle"
+                  />
+                  <input
+                    data-config-filter
+                    value={filter}
+                    onChange={(event) => setFilter(event.target.value)}
+                    placeholder="Filter this scope"
+                    spellCheck={false}
+                    aria-label="Filter this scope"
+                    className={cn(
+                      'h-[26px] w-full rounded-well border border-border bg-surface-sunken pr-2 pl-7',
+                      'text-[12px] text-fg select-text placeholder:text-fg-subtle',
+                      'focus:border-accent focus:outline-none'
+                    )}
+                  />
+                </div>
+                {onNew && (
+                  <button
+                    type="button"
+                    data-config-new
+                    onClick={onNew}
+                    title="Add a skill, command, agent, rule or settings file to this scope"
+                    aria-label="Add a file to this scope"
+                    className={cn(
+                      // Outlined in the accent and never filled, at the height
+                      // of the field beside it so the row reads as one control
+                      // strip rather than two things that nearly line up.
+                      'grid size-[26px] shrink-0 place-items-center rounded-well border border-accent',
+                      'text-accent-text transition-colors hover:bg-accent-soft'
+                    )}
+                  >
+                    <PlusIcon width={12} height={12} />
+                  </button>
+                )}
               </div>
               <p className="mt-2 flex items-baseline gap-1.5 text-[11px] text-fg-subtle">
                 <span className="tabular-nums">

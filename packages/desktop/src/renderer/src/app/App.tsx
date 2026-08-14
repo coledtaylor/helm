@@ -20,8 +20,12 @@ import {
   BookIcon,
   cn,
   ConfigConsole,
+  ConfigDeleteDialog,
+  ConfigDeletedNotice,
   ConfigEditor,
+  ConfigNewDialog,
   ConfigNothingSelected,
+  ConfigRenameDialog,
   ConfirmSessionDialog,
   ContentDocumentPane,
   ContentNothingSelected,
@@ -1196,6 +1200,47 @@ export function App(): JSX.Element {
     )
 
   /**
+   * New, Rename and Delete for one entry in a `.claude` tree.
+   *
+   * Only one is ever open, so they share the busy flag and the error - and the
+   * error is the dialog's own, because every refusal these three have is about
+   * what was typed into the box that is still on screen. Rendered beside the
+   * other modals rather than inside the console: a dialog nested in a pane that
+   * a split can narrow to 119px is a dialog that gets clipped.
+   */
+  const configEntryDialog =
+    configState.scope === null || configState.entryDialog === null ? null : configState
+      .entryDialog === 'new' ? (
+      <ConfigNewDialog
+        scope={configState.scope}
+        files={configState.tree?.files ?? []}
+        busy={configState.entryBusy}
+        error={configState.entryError}
+        onCreate={configState.createFile}
+        onCancel={() => configState.openEntryDialog(null)}
+      />
+    ) : configState.selected === null ? null : configState.entryDialog === 'rename' ? (
+      <ConfigRenameDialog
+        scope={configState.scope}
+        file={configState.selected}
+        files={configState.tree?.files ?? []}
+        busy={configState.entryBusy}
+        error={configState.entryError}
+        onRename={configState.renameFile}
+        onCancel={() => configState.openEntryDialog(null)}
+      />
+    ) : (
+      <ConfigDeleteDialog
+        file={configState.selected}
+        files={configState.tree?.files ?? []}
+        busy={configState.entryBusy}
+        error={configState.entryError}
+        onDelete={configState.deleteFile}
+        onCancel={() => configState.openEntryDialog(null)}
+      />
+    )
+
+  /**
    * Setup owns the whole window rather than sitting in a tab.
    *
    * There is nothing else to look at: no roots means no tree, no config scopes
@@ -1478,6 +1523,22 @@ export function App(): JSX.Element {
               refreshing={configState.refreshing}
               compact={showSessions}
               onBack={() => configState.select(null)}
+              onNew={
+                configState.scope === null
+                  ? undefined
+                  : () => configState.openEntryDialog('new')
+              }
+              notice={
+                configState.deleted === null ? null : (
+                  <ConfigDeletedNotice
+                    label={configState.deleted.label}
+                    fileCount={configState.deleted.files.length}
+                    busy={configState.entryBusy}
+                    onUndo={configState.undoDelete}
+                    onDismiss={configState.dismissDeleted}
+                  />
+                )
+              }
             >
               {configState.view === 'files' ? (
                 configState.selected === null ? (
@@ -1501,6 +1562,8 @@ export function App(): JSX.Element {
                     onRestore={configState.restore}
                     onReveal={launcher.reveal}
                     onDirtyChange={configState.setDirty}
+                    onRename={() => configState.openEntryDialog('rename')}
+                    onDelete={() => configState.openEntryDialog('delete')}
                   />
                 )
               ) : configState.view === 'effective' ? (
@@ -1885,6 +1948,7 @@ export function App(): JSX.Element {
 
         {harnessDialog}
         {confirmDialog}
+        {configEntryDialog}
 
         {/* What a launch composed, and anything that went wrong doing it.
             Over the pane rather than in it, because a profile is launched from
