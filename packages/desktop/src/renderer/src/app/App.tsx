@@ -1755,7 +1755,20 @@ export function App(): JSX.Element {
                 // pane because a root is a setting and the pane is handed
                 // discovery; see `activeProjectIsRoot`.
                 {...(activeProjectIsRoot
-                  ? { onRemoveRoot: (project: Project) => launcher.removeRoot(project.path) }
+                  ? {
+                      onRemoveRoot: (project: Project) => {
+                        // The shell goes with the pane, exactly as it does in
+                        // `closeTab`. Removing a folder takes it out of
+                        // discovery, which drops its pane from `openPanes`
+                        // without going through the close button - so nothing
+                        // else is going to end the pty, and it would sit in the
+                        // registry with no tab in front of it until Helm quits.
+                        // Measured: settings-check's shell registry still held
+                        // a removed folder's shell three groups later.
+                        void disposeShell(project.path)
+                        launcher.removeRoot(project.path)
+                      }
+                    }
                   : {})}
                                 // The whole snapshot, not this project's slice of it. The pane
                 // reduces it itself (`projectPulls`), so the project page and
