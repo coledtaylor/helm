@@ -157,6 +157,31 @@ const isSpikeMode =
   mode !== 'design-shot' &&
   mode !== 'affordance-check'
 
+/**
+ * A check's window keeps rendering when something else is in front of it.
+ *
+ * Chromium backgrounds an occluded window: `requestAnimationFrame` stops and
+ * timers are throttled to once a second. Every check here drives the **real
+ * window** and measures what came back within a few hundred milliseconds - a
+ * synthesised pointer move and then `getComputedStyle`, a drag and then the
+ * pane's width - so a throttled renderer answers "nothing changed" to all of
+ * it, which is indistinguishable from the app being broken.
+ *
+ * Measured on a machine running six Helm windows at once: `affordance-check`
+ * measured 162 controls with its window in front and 7 with somebody else's on
+ * top, reporting most of the app as having no hover state at all. The
+ * alternative - raising or focusing our own window - is worse than the
+ * problem, because every other window on that machine belongs to a check that
+ * would then be the one being measured through a throttled renderer.
+ *
+ * Check and spike modes only. `app` is somebody's actual Helm, and a Helm
+ * minimised behind an editor should go quiet like any other window.
+ */
+if (mode !== 'app') {
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+  app.commandLine.appendSwitch('disable-renderer-backgrounding')
+}
+
 initDataDir()
 
 /**
