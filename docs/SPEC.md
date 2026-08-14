@@ -327,7 +327,10 @@ the theme toggle, laid out as one scrolling page of titled groups:
 
 - **Claude CLI** - the resolved executable, its version and whether that version
   is inside the tested range, "Locate manually…", and **Clear override**
-- **Workspace** - the scan roots, with add *and remove*
+- **Workspace** - the scan roots, with add *and remove*. Not the only way out
+  any more: a folder that is itself a root carries the same removal on its own
+  project pane - the "Scanned folder" panel, in 5's Portability note - which is
+  where somebody looking at a folder they want gone actually is
 - **Appearance** - theme, and what the status bar's usage segment shows
 - **Updates** - this build's version, the newest release Helm has heard of, one
   sentence saying which of five things is true of the pair, the launch-check
@@ -740,6 +743,29 @@ option open and is what makes the app genuinely portable.
   manifest; its optional `repos:` key names where the repositories are, so a
   folder that already holds repos at its top level can become one without
   hiding them.
+
+  > [!note] Amended 2026-08-14 - what "falls back to plain folders" means
+  > A root with no harness under it used to list its immediate children,
+  > always. That is right for a directory of repositories and wrong for a
+  > directory somebody picked meaning *this one*: adding a single tool
+  > directory put its `data`, `scripts`, `src` and `tests` in the launcher and
+  > nothing named after the folder that was picked.
+  >
+  > The container reading now needs evidence, and it comes off the children: a
+  > child carrying `.git`, `.claude` or `CLAUDE.md` says the root is a
+  > container and its siblings come with it. With none, the root is the
+  > project - **the folder you picked is the thing that appears**. Those three
+  > markers and no more; a list that grew to `package.json`, `pyproject.toml`
+  > and whatever is next would be wrong for every ecosystem not yet in it, and
+  > wrong silently. Every scan test from before the change passes unchanged,
+  > which is what says this only ever narrows the old rule.
+  >
+  > A folder can also be taken back out, from a **Scanned folder** panel on its
+  > own project pane - the Settings list of roots (4.5) was the only way, and
+  > it is not where somebody looking at a folder they want gone goes looking.
+  > Removal is a change to a setting: the rows go from the tree and from the
+  > discovery cache, and nothing on disk is touched, which the panel says in
+  > those words. `pnpm settings-check`'s S-22 is both halves.
 - **Portable install** - single `.exe`, app data beside it when portable,
   `%APPDATA%` when installed. Both install-tested by `pnpm packaging-check --only=package`;
   the NSIS build is per-user and needs no elevation. See [PACKAGING.md](PACKAGING.md).

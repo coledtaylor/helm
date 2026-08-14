@@ -669,9 +669,15 @@ function buildFixtures(root: string, claudeHome: string): Fixtures {
   dir('plain', 'beta')
   file(join(plain, 'alpha', '.claude', 'skills', 'one', 'SKILL.md'), '# One\n')
 
+  // A folder of repositories, and each one has to *be* one: a root with no
+  // project under it is now the project (SPEC 5, Portability), so two bare
+  // directories would arrive as one row named `convertible` and this check
+  // would be measuring the rule rather than the conversion. `.git` is the
+  // marker a repository actually carries, and it is a directory here for the
+  // same reason it is one in a clone.
   const convertible = dir('convertible')
-  dir('convertible', 'first')
-  dir('convertible', 'second')
+  dir('convertible', 'first', '.git')
+  dir('convertible', 'second', '.git')
 
   const named = dir('named')
   file(join(named, 'harness.yaml'), 'name: "named"\nrepos: "projects"\n')
