@@ -2,7 +2,8 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { scan } from './scan'
+import { EMPTY_INVENTORY } from '../types'
+import { disprovedProjectPaths, orphanedProjectPaths, scan } from './scan'
 
 let root: string
 
@@ -259,5 +260,87 @@ describe('scan', () => {
     await file('dev/harness.yaml', 'name: "dev"\n')
     const result = await scan({ roots: [join(root, 'dev')] })
     expect(result.projects.every((p) => p.git === null)).toBe(true)
+  })
+})
+
+describe('reconciling the discovery cache', () => {
+  const scanned = (
+    roots: string[],
+    projects: string[],
+    errors: Array<{ path: string; message: string }> = []
+  ): Parameters<typeof disprovedProjectPaths>[1] => ({
+    roots,
+    projects: projects.map((path) => ({
+      path,
+      name: path,
+      kind: 'folder' as const,
+      harnessPath: null,
+      hasClaudeDir: false,
+      inventory: EMPTY_INVENTORY,
+      git: null
+    })),
+    errors
+  })
+
+  it('disproves a cached row a completed scan of its own root did not return', () => {
+    const tool = join(root, 'tool')
+    const cached = [join(tool, 'src'), join(tool, 'tests'), tool]
+
+    expect(disprovedProjectPaths(cached, scanned([tool], [tool]))).toEqual([
+      join(tool, 'src'),
+      join(tool, 'tests')
+    ])
+  })
+
+  it('keeps everything under a root the scan could not read', () => {
+    // The unplugged drive. A row is only ever dropped where this pass can prove
+    // it wrong, and a root that errored proves nothing about what is under it.
+    const gone = join(root, 'gone')
+    const cached = [join(gone, 'alpha')]
+
+    expect(
+      disprovedProjectPaths(cached, scanned([gone], [], [{ path: gone, message: 'not a directory' }]))
+    ).toEqual([])
+    // An error *below* the root is the same answer: the walk was incomplete.
+    expect(
+      disprovedProjectPaths(
+        cached,
+        scanned([gone], [], [{ path: join(gone, 'beta'), message: 'EPERM' }])
+      )
+    ).toEqual([])
+  })
+
+  it('keeps a cached row that belongs to no current root at all', () => {
+    // Nothing scanned it, so nothing has an opinion about it. Removal is what
+    // takes these, and it says so itself.
+    const cached = [join(root, 'elsewhere', 'alpha')]
+    expect(disprovedProjectPaths(cached, scanned([join(root, 'here')], []))).toEqual([])
+  })
+
+  it('matches roots and rows across two spellings of one directory', () => {
+    const cached = [join(root, 'Tool', 'SRC')]
+    const tool = join(root, 'tool')
+    expect(disprovedProjectPaths(cached, scanned([tool], [tool]))).toEqual([
+      join(root, 'Tool', 'SRC')
+    ])
+    expect(disprovedProjectPaths(cached, scanned([tool], [join(root, 'tool', 'src')]))).toEqual([])
+  })
+
+  it('orphans the rows a removed root put there, and only those', () => {
+    const removed = join(root, 'tool')
+    const kept = join(root, 'work')
+    const cached = [join(removed, 'src'), removed, join(kept, 'alpha')]
+
+    expect(orphanedProjectPaths(cached, removed, [kept])).toEqual([join(removed, 'src'), removed])
+  })
+
+  it('keeps an orphan that another root still covers', () => {
+    // Two overlapping roots, which the settings pane allows: dropping the inner
+    // one may not take rows the outer one is still scanning.
+    const outer = root
+    const inner = join(root, 'tool')
+    const cached = [join(inner, 'src')]
+
+    expect(orphanedProjectPaths(cached, inner, [outer])).toEqual([])
   })
 })

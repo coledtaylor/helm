@@ -334,3 +334,67 @@ export async function scan(opts: ScanOptions): Promise<DiscoveryResult> {
     durationMs: Date.now() - startedAt
   }
 }
+
+/**
+ * Whether `path` is `root` or sits under it.
+ *
+ * Case-insensitively on Windows, which `relative` handles: two spellings of one
+ * directory are one directory, and every path here came out of a picker, a
+ * settings row or a database column that may each have recorded a different
+ * one.
+ */
+export function isWithin(root: string, path: string): boolean {
+  const within = relative(resolve(root), resolve(path))
+  return within === '' || (!within.startsWith('..') && !isAbsolute(within))
+}
+
+/**
+ * The cached project rows a completed scan has **disproved**.
+ *
+ * The discovery cache exists so the launcher can paint before a scan lands, and
+ * a scan otherwise only ever writes to it: rows it did not see are left alone,
+ * so a project on a drive that is not plugged in is stale rather than gone.
+ * That rule has one hole, and it is permanent - a row written by a scan that
+ * was wrong is a row nothing ever takes back. The subdirectories the folder-root
+ * bug wrote would have gone on painting for a second at every start, for good,
+ * on a machine where the bug itself was fixed.
+ *
+ * So a row is forgotten only where this pass can *prove* it wrong: it is under
+ * a root that was just walked with no error at or below it, and the walk did
+ * not return it. A root that errored - or a row belonging to no current root -
+ * keeps everything under it, which is exactly the unplugged drive the original
+ * rule is about.
+ */
+export function disprovedProjectPaths(
+  cached: readonly string[],
+  result: Pick<DiscoveryResult, 'roots' | 'projects' | 'errors'>
+): string[] {
+  const trusted = result.roots.filter(
+    (root) => !result.errors.some((error) => isWithin(root, error.path))
+  )
+  if (trusted.length === 0) return []
+
+  const found = new Set(result.projects.map((project) => project.path.toLowerCase()))
+  return cached.filter(
+    (path) =>
+      !found.has(path.toLowerCase()) && trusted.some((root) => isWithin(root, path))
+  )
+}
+
+/**
+ * The cached project rows that removing `removed` from the scan roots orphans:
+ * under it, and under none of the roots that remain.
+ *
+ * The scan cannot answer this one - a root that is no longer scanned is a root
+ * nothing walks again - so removal has to say so itself, and it is the same
+ * claim `disprovedProjectPaths` makes: the rows this root put there go with it.
+ */
+export function orphanedProjectPaths(
+  cached: readonly string[],
+  removed: string,
+  remaining: readonly string[]
+): string[] {
+  return cached.filter(
+    (path) => isWithin(removed, path) && !remaining.some((root) => isWithin(root, path))
+  )
+}

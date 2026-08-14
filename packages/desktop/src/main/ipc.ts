@@ -1,7 +1,9 @@
 import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron'
-import { isAbsolute, relative } from 'node:path'
 import {
   createHarness,
+  forgetProjects,
+  isWithin,
+  orphanedProjectPaths,
   readArchivedConversation,
   readHistoryProjects,
   readHistoryPrompts,
@@ -116,15 +118,6 @@ export interface IpcContext {
    * is simulated without going anywhere near the user's real one.
    */
   claudeHome?: string | undefined
-}
-
-/**
- * Whether `path` is `root` or sits under it, compared case-insensitively
- * because two spellings of the same Windows directory are the same directory.
- */
-function isWithin(root: string, path: string): boolean {
-  const within = relative(root, path)
-  return within === '' || (!within.startsWith('..') && !isAbsolute(within))
 }
 
 export function registerIpc(ctx: IpcContext): void {
@@ -247,6 +240,20 @@ export function registerIpc(ctx: IpcContext): void {
         (existing) => existing.toLowerCase() !== path.toLowerCase()
       )
       const next = updateSettings(services, { scanRoots: merged })
+      // The rows this root put in the discovery cache go with it. Nothing else
+      // can take them: the next scan does not walk a root that is no longer a
+      // root, so a row left here would go on painting at every start, in a tree
+      // that no longer holds it once the scan lands - the flicker being the
+      // small half of it, and "Helm still lists a folder I removed" the rest.
+      // Rows a *remaining* root still covers are kept; see `orphanedProjectPaths`.
+      forgetProjects(
+        services.store,
+        orphanedProjectPaths(
+          cachedProjects(services).map((project) => project.path),
+          path,
+          next.scanRoots
+        )
+      )
       emit(ctx.window(), 'settings:changed', next)
       return next.scanRoots
     },

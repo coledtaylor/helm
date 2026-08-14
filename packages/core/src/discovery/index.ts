@@ -21,4 +21,10 @@ export {
   type CreateHarnessResult
 } from './harness'
 export { findEnclosingHarness, suggestRoots } from './roots'
-export { scan, type ScanOptions } from './scan'
+export {
+  disprovedProjectPaths,
+  isWithin,
+  orphanedProjectPaths,
+  scan,
+  type ScanOptions
+} from './scan'

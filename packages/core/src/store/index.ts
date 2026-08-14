@@ -36,7 +36,12 @@ export {
   type HistoryIndexInput
 } from './history'
 export { knownMigrations, migrate, type MigrationOutcome } from './migrate'
-export { cacheProjects, readCachedProjects, type CachedProject } from './projects'
+export {
+  cacheProjects,
+  forgetProjects,
+  readCachedProjects,
+  type CachedProject
+} from './projects'
 export {
   forgetPrRepos,
   readPrRepos,

@@ -15,7 +15,7 @@ import {
 } from '../types'
 import { openStore, type Store } from './db'
 import { knownMigrations } from './migrate'
-import { cacheProjects, readCachedProjects } from './projects'
+import { cacheProjects, forgetProjects, readCachedProjects } from './projects'
 import {
   finishSession,
   readSessions,
@@ -664,6 +664,20 @@ describe('project cache', () => {
   it('stores a null git state for a directory that is not a repo', () => {
     cacheProjects(store, [project({ git: null })])
     expect(readCachedProjects(store)[0]?.git).toBeNull()
+  })
+
+  it('forgets rows by path, however they were spelled, and only those', () => {
+    const alpha = join(dir, 'repos', 'alpha')
+    const beta = join(dir, 'repos', 'beta')
+    cacheProjects(store, [project(), project({ path: beta, name: 'beta' })])
+
+    expect(forgetProjects(store, [alpha.toUpperCase()])).toBe(1)
+    expect(readCachedProjects(store).map((p) => p.path)).toEqual([beta])
+    // Idempotent, because the caller works out what to forget from a list that
+    // may already have been reconciled by the scan that preceded it.
+    expect(forgetProjects(store, [alpha])).toBe(0)
+    expect(forgetProjects(store, [])).toBe(0)
+    expect(readCachedProjects(store)).toHaveLength(1)
   })
 })
 
