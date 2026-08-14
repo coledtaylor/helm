@@ -1585,6 +1585,7 @@ export function App(): JSX.Element {
               {contentState.selected === null ? (
                 <ContentNothingSelected
                   scope={contentState.scope}
+                  view={contentState.view}
                   fileCount={contentState.tree?.files.length ?? 0}
                 />
               ) : (

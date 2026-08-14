@@ -11,6 +11,7 @@ import type {
   ContentViewMode
 } from '@helm/core'
 import { cn } from '../lib/cn'
+import { CONTENT_KIND_ICON } from '../lib/contentIcons'
 import { ROW_SELECTED } from '../lib/rows'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes } from '../lib/time'
@@ -18,7 +19,6 @@ import { ContentTreeList } from './ContentTreeList'
 import { PaneBack } from './PaneBack'
 import { PaneHeader } from './PaneHeader'
 import {
-  ArtifactIcon,
   BookIcon,
   CaretIcon,
   DocIcon,
@@ -607,7 +607,7 @@ function Row({
   onSelect: (file: ContentFile) => void
   onReveal: (path: string) => void
 }): JSX.Element {
-  const Icon = file.kind === 'html' ? ArtifactIcon : file.kind === 'markdown' ? DocIcon : SlidersIcon
+  const Icon = CONTENT_KIND_ICON[file.kind]
   // Listed, but not readable here. Greyed and sent to Explorer rather than
   // hidden: the whole complaint this pane answers is a file that is on the disk
   // and not on the screen, and "Helm cannot render this" is not a reason to
@@ -830,12 +830,20 @@ function Empty({ scope }: { scope: ContentScope | null }): JSX.Element {
   )
 }
 
-/** Shown in the detail column when nothing is open. */
+/**
+ * Shown in the detail column when nothing is open.
+ *
+ * It says what the *mode* is doing, not what the curated walk found. Repeating
+ * "555 files" beside a file tree would be quoting a number from the other view
+ * - true of the scope, and not true of anything on screen.
+ */
 export function ContentNothingSelected({
   scope,
+  view,
   fileCount
 }: {
   scope: ContentScope | null
+  view: ContentViewMode
   fileCount: number
 }): JSX.Element {
   return (
@@ -845,12 +853,24 @@ export function ContentNothingSelected({
         <p className="mt-3 text-[13px] text-fg-muted">
           {scope === null
             ? 'Pick a scope to read what is in it.'
-            : `${fileCount} ${fileCount === 1 ? 'file' : 'files'} in ${scope.label}.`}
+            : view === 'tree'
+              ? `Every file in ${scope.label}.`
+              : `${fileCount} ${fileCount === 1 ? 'file' : 'files'} in ${scope.label}.`}
         </p>
         <p className="mt-2 text-[12px] leading-relaxed text-fg-subtle">
-          Markdown renders with its frontmatter as a header and its{' '}
-          <strong className="font-medium text-fg-muted">[[wikilinks]]</strong> live. HTML opens in a
-          sandboxed frame with no network behind it.
+          {view === 'tree' ? (
+            <>
+              Directories are read as you open them, and what the repository ignores is listed
+              rather than hidden. Markdown, HTML and data open the way they do anywhere else;
+              everything else opens as source.
+            </>
+          ) : (
+            <>
+              Markdown renders with its frontmatter as a header and its{' '}
+              <strong className="font-medium text-fg-muted">[[wikilinks]]</strong> live. HTML opens
+              in a sandboxed frame with no network behind it.
+            </>
+          )}
         </p>
       </div>
     </div>

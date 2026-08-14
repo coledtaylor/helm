@@ -2,8 +2,9 @@ import type { JSX } from 'react'
 import { Fragment } from 'react'
 import type { ContentDirEntry, ContentDirListing } from '@helm/core'
 import { cn } from '../lib/cn'
+import { CONTENT_KIND_ICON } from '../lib/contentIcons'
 import { ROW_SELECTED } from '../lib/rows'
-import { ArtifactIcon, CaretIcon, DocIcon, FolderIcon, LinkIcon, SlidersIcon } from './icons'
+import { CaretIcon, FolderIcon, LinkIcon } from './icons'
 
 /**
  * A scope as an ordinary file tree.
@@ -176,13 +177,7 @@ function TreeRow({
   // listed so the reader knows they are there; neither is walked.
   const walkable = entry.directory && !entry.ignored && !entry.link
   const unopenable = !entry.directory && entry.kind === 'binary'
-  const Icon = entry.directory
-    ? FolderIcon
-    : entry.kind === 'html'
-      ? ArtifactIcon
-      : entry.kind === 'markdown'
-        ? DocIcon
-        : SlidersIcon
+  const Icon = entry.directory ? FolderIcon : CONTENT_KIND_ICON[entry.kind ?? 'binary']
 
   const onClick = (): void => {
     if (walkable) return onToggleDir(entry.relPath)
