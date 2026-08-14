@@ -245,7 +245,23 @@ export function useContent(): ContentState {
       void helm
         .invoke('content:dir', { scopePath, relPath })
         .then((listing) => setDirs((current) => new Map(current).set(relPath, listing)))
-        .catch(() => undefined)
+        .catch((err: unknown) => {
+          // A listing that never arrives is still an answer, and it has to be
+          // written down: `loadingDirs` is derived from "expanded with no
+          // listing", so dropping the failure leaves the row pulsing for ever
+          // with nothing on screen to say why.
+          setDirs((current) =>
+            new Map(current).set(relPath, {
+              scopePath,
+              relPath,
+              entries: [],
+              ignored: 0,
+              ignoreSource: 'default',
+              error: readable(err),
+              tookMs: 0
+            })
+          )
+        })
     },
     [scopePath]
   )
