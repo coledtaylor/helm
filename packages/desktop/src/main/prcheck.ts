@@ -2685,7 +2685,9 @@ async function triageChecks({
     writeFileSync(alphaFile, alphaAsBuilt)
     writeFileSync(betaFile, betaAsBuilt)
     await sendWrite(win, { prStaleDays: 0 }).catch(() => null)
-    await refreshNow(pulls)
+    // Caught, like every other restore in this file: a failure here would
+    // otherwise replace whatever went wrong above with a fetch error.
+    await refreshNow(pulls).catch(() => undefined)
   }
 
   return checks
