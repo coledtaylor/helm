@@ -333,6 +333,48 @@ async function shootProjectRepo(
   return shot.file
 }
 
+/**
+ * The content pane as a **file tree**, which the walk cannot reach on its own.
+ *
+ * The walk opens the first scope, which on a machine organised into harnesses
+ * is a harness, and a harness defaults to the curated view - so without this
+ * the second of the pane's two modes is never photographed. It is the same
+ * argument the repository shot makes for the project pane, and the same one the
+ * crowded tab strip makes: the shot that matters is often a *state* rather than
+ * a view.
+ *
+ * `packages/` is expanded when it is there so the shot carries a nested level;
+ * a tree drawn one level deep does not show whether the indent works. The pane
+ * is put back on Curated afterwards, because the next theme's walk starts from
+ * whatever this one left.
+ */
+async function shootContentTree(
+  win: BrowserWindow,
+  outDir: string,
+  theme: string
+): Promise<string | null> {
+  if (!(await click(win, '[data-content-view="tree"]'))) {
+    console.error('design-shot: the content pane has no Tree control')
+    return null
+  }
+  await sleep(900)
+  // Whichever directory the scope actually has, rather than a name written
+  // down here - one level of nesting is the point, not which one.
+  await js<void>(
+    win,
+    `(() => {
+       const rows = [...document.querySelectorAll('[data-content-tree-entry][aria-expanded="false"]')];
+       const first = rows[0];
+       if (first) first.click();
+     })()`
+  ).catch(() => undefined)
+  await sleep(900)
+  const shot = await screenshot(win, outDir, `content-tree-${theme}.png`)
+  await click(win, '[data-content-view="curated"]')
+  await sleep(500)
+  return shot.file
+}
+
 /** The project shell's height, written the way its drag handle writes it. */
 async function writeShellHeight(win: BrowserWindow, pct: number): Promise<void> {
   await js<void>(
@@ -1178,6 +1220,14 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
         // the room, and the harness row the walk opens first has no branch,
         // no git stats and no pull-request panel to squeeze.
         files.push(...(await shootShellHeights(win, outDir, theme, shellHeightBefore)))
+      }
+
+      // The content pane again, in its other mode. The walk opens a harness,
+      // which defaults to curated, so the file tree is a state rather than a
+      // view and no click in the itinerary reaches it.
+      if (view.name === 'content') {
+        const treeShot = await shootContentTree(win, outDir, theme)
+        if (treeShot !== null) files.push(treeShot)
       }
 
       // The history pane again, two clicks in: the archived transcript, and a

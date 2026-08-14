@@ -420,6 +420,53 @@ describe('readContentDir', () => {
     }
   })
 
+  /**
+   * The junction rule, which is the same one the config tree and the curated
+   * walk follow: an overlay shim's subdirectories are junctions into real
+   * repositories, so a tree that walked one would list another project's files
+   * as this scope's - and one pointing at an ancestor would not finish.
+   *
+   * Windows-first, so this plants a real junction with `mklink /J`. The row is
+   * still *listed* - that is the point of the whole surface - and marked as a
+   * link; what is refused is reading through it.
+   */
+  it('lists a junction and refuses to read through it', async () => {
+    const root = fixture()
+    const outside = mkdtempSync(join(tmpdir(), 'helm-content-outside-'))
+    try {
+      writeFileSync(join(outside, 'somebody-elses-note.md'), '# Not this scope\n')
+      const link = join(root, 'linked')
+      const made = spawnSync('cmd', ['/c', 'mklink', '/J', link, outside], { windowsHide: true })
+      if (made.status !== 0) return // Not Windows, or no permission to make one.
+
+      const top = await readContentDir(contentScope(root, 'project'), '', {
+        ignoreSource: 'default'
+      })
+      const row = top.entries.find((entry) => entry.name === 'linked')
+      expect(row).toBeDefined()
+      expect(row?.link).toBe(true)
+
+      // The fixture has to be discriminating: the junction really does lead to
+      // a file, so a refusal is a refusal rather than an empty directory.
+      const behind = await readContentDir(contentScope(outside, 'project'), '', {
+        ignoreSource: 'default'
+      })
+      expect(behind.entries.map((entry) => entry.name)).toContain('somebody-elses-note.md')
+
+      const through = await readContentDir(contentScope(root, 'project'), 'linked', {
+        ignoreSource: 'default'
+      })
+      expect(through.error).toMatch(/link out of this scope/)
+      expect(through.entries).toEqual([])
+    } finally {
+      // `rm` the junction rather than walking it - the rule CLAUDE.md states
+      // about anything that removes a shim applies to a test that plants one.
+      rmSync(join(root, 'linked'), { recursive: true, force: true })
+      rmSync(root, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
   it('refuses a path that escapes the scope', async () => {
     const root = fixture()
     try {

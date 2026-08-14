@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { readdirSync, statSync } from 'node:fs'
+import { readdirSync, realpathSync, statSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import type {
   ContentDirEntry,
@@ -77,6 +77,22 @@ const ALWAYS_IGNORED = new Set(['.git'])
 
 function slashed(from: string, path: string): string {
   return relative(from, path).split(sep).join('/')
+}
+
+/**
+ * The path with its links resolved, or the path itself.
+ *
+ * A directory that is not there cannot be resolved, and that is not this
+ * function's problem to report - the `readdir` below says so with the real
+ * error. Falling back to the path keeps the containment check honest: an
+ * unresolvable path is compared as written rather than skipping the check.
+ */
+function realOrSelf(path: string): string {
+  try {
+    return realpathSync.native(path)
+  } catch {
+    return path
+  }
 }
 
 /** The nearest ancestor holding a `.git`, or null. A worktree's is a file. */
@@ -196,6 +212,34 @@ export async function readContentDir(
       ignored: 0,
       ignoreSource: 'default',
       error: `${relPath} is outside this scope`,
+      tookMs: Date.now() - started
+    }
+  }
+
+  /**
+   * And outside it *after the links are resolved*, which is the check that
+   * matters on this platform.
+   *
+   * The rows already refuse to expand a link, so the window cannot ask for a
+   * path inside one. That is a fact about one caller, though, and the rule is
+   * about the disk: an overlay shim's subdirectories are junctions into real
+   * repositories, so a listing reached through one would report another
+   * project's files as this scope's - and a junction pointing at an ancestor
+   * would let a reader walk in circles. `realpath` answers both at any depth
+   * for one syscall, where checking each entry for link-ness only answers the
+   * first level.
+   */
+  const resolvedDir = realOrSelf(dir)
+  const resolvedBase = realOrSelf(base)
+  const afterLinks = relative(resolvedBase, resolvedDir)
+  if (afterLinks.startsWith('..') || /^[A-Za-z]:/.test(afterLinks)) {
+    return {
+      scopePath: base,
+      relPath,
+      entries: [],
+      ignored: 0,
+      ignoreSource: 'default',
+      error: `${relPath} is a link out of this scope, and Helm does not follow one`,
       tookMs: Date.now() - started
     }
   }
