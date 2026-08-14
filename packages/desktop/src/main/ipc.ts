@@ -433,6 +433,13 @@ export function registerIpc(ctx: IpcContext): void {
       ctx.config.watch(path)
     },
 
+    // The other three things a directory supports. They reach the same
+    // snapshot-first path `config:write` does; what is new here is the
+    // question, not a second route to the disk.
+    'config:create': (request) => ctx.config.create(request),
+    'config:rename': (request) => ctx.config.rename(request),
+    'config:delete': (request) => ctx.config.remove(request),
+
     'config:effective': (request) => ctx.config.effective(request),
 
     'config:mcpPreview': (request) => ctx.config.mcpPreview(request),

@@ -3,6 +3,8 @@ import { basename, dirname, join, resolve } from 'node:path'
 import {
   addMcpServer,
   computeEffectiveView,
+  createConfigFile,
+  deleteConfigEntry,
   hashContent,
   insertConfigSnapshot,
   listMcpServers,
@@ -16,6 +18,7 @@ import {
   readConfigTree,
   readProfile,
   removeMcpServer,
+  renameConfigEntry,
   restoreConfigSnapshot,
   runDoctor,
   snapshotKey,
@@ -24,12 +27,18 @@ import {
   type ClaudeCommand,
   type ConfigScope,
   type ConfigSnapshotMeta,
+  type CreateConfigRequest,
+  type CreateConfigResult,
+  type DeleteConfigRequest,
+  type DeleteConfigResult,
   type DoctorReport,
   type EffectiveView,
   type McpAddRequest,
   type McpPreview,
   type McpResult,
   type McpScope,
+  type RenameConfigRequest,
+  type RenameConfigResult,
   type WriteConfigRequest,
   type WriteConfigResult
 } from '@helm/core'
@@ -61,6 +70,9 @@ export interface ConfigService {
   snapshots: (scopePath: string, path: string) => ConfigSnapshotMeta[]
   snapshot: (id: number) => { content: string } | null
   restore: (id: number, path: string) => WriteConfigResult
+  create: (req: CreateConfigRequest) => CreateConfigResult
+  rename: (req: RenameConfigRequest) => RenameConfigResult
+  remove: (req: DeleteConfigRequest) => DeleteConfigResult
   /** Watch one file, or stop watching. */
   watch: (path: string | null) => void
   effective: (req: EffectiveViewRequest) => EffectiveView
@@ -373,6 +385,69 @@ export function createConfigService({
     return result
   }
 
+  /**
+   * The same courtesy for a path this process just changed by some other route.
+   *
+   * The watch is on a *directory*, so creating, moving or removing the file the
+   * editor has open fires it - and an "edited outside Helm" banner over a
+   * rename the user just asked for would be the app reporting itself as a third
+   * party. Re-reading is enough: the hash of whatever is there now, including
+   * the empty hash of a file that is not.
+   */
+  function noteChanged(...paths: readonly string[]): void {
+    if (watched === null) return
+    if (!paths.some((path) => resolve(path) === watched)) return
+    watchedHash = readConfigFileContent(watched).hash
+  }
+
+  // -------------------------------------------------------------------------
+  // Create, rename, delete
+  // -------------------------------------------------------------------------
+  /**
+   * The entry is resolved from the tree rather than taken from the request.
+   *
+   * What a path *is* - a skill whose directory carries its name, a command
+   * whose path is its namespace - decides what a rename moves and what a delete
+   * removes, and that is a fact about the disk. A renderer that sent its own
+   * copy of the kind could ask for a skill's directory to be moved by naming a
+   * settings file.
+   */
+  function entryIn(scopePath: string, path: string): { scope: ConfigScope; files: ReturnType<typeof readConfigTree>['files']; file: ReturnType<typeof readConfigTree>['files'][number] } {
+    const scope = scopeFor(scopePath)
+    const { files } = readConfigTree(scope)
+    const target = resolve(path)
+    const file = files.find((candidate) => resolve(candidate.path) === target)
+    if (!file) {
+      throw new Error(
+        `${target} is not a configuration file in ${scope.label}. Re-read the scope and try again.`
+      )
+    }
+    return { scope, files, file }
+  }
+
+  function create(req: CreateConfigRequest): CreateConfigResult {
+    const result = createConfigFile(services.store, scopeFor(req.scopePath), {
+      kind: req.kind,
+      name: req.name
+    })
+    if (result.path !== null) noteChanged(result.path)
+    return result
+  }
+
+  function rename(req: RenameConfigRequest): RenameConfigResult {
+    const { scope, files, file } = entryIn(req.scopePath, req.path)
+    const result = renameConfigEntry(services.store, scope, files, file, req.name)
+    noteChanged(...result.moved.flatMap((move) => [move.from, move.to]))
+    return result
+  }
+
+  function remove(req: DeleteConfigRequest): DeleteConfigResult {
+    const { scope, files, file } = entryIn(req.scopePath, req.path)
+    const result = deleteConfigEntry(services.store, scope, files, file)
+    noteChanged(...result.removed.map((row) => row.path))
+    return result
+  }
+
   return {
     scopes,
     tree: (scopePath) => readConfigTree(scopeFor(scopePath)),
@@ -391,6 +466,9 @@ export function createConfigService({
       }
       return result
     },
+    create,
+    rename,
+    remove,
     watch: watchFile,
     effective,
     mcpPreview: previewMcpAdd,
