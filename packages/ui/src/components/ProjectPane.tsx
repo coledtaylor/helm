@@ -5,7 +5,14 @@ import { cn } from '../lib/cn'
 import { GitChip } from './GitChip'
 import { fetchedCaption } from './PullsPane'
 import { PullRow, useNow } from './PullRow'
-import { BookIcon, LayersIcon, RefreshIcon, SlidersIcon, TerminalIcon } from './icons'
+import {
+  BookIcon,
+  CloseIcon,
+  LayersIcon,
+  RefreshIcon,
+  SlidersIcon,
+  TerminalIcon
+} from './icons'
 
 const KIND_LABEL = {
   harness: 'Harness',
@@ -61,6 +68,17 @@ export interface ProjectPaneProps {
   /** Opens the content viewer with this project as its scope. */
   onOpenContent?: ((project: Project) => void) | undefined
   /**
+   * Takes this folder out of the scan roots. Passed **only for a project whose
+   * own path is a root**, which is the whole of what can be removed: a repo
+   * found inside a scanned folder is not something Helm was told about, and
+   * offering to remove it would be offering to remove its parent.
+   *
+   * Absent for every other project, so the panel below is absent too rather
+   * than disabled - a control that is never usable on most of the panes it
+   * appears on is a control that teaches people to ignore it.
+   */
+  onRemoveRoot?: ((project: Project) => void) | undefined
+  /**
    * The whole pull-request snapshot, reduced to this project by `projectPulls`.
    * Null before the first read; the panel is simply absent for a project the
    * surface has nothing to say about.
@@ -100,6 +118,7 @@ export function ProjectPane({
   onSaveAsProfile,
   onOpenConfig,
   onOpenContent,
+  onRemoveRoot,
   pulls = null,
   onOpenPull,
   onRefreshPulls,
@@ -252,6 +271,8 @@ export function ProjectPane({
             </Muted>
           )}
         </Panel>
+
+        {onRemoveRoot && <ScannedFolder project={project} onRemove={onRemoveRoot} />}
 
         <PullRequests
           repo={repo}
@@ -460,6 +481,66 @@ function Panel({
       )}
       {children}
     </section>
+  )
+}
+
+/**
+ * The panel for a folder that is one of Helm's scan roots, and its way out.
+ *
+ * The bug this answers was two bugs in one report: adding a folder listed its
+ * subdirectories instead of itself, and *nothing anywhere could undo the add*.
+ * The Settings pane could, and had been able to since first run landed - but a
+ * list of roots in a settings page is not where somebody looking at a folder
+ * they want gone goes looking, and a surface with no way back is a surface that
+ * punishes trying it.
+ *
+ * It sits here rather than on the row for the reason DESIGN.md 5 gives: a row
+ * carries no buttons, and everything else about the thing on it is one click
+ * away on a pane with room to say it. This action needs that room - "remove"
+ * over a folder is exactly the word somebody reads as *delete*, so the sentence
+ * that says nothing on disk is touched has to be next to the button rather than
+ * inside a tooltip, and it names what else goes with it, which for a folder of
+ * repositories is every project underneath.
+ *
+ * `CloseIcon` for the same reason, matching the Settings pane's own remove: the
+ * trash can is the glyph for destroying a thing, and this destroys nothing.
+ */
+function ScannedFolder({
+  project,
+  onRemove
+}: {
+  project: Project
+  onRemove: (project: Project) => void
+}): JSX.Element {
+  return (
+    <Panel title="Scanned folder" mark="scan-root" className="mt-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <button
+          type="button"
+          data-project-remove-root={project.path}
+          onClick={() => onRemove(project)}
+          aria-label={`Remove ${project.name} from Helm`}
+          className={cn(
+            // A secondary button that finds the danger tone under the pointer,
+            // rather than a Danger button (DESIGN.md 4) resting in it. The tone
+            // is a warning about what the click does, and what this one does is
+            // reversible in two clicks and touches nothing outside Helm - a
+            // control that shouts at rest would be overstating its own stakes.
+            'flex shrink-0 items-center gap-2 rounded-well border border-border-strong px-3 py-1.5',
+            'text-[12px] text-fg transition-colors',
+            'hover:border-danger/45 hover:bg-danger/10 hover:text-danger active:bg-active'
+          )}
+        >
+          <CloseIcon width={12} height={12} />
+          Remove from Helm
+        </button>
+        <p className="min-w-0 flex-1 text-[11px] leading-[1.55] text-fg-subtle">
+          Helm scans this folder. Removing it takes this folder - and anything Helm found inside
+          it - out of the launcher. <span className="text-fg-muted">Nothing on disk is deleted</span>
+          , and adding it again brings it all back.
+        </p>
+      </div>
+    </Panel>
   )
 }
 

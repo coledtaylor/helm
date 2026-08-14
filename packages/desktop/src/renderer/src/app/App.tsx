@@ -1018,6 +1018,30 @@ export function App(): JSX.Element {
     activePane?.kind === 'project' ? (projectsByPath.get(activePane.path) ?? null) : null
   const selectedPath = activeProject?.path ?? null
 
+  /**
+   * Whether the open project is itself one of the scanned folders, which is
+   * what decides whether its pane offers to remove it.
+   *
+   * Case-insensitively, like every other path comparison the window makes: the
+   * root was typed into a picker and the project's path came out of a directory
+   * listing, and two spellings of one Windows directory are one directory.
+   *
+   * A `useMemo` for a two-line comparison, and not for the cost of it.
+   * `selectedPath` is what the shell drag's `useCallback` is keyed on, and
+   * calling a method on it in the render body is enough for the React Compiler
+   * to treat it as possibly mutated and give up preserving that memoization -
+   * `react-hooks/preserve-manual-memoization`, an error in this repo. Inside a
+   * memo whose dependencies it can see, the same lines are fine.
+   */
+  const activeProjectIsRoot = useMemo(
+    () =>
+      selectedPath !== null &&
+      (settings?.scanRoots ?? []).some(
+        (root) => root.toLowerCase() === selectedPath.toLowerCase()
+      ),
+    [settings, selectedPath]
+  )
+
   // -------------------------------------------------------------------------
   // The project shell's drag handle
   // -------------------------------------------------------------------------
@@ -1726,7 +1750,14 @@ export function App(): JSX.Element {
                 }}
                 onOpenConfig={openConfigAt}
                 onOpenContent={openContentAt}
-                // The whole snapshot, not this project's slice of it. The pane
+                // Only where this project *is* a scan root, which is the whole
+                // of what removal can act on. Decided here rather than in the
+                // pane because a root is a setting and the pane is handed
+                // discovery; see `activeProjectIsRoot`.
+                {...(activeProjectIsRoot
+                  ? { onRemoveRoot: (project: Project) => launcher.removeRoot(project.path) }
+                  : {})}
+                                // The whole snapshot, not this project's slice of it. The pane
                 // reduces it itself (`projectPulls`), so the project page and
                 // the Pulls pane read one answer rather than two - and the
                 // ignore list, which is structurally absent from `repos`, is
