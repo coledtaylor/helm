@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ConfigFile,
   ConfigFileContent,
+  ConfigRendered,
   ConfigScope,
   ConfigSnapshotMeta,
   ConfigTree,
@@ -12,6 +13,8 @@ import type {
   McpResult,
   McpScope
 } from '@helm/core'
+// A value, so it comes from the entry point with no `node:` imports behind it.
+import { isRedactedConfigFile } from '@helm/core/types'
 import type { ConfigViewKind } from '@helm/ui'
 import { helm } from './bridge'
 
@@ -55,6 +58,10 @@ export interface ConfigState {
   /** Selects by absolute path, switching scope if the file is in another one. */
   openPath: (path: string) => void
   loaded: ConfigFileContent | null
+  /** The open file as markdown or as highlighted source. Null while rendering. */
+  rendered: ConfigRendered | null
+  /** Helm will not read this file, so nothing asked for its bytes. */
+  redacted: boolean
   snapshots: ConfigSnapshotMeta[]
   saving: boolean
   editorError: string | null
@@ -263,17 +270,58 @@ export function useConfig(): ConfigState {
     [scopePath]
   )
 
+  /**
+   * The one file in a `.claude` tree Helm will not open.
+   *
+   * `.credentials.json` is a `.json` in a directory of `.json`s, so the console
+   * is exactly the surface that would read it by accident - and CLAUDE.md's
+   * credentials rule is that a sign-in is detected from an artefact's
+   * *existence* and nothing opens one. The row stays, the pane says what the
+   * file is, and no request for its bytes is ever made.
+   */
+  const redacted = selected !== null && isRedactedConfigFile(selected.relPath)
+
   useEffect(() => {
     // Releasing the watch matters on Windows, where a handle on a directory is
     // not free: an app that watches every file it has ever shown is an app that
     // eventually gets in another tool's way.
-    void helm.invoke('config:watch', { path: selectedPath })
-    if (selectedPath === null) return
+    void helm.invoke('config:watch', { path: redacted ? null : selectedPath })
+    if (selectedPath === null || redacted) return
     readSelected(selectedPath, fileKey)
-  }, [selectedPath, fileKey, readSelected])
+  }, [selectedPath, fileKey, readSelected, redacted])
 
   const loaded = fileAnswer?.key === fileKey ? fileAnswer.value : null
   const snapshots = snapshotAnswer?.key === fileKey ? snapshotAnswer.value : []
+
+  /**
+   * The bytes as something other than a textarea, rendered in main.
+   *
+   * Of the file rather than of the draft: the reading view shows what is on
+   * disk, and a preview of unsaved text is a different feature with a different
+   * cost (a render per keystroke). Re-runs when the file's hash changes, which
+   * covers a save, a restore and an external edit alike.
+   */
+  const [renderAnswer, setRenderAnswer] = useState<Answered<ConfigRendered> | null>(null)
+  const renderKey = `${selectedPath ?? ''}:${loaded?.hash ?? ''}`
+  useEffect(() => {
+    if (selectedPath === null || loaded === null || loaded.binary || !loaded.exists) return
+    let live = true
+    void helm
+      .invoke('config:render', { path: selectedPath, source: loaded.content })
+      .then((result) => {
+        if (live) setRenderAnswer({ key: renderKey, value: result })
+      })
+      .catch(() => {
+        // The source view still works, and a file that will not render is a
+        // bug worth seeing rather than a reason to show nothing.
+        if (live) setRenderAnswer({ key: renderKey, value: { markdown: null, code: null } })
+      })
+    return () => {
+      live = false
+    }
+  }, [selectedPath, renderKey, loaded])
+
+  const rendered = renderAnswer?.key === renderKey ? renderAnswer.value : null
 
   // Main's watcher, which fires while the user is still typing rather than when
   // they save. The bytes come with it so "reload" is a decision, not a leap.
@@ -609,6 +657,8 @@ export function useConfig(): ConfigState {
     select,
     openPath,
     loaded,
+    rendered,
+    redacted,
     snapshots,
     saving,
     editorError,

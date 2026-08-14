@@ -1410,6 +1410,20 @@ export interface ConfigLive {
   references: Array<{ key: string; layer: SettingsLayerKind; file: string; value: string }>
 }
 
+/**
+ * A config file rendered as what it is, rather than as its bytes.
+ *
+ * Exactly one half is ever set: markdown for the kinds a session reads as
+ * prose, highlighted source for the ones it runs. Both are null when the file
+ * is neither, which is the case the pane draws as plain mono - and `code` is
+ * null too when shiki has no grammar for the extension, so "not highlighted"
+ * and "highlighted as plain text" stay different answers.
+ */
+export interface ConfigRendered {
+  markdown: RenderedMarkdown | null
+  code: { html: string; language: string; highlighted: boolean } | null
+}
+
 // --- MCP management --------------------------------------------------------
 
 export type McpScope = 'local' | 'user' | 'project'

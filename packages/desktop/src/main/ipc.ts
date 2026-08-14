@@ -422,6 +422,7 @@ export function registerIpc(ctx: IpcContext): void {
     'config:scopes': () => ctx.config.scopes(),
     'config:tree': ({ scopePath }) => ctx.config.tree(scopePath),
     'config:read': ({ path }) => ctx.config.read(path),
+    'config:render': ({ path, source }) => ctx.config.render(path, source),
     // Every byte Helm writes into a `.claude` tree goes through this one
     // handler, which is what makes "no write without a snapshot" a property of
     // the app rather than of whoever remembered to take one.

@@ -4,6 +4,7 @@ import type {
   ArchivedConversation,
   CachedProject,
   ConfigFileContent,
+  ConfigRendered,
   ConfigScope,
   ConfigSnapshotMeta,
   ConfigTree,
@@ -598,6 +599,16 @@ export interface IpcRequests {
   'config:scopes': { request: void; response: ConfigScope[] }
   'config:tree': { request: { scopePath: string }; response: ConfigTree }
   'config:read': { request: { path: string }; response: ConfigFileContent }
+  /**
+   * The same bytes as something other than a textarea: markdown rendered, a
+   * hook highlighted. Takes the source rather than reading the file again, so
+   * one channel serves both the file on disk and a draft being edited - and so
+   * the render can never be of a version the pane is not showing.
+   */
+  'config:render': {
+    request: { path: string; source: string }
+    response: ConfigRendered
+  }
   'config:write': { request: WriteConfigRequest; response: WriteConfigResult }
   /** Versions of one file, newest first, without their contents. */
   'config:snapshots': {
@@ -990,6 +1001,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'config:scopes': true,
   'config:tree': true,
   'config:read': true,
+  'config:render': true,
   'config:write': true,
   'config:snapshots': true,
   'config:snapshot': true,

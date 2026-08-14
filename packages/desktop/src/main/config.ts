@@ -4,6 +4,7 @@ import {
   addMcpServer,
   computeEffectiveView,
   hashContent,
+  highlightCode,
   insertConfigSnapshot,
   listMcpServers,
   listProfiles,
@@ -16,12 +17,14 @@ import {
   readConfigTree,
   readProfile,
   removeMcpServer,
+  renderMarkdown,
   restoreConfigSnapshot,
   runDoctor,
   snapshotKey,
   userConfigScope,
   writeConfigFile,
   type ClaudeCommand,
+  type ConfigRendered,
   type ConfigScope,
   type ConfigSnapshotMeta,
   type DoctorReport,
@@ -64,6 +67,7 @@ export interface ConfigService {
   /** Watch one file, or stop watching. */
   watch: (path: string | null) => void
   effective: (req: EffectiveViewRequest) => EffectiveView
+  render: (path: string, source: string) => Promise<ConfigRendered>
   mcpPreview: (req: McpAddRequest) => McpPreview
   mcpAdd: (req: McpAddRequest) => Promise<McpResult>
   mcpRemove: (req: { name: string; scope: McpScope; cwd: string }) => Promise<McpResult>
@@ -237,6 +241,32 @@ export function createConfigService({
   }
 
   /**
+   * A config file as something other than a textarea.
+   *
+   * Both halves are the content viewer's, unchanged: `renderMarkdown` is the
+   * pipeline that renders a note, and `highlightCode` is the shiki wrapper its
+   * fences go through. A `SKILL.md` is markdown by every rule the viewer
+   * applies to a note, and a hook is a program - there was never a second
+   * renderer to write here, only a second caller.
+   *
+   * Rendering stays in main for the reason the viewer's does: shiki's grammars
+   * are megabytes the browser bundle must not carry, and the window receives
+   * finished HTML rather than walking a syntax tree.
+   *
+   * No wikilink index is passed. These files are not a vault - `[[a]]` in a
+   * `SKILL.md` is prose - so every wikilink renders unresolved, which is what
+   * an index nothing indexed would produce anyway.
+   */
+  async function render(path: string, source: string): Promise<ConfigRendered> {
+    const extension = (/\.[^.\\/]+$/.exec(path)?.[0] ?? '').toLowerCase()
+    if (extension === '.md' || extension === '.markdown') {
+      return { markdown: await renderMarkdown(source, { path: resolve(path) }), code: null }
+    }
+    const code = await highlightCode(source, extension.replace(/^\./, ''))
+    return { markdown: null, code: code.html === '' ? null : code }
+  }
+
+  /**
    * Runs `claude mcp add-json`, having first put the file it is about to
    * rewrite into the snapshot table.
    *
@@ -393,6 +423,7 @@ export function createConfigService({
     },
     watch: watchFile,
     effective,
+    render,
     mcpPreview: previewMcpAdd,
     mcpAdd,
     mcpRemove,
