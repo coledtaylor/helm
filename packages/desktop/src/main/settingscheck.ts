@@ -439,6 +439,34 @@ async function clickProject(win: BrowserWindow, path: string): Promise<boolean> 
   )
 }
 
+/**
+ * Close a project's tab, the way a person does: the X beside it.
+ *
+ * A group that opens a project pane has to close it again, and the reason is
+ * not tidiness. A project tab holds a **project shell**, which lives in
+ * `pterms.ts` outside React and outlives every render - so a pane left open is
+ * a pty still in the registry when a later group counts terminals.
+ *
+ * That is how `S-22` broke `S-10`: two panes opened here, two shells left
+ * behind, and `shells.length === 2` was 4 by the time the terminal group asked.
+ * `S-10` was right and the app was right; this is the probe that was wrong. The
+ * same shape is on record in the `checks` skill - "S-10 was counting terminals
+ * it never started" - from the last time inherited workspace state reached it.
+ *
+ * Matched in JavaScript rather than by a CSS attribute selector, like
+ * `clickProject` above: `data-tab` carries a Windows path and a backslash in a
+ * selector is an escape.
+ */
+async function closeProjectTab(win: BrowserWindow, path: string): Promise<boolean> {
+  return js<boolean>(
+    win,
+    `(() => { const tab = [...document.querySelectorAll('[role="tab"]')]
+        .find((t) => t.dataset.tab === 'project:' + ${JSON.stringify(path)});
+      const close = tab?.parentElement?.querySelector('button[aria-label^="Close "]');
+      if (!close) return false; close.click(); return true })()`
+  ).catch(() => false)
+}
+
 /** Focus a field, replace what is in it, and commit with Enter. Real keystrokes. */
 async function typeInto(win: BrowserWindow, selector: string, text: string): Promise<boolean> {
   const focused = await js<boolean>(
@@ -1556,6 +1584,28 @@ export async function runSettingsChecks(
       path.toLowerCase().startsWith(fixtures.leafRoot.toLowerCase())
     )
 
+    // The workspace goes back to how this group found it. Opening a project
+    // pane starts a project shell that outlives every render, so a pane left
+    // open here is a pty in the registry when a later group counts them - which
+    // is exactly how this probe broke `S-10`. See `closeProjectTab`.
+    //
+    // The leaf root's own tab is already gone: removing a folder drops it from
+    // discovery and the pane goes with it. `insideRoot` is the one this group
+    // has to put back, and the close is asserted rather than fired and
+    // forgotten, since a cleanup that silently did nothing is how the next
+    // group inherits the same problem.
+    const tidiedUp = await closeProjectTab(win, insideRoot)
+    await sleep(500)
+    const panesLeftOpen = await js<string[]>(
+      win,
+      `[...document.querySelectorAll('[role="tab"]')]
+        .map((t) => t.dataset.tab ?? '')
+        .filter((id) => id.startsWith('project:') &&
+          id.toLowerCase().includes(${JSON.stringify(
+            fixtures.dir.toLowerCase()
+          )}))`
+    ).catch(() => ['<unreadable>'])
+
     checks.push({
       id: 'S-22',
       criterion: 'A folder added as a root is itself the row, and its pane can remove it',
@@ -1577,7 +1627,10 @@ export async function runSettingsChecks(
         // The folder is still there. Removal is a change to a setting and
         // nothing else, and the panel says so in those words.
         existsSync(fixtures.leafRoot) &&
-        leafSubdirs.every((path) => existsSync(path)),
+        leafSubdirs.every((path) => existsSync(path)) &&
+        // And this group left the workspace as it found it.
+        tidiedUp &&
+        panesLeftOpen.length === 0,
       detail: {
         leafRoot: fixtures.leafRoot,
         subdirectoriesTheOldRuleWouldHaveListed: leafSubdirs,
@@ -1586,6 +1639,7 @@ export async function runSettingsChecks(
         cachedRows: { before: cachedBefore, after: cachedAfter },
         rootsAfterPaneRemove,
         stillOnDisk: existsSync(fixtures.leafRoot),
+        leftTheWorkspaceAsItFoundIt: { closedTheProjectPane: tidiedUp, panesLeftOpen },
         screenshot: leafShot.file
       },
       notes: [
@@ -1599,7 +1653,11 @@ export async function runSettingsChecks(
         'the next scan lands - are gone with it. Both are asserted to have been',
         'there beforehand.',
         'The folder and every subdirectory are still on disk afterwards, which is',
-        'what the panel promises in the words next to the button.'
+        'what the panel promises in the words next to the button.',
+        'The two project panes this opens are closed again before it returns. A',
+        'project tab holds a shell that outlives every render, so a pane left',
+        'open is a pty a later group counts - which is how this probe broke S-10',
+        'the first time it ran in a full pass.'
       ]
     })
   }
@@ -3231,6 +3289,16 @@ export async function runSettingsChecks(
           shellStarted: shellUp,
           shellNameInHeader,
           sessionStarted: sessionUp,
+          // Every gate in `ok` is now reported, which four of them were not.
+          // This check failed once with `secondShellUp` false and *every*
+          // scalar in the detail identical to a passing run, because the gate
+          // that went false was not among them - the diagnosis had to start
+          // from two registry dumps and a guess. A conjunction of twenty-two
+          // booleans owes the report all twenty-two.
+          sessionLaunchClicked: launched,
+          everyTerminalTookTheSize: everyTerminalResized,
+          sizeLandedInTheDatabase: sizeLanded,
+          hiddenPaneCameBack: shellVisible,
           hidTheShellByMaximizingTheSession: { clicked: shellHidden0, detached: shellWentAway },
           sizeChangedFrom: DEFAULT_TERMINAL.fontSize,
           sizeChangedTo: bigger,
@@ -3265,7 +3333,17 @@ export async function runSettingsChecks(
             agrees: cellAgrees
           },
           rewritingTheSameValueMovedNothing: idempotent,
-          preSpawnEstimate: { estimate, settledAfterFit: settled, tracks: estimateTracks }
+          preSpawnEstimate: {
+            secondShellUp,
+            // What the registry actually holds, and where each one came from.
+            // `secondShellUp` is a count - `shells.length === 2` - so the way
+            // it fails is a *third* shell somebody else opened, and the only
+            // useful thing to say about that is whose it is.
+            shellsOpen: ctx.pterm.list().map((entry) => entry.path),
+            estimate,
+            settledAfterFit: settled,
+            tracks: estimateTracks
+          }
         },
         notes: [
           'Every resize is captured by wrapping `sessions.resize` and',
