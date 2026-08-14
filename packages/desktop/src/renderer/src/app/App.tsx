@@ -1598,6 +1598,7 @@ export function App(): JSX.Element {
                     onDirtyChange={configState.setDirty}
                     onRename={() => configState.openEntryDialog('rename')}
                     onDelete={() => configState.openEntryDialog('delete')}
+                    justCreated={configState.selected.path === configState.createdPath}
                   />
                 )
               ) : configState.view === 'effective' ? (

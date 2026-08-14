@@ -101,6 +101,8 @@ export interface ConfigState {
   entryBusy: boolean
   entryError: string | null
   createFile: (kind: CreatableKind, name: string) => void
+  /** The path the New dialog just wrote, which opens ready to type in. */
+  createdPath: string | null
   renameFile: (name: string) => void
   deleteFile: () => void
   /** What a delete left behind: the rows that can bring it back. */
@@ -455,6 +457,18 @@ export function useConfig(): ConfigState {
   // New, rename, delete
   // -------------------------------------------------------------------------
   const [entryDialog, setEntryDialog] = useState<ConfigEntryDialog>(null)
+  /**
+   * The file the New dialog just wrote, so the editor can open it ready to type
+   * in rather than rendered.
+   *
+   * The two halves of this console arrived on separate branches and disagreed
+   * here: creating a file opened it in the editor, because every scaffold is a
+   * placeholder whose text says what to replace, while the redesign opens a
+   * markdown file rendered because that is the right default for reading one.
+   * Both are right, and they are about different moments - so the rendered
+   * default stands everywhere except the one click that just produced the file.
+   */
+  const [createdPath, setCreatedPath] = useState<string | null>(null)
   const [entryBusy, setEntryBusy] = useState(false)
   const [entryError, setEntryError] = useState<string | null>(null)
   const [deletedEntry, setDeletedEntry] = useState<
@@ -505,6 +519,7 @@ export function useConfig(): ConfigState {
           // Opened straight away: every scaffold below is a placeholder with a
           // sentence in it saying what to replace, and a New that left you
           // looking at the list would have written a file nobody read.
+          setCreatedPath(result.path)
           landOn(result.path)
         })
         .catch((err: unknown) => setEntryError(readable(err)))
@@ -839,6 +854,7 @@ export function useConfig(): ConfigState {
     entryBusy,
     entryError,
     createFile,
+    createdPath,
     renameFile,
     deleteFile,
     deleted,

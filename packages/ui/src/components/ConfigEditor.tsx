@@ -73,6 +73,16 @@ export interface ConfigEditorProps {
       caller that does not offer them simply does not render them. */
   onRename?: (() => void) | undefined
   onDelete?: (() => void) | undefined
+  /**
+   * This file was just created, so it opens ready to type in.
+   *
+   * A scaffold is a placeholder whose text says what to replace, and rendering
+   * that placeholder is the one case where the read-first default is wrong. The
+   * editor is keyed on the path by its caller, so this only ever decides the
+   * mode the pane mounts in - the moment the user picks another file it is a
+   * fresh component with the ordinary default again.
+   */
+  justCreated?: boolean | undefined
 }
 
 const JSON_KINDS = new Set(['settings', 'settings-local', 'mcp'])
@@ -122,12 +132,13 @@ export function ConfigEditor({
   onOpenExternal,
   onDirtyChange,
   onRename,
-  onDelete
+  onDelete,
+  justCreated = false
 }: ConfigEditorProps): JSX.Element {
   const [draft, setDraft] = useState('')
   const [caret, setCaret] = useState({ line: 1, column: 1 })
   const [showHistory, setShowHistory] = useState(false)
-  const [mode, setMode] = useState<ConfigDetailMode>('read')
+  const [mode, setMode] = useState<ConfigDetailMode>(justCreated ? 'edit' : 'read')
   const areaRef = useRef<HTMLTextAreaElement>(null)
 
   // Re-seeded whenever a different file, or a different version of it, arrives.
