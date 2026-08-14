@@ -83,6 +83,60 @@ describe('scan', () => {
     expect(result.projects.find((p) => p.name === 'one')?.inventory.claudeMd).toBe(true)
   })
 
+  it('lists the folder itself when none of its children looks like a project', async () => {
+    // The reported bug: a project directory added as a root listed its own
+    // source tree as four projects and itself as none.
+    await dir('tool/data')
+    await dir('tool/scripts')
+    await dir('tool/src')
+    await dir('tool/tests')
+    await file('tool/pyproject.toml')
+
+    const result = await scan({ roots: [join(root, 'tool')] })
+
+    expect(result.projects.map((p) => p.name)).toEqual(['tool'])
+    expect(result.projects[0]?.path).toBe(join(root, 'tool'))
+    expect(result.projects[0]?.kind).toBe('folder')
+  })
+
+  it('still lists the children when one of them looks like a project', async () => {
+    // The other half of the same rule, and the reason it is read off the
+    // children: `.git`, `.claude` and `CLAUDE.md` each say "container" on their
+    // own, and the siblings come with it.
+    await dir('repos/alpha')
+    await dir('repos/beta')
+    await dir('repos/gamma')
+
+    const bare = await scan({ roots: [join(root, 'repos')] })
+    expect(bare.projects.map((p) => p.name)).toEqual(['repos'])
+
+    for (const marker of ['alpha/.git', 'alpha/.claude/skills/one/SKILL.md', 'alpha/CLAUDE.md']) {
+      await rm(join(root, 'repos', 'alpha'), { recursive: true, force: true })
+      await file(join('repos', marker))
+
+      const result = await scan({ roots: [join(root, 'repos')] })
+      expect(result.projects.map((p) => p.name).sort()).toEqual(['alpha', 'beta', 'gamma'])
+    }
+  })
+
+  it('sees a git worktree, whose .git is a file rather than a directory', async () => {
+    await dir('checkouts/branch-b')
+    await file('checkouts/branch-a/.git', 'gitdir: ../../real/.git/worktrees/branch-a\n')
+
+    const result = await scan({ roots: [join(root, 'checkouts')] })
+
+    expect(result.projects.map((p) => p.name).sort()).toEqual(['branch-a', 'branch-b'])
+  })
+
+  it('lists an empty root as itself rather than as nothing at all', async () => {
+    await dir('empty')
+
+    const result = await scan({ roots: [join(root, 'empty')] })
+
+    expect(result.projects.map((p) => p.name)).toEqual(['empty'])
+    expect(result.errors).toEqual([])
+  })
+
   it('handles a harness whose manifest is malformed', async () => {
     await file('dev/harness.yaml', ':\n  - this is not: valid: yaml\n')
     await dir('dev/repos/alpha')

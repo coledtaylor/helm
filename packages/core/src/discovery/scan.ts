@@ -12,14 +12,30 @@ import { readGitStates } from './git'
  * The shape it looks for, in order:
  *   1. the root itself is a harness  (`harness.yaml`)  -> harness + its repos/*
  *   2. the root *contains* harnesses                    -> each one, as above
- *   3. anything else                                    -> a plain folder
+ *   3. the root's children look like projects           -> those children
+ *   4. anything else                                    -> the root itself
  *
  * SPEC's portability requirement is the reason for step 3: Helm must be useful
  * pointed at a directory of ordinary repos, with no harness anywhere in sight.
+ * Step 4 is the answer to what step 3 used to do unconditionally - see
+ * `looksLikeProject`.
  */
 
 const HARNESS_MANIFEST = 'harness.yaml'
 const REPOS_DIRNAME = 'repos'
+
+/**
+ * What makes a directory a project in its own right rather than a container of
+ * them. Any one of these is enough.
+ *
+ * These three and no more, and the shortness of the list is the point: they are
+ * exactly the things Helm already has something to say about a project - the
+ * git chip, the `.claude/` flag and the instruction file on its pane. A list
+ * that grew to `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod` and
+ * whatever comes next would be a list that is wrong for every ecosystem not yet
+ * added to it, and wrong silently.
+ */
+const PROJECT_MARKERS = ['.git', '.claude', 'CLAUDE.md']
 
 /** Directories that are never projects, skipped before any I/O is spent on them. */
 const SKIP_DIRS = new Set([
@@ -181,6 +197,28 @@ async function isHarness(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Whether `path` carries any of `PROJECT_MARKERS`.
+ *
+ * Existence only, not kind: a repository checked out as a git worktree has
+ * `.git` as a *file* holding a `gitdir:` line, and refusing to see one would
+ * hide exactly the directories somebody working on two branches at once cares
+ * most about.
+ */
+async function looksLikeProject(path: string): Promise<boolean> {
+  const probes = await Promise.all(
+    PROJECT_MARKERS.map(async (marker) => {
+      try {
+        await stat(join(path, marker))
+        return true
+      } catch {
+        return false
+      }
+    })
+  )
+  return probes.some(Boolean)
+}
+
 export async function scan(opts: ScanOptions): Promise<DiscoveryResult> {
   const startedAt = Date.now()
   const maxDepth = opts.maxDepth ?? 1
@@ -239,7 +277,30 @@ export async function scan(opts: ScanOptions): Promise<DiscoveryResult> {
       return
     }
 
-    // No harness anywhere below: the root's immediate children are the projects.
+    // No harness anywhere below, so the root is either a container of projects
+    // or a project. Nothing about the *root* can tell those apart - a directory
+    // with subdirectories in it is both - so the answer is read off the
+    // children, and only a child that looks like a project is evidence.
+    //
+    // This branch used to have no test in it at all: every child became a
+    // project unconditionally, which is right for `C:\repos` and catastrophic
+    // for a folder someone picked meaning "this one". Reported from a real
+    // workspace: adding a single Python tool directory put `data`, `scripts`,
+    // `src` and `tests` in the launcher and nothing carrying the name of the
+    // folder that was picked. The rule is the one the report asked for - the
+    // folder you picked is the thing that appears.
+    //
+    // Deliberately *not* the converse test - "the root looks like a project, so
+    // it is one". A directory of repositories that happens to carry a CLAUDE.md
+    // at its top is a container, and asking about the root first would collapse
+    // it to a single row. Asking about the children only ever narrows what this
+    // did before, which is the whole of the change.
+    const projectChildren = await Promise.all(results.map((r) => looksLikeProject(r.child)))
+    if (!projectChildren.some(Boolean)) {
+      addProjects([await describeProject(path, 'folder', null)])
+      return
+    }
+
     addProjects(
       await Promise.all(results.map(({ child }) => describeProject(child, 'folder', null)))
     )
