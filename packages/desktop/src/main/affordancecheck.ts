@@ -132,6 +132,23 @@ const VIEWS: Array<{ name: string; open: readonly string[] | null; anchor: strin
   { name: 'welcome', open: null, anchor: 'aside nav button[title]' },
   { name: 'project', open: ['aside nav button[title]'], anchor: '[data-project-pane]' },
   { name: 'config', open: ['[data-open-config]'], anchor: '[data-config-scope]' },
+  /**
+   * The console with a file picked, which is where the editor's own controls
+   * are - Save, Revert, the version list, the path, Rename and Delete.
+   *
+   * A separate row rather than a deeper `config`, because none of them exists
+   * until something is selected: without this step they sit in exactly the
+   * coverage gap AFF-2 is named for, measured by nothing and reported by
+   * nothing. The first row is taken whatever it is, so on a scope whose first
+   * file is a `settings.json` this measures Rename *disabled* - which AFF-5
+   * then has an opinion about, and which is the honest state of that control
+   * on that file.
+   */
+  {
+    name: 'config:file',
+    open: ['[data-open-config]', 'button[data-config-file]'],
+    anchor: '[data-delete-config]'
+  },
   // The config console's other three views. One click further in, and the pane
   // that holds the app's only two label-wrapped checkboxes and its MCP form -
   // which is to say, the controls least like the ones on the seven top views.
