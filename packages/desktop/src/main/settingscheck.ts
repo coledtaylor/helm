@@ -1052,6 +1052,7 @@ export async function runSettingsChecks(
          ghLocate: Boolean(document.querySelector('[data-settings-gh-locate]')),
          ghClear: Boolean(document.querySelector('[data-settings-clear-gh]')),
          prPoll: Boolean(document.querySelector('[data-settings-pr-poll]')),
+         prStale: Boolean(document.querySelector('[data-settings-pr-stale]')),
          // The block, not the count beside it: the count is only there when a
          // github.com repository has been found, and this check runs on
          // whatever machine it runs on.
@@ -2561,6 +2562,15 @@ export async function runSettingsChecks(
         why: 'a one-minute sweep is one gh per remote against the user’s own rate limit'
       },
       {
+        key: 'prStaleDays',
+        good: 7,
+        // Not "too small" - zero is legal and means no split at all. Past the
+        // ceiling is the interesting rejection: at four months the cutoff has
+        // stopped being a statement about attention.
+        bad: 120,
+        why: 'a cutoff past a quarter is sorting by archaeology rather than by attention'
+      },
+      {
         key: 'prIgnoredRepos',
         good: ['acme/widget'],
         // Two spellings of one repository. The matcher is case-insensitive, so
@@ -4031,6 +4041,21 @@ export async function runSettingsChecks(
     await sleep(600)
     const rowWhenFifteen = rowValue(dbFile, 'prPollMinutes')
 
+    // The stale cutoff, through its own picker and in the same shape: off
+    // first, because off is the state a select is likeliest to fail to
+    // represent - and here it is also the state that switches a whole section
+    // of the Pulls pane back off.
+    const staleOffered = await js<string[]>(
+      win,
+      `[...(document.querySelector('[data-settings-pr-stale]')?.options ?? [])].map((o) => o.value)`
+    )
+    const pickedStaleOff = await chooseOption(win, '[data-settings-pr-stale]', '0')
+    await sleep(600)
+    const rowWhenStaleOff = rowValue(dbFile, 'prStaleDays')
+    const pickedStaleWeek = await chooseOption(win, '[data-settings-pr-stale]', '7')
+    await sleep(600)
+    const rowWhenStaleWeek = rowValue(dbFile, 'prStaleDays')
+
     // The review launch's two settings, through the pane's own controls.
     // The template is typed rather than written, because a text field that
     // commits on blur has two ways to fail that a row write does not.
@@ -4105,6 +4130,13 @@ export async function runSettingsChecks(
         pickedFifteen.offered &&
         pickedFifteen.set &&
         rowWhenFifteen === 15 &&
+        staleOffered.includes('0') &&
+        pickedStaleOff.offered &&
+        pickedStaleOff.set &&
+        rowWhenStaleOff === 0 &&
+        pickedStaleWeek.offered &&
+        pickedStaleWeek.set &&
+        rowWhenStaleWeek === 7 &&
         typedTemplate &&
         rowAfterTyping === template &&
         resetDisabledWhenCustom === false &&
@@ -4153,6 +4185,11 @@ export async function runSettingsChecks(
           off: { picked: pickedOff, databaseRow: rowWhenOff },
           fifteen: { picked: pickedFifteen, databaseRow: rowWhenFifteen }
         },
+        staleCutoff: {
+          offeredValues: staleOffered,
+          off: { picked: pickedStaleOff, databaseRow: rowWhenStaleOff },
+          aWeek: { picked: pickedStaleWeek, databaseRow: rowWhenStaleWeek }
+        },
         reviewPrompt: {
           typed: typedTemplate,
           templateTyped: template,
@@ -4189,6 +4226,10 @@ export async function runSettingsChecks(
         'alone - nothing here or in the app opens a credential store.',
         'The interval is set through the select, including 0, which is the value',
         'that disarms the timer rather than a small number inside the range.',
+        'The stale cutoff is set the same way and for the same reason: 0 there is',
+        'the Pulls pane reverting to one flat Open list rather than a one-day',
+        'cutoff, so it is the value most worth watching round-trip. What the',
+        'setting then *does* to that pane is `pnpm pr-check`’s triage phase.',
         'The review prompt is typed into the field and committed the way a person',
         'commits it, then put back with Reset - and Reset is checked for being',
         'disabled at the built-in prompt, because a Reset that stays live is one',
@@ -4246,6 +4287,10 @@ export async function runSettingsChecks(
     // pointed at a working program, not at a stub that refuses to sign in.
     ...(whereIs('gh.exe')[0] !== undefined ? { ghPath: whereIs('gh.exe')[0] } : {}),
     prPollMinutes: 30,
+    // Off the default in the direction that is unambiguous. A week is a cutoff
+    // nobody's default produces, and unlike 0 it leaves the split switched on -
+    // so what the restart phase finds is a real value rather than an absence.
+    prStaleDays: 7,
     // A repository nobody has, on purpose. The setting is a list rather than a
     // scalar and JSON round-tripping an array through one `app_settings` row is
     // the half of it worth restarting for; naming a repository that exists
