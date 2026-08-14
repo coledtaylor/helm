@@ -1,4 +1,5 @@
 import { net, type BrowserWindow, type WebFrameMain } from 'electron'
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join, relative, sep } from 'node:path'
@@ -46,8 +47,10 @@ import type { CheckContext } from './sessionscheck'
  */
 
 const PROFILE_NAME = 'Content fixtures'
+/** The fixture *project*, which has to be a second scope for the tree probes. */
+const PROJECT_PROFILE_NAME = 'Content fixture project'
 
-const GROUPS = ['browse', 'render', 'links', 'artifact', 'search', 'edit', 'scroll'] as const
+const GROUPS = ['browse', 'scope', 'render', 'links', 'artifact', 'search', 'edit', 'scroll'] as const
 type Group = (typeof GROUPS)[number]
 
 // ---------------------------------------------------------------------------
@@ -97,15 +100,20 @@ const SKIP = new Set([
 ])
 
 /**
- * Every readable file under a scope, walked naively.
+ * Every file under a directory, walked naively.
  *
- * Deliberately not the tree scanner's algorithm: a plain recursion from the
- * scope root that keeps anything ending in a content extension, with the same
- * exclusion list and nothing else. It knows nothing about named roots or
- * discovered ones - it just enumerates - so it can disagree with the scanner
- * when the scanner is wrong about which directories are content.
+ * **No extension filter**, and that is the change the scope split forced. This
+ * reader used to keep only files ending in a content extension, because the
+ * pane did; the pane now lists every file inside a root it offers, so a reader
+ * that still filtered would report a hundred "listed but not on disk" rows
+ * against a pane that was right.
+ *
+ * The absence of the filter is what makes this second read strong. "Every file
+ * under this directory" needs no list of extensions to be maintained beside the
+ * one in `roots.ts`, so the two cannot drift - the only way for them to
+ * disagree is for one of them to be wrong about the disk.
  */
-function walkContent(dir: string, base: string, into: string[], depth = 0): void {
+function walkEveryFile(dir: string, base: string, into: string[], depth = 0): void {
   if (depth > 7) return
   let entries
   try {
@@ -118,21 +126,10 @@ function walkContent(dir: string, base: string, into: string[], depth = 0): void
     if (entry.isDirectory()) {
       if (entry.isSymbolicLink()) continue
       if (SKIP.has(entry.name.toLowerCase())) continue
-      // Dot directories are tooling and not content. `.claude` is the one
-      // exception, and only its `skills` subtree: `settings.json`,
-      // `commands/` and `rules/` are the config console's, and a content
-      // browser that listed them would be a second, worse config console.
-      if (entry.name.startsWith('.')) {
-        if (entry.name === '.claude' && depth === 0) {
-          walkContent(join(path, 'skills'), base, into, depth + 2)
-        }
-        continue
-      }
-      walkContent(path, base, into, depth + 1)
+      walkEveryFile(path, base, into, depth + 1)
       continue
     }
     if (!entry.isFile()) continue
-    if (!/\.(md|markdown|mdx|html|htm|ya?ml|jsonc?|toml|txt|csv|log)$/i.test(entry.name)) continue
     into.push(relative(base, path).split(sep).join('/'))
   }
 }
@@ -429,6 +426,10 @@ interface Fixtures {
   artifact: string
   hostile: string
   secret: string
+  /** A repository the driver owns, for the tree view. Has a real `.gitignore`. */
+  project: string
+  /** Whether `git init` worked, so the gitignore claims can be believed. */
+  projectIsRepo: boolean
 }
 
 /** ~20,000 words of prose, so the criterion can be measured as it is written. */
@@ -585,7 +586,57 @@ function buildFixtures(dataDir: string): Fixtures {
   const secret = join(root, 'secret-outside-the-artifact.txt')
   writeFileSync(secret, 'HELMM6SECRETTHATMUSTNOTBESERVED\n')
 
-  return { root, notes, bigNote, artifact, hostile, secret }
+  /**
+   * The pair the discovery rule is drawn by.
+   *
+   * `tools/` holds nothing but scripts and must become a root; `screenshots/`
+   * holds nothing but bytes and must not. Planting only the first would pass a
+   * rule that offered every directory on the disk, so both are here and CONT-12
+   * asserts both directions.
+   */
+  mkdirSync(join(root, 'tools'), { recursive: true })
+  writeFileSync(join(root, 'tools', 'rep-payload.py'), '# Rebuild the payload\nimport json, sys\n')
+  writeFileSync(join(root, 'tools', 'sweep.ps1'), 'Get-ChildItem -Recurse | Measure-Object\n')
+  mkdirSync(join(root, 'screenshots'), { recursive: true })
+  writeFileSync(join(root, 'screenshots', 'one.png'), 'not a real png, and that is fine')
+
+  // A binary inside a root that *is* offered. Listed, greyed, not hidden - the
+  // other half of "the kind decides how it opens, not whether it is shown".
+  writeFileSync(join(notes, 'diagram.png'), 'not a real png either')
+
+  /**
+   * A repository the driver owns, for the tree view.
+   *
+   * A real `git init` and a real `.gitignore`, because the claim under test is
+   * that *the repository* decides what is ignored. `secrets/` is in no built-in
+   * list, so a pass here cannot be Helm's fallback answering under another
+   * name - CONT-14 asserts the fallback disagrees before believing the rest.
+   */
+  const project = join(dataDir, 'content-fixture-project')
+  rmSync(project, { recursive: true, force: true })
+  mkdirSync(join(project, 'src', 'util'), { recursive: true })
+  mkdirSync(join(project, 'node_modules', 'left-pad'), { recursive: true })
+  mkdirSync(join(project, 'dist'), { recursive: true })
+  mkdirSync(join(project, 'secrets'), { recursive: true })
+  mkdirSync(join(project, 'assets'), { recursive: true })
+  // An empty named root, for the project-in-curated cross case: it must stay on
+  // the list and say it is empty.
+  mkdirSync(join(project, 'docs'), { recursive: true })
+  writeFileSync(join(project, '.gitignore'), 'node_modules/\ndist/\nsecrets/\n')
+  writeFileSync(join(project, 'README.md'), '# Fixture project\n\nHELMM6PROJECT lives here.\n')
+  writeFileSync(join(project, 'package.json'), '{ "name": "content-fixture-project" }\n')
+  writeFileSync(join(project, 'LICENSE'), 'All rights reserved.\n')
+  writeFileSync(join(project, 'src', 'index.ts'), 'export const answer = 42\n')
+  writeFileSync(join(project, 'src', 'util', 'helpers.ts'), 'export const noop = (): void => {}\n')
+  writeFileSync(join(project, 'node_modules', 'left-pad', 'index.js'), 'module.exports = 1\n')
+  writeFileSync(join(project, 'dist', 'bundle.js'), 'console.log(1)\n')
+  writeFileSync(join(project, 'secrets', 'token.txt'), 'not a real secret\n')
+  writeFileSync(join(project, 'assets', 'logo.png'), 'not a real png')
+
+  const git = spawnSync('git', ['init', '-q'], { cwd: project, windowsHide: true })
+  const projectIsRepo = git.error === undefined && git.status === 0
+
+  return { root, notes, bigNote, artifact, hostile, secret, project, projectIsRepo }
 }
 
 // ---------------------------------------------------------------------------
@@ -641,23 +692,31 @@ export async function runContentChecks(
 
   // The fixture harness is not inside any scanned root, so it becomes a scope
   // the way a user's out-of-tree folder would: a profile points at it.
-  const stale = findProfileByName(services.store, PROFILE_NAME)
-  if (stale) deleteProfile(services.store, stale.id)
-  const profile: Profile = createProfile(services.store, {
-    name: PROFILE_NAME,
-    root: fixtures.root,
-    overlays: [],
-    access: [],
-    model: null,
-    effort: null,
-    permissionMode: null,
-    agent: null,
-    mcp: [],
-    openingPrompt: null,
-    pinnedOrder: null
-  })
+  const asProfile = (name: string, root: string): Profile => {
+    const stale = findProfileByName(services.store, name)
+    if (stale) deleteProfile(services.store, stale.id)
+    return createProfile(services.store, {
+      name,
+      root,
+      overlays: [],
+      access: [],
+      model: null,
+      effort: null,
+      permissionMode: null,
+      agent: null,
+      mcp: [],
+      openingPrompt: null,
+      pinnedOrder: null
+    })
+  }
+  const profile = asProfile(PROFILE_NAME, fixtures.root)
+  const projectProfile = asProfile(PROJECT_PROFILE_NAME, fixtures.project)
 
   const harness = (services.lastScan?.projects ?? []).find((p) => p.kind === 'harness')
+  // A real project scope, for the half of CONT-12 that is about what a *kind*
+  // decides. Found by kind rather than by name, so it is whatever this machine
+  // has rather than something written down here.
+  const realProject = (services.lastScan?.projects ?? []).find((p) => p.kind !== 'harness')
 
   const opened = await showViewer(win)
   await click(win, 'button[data-content-refresh]')
@@ -677,7 +736,10 @@ export async function runContentChecks(
     detail: {
       harness: harness?.path ?? null,
       fixtures: fixtures.root,
+      fixtureProject: fixtures.project,
+      fixtureProjectIsRepo: fixtures.projectIsRepo,
       profileId: profile.id,
+      projectProfileId: projectProfile.id,
       offeredInTheSwitcher: offersFixture
     },
     notes: [
@@ -703,6 +765,13 @@ export async function runContentChecks(
   }
 
   try {
+    await group('scope', async () => [
+      ...(harness
+        ? await modeChecks(ctx, shotDir, harness.path, realProject?.path ?? null, fixtures)
+        : []),
+      ...(await curationChecks(ctx, fixtures)),
+      ...(await treeChecks(ctx, shotDir, fixtures))
+    ])
     if (harness) {
       await group('browse', () => browseChecks(ctx, shotDir, harness.path))
       await group('render', () => renderChecks(ctx, shotDir, harness.path, appConsole))
@@ -722,8 +791,10 @@ export async function runContentChecks(
     }
     await group('artifact', () => artifactChecks(ctx, shotDir, fixtures, harness?.path ?? null))
   } finally {
-    const made = findProfileByName(services.store, PROFILE_NAME)
-    if (made) deleteProfile(services.store, made.id)
+    for (const name of [PROFILE_NAME, PROJECT_PROFILE_NAME]) {
+      const made = findProfileByName(services.store, name)
+      if (made) deleteProfile(services.store, made.id)
+    }
   }
 
   return checks
@@ -737,15 +808,43 @@ async function browseChecks(ctx: CheckContext, shotDir: string, harnessPath: str
   const { win, content } = ctx
 
   const tree = content.tree(harnessPath, true)
-  const truth: string[] = []
-  walkContent(harnessPath, harnessPath, truth)
+
+  /**
+   * What the pane's own roots say should be on the list.
+   *
+   * The comparison is now in two halves, because the pane makes two claims and
+   * they fail differently. **Which directories are offered** is curation, and
+   * it is asserted against a fixture the driver planted in `CONT-12`, where the
+   * answer is known. **Which files are inside an offered one** is not a
+   * judgement at all - it is every file - and that is what this compares, by
+   * walking exactly the directories the pane named and keeping everything.
+   *
+   * So a pane that offered the wrong directories fails CONT-12, and a pane that
+   * offered the right ones and then hid a file inside them fails here. The old
+   * single comparison could not tell those apart, and its filter meant it could
+   * not see the second one at all.
+   */
+  const truth = new Set<string>()
+  for (const root of tree.roots) {
+    if (root.relPath === '') {
+      // The scope's own top-level files, which are not recursive.
+      for (const entry of readdirSync(root.path, { withFileTypes: true })) {
+        if (entry.isFile()) truth.add(entry.name.toLowerCase())
+      }
+      continue
+    }
+    const found: string[] = []
+    walkEveryFile(root.path, harnessPath, found)
+    for (const rel of found) truth.add(rel.toLowerCase())
+  }
 
   const fromPane = new Set(tree.files.map((file) => file.relPath.toLowerCase()))
-  const fromWalk = new Set(truth.map((rel) => rel.toLowerCase()))
-  const missing = [...fromWalk].filter((rel) => !fromPane.has(rel))
-  const extra = [...fromPane].filter((rel) => !fromWalk.has(rel))
+  const missing = [...truth].filter((rel) => !fromPane.has(rel))
+  const extra = [...fromPane].filter((rel) => !truth.has(rel))
 
   await selectScope(win, harnessPath)
+  await click(win, '[data-content-view="curated"]')
+  await sleep(500)
   const painted = await js<Array<{ relPath: string; kind: string }>>(
     win,
     `[...document.querySelectorAll('button[data-content-file]')].map((el) => ({
@@ -757,12 +856,17 @@ async function browseChecks(ctx: CheckContext, shotDir: string, harnessPath: str
   const rootRels = tree.roots.map((root) => root.relPath)
   const namedPresent = named.filter((rel) => rootRels.includes(rel))
 
+  // The walk has to have found something to compare, or "no disagreements" is
+  // what an empty set reports too.
+  const discriminating = truth.size > 20
+
   return [
     {
       id: 'CONT-1',
       criterion: 'File browser scoped to the selected project/harness: notes/, context/, .claude/skills/, docs/',
-      title: 'The tree matches an independent walk of the same directory, file for file',
+      title: 'Every file inside an offered root is listed, matched against an independent walk',
       ok:
+        discriminating &&
         missing.length === 0 &&
         extra.length === 0 &&
         namedPresent.length === 4 &&
@@ -772,20 +876,340 @@ async function browseChecks(ctx: CheckContext, shotDir: string, harnessPath: str
       detail: {
         scope: harnessPath,
         pane: tree.files.length,
-        independentWalk: truth.length,
+        independentWalk: truth.size,
         missingFromThePane: missing.slice(0, 20),
         listedButNotOnDisk: extra.slice(0, 20),
-        roots: tree.roots.map((root) => `${root.relPath || '(scope root)'}=${String(root.files)}`),
+        roots: tree.roots.map(
+          (root) => `${root.relPath || '(scope root)'}=${String(root.files)} ${root.offer}`
+        ),
         namedRootsFound: namedPresent,
+        kindsOnScreen: [...new Set(painted.map((row) => row.kind))].sort(),
         paintedRows: painted.length,
         walkMs: tree.tookMs,
         screenshot: shot.file
       },
       notes: [
-        'The second read is a plain readdirSync recursion in contentcheck.ts with the same exclusion',
-        'list and no notion of roots at all - so a scanner that decided the wrong directories',
-        'were content would disagree with it.',
-        'The four named roots are asserted by name because the criterion names them.'
+        'The second read is a plain readdirSync recursion in contentcheck.ts over the directories',
+        'the pane named, with no extension filter of any kind - so it cannot drift from the kind',
+        'table in roots.ts, and the only way to disagree is to be wrong about the disk.',
+        'The four named roots are asserted by name because the criterion names them.',
+        'Which directories are offered is CONT-12’s claim, against a fixture with a known answer.'
+      ]
+    }
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// CONT-12 / CONT-13 / CONT-14: the scope split
+// ---------------------------------------------------------------------------
+
+/** What the header's mode control and its caption are saying, right now. */
+async function readMode(win: BrowserWindow): Promise<{
+  view: string
+  caption: string
+  count: string
+}> {
+  return js(
+    win,
+    `(() => {
+      const on = [...document.querySelectorAll('[data-content-view]')]
+        .find((el) => el.getAttribute('aria-pressed') === 'true');
+      return {
+        view: on ? on.dataset.contentView : '',
+        caption: (document.querySelector('[data-content-view-rule]')?.textContent ?? '').trim(),
+        count: (document.querySelector('[data-content-count]')?.textContent ?? '').trim()
+      }
+    })()`
+  )
+}
+
+/**
+ * CONT-12: the scope kind picks the default, and nothing else.
+ *
+ * Two claims that fail differently. The **default** is read off the real
+ * harness and a real project, because "kind picks it" is a claim about
+ * discovery's own answer for the kind. The **cross case** is exercised on the
+ * driver's own fixtures - the one the mock never draws, where every frame is
+ * harness+Curated or project+Tree and switching the mode switches the scope
+ * with it.
+ */
+async function modeChecks(
+  ctx: CheckContext,
+  shotDir: string,
+  harnessPath: string,
+  projectPath: string | null,
+  fixtures: Fixtures
+): Promise<Check[]> {
+  const { win } = ctx
+
+  await selectScope(win, harnessPath)
+  const harnessDefault = await readMode(win)
+
+  let projectDefault: { view: string; caption: string; count: string } | null = null
+  if (projectPath !== null) {
+    await selectScope(win, projectPath)
+    projectDefault = await readMode(win)
+  }
+
+  // The cross case, on fixtures. A project read as a vault, then a harness
+  // walked as a tree.
+  await selectScope(win, fixtures.project)
+  await click(win, '[data-content-view="curated"]')
+  await sleep(700)
+  const projectCurated = await readMode(win)
+  const emptyRoot = await js<{ listed: boolean; saysEmpty: boolean; offer: string }>(
+    win,
+    `(() => {
+      const head = document.querySelector('[data-content-section="docs"]');
+      return {
+        listed: Boolean(head),
+        saysEmpty: Boolean(document.querySelector('[data-content-root-empty="docs"]')),
+        offer: head ? head.dataset.contentRootOffer : ''
+      }
+    })()`
+  )
+  const curatedShot = await screenshot(win, shotDir, 'content-project-curated.png')
+
+  await selectScope(win, fixtures.root)
+  await click(win, '[data-content-view="tree"]')
+  await sleep(700)
+  const harnessTree = await readMode(win)
+  const harnessTreeEntries = await js<string[]>(
+    win,
+    `[...document.querySelectorAll('[data-content-tree-entry]')].map((el) => el.dataset.contentTreeEntry)`
+  )
+  const treeShot = await screenshot(win, shotDir, 'content-harness-tree.png')
+
+  return [
+    {
+      id: 'CONT-12',
+      criterion:
+        'A harness opens curated and a project opens on a tree; both modes work from either kind, and the kind only picks the default',
+      title: 'The default follows the scope kind, and the cross case works in both directions',
+      ok:
+        harnessDefault.view === 'curated' &&
+        harnessDefault.caption.includes('harness default') &&
+        (projectDefault === null ||
+          (projectDefault.view === 'tree' && projectDefault.caption.includes('project default'))) &&
+        projectCurated.view === 'curated' &&
+        emptyRoot.listed &&
+        emptyRoot.saysEmpty &&
+        emptyRoot.offer === 'named' &&
+        harnessTree.view === 'tree' &&
+        harnessTreeEntries.includes('notes') &&
+        harnessTreeEntries.includes('tools'),
+      detail: {
+        harness: { scope: harnessPath, ...harnessDefault },
+        project: projectDefault === null ? 'no project scope on this machine' : { scope: projectPath, ...projectDefault },
+        projectAsCurated: { scope: fixtures.project, ...projectCurated, emptyNamedRoot: emptyRoot },
+        harnessAsTree: { scope: fixtures.root, ...harnessTree, topLevel: harnessTreeEntries.length },
+        screenshots: [curatedShot.file, treeShot.file]
+      },
+      notes: [
+        'The caption is read as text rather than inferred from the mode: "harness default - curated',
+        'roots" is the thing that stops the rule being invisible, and a caption that had stopped',
+        'saying it would leave the control passing with nothing on screen to explain it.',
+        'The empty named root is asserted on the fixture project, where the driver made docs/ and',
+        'put nothing in it - so "listed and says empty" has a known answer.'
+      ]
+    }
+  ]
+}
+
+/**
+ * CONT-13: curation decides directories, never files.
+ *
+ * Against the fixture harness, where the driver planted the discriminating
+ * pair itself: `tools/` holding nothing but scripts, `screenshots/` holding
+ * nothing but bytes. Asserting only the first would pass a rule that offered
+ * every directory there is.
+ */
+async function curationChecks(ctx: CheckContext, fixtures: Fixtures): Promise<Check[]> {
+  const { win, content } = ctx
+
+  // The fixtures have to be there and have to discriminate before any of this
+  // is worth reading - the PROF-4 shape, where a missing file made every
+  // answer match.
+  const planted = {
+    sourceOnly: existsSync(join(fixtures.root, 'tools', 'rep-payload.py')),
+    bytesOnly: existsSync(join(fixtures.root, 'screenshots', 'one.png')),
+    binaryInsideARoot: existsSync(join(fixtures.notes, 'diagram.png'))
+  }
+
+  await selectScope(win, fixtures.root)
+  await click(win, '[data-content-view="curated"]')
+  await sleep(700)
+
+  const tree = content.tree(fixtures.root, true)
+  const roots = new Map(tree.roots.map((root) => [root.relPath, root]))
+  const painted = await js<Array<{ relPath: string; kind: string }>>(
+    win,
+    `[...document.querySelectorAll('button[data-content-file]')].map((el) => ({
+      relPath: el.dataset.contentFile, kind: el.dataset.contentKind }))`
+  )
+  const onScreen = new Map(painted.map((row) => [row.relPath.toLowerCase(), row.kind]))
+
+  return [
+    {
+      id: 'CONT-13',
+      criterion:
+        'Curated roots list every file; source opens as source, binary is listed rather than hidden; a source-only directory is a found root',
+      title: 'A directory of nothing but scripts is a root, one of nothing but bytes is not',
+      ok:
+        planted.sourceOnly &&
+        planted.bytesOnly &&
+        planted.binaryInsideARoot &&
+        roots.get('tools')?.offer === 'discovered' &&
+        !roots.has('screenshots') &&
+        onScreen.get('tools/rep-payload.py') === 'source' &&
+        onScreen.get('tools/sweep.ps1') === 'source' &&
+        onScreen.get('notes/diagram.png') === 'binary' &&
+        !onScreen.has('screenshots/one.png'),
+      detail: {
+        fixturesPlanted: planted,
+        roots: tree.roots.map((root) => `${root.relPath || '(scope root)'}=${String(root.files)} ${root.offer}`),
+        toolsRows: painted.filter((row) => row.relPath.startsWith('tools/')),
+        binaryRow: painted.find((row) => row.relPath === 'notes/diagram.png') ?? null,
+        screenshotsOffered: roots.has('screenshots')
+      },
+      notes: [
+        'Both directions, deliberately. `tools/` proves source counts as content; `screenshots/`',
+        'proves binary still does not, which is what stops the rule from offering every directory',
+        'on the disk. `notes/diagram.png` is the third claim: inside a root that *is* offered,',
+        'even a binary is listed - the kind decides how a file opens, not whether it is shown.'
+      ]
+    }
+  ]
+}
+
+/**
+ * CONT-14: the project tree - lazy, complete, and ignoring what the repository
+ * ignores.
+ *
+ * Laziness is asserted the only way it can be: by looking for rows that must
+ * not exist yet, expanding, and looking again. A tree that had walked eagerly
+ * and hidden the rows would fail the first half; one that never read the
+ * directory fails the second.
+ */
+async function treeChecks(ctx: CheckContext, shotDir: string, fixtures: Fixtures): Promise<Check[]> {
+  const { win, content } = ctx
+
+  await selectScope(win, fixtures.project)
+  await click(win, '[data-content-view="tree"]')
+  await sleep(900)
+
+  const readRows = async (): Promise<Array<{ rel: string; kind: string; ignored: string }>> =>
+    js(
+      win,
+      `[...document.querySelectorAll('[data-content-tree-entry]')].map((el) => ({
+        rel: el.dataset.contentTreeEntry,
+        kind: el.dataset.contentKind,
+        ignored: el.dataset.contentIgnored
+      }))`
+    )
+
+  const before = await readRows()
+  await click(win, '[data-content-tree-entry="src"]')
+  await sleep(900)
+  const after = await readRows()
+
+  const badged = await js<string[]>(
+    win,
+    `[...document.querySelectorAll('[data-content-tree-entry][data-content-ignored="true"]')]
+       .map((el) => (el.textContent ?? '').includes('IGNORED') ? el.dataset.contentTreeEntry : '')
+       .filter(Boolean)`
+  )
+  const source = await js<string>(
+    win,
+    `document.querySelector('[data-content-tree]')?.dataset.contentTree ?? ''`
+  )
+  const caption = await js<string>(
+    win,
+    `(document.querySelector('[data-content-tree]')?.lastElementChild?.textContent ?? '').trim()`
+  )
+  const count = await js<string>(
+    win,
+    `(document.querySelector('[data-content-count="tree"]')?.textContent ?? '').trim()`
+  )
+
+  // The independent read: what is actually in the fixture's top level, and what
+  // git itself says about it - asked through the driver's own spawn rather than
+  // through the code under test.
+  const onDisk = readdirSync(fixtures.project, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() || entry.isFile())
+    .map((entry) => entry.name)
+  const gitSays = new Set<string>()
+  if (fixtures.projectIsRepo) {
+    const probe = spawnSync(
+      'git',
+      ['check-ignore', ...onDisk.map((name) => name)],
+      { cwd: fixtures.project, encoding: 'utf8', windowsHide: true }
+    )
+    for (const line of (probe.stdout ?? '').split(/\r?\n/)) {
+      if (line.trim() !== '') gitSays.add(line.trim().replace(/\/$/, ''))
+    }
+  }
+
+  // The fallback has to disagree, or "gitignore respected" is also what a
+  // built-in list would report. `secrets/` is in no built-in list anywhere.
+  const fallback = await content.dir(fixtures.project, '')
+  const fallbackSecrets = fallback.entries.find((entry) => entry.name === 'secrets')
+
+  const listed = new Set(before.map((row) => row.rel))
+  const ignoredOnScreen = new Set(before.filter((row) => row.ignored === 'true').map((row) => row.rel))
+  const shot = await screenshot(win, shotDir, 'content-project-tree.png')
+
+  return [
+    {
+      id: 'CONT-14',
+      criterion:
+        'The project tree lists every file, reads directories lazily on expand, and shows what .gitignore ignores rather than hiding it',
+      title: 'Every top-level entry is a row, `src/` is read only when opened, and git decides the greying',
+      ok:
+        fixtures.projectIsRepo &&
+        gitSays.size > 0 &&
+        onDisk.every((name) => listed.has(name)) &&
+        listed.size === onDisk.length &&
+        // Lazy: nothing under `src/` before the click, everything after it.
+        before.every((row) => !row.rel.startsWith('src/')) &&
+        after.some((row) => row.rel === 'src/index.ts') &&
+        after.some((row) => row.rel === 'src/util') &&
+        // The repository's own answer, not Helm's list.
+        [...gitSays].every((name) => ignoredOnScreen.has(name)) &&
+        ignoredOnScreen.has('secrets') &&
+        badged.includes('node_modules') &&
+        badged.includes('dist') &&
+        source === 'gitignore' &&
+        caption.includes('.gitignore respected') &&
+        count.includes('ignored') &&
+        // The fallback would not have called `secrets/` ignored, so a pass here
+        // is git answering rather than the built-in list under another name.
+        fallbackSecrets?.ignoredBy === 'gitignore' &&
+        // Unsupported kinds are rows, not omissions.
+        listed.has('LICENSE'),
+      detail: {
+        project: fixtures.project,
+        isRepo: fixtures.projectIsRepo,
+        onDisk,
+        listed: [...listed],
+        ignoredOnScreen: [...ignoredOnScreen],
+        gitCheckIgnoreSaid: [...gitSays],
+        badgedIgnored: badged,
+        beforeExpandingSrc: before.filter((row) => row.rel.startsWith('src')).map((row) => row.rel),
+        afterExpandingSrc: after.filter((row) => row.rel.startsWith('src/')).map((row) => row.rel),
+        ignoreSource: source,
+        captionUnderTheTree: caption,
+        headerCount: count,
+        screenshot: shot.file
+      },
+      notes: [
+        'The ignore set is compared against this driver’s own `git check-ignore` spawn, which is',
+        'the world rather than a second opinion - Helm and the check are both asking git, and if',
+        'they disagree one of them is passing the wrong paths.',
+        'gitSays.size > 0 is the discrimination guard: on a machine with no git the whole claim',
+        'is vacuous, and this fails rather than reporting green over nothing.',
+        '`secrets/` is in no built-in skip list, so its being ignored can only have come from the',
+        'repository - which is what separates this from the fallback passing under another name.'
       ]
     }
   ]
