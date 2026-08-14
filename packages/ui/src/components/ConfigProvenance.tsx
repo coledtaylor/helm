@@ -99,7 +99,12 @@ function SourceLink({
   return (
     <button
       type="button"
-      data-open-settings={file}
+      // `data-open-layer`, not `data-open-settings`: that one is the title
+      // bar's gear, and `design-shot` reaches the settings pane by it. Panes
+      // are hidden rather than unmounted, so a second element carrying that
+      // attribute is a `querySelector` that can return either - which is how
+      // this was found, by a probe reading the gear's empty label.
+      data-open-layer={file}
       onClick={() => onOpenFile(file)}
       title={file}
       className="ml-auto shrink-0 font-mono text-[10.5px] text-fg-subtle transition-colors hover:text-accent-text"

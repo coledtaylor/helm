@@ -168,8 +168,8 @@ function SettingRow({
   const hint = settingHint(topLevelKey(row.key))
   return (
     <div
-      data-setting={row.key}
-      data-setting-wins={row.wins}
+      data-config-setting={row.key}
+      data-config-setting-wins={row.wins}
       className="border-b border-border bg-surface-raised px-3.5 py-2.5 last:border-b-0"
     >
       <div className="flex items-baseline gap-3">

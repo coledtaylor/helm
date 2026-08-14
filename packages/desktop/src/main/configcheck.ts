@@ -923,8 +923,8 @@ async function filesChecks(
   await pollJs(win, `document.querySelector('[data-config-settings]')`, 10_000)
   const painted = await js<Array<{ key: string; wins: string }>>(
     win,
-    `[...document.querySelectorAll('[data-setting]')].map((el) => ({
-      key: el.dataset.setting, wins: el.dataset.settingWins }))`
+    `[...document.querySelectorAll('[data-config-setting]')].map((el) => ({
+      key: el.dataset.configSetting, wins: el.dataset.configSettingWins }))`
   )
   const paneAgrees = [...declared.keys()].every((key) => {
     const seen = painted.find((candidate) => candidate.key === key)
@@ -1013,7 +1013,7 @@ async function filesChecks(
       return {
         count: box?.dataset.hookProvenance ?? '',
         events: [...document.querySelectorAll('[data-hook-event]')].map((el) => el.dataset.hookEvent),
-        source: document.querySelector('[data-open-settings]')?.textContent ?? '',
+        source: document.querySelector('[data-open-layer]')?.textContent ?? '',
         text: (box?.textContent ?? '').replace(/\\s+/g, ' ').trim()
       } })()`
   )
