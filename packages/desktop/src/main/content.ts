@@ -327,7 +327,14 @@ export function registerContentProtocol(): void {
 
     // The entry document, and only that one, gets the wikilink bootstrap. A
     // stylesheet or a chart script beside it is served verbatim.
-    if (rel === '' && /\.html?$/i.test(target)) {
+    //
+    // Compared by *path*, not by the request being for the bare directory. The
+    // URL a frame is handed carries the file's own name as its last segment -
+    // `helm-content://artifact/<token>/lesson.html` - so `rel` is that name and
+    // is never empty for the document itself. Written the other way round this
+    // injected into nothing at all, which is a bootstrap that silently does not
+    // run: CONT-15 read `[[beta]]` still sitting there as literal text.
+    if (target.toLowerCase() === entry.file.toLowerCase() && /\.html?$/i.test(target)) {
       bytes = Buffer.from(withWikilinks(bytes.toString('utf8'), entry.links), 'utf8')
     }
 

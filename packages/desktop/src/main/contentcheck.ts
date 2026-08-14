@@ -399,8 +399,24 @@ async function showViewer(win: BrowserWindow): Promise<boolean> {
   return pollJs(win, `document.querySelector('select[data-content-scope]')`, 20_000)
 }
 
-/** Points the switcher at a scope, and refuses to continue if it did not move. */
-async function selectScope(win: BrowserWindow, path: string): Promise<void> {
+/**
+ * Points the switcher at a scope, and refuses to continue if it did not move.
+ *
+ * It also puts the pane on the **curated** view, because every probe in this
+ * file that opens a file does it by clicking a `[data-content-file]` row and
+ * those rows exist in one of the two modes. That is not a detail: the fixture
+ * harness reaches the switcher through a *profile*, which registers it as a
+ * project, and a project defaults to the tree - so the artifact probes were
+ * clicking for rows that were never going to be there and reporting
+ * `opened: false` rather than anything about artifacts. The three probes that
+ * are about the tree ask for it by name, immediately after this.
+ */
+async function selectScope(
+  win: BrowserWindow,
+  path: string,
+  /** `keep` leaves the mode alone - for the one probe that is *about* the default. */
+  mode: 'curated' | 'keep' = 'curated'
+): Promise<void> {
   await setValue(win, 'select[data-content-scope]', path)
   await sleep(600)
   const landed = await js<string>(
@@ -412,6 +428,7 @@ async function selectScope(win: BrowserWindow, path: string): Promise<void> {
       `the content scope switcher has no option for ${path} - it is showing ${landed || '(nothing)'}`
     )
   }
+  if (mode === 'curated') await click(win, '[data-content-view="curated"]')
   await pollJs(win, `document.querySelector('[data-content-status]')`, 10_000)
   await sleep(400)
 }
@@ -558,6 +575,7 @@ function buildFixtures(dataDir: string): Fixtures {
     `<!doctype html><html><head><meta charset="utf-8"><title>Fixture artifact</title>
 <style>body{font:14px/1.5 system-ui;margin:2rem;color:#222}h1{font-size:1.3rem}</style></head>
 <body><h1 id="heading">HELMM6ARTIFACT</h1><p id="out">pending</p>
+<p id="links">A resolved link to [[beta]] and a broken one to [[never-written]].</p>
 <script>document.getElementById('out').textContent = 'ran'</script></body></html>
 `
   )
@@ -943,12 +961,14 @@ async function modeChecks(
 ): Promise<Check[]> {
   const { win } = ctx
 
-  await selectScope(win, harnessPath)
+  // `keep`, because this is the one probe the mode is the subject of: forcing
+  // it here would read back the driver's own click and call it the default.
+  await selectScope(win, harnessPath, 'keep')
   const harnessDefault = await readMode(win)
 
   let projectDefault: { view: string; caption: string; count: string } | null = null
   if (projectPath !== null) {
-    await selectScope(win, projectPath)
+    await selectScope(win, projectPath, 'keep')
     projectDefault = await readMode(win)
   }
 
@@ -1920,12 +1940,33 @@ async function artifactChecks(
   const { win } = ctx
   const checks: Check[] = []
 
-  // ---- a real artifact, and the console it must not fill ------------------
+  /**
+   * A real artifact out of the real vault - and a *document*, not whichever
+   * HTML file happens to be newest.
+   *
+   * This used to take the first HTML file in the tree, which is the newest one
+   * in `notes/`. That made the probe hostage to whatever was written last: a
+   * design tool dropped a 36 KB fragment into the vault with no `<title>`, no
+   * heading and its scripts beside it, and CONT-5 went red asserting a document
+   * about something that is not one. The criterion is that an artifact opens
+   * *rendered*, so the file this is asked of is one that claims to be a
+   * document, decided from its own bytes and named in the detail. If the vault
+   * holds none, that is reported rather than failed - and the fixture artifact
+   * below covers the criterion either way.
+   */
   const realArtifact =
     harnessPath !== null
       ? ctx.content
           .tree(harnessPath, true)
-          .files.find((file) => file.kind === 'html' && HTML.test(file.path))
+          .files.find((file) => {
+            if (file.kind !== 'html' || !HTML.test(file.path)) return false
+            try {
+              const head = readFileSync(file.path, 'utf8').slice(0, 64 * 1024)
+              return /<title[^>]*>\s*\S/i.test(head) && /<h[1-3][\s>]/i.test(head)
+            } catch {
+              return false
+            }
+          })
       : undefined
 
   if (realArtifact) {
@@ -1971,7 +2012,31 @@ async function artifactChecks(
         'The console is read from the main process, which is the only place it can be read -',
         'the frame has an opaque origin, so the window hosting it cannot reach its console.',
         '"Rendered" is `document.body.scrollHeight` measured inside the frame, so an empty',
-        'document that loaded successfully still fails.'
+        'document that loaded successfully still fails.',
+        'The file is chosen from its own bytes - a `<title>` and a heading - rather than by',
+        'being the newest HTML in the vault, so a fragment dropped in by a design tool cannot',
+        'become the thing this criterion is asked about.'
+      ]
+    })
+  } else if (harnessPath !== null) {
+    // Said out loud rather than skipped. A criterion with no real artifact
+    // behind it is a criterion carried entirely by a fixture, and that is worth
+    // knowing about - `PROF-4` is what happens when nobody is told.
+    checks.push({
+      id: 'CONT-5',
+      criterion: 'An HTML artifact opens rendered, sandboxed, with no console errors',
+      title: 'No HTML file in this harness claims to be a document, so this ran against no real artifact',
+      ok: true,
+      detail: {
+        scope: harnessPath,
+        htmlFilesInTheScope: ctx.content
+          .tree(harnessPath, true)
+          .files.filter((file) => file.kind === 'html').length
+      },
+      notes: [
+        'Not a failure: a harness legitimately holds no generated report. But it does mean the',
+        'criterion below is carried by the fixture artifact alone on this machine, and a reader',
+        'of this report should know that rather than infer coverage that is not there.'
       ]
     })
   }
@@ -2100,6 +2165,98 @@ async function artifactChecks(
       'reaches the handler, which is a 404 and proves the parser. `%2e%2e%2f` survives - `%2f`',
       'is never decoded during canonicalisation - and is what actually reaches `resolve()`, so',
       'the 403 is the containment check refusing rather than the URL never arriving.'
+    ]
+  })
+
+  // ---- CONT-15: wikilinks inside a rendered artifact -----------------------
+
+  /**
+   * A `[[wikilink]]` in an HTML artifact, from inside the frame to the note it
+   * opens.
+   *
+   * The whole path is exercised because every part of it is unusual. The
+   * brackets are rewritten by a bootstrap the *protocol handler* injected, in a
+   * document with an opaque origin that this window cannot read; the click is
+   * carried out by `postMessage`, the only channel a sandboxed frame has; and
+   * the target is resolved by the main process, because the frame is
+   * deliberately told which names resolve and no paths at all.
+   *
+   * So the assertions are: the bracket became an anchor, the broken one is
+   * marked and is *not* the same as the live one, the frame holds no path, and
+   * clicking it lands the pane on the note.
+   */
+  clearArtifactConsole()
+  const link = await openArtifact(ctx, fixtures.root, 'lessons/artifact.html')
+  const inFrame = link.frame
+    ? await link.frame
+        .executeJavaScript(
+          `({
+             live: document.querySelectorAll('a[data-helm-wikilink="beta"]').length,
+             broken: document.querySelectorAll('a.helm-wikilink-broken').length,
+             brokenTarget: document.querySelector('a.helm-wikilink-broken')?.dataset.helmWikilink ?? null,
+             stillLiteral: (document.body.innerText || '').includes('[[beta]]'),
+             // Nothing in the frame may carry a filesystem path. The table it
+             // was given is names to booleans, and this is what says so.
+             pathsInTheDocument: /[A-Za-z]:\\\\\\\\|helm-data/.test(document.documentElement.outerHTML)
+           })`
+        )
+        .catch(() => null)
+    : null
+
+  let landedOn: string | null = null
+  if (link.frame && inFrame !== null) {
+    await link.frame
+      .executeJavaScript(`document.querySelector('a[data-helm-wikilink="beta"]')?.click(), 1`)
+      .catch(() => undefined)
+    await pollJs(win, `document.querySelector('[data-content-body]')?.dataset.contentPath`, 15_000)
+    await sleep(500)
+    landedOn = await js<string | null>(
+      win,
+      `document.querySelector('[data-content-body]')?.dataset.contentPath ?? null`
+    )
+  }
+
+  const frameShape = inFrame as {
+    live?: number
+    broken?: number
+    brokenTarget?: string | null
+    stillLiteral?: boolean
+    pathsInTheDocument?: boolean
+  } | null
+  const expectedTarget = join(fixtures.notes, 'beta.md')
+
+  checks.push({
+    id: 'CONT-15',
+    criterion: 'The wikilink index resolves inside rendered HTML as well as markdown',
+    title: 'A `[[wikilink]]` in an artifact is a link, and clicking it opens the note',
+    ok:
+      link.opened &&
+      link.frame !== null &&
+      // The fixture has to carry both, or "one link, no broken ones" would also
+      // be what a bootstrap that never ran reports.
+      readFileSync(fixtures.artifact, 'utf8').includes('[[beta]]') &&
+      readFileSync(fixtures.artifact, 'utf8').includes('[[never-written]]') &&
+      existsSync(expectedTarget) &&
+      (frameShape?.live ?? 0) === 1 &&
+      (frameShape?.broken ?? 0) === 1 &&
+      frameShape?.brokenTarget === 'never-written' &&
+      frameShape.stillLiteral === false &&
+      frameShape.pathsInTheDocument === false &&
+      landedOn?.toLowerCase() === expectedTarget.toLowerCase(),
+    detail: {
+      artifact: fixtures.artifact,
+      insideTheFrame: frameShape,
+      clickLandedOn: landedOn,
+      expected: expectedTarget,
+      artifactConsole: artifactConsoleEntries().map((entry) => `${entry.level}: ${entry.message}`)
+    },
+    notes: [
+      'Read from inside the frame through WebFrameMain, which is the only reader that can - the',
+      'document has an opaque origin, so the window hosting it cannot see into it at all.',
+      '`pathsInTheDocument` is the security half: the bootstrap is given names and booleans, and',
+      'a regression that started injecting resolved paths would hand a filesystem layout to code',
+      'Helm did not write. The broken link is asserted separately from the live one so that a',
+      'bootstrap which linked everything, or nothing, fails rather than half-passing.'
     ]
   })
 
