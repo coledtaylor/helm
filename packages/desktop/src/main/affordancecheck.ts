@@ -629,12 +629,41 @@ export async function runAffordanceChecks(
    * finding was originally reported as one dead hover and stopped being
    * reported at all when the star arrived, without the row changing.
    */
-  let selectedRow: { tier: Tier; label: string; restBg: string; hoverBg: string } | null = null
+  let selectedRow: {
+    tier: Tier
+    label: string
+    restBg: string
+    hoverBg: string
+    /** Chromium's own answer to "the pointer is on this". The positive control. */
+    hot: boolean
+  } | null = null
   if (wanted.has('hover')) {
     await closeAllTabs(win)
     await sleep(300)
+    // The tree is put back to the top first, and that is not tidiness. The walk
+    // clicks rows wherever they are, `el.click()` scrolls the last one into
+    // view, and a first row left scrolled off the top still answers
+    // `aria-current` and still reports a box - at coordinates the pointer then
+    // lands nowhere near. Both readings come back identical, which is exactly
+    // what a dead hover looks like. Found when a view added to the end of the
+    // walk left the sidebar scrolled to its foot and turned this probe red with
+    // nothing wrong in the app. `hot` below is the second half of the same fix.
+    await js<void>(
+      win,
+      `(() => { const nav = document.querySelector('aside nav'); if (nav) nav.scrollTop = 0 })()`
+    ).catch(() => undefined)
+    await sleep(200)
     await click(win, 'aside nav button[title]')
     await sleep(900)
+    // ...and then the row itself is put where the pointer can reach it. The
+    // scroll above is where the row *was* clicked from; this is about where it
+    // ends up, since opening a project can move the tree under it.
+    await js<void>(
+      win,
+      `(() => { const el = document.querySelector('aside [aria-current="true"]')
+        if (el) el.scrollIntoView({ block: 'center' }) })()`
+    ).catch(() => undefined)
+    await sleep(300)
     const find = `(() => {
       ${READ_FN}
       const el = document.querySelector('aside [aria-current="true"]')
@@ -651,6 +680,7 @@ export async function runAffordanceChecks(
         selectedRow = {
           tier: tierOf(rest, hover),
           label: rest.label,
+          hot: hover.hot && hover.onTop,
           // The first field `props()` joins is `backgroundColor`, which is the
           // property this recipe moves. Named in the report so a failure says
           // "these two are the same colour" rather than "the tier was none".
@@ -750,12 +780,19 @@ export async function runAffordanceChecks(
       // `null` fails. Nothing selected means the click never opened a project,
       // and a probe that reports green because it could not find its subject is
       // the shape CLAUDE.md names as worse than no check.
-      ok: selectedRow !== null && selectedRow.tier === 'self',
+      // `hot` is required as well as the tier, so "the pointer never arrived"
+      // cannot go on presenting itself as "the tint is dead" - the two are
+      // indistinguishable from the colours alone, and the walk has carried this
+      // control on every element it measures for exactly that reason.
+      ok: selectedRow !== null && selectedRow.hot && selectedRow.tier === 'self',
       detail: { selectedRow },
       notes: [
         selectedRow === null
           ? 'no [aria-current="true"] row in the sidebar - the project never opened, so nothing was measured'
           : `rest ${selectedRow.restBg} -> hover ${selectedRow.hoverBg}`,
+        ...(selectedRow !== null && !selectedRow.hot
+          ? ['the pointer never landed on the row - this says nothing about the tint']
+          : []),
         'The tier has to be `self`. `near` is what this row scores when it has',
         'no hover recipe of its own, because its pin star fades in beside it.',
         'The recipe is `ROW_SELECTED_GROUP` in ui/src/lib/rows.ts; putting the',
