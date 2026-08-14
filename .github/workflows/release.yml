@@ -140,12 +140,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Notes come from git log, not GitHub's generate_release_notes.
+          # Notes come from CHANGELOG.md, and neither from git log nor from
+          # GitHub's generate_release_notes.
+          #
           # generate_release_notes lists *merged pull requests*; this repo's
-          # history is branches merged locally, so it would produce a release
-          # body that is a "Full Changelog" link and nothing else. The commit
-          # subjects here are already written as one-line statements of what
-          # landed, which is exactly what a changelog entry is.
+          # history is branches merged locally, so it would produce a body that
+          # is a "Full Changelog" link and nothing else.
+          #
+          # `git log` was what this did through 0.4.0, on the argument that the
+          # commit subjects here are already one-line statements of what landed.
+          # They are - but of what landed in the *repository*. 0.4.0 produced
+          # fifty-nine of them, most naming a probe id, a fixture or a refactor,
+          # and three identical lines from one cherry-pick onto three branches.
+          # Filtering by path gets some of it and cannot get the rest: the same
+          # file is touched for a reason a user sees and for a reason they never
+          # will, and only the person who wrote it knows which. So it is written
+          # down rather than derived.
           previous=$(git tag --list 'v*' --sort=-v:refname | head -n1)
 
           # The note at the top of release-body.md is addressed to whoever edits
@@ -157,22 +167,30 @@ jobs:
           sed '/^<!--$/,/^-->$/d' .github/release-body.md \
             | sed '/./,$!d' \
             | sed "s/\${VERSION}/$VERSION/g" >notes.md
+          # The section for this version, from its own heading to the next one.
+          # Matched on the exact version so `0.4.10` can never be answered by
+          # `0.4.1`'s section.
+          section=$(awk -v want="## $VERSION" '
+            $0 == want { inside = 1; next }
+            inside && /^## / { exit }
+            inside { print }
+          ' CHANGELOG.md)
+
+          # Fails the release rather than publishing an empty body. Writing the
+          # section is the step a person can skip, and the step a person can
+          # skip is the step that gets skipped - so it is the step that stops
+          # the build. No tag is created when this job fails, so the remedy is
+          # to add the section and push again.
+          if [[ -z ${section//[[:space:]]/} ]]; then
+            echo "::error file=CHANGELOG.md::no '## $VERSION' section in CHANGELOG.md, so there is nothing to tell anyone about this release"
+            exit 1
+          fi
+
           {
             echo
+            echo "$section"
             if [[ -n $previous ]]; then
-              echo "## Changes since $previous"
-            else
-              echo "## Changes"
               echo
-              echo "First release."
-            fi
-            echo
-            # --no-merges: a merge subject and the commits it brings in are both
-            # in the range, and listing both says everything twice.
-            # --reverse: oldest first, so it reads as a history.
-            git log --no-merges --reverse --format='- %s' ${previous:+"$previous..HEAD"}
-            echo
-            if [[ -n $previous ]]; then
               echo "**Full changelog:** https://github.com/$GITHUB_REPOSITORY/compare/$previous...$TAG"
             fi
           } >>notes.md

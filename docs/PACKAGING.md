@@ -80,10 +80,21 @@ runs the checks, skips the release job and finishes green.
   together rather than leaving a window where the app announces a version whose
   download page is empty. A run cancelled mid-upload leaves an unpublished
   draft; the next run deletes it and starts over.
-- **Notes are `git log` subjects**, oldest first, merges excluded. GitHub's
-  generated notes list merged pull requests, and this repository's history is
-  branches merged locally, so the generated body would be a "Full Changelog"
-  link and nothing else.
+- **Notes are the `## <version>` section of [CHANGELOG.md](../CHANGELOG.md)**,
+  and **a release with no section for its version fails rather than
+  publishing.** No tag is created when that job fails, so the remedy is to write
+  the section and push again. GitHub's generated notes list merged pull
+  requests, and this repository's history is branches merged locally, so the
+  generated body would be a "Full Changelog" link and nothing else.
+- **Why it is written rather than derived.** Through 0.4.0 the notes were
+  `git log` subjects, on the argument that they are already one-line statements
+  of what landed. They are - of what landed in the *repository*. 0.4.0 produced
+  fifty-nine lines, most of them naming a probe id, a fixture or a refactor, and
+  three identical lines from one cherry-pick onto three branches. Filtering by
+  path removes some and cannot remove the rest: the same file is touched for a
+  reason somebody using Helm sees and for a reason they never will, and only the
+  person who wrote the commit knows which. The changelog is for them; the
+  commits are one click away under "Full changelog".
 - **A release page is a changelog and nothing else.** Install notes, the
   SmartScreen warning and first run are the README's, one click away and
   maintained once rather than restated at every tag.
