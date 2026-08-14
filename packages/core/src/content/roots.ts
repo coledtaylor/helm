@@ -154,6 +154,15 @@ export function contentFileKind(name: string): ContentFileKind {
   if (DATA_EXT.has(ext)) return 'data'
   if (TEXT_EXT.has(ext)) return 'text'
   if (SOURCE_EXT.has(ext)) return 'source'
+  // A file with no extension at all is text until proved otherwise. `LICENSE`,
+  // `Makefile`, `Dockerfile`, `CODEOWNERS`, `Procfile` - every extensionless
+  // file a repository normally holds is one somebody reads, and greying them
+  // was this rule making the omission it was written to end, in the one place
+  // no extension list can reach. A name-by-name table would always be one
+  // convention behind; the byte check inside `readConfigFileContent` is the
+  // backstop, and it says "could not read this as text" for the rare case that
+  // really is a blob.
+  if (ext === '') return 'text'
   return 'binary'
 }
 

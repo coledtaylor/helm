@@ -468,6 +468,10 @@ describe('assertContentWritable', () => {
     expect(() => assertContentWritable('C:/v', 'C:/v/tools/rebuild.py')).not.toThrow()
   })
 
+  it('allows an extensionless file, which is text until the bytes say otherwise', () => {
+    expect(() => assertContentWritable('C:/v', 'C:/v/LICENSE')).not.toThrow()
+  })
+
   it('allows a note and a skill', () => {
     expect(() => assertContentWritable('C:/v', 'C:/v/notes/a.md')).not.toThrow()
     expect(() => assertContentWritable('C:/v', 'C:/v/.claude/skills/x/SKILL.md')).not.toThrow()
