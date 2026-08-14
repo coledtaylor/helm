@@ -5,6 +5,8 @@ import { dirname, extname, relative, resolve, sep } from 'node:path'
 import {
   buildCorpus,
   buildWikiIndex,
+  contentExtension,
+  contentFileKind,
   contentScope,
   corpusIsCurrent,
   readConfigFileContent,
@@ -287,15 +289,21 @@ export function createContentService({ services }: ContentServiceDeps): ContentS
 
     const content = readConfigFileContent(absolute)
     if (!file) {
+      const name = absolute.split(sep).at(-1) ?? absolute
       return {
         file: {
           path: absolute,
           relPath: relative(resolve(scopePath), absolute).split(sep).join('/'),
           root: '',
           rootKind: 'found',
-          kind: 'text',
-          slug: absolute.split(sep).at(-1) ?? absolute,
-          title: absolute.split(sep).at(-1) ?? absolute,
+          // The real kind, not a flat `text`. This is the row a file gets when
+          // the tree does not list it - opened out of the tree view, or through
+          // a wikilink into a directory the curated walk bounded out - and
+          // calling a `.py` text here would open the wrong surface for it.
+          kind: contentFileKind(name),
+          slug: name.replace(/\.[^.]+$/, ''),
+          ext: contentExtension(name).replace(/^\./, ''),
+          title: name,
           size: content.size,
           mtimeMs: content.mtimeMs,
           noteType: null,

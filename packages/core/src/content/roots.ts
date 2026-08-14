@@ -20,12 +20,22 @@ import { frontmatterString, frontmatterTags, parseNoteFrontmatter } from './fron
  * produced" is the actual brief, and on this machine that means
  * `lessons/0001-...html` and `reference/glossary.html` at the harness root:
  * artifacts, in directories no specification could have listed. So every other
- * top-level directory is checked for markdown or HTML and included if it has
+ * top-level directory is checked for readable content and included if it has
  * any.
  *
- * `repos/` is the one deliberate exclusion. Each repo underneath it is a scope
- * in its own right, and folding their notes into the harness's would make the
- * scope switcher meaningless.
+ * **This is a curation model, and curation is only correct for a harness.** In
+ * a project the same rule produces neither a curated set nor a complete one -
+ * `packages/` appears because one package has a README while `src/` does not
+ * appear at all - so a project scope opens on `filetree.ts` instead. See
+ * SPEC 4.3. Curation decides which *directories* are offered; it does not get
+ * to decide which files inside one are shown.
+ *
+ * `repos/` is the one deliberate exclusion **here**, in the curated view. Each
+ * repo underneath it is a scope in its own right, and folding their notes into
+ * the harness's would make the scope switcher meaningless - a curated list is a
+ * short list, and one that quietly contained six other projects' notes would
+ * not be. The tree view descends into it: `FALLBACK_SKIPPED_DIRS` in
+ * `filetree.ts` is the other half of that answer.
  */
 
 /** Deep enough for `docs/adr/2026/thing.md`, shallow enough to end. */
@@ -37,7 +47,14 @@ const MAX_FILES = 5000
 /** Read far enough into a file to have passed the frontmatter and the first heading. */
 const HEAD_BYTES = 8192
 
-const SKIPPED_DIRS = new Set([
+/**
+ * Directories the curated walk does not enter.
+ *
+ * Exported because the tree view's fallback - what it hides when there is no
+ * repository to ask about `.gitignore` - is this list minus one entry, and two
+ * copies of it would drift. `filetree.ts` says which entry and why.
+ */
+export const CURATED_SKIPPED_DIRS = new Set([
   'repos',
   'node_modules',
   '.git',
@@ -71,7 +88,33 @@ const SKIPPED_DIRS = new Set([
 const MARKDOWN_EXT = new Set(['.md', '.markdown', '.mdx'])
 const HTML_EXT = new Set(['.html', '.htm'])
 const DATA_EXT = new Set(['.yaml', '.yml', '.json', '.jsonc', '.toml'])
-const TEXT_EXT = new Set(['.txt', '.csv', '.log'])
+const TEXT_EXT = new Set(['.txt', '.csv', '.log', '.text', '.rst', '.adoc'])
+
+/**
+ * Extensions that open in the source view, mirroring the config tree's
+ * `TEXT_EXT` and extended for what an agent actually writes into a harness.
+ *
+ * The list is generous on purpose. Getting it wrong in this direction costs a
+ * syntax-highlighted pane for a file that would have read fine as plain text;
+ * getting it wrong in the other direction is the bug this task is named for -
+ * a file that exists, that the agent wrote, and that the pane does not admit
+ * to. Anything not listed anywhere is `binary`, which is still **shown**.
+ */
+const SOURCE_EXT = new Set([
+  '.js', '.mjs', '.cjs', '.jsx',
+  '.ts', '.mts', '.cts', '.tsx',
+  '.py', '.pyi', '.rb', '.pl', '.php', '.lua', '.r',
+  '.sh', '.bash', '.zsh', '.fish', '.ps1', '.psm1', '.psd1', '.bat', '.cmd',
+  '.c', '.h', '.cc', '.cpp', '.hpp', '.cs', '.java', '.kt', '.kts', '.swift',
+  '.go', '.rs', '.scala', '.clj', '.ex', '.exs', '.erl', '.hs', '.ml', '.vb',
+  '.sql', '.graphql', '.gql', '.proto',
+  '.css', '.scss', '.sass', '.less',
+  '.vue', '.svelte', '.astro',
+  '.ini', '.cfg', '.conf', '.properties', '.env', '.editorconfig',
+  '.gitignore', '.gitattributes', '.dockerignore', '.npmrc', '.nvmrc',
+  '.xml', '.svg', '.patch', '.diff', '.make', '.mk', '.cmake', '.gradle',
+  '.tf', '.tfvars', '.nix', '.vim', '.el', '.applescript'
+])
 
 /** The four the spec names, in the order it names them. */
 const NAMED_ROOTS: Array<{ rel: string; kind: ContentRootKind; label: string }> = [
@@ -81,18 +124,51 @@ const NAMED_ROOTS: Array<{ rel: string; kind: ContentRootKind; label: string }> 
   { rel: 'docs', kind: 'docs', label: 'Docs' }
 ]
 
-function extensionOf(name: string): string {
+/**
+ * The part of a name that decides its kind.
+ *
+ * A leading dot is the whole name, not an empty extension: `.gitignore` and
+ * `.npmrc` are files somebody edits, and reading them as "no extension" put
+ * them in the same bucket as a `.dll`.
+ */
+export function contentExtension(name: string): string {
   const dot = name.lastIndexOf('.')
-  return dot <= 0 ? '' : name.slice(dot).toLowerCase()
+  if (dot < 0) return ''
+  if (dot === 0) return name.toLowerCase()
+  return name.slice(dot).toLowerCase()
 }
 
-export function contentFileKind(name: string): ContentFileKind | null {
-  const ext = extensionOf(name)
+/**
+ * How a file opens - never whether it is listed.
+ *
+ * This used to return `null` for anything it did not recognise and the walk
+ * used that as a filter, which is how `tools/rep-payload.py` came to be absent
+ * from a pane whose whole job is showing what the agent wrote. Now every file
+ * has a kind: unrecognised is `binary`, which is listed, greyed, and opened in
+ * Explorer rather than in Helm.
+ */
+export function contentFileKind(name: string): ContentFileKind {
+  const ext = contentExtension(name)
   if (MARKDOWN_EXT.has(ext)) return 'markdown'
   if (HTML_EXT.has(ext)) return 'html'
   if (DATA_EXT.has(ext)) return 'data'
   if (TEXT_EXT.has(ext)) return 'text'
-  return null
+  if (SOURCE_EXT.has(ext)) return 'source'
+  return 'binary'
+}
+
+/**
+ * Whether a file is evidence that the directory holding it is content.
+ *
+ * Source counts, which is the change: a directory of nothing but scripts is a
+ * directory of things the agent wrote, and `tools/` is a directory the harness
+ * layout names for exactly that. Binary does not count, and that is the same
+ * judgement as before wearing a different name - a directory of PNGs called
+ * `docs-images` is not a place to go reading, and offering it as a root would
+ * put a list of unopenable rows on screen for nothing.
+ */
+export function countsAsContent(kind: ContentFileKind): boolean {
+  return kind !== 'binary'
 }
 
 function isDir(path: string): boolean {
@@ -151,8 +227,9 @@ function firstHeading(body: string): string | null {
 
 function describeFile(path: string, relPath: string, root: ContentRoot, stat: { size: number; mtimeMs: number }): ContentFile {
   const name = basename(path)
-  const kind = contentFileKind(name) ?? 'text'
+  const kind = contentFileKind(name)
   const slug = name.replace(/\.[^.]+$/, '')
+  const ext = contentExtension(name).replace(/^\./, '')
 
   let title = slug
   let noteType: string | null = null
@@ -186,6 +263,7 @@ function describeFile(path: string, relPath: string, root: ContentRoot, stat: { 
     rootKind: root.kind,
     kind,
     slug,
+    ext,
     title,
     size: stat.size,
     mtimeMs: stat.mtimeMs,
@@ -228,12 +306,14 @@ export function readContentTree(scope: ContentScope): ContentTree {
       const path = join(dir, entry.name)
       if (entry.isDirectory()) {
         if (entry.isSymbolicLink()) continue
-        if (SKIPPED_DIRS.has(entry.name.toLowerCase())) continue
+        if (CURATED_SKIPPED_DIRS.has(entry.name.toLowerCase())) continue
         walk(path, root, depth + 1)
         continue
       }
       if (!entry.isFile()) continue
-      if (contentFileKind(entry.name) === null) continue
+
+      // No kind filter. A root that is offered lists **everything** inside it;
+      // the kind decides which surface opens, not whether the row exists.
 
       let stat
       try {
@@ -247,9 +327,17 @@ export function readContentTree(scope: ContentScope): ContentTree {
     }
   }
 
-  /** The scope's own top-level files: CLAUDE.md, README.md, a loose spec. */
+  /**
+   * The scope's own top-level files: CLAUDE.md, README.md, a loose spec.
+   *
+   * `named`, because it is offered by rule rather than because a walk found
+   * something. That is what the badge means - *why* this directory is on the
+   * list - and it is the one question the old heuristic left the reader to
+   * infer.
+   */
   const rootLevel: ContentRoot = {
     kind: 'root',
+    offer: 'named',
     relPath: '',
     path: scope.path,
     label: scope.label,
@@ -258,7 +346,6 @@ export function readContentTree(scope: ContentScope): ContentTree {
   try {
     for (const entry of readdirSync(scope.path, { withFileTypes: true })) {
       if (!entry.isFile()) continue
-      if (contentFileKind(entry.name) === null) continue
       const path = join(scope.path, entry.name)
       try {
         const stat = statSync(path)
@@ -271,6 +358,11 @@ export function readContentTree(scope: ContentScope): ContentTree {
   } catch (err) {
     errors.push(`${scope.path}: ${err instanceof Error ? err.message : String(err)}`)
   }
+  // Unlike the four the spec names, this one is listed only when it holds
+  // something. "`docs/` is empty" is a fact about a directory somebody went
+  // looking for by name; "the scope directory has no loose files" is the tidy
+  // case rather than a finding, and a row saying it would be on screen in every
+  // scope that keeps its files in subdirectories.
   if (rootLevel.files > 0) roots.push(rootLevel)
 
   const claimed = new Set<string>()
@@ -280,29 +372,36 @@ export function readContentTree(scope: ContentScope): ContentTree {
     claimed.add(named.rel.split('/')[0]?.toLowerCase() ?? '')
     const root: ContentRoot = {
       kind: named.kind,
+      offer: 'named',
       relPath: named.rel,
       path,
       label: named.label,
       files: 0
     }
     walk(path, root, 1)
-    if (root.files > 0) roots.push(root)
+    // Listed whether or not it holds anything. An empty `docs/` is
+    // present-and-empty, and dropping it would be the same silent omission this
+    // whole surface exists to stop - one level down, where it is harder to see.
+    roots.push(root)
   }
 
   // Everything else at the top level that turns out to hold something readable.
   // Checked by walking it, which is the only honest test - a directory of PNGs
-  // named `docs-images` is not content and no name-based rule would know.
+  // named `docs-images` is not content and no name-based rule would know. What
+  // *counts* as readable now includes source, which is what makes a `tools/`
+  // holding nothing but scripts a root rather than a directory that vanishes.
   let discovered: ContentRoot[] = []
   try {
     for (const entry of readdirSync(scope.path, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.isSymbolicLink()) continue
       const lower = entry.name.toLowerCase()
-      if (SKIPPED_DIRS.has(lower) || claimed.has(lower)) continue
+      if (CURATED_SKIPPED_DIRS.has(lower) || claimed.has(lower)) continue
       // Dot directories are tooling, not content. `.claude/skills` is the one
       // exception and it is already a named root above.
       if (entry.name.startsWith('.')) continue
       const root: ContentRoot = {
         kind: 'found',
+        offer: 'discovered',
         relPath: entry.name,
         path: join(scope.path, entry.name),
         label: entry.name,
@@ -310,7 +409,16 @@ export function readContentTree(scope: ContentScope): ContentTree {
       }
       const before = files.length
       walk(root.path, root, 1)
-      if (files.length > before) discovered.push(root)
+      // Offered only if the walk found something worth *reading*. A directory
+      // that produced nothing but binaries is dropped, and dropping it is a
+      // judgement about the directory rather than about its files - the files
+      // inside a root that is offered are all listed, binaries included.
+      if (files.slice(before).some((file) => countsAsContent(file.kind))) {
+        discovered.push(root)
+      } else {
+        files.length = before
+        root.files = 0
+      }
     }
   } catch {
     // Already reported by the top-level file read above.

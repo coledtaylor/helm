@@ -10,7 +10,19 @@ export {
   parseNoteFrontmatter,
   type ParsedFrontmatter
 } from './frontmatter'
-export { contentFileKind, contentScope, readContentTree } from './roots'
+export {
+  CURATED_SKIPPED_DIRS,
+  contentExtension,
+  contentFileKind,
+  contentScope,
+  countsAsContent,
+  readContentTree
+} from './roots'
+export {
+  contentTreeRootLabel,
+  readContentDir,
+  type ReadContentDirOptions
+} from './filetree'
 export {
   buildWikiIndex,
   headingSlug,
