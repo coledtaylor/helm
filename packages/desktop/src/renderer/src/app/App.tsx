@@ -1436,6 +1436,10 @@ export function App(): JSX.Element {
               // the setting lives; this is the undo standing beside the thing
               // it undoes.
               onUnignoreRepo={unignoreRepo}
+              // The one piece of this pane's triage that is a preference. The
+              // filter and the grouping beside it are the pane's own state and
+              // are deliberately nowhere near settings.
+              staleDays={settings?.prStaleDays ?? DEFAULT_SETTINGS.prStaleDays}
               compact={showSessions}
             />
           </div>
