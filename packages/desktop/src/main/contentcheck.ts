@@ -922,6 +922,29 @@ async function browseChecks(ctx: CheckContext, shotDir: string, harnessPath: str
 // CONT-12 / CONT-13 / CONT-14: the scope split
 // ---------------------------------------------------------------------------
 
+/**
+ * A screenshot, or the reason there is not one.
+ *
+ * `capturePage` goes through Chromium's compositor and can fail for reasons
+ * that have nothing to do with the pane - on this machine, several Electron
+ * apps sharing a GPU is enough, and it rejects with a bare `UnknownVizError`
+ * and no stack. That took a whole group's assertions down with it, which is the
+ * wrong trade: the PNG is evidence for a person to look at, not a step in any
+ * claim these probes make. A missing one is recorded and the assertions stand.
+ */
+async function tryShot(
+  win: BrowserWindow,
+  dir: string,
+  name: string
+): Promise<{ file: string | null; error: string | null }> {
+  try {
+    const shot = await screenshot(win, dir, name)
+    return { file: shot.file, error: null }
+  } catch (err) {
+    return { file: null, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 /** What the header's mode control and its caption are saying, right now. */
 async function readMode(win: BrowserWindow): Promise<{
   view: string
@@ -989,7 +1012,7 @@ async function modeChecks(
       }
     })()`
   )
-  const curatedShot = await screenshot(win, shotDir, 'content-project-curated.png')
+  const curatedShot = await tryShot(win, shotDir, 'content-project-curated.png')
 
   await selectScope(win, fixtures.root)
   await click(win, '[data-content-view="tree"]')
@@ -999,7 +1022,7 @@ async function modeChecks(
     win,
     `[...document.querySelectorAll('[data-content-tree-entry]')].map((el) => el.dataset.contentTreeEntry)`
   )
-  const treeShot = await screenshot(win, shotDir, 'content-harness-tree.png')
+  const treeShot = await tryShot(win, shotDir, 'content-harness-tree.png')
 
   return [
     {
@@ -1024,7 +1047,8 @@ async function modeChecks(
         project: projectDefault === null ? 'no project scope on this machine' : { scope: projectPath, ...projectDefault },
         projectAsCurated: { scope: fixtures.project, ...projectCurated, emptyNamedRoot: emptyRoot },
         harnessAsTree: { scope: fixtures.root, ...harnessTree, topLevel: harnessTreeEntries.length },
-        screenshots: [curatedShot.file, treeShot.file]
+        screenshots: [curatedShot.file, treeShot.file],
+        screenshotErrors: [curatedShot.error, treeShot.error].filter(Boolean)
       },
       notes: [
         'The caption is read as text rather than inferred from the mode: "harness default - curated',
@@ -1143,7 +1167,7 @@ async function treeChecks(ctx: CheckContext, shotDir: string, fixtures: Fixtures
    * nobody can tie to the assertion it illustrates is the `PROF-4` shape with
    * a picture attached.
    */
-  const shot = await screenshot(win, shotDir, 'content-project-tree.png')
+  const shot = await tryShot(win, shotDir, 'content-project-tree.png')
   const shotScope = await js<string>(
     win,
     `document.querySelector('select[data-content-scope]')?.value ?? ''`
@@ -1244,7 +1268,8 @@ async function treeChecks(ctx: CheckContext, shotDir: string, fixtures: Fixtures
         ignoreSource: source,
         captionUnderTheTree: caption,
         headerCount: count,
-        screenshot: shot.file
+        screenshot: shot.file,
+        screenshotError: shot.error
       },
       notes: [
         'The ignore set is compared against this driver’s own `git check-ignore` spawn, which is',
@@ -2275,14 +2300,38 @@ async function searchChecks(ctx: CheckContext, harnessPath: string): Promise<Che
   /**
    * The corpus, read again here, so the expected counts are this file's own.
    *
-   * Every file, not just the markdown, because that is what the search covers:
-   * markdown is searched by name *and* text, everything else by name alone. A
-   * counter that held only the markdown would expect fewer hits than the pane
-   * honestly returns for any term matching an artifact's or a data file's name.
+   * Every file, not just the ones whose text is read: **names are matched for
+   * every kind**, and a counter holding only the bodies would expect fewer hits
+   * than the pane honestly returns for any term matching an artifact's or a
+   * data file's name.
+   *
+   * The set whose *bodies* are read is written out here in this file's own
+   * words rather than taken from the result, because a reader that asked the
+   * pane what it searched and then agreed with it would be measuring nothing.
+   * The result carries the same list, and `bodyKindsAgree` below checks the two
+   * against each other - so widening the search in `core` turns this red and a
+   * person decides, instead of the expectation quietly following the code.
    */
+  const BODY_KINDS = ['markdown', 'data', 'text', 'source']
+
+  /**
+   * And the size ceiling, which is part of the same rule.
+   *
+   * "A single file large enough to be a database dump is not prose" - a file
+   * over this is carried by name and its bytes are not read. Stated here in
+   * this file's own words for the same reason the kind list is, and it is not
+   * hypothetical: this harness holds a 29 MB `tools/password-hunt-results.txt`,
+   * and a reader without the ceiling expected 42,745 matches for "the" against
+   * the 10,043 the pane honestly found.
+   */
+  const BODY_MAX_BYTES = 4 * 1024 * 1024
+
   const corpus = tree.files.map((file) => ({
     file,
-    text: file.kind === 'markdown' ? readFileSync(file.path, 'utf8') : ''
+    text:
+      BODY_KINDS.includes(file.kind) && file.size <= BODY_MAX_BYTES
+        ? readFileSync(file.path, 'utf8')
+        : ''
   }))
 
   const countOccurrences = (needle: string): { files: number; matches: number } => {
@@ -2372,31 +2421,73 @@ async function searchChecks(ctx: CheckContext, harnessPath: string): Promise<Che
   const p95 = round(percentile(times, 95))
   const worst = round(Math.max(...times, 0))
 
+  /**
+   * How many *files* a result may carry.
+   *
+   * The hit list is bounded - a hundred-thousand-match term must not paint a
+   * row per file - and the pane says so on screen with "More files matched than
+   * are listed". `totalMatches` is not bounded, which is why the match counts
+   * below are compared unconditionally and the file counts are compared against
+   * the bound.
+   *
+   * This started mattering when the corpus grew to include data, text and
+   * source: "the" now matches 225 files where it used to match fewer than 200,
+   * so the cap began to bite and a reader that did not model it called a
+   * correct result wrong.
+   */
+  const MAX_HIT_FILES = 200
+
   const wrong: Array<Record<string, unknown>> = []
   for (const term of terms) {
     const sample = warm.find((entry) => entry.term === term) ?? samples.find((entry) => entry.term === term)
     if (!sample) continue
     const expected = countOccurrences(term)
-    if (sample.matches !== expected.matches || sample.files !== expected.files) {
+    const expectedFiles = Math.min(expected.files, MAX_HIT_FILES)
+    if (sample.matches !== expected.matches || sample.files !== expectedFiles) {
       wrong.push({
         term,
         pane: { files: sample.files, matches: sample.matches },
-        independentCount: expected
+        independentCount: expected,
+        expectedFilesAfterTheCap: expectedFiles
       })
     }
   }
 
   // And through the box, so the number on screen is the number measured.
+  //
+  // Polled rather than slept at. A fixed wait was racing the search - the box
+  // debounces, then main answers, and this read landed on "Searching…" often
+  // enough once the corpus grew. `[data-search-scope]` is painted only when a
+  // result has arrived, so it is the thing to wait for.
   await setValue(win, 'input[data-content-search]', 'geofenc')
-  await sleep(700)
-  const throughTheBox = await js<{ status: string; rows: number; tookAttr: string | null }>(
+  await pollJs(win, `document.querySelector('[data-search-scope]')`, 20_000)
+  await sleep(200)
+  const throughTheBox = await js<{
+    status: string
+    rows: number
+    tookAttr: string | null
+    scopeAttr: string | null
+  }>(
     win,
     `(() => ({
       status: (document.querySelector('[data-content-status]')?.textContent ?? '').replace(/\\s+/g, ' ').trim(),
       rows: document.querySelectorAll('button[data-content-hit]').length,
-      tookAttr: document.querySelector('[data-search-took]')?.dataset.searchTook ?? null
+      tookAttr: document.querySelector('[data-search-took]')?.dataset.searchTook ?? null,
+      scopeAttr: document.querySelector('[data-search-scope]')?.dataset.searchScope ?? null
     }))()`
   )
+
+  /**
+   * What the pane says it read, against what this file assumed it read.
+   *
+   * Two independent statements of one rule, compared. This is what keeps the
+   * corpus above honest: it is written out here rather than derived, so it can
+   * be wrong - and this is the line that says so when it is.
+   */
+  const reportedBodyKinds = (throughTheBox.scopeAttr ?? '').split(',').filter((kind) => kind !== '')
+  const bodyKindsAgree =
+    reportedBodyKinds.length === BODY_KINDS.length &&
+    [...reportedBodyKinds].sort().join(',') === [...BODY_KINDS].sort().join(',')
   await setValue(win, 'input[data-content-search]', '')
   await sleep(400)
 
@@ -2405,10 +2496,19 @@ async function searchChecks(ctx: CheckContext, harnessPath: string): Promise<Che
       id: 'CONT-7',
       criterion: 'Search finds text across notes and skill files in <200ms',
       title: `p50 ${String(p50)} ms, p95 ${String(p95)} ms over ${String(times.length)} searches of ${String(markdown.length)} files`,
-      ok: times.length > 0 && p95 < 200 && wrong.length === 0 && throughTheBox.rows > 0,
+      ok:
+        times.length > 0 &&
+        p95 < 200 &&
+        wrong.length === 0 &&
+        throughTheBox.rows > 0 &&
+        bodyKindsAgree &&
+        // The status row has to *say* what was searched, which is the half of
+        // this criterion that is not about speed.
+        /text in \d+, names in \d+/.test(throughTheBox.status),
       detail: {
         scope: harnessPath,
         filesSearched: markdown.length,
+        bodyKinds: { thisFileExpects: BODY_KINDS, thePaneReports: reportedBodyKinds },
         bytes: corpus.reduce((n, entry) => n + entry.text.length, 0),
         samples: times.length,
         p50,
@@ -2432,7 +2532,13 @@ async function searchChecks(ctx: CheckContext, harnessPath: string): Promise<Che
         'rather than being dropped: it is a real thing that happens, but it is not what the',
         'criterion is about.',
         'Match counts are checked against an `indexOf` loop written in this file over its own',
-        'read of the same files.'
+        'read of the same files.',
+        'Which kinds have their *bodies* read is stated here and compared against what the pane',
+        'reports, so widening the search in core turns this red rather than quietly moving the',
+        'expectation with it. Names are matched for every kind, always.',
+        'The status row is required to say what was searched: that is the second half of the',
+        'criterion, and a search that answered correctly while saying nothing about its own',
+        'scope is the thing this pane was rebuilt to stop.'
       ]
     }
   ]
