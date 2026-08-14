@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseNoteFrontmatter } from './frontmatter'
 import { renderMarkdown } from './markdown'
+import { readContentDir } from './filetree'
 import { contentScope, readContentTree } from './roots'
 import { buildCorpus, searchCorpus } from './search'
 import { assertContentWritable } from './write'
@@ -25,6 +27,19 @@ function fixture(): string {
   writeFileSync(join(root, 'docs', 'SPEC.md'), '# Spec\n')
   writeFileSync(join(root, 'README.md'), '# Readme\n')
   writeFileSync(join(root, 'repos', 'other', 'notes', 'hidden.md'), '# Hidden\n')
+
+  // A directory of nothing but scripts, and a directory of nothing but bytes.
+  // The pair is the discovery rule drawn: source counts as content, binary does
+  // not, and asserting only the first would pass a rule that offered every
+  // directory on the disk.
+  mkdirSync(join(root, 'tools'), { recursive: true })
+  writeFileSync(join(root, 'tools', 'rebuild.py'), '# rebuild\nprint("ok")\n')
+  writeFileSync(join(root, 'tools', 'notes.png'), 'not really a png')
+  mkdirSync(join(root, 'screenshots'), { recursive: true })
+  writeFileSync(join(root, 'screenshots', 'one.png'), 'not really a png')
+
+  // An empty named root. It has to stay on the list and say it is empty.
+  mkdirSync(join(root, 'context'), { recursive: true })
   return root
 }
 
@@ -255,6 +270,213 @@ describe('readContentTree', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it('offers a directory of nothing but scripts, and not one of nothing but bytes', () => {
+    const root = fixture()
+    try {
+      const tree = readContentTree(contentScope(root, 'harness', 'fixture'))
+      const rels = tree.roots.map((r) => r.relPath)
+      expect(rels).toContain('tools')
+      expect(rels).not.toContain('screenshots')
+      // Both sides of the pair have to be real for the assertion to mean
+      // anything: `screenshots/` must exist and have been walked.
+      expect(tree.files.some((f) => f.relPath === 'screenshots/one.png')).toBe(false)
+      expect(tree.roots.find((r) => r.relPath === 'tools')?.offer).toBe('discovered')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('lists every file inside a root it offers, binary included', () => {
+    const root = fixture()
+    try {
+      const tree = readContentTree(contentScope(root, 'harness', 'fixture'))
+      const inTools = tree.files.filter((f) => f.root === 'tools').map((f) => f.relPath)
+      expect(inTools).toContain('tools/rebuild.py')
+      expect(inTools).toContain('tools/notes.png')
+      expect(tree.files.find((f) => f.relPath === 'tools/rebuild.py')?.kind).toBe('source')
+      expect(tree.files.find((f) => f.relPath === 'tools/notes.png')?.kind).toBe('binary')
+      expect(tree.files.find((f) => f.relPath === 'tools/rebuild.py')?.ext).toBe('py')
+      // A file that is not prose keeps its whole name: "rebuild" is a viewer
+      // editing the name of a file somebody is looking for by its full one.
+      expect(tree.files.find((f) => f.relPath === 'tools/rebuild.py')?.title).toBe('rebuild.py')
+      expect(tree.files.find((f) => f.relPath === 'tools/notes.png')?.title).toBe('notes.png')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('gives a dotfile a name rather than an empty one', () => {
+    const root = fixture()
+    try {
+      writeFileSync(join(root, 'tools', '.gitignore'), 'out/\n')
+      const tree = readContentTree(contentScope(root, 'harness', 'fixture'))
+      const dotfile = tree.files.find((f) => f.relPath === 'tools/.gitignore')
+      expect(dotfile).toBeDefined()
+      expect(dotfile?.title).toBe('.gitignore')
+      expect(dotfile?.slug).toBe('.gitignore')
+      expect(dotfile?.kind).toBe('source')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps an empty named root on the list, badged named', () => {
+    const root = fixture()
+    try {
+      const tree = readContentTree(contentScope(root, 'harness', 'fixture'))
+      const context = tree.roots.find((r) => r.relPath === 'context')
+      expect(context).toBeDefined()
+      expect(context?.files).toBe(0)
+      expect(context?.offer).toBe('named')
+      // Discriminating: the fixture's `context/` really is empty, so a rule
+      // that dropped empty roots would have failed the line above.
+      expect(tree.files.some((f) => f.root === 'context')).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('readContentDir', () => {
+  it('lists every entry, marks ignored ones rather than dropping them', async () => {
+    const root = fixture()
+    try {
+      mkdirSync(join(root, 'node_modules', 'pkg'), { recursive: true })
+      writeFileSync(join(root, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1\n')
+      const listing = await readContentDir(contentScope(root, 'project'), '', {
+        ignoreSource: 'default'
+      })
+      const names = listing.entries.map((e) => e.name)
+      expect(names).toContain('node_modules')
+      expect(names).toContain('README.md')
+      // `repos/` is descended by the tree even though the curated view drops it.
+      expect(names).toContain('repos')
+      expect(listing.entries.find((e) => e.name === 'repos')?.ignored).toBe(false)
+      expect(listing.entries.find((e) => e.name === 'node_modules')?.ignored).toBe(true)
+      expect(listing.ignored).toBeGreaterThan(0)
+      expect(listing.ignoreSource).toBe('default')
+      // Directories first, then names.
+      const firstFile = listing.entries.findIndex((e) => !e.directory)
+      const lastDir = listing.entries.map((e) => e.directory).lastIndexOf(true)
+      expect(lastDir).toBeLessThan(firstFile)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not walk eagerly - one directory per call', async () => {
+    const root = fixture()
+    try {
+      const top = await readContentDir(contentScope(root, 'project'), '', {
+        ignoreSource: 'default'
+      })
+      expect(top.entries.every((e) => !e.relPath.includes('/'))).toBe(true)
+      const notes = await readContentDir(contentScope(root, 'project'), 'notes', {
+        ignoreSource: 'default'
+      })
+      expect(notes.entries.map((e) => e.name).sort()).toEqual(['alpha.md', 'beta.md'])
+      expect(notes.entries[0]?.relPath).toBe('notes/alpha.md')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  /**
+   * The gitignore half, against a real repository.
+   *
+   * A fixture with `git init` and a `.gitignore`, because the claim is that the
+   * *repository* decides - and the only way to be wrong about that quietly is
+   * to assert it against a list written in this file. The fallback list is
+   * asserted to disagree first: `secrets/` is in no built-in list, so a green
+   * result here cannot be the fallback passing under another name.
+   */
+  it('takes its ignores from the repository when there is one', async () => {
+    const root = fixture()
+    try {
+      const git = spawnSync('git', ['init', '-q'], { cwd: root, windowsHide: true })
+      if (git.error) return // No git on this machine; the fallback path is covered above.
+      writeFileSync(join(root, '.gitignore'), 'secrets/\n*.tmp\n')
+      mkdirSync(join(root, 'secrets'), { recursive: true })
+      writeFileSync(join(root, 'secrets', 'a.txt'), 'x')
+      writeFileSync(join(root, 'scratch.tmp'), 'x')
+
+      const fallback = await readContentDir(contentScope(root, 'project'), '', {
+        ignoreSource: 'default'
+      })
+      expect(fallback.entries.find((e) => e.name === 'secrets')?.ignored).toBe(false)
+      expect(fallback.entries.find((e) => e.name === 'scratch.tmp')?.ignored).toBe(false)
+
+      const listing = await readContentDir(contentScope(root, 'project'), '')
+      expect(listing.ignoreSource).toBe('gitignore')
+      expect(listing.entries.find((e) => e.name === 'secrets')?.ignored).toBe(true)
+      expect(listing.entries.find((e) => e.name === 'secrets')?.ignoredBy).toBe('gitignore')
+      expect(listing.entries.find((e) => e.name === 'scratch.tmp')?.ignored).toBe(true)
+      expect(listing.entries.find((e) => e.name === 'notes')?.ignored).toBe(false)
+      // `.git` is never listed as readable content whatever git says about it.
+      expect(listing.entries.find((e) => e.name === '.git')?.ignored).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  /**
+   * The junction rule, which is the same one the config tree and the curated
+   * walk follow: an overlay shim's subdirectories are junctions into real
+   * repositories, so a tree that walked one would list another project's files
+   * as this scope's - and one pointing at an ancestor would not finish.
+   *
+   * Windows-first, so this plants a real junction with `mklink /J`. The row is
+   * still *listed* - that is the point of the whole surface - and marked as a
+   * link; what is refused is reading through it.
+   */
+  it('lists a junction and refuses to read through it', async () => {
+    const root = fixture()
+    const outside = mkdtempSync(join(tmpdir(), 'helm-content-outside-'))
+    try {
+      writeFileSync(join(outside, 'somebody-elses-note.md'), '# Not this scope\n')
+      const link = join(root, 'linked')
+      const made = spawnSync('cmd', ['/c', 'mklink', '/J', link, outside], { windowsHide: true })
+      if (made.status !== 0) return // Not Windows, or no permission to make one.
+
+      const top = await readContentDir(contentScope(root, 'project'), '', {
+        ignoreSource: 'default'
+      })
+      const row = top.entries.find((entry) => entry.name === 'linked')
+      expect(row).toBeDefined()
+      expect(row?.link).toBe(true)
+
+      // The fixture has to be discriminating: the junction really does lead to
+      // a file, so a refusal is a refusal rather than an empty directory.
+      const behind = await readContentDir(contentScope(outside, 'project'), '', {
+        ignoreSource: 'default'
+      })
+      expect(behind.entries.map((entry) => entry.name)).toContain('somebody-elses-note.md')
+
+      const through = await readContentDir(contentScope(root, 'project'), 'linked', {
+        ignoreSource: 'default'
+      })
+      expect(through.error).toMatch(/link out of this scope/)
+      expect(through.entries).toEqual([])
+    } finally {
+      // `rm` the junction rather than walking it - the rule CLAUDE.md states
+      // about anything that removes a shim applies to a test that plants one.
+      rmSync(join(root, 'linked'), { recursive: true, force: true })
+      rmSync(root, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a path that escapes the scope', async () => {
+    const root = fixture()
+    try {
+      const listing = await readContentDir(contentScope(root, 'project'), '../..')
+      expect(listing.error).toMatch(/outside this scope/)
+      expect(listing.entries).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('search', () => {
@@ -305,7 +527,15 @@ describe('assertContentWritable', () => {
   })
 
   it('refuses a file it cannot read as content', () => {
-    expect(() => assertContentWritable('C:/v', 'C:/v/notes/a.exe')).toThrow(/markdown/)
+    expect(() => assertContentWritable('C:/v', 'C:/v/notes/a.exe')).toThrow(/binary/)
+  })
+
+  it('allows a script, which is a file the agent wrote', () => {
+    expect(() => assertContentWritable('C:/v', 'C:/v/tools/rebuild.py')).not.toThrow()
+  })
+
+  it('allows an extensionless file, which is text until the bytes say otherwise', () => {
+    expect(() => assertContentWritable('C:/v', 'C:/v/LICENSE')).not.toThrow()
   })
 
   it('allows a note and a skill', () => {

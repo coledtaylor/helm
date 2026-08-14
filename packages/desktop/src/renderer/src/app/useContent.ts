@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ConfigSnapshotMeta,
+  ContentDirListing,
   ContentDocument,
   ContentFile,
   ContentScope,
   ContentSearchResult,
   ContentTree,
+  ContentViewMode,
   RenderedMarkdown
 } from '@helm/core'
 import type { ArtifactConsoleEntry, ContentMode } from '@helm/ui'
@@ -38,15 +40,31 @@ export interface ContentState {
   refresh: () => void
   refreshing: boolean
 
+  /** Curated roots or a file tree. The scope's kind picks the first answer only. */
+  view: ContentViewMode
+  setView: (view: ContentViewMode) => void
+  /** True while `view` is still whatever the scope's kind chose. */
+  viewIsDefault: boolean
+  /** One listing per directory the reader has opened, keyed by scope-relative path. */
+  dirs: ReadonlyMap<string, ContentDirListing>
+  expanded: ReadonlySet<string>
+  toggleDir: (relPath: string) => void
+  /** Directories with a read in flight, so a row can say it is working. */
+  loadingDirs: ReadonlySet<string>
+
   query: string
   setQuery: (query: string) => void
   search: ContentSearchResult | null
   searching: boolean
 
   selected: ContentFile | null
+  /** What the list marks as current, which is known before the document arrives. */
+  selectedPath: string | null
   select: (file: ContentFile | null, line?: number) => void
-  /** Opens by absolute path - what a `[[wikilink]]` does. */
+  /** Opens by absolute path - what a `[[wikilink]]` and a tree row do. */
   openPath: (path: string, heading?: string | null) => void
+  /** A `[[wikilink]]` clicked inside a sandboxed HTML artifact. */
+  openWikilink: (target: string, heading: string | null) => void
   document: ContentDocument | null
   /** The term the document was opened from, marked in the reading view. */
   highlight: string | null
@@ -94,6 +112,20 @@ export function useContent(): ContentState {
   const [treeAnswer, setTreeAnswer] = useState<Answered<ContentTree | null> | null>(null)
   const [treeVersion, setTreeVersion] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
+
+  /**
+   * The mode, per scope, and only where somebody chose one.
+   *
+   * A scope nobody has touched opens on its kind's default - harness to
+   * curated, project to a tree - and a scope somebody switched stays switched
+   * for as long as the pane is open. Remembering it per scope rather than
+   * globally is what stops "I looked at one project as a tree" from turning
+   * every harness into a tree afterwards, and forgetting it on the way back is
+   * what would make the control feel like it had not worked.
+   */
+  const [chosenView, setChosenView] = useState<ReadonlyMap<string, ContentViewMode>>(new Map())
+  const [dirs, setDirs] = useState<ReadonlyMap<string, ContentDirListing>>(new Map())
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
 
   const [query, setQueryState] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
@@ -176,14 +208,111 @@ export function useContent(): ContentState {
     setExternal(null)
     setError(null)
     setArtifactUrl(null)
+    // The listings belong to the scope that was open. Kept, and a different
+    // scope's are simply never asked for - but the *expansion* is dropped,
+    // because `packages/core` meaning two different directories in two scopes
+    // is exactly the case where carrying it over paints the wrong tree.
+    setExpanded(new Set())
+    setDirs(new Map())
   }, [])
+
+  // -------------------------------------------------------------------------
+  // Curated or tree
+  // -------------------------------------------------------------------------
+
+  /**
+   * The default, from the scope's kind and nothing else.
+   *
+   * A harness's directories *are* its knowledge layer, so curation is the right
+   * answer there. A project's are a repository, where curation produces an
+   * arbitrary slice - `packages/` because one package has a README, no `src/`
+   * at all - and the honest answer is every file. See SPEC 4.3.
+   */
+  const defaultView: ContentViewMode = scope?.kind === 'harness' ? 'curated' : 'tree'
+  const view = chosenView.get(scopePath.toLowerCase()) ?? defaultView
+  const viewIsDefault = !chosenView.has(scopePath.toLowerCase())
+
+  const setView = useCallback(
+    (next: ContentViewMode) => {
+      setChosenView((current) => new Map(current).set(scopePath.toLowerCase(), next))
+    },
+    [scopePath]
+  )
+
+  const readDir = useCallback(
+    (relPath: string) => {
+      if (scopePath === '') return
+      void helm
+        .invoke('content:dir', { scopePath, relPath })
+        .then((listing) => setDirs((current) => new Map(current).set(relPath, listing)))
+        .catch((err: unknown) => {
+          // A listing that never arrives is still an answer, and it has to be
+          // written down: `loadingDirs` is derived from "expanded with no
+          // listing", so dropping the failure leaves the row pulsing for ever
+          // with nothing on screen to say why.
+          setDirs((current) =>
+            new Map(current).set(relPath, {
+              scopePath,
+              relPath,
+              entries: [],
+              ignored: 0,
+              ignoreSource: 'default',
+              error: readable(err),
+              tookMs: 0
+            })
+          )
+        })
+    },
+    [scopePath]
+  )
+
+  // The scope's own directory, whenever the tree is what is on screen. Nothing
+  // below it is read until somebody opens it - that is the whole point.
+  useEffect(() => {
+    if (view !== 'tree' || scopePath === '') return
+    readDir('')
+  }, [view, scopePath, readDir, treeVersion])
+
+  /**
+   * Which directories are still waiting, derived rather than stored.
+   *
+   * "Expanded and no listing yet" is exactly the set, and holding it as state
+   * instead would mean setting it synchronously inside the effect that starts
+   * the read - the cascading-render shape the lint rule in this repo refuses,
+   * for a value that is already implied by two others.
+   */
+  const loadingDirs = useMemo(() => {
+    const out = new Set<string>()
+    for (const relPath of expanded) if (!dirs.has(relPath)) out.add(relPath)
+    return out
+  }, [expanded, dirs])
+
+  const toggleDir = useCallback(
+    (relPath: string) => {
+      setExpanded((current) => {
+        const next = new Set(current)
+        if (next.delete(relPath)) return next
+        next.add(relPath)
+        return next
+      })
+      // Re-read on every open rather than serving a listing from the last time
+      // this directory was expanded: a tree that is lazy is a tree that has to
+      // be current when it is asked, and the read is one `readdir`.
+      readDir(relPath)
+    },
+    [readDir]
+  )
 
   const refresh = useCallback(() => {
     setRefreshing(true)
     loadScopes()
     setTreeVersion((n) => n + 1)
     setDocVersion((n) => n + 1)
-  }, [loadScopes])
+    // Every directory the reader has open, re-read. Dropping them instead would
+    // collapse the tree under somebody who asked for it to be refreshed.
+    setDirs(new Map())
+    for (const relPath of expanded) readDir(relPath)
+  }, [loadScopes, expanded, readDir])
 
   // -------------------------------------------------------------------------
   // Search
@@ -293,12 +422,12 @@ export function useContent(): ContentState {
       setHighlight(line !== undefined || query.trim() !== '' ? query.trim() || null : null)
       if (file?.kind === 'html') {
         void helm
-          .invoke('content:artifact', { path: file.path })
+          .invoke('content:artifact', { scopePath, path: file.path })
           .then((minted) => setArtifactUrl(minted.url))
           .catch((err: unknown) => setError(readable(err)))
       }
     },
-    [query]
+    [query, scopePath]
   )
 
   const openPath = useCallback(
@@ -313,12 +442,34 @@ export function useContent(): ContentState {
       void heading
       if (/\.html?$/i.test(path)) {
         void helm
-          .invoke('content:artifact', { path })
+          .invoke('content:artifact', { scopePath, path })
           .then((minted) => setArtifactUrl(minted.url))
           .catch((err: unknown) => setError(readable(err)))
       }
     },
-    []
+    [scopePath]
+  )
+
+  /**
+   * A `[[wikilink]]` clicked inside a sandboxed artifact.
+   *
+   * The frame is deliberately told no paths, so what arrives here is the name
+   * between the brackets and nothing more. Main resolves it against the same
+   * index a note's links were resolved through - so a link that works in a note
+   * works in a lesson - and a name nothing answers to opens nothing, which is
+   * the same thing a broken wikilink does in markdown.
+   */
+  const openWikilink = useCallback(
+    (target: string, heading: string | null) => {
+      if (selectedPath === null || scopePath === '') return
+      void helm
+        .invoke('content:wikilink', { scopePath, target, from: selectedPath })
+        .then((answer) => {
+          if (answer.path !== null) openPath(answer.path, heading)
+        })
+        .catch(() => undefined)
+    },
+    [scopePath, selectedPath, openPath]
   )
 
   // -------------------------------------------------------------------------
@@ -443,13 +594,22 @@ export function useContent(): ContentState {
     treeLoading,
     refresh,
     refreshing,
+    view,
+    setView,
+    viewIsDefault,
+    dirs,
+    expanded,
+    toggleDir,
+    loadingDirs,
     query,
     setQuery,
     search,
     searching,
     selected,
+    selectedPath,
     select,
     openPath,
+    openWikilink,
     document,
     highlight,
     mode,

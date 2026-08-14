@@ -7,6 +7,7 @@ import type {
   ConfigScope,
   ConfigSnapshotMeta,
   ConfigTree,
+  ContentDirListing,
   ContentDocument,
   ContentScope,
   ContentSearchResult,
@@ -692,6 +693,19 @@ export interface IpcRequests {
    */
   'content:scopes': { request: void; response: ContentScope[] }
   'content:tree': { request: { scopePath: string; refresh?: boolean }; response: ContentTree }
+  /**
+   * One directory of the tree view.
+   *
+   * A channel per directory rather than one walk, because the tree is lazy on
+   * purpose: `content:tree` walks a whole scope to decide what to *curate*, and
+   * a project has no ceiling that walk could be given which is not either a
+   * silent truncation or a several-second pause. This one costs a `readdir` and
+   * a `git check-ignore` against a directory somebody just clicked open.
+   */
+  'content:dir': {
+    request: { scopePath: string; relPath: string }
+    response: ContentDirListing
+  }
   /** A file, its bytes, and - for markdown - the HTML it renders to. */
   'content:document': {
     request: { scopePath: string; path: string }
@@ -723,8 +737,21 @@ export interface IpcRequests {
    * the main process pinned to a token it issued for a file the user opened.
    */
   'content:artifact': {
-    request: { path: string }
+    request: { scopePath: string; path: string }
     response: { url: string; token: string }
+  }
+  /**
+   * Resolves a `[[wikilink]]` a *frame* clicked.
+   *
+   * The one caller that cannot resolve its own links. A rendered note has its
+   * links resolved before the HTML reaches the window; an HTML artifact runs in
+   * a sandbox with an opaque origin that is deliberately told no paths, so it
+   * posts the target's name out and this answers with the file. `from` is the
+   * artifact, which is how `[[index]]` prefers the one in its own directory.
+   */
+  'content:wikilink': {
+    request: { scopePath: string; target: string; from: string }
+    response: { path: string | null }
   }
 
   /**
@@ -1009,6 +1036,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'pr:review': true,
   'content:scopes': true,
   'content:tree': true,
+  'content:dir': true,
   'content:document': true,
   'content:render': true,
   'content:search': true,
@@ -1016,6 +1044,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'content:snapshots': true,
   'content:restore': true,
   'content:artifact': true,
+  'content:wikilink': true,
   'shell:openExternal': true,
   'clipboard:read': true,
   'clipboard:write': true

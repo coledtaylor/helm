@@ -12,6 +12,7 @@ export {
   ContentNothingSelected,
   type ContentViewerProps
 } from './components/ContentViewer'
+export { ContentTreeList, type ContentTreeListProps } from './components/ContentTreeList'
 export {
   ContentDocumentPane,
   type ArtifactConsoleEntry,

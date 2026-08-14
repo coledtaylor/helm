@@ -286,7 +286,8 @@
   white-space: break-spaces;
 }
 
-.markdown pre {
+.markdown pre,
+.source-view pre {
   position: relative;
   padding: 0.85rem 1rem;
   overflow-x: auto;
@@ -300,7 +301,8 @@
   tab-size: 2;
 }
 
-.markdown pre code {
+.markdown pre code,
+.source-view pre code {
   display: block;
   min-width: max-content;
   padding: 0;
@@ -309,7 +311,8 @@
   font-size: inherit;
 }
 
-.markdown pre .line {
+.markdown pre .line,
+.source-view pre .line {
   display: block;
   min-height: 1lh;
 }
@@ -330,7 +333,9 @@
 }
 
 .markdown .shiki,
-.markdown .shiki span {
+.markdown .shiki span,
+.source-view .shiki,
+.source-view .shiki span {
   color: var(--shiki-light);
   font-style: var(--shiki-light-font-style);
   font-weight: var(--shiki-light-font-weight);
@@ -338,11 +343,25 @@
 }
 
 .dark .markdown .shiki,
-.dark .markdown .shiki span {
+.dark .markdown .shiki span,
+.dark .source-view .shiki,
+.dark .source-view .shiki span {
   color: var(--shiki-dark);
   font-style: var(--shiki-dark-font-style);
   font-weight: var(--shiki-dark-font-weight);
   text-decoration: var(--shiki-dark-text-decoration);
+}
+
+/* The source view shares the code rules above and nothing else. A whole file is
+ * the pane's contents rather than a block inside a document, so it fills the
+ * pane and scrolls itself instead of sitting in a fixed-height well. */
+.source-view {
+  min-height: 100%;
+}
+
+.source-view pre {
+  min-height: 100%;
+  margin: 0;
 }
 
 /* --------------------------------------------------------------------------

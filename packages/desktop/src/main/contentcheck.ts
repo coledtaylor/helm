@@ -1,8 +1,10 @@
 import { net, type BrowserWindow, type WebFrameMain } from 'electron'
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join, relative, sep } from 'node:path'
 import {
+  CURATED_SKIPPED_DIRS,
   countConfigSnapshots,
   createProfile,
   deleteProfile,
@@ -46,8 +48,10 @@ import type { CheckContext } from './sessionscheck'
  */
 
 const PROFILE_NAME = 'Content fixtures'
+/** The fixture *project*, which has to be a second scope for the tree probes. */
+const PROJECT_PROFILE_NAME = 'Content fixture project'
 
-const GROUPS = ['browse', 'render', 'links', 'artifact', 'search', 'edit', 'scroll'] as const
+const GROUPS = ['browse', 'scope', 'render', 'links', 'artifact', 'search', 'edit', 'scroll'] as const
 type Group = (typeof GROUPS)[number]
 
 // ---------------------------------------------------------------------------
@@ -97,15 +101,20 @@ const SKIP = new Set([
 ])
 
 /**
- * Every readable file under a scope, walked naively.
+ * Every file under a directory, walked naively.
  *
- * Deliberately not the tree scanner's algorithm: a plain recursion from the
- * scope root that keeps anything ending in a content extension, with the same
- * exclusion list and nothing else. It knows nothing about named roots or
- * discovered ones - it just enumerates - so it can disagree with the scanner
- * when the scanner is wrong about which directories are content.
+ * **No extension filter**, and that is the change the scope split forced. This
+ * reader used to keep only files ending in a content extension, because the
+ * pane did; the pane now lists every file inside a root it offers, so a reader
+ * that still filtered would report a hundred "listed but not on disk" rows
+ * against a pane that was right.
+ *
+ * The absence of the filter is what makes this second read strong. "Every file
+ * under this directory" needs no list of extensions to be maintained beside the
+ * one in `roots.ts`, so the two cannot drift - the only way for them to
+ * disagree is for one of them to be wrong about the disk.
  */
-function walkContent(dir: string, base: string, into: string[], depth = 0): void {
+function walkEveryFile(dir: string, base: string, into: string[], depth = 0): void {
   if (depth > 7) return
   let entries
   try {
@@ -118,21 +127,10 @@ function walkContent(dir: string, base: string, into: string[], depth = 0): void
     if (entry.isDirectory()) {
       if (entry.isSymbolicLink()) continue
       if (SKIP.has(entry.name.toLowerCase())) continue
-      // Dot directories are tooling and not content. `.claude` is the one
-      // exception, and only its `skills` subtree: `settings.json`,
-      // `commands/` and `rules/` are the config console's, and a content
-      // browser that listed them would be a second, worse config console.
-      if (entry.name.startsWith('.')) {
-        if (entry.name === '.claude' && depth === 0) {
-          walkContent(join(path, 'skills'), base, into, depth + 2)
-        }
-        continue
-      }
-      walkContent(path, base, into, depth + 1)
+      walkEveryFile(path, base, into, depth + 1)
       continue
     }
     if (!entry.isFile()) continue
-    if (!/\.(md|markdown|mdx|html|htm|ya?ml|jsonc?|toml|txt|csv|log)$/i.test(entry.name)) continue
     into.push(relative(base, path).split(sep).join('/'))
   }
 }
@@ -401,8 +399,24 @@ async function showViewer(win: BrowserWindow): Promise<boolean> {
   return pollJs(win, `document.querySelector('select[data-content-scope]')`, 20_000)
 }
 
-/** Points the switcher at a scope, and refuses to continue if it did not move. */
-async function selectScope(win: BrowserWindow, path: string): Promise<void> {
+/**
+ * Points the switcher at a scope, and refuses to continue if it did not move.
+ *
+ * It also puts the pane on the **curated** view, because every probe in this
+ * file that opens a file does it by clicking a `[data-content-file]` row and
+ * those rows exist in one of the two modes. That is not a detail: the fixture
+ * harness reaches the switcher through a *profile*, which registers it as a
+ * project, and a project defaults to the tree - so the artifact probes were
+ * clicking for rows that were never going to be there and reporting
+ * `opened: false` rather than anything about artifacts. The three probes that
+ * are about the tree ask for it by name, immediately after this.
+ */
+async function selectScope(
+  win: BrowserWindow,
+  path: string,
+  /** `keep` leaves the mode alone - for the one probe that is *about* the default. */
+  mode: 'curated' | 'keep' = 'curated'
+): Promise<void> {
   await setValue(win, 'select[data-content-scope]', path)
   await sleep(600)
   const landed = await js<string>(
@@ -414,6 +428,7 @@ async function selectScope(win: BrowserWindow, path: string): Promise<void> {
       `the content scope switcher has no option for ${path} - it is showing ${landed || '(nothing)'}`
     )
   }
+  if (mode === 'curated') await click(win, '[data-content-view="curated"]')
   await pollJs(win, `document.querySelector('[data-content-status]')`, 10_000)
   await sleep(400)
 }
@@ -429,6 +444,10 @@ interface Fixtures {
   artifact: string
   hostile: string
   secret: string
+  /** A repository the driver owns, for the tree view. Has a real `.gitignore`. */
+  project: string
+  /** Whether `git init` worked, so the gitignore claims can be believed. */
+  projectIsRepo: boolean
 }
 
 /** ~20,000 words of prose, so the criterion can be measured as it is written. */
@@ -556,6 +575,7 @@ function buildFixtures(dataDir: string): Fixtures {
     `<!doctype html><html><head><meta charset="utf-8"><title>Fixture artifact</title>
 <style>body{font:14px/1.5 system-ui;margin:2rem;color:#222}h1{font-size:1.3rem}</style></head>
 <body><h1 id="heading">HELMM6ARTIFACT</h1><p id="out">pending</p>
+<p id="links">A resolved link to [[beta]] and a broken one to [[never-written]].</p>
 <script>document.getElementById('out').textContent = 'ran'</script></body></html>
 `
   )
@@ -585,7 +605,57 @@ function buildFixtures(dataDir: string): Fixtures {
   const secret = join(root, 'secret-outside-the-artifact.txt')
   writeFileSync(secret, 'HELMM6SECRETTHATMUSTNOTBESERVED\n')
 
-  return { root, notes, bigNote, artifact, hostile, secret }
+  /**
+   * The pair the discovery rule is drawn by.
+   *
+   * `tools/` holds nothing but scripts and must become a root; `screenshots/`
+   * holds nothing but bytes and must not. Planting only the first would pass a
+   * rule that offered every directory on the disk, so both are here and CONT-12
+   * asserts both directions.
+   */
+  mkdirSync(join(root, 'tools'), { recursive: true })
+  writeFileSync(join(root, 'tools', 'rep-payload.py'), '# Rebuild the payload\nimport json, sys\n')
+  writeFileSync(join(root, 'tools', 'sweep.ps1'), 'Get-ChildItem -Recurse | Measure-Object\n')
+  mkdirSync(join(root, 'screenshots'), { recursive: true })
+  writeFileSync(join(root, 'screenshots', 'one.png'), 'not a real png, and that is fine')
+
+  // A binary inside a root that *is* offered. Listed, greyed, not hidden - the
+  // other half of "the kind decides how it opens, not whether it is shown".
+  writeFileSync(join(notes, 'diagram.png'), 'not a real png either')
+
+  /**
+   * A repository the driver owns, for the tree view.
+   *
+   * A real `git init` and a real `.gitignore`, because the claim under test is
+   * that *the repository* decides what is ignored. `secrets/` is in no built-in
+   * list, so a pass here cannot be Helm's fallback answering under another
+   * name - CONT-14 asserts the fallback disagrees before believing the rest.
+   */
+  const project = join(dataDir, 'content-fixture-project')
+  rmSync(project, { recursive: true, force: true })
+  mkdirSync(join(project, 'src', 'util'), { recursive: true })
+  mkdirSync(join(project, 'node_modules', 'left-pad'), { recursive: true })
+  mkdirSync(join(project, 'dist'), { recursive: true })
+  mkdirSync(join(project, 'secrets'), { recursive: true })
+  mkdirSync(join(project, 'assets'), { recursive: true })
+  // An empty named root, for the project-in-curated cross case: it must stay on
+  // the list and say it is empty.
+  mkdirSync(join(project, 'docs'), { recursive: true })
+  writeFileSync(join(project, '.gitignore'), 'node_modules/\ndist/\nsecrets/\n')
+  writeFileSync(join(project, 'README.md'), '# Fixture project\n\nHELMM6PROJECT lives here.\n')
+  writeFileSync(join(project, 'package.json'), '{ "name": "content-fixture-project" }\n')
+  writeFileSync(join(project, 'LICENSE'), 'All rights reserved.\n')
+  writeFileSync(join(project, 'src', 'index.ts'), 'export const answer = 42\n')
+  writeFileSync(join(project, 'src', 'util', 'helpers.ts'), 'export const noop = (): void => {}\n')
+  writeFileSync(join(project, 'node_modules', 'left-pad', 'index.js'), 'module.exports = 1\n')
+  writeFileSync(join(project, 'dist', 'bundle.js'), 'console.log(1)\n')
+  writeFileSync(join(project, 'secrets', 'token.txt'), 'not a real secret\n')
+  writeFileSync(join(project, 'assets', 'logo.png'), 'not a real png')
+
+  const git = spawnSync('git', ['init', '-q'], { cwd: project, windowsHide: true })
+  const projectIsRepo = git.error === undefined && git.status === 0
+
+  return { root, notes, bigNote, artifact, hostile, secret, project, projectIsRepo }
 }
 
 // ---------------------------------------------------------------------------
@@ -641,23 +711,31 @@ export async function runContentChecks(
 
   // The fixture harness is not inside any scanned root, so it becomes a scope
   // the way a user's out-of-tree folder would: a profile points at it.
-  const stale = findProfileByName(services.store, PROFILE_NAME)
-  if (stale) deleteProfile(services.store, stale.id)
-  const profile: Profile = createProfile(services.store, {
-    name: PROFILE_NAME,
-    root: fixtures.root,
-    overlays: [],
-    access: [],
-    model: null,
-    effort: null,
-    permissionMode: null,
-    agent: null,
-    mcp: [],
-    openingPrompt: null,
-    pinnedOrder: null
-  })
+  const asProfile = (name: string, root: string): Profile => {
+    const stale = findProfileByName(services.store, name)
+    if (stale) deleteProfile(services.store, stale.id)
+    return createProfile(services.store, {
+      name,
+      root,
+      overlays: [],
+      access: [],
+      model: null,
+      effort: null,
+      permissionMode: null,
+      agent: null,
+      mcp: [],
+      openingPrompt: null,
+      pinnedOrder: null
+    })
+  }
+  const profile = asProfile(PROFILE_NAME, fixtures.root)
+  const projectProfile = asProfile(PROJECT_PROFILE_NAME, fixtures.project)
 
   const harness = (services.lastScan?.projects ?? []).find((p) => p.kind === 'harness')
+  // A real project scope, for the half of CONT-12 that is about what a *kind*
+  // decides. Found by kind rather than by name, so it is whatever this machine
+  // has rather than something written down here.
+  const realProject = (services.lastScan?.projects ?? []).find((p) => p.kind !== 'harness')
 
   const opened = await showViewer(win)
   await click(win, 'button[data-content-refresh]')
@@ -677,7 +755,10 @@ export async function runContentChecks(
     detail: {
       harness: harness?.path ?? null,
       fixtures: fixtures.root,
+      fixtureProject: fixtures.project,
+      fixtureProjectIsRepo: fixtures.projectIsRepo,
       profileId: profile.id,
+      projectProfileId: projectProfile.id,
       offeredInTheSwitcher: offersFixture
     },
     notes: [
@@ -703,6 +784,13 @@ export async function runContentChecks(
   }
 
   try {
+    await group('scope', async () => [
+      ...(harness
+        ? await modeChecks(ctx, shotDir, harness.path, realProject?.path ?? null, fixtures)
+        : []),
+      ...(await curationChecks(ctx, fixtures)),
+      ...(await treeChecks(ctx, shotDir, fixtures))
+    ])
     if (harness) {
       await group('browse', () => browseChecks(ctx, shotDir, harness.path))
       await group('render', () => renderChecks(ctx, shotDir, harness.path, appConsole))
@@ -724,8 +812,10 @@ export async function runContentChecks(
     }
     await group('artifact', () => artifactChecks(ctx, shotDir, fixtures, harness?.path ?? null))
   } finally {
-    const made = findProfileByName(services.store, PROFILE_NAME)
-    if (made) deleteProfile(services.store, made.id)
+    for (const name of [PROFILE_NAME, PROJECT_PROFILE_NAME]) {
+      const made = findProfileByName(services.store, name)
+      if (made) deleteProfile(services.store, made.id)
+    }
   }
 
   return checks
@@ -739,15 +829,43 @@ async function browseChecks(ctx: CheckContext, shotDir: string, harnessPath: str
   const { win, content } = ctx
 
   const tree = content.tree(harnessPath, true)
-  const truth: string[] = []
-  walkContent(harnessPath, harnessPath, truth)
+
+  /**
+   * What the pane's own roots say should be on the list.
+   *
+   * The comparison is now in two halves, because the pane makes two claims and
+   * they fail differently. **Which directories are offered** is curation, and
+   * it is asserted against a fixture the driver planted in `CONT-12`, where the
+   * answer is known. **Which files are inside an offered one** is not a
+   * judgement at all - it is every file - and that is what this compares, by
+   * walking exactly the directories the pane named and keeping everything.
+   *
+   * So a pane that offered the wrong directories fails CONT-12, and a pane that
+   * offered the right ones and then hid a file inside them fails here. The old
+   * single comparison could not tell those apart, and its filter meant it could
+   * not see the second one at all.
+   */
+  const truth = new Set<string>()
+  for (const root of tree.roots) {
+    if (root.relPath === '') {
+      // The scope's own top-level files, which are not recursive.
+      for (const entry of readdirSync(root.path, { withFileTypes: true })) {
+        if (entry.isFile()) truth.add(entry.name.toLowerCase())
+      }
+      continue
+    }
+    const found: string[] = []
+    walkEveryFile(root.path, harnessPath, found)
+    for (const rel of found) truth.add(rel.toLowerCase())
+  }
 
   const fromPane = new Set(tree.files.map((file) => file.relPath.toLowerCase()))
-  const fromWalk = new Set(truth.map((rel) => rel.toLowerCase()))
-  const missing = [...fromWalk].filter((rel) => !fromPane.has(rel))
-  const extra = [...fromPane].filter((rel) => !fromWalk.has(rel))
+  const missing = [...truth].filter((rel) => !fromPane.has(rel))
+  const extra = [...fromPane].filter((rel) => !truth.has(rel))
 
   await selectScope(win, harnessPath)
+  await click(win, '[data-content-view="curated"]')
+  await sleep(500)
   const painted = await js<Array<{ relPath: string; kind: string }>>(
     win,
     `[...document.querySelectorAll('button[data-content-file]')].map((el) => ({
@@ -759,12 +877,17 @@ async function browseChecks(ctx: CheckContext, shotDir: string, harnessPath: str
   const rootRels = tree.roots.map((root) => root.relPath)
   const namedPresent = named.filter((rel) => rootRels.includes(rel))
 
+  // The walk has to have found something to compare, or "no disagreements" is
+  // what an empty set reports too.
+  const discriminating = truth.size > 20
+
   return [
     {
       id: 'CONT-1',
       criterion: 'File browser scoped to the selected project/harness: notes/, context/, .claude/skills/, docs/',
-      title: 'The tree matches an independent walk of the same directory, file for file',
+      title: 'Every file inside an offered root is listed, matched against an independent walk',
       ok:
+        discriminating &&
         missing.length === 0 &&
         extra.length === 0 &&
         namedPresent.length === 4 &&
@@ -774,20 +897,390 @@ async function browseChecks(ctx: CheckContext, shotDir: string, harnessPath: str
       detail: {
         scope: harnessPath,
         pane: tree.files.length,
-        independentWalk: truth.length,
+        independentWalk: truth.size,
         missingFromThePane: missing.slice(0, 20),
         listedButNotOnDisk: extra.slice(0, 20),
-        roots: tree.roots.map((root) => `${root.relPath || '(scope root)'}=${String(root.files)}`),
+        roots: tree.roots.map(
+          (root) => `${root.relPath || '(scope root)'}=${String(root.files)} ${root.offer}`
+        ),
         namedRootsFound: namedPresent,
+        kindsOnScreen: [...new Set(painted.map((row) => row.kind))].sort(),
         paintedRows: painted.length,
         walkMs: tree.tookMs,
         screenshot: shot.file
       },
       notes: [
-        'The second read is a plain readdirSync recursion in contentcheck.ts with the same exclusion',
-        'list and no notion of roots at all - so a scanner that decided the wrong directories',
-        'were content would disagree with it.',
-        'The four named roots are asserted by name because the criterion names them.'
+        'The second read is a plain readdirSync recursion in contentcheck.ts over the directories',
+        'the pane named, with no extension filter of any kind - so it cannot drift from the kind',
+        'table in roots.ts, and the only way to disagree is to be wrong about the disk.',
+        'The four named roots are asserted by name because the criterion names them.',
+        'Which directories are offered is CONT-12’s claim, against a fixture with a known answer.'
+      ]
+    }
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// CONT-12 / CONT-13 / CONT-14: the scope split
+// ---------------------------------------------------------------------------
+
+/**
+ * A screenshot, or the reason there is not one.
+ *
+ * `capturePage` goes through Chromium's compositor and can fail for reasons
+ * that have nothing to do with the pane - on this machine, several Electron
+ * apps sharing a GPU is enough, and it rejects with a bare `UnknownVizError`
+ * and no stack. That took a whole group's assertions down with it, which is the
+ * wrong trade: the PNG is evidence for a person to look at, not a step in any
+ * claim these probes make. A missing one is recorded and the assertions stand.
+ */
+async function tryShot(
+  win: BrowserWindow,
+  dir: string,
+  name: string
+): Promise<{ file: string | null; error: string | null }> {
+  try {
+    const shot = await screenshot(win, dir, name)
+    return { file: shot.file, error: null }
+  } catch (err) {
+    return { file: null, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** What the header's mode control and its caption are saying, right now. */
+async function readMode(win: BrowserWindow): Promise<{
+  view: string
+  caption: string
+  count: string
+}> {
+  return js(
+    win,
+    `(() => {
+      const on = [...document.querySelectorAll('[data-content-view]')]
+        .find((el) => el.getAttribute('aria-pressed') === 'true');
+      return {
+        view: on ? on.dataset.contentView : '',
+        caption: (document.querySelector('[data-content-view-rule]')?.textContent ?? '').trim(),
+        count: (document.querySelector('[data-content-count]')?.textContent ?? '').trim()
+      }
+    })()`
+  )
+}
+
+/**
+ * CONT-12: the scope kind picks the default, and nothing else.
+ *
+ * Two claims that fail differently. The **default** is read off the real
+ * harness and a real project, because "kind picks it" is a claim about
+ * discovery's own answer for the kind. The **cross case** is exercised on the
+ * driver's own fixtures - the one the mock never draws, where every frame is
+ * harness+Curated or project+Tree and switching the mode switches the scope
+ * with it.
+ */
+async function modeChecks(
+  ctx: CheckContext,
+  shotDir: string,
+  harnessPath: string,
+  projectPath: string | null,
+  fixtures: Fixtures
+): Promise<Check[]> {
+  const { win } = ctx
+
+  // `keep`, because this is the one probe the mode is the subject of: forcing
+  // it here would read back the driver's own click and call it the default.
+  await selectScope(win, harnessPath, 'keep')
+  const harnessDefault = await readMode(win)
+
+  let projectDefault: { view: string; caption: string; count: string } | null = null
+  if (projectPath !== null) {
+    await selectScope(win, projectPath, 'keep')
+    projectDefault = await readMode(win)
+  }
+
+  // The cross case, on fixtures. A project read as a vault, then a harness
+  // walked as a tree.
+  await selectScope(win, fixtures.project)
+  await click(win, '[data-content-view="curated"]')
+  await sleep(700)
+  const projectCurated = await readMode(win)
+  const emptyRoot = await js<{ listed: boolean; saysEmpty: boolean; offer: string }>(
+    win,
+    `(() => {
+      const head = document.querySelector('[data-content-section="docs"]');
+      return {
+        listed: Boolean(head),
+        saysEmpty: Boolean(document.querySelector('[data-content-root-empty="docs"]')),
+        offer: head ? head.dataset.contentRootOffer : ''
+      }
+    })()`
+  )
+  const curatedShot = await tryShot(win, shotDir, 'content-project-curated.png')
+
+  await selectScope(win, fixtures.root)
+  await click(win, '[data-content-view="tree"]')
+  await sleep(700)
+  const harnessTree = await readMode(win)
+  const harnessTreeEntries = await js<string[]>(
+    win,
+    `[...document.querySelectorAll('[data-content-tree-entry]')].map((el) => el.dataset.contentTreeEntry)`
+  )
+  const treeShot = await tryShot(win, shotDir, 'content-harness-tree.png')
+
+  return [
+    {
+      id: 'CONT-12',
+      criterion:
+        'A harness opens curated and a project opens on a tree; both modes work from either kind, and the kind only picks the default',
+      title: 'The default follows the scope kind, and the cross case works in both directions',
+      ok:
+        harnessDefault.view === 'curated' &&
+        harnessDefault.caption.includes('harness default') &&
+        (projectDefault === null ||
+          (projectDefault.view === 'tree' && projectDefault.caption.includes('project default'))) &&
+        projectCurated.view === 'curated' &&
+        emptyRoot.listed &&
+        emptyRoot.saysEmpty &&
+        emptyRoot.offer === 'named' &&
+        harnessTree.view === 'tree' &&
+        harnessTreeEntries.includes('notes') &&
+        harnessTreeEntries.includes('tools'),
+      detail: {
+        harness: { scope: harnessPath, ...harnessDefault },
+        project: projectDefault === null ? 'no project scope on this machine' : { scope: projectPath, ...projectDefault },
+        projectAsCurated: { scope: fixtures.project, ...projectCurated, emptyNamedRoot: emptyRoot },
+        harnessAsTree: { scope: fixtures.root, ...harnessTree, topLevel: harnessTreeEntries.length },
+        screenshots: [curatedShot.file, treeShot.file],
+        screenshotErrors: [curatedShot.error, treeShot.error].filter(Boolean)
+      },
+      notes: [
+        'The caption is read as text rather than inferred from the mode: "harness default - curated',
+        'roots" is the thing that stops the rule being invisible, and a caption that had stopped',
+        'saying it would leave the control passing with nothing on screen to explain it.',
+        'The empty named root is asserted on the fixture project, where the driver made docs/ and',
+        'put nothing in it - so "listed and says empty" has a known answer.'
+      ]
+    }
+  ]
+}
+
+/**
+ * CONT-13: curation decides directories, never files.
+ *
+ * Against the fixture harness, where the driver planted the discriminating
+ * pair itself: `tools/` holding nothing but scripts, `screenshots/` holding
+ * nothing but bytes. Asserting only the first would pass a rule that offered
+ * every directory there is.
+ */
+async function curationChecks(ctx: CheckContext, fixtures: Fixtures): Promise<Check[]> {
+  const { win, content } = ctx
+
+  // The fixtures have to be there and have to discriminate before any of this
+  // is worth reading - the PROF-4 shape, where a missing file made every
+  // answer match.
+  const planted = {
+    sourceOnly: existsSync(join(fixtures.root, 'tools', 'rep-payload.py')),
+    bytesOnly: existsSync(join(fixtures.root, 'screenshots', 'one.png')),
+    binaryInsideARoot: existsSync(join(fixtures.notes, 'diagram.png'))
+  }
+
+  await selectScope(win, fixtures.root)
+  await click(win, '[data-content-view="curated"]')
+  await sleep(700)
+
+  const tree = content.tree(fixtures.root, true)
+  const roots = new Map(tree.roots.map((root) => [root.relPath, root]))
+  const painted = await js<Array<{ relPath: string; kind: string }>>(
+    win,
+    `[...document.querySelectorAll('button[data-content-file]')].map((el) => ({
+      relPath: el.dataset.contentFile, kind: el.dataset.contentKind }))`
+  )
+  const onScreen = new Map(painted.map((row) => [row.relPath.toLowerCase(), row.kind]))
+
+  return [
+    {
+      id: 'CONT-13',
+      criterion:
+        'Curated roots list every file; source opens as source, binary is listed rather than hidden; a source-only directory is a found root',
+      title: 'A directory of nothing but scripts is a root, one of nothing but bytes is not',
+      ok:
+        planted.sourceOnly &&
+        planted.bytesOnly &&
+        planted.binaryInsideARoot &&
+        roots.get('tools')?.offer === 'discovered' &&
+        !roots.has('screenshots') &&
+        onScreen.get('tools/rep-payload.py') === 'source' &&
+        onScreen.get('tools/sweep.ps1') === 'source' &&
+        onScreen.get('notes/diagram.png') === 'binary' &&
+        !onScreen.has('screenshots/one.png'),
+      detail: {
+        fixturesPlanted: planted,
+        roots: tree.roots.map((root) => `${root.relPath || '(scope root)'}=${String(root.files)} ${root.offer}`),
+        toolsRows: painted.filter((row) => row.relPath.startsWith('tools/')),
+        binaryRow: painted.find((row) => row.relPath === 'notes/diagram.png') ?? null,
+        screenshotsOffered: roots.has('screenshots')
+      },
+      notes: [
+        'Both directions, deliberately. `tools/` proves source counts as content; `screenshots/`',
+        'proves binary still does not, which is what stops the rule from offering every directory',
+        'on the disk. `notes/diagram.png` is the third claim: inside a root that *is* offered,',
+        'even a binary is listed - the kind decides how a file opens, not whether it is shown.'
+      ]
+    }
+  ]
+}
+
+/**
+ * CONT-14: the project tree - lazy, complete, and ignoring what the repository
+ * ignores.
+ *
+ * Laziness is asserted the only way it can be: by looking for rows that must
+ * not exist yet, expanding, and looking again. A tree that had walked eagerly
+ * and hidden the rows would fail the first half; one that never read the
+ * directory fails the second.
+ */
+async function treeChecks(ctx: CheckContext, shotDir: string, fixtures: Fixtures): Promise<Check[]> {
+  const { win } = ctx
+
+  await selectScope(win, fixtures.project)
+  await click(win, '[data-content-view="tree"]')
+  await sleep(900)
+
+  const readRows = async (): Promise<Array<{ rel: string; kind: string; ignored: string }>> =>
+    js(
+      win,
+      `[...document.querySelectorAll('[data-content-tree-entry]')].map((el) => ({
+        rel: el.dataset.contentTreeEntry,
+        kind: el.dataset.contentKind,
+        ignored: el.dataset.contentIgnored
+      }))`
+    )
+
+  const before = await readRows()
+  await click(win, '[data-content-tree-entry="src"]')
+  await sleep(900)
+  const after = await readRows()
+
+  /**
+   * The shot, and the scope it is a shot *of*.
+   *
+   * Taken here rather than at the end, and paired with a read of the switcher
+   * in the same moment, because the first run of this probe wrote a PNG of a
+   * different scope mid-transition and reported green beside it. A screenshot
+   * nobody can tie to the assertion it illustrates is the `PROF-4` shape with
+   * a picture attached.
+   */
+  const shot = await tryShot(win, shotDir, 'content-project-tree.png')
+  const shotScope = await js<string>(
+    win,
+    `document.querySelector('select[data-content-scope]')?.value ?? ''`
+  )
+
+  const badged = await js<string[]>(
+    win,
+    `[...document.querySelectorAll('[data-content-tree-entry][data-content-ignored="true"]')]
+       .map((el) => (el.textContent ?? '').includes('IGNORED') ? el.dataset.contentTreeEntry : '')
+       .filter(Boolean)`
+  )
+  const source = await js<string>(
+    win,
+    `document.querySelector('[data-content-tree]')?.dataset.contentTree ?? ''`
+  )
+  const caption = await js<string>(
+    win,
+    `(document.querySelector('[data-content-tree]')?.lastElementChild?.textContent ?? '').trim()`
+  )
+  const count = await js<string>(
+    win,
+    `(document.querySelector('[data-content-count="tree"]')?.textContent ?? '').trim()`
+  )
+
+  // The independent read: what is actually in the fixture's top level, and what
+  // git itself says about it - asked through the driver's own spawn rather than
+  // through the code under test.
+  const onDisk = readdirSync(fixtures.project, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() || entry.isFile())
+    .map((entry) => entry.name)
+  const gitSays = new Set<string>()
+  if (fixtures.projectIsRepo) {
+    const probe = spawnSync(
+      'git',
+      ['check-ignore', ...onDisk.map((name) => name)],
+      { cwd: fixtures.project, encoding: 'utf8', windowsHide: true }
+    )
+    for (const line of (probe.stdout ?? '').split(/\r?\n/)) {
+      if (line.trim() !== '') gitSays.add(line.trim().replace(/\/$/, ''))
+    }
+  }
+
+  /**
+   * The discriminator: `secrets/` is in no built-in list.
+   *
+   * "gitignore respected" is also what a run that quietly fell back would
+   * report about `node_modules/` and `dist/`, because those are in Helm's own
+   * list too. `secrets/` is in neither list, so its being greyed can only have
+   * come from the repository - and this asserts the list really does not hold
+   * it, rather than taking that on trust from the name.
+   */
+  const notInHelmsList = !CURATED_SKIPPED_DIRS.has('secrets')
+
+  const listed = new Set(before.map((row) => row.rel))
+  const ignoredOnScreen = new Set(before.filter((row) => row.ignored === 'true').map((row) => row.rel))
+
+  return [
+    {
+      id: 'CONT-14',
+      criterion:
+        'The project tree lists every file, reads directories lazily on expand, and shows what .gitignore ignores rather than hiding it',
+      title: 'Every top-level entry is a row, `src/` is read only when opened, and git decides the greying',
+      ok:
+        fixtures.projectIsRepo &&
+        gitSays.size > 0 &&
+        onDisk.every((name) => listed.has(name)) &&
+        listed.size === onDisk.length &&
+        // Lazy: nothing under `src/` before the click, everything after it.
+        before.every((row) => !row.rel.startsWith('src/')) &&
+        after.some((row) => row.rel === 'src/index.ts') &&
+        after.some((row) => row.rel === 'src/util') &&
+        // The repository's own answer, not Helm's list.
+        [...gitSays].every((name) => ignoredOnScreen.has(name)) &&
+        ignoredOnScreen.has('secrets') &&
+        badged.includes('node_modules') &&
+        badged.includes('dist') &&
+        source === 'gitignore' &&
+        caption.includes('.gitignore respected') &&
+        count.includes('ignored') &&
+        notInHelmsList &&
+        // The shot is of the thing that was asserted, not of whatever the
+        // window happened to be showing by the time it was taken.
+        shotScope.toLowerCase() === fixtures.project.toLowerCase() &&
+        // Unsupported kinds are rows, not omissions.
+        listed.has('LICENSE'),
+      detail: {
+        project: fixtures.project,
+        isRepo: fixtures.projectIsRepo,
+        secretsIsInHelmsOwnList: !notInHelmsList,
+        scopeTheScreenshotShows: shotScope,
+        onDisk,
+        listed: [...listed],
+        ignoredOnScreen: [...ignoredOnScreen],
+        gitCheckIgnoreSaid: [...gitSays],
+        badgedIgnored: badged,
+        beforeExpandingSrc: before.filter((row) => row.rel.startsWith('src')).map((row) => row.rel),
+        afterExpandingSrc: after.filter((row) => row.rel.startsWith('src/')).map((row) => row.rel),
+        ignoreSource: source,
+        captionUnderTheTree: caption,
+        headerCount: count,
+        screenshot: shot.file,
+        screenshotError: shot.error
+      },
+      notes: [
+        'The ignore set is compared against this driver’s own `git check-ignore` spawn, which is',
+        'the world rather than a second opinion - Helm and the check are both asking git, and if',
+        'they disagree one of them is passing the wrong paths.',
+        'gitSays.size > 0 is the discrimination guard: on a machine with no git the whole claim',
+        'is vacuous, and this fails rather than reporting green over nothing.',
+        '`secrets/` is in no built-in skip list, so its being ignored can only have come from the',
+        'repository - which is what separates this from the fallback passing under another name.'
       ]
     }
   ]
@@ -1474,7 +1967,134 @@ async function artifactChecks(
   const { win } = ctx
   const checks: Check[] = []
 
-  // ---- a real artifact, and the console it must not fill ------------------
+  /**
+   * The criterion, against an artifact the **driver planted**.
+   *
+   * This used to be asserted against a file out of the developer's own vault,
+   * and it broke twice for the same reason: the corpus was a directory other
+   * people write to. First it took the newest HTML file, which a design tool
+   * made a 36 KB fragment with no `<title>` and no heading; narrowing it to
+   * "a file that claims to be a document" made that instance go away without
+   * touching the fault. A probe whose corpus is somebody's working directory
+   * will keep going red for reasons that are not about the code, and each time
+   * it will look exactly like a regression - there is a closed ClickUp task
+   * about this same surface doing this same thing.
+   *
+   * So the claim is made about `lessons/artifact.html`, which this file writes:
+   * a title, a heading, inline CSS and an inline script that mutates the DOM.
+   * That exercises the whole path - the protocol, the frame, scripts running
+   * under the sandbox, and the console staying quiet - over bytes the check
+   * owns, so the only thing that can turn it red is Helm.
+   *
+   * It now also guards the wikilink bootstrap the protocol injects into every
+   * artifact: that script runs in this document, and anything it threw would
+   * arrive in the same console this asserts is clean.
+   *
+   * The real vault is still read, in `CONT-5b`, and is still worth reading -
+   * see the note there for what it does and does not claim.
+   */
+  clearArtifactConsole()
+  const planted = await openArtifact(ctx, fixtures.root, 'lessons/artifact.html')
+  const plantedRendered = planted.frame
+    ? await planted.frame
+        .executeJavaScript(
+          `({ title: document.title, headings: document.querySelectorAll('h1,h2,h3').length,
+              ran: document.getElementById('out')?.textContent ?? null,
+              text: (document.body?.innerText ?? '').length,
+              // The fixture's own marker, read back out of the laid-out text.
+              // This is what "rendered" means here - see the note below.
+              marker: (document.body?.innerText ?? '').includes('HELMM6ARTIFACT'),
+              painted: document.body ? document.body.scrollHeight : 0 })`
+        )
+        .catch(() => null)
+    : null
+  await sleep(700)
+  const plantedLogged = artifactConsoleEntries()
+  const plantedShot = await tryShot(win, shotDir, 'content-artifact-planted.png')
+
+  const plantedShape = plantedRendered as {
+    title?: string
+    headings?: number
+    ran?: string | null
+    marker?: boolean
+    painted?: number
+  } | null
+  const plantedErrors = plantedLogged.filter(
+    (entry) => entry.level === 'error' || entry.level === 'warning'
+  )
+
+  checks.push({
+    id: 'CONT-5',
+    criterion: 'An HTML artifact opens rendered, sandboxed, with no console errors',
+    title: 'A planted artifact rendered in the frame, ran its script, and logged nothing',
+    ok:
+      planted.opened &&
+      planted.frame !== null &&
+      // The fixture has to be there and be discriminating before any of this
+      // means anything: it declares a title, a heading and a script whose
+      // effect is readable back out of the DOM.
+      readFileSync(fixtures.artifact, 'utf8').includes('HELMM6ARTIFACT') &&
+      plantedShape?.title === 'Fixture artifact' &&
+      (plantedShape.headings ?? 0) > 0 &&
+      // "Rendered" is the fixture's own marker read back out of the *laid-out
+      // text*, not a height threshold. The height one was inherited from when
+      // this probe measured a real lesson page and was calibrated for it: a
+      // 409-byte fixture is legitimately about 100px tall, so `> 200` failed a
+      // document that had rendered perfectly. Inflating the fixture to clear
+      // the number would have been fitting the fixture to the test. The marker
+      // is the stronger claim anyway - it says the bytes on disk reached the
+      // DOM and were laid out as text, which a blank or unloaded document
+      // cannot fake at any height.
+      plantedShape.marker === true &&
+      (plantedShape.painted ?? 0) > 0 &&
+      // The inline script ran, which is what says the sandbox allows scripts
+      // rather than that the document merely parsed.
+      plantedShape.ran === 'ran' &&
+      plantedErrors.length === 0,
+    detail: {
+      file: fixtures.artifact,
+      bytesOnDisk: statSync(fixtures.artifact).size,
+      frameUrl: planted.frame?.url ?? null,
+      rendered: plantedRendered,
+      consoleEntries: plantedLogged,
+      screenshot: plantedShot.file,
+      screenshotError: plantedShot.error
+    },
+    notes: [
+      'Against a fixture this file writes, deliberately. The same claim used to be made about',
+      'a file from the developer’s vault and went red twice for reasons that were not about',
+      'Helm - a corpus other people write to is not a fixture, however real it is.',
+      'The console is read from the main process, which is the only place it can be read - the',
+      'frame has an opaque origin, so the window hosting it cannot reach its console.',
+      '"Rendered" is the fixture’s own marker token read back out of the laid-out text inside',
+      'the frame, so a document that loaded but painted nothing still fails; `ran` is the',
+      'inline script’s own effect, so one that parsed but was not allowed to execute fails too.',
+      'This also covers the wikilink bootstrap the protocol injects: it runs in this document,',
+      'and anything it threw would land in the console asserted clean here.'
+    ]
+  })
+
+  // ---- CONT-5b: the same thing, over a file Helm did not write -------------
+
+  /**
+   * A real artifact out of the real vault, reported rather than gated.
+   *
+   * Worth keeping and worth *not* asserting on. A planted fixture can only
+   * contain what the driver thought to write, and the one thing a real artifact
+   * has that a fixture never will is surprises - so this still opens one, and
+   * the report names it and says what came back.
+   *
+   * What it asserts is the half that is about **Helm**: that a file the check
+   * did not write can be served and framed at all. What it does not assert is
+   * anything about that file's *contents* - no heading count, no height, no
+   * console threshold - because those are facts about somebody else's file, and
+   * gating on them is precisely the thing that made this probe go red twice for
+   * reasons that were not about the code.
+   *
+   * That is not a check softened until it cannot fail: the criterion is carried
+   * whole by `CONT-5` above, against bytes this file owns. This is additional
+   * coverage, and it fails when the protocol cannot serve a real file.
+   */
   const realArtifact =
     harnessPath !== null
       ? ctx.content
@@ -1484,9 +2104,9 @@ async function artifactChecks(
 
   if (realArtifact) {
     clearArtifactConsole()
-    const { opened, frame } = await openArtifact(ctx, harnessPath ?? '', realArtifact.relPath)
-    const rendered = frame
-      ? await frame
+    const real = await openArtifact(ctx, harnessPath ?? '', realArtifact.relPath)
+    const realRendered = real.frame
+      ? await real.frame
           .executeJavaScript(
             `({ title: document.title, headings: document.querySelectorAll('h1,h2,h3').length,
                 text: (document.body?.innerText ?? '').length,
@@ -1495,37 +2115,48 @@ async function artifactChecks(
           .catch(() => null)
       : null
     await sleep(700)
-    const logged = artifactConsoleEntries()
-    const shot = await screenshot(win, shotDir, 'content-artifact-real.png')
-
-    const painted = (rendered as { painted?: number } | null)?.painted ?? 0
-    const errors = logged.filter((entry) => entry.level === 'error' || entry.level === 'warning')
+    const realLogged = artifactConsoleEntries()
+    const realShot = await tryShot(win, shotDir, 'content-artifact-real.png')
 
     checks.push({
-      id: 'CONT-5',
+      id: 'CONT-5b',
       criterion: 'An HTML artifact opens rendered, sandboxed, with no console errors',
-      title: `${realArtifact.relPath} rendered in the frame and logged nothing`,
-      ok:
-        opened &&
-        frame !== null &&
-        painted > 200 &&
-        ((rendered as { headings?: number } | null)?.headings ?? 0) > 0 &&
-        errors.length === 0,
+      title: `A real artifact from the vault (${realArtifact.relPath}) was served and framed`,
+      ok: real.opened && real.frame !== null,
       detail: {
         file: realArtifact.path,
         bytesOnDisk: statSync(realArtifact.path).size,
-        frameUrl: frame?.url ?? null,
-        rendered,
-        consoleEntries: logged,
-        screenshot: shot.file
+        frameUrl: real.frame?.url ?? null,
+        rendered: realRendered,
+        // Reported, not asserted. A real artifact that logs is a fact about
+        // that file; the console claim is CONT-5's, over a document this check
+        // wrote.
+        consoleEntries: realLogged,
+        screenshot: realShot.file,
+        screenshotError: realShot.error
       },
       notes: [
-        'A real artifact from the user’s harness, not a fixture: the criterion is about the',
-        'files Claude actually produces.',
-        'The console is read from the main process, which is the only place it can be read -',
-        'the frame has an opaque origin, so the window hosting it cannot reach its console.',
-        '"Rendered" is `document.body.scrollHeight` measured inside the frame, so an empty',
-        'document that loaded successfully still fails.'
+        'The one probe here that opens a file Claude actually produced, kept for exactly that.',
+        'It asserts only that Helm could serve and frame it - what is *inside* somebody else’s',
+        'file is reported and never gated on, because gating on it is what made this go red',
+        'twice for reasons that had nothing to do with the code.',
+        'A reader comparing runs should read `rendered` and `consoleEntries` here as findings',
+        'about the vault, not as a verdict on Helm.'
+      ]
+    })
+  } else if (harnessPath !== null) {
+    // Said out loud rather than skipped, so nobody infers coverage that is not
+    // there - `PROF-4` is what happens when nobody is told.
+    checks.push({
+      id: 'CONT-5b',
+      criterion: 'An HTML artifact opens rendered, sandboxed, with no console errors',
+      title: 'This harness holds no HTML at all, so nothing real was opened',
+      ok: true,
+      detail: { scope: harnessPath },
+      notes: [
+        'Not a failure: a harness legitimately holds no generated report. The criterion is',
+        'carried by CONT-5 against a planted artifact either way; this only means the extra',
+        'coverage over a real one did not happen on this machine.'
       ]
     })
   }
@@ -1657,6 +2288,98 @@ async function artifactChecks(
     ]
   })
 
+  // ---- CONT-15: wikilinks inside a rendered artifact -----------------------
+
+  /**
+   * A `[[wikilink]]` in an HTML artifact, from inside the frame to the note it
+   * opens.
+   *
+   * The whole path is exercised because every part of it is unusual. The
+   * brackets are rewritten by a bootstrap the *protocol handler* injected, in a
+   * document with an opaque origin that this window cannot read; the click is
+   * carried out by `postMessage`, the only channel a sandboxed frame has; and
+   * the target is resolved by the main process, because the frame is
+   * deliberately told which names resolve and no paths at all.
+   *
+   * So the assertions are: the bracket became an anchor, the broken one is
+   * marked and is *not* the same as the live one, the frame holds no path, and
+   * clicking it lands the pane on the note.
+   */
+  clearArtifactConsole()
+  const link = await openArtifact(ctx, fixtures.root, 'lessons/artifact.html')
+  const inFrame = link.frame
+    ? await link.frame
+        .executeJavaScript(
+          `({
+             live: document.querySelectorAll('a[data-helm-wikilink="beta"]').length,
+             broken: document.querySelectorAll('a.helm-wikilink-broken').length,
+             brokenTarget: document.querySelector('a.helm-wikilink-broken')?.dataset.helmWikilink ?? null,
+             stillLiteral: (document.body.innerText || '').includes('[[beta]]'),
+             // Nothing in the frame may carry a filesystem path. The table it
+             // was given is names to booleans, and this is what says so.
+             pathsInTheDocument: /[A-Za-z]:\\\\\\\\|helm-data/.test(document.documentElement.outerHTML)
+           })`
+        )
+        .catch(() => null)
+    : null
+
+  let landedOn: string | null = null
+  if (link.frame && inFrame !== null) {
+    await link.frame
+      .executeJavaScript(`document.querySelector('a[data-helm-wikilink="beta"]')?.click(), 1`)
+      .catch(() => undefined)
+    await pollJs(win, `document.querySelector('[data-content-body]')?.dataset.contentPath`, 15_000)
+    await sleep(500)
+    landedOn = await js<string | null>(
+      win,
+      `document.querySelector('[data-content-body]')?.dataset.contentPath ?? null`
+    )
+  }
+
+  const frameShape = inFrame as {
+    live?: number
+    broken?: number
+    brokenTarget?: string | null
+    stillLiteral?: boolean
+    pathsInTheDocument?: boolean
+  } | null
+  const expectedTarget = join(fixtures.notes, 'beta.md')
+
+  checks.push({
+    id: 'CONT-15',
+    criterion: 'The wikilink index resolves inside rendered HTML as well as markdown',
+    title: 'A `[[wikilink]]` in an artifact is a link, and clicking it opens the note',
+    ok:
+      link.opened &&
+      link.frame !== null &&
+      // The fixture has to carry both, or "one link, no broken ones" would also
+      // be what a bootstrap that never ran reports.
+      readFileSync(fixtures.artifact, 'utf8').includes('[[beta]]') &&
+      readFileSync(fixtures.artifact, 'utf8').includes('[[never-written]]') &&
+      existsSync(expectedTarget) &&
+      (frameShape?.live ?? 0) === 1 &&
+      (frameShape?.broken ?? 0) === 1 &&
+      frameShape?.brokenTarget === 'never-written' &&
+      frameShape.stillLiteral === false &&
+      frameShape.pathsInTheDocument === false &&
+      landedOn?.toLowerCase() === expectedTarget.toLowerCase(),
+    detail: {
+      artifact: fixtures.artifact,
+      insideTheFrame: frameShape,
+      clickLandedOn: landedOn,
+      expected: expectedTarget,
+      artifactConsole: artifactConsoleEntries().map((entry) => `${entry.level}: ${entry.message}`)
+    },
+    notes: [
+      'Read from inside the frame through WebFrameMain, which is the only reader that can - the',
+      'document has an opaque origin, so the window hosting it cannot see into it at all.',
+      '`pathsInTheDocument` is the security half: the bootstrap is given names and booleans, and',
+      'a regression that started injecting resolved paths would hand a filesystem layout to code',
+      'Helm did not write. The broken link is asserted separately from the live one so that a',
+      'bootstrap which linked everything, or nothing, fails rather than half-passing.'
+    ]
+  })
+
   return checks
 }
 
@@ -1672,14 +2395,38 @@ async function searchChecks(ctx: CheckContext, harnessPath: string): Promise<Che
   /**
    * The corpus, read again here, so the expected counts are this file's own.
    *
-   * Every file, not just the markdown, because that is what the search covers:
-   * markdown is searched by name *and* text, everything else by name alone. A
-   * counter that held only the markdown would expect fewer hits than the pane
-   * honestly returns for any term matching an artifact's or a data file's name.
+   * Every file, not just the ones whose text is read: **names are matched for
+   * every kind**, and a counter holding only the bodies would expect fewer hits
+   * than the pane honestly returns for any term matching an artifact's or a
+   * data file's name.
+   *
+   * The set whose *bodies* are read is written out here in this file's own
+   * words rather than taken from the result, because a reader that asked the
+   * pane what it searched and then agreed with it would be measuring nothing.
+   * The result carries the same list, and `bodyKindsAgree` below checks the two
+   * against each other - so widening the search in `core` turns this red and a
+   * person decides, instead of the expectation quietly following the code.
    */
+  const BODY_KINDS = ['markdown', 'data', 'text', 'source']
+
+  /**
+   * And the size ceiling, which is part of the same rule.
+   *
+   * "A single file large enough to be a database dump is not prose" - a file
+   * over this is carried by name and its bytes are not read. Stated here in
+   * this file's own words for the same reason the kind list is, and it is not
+   * hypothetical: this harness holds a 29 MB `tools/password-hunt-results.txt`,
+   * and a reader without the ceiling expected 42,745 matches for "the" against
+   * the 10,043 the pane honestly found.
+   */
+  const BODY_MAX_BYTES = 4 * 1024 * 1024
+
   const corpus = tree.files.map((file) => ({
     file,
-    text: file.kind === 'markdown' ? readFileSync(file.path, 'utf8') : ''
+    text:
+      BODY_KINDS.includes(file.kind) && file.size <= BODY_MAX_BYTES
+        ? readFileSync(file.path, 'utf8')
+        : ''
   }))
 
   const countOccurrences = (needle: string): { files: number; matches: number } => {
@@ -1769,31 +2516,73 @@ async function searchChecks(ctx: CheckContext, harnessPath: string): Promise<Che
   const p95 = round(percentile(times, 95))
   const worst = round(Math.max(...times, 0))
 
+  /**
+   * How many *files* a result may carry.
+   *
+   * The hit list is bounded - a hundred-thousand-match term must not paint a
+   * row per file - and the pane says so on screen with "More files matched than
+   * are listed". `totalMatches` is not bounded, which is why the match counts
+   * below are compared unconditionally and the file counts are compared against
+   * the bound.
+   *
+   * This started mattering when the corpus grew to include data, text and
+   * source: "the" now matches 225 files where it used to match fewer than 200,
+   * so the cap began to bite and a reader that did not model it called a
+   * correct result wrong.
+   */
+  const MAX_HIT_FILES = 200
+
   const wrong: Array<Record<string, unknown>> = []
   for (const term of terms) {
     const sample = warm.find((entry) => entry.term === term) ?? samples.find((entry) => entry.term === term)
     if (!sample) continue
     const expected = countOccurrences(term)
-    if (sample.matches !== expected.matches || sample.files !== expected.files) {
+    const expectedFiles = Math.min(expected.files, MAX_HIT_FILES)
+    if (sample.matches !== expected.matches || sample.files !== expectedFiles) {
       wrong.push({
         term,
         pane: { files: sample.files, matches: sample.matches },
-        independentCount: expected
+        independentCount: expected,
+        expectedFilesAfterTheCap: expectedFiles
       })
     }
   }
 
   // And through the box, so the number on screen is the number measured.
+  //
+  // Polled rather than slept at. A fixed wait was racing the search - the box
+  // debounces, then main answers, and this read landed on "Searching…" often
+  // enough once the corpus grew. `[data-search-scope]` is painted only when a
+  // result has arrived, so it is the thing to wait for.
   await setValue(win, 'input[data-content-search]', 'geofenc')
-  await sleep(700)
-  const throughTheBox = await js<{ status: string; rows: number; tookAttr: string | null }>(
+  await pollJs(win, `document.querySelector('[data-search-scope]')`, 20_000)
+  await sleep(200)
+  const throughTheBox = await js<{
+    status: string
+    rows: number
+    tookAttr: string | null
+    scopeAttr: string | null
+  }>(
     win,
     `(() => ({
       status: (document.querySelector('[data-content-status]')?.textContent ?? '').replace(/\\s+/g, ' ').trim(),
       rows: document.querySelectorAll('button[data-content-hit]').length,
-      tookAttr: document.querySelector('[data-search-took]')?.dataset.searchTook ?? null
+      tookAttr: document.querySelector('[data-search-took]')?.dataset.searchTook ?? null,
+      scopeAttr: document.querySelector('[data-search-scope]')?.dataset.searchScope ?? null
     }))()`
   )
+
+  /**
+   * What the pane says it read, against what this file assumed it read.
+   *
+   * Two independent statements of one rule, compared. This is what keeps the
+   * corpus above honest: it is written out here rather than derived, so it can
+   * be wrong - and this is the line that says so when it is.
+   */
+  const reportedBodyKinds = (throughTheBox.scopeAttr ?? '').split(',').filter((kind) => kind !== '')
+  const bodyKindsAgree =
+    reportedBodyKinds.length === BODY_KINDS.length &&
+    [...reportedBodyKinds].sort().join(',') === [...BODY_KINDS].sort().join(',')
   await setValue(win, 'input[data-content-search]', '')
   await sleep(400)
 
@@ -1802,10 +2591,19 @@ async function searchChecks(ctx: CheckContext, harnessPath: string): Promise<Che
       id: 'CONT-7',
       criterion: 'Search finds text across notes and skill files in <200ms',
       title: `p50 ${String(p50)} ms, p95 ${String(p95)} ms over ${String(times.length)} searches of ${String(markdown.length)} files`,
-      ok: times.length > 0 && p95 < 200 && wrong.length === 0 && throughTheBox.rows > 0,
+      ok:
+        times.length > 0 &&
+        p95 < 200 &&
+        wrong.length === 0 &&
+        throughTheBox.rows > 0 &&
+        bodyKindsAgree &&
+        // The status row has to *say* what was searched, which is the half of
+        // this criterion that is not about speed.
+        /text in \d+, names in \d+/.test(throughTheBox.status),
       detail: {
         scope: harnessPath,
         filesSearched: markdown.length,
+        bodyKinds: { thisFileExpects: BODY_KINDS, thePaneReports: reportedBodyKinds },
         bytes: corpus.reduce((n, entry) => n + entry.text.length, 0),
         samples: times.length,
         p50,
@@ -1829,7 +2627,13 @@ async function searchChecks(ctx: CheckContext, harnessPath: string): Promise<Che
         'rather than being dropped: it is a real thing that happens, but it is not what the',
         'criterion is about.',
         'Match counts are checked against an `indexOf` loop written in this file over its own',
-        'read of the same files.'
+        'read of the same files.',
+        'Which kinds have their *bodies* read is stated here and compared against what the pane',
+        'reports, so widening the search in core turns this red rather than quietly moving the',
+        'expectation with it. Names are matched for every kind, always.',
+        'The status row is required to say what was searched: that is the second half of the',
+        'criterion, and a search that answered correctly while saying nothing about its own',
+        'scope is the thing this pane was rebuilt to stop.'
       ]
     }
   ]

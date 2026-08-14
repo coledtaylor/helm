@@ -154,6 +154,16 @@ const VIEWS: Array<{ name: string; open: readonly string[] | null; anchor: strin
     anchor: '[data-run-doctor]'
   },
   { name: 'content', open: ['[data-open-content]'], anchor: '[data-content-scope]' },
+  // The content pane's other mode, and it has to be its own row for the reason
+  // the config console's three do: a file tree's rows are a control recipe that
+  // exists nowhere else in the app, and the pane's default is the curated view,
+  // so the walk above never draws one. AFF-2 is what says a control nothing
+  // measured is uncovered rather than fine.
+  {
+    name: 'content:tree',
+    open: ['[data-open-content]', '[data-content-view="tree"]'],
+    anchor: '[data-content-tree]'
+  },
   { name: 'history', open: ['[data-open-history]'], anchor: '[data-history-search]' },
   { name: 'pulls', open: ['[data-open-pulls]'], anchor: '[data-pulls-refresh]' },
   { name: 'settings', open: ['[data-open-settings]'], anchor: '[data-settings-pane]' }

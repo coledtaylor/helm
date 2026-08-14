@@ -63,10 +63,16 @@ export function assertContentWritable(scopePath: string, path: string): void {
     }
   }
 
+  // A kind decides how a file opens, and here it decides whether it may be
+  // written: everything the viewer can *read* as text it may also save, source
+  // included - a `tools/` script is a file the agent wrote and fixing a typo in
+  // it should not mean a detour through Explorer. `binary` is the one refusal,
+  // and it is the same refusal the config write makes for the same reason:
+  // Helm will not rewrite bytes it cannot read.
   const name = segments.at(-1) ?? ''
-  if (contentFileKind(name) === null) {
+  if (contentFileKind(name) === 'binary') {
     throw new Error(
-      `Refusing to write ${absolute}: the content viewer edits markdown, data and text files.`
+      `Refusing to write ${absolute}: the content viewer edits text, not binary files.`
     )
   }
 }
