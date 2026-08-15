@@ -450,6 +450,154 @@ async function shootContentTree(
   return shot.file
 }
 
+/**
+ * A file opened as **source** rather than as a document.
+ *
+ * The walk's two content shots are both markdown - the reading view and the
+ * file tree - so the code well went unphotographed, and it was the one thing on
+ * that pane with no height of its own: the block grew to the length of the file
+ * and its horizontal scrollbar ended up at the bottom of the file rather than
+ * the bottom of the pane. A thumbnail of a document would never have shown it.
+ *
+ * The file is chosen by *shape*, not by name: the widest thing in the scope that
+ * is long enough to overflow the pane, so the shot is of a block that has to
+ * scroll in both directions. Picking a path written down here would photograph
+ * whatever that file happens to be on somebody else's machine, which for this
+ * question is likely to be forty lines that fit.
+ */
+interface SourceGeometry {
+  pane: number
+  paneScroll: number
+  block: number
+  blockScroll: number
+  blockWidth: number
+  blockScrollWidth: number
+  bounded: boolean
+}
+
+/** Open one content row, matched on its path in JavaScript for the same reason
+ * `clickProjectRow` does: a Windows path is full of backslashes and a CSS
+ * string escapes them too. */
+async function openContentFile(win: BrowserWindow, path: string): Promise<boolean> {
+  return js<boolean>(
+    win,
+    `(() => {
+       const el = [...document.querySelectorAll('[data-content-file]')]
+         .find((b) => b.dataset.contentFile === ${JSON.stringify(path)})
+       if (!el) return false
+       el.click()
+       return true
+     })()`
+  ).catch(() => false)
+}
+
+/** The pane and the block it holds, as a person would measure them. */
+async function sourceGeometry(win: BrowserWindow): Promise<SourceGeometry | null> {
+  return js<SourceGeometry | null>(
+    win,
+    `(() => {
+       const outer = document.querySelector('[data-content-source]')
+       const pre = outer && outer.querySelector('pre')
+       if (!pre) return null
+       return {
+         pane: outer.clientHeight,
+         paneScroll: outer.scrollHeight,
+         block: pre.clientHeight,
+         blockScroll: pre.scrollHeight,
+         blockWidth: pre.clientWidth,
+         blockScrollWidth: pre.scrollWidth,
+         bounded: pre.clientHeight <= outer.clientHeight && outer.scrollHeight === outer.clientHeight
+       }
+     })()`
+  ).catch(() => null)
+}
+
+async function paintedSource(win: BrowserWindow, path: string): Promise<SourceGeometry | null> {
+  if (!(await openContentFile(win, path))) return null
+  if (!(await pollJs(win, `document.querySelector('[data-content-source] pre')`, 8000))) return null
+  await sleep(250)
+  return sourceGeometry(win)
+}
+
+async function shootContentSource(
+  win: BrowserWindow,
+  outDir: string,
+  theme: string
+): Promise<string | null> {
+  const candidates = await js<string[]>(
+    win,
+    `[...document.querySelectorAll('[data-content-file]')]
+       .map((el) => el.dataset.contentFile || '')
+       .filter((p) => /\\.(json|ya?ml|mjs|cjs|js|ts|tsx|py|ps1|sh|css|log|toml|ini)$/i.test(p))`
+  ).catch(() => [] as string[])
+
+  if (candidates.length === 0) {
+    console.error(`design-shot: no source file in this scope - no code shot (${theme})`)
+    return null
+  }
+
+  // Opened and *measured* until one overflows, rather than taking the first
+  // match. The DOM row carries no size, so shape is not something this can be
+  // told - it has to be looked at. Taking `candidates[0]` photographed a 20-line
+  // `.mcp.json`, which is a perfectly good picture of a code well and no
+  // evidence at all about the thing this shot exists for.
+  let best: { file: string; geom: SourceGeometry } | null = null
+  for (const file of candidates.slice(0, 14)) {
+    const geom = await paintedSource(win, file)
+    if (geom === null) continue
+    const overflowsY = geom.blockScroll > geom.block
+    const overflowsX = geom.blockScrollWidth > geom.blockWidth
+    if (overflowsY && overflowsX) {
+      best = { file, geom }
+      break
+    }
+    // A vertical overflow is worth more than none; a file that fits is only
+    // ever a last resort, so the shot is never simply missing.
+    if (best === null || (overflowsY && best.geom.blockScroll <= best.geom.block)) {
+      best = { file, geom }
+    }
+  }
+
+  if (best === null) {
+    console.error(`design-shot: no source file painted a block (${theme})`)
+    return null
+  }
+
+  if (best.file !== (await currentSourceFile(win))) await paintedSource(win, best.file)
+
+  const { geom } = best
+  const overflows = geom.blockScroll > geom.block || geom.blockScrollWidth > geom.blockWidth
+  // Printed, because the failure this shot exists for is a *number*: a block
+  // taller than the pane it sits in. At thumbnail size a bounded well and an
+  // unbounded one are the same picture.
+  console.log(
+    `design-shot: content source (${theme}) ${JSON.stringify({ file: best.file, ...geom })}`
+  )
+  if (!overflows) {
+    console.error(
+      `design-shot: ${best.file} fits the pane - the code shot shows a well that never had to scroll (${theme})`
+    )
+  }
+  if (!geom.bounded) {
+    console.error(`design-shot: the source block is NOT bounded by its pane (${theme})`)
+  }
+
+  await drawn(win)
+  const shot = await screenshot(win, outDir, `content-source-${theme}.png`)
+  return shot.file
+}
+
+/** Which file the document pane is showing, so a re-open can be skipped. */
+async function currentSourceFile(win: BrowserWindow): Promise<string | null> {
+  return js<string | null>(
+    win,
+    `(() => {
+       const el = document.querySelector('[data-content-file][aria-current="true"]')
+       return el ? el.dataset.contentFile : null
+     })()`
+  ).catch(() => null)
+}
+
 /** The project shell's height, written the way its drag handle writes it. */
 async function writeShellHeight(win: BrowserWindow, pct: number): Promise<void> {
   await js<void>(
@@ -1559,6 +1707,9 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
       if (view.name === 'content') {
         const treeShot = await shootContentTree(win, outDir, theme)
         if (treeShot !== null) files.push(treeShot)
+        // And a file opened as source, which neither of the two above is.
+        const sourceShot = await shootContentSource(win, outDir, theme)
+        if (sourceShot !== null) files.push(sourceShot)
       }
 
       // The history pane again, two clicks in: the archived transcript, and a

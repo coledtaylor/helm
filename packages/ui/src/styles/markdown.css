@@ -383,16 +383,44 @@
   text-decoration: var(--shiki-dark-text-decoration);
 }
 
-/* The source view shares the code rules above and nothing else. A whole file is
+/*
+ * The source view shares the code rules above and nothing else. A whole file is
  * the pane's contents rather than a block inside a document, so it fills the
- * pane and scrolls itself instead of sitting in a fixed-height well. */
+ * pane and scrolls itself instead of sitting in a fixed-height well.
+ *
+ * `height` rather than `min-height`, and that one word is the whole fix.
+ * `min-height: 100%` is still half right and is why the height is pinned at all
+ * rather than left to the content: a forty-line file should fill the pane, not
+ * float in it as a short card. What it had was no ceiling. The block grew to the
+ * length of the file and the wrapper scrolled it, which split the two axes
+ * across two elements - `overflow-x` belongs to this `pre`, so the horizontal
+ * scrollbar sat at the bottom of the *file* instead of the bottom of the pane.
+ *
+ * Measured in the real window on a 58KB minified JSON, pane 765px tall: the
+ * block was 37,654px tall and 23,917px wide, `clientHeight === scrollHeight` so
+ * it never scrolled itself, and the bar that would have moved it sideways was at
+ * y=37,877 - reachable only after scrolling through the entire file. The card
+ * also had no bottom edge on screen, so it read as a background wash rather than
+ * a well.
+ *
+ * Pinned both ways, this `pre` is the viewport: both scrollbars are its own and
+ * both stay at the edge of the pane.
+ */
 .source-view {
-  min-height: 100%;
+  height: 100%;
 }
 
 .source-view pre {
-  min-height: 100%;
+  height: 100%;
   margin: 0;
+  /*
+   * Both axes, overriding the `overflow-x` the shared block above sets. That
+   * rule is still right where it applies - a fence inside a document scrolls
+   * sideways on itself and vertically with the document it belongs to. A file
+   * has no document around it, so it owns both.
+   */
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 /* --------------------------------------------------------------------------

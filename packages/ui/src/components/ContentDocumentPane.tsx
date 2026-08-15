@@ -484,6 +484,14 @@ function Header({
  * Plain text is the fallback and it is a real one, not an error state - a file
  * past the highlighting ceiling, or in a language nobody packaged a grammar
  * for, is still a file somebody wanted to read.
+ *
+ * **This wrapper does not scroll - the block inside it does.** Both branches
+ * below are pinned to the wrapper's height and own both of their scrollbars, so
+ * a long file is read inside a bounded well rather than by scrolling the well
+ * itself past the bottom of the window. See the `.source-view` rules in
+ * `markdown.css` for the measurements that argument came from; the plain-text
+ * branch carries the same thing as utilities because it is a `pre` this file
+ * writes rather than one shiki hands over.
  */
 function SourceBody({
   content,
@@ -497,7 +505,7 @@ function SourceBody({
   source: ContentSource | null
 }): JSX.Element {
   return (
-    <div data-content-source className="min-w-0 flex-1 overflow-auto overscroll-contain p-3">
+    <div data-content-source className="min-w-0 flex-1 overflow-hidden p-3">
       {loading ? (
         <p className="text-[12px] text-fg-subtle">Reading&hellip;</p>
       ) : binary ? (
@@ -517,7 +525,7 @@ function SourceBody({
       ) : (
         <pre
           data-content-language="plaintext"
-          className="rounded-raised border border-border bg-surface-sunken p-3 font-mono text-[12px] leading-[1.55] text-fg select-text"
+          className="h-full overflow-auto overscroll-contain rounded-raised border border-border bg-surface-sunken p-3 font-mono text-[12px] leading-[1.55] text-fg select-text"
         >
           {content}
         </pre>
