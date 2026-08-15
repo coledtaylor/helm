@@ -86,14 +86,40 @@ async function clickProjectRow(win: BrowserWindow, path: string): Promise<boolea
   )
 }
 
-/** Every open tab closed, so an empty workspace is a state the walk can get
+/**
+ * Every open tab closed, so an empty workspace is a state the walk can get
  * back to - the second theme pass starts where the first one left off. Scoped
- * to the tab strip: other things on screen have close buttons too. */
-async function closeAllTabs(win: BrowserWindow): Promise<void> {
-  await js<void>(
+ * to the tab strip: other things on screen have close buttons too.
+ *
+ * One close per turn of the event loop, re-querying each time, rather than a
+ * `for` over one `querySelectorAll`. That earlier shape left the strip **fully
+ * populated** and the light pass photographed the dark pass's last pane as
+ * `welcome-light.png` - the exact failure the anchors below were written to
+ * stop, which `welcome` was exempt from for having none. A static NodeList
+ * taken before the first click holds nodes React detaches as it re-renders the
+ * strip, and a click on a detached button is a no-op that reports nothing.
+ *
+ * Returns what is left, because "closed them all" is not a claim a loop that
+ * clicked into the void can make - and this one made it for as long as it
+ * existed.
+ */
+async function closeAllTabs(win: BrowserWindow): Promise<number> {
+  return js<number>(
     win,
-    `(() => { for (const el of document.querySelectorAll('[role="tablist"] button[aria-label^="Close "]'))
-        el.click() })()`
+    `(async () => {
+      const strip = () => document.querySelectorAll('[role="tablist"] button[aria-label^="Close "]')
+      // A plain timeout rather than requestAnimationFrame: Chromium throttles
+      // rAF to nothing while the window is occluded, which is the normal state
+      // of a window a check drives on a machine somebody is working on.
+      const settle = () => new Promise((r) => setTimeout(r, 40))
+      for (let guard = 0; guard < 40; guard++) {
+        const next = strip()[0]
+        if (!next) break
+        next.click()
+        await settle()
+      }
+      return strip().length
+    })()`
   )
 }
 
@@ -137,9 +163,13 @@ async function drawn(win: BrowserWindow): Promise<void> {
  */
 const VIEWS: Array<{ name: string; selector: string | null; anchor: string | null }> = [
   // Nothing open. Reached by the close-everything above rather than a click,
-  // hence the null selector - and nothing to anchor on either, since the
-  // whole point of it is a window with no pane in it.
-  { name: 'welcome', selector: null, anchor: null },
+  // hence the null selector. It is anchored like everything else, though the
+  // reading is inverted: the anchor is the empty state's own pane, and what it
+  // rules out is a *leftover* view being shot under this name. It was exempt
+  // once, on the argument that a window with no pane in it has nothing to
+  // anchor on, and that is how `welcome-light.png` came to hold the Pull
+  // requests pane for as long as `closeAllTabs` was silently closing nothing.
+  { name: 'welcome', selector: null, anchor: '[data-welcome-pane]' },
   // First project row in the tree - the launcher's home view.
   { name: 'project', selector: 'aside nav button[title]', anchor: '[data-project-pane]' },
   { name: 'config', selector: '[data-open-config]', anchor: '[data-config-scope]' },
@@ -1461,7 +1491,11 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
     // Through the real toggle, so the shot proves the control too.
     await click(win, `button[aria-label="${THEME_LABEL[theme]}"]`)
     await sleep(400)
-    await closeAllTabs(win)
+    // Said out loud: `welcome` is the empty workspace, so a tab left open here
+    // is not a cosmetic difference between the two passes - it is a different
+    // view under that name.
+    const stuck = await closeAllTabs(win)
+    if (stuck > 0) console.error(`design-shot: ${String(stuck)} tab(s) would not close (${theme})`)
     await sleep(400)
 
     if (want.has('responsive')) await sweepWidths(win, outDir, theme, files)
