@@ -423,6 +423,55 @@
   overscroll-behavior: contain;
 }
 
+/*
+ * Wrapping. Off unless the header's toggle says otherwise, per file.
+ *
+ * Three declarations, and the interesting thing is what is *not* among them:
+ * the grid stays. `display: grid` on the code element is not a layout
+ * preference, it is what stops shiki's newlines - which sit between the `.line`
+ * spans as raw text - becoming anonymous line boxes and rendering every block at
+ * double height (41px where the line-height is 19.2, measured). That job has
+ * nothing to do with whether a line wraps, so wrapping must not disturb it, and
+ * `white-space` is set on the lines rather than on the code element for the same
+ * reason: the whitespace-only runs between them keep the treatment they had.
+ *
+ * `min-width: max-content` is the one that has to go. It is what makes the grid
+ * column as wide as the longest line, which is precisely the horizontal overflow
+ * being switched off.
+ */
+.source-view[data-wrap='on'] pre code {
+  min-width: 0;
+}
+
+.source-view[data-wrap='on'] .line {
+  white-space: pre-wrap;
+  /*
+   * A minified payload is a single token thousands of characters long with no
+   * space to break at, and `pre-wrap` alone leaves it overflowing - which is the
+   * exact state wrapping was turned on to end. `anywhere` rather than
+   * `break-word` because it also lets the line contribute a zero min-content
+   * width, so the block can actually be narrower than that token.
+   */
+  overflow-wrap: anywhere;
+  /*
+   * The hanging indent. `padding-left` moves every row right and the negative
+   * `text-indent` pulls the first one back, so a line keeps its own leading
+   * whitespace exactly where the file put it and only the continuations are
+   * marked. Zero is a real setting and lands both at the same place, which is
+   * what a plain editor does.
+   *
+   * `--line-indent` is the line's **own** leading whitespace, measured in the
+   * renderer and set per line (`SourceBody`). Without it the hang is measured
+   * from the block's edge, which is wrong in the direction that matters: the
+   * continuation of a line nested six columns deep would start at four, to the
+   * left of the code it belongs to, reading as a new top-level key in exactly
+   * the structured files this is most used on. It defaults to zero, so a line
+   * nothing measured still hangs sensibly rather than not at all.
+   */
+  padding-left: calc(var(--line-indent, 0ch) + var(--source-wrap-indent, 0px));
+  text-indent: calc(-1 * (var(--line-indent, 0ch) + var(--source-wrap-indent, 0px)));
+}
+
 /* --------------------------------------------------------------------------
  * Wikilinks
  *

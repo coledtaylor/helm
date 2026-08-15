@@ -584,7 +584,59 @@ async function shootContentSource(
 
   await drawn(win)
   const shot = await screenshot(win, outDir, `content-source-${theme}.png`)
+  await shootContentSourceWrapped(win, outDir, theme, best.file)
   return shot.file
+}
+
+/**
+ * The same file with wrapping switched on from the header.
+ *
+ * A state rather than a view, and the one the setting exists for: the shot above
+ * is a block running off to the right, this is the same block folded into the
+ * pane with its continuations hung. Taken by clicking the real toggle, so the
+ * control is photographed in its pressed state at the same time.
+ */
+async function shootContentSourceWrapped(
+  win: BrowserWindow,
+  outDir: string,
+  theme: string,
+  file: string
+): Promise<void> {
+  const wasOff = await js<boolean>(
+    win,
+    `(() => {
+       const b = document.querySelector('[data-content-wrap]')
+       if (!b) return false
+       if (b.getAttribute('aria-pressed') === 'false') b.click()
+       return true
+     })()`
+  ).catch(() => false)
+  if (!wasOff) {
+    console.error(`design-shot: ${file} has no wrap toggle - no wrapped shot (${theme})`)
+    return
+  }
+  await sleep(400)
+
+  const geom = await js<string>(
+    win,
+    `(() => {
+       const pre = document.querySelector('[data-content-source] pre')
+       const view = document.querySelector('.source-view')
+       if (!pre) return 'no block'
+       return JSON.stringify({
+         wrap: view ? view.getAttribute('data-wrap') : null,
+         width: pre.clientWidth,
+         scrollWidth: pre.scrollWidth,
+         stillOverflowing: pre.scrollWidth > pre.clientWidth,
+         linesCarryingOwnIndent: [...document.querySelectorAll('.source-view .line')]
+           .filter((l) => (l.getAttribute('style') || '').includes('--line-indent')).length
+       })
+     })()`
+  ).catch(() => 'unreadable')
+  console.log(`design-shot: content source wrapped (${theme}) ${geom}`)
+
+  await drawn(win)
+  await screenshot(win, outDir, `content-source-wrapped-${theme}.png`)
 }
 
 /** Which file the document pane is showing, so a re-open can be skipped. */
@@ -1768,6 +1820,18 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
     )
     await sleep(400)
     files.push((await screenshot(win, outDir, `settings-archive-${theme}.png`)).file)
+
+    // The Content viewer group, which is two rows and is where the wrap default
+    // and its indent live. Photographed because the pane is the only place
+    // either is visible at rest - the toggle in a document's header shows the
+    // *state*, not the setting behind it.
+    await js<void>(
+      win,
+      `(() => { const el = document.querySelector('[data-settings-group="content"]');
+        if (el) el.scrollIntoView({ block: 'center' }) })()`
+    )
+    await sleep(400)
+    files.push((await screenshot(win, outDir, `settings-content-${theme}.png`)).file)
 
     // The Terminal group, which is below the fold on a default-sized window and
     // is the group made of controls the rest of the app does not use (a

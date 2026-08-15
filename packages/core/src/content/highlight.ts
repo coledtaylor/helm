@@ -32,6 +32,16 @@ interface Highlighter {
   getLoadedLanguages: () => string[]
 }
 
+/**
+ * The one node a transformer here touches: the `<span class="line">` element,
+ * as hast. Structural for the same reason `Highlighter` is - the alternative is
+ * a type-only dependency on shiki in a file whose whole design is to reach it
+ * through `import()` and nothing else.
+ */
+interface LineElement {
+  properties: Record<string, unknown>
+}
+
 export const LIGHT_THEME = 'github-light'
 export const DARK_THEME = 'one-dark-pro'
 
@@ -157,6 +167,39 @@ export async function ensureLanguage(raw: string): Promise<string> {
  * custom properties instead of a committed colour, which is what lets the
  * stylesheet pick a side from the `dark` class without re-running any of this.
  */
+/**
+ * Each line's own leading indentation, written onto the line as `--line-indent`.
+ *
+ * The content viewer's wrapped source view hangs a continuation row by the
+ * line's indentation plus the configured amount, so a row that is the rest of a
+ * deeply nested line cannot be mistaken for a new shallow one. CSS cannot
+ * measure that: `text-indent` is resolved against the content box, and the
+ * whitespace it would need to count is *inside* the line.
+ *
+ * It is emitted here, into the HTML, rather than measured in the renderer, and
+ * that is not a stylistic preference. The renderer injects this string with
+ * `dangerouslySetInnerHTML`, and that subtree is rebuilt from the string
+ * whenever the document pane re-renders - measured on a real window, every
+ * `.line` node was a different object about a second later. Anything written
+ * onto those nodes from an effect is wiped by the next render and does not come
+ * back, because the effect's dependencies have not changed. Carried in the
+ * string, it survives every rebuild by construction.
+ *
+ * A tab counts for `tab-size`, which the stylesheet sets to 2. Counting it as
+ * one column would under-hang every tab-indented file.
+ */
+const TAB_COLUMNS = 2
+
+function indentColumns(line: string): number {
+  let columns = 0
+  for (const ch of line) {
+    if (ch === ' ') columns += 1
+    else if (ch === '\t') columns += TAB_COLUMNS
+    else break
+  }
+  return columns
+}
+
 export async function highlightCode(
   code: string,
   language: string
@@ -164,11 +207,28 @@ export async function highlightCode(
   const lang = await ensureLanguage(language)
   const core = await getHighlighter()
   if (!core) return { html: '', language: 'plaintext', highlighted: false }
+  // Indexed from the source rather than read back off the rendered node: the
+  // transformer sees a token tree, and reassembling the text from it to count
+  // spaces would be doing the tokeniser's work backwards.
+  const indents = code.split('\n').map(indentColumns)
   try {
     const html = core.codeToHtml(code, {
       lang,
       themes: { light: LIGHT_THEME, dark: DARK_THEME },
-      defaultColor: false
+      defaultColor: false,
+      transformers: [
+        {
+          name: 'helm:line-indent',
+          line(node: LineElement, line: number) {
+            // `line` is 1-based.
+            const columns = indents[line - 1] ?? 0
+            if (columns === 0) return
+            const props = node.properties
+            const existing = typeof props.style === 'string' ? `${props.style};` : ''
+            props.style = `${existing}--line-indent:${String(columns)}ch`
+          }
+        }
+      ]
     })
     return { html, language: lang, highlighted: lang !== 'plaintext' }
   } catch {

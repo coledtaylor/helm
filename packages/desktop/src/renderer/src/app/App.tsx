@@ -1705,6 +1705,8 @@ export function App(): JSX.Element {
                   error={contentState.error}
                   external={contentState.external}
                   highlight={contentState.highlight}
+                  wrapDefault={settings?.contentWrap ?? DEFAULT_SETTINGS.contentWrap}
+                  wrapIndent={settings?.contentWrapIndent ?? DEFAULT_SETTINGS.contentWrapIndent}
                   onSave={contentState.save}
                   onReload={contentState.reload}
                   onRestore={contentState.restore}
@@ -1773,6 +1775,14 @@ export function App(): JSX.Element {
               archiveStats={historyState.archiveStats}
               transcriptArchiveMaxBytes={
                 settings?.transcriptArchiveMaxBytes ?? DEFAULT_SETTINGS.transcriptArchiveMaxBytes
+              }
+              contentWrap={settings?.contentWrap ?? DEFAULT_SETTINGS.contentWrap}
+              onContentWrapChange={(contentWrap) => writeSettings({ contentWrap })}
+              contentWrapIndent={
+                settings?.contentWrapIndent ?? DEFAULT_SETTINGS.contentWrapIndent
+              }
+              onContentWrapIndentChange={(contentWrapIndent) =>
+                writeSettings({ contentWrapIndent })
               }
               onTranscriptArchiveMaxBytesChange={(transcriptArchiveMaxBytes) =>
                 writeSettings({ transcriptArchiveMaxBytes })

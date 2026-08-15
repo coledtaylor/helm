@@ -1,4 +1,4 @@
-import type { ChangeEvent, JSX } from 'react'
+import type { ChangeEvent, CSSProperties, JSX } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import type {
   ConfigSnapshotMeta,
@@ -20,7 +20,8 @@ import {
   PencilIcon,
   RestoreIcon,
   SaveIcon,
-  WarnIcon
+  WarnIcon,
+  WrapIcon
 } from './icons'
 
 export type ContentMode = 'read' | 'edit'
@@ -60,6 +61,19 @@ export interface ContentDocumentPaneProps {
 
   /** The search term the file was opened from, highlighted in the reading view. */
   highlight: string | null
+
+  /**
+   * Whether a source file starts wrapped, and how far a continuation hangs.
+   *
+   * `wrapDefault` is the *setting*; what the pane shows is local state seeded
+   * from it. The pane is keyed on the file's path at its call site, so opening
+   * another file remounts it and the toggle returns to the default - which is
+   * the intent, not an accident of the key: whether a file reads better wrapped
+   * is a question about that file, and a minified payload's answer should not
+   * follow you into the next one.
+   */
+  wrapDefault: boolean
+  wrapIndent: number
 
   onSave: (content: string) => void
   onReload: () => void
@@ -103,6 +117,8 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
     error,
     external,
     highlight,
+    wrapDefault,
+    wrapIndent,
     onSave,
     onReload,
     onRestore,
@@ -116,6 +132,9 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
 
   const [draft, setDraft] = useState('')
   const [showHistory, setShowHistory] = useState(false)
+  // Seeded from the setting, then owned by the toggle for as long as this file
+  // is open. See `wrapDefault`.
+  const [wrap, setWrap] = useState(wrapDefault)
   const areaRef = useRef<HTMLTextAreaElement>(null)
 
   // Re-seeded whenever a different file, or a different version of it, arrives.
@@ -145,6 +164,9 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
 
   const isMarkdown = file.kind === 'markdown'
   const isHtml = file.kind === 'html'
+  // Exactly the condition under which `SourceBody` is the body below, written
+  // once so the toggle cannot appear over a document that has no lines to wrap.
+  const showsSource = mode === 'read' && !isMarkdown && !isHtml && file.kind !== 'binary'
   const rendered = mode === 'edit' && preview !== null ? preview : (loaded?.rendered ?? null)
   const canSave = loaded !== null && dirty && !saving && external === null && !loaded.content.binary
 
@@ -162,6 +184,9 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
         onModeChange={onModeChange}
         onReveal={onReveal}
         editable={!loaded?.content.binary}
+        showWrap={showsSource}
+        wrap={wrap}
+        onWrapChange={setWrap}
       />
 
       {external !== null && (
@@ -289,6 +314,8 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
               loading={loaded === null}
               binary={loaded?.content.binary ?? false}
               source={loaded?.source ?? null}
+              wrap={wrap}
+              wrapIndent={wrapIndent}
             />
           ))}
       </div>
@@ -380,7 +407,10 @@ function Header({
   mode,
   onModeChange,
   onReveal,
-  editable
+  editable,
+  showWrap,
+  wrap,
+  onWrapChange
 }: {
   file: ContentFile
   rendered: RenderedMarkdown | null
@@ -388,6 +418,10 @@ function Header({
   onModeChange: (mode: ContentMode) => void
   onReveal: (path: string) => void
   editable: boolean
+  /** Only over a body made of lines - see `showsSource` at the call site. */
+  showWrap: boolean
+  wrap: boolean
+  onWrapChange: (wrap: boolean) => void
 }): JSX.Element {
   const chips = rendered?.frontmatter.fields ?? []
   const broken = rendered?.counts.brokenWikilinks ?? 0
@@ -418,6 +452,32 @@ function Header({
             <LinkIcon width={10} height={10} />
             {broken} unwritten
           </span>
+        )}
+
+        {showWrap && (
+          // A lone toggle rather than an On/Off pair: wrapping is one thing
+          // that is either happening or not, and a two-segment control for a
+          // boolean claims there is a choice to read.
+          <button
+            type="button"
+            data-content-wrap
+            aria-pressed={wrap}
+            onClick={() => onWrapChange(!wrap)}
+            title={
+              wrap
+                ? 'Long lines wrap. Click to let them run off to the right.'
+                : 'Long lines run off to the right. Click to wrap them.'
+            }
+            className={cn(
+              'flex shrink-0 items-center gap-1.5 rounded-well border px-2.5 py-1 text-[11px] transition-colors',
+              wrap
+                ? 'border-accent/50 bg-accent-soft text-accent-text'
+                : 'border-border text-fg-muted hover:bg-hover hover:text-fg'
+            )}
+          >
+            <WrapIcon width={11} height={11} />
+            Wrap
+          </button>
         )}
 
         {editable && (
@@ -497,13 +557,28 @@ function SourceBody({
   content,
   loading,
   binary,
-  source
+  source,
+  wrap,
+  wrapIndent
 }: {
   content: string
   loading: boolean
   binary: boolean
   source: ContentSource | null
+  wrap: boolean
+  wrapIndent: number
 }): JSX.Element {
+  // The indent travels as a custom property rather than a class, because it is
+  // a number a person types rather than one of a set - a utility per column
+  // would be sixteen classes that only exist to carry an integer.
+  const wrapVars = { '--source-wrap-indent': `${String(wrapIndent)}ch` } as CSSProperties
+
+  // The per-line `--line-indent` the hang is measured from arrives *in* the
+  // HTML, written by `highlightCode`. It was an effect walking `.line` nodes
+  // first, and that cannot work here: this subtree is rebuilt from the string
+  // on every re-render of the pane - every node measured a different object a
+  // second later - so anything an effect writes onto it is wiped and, its
+  // dependencies being unchanged, never rewritten.
   return (
     <div data-content-source className="min-w-0 flex-1 overflow-hidden p-3">
       {loading ? (
@@ -515,6 +590,8 @@ function SourceBody({
       ) : source !== null && source.html !== '' ? (
         <div
           className="source-view"
+          data-wrap={wrap ? 'on' : 'off'}
+          style={wrapVars}
           data-content-language={source.language}
           data-content-highlighted={source.highlighted}
           // The same argument as the markdown body's: this string was produced
@@ -525,7 +602,18 @@ function SourceBody({
       ) : (
         <pre
           data-content-language="plaintext"
-          className="h-full overflow-auto overscroll-contain rounded-raised border border-border bg-surface-sunken p-3 font-mono text-[12px] leading-[1.55] text-fg select-text"
+          data-wrap={wrap ? 'on' : 'off'}
+          style={wrapVars}
+          className={cn(
+            'h-full overflow-auto overscroll-contain rounded-raised border border-border bg-surface-sunken p-3',
+            'font-mono text-[12px] leading-[1.55] text-fg select-text',
+            // No `.line` spans to hang off here - this branch is one text node -
+            // so the indent lands on the block itself, which gives every wrapped
+            // row the same hang the highlighted branch gives each line.
+            wrap
+              ? 'wrap-anywhere whitespace-pre-wrap [padding-left:calc(0.75rem+var(--source-wrap-indent))] [text-indent:calc(-1*var(--source-wrap-indent))]'
+              : 'whitespace-pre'
+          )}
         >
           {content}
         </pre>

@@ -65,6 +65,7 @@ const GROUPS = [
   'updates',
   'validation',
   'terminal',
+  'content',
   'github'
 ] as const
 type Group = (typeof GROUPS)[number]
@@ -810,6 +811,119 @@ async function openSettings(win: BrowserWindow): Promise<boolean> {
   if (await exists(win, '[data-settings-pane]')) return true
   await click(win, '[data-open-settings]')
   return pollJs(win, `document.querySelector('[data-settings-pane]')`, 10_000)
+}
+
+interface WrappedSource {
+  file: string
+  wrapAttr: string | null
+  togglePressed: string | null
+  clientWidth: number
+  scrollWidth: number
+  /** Columns of leading whitespace on the line that was measured. */
+  indentColumns: number
+  /** How far the continuation row starts past the line's own first row. */
+  hangPx: number
+  expectedHangPx: number
+  charPx: number
+}
+
+/**
+ * Open a source file in the content viewer and measure how a long line wraps.
+ *
+ * The file is chosen by *shape* - long enough to wrap at this width - by
+ * opening candidates and measuring, because the DOM row carries no size and a
+ * path written down here would name a forty-line file on somebody else's
+ * machine. The same reason `design-shot` picks its code shot this way.
+ *
+ * What comes back is geometry, deliberately. "It wrapped" is `scrollWidth`
+ * returning to `clientWidth`; "it hung" is the second visual row of a line
+ * starting further right than the first. A class name would say both of those
+ * things whether or not they happened.
+ */
+async function openWrappedSource(win: BrowserWindow): Promise<WrappedSource | null> {
+  await click(win, '[data-open-content]')
+  if (!(await pollJs(win, `document.querySelector('[data-content-scope]')`, 10_000))) return null
+  await sleep(600)
+
+  const candidates = await js<string[]>(
+    win,
+    `[...document.querySelectorAll('[data-content-file]')]
+       .map((el) => el.dataset.contentFile || '')
+       .filter((p) => /\\.(json|ya?ml|mjs|cjs|js|ts|tsx|py|ps1|sh|css|log|toml|ini)$/i.test(p))`
+  ).catch(() => [] as string[])
+
+  for (const file of candidates.slice(0, 14)) {
+    const opened = await js<boolean>(
+      win,
+      `(() => {
+         const el = [...document.querySelectorAll('[data-content-file]')]
+           .find((b) => b.dataset.contentFile === ${JSON.stringify(file)})
+         if (!el) return false
+         el.click()
+         return true
+       })()`
+    ).catch(() => false)
+    if (!opened) continue
+    if (!(await pollJs(win, `document.querySelector('[data-content-source] pre')`, 8000))) continue
+    await sleep(350)
+
+    const measured = await js<WrappedSource | null>(
+      win,
+      `(() => {
+         const view = document.querySelector('.source-view')
+         const pre = document.querySelector('[data-content-source] pre')
+         const toggle = document.querySelector('[data-content-wrap]')
+         if (!view || !pre) return null
+         // One character of the block's own font, so the expected hang is in the
+         // same unit the browser resolved 'ch' with rather than a guess.
+         const ruler = document.createElement('span')
+         ruler.textContent = '0'.repeat(100)
+         ruler.style.cssText = 'position:absolute;visibility:hidden;white-space:pre'
+         pre.appendChild(ruler)
+         const charPx = ruler.getBoundingClientRect().width / 100
+         ruler.remove()
+
+         const indentCols = (el) => {
+           const m = /--line-indent:(\\d+)ch/.exec(el.getAttribute('style') || '')
+           return m ? Number(m[1]) : 0
+         }
+         const preLeft = pre.getBoundingClientRect().left
+         let found = null
+         for (const line of view.querySelectorAll('.line')) {
+           if (line.getBoundingClientRect().height < 25) continue
+           const range = document.createRange()
+           range.selectNodeContents(line)
+           const rows = new Map()
+           for (const r of range.getClientRects()) {
+             if (!r.width) continue
+             const top = Math.round(r.top)
+             const x = Math.round(r.left - preLeft)
+             if (!rows.has(top) || rows.get(top) > x) rows.set(top, x)
+           }
+           const xs = [...rows.entries()].sort((a, b) => a[0] - b[0]).map((e) => e[1])
+           if (xs.length < 2) continue
+           found = { line, xs, cols: indentCols(line) }
+           break
+         }
+         if (!found) return null
+         const codeStartsAt = found.xs[0] + found.cols * charPx
+         return {
+           file: ${JSON.stringify(file)},
+           wrapAttr: view.getAttribute('data-wrap'),
+           togglePressed: toggle ? toggle.getAttribute('aria-pressed') : null,
+           clientWidth: pre.clientWidth,
+           scrollWidth: pre.scrollWidth,
+           indentColumns: found.cols,
+           hangPx: Math.round(found.xs[1] - codeStartsAt),
+           expectedHangPx: Math.round(7 * charPx),
+           charPx: Math.round(charPx * 100) / 100
+         }
+       })()`
+    ).catch(() => null)
+
+    if (measured !== null) return measured
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -4194,6 +4308,107 @@ export async function runSettingsChecks(
       ctx.sessions.resize = realSessionResize
       ctx.pterm.resize = realShellResize
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // S-12b: the content viewer's wrap settings, and what they reach
+  // -------------------------------------------------------------------------
+  //
+  // Two claims, and the second is the one worth having. The first is the
+  // ordinary round trip: the pane's controls write the rows. The second is that
+  // the rows reach the **document**, which is where a setting like this
+  // actually fails - a value that persists perfectly and paints nothing is the
+  // shape a settings row is most likely to be wrong in.
+  //
+  // The document is asked for geometry rather than for class names: a wrapped
+  // block is one whose `scrollWidth` has come back to its `clientWidth`, and a
+  // hanging indent is a second visual row starting further right than the
+  // first. Both are measured off the real window; neither can be satisfied by
+  // an attribute that says the right thing while the block runs off the side.
+  if (run('content')) {
+    await openSettings(win)
+    await sleep(300)
+
+    // Parked on values that are not the defaults, so "the row changed" and "the
+    // row was always this" cannot be confused - `contentWrap` defaults to false
+    // and the indent to 4.
+    const wrapBox = '[data-settings-content-wrap] input[type="checkbox"]'
+    const indentField = '[data-settings-content-wrap-indent]'
+
+    const wrapBefore = rowValue(dbFile, 'contentWrap')
+    const clickedWrap = await click(win, wrapBox)
+    await sleep(500)
+    const wrapAfter = rowValue(dbFile, 'contentWrap')
+
+    // Committed with Enter, which is what a person does, and **not** with a
+    // dispatched `blur`: React maps `onBlur` to `focusout`, so a raw non-bubbling
+    // `blur` reaches nothing and the field keeps its draft. That is how this
+    // probe first reported a written row of `undefined` while the pane on screen
+    // showed 7 - the field had the text and the commit had never run.
+    const setIndent = await js<boolean>(
+      win,
+      `(() => {
+         const el = document.querySelector('${indentField}')
+         if (!el) return false
+         const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+         setter.call(el, '7')
+         el.dispatchEvent(new Event('input', { bubbles: true }))
+         el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+         return true
+       })()`
+    ).catch(() => false)
+    await sleep(600)
+    const indentAfter = rowValue(dbFile, 'contentWrapIndent')
+
+    checks.push({
+      id: 'S-12b',
+      criterion: 'The content viewer’s wrap default and indent are settings that round-trip',
+      title: `contentWrap ${JSON.stringify(wrapBefore)} -> ${JSON.stringify(wrapAfter)}, contentWrapIndent -> ${JSON.stringify(indentAfter)}`,
+      ok: clickedWrap && wrapAfter === true && setIndent && indentAfter === 7,
+      detail: {
+        clickedWrap,
+        wrapBefore,
+        wrapAfter,
+        setIndent,
+        indentAfter,
+        readBy: 'this driver’s own read-only connection to helm.db, not services.store'
+      },
+      notes: [
+        'Parked on values that are not the defaults - `contentWrap` defaults to false',
+        'and the indent to 4 - so "the row changed" cannot be confused with "the row',
+        'was always this".'
+      ]
+    })
+
+    // Now the half that matters: does a document obey them? Opened *after* the
+    // settings were parked, so what is measured is a pane that read them on the
+    // way in rather than one that was already open and happened to re-render.
+    const doc = await openWrappedSource(win)
+    checks.push({
+      id: 'S-12c',
+      criterion: 'A source file opens wrapped, hanging by the setting, because the settings say so',
+      title:
+        doc === null
+          ? 'no source file in this scope could be measured'
+          : `${doc.file}: block ${String(doc.clientWidth)}px wide holding ${String(doc.scrollWidth)}px, hang ${String(doc.hangPx)}px for ${String(doc.indentColumns)} columns`,
+      ok:
+        doc !== null &&
+        doc.wrapAttr === 'on' &&
+        doc.togglePressed === 'true' &&
+        // Wrapped means the horizontal overflow is gone, not that a class is set.
+        doc.scrollWidth === doc.clientWidth &&
+        // And the hang is the setting, measured: 7 columns of this mono face.
+        doc.hangPx > 0 &&
+        Math.abs(doc.hangPx - doc.expectedHangPx) <= 2,
+      detail: doc === null ? { measured: false } : { ...doc },
+      notes: [
+        'Geometry, not class names: "wrapped" is `scrollWidth` back at `clientWidth`,',
+        'and "hung" is the second visual row of a line starting further right than the',
+        'first. A `data-wrap` attribute would report both whether or not they happened.',
+        'The expected hang is computed from a ruler measured in the block’s own font,',
+        'so it is in the unit the browser resolved `ch` with rather than a guess.'
+      ]
+    })
   }
 
   // -------------------------------------------------------------------------

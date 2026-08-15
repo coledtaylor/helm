@@ -2,6 +2,7 @@ import type { JSX, ReactNode } from 'react'
 import { useState } from 'react'
 import {
   offerableUsageModes,
+  CONTENT_WRAP_INDENT,
   COST_MODE_UNAVAILABLE,
   DEFAULT_PR_REVIEW_PROMPT,
   EFFORT_LEVELS,
@@ -150,6 +151,12 @@ export interface SettingsPaneProps {
   archiveStats: ArchiveStats | null
   transcriptArchiveMaxBytes: number
   onTranscriptArchiveMaxBytesChange: (bytes: number) => void
+
+  /** The content viewer's wrapping default, and the hang on a continuation. */
+  contentWrap: boolean
+  onContentWrapChange: (wrap: boolean) => void
+  contentWrapIndent: number
+  onContentWrapIndentChange: (columns: number) => void
 
   /**
    * What Helm found out about `gh`, out of the pull-request snapshot. Null
@@ -333,6 +340,10 @@ export function SettingsPane({
   archiveStats,
   transcriptArchiveMaxBytes,
   onTranscriptArchiveMaxBytesChange,
+  contentWrap,
+  onContentWrapChange,
+  contentWrapIndent,
+  onContentWrapIndentChange,
   gh,
   onLocateGh,
   onClearGhOverride,
@@ -601,6 +612,13 @@ export function SettingsPane({
           </Row>
         </Group>
 
+        <ContentGroup
+          wrap={contentWrap}
+          onWrapChange={onContentWrapChange}
+          indent={contentWrapIndent}
+          onIndentChange={onContentWrapIndentChange}
+        />
+
         <UpdatesGroup
           appVersion={appVersion}
           releasesUrl={releasesUrl}
@@ -862,6 +880,60 @@ function askedWhen(checkedAt: string): string {
  * "up to date", "could not ask" and "never asked" are exactly the three states
  * in which somebody wants to go and look for themselves.
  */
+/**
+ * The content viewer's source view.
+ *
+ * Two rows and only the first is a preference about Helm - the second is a
+ * number the first one uses, shown beside it rather than in a dialog behind it,
+ * and disabled-looking is deliberately *not* what it does when wrapping is off:
+ * the default here is off, so a greyed row would be the state most people find
+ * it in, and a control nobody can try is a control nobody discovers.
+ */
+function ContentGroup({
+  wrap,
+  onWrapChange,
+  indent,
+  onIndentChange
+}: {
+  wrap: boolean
+  onWrapChange: (wrap: boolean) => void
+  indent: number
+  onIndentChange: (columns: number) => void
+}): JSX.Element {
+  return (
+    <Group name="content" title="Content viewer">
+      <Row
+        label="Wrap long lines"
+        hint="The default for a file opened as source. Every document keeps its own toggle in the header, so a minified payload can wrap without the next file wrapping too."
+      >
+        <span data-settings-content-wrap={String(wrap)}>
+          <Checkbox
+            checked={wrap}
+            onChange={() => onWrapChange(!wrap)}
+            label="Wrap long lines in the source view"
+          />
+        </span>
+      </Row>
+
+      <Divider />
+
+      <Row
+        label="Wrap indent"
+        hint="Columns a wrapped line's continuation hangs by, so a row that is the rest of the line above cannot be mistaken for the next one. Zero lines them up, which is what a plain editor does."
+      >
+        <NumberField
+          value={indent}
+          min={CONTENT_WRAP_INDENT.min}
+          max={CONTENT_WRAP_INDENT.max}
+          label="Wrap indent in columns"
+          data-settings-content-wrap-indent={String(indent)}
+          onCommit={onIndentChange}
+        />
+      </Row>
+    </Group>
+  )
+}
+
 function UpdatesGroup({
   appVersion,
   releasesUrl,

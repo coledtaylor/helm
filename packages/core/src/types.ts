@@ -684,6 +684,21 @@ export const TERMINAL_SCROLLBACK = { min: 500, max: 200_000, default: 10_000 } a
 export const PROJECT_SHELL_HEIGHT_PCT = { min: 10, max: 50, default: 30 } as const
 
 /**
+ * The hanging indent a wrapped source line's continuation carries, in columns.
+ *
+ * Its job is to say "this row is the last row continued" rather than "this row
+ * is the next line", and that is a distinction the eye makes by *size*: at the
+ * `tab-size: 2` this viewer sets, a two-column hang is the same distance as one
+ * nesting step, so a continuation would read as a child of the line above it.
+ * Four is the smallest value that cannot be mistaken for a level of nesting.
+ *
+ * Zero is allowed and is a real choice - it is what a plain editor does. The
+ * ceiling is where the hang starts eating the measure it was meant to make
+ * readable.
+ */
+export const CONTENT_WRAP_INDENT = { min: 0, max: 16, default: 4 } as const
+
+/**
  * How much of the window's width the sessions column takes, as a percentage.
  *
  * The other axis of the same idea as `PROJECT_SHELL_HEIGHT_PCT`, and the same
@@ -947,6 +962,31 @@ export interface AppSettings {
   sessionSplitPct: number
 
   /**
+   * Whether the content viewer wraps long lines when it shows a file as source.
+   *
+   * **Default off, and that is a position this repository already took.** The
+   * content editor's textarea soft-wraps and says why in a comment beside it:
+   * it edits prose, where a paragraph is one very long line. The config editor
+   * next to it deliberately does not, because it edits JSON, "where a wrapped
+   * line hides the structure". A source file is structure, so the default
+   * follows the config editor rather than the prose one.
+   *
+   * This is the *default*, not the state. The document header carries a toggle
+   * that overrides it for the file on screen, because whether a given file
+   * reads better wrapped is a question about that file - a minified payload and
+   * a hand-written YAML want opposite answers, and neither is a preference
+   * about Helm.
+   */
+  contentWrap: boolean
+  /**
+   * The hanging indent on a wrapped line's continuation rows, in columns.
+   * Bounded by `CONTENT_WRAP_INDENT`; zero is a real choice. Has no effect
+   * while nothing is wrapped, which is why it is one setting rather than a
+   * pair that have to be kept consistent.
+   */
+  contentWrapIndent: number
+
+  /**
    * How many bytes of `helm.db` the transcript archive may occupy.
    *
    * The archive itself has no on/off switch, and that is the decision rather
@@ -1118,6 +1158,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalShell: null,
   projectShellHeightPct: PROJECT_SHELL_HEIGHT_PCT.default,
   sessionSplitPct: SESSION_SPLIT_PCT.default,
+  // Off, following the config editor rather than the prose one - see the field.
+  contentWrap: false,
+  contentWrapIndent: CONTENT_WRAP_INDENT.default,
   transcriptArchiveMaxBytes: TRANSCRIPT_ARCHIVE_BYTES.default,
   ghPath: null,
   prPollMinutes: PR_POLL_MINUTES.default,

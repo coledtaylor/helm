@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path'
 import { sql } from 'drizzle-orm'
 import {
+  CONTENT_WRAP_INDENT,
   DEFAULT_SETTINGS,
   EFFORT_LEVELS,
   isRepoSlug,
@@ -342,6 +343,19 @@ export const SETTING_VALIDATORS: SettingValidators = {
    * 0.4499999.
    */
   sessionSplitPct: boundedInteger(SESSION_SPLIT_PCT),
+
+  /**
+   * Whether a source file wraps, and how far its continuation rows hang.
+   *
+   * Two keys rather than one nullable number, because they answer different
+   * questions and one of them survives the other being switched off: the indent
+   * a person settled on should still be there when they turn wrapping back on.
+   * Folding "off" into `indent: null` would lose it every time.
+   */
+  contentWrap: (value) =>
+    typeof value === 'boolean' ? null : `expected true or false, got ${describe(value)}`,
+
+  contentWrapIndent: boundedInteger(CONTENT_WRAP_INDENT),
 
   /**
    * The transcript archive's ceiling, in bytes.

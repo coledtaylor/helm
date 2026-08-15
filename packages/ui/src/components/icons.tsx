@@ -542,6 +542,22 @@ export function HelmMarkIcon(props: IconProps): JSX.Element {
 }
 
 /**
+ * Word wrap: a line that runs out of room, turns back, and comes in under
+ * itself. The arrow head is what makes it a wrap rather than a paragraph mark -
+ * two rules and a hook read as an unordered list at 14px.
+ */
+export function WrapIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M2.25 4h11.5" />
+      <path d="M2.25 12h4" />
+      <path d="M2.25 8h9a2.25 2.25 0 0 1 0 4.5H9" />
+      <path d="m7.75 10.5-1.5 1.5 1.5 1.5" />
+    </Icon>
+  )
+}
+
+/**
  * The disclosure caret on a collapsible section. Points right; the caller
  * rotates it 90deg when the section is open, so the two states are one glyph
  * turning rather than two glyphs swapping.

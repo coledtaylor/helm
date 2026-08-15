@@ -139,6 +139,8 @@ describe('settings', () => {
       terminalShell: join(dir, 'pwsh.exe'),
       projectShellHeightPct: 42,
       sessionSplitPct: 62,
+      contentWrap: true,
+      contentWrapIndent: 6,
       transcriptArchiveMaxBytes: 256 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 15,
@@ -379,6 +381,24 @@ describe('settings validation', () => {
       bad: [19, 81, 0, -45, 100, 45.5, '45', null, Number.NaN, Number.POSITIVE_INFINITY]
     },
     {
+      // Whether a source file wraps. `'true'` and `1` are in the bad column
+      // because this value is read straight into a class decision, where any
+      // truthy string would switch wrapping on and `'false'` would too.
+      key: 'contentWrap',
+      good: [true, false],
+      bad: ['true', 'false', 1, 0, null, {}, []]
+    },
+    {
+      // The hanging indent, in columns. Zero is *good* - it is what a plain
+      // editor does, and the setting has to be able to say so. Negative is bad
+      // even though the CSS would accept it: a negative hang pulls a
+      // continuation left of the code it belongs to, which reads as a new
+      // statement rather than the same one.
+      key: 'contentWrapIndent',
+      good: [0, 4, 16],
+      bad: [-1, 17, 4.5, '4', null, Number.NaN, Number.POSITIVE_INFINITY]
+    },
+    {
       // A byte count, and null is in the *bad* column deliberately: there is no
       // "no ceiling" for this key. The archive is always on and always bounded,
       // and an unbounded one is the state `helm.db` is not allowed to reach.
@@ -557,6 +577,8 @@ describe('settings validation', () => {
       terminalShell: join(dir, 'cmd.exe'),
       projectShellHeightPct: 45,
       sessionSplitPct: 70,
+      contentWrap: true,
+      contentWrapIndent: 2,
       transcriptArchiveMaxBytes: 512 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 0,
@@ -593,6 +615,8 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   terminalShell: join(dir, 'cmd.exe'),
   projectShellHeightPct: 45,
   sessionSplitPct: 70,
+  contentWrap: true,
+  contentWrapIndent: 2,
   transcriptArchiveMaxBytes: 512 * 1024 * 1024,
   ghPath: join(dir, 'gh.exe'),
   prPollMinutes: 0,
