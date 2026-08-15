@@ -1,5 +1,7 @@
 import { basename } from 'node:path'
 import type { TranscriptFile, HistoryTail } from '../discovery/history'
+import { deriveSessionTitle, titleRank } from '../discovery/title'
+import { HISTORY_NAME_MAX } from '../types'
 import type {
   ArchiveSessionState,
   HistoryPage,
@@ -78,15 +80,27 @@ export function indexHistory(store: Store, input: HistoryIndexInput): HistorySum
         .prepare('SELECT COALESCE(MAX(seq), -1) + 1 AS seq FROM history_prompts')
         .get() as { seq: number }
       const insert = store.raw.prepare(
-        'INSERT INTO history_prompts (seq, session_id, project, at, text) VALUES (?, ?, ?, ?, ?)'
+        `INSERT INTO history_prompts (seq, session_id, project, at, text, title_rank)
+         VALUES (?, ?, ?, ?, ?, ?)`
       )
       let seq = next.seq
       for (const line of tail.lines) {
-        insert.run(seq++, line.sessionId, line.project, line.timestamp, line.display)
+        insert.run(
+          seq++,
+          line.sessionId,
+          line.project,
+          line.timestamp,
+          line.display,
+          titleRank(line.display)
+        )
       }
     }
 
-    if (tail.reset || tail.lines.length > 0) {
+    // Always, because a database written before `title_rank` existed has every
+    // row unranked and no new prompt is coming to trigger a pass.
+    const backfilled = rankUnranked(store)
+
+    if (tail.reset || tail.lines.length > 0 || backfilled > 0) {
       rebuildSessions(store)
     }
 
@@ -111,6 +125,27 @@ export function indexHistory(store: Store, input: HistoryIndexInput): HistorySum
 }
 
 /**
+ * Ranks the prompts that have no rank yet, and says how many it found.
+ *
+ * The one thing a migration could not do. `title_rank` is produced by a
+ * function - `discovery/title.ts` - so the column arrives null on every row an
+ * older build wrote, and nothing but a pass through JavaScript can fill it.
+ * Running it on every pass rather than once behind a flag means the answer does
+ * not depend on a marker that could be wrong: unranked rows are the only
+ * evidence needed, and once there are none this is a scan that finds nothing.
+ */
+function rankUnranked(store: Store): number {
+  const rows = store.raw
+    .prepare('SELECT seq, text FROM history_prompts WHERE title_rank IS NULL')
+    .all() as Array<{ seq: number; text: string }>
+  if (rows.length === 0) return 0
+
+  const set = store.raw.prepare('UPDATE history_prompts SET title_rank = ? WHERE seq = ?')
+  for (const row of rows) set.run(titleRank(row.text), row.seq)
+  return rows.length
+}
+
+/**
  * Recomputes every session row from the prompts.
  *
  * `project` and `first_prompt` are taken from the session's earliest prompt by
@@ -118,38 +153,54 @@ export function indexHistory(store: Store, input: HistoryIndexInput): HistorySum
  * SQLite would accept that and pick an arbitrary row, which is the kind of
  * thing that is right until the day it is not.
  *
+ * `title_prompt` is the same join one rank down. The earliest prompt that says
+ * something, or failing that the earliest that is at least legible - the order
+ * `sessionTitleFrom` states in one line and this expresses as two `MIN`s, so
+ * that choosing a title costs nothing beyond the GROUP BY already being run.
+ * Both can be null - every prompt in the session being an image, or the ranks
+ * not being backfilled yet - and the opening prompt is what it falls back to,
+ * which is what this column showed before it existed.
+ *
  * The conflict clause deliberately leaves the transcript columns alone - they
  * are owned by `applyTranscripts`, which knows what is on disk. Overwriting
- * them here would mark every session reaped on every pass.
+ * them here would mark every session reaped on every pass. `history_names` is
+ * untouched for a stronger reason: it is not derived from anything here, which
+ * is why it is a table of its own.
  */
 function rebuildSessions(store: Store): void {
   store.raw
     .prepare(
       `INSERT INTO history_sessions (
          session_id, project, project_key, prompt_count,
-         first_at, last_at, first_prompt,
+         first_at, last_at, first_prompt, title_prompt,
          transcript_file, transcript_bytes, project_exists
        )
        SELECT a.session_id, f.project, lower(f.project), a.n,
-              a.first_at, a.last_at, f.text,
+              a.first_at, a.last_at, f.text, COALESCE(t.text, f.text),
               NULL, NULL, 0
        FROM (
          SELECT session_id,
                 COUNT(*) AS n,
                 MIN(at)  AS first_at,
                 MAX(at)  AS last_at,
-                MIN(seq) AS first_seq
+                MIN(seq) AS first_seq,
+                COALESCE(
+                  MIN(CASE WHEN title_rank = 0 THEN seq END),
+                  MIN(CASE WHEN title_rank = 1 THEN seq END)
+                ) AS title_seq
          FROM history_prompts
          GROUP BY session_id
        ) a
        JOIN history_prompts f ON f.seq = a.first_seq
+       LEFT JOIN history_prompts t ON t.seq = a.title_seq
        ON CONFLICT(session_id) DO UPDATE SET
          project      = excluded.project,
          project_key  = excluded.project_key,
          prompt_count = excluded.prompt_count,
          first_at     = excluded.first_at,
          last_at      = excluded.last_at,
-         first_prompt = excluded.first_prompt`
+         first_prompt = excluded.first_prompt,
+         title_prompt = excluded.title_prompt`
     )
     .run()
 
@@ -203,6 +254,8 @@ interface SessionRow {
   first_at: number
   last_at: number
   first_prompt: string
+  title_prompt: string | null
+  label: string | null
   transcript_file: string | null
   transcript_bytes: number | null
   project_exists: number
@@ -212,6 +265,10 @@ interface SessionRow {
 }
 
 function toSession(row: SessionRow): HistorySession {
+  // Derived here rather than stored, so a change to the rule reaches sessions
+  // indexed by an older build without a re-index. `title_prompt` is which
+  // prompt; this is what it reads as.
+  const title = deriveSessionTitle(row.title_prompt ?? row.first_prompt)
   const session: HistorySession = {
     sessionId: row.session_id,
     project: row.project,
@@ -220,6 +277,9 @@ function toSession(row: SessionRow): HistorySession {
     firstAt: row.first_at,
     lastAt: row.last_at,
     firstPrompt: row.first_prompt,
+    title: title.text,
+    titleFallback: title.fallback,
+    label: row.label,
     transcriptFile: row.transcript_file,
     transcriptBytes: row.transcript_bytes,
     projectExists: row.project_exists === 1,
@@ -243,6 +303,17 @@ function toSession(row: SessionRow): HistorySession {
 const ARCHIVE_JOIN = 'LEFT JOIN transcript_sessions a ON a.session_id = lower(s.session_id)'
 const ARCHIVE_COLUMNS = `, a.state AS archive_state,
               CASE WHEN a.session_id IS NULL THEN NULL ELSE a.message_count END AS archived_messages`
+
+/**
+ * The hand-given name, joined on beside the derived one.
+ *
+ * Same shape as the archive join and for the same reason: which name a row
+ * shows is a property of the row, and a second query per selection would mean
+ * the list painting one name and the detail another. Lower-cased on the way in,
+ * because that is how `history_names` is keyed.
+ */
+const NAME_JOIN = 'LEFT JOIN history_names n ON n.session_id = lower(s.session_id)'
+const NAME_COLUMN = ', n.name AS label'
 
 /**
  * A substring of a prompt or a project path, as a LIKE pattern.
@@ -295,9 +366,12 @@ function buildFilters(query: HistoryQuery, archived: Map<string, ArchiveMatch> |
     // is stored lower-cased, so the comparison does not depend on LIKE's
     // ASCII-only case folding.
     params['likeKey'] = likePattern(search.toLowerCase())
+    // A hand-given name counts too. It is what the row shows, so a search that
+    // could not find it would be a name you can read and cannot look up.
     clauses.push(
       `(s.session_id IN (SELECT session_id FROM history_prompts WHERE text LIKE @like ESCAPE '\\')
-        OR s.project_key LIKE @likeKey ESCAPE '\\')`
+        OR s.project_key LIKE @likeKey ESCAPE '\\'
+        OR n.name LIKE @like ESCAPE '\\')`
     )
   }
 
@@ -353,10 +427,11 @@ export function readHistorySessions(store: Store, query: HistoryQuery = {}): His
   const rows = store.raw
     .prepare(
       `SELECT s.session_id, s.project, s.prompt_count, s.first_at, s.last_at,
-              s.first_prompt, s.transcript_file, s.transcript_bytes,
-              s.project_exists${ARCHIVE_COLUMNS}${matchColumn}
+              s.first_prompt, s.title_prompt, s.transcript_file, s.transcript_bytes,
+              s.project_exists${ARCHIVE_COLUMNS}${NAME_COLUMN}${matchColumn}
        FROM history_sessions s
        ${ARCHIVE_JOIN}
+       ${NAME_JOIN}
        ${where}
        ORDER BY s.last_at DESC, s.session_id
        LIMIT @limit`
@@ -365,7 +440,7 @@ export function readHistorySessions(store: Store, query: HistoryQuery = {}): His
 
   const { total } = store.raw
     .prepare(
-      `SELECT COUNT(*) AS total FROM history_sessions s ${ARCHIVE_JOIN} ${where}`
+      `SELECT COUNT(*) AS total FROM history_sessions s ${ARCHIVE_JOIN} ${NAME_JOIN} ${where}`
     )
     .get(...ids, params) as { total: number }
 
@@ -468,9 +543,52 @@ export function readHistorySession(store: Store, sessionId: string): HistorySess
   const row = store.raw
     .prepare(
       `SELECT s.session_id, s.project, s.prompt_count, s.first_at, s.last_at, s.first_prompt,
-              s.transcript_file, s.transcript_bytes, s.project_exists${ARCHIVE_COLUMNS}
-       FROM history_sessions s ${ARCHIVE_JOIN} WHERE s.session_id = ?`
+              s.title_prompt, s.transcript_file, s.transcript_bytes,
+              s.project_exists${ARCHIVE_COLUMNS}${NAME_COLUMN}
+       FROM history_sessions s ${ARCHIVE_JOIN} ${NAME_JOIN} WHERE s.session_id = ?`
     )
     .get(sessionId) as SessionRow | undefined
   return row ? toSession(row) : null
+}
+
+/**
+ * Names a session by hand, or clears the name it was given.
+ *
+ * The one write in this file that is not derived from a file Helm does not own,
+ * and it goes to `history_names` rather than to a column on `history_sessions`
+ * for the reason that table's comment gives: the aggregate is rebuilt in full,
+ * and anything authored that lived on it would last until the next pass.
+ *
+ * Clearing **deletes the row** rather than writing an empty string, so a
+ * cleared session is one that was never renamed - which is what makes it fall
+ * back to the derived title instead of to a blank line. The name is sanitised
+ * the way a tab's is: a control or zero-width character is invisible in the
+ * field and reorders the row it lands in.
+ *
+ * Returns the session as it now reads, or null for an id the index does not
+ * have - a caller asking about a session from a database this build has never
+ * seen gets to say so rather than to write a row nothing joins to.
+ */
+export function renameHistorySession(
+  store: Store,
+  sessionId: string,
+  name: string | null
+): HistorySession | null {
+  const key = sessionId.toLowerCase()
+  const clean = (name ?? '').replace(/\p{C}/gu, ' ').replace(/\s+/g, ' ').trim()
+
+  if (clean === '') {
+    store.raw.prepare('DELETE FROM history_names WHERE session_id = ?').run(key)
+  } else {
+    store.raw
+      .prepare(
+        `INSERT INTO history_names (session_id, name, renamed_at)
+         VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+         ON CONFLICT(session_id) DO UPDATE SET
+           name = excluded.name, renamed_at = excluded.renamed_at`
+      )
+      .run(key, clean.slice(0, HISTORY_NAME_MAX))
+  }
+
+  return readHistorySession(store, sessionId)
 }

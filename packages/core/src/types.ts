@@ -370,8 +370,32 @@ export interface HistorySession {
   promptCount: number
   firstAt: number
   lastAt: number
-  /** The opening prompt: what identifies a conversation at a glance. */
+  /** The opening prompt, verbatim. What was said first, not what this is called. */
   firstPrompt: string
+  /**
+   * What to call this session, derived from its prompts.
+   *
+   * Never empty, and not the same thing as `firstPrompt`: the opening prompt is
+   * a slash command in 291 of this machine's 1,011 sessions and an image
+   * placeholder in others, which is a row that says nothing. See
+   * `discovery/title.ts` for what is read instead, and `historyTitle` for the
+   * name a surface should actually paint.
+   */
+  title: string
+  /**
+   * True when no prompt survived cleaning and `title` is Helm's own words for
+   * an empty record - "Image only", "No prompt recorded". A stand-in is not
+   * something to draw in the same weight as a sentence somebody wrote.
+   */
+  titleFallback: boolean
+  /**
+   * The name somebody gave this session by hand, or null.
+   *
+   * Kept apart from `title` for the reason `SessionRecord` keeps `label` apart
+   * from `name`: clearing it has to return the row to its derived title, and a
+   * single field that had been overwritten could not.
+   */
+  label: string | null
   /** The transcript on disk, or null once it has been reaped. */
   transcriptFile: string | null
   transcriptBytes: number | null
@@ -396,6 +420,32 @@ export interface HistorySession {
    * can tell "matched here" from "this is just the start of it".
    */
   match?: string | undefined
+}
+
+/**
+ * The cap on a hand-given session name.
+ *
+ * Long enough for a sentence about what a session was, short enough that the
+ * list stays a list. `sanitizeSessionName`'s 60 is a tab's width; this is a
+ * row's, and the row is wider. Here rather than beside the write because the
+ * field enforcing it is in the renderer and the write enforcing it is in main -
+ * one number, imported by both, or the field lets you type what the write will
+ * silently cut.
+ */
+export const HISTORY_NAME_MAX = 120
+
+/**
+ * What to call a history session on screen: the name it was given, or the one
+ * derived from its prompts.
+ *
+ * `sessionLabel`'s twin, and it exists for the same reason - the list row, the
+ * detail heading and the tab a resume opens all name the same session, and a
+ * `label ?? title` written out three times is three places for them to
+ * disagree. In `types.ts` because the renderer imports it (CLAUDE.md
+ * "Boundaries").
+ */
+export function historyTitle(session: Pick<HistorySession, 'title' | 'label'>): string {
+  return session.label ?? session.title
 }
 
 // ---------------------------------------------------------------------------

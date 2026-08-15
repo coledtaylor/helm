@@ -33,6 +33,7 @@ export {
   readHistoryPrompts,
   readHistorySession,
   readHistorySessions,
+  renameHistorySession,
   type HistoryIndexInput
 } from './history'
 export { knownMigrations, migrate, type MigrationOutcome } from './migrate'

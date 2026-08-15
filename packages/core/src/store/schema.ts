@@ -183,7 +183,22 @@ export const historyPrompts = sqliteTable(
     project: text('project').notNull(),
     /** Epoch milliseconds. */
     at: integer('at').notNull(),
-    text: text('text').notNull()
+    text: text('text').notNull(),
+    /**
+     * How usable this prompt is as the session's title: 0 says something, 1 is
+     * legible but subjectless, 2 is nothing at all. `titleRank` in
+     * `discovery/title.ts` is the authority and the only thing that writes it.
+     *
+     * Stored rather than computed on read so the aggregate can pick a session's
+     * title prompt with a `MIN(seq)` per rank instead of pulling 284 KB of
+     * prompt text into JavaScript on every pass.
+     *
+     * **Nullable, and that is the upgrade path.** A database written before
+     * this column existed has 4,000 rows with no rank, and a migration cannot
+     * compute one - the rule is a function, not SQL. So null means "not ranked
+     * yet" and the next index pass backfills it; see `rankUnranked`.
+     */
+    titleRank: integer('title_rank')
   },
   // The search is a substring match, which no index can serve - so the index
   // that matters is the one that turns a matched session back into its
@@ -213,6 +228,13 @@ export const historySessions = sqliteTable(
     firstAt: integer('first_at').notNull(),
     lastAt: integer('last_at').notNull(),
     firstPrompt: text('first_prompt').notNull(),
+    /**
+     * The prompt the title is derived from: the earliest one with the best
+     * `title_rank`, which is the opener only when the opener says something.
+     * Raw text, cleaned and truncated on the way out by `deriveSessionTitle` -
+     * a stored title would be a second copy of a rule that can change.
+     */
+    titlePrompt: text('title_prompt'),
     /** Null once Claude Code has reaped it; the session is then history-only. */
     transcriptFile: text('transcript_file'),
     transcriptBytes: integer('transcript_bytes'),
@@ -223,6 +245,28 @@ export const historySessions = sqliteTable(
     index('history_sessions_project_idx').on(t.projectKey, t.lastAt)
   ]
 )
+
+/**
+ * A name somebody gave a session by hand.
+ *
+ * **Its own table, and that is the whole design.** Every other `history_*`
+ * table is derived: `indexHistory` empties `history_sessions` on a reset and
+ * rebuilds it in full from the prompts, deliberately, so its arithmetic cannot
+ * drift. A `label` column on that table would therefore last exactly until the
+ * next re-index. This one is the only thing in the family that is authored
+ * rather than computed, so it is the only one nothing rebuilds - the rebuild
+ * does not know it exists, and the read joins it back on.
+ *
+ * Lower-cased, like `transcript_sessions`: `history.jsonl` and the transcript
+ * file names disagree on the casing of a session id, and a rename keyed on the
+ * raw string would come back attached to nothing.
+ */
+export const historyNames = sqliteTable('history_names', {
+  sessionId: text('session_id').primaryKey(),
+  /** Never empty - clearing a name deletes the row, it does not blank it. */
+  name: text('name').notNull(),
+  renamedAt: text('renamed_at').notNull().default(now)
+})
 
 /**
  * How much of the history file has been consumed, so the next pass reads only

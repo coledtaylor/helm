@@ -84,5 +84,13 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "ALTER TABLE `sessions` ADD `label` text;",
       "ALTER TABLE `sessions` ADD `branch` text;"
     ]
+  },
+  {
+    "tag": "0009_wet_ozymandias",
+    "statements": [
+      "CREATE TABLE `history_names` (\n\t`session_id` text PRIMARY KEY NOT NULL,\n\t`name` text NOT NULL,\n\t`renamed_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL\n);",
+      "ALTER TABLE `history_prompts` ADD `title_rank` integer;",
+      "ALTER TABLE `history_sessions` ADD `title_prompt` text;"
+    ]
   }
 ]

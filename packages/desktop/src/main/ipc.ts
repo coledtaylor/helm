@@ -8,6 +8,7 @@ import {
   readHistoryProjects,
   readHistoryPrompts,
   readHistorySessions,
+  renameHistorySession,
   suggestRoots
 } from '@helm/core'
 import type { ConfigService } from './config'
@@ -415,6 +416,11 @@ export function registerIpc(ctx: IpcContext): void {
     'history:prompts': ({ sessionId }) => readHistoryPrompts(services.store, sessionId),
     'history:projects': () => readHistoryProjects(services.store),
     'history:refresh': () => ctx.history.refresh(),
+    // The one write in this family. It touches `history_names` and nothing the
+    // index owns, so no pass is forced and no other window has to be told: the
+    // renderer adopts the row it gets back.
+    'history:rename': ({ sessionId, name }) =>
+      renameHistorySession(services.store, sessionId, name),
     // Awaited by the renderer for the same reason `session:start` is: the
     // reasons a resume cannot happen are sentences, and a tab is the wrong
     // place to learn them.

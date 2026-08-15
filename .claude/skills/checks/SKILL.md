@@ -148,6 +148,18 @@ count against its own read of `~/.claude/history.jsonl`. Spawns two real
 sessions: one resumed through the app, one on its own pty to prove the watcher
 notices a session Helm did not start.
 
+Its `titles` group spawns nothing and is worth copying twice over. HIST-9 judges
+derived titles on **properties** rather than against a second copy of the
+derivation - no row titled with a bare slash command while that session said
+something in prose, none titled with an attachment placeholder, none blank -
+because a check that re-implements the rule it checks agrees with itself and
+proves nothing; every predicate in it is one-sided, so it can only under-report.
+And HIST-10 **makes the rebuild destroy something first**: it plants a canary in
+a derived column beside the hand-given name and forces the DELETE-and-rebuild a
+rewritten history file would cause, so "the name survived" is a claim about a
+rebuild that provably happened rather than about a reset that quietly did
+nothing.
+
 **`config-check`** - the config console. Tree against its own `readdirSync`,
 restores against their own `sha256`, predicted overlay namespaces against a
 hand-built `basename(overlay):skill` list. The effective view is then checked

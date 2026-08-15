@@ -1,5 +1,5 @@
 import type { JSX, KeyboardEvent, ReactNode } from 'react'
-import { Fragment, useMemo } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import type {
   ArchiveMessage,
   ArchiveStats,
@@ -10,6 +10,9 @@ import type {
   HistorySession,
   HistorySummary
 } from '@helm/core'
+// A value, so it comes from `@helm/core/types` - the entry point with no
+// filesystem behind it (CLAUDE.md "Boundaries").
+import { HISTORY_NAME_MAX, historyTitle } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { ROW_SELECTED } from '../lib/rows'
 import { SEGMENT_ON } from '../lib/segmented'
@@ -57,6 +60,15 @@ export interface SessionHistoryProps {
 
   onRefresh: () => void
   refreshing: boolean
+
+  /**
+   * Names a session by hand. Null restores the title derived from its prompts.
+   *
+   * A derived title cannot tell six check probes apart - their first
+   * substantive prompt genuinely is the same sentence - and nothing Helm can
+   * read will fix that. This is the half of the answer that is not derivation.
+   */
+  onRename: (sessionId: string, name: string | null) => void
 
   onResume: (session: HistorySession) => void
   /** Session id whose resume is in flight. */
@@ -178,6 +190,7 @@ export function SessionHistory({
   promptsLoading,
   conversation,
   conversationLoading,
+  onRename,
   onRefresh,
   refreshing,
   onResume,
@@ -503,7 +516,11 @@ export function SessionHistory({
             <NothingSelected summary={summary} archiveStats={archiveStats} />
           ) : (
             <Detail
+              // Remounted per session, so a rename left open on one row is not
+              // still open, holding that row's text, over the next one.
+              key={selected.sessionId}
               session={selected}
+              onRename={onRename}
               prompts={prompts}
               promptsLoading={promptsLoading}
               conversation={conversation}
@@ -545,10 +562,15 @@ function Row({
 }): JSX.Element {
   const blocked = blockedBy(session)
   const mark = markOf(session)
-  // The searched-for text if this row matched on something other than its
-  // opening prompt, so a hit deep in a conversation is visible from the list.
-  const headline = session.match ?? session.firstPrompt
-  const isMatch = session.match !== undefined && session.match !== session.firstPrompt
+  const title = historyTitle(session)
+  // The searched-for text if this row matched on something other than what it
+  // is called, so a hit deep in a conversation is visible from the list.
+  const headline = session.match ?? title
+  const isMatch = session.match !== undefined && session.match !== title
+  // Helm's own words for a session that recorded nothing readable are not a
+  // sentence anybody wrote, and are not drawn as one. A name given by hand is
+  // never a stand-in, whatever the prompts said.
+  const standIn = session.label === null && session.titleFallback && session.match === undefined
 
   return (
     <button
@@ -557,8 +579,13 @@ function Row({
       data-session={session.sessionId}
       data-resumable={blocked === null}
       data-archive={session.archive ?? 'none'}
+      data-named={session.label !== null}
       onClick={() => onSelect(session)}
-      title={`${session.projectName} · ${formatMoment(session.lastAt)}`}
+      // The full opening prompt, which the title is a truncation of and which
+      // the derivation may have read past entirely.
+      title={`${title}\n\n${session.projectName} · ${formatMoment(session.lastAt)}${
+        session.firstPrompt.trim() === '' ? '' : `\n\nFirst prompt: ${session.firstPrompt}`
+      }`}
       className={cn(
         'session-row relative flex w-full flex-col gap-0.5 rounded-well py-1.5 pr-2 pl-4 text-left',
         'transition-colors',
@@ -574,16 +601,16 @@ function Row({
         className={cn('absolute top-[9px] left-1.5 size-1.5 rounded-full', MARK_CLASS[mark])}
       />
       <span
+        // Named so a driver can read the title without slicing it out of the
+        // row's whole text, which runs the project and the age onto the end of
+        // it with no separator.
+        data-session-title
         className={cn(
           'block truncate text-[12px]',
-          blocked === null ? 'text-fg' : 'text-fg-muted'
+          standIn ? 'text-fg-subtle italic' : blocked === null ? 'text-fg' : 'text-fg-muted'
         )}
       >
-        {headline.trim() === '' ? (
-          <span className="text-fg-subtle italic">no prompt</span>
-        ) : (
-          <Highlight text={headline} needle={search} />
-        )}
+        <Highlight text={headline} needle={search} />
       </span>
       <span className="flex items-baseline gap-1.5 text-[10px] text-fg-subtle">
         {showProject && <span className="min-w-0 truncate">{session.projectName}</span>}
@@ -739,6 +766,7 @@ function NothingSelected({
 
 function Detail({
   session,
+  onRename,
   prompts,
   promptsLoading,
   conversation,
@@ -753,6 +781,7 @@ function Detail({
   totalResumable
 }: {
   session: HistorySession
+  onRename: (sessionId: string, name: string | null) => void
   prompts: HistoryPrompt[]
   promptsLoading: boolean
   conversation: ArchivedConversation | null
@@ -767,17 +796,38 @@ function Detail({
   totalResumable: number
 }): JSX.Element {
   const blocked = blockedBy(session)
+  const [renaming, setRenaming] = useState(false)
+  const title = historyTitle(session)
+  const standIn = session.label === null && session.titleFallback
 
   return (
     <div className="mx-auto max-w-3xl px-8 py-7">
       <header>
-        <h2 className="text-[17px] leading-snug font-medium tracking-tight text-fg">
-          {session.firstPrompt.trim() === '' ? (
-            <span className="text-fg-subtle italic">Session with no recorded prompt</span>
-          ) : (
-            <span className="line-clamp-3 break-words">{session.firstPrompt}</span>
-          )}
-        </h2>
+        {renaming ? (
+          <HistoryRename
+            initial={title}
+            onDone={(name) => {
+              setRenaming(false)
+              if (name !== undefined) onRename(session.sessionId, name)
+            }}
+          />
+        ) : (
+          <h2
+            data-history-title
+            onDoubleClick={() => setRenaming(true)}
+            title={
+              session.label === null
+                ? 'Double-click to name this session'
+                : `Named by hand. Its prompts read “${session.title}”.`
+            }
+            className={cn(
+              'text-[17px] leading-snug font-medium tracking-tight',
+              standIn ? 'text-fg-subtle italic' : 'text-fg'
+            )}
+          >
+            <span className="line-clamp-3 break-words">{title}</span>
+          </h2>
+        )}
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-fg-subtle">
           <button
             type="button"
@@ -794,6 +844,30 @@ function Detail({
               className="text-accent-text transition-colors hover:underline"
             >
               Show in Explorer
+            </button>
+          )}
+          {/* A written-out control beside the double-click, not instead of it.
+              The gesture is how a tab is renamed and belongs here too, but a
+              gesture with nothing on screen to suggest it is a feature only its
+              author knows about - and `affordance-check` walks buttons, not
+              double-clicks. */}
+          <button
+            type="button"
+            data-history-rename={session.sessionId}
+            onClick={() => setRenaming(true)}
+            className="text-accent-text transition-colors hover:underline"
+          >
+            {session.label === null ? 'Name this session' : 'Rename'}
+          </button>
+          {session.label !== null && (
+            <button
+              type="button"
+              data-history-rename-clear
+              onClick={() => onRename(session.sessionId, null)}
+              title={`Go back to the title read from the prompts: “${session.title}”`}
+              className="text-fg-muted transition-colors hover:text-accent-text hover:underline"
+            >
+              Use the derived title
             </button>
           )}
         </div>
@@ -927,6 +1001,55 @@ function Detail({
   )
 }
 
+/**
+ * The name field, open for as long as it has the caret.
+ *
+ * `TabRename`'s rules, and they are the same rules for the same reasons:
+ * Escape abandons, Enter and blur commit, and an empty field commits null
+ * rather than an empty string - clearing the field is the natural way to ask
+ * for the derived title back, and a session with no title at all is not a state
+ * to allow. What is different is only what is being named: a record of a
+ * conversation that has already ended, so there is no terminal to keep the
+ * keystrokes away from.
+ */
+function HistoryRename({
+  initial,
+  onDone
+}: {
+  initial: string
+  /** `undefined` means cancelled and nothing should be written. */
+  onDone: (name: string | null | undefined) => void
+}): JSX.Element {
+  const [value, setValue] = useState(initial)
+
+  return (
+    <input
+      data-history-name
+      aria-label="Name this session"
+      value={value}
+      autoFocus
+      maxLength={HISTORY_NAME_MAX}
+      onFocus={(event) => event.currentTarget.select()}
+      onChange={(event) => setValue(event.target.value)}
+      onKeyDown={(event) => {
+        event.stopPropagation()
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          onDone(undefined)
+        } else if (event.key === 'Enter') {
+          event.preventDefault()
+          onDone(value.trim() === '' ? null : value.trim())
+        }
+      }}
+      onBlur={() => onDone(value.trim() === '' ? null : value.trim())}
+      className={cn(
+        'w-full rounded-well border border-accent bg-surface-sunken px-2 py-1',
+        'text-[17px] leading-snug font-medium tracking-tight text-fg select-text outline-none'
+      )}
+    />
+  )
+}
+
 const UNAVAILABLE_TITLE: Record<Exclude<Blocked, null>, string> = {
   reaped: 'This conversation cannot be reopened',
   archived: 'This conversation cannot be reopened, but Helm kept it',
@@ -1026,6 +1149,12 @@ function Unavailable({
  * for every **live** session. What is on screen is a row out of Helm's own
  * database, read long after the process that produced it exited.
  *
+ * Drawn as a conversation rather than as a table of rows: two speakers, each
+ * on their own side, which is the shape a person reading a conversation back
+ * already knows how to scan. The well is sunken and the bubbles are raised, so
+ * the elevation says the same thing the alignment does - the messages sit *in*
+ * a record rather than beside one.
+ *
  * A `<ul>` rather than an `<ol>`, and that is not cosmetic: the prompts list
  * below is an `<ol>`, and `pnpm history-check`'s HIST-6 counts `ol li` to check
  * a reaped session still shows every prompt it had. A second ordered list in
@@ -1055,12 +1184,12 @@ function Conversation({
       {loading && conversation.messages.length === 0 ? (
         <p className="text-[12px] text-fg-subtle">Reading&hellip;</p>
       ) : (
-        <ul className="overflow-hidden rounded-raised border border-border bg-surface-raised">
-          {readAsTurns(conversation.messages).map((entry, index) =>
+        <ul className="space-y-2.5 rounded-raised border border-border bg-surface-sunken px-3 py-3.5">
+          {readAsTurns(conversation.messages).map((entry) =>
             entry.kind === 'tools' ? (
-              <ToolRun key={entry.key} names={entry.names} first={index === 0} />
+              <ToolRun key={entry.key} names={entry.names} />
             ) : (
-              <Message key={entry.message.uuid} message={entry.message} first={index === 0} />
+              <Message key={entry.message.uuid} message={entry.message} />
             )
           )}
         </ul>
@@ -1128,48 +1257,74 @@ function summariseTools(names: readonly string[]): string {
   return runs.map((run) => (run.n === 1 ? run.name : `${run.name} ×${String(run.n)}`)).join(' · ')
 }
 
-/** One recessive line for a stretch of tool work. Machine data, so mono. */
-function ToolRun({ names, first }: { names: string[]; first: boolean }): JSX.Element {
+/**
+ * A stretch of tool work, as a rule across the column.
+ *
+ * Deliberately not a third bubble. A bubble is something somebody said, and a
+ * tool call is neither speaker talking - it is the work that happened between
+ * two things they said. Drawn as a divider it stays in the record, keeps the
+ * conversation's order honest, and costs one line instead of a turn. Machine
+ * data, so mono.
+ */
+function ToolRun({ names }: { names: string[] }): JSX.Element {
   return (
-    <li
-      data-transcript-tools={String(names.length)}
-      className={cn(
-        'flex items-baseline gap-2 bg-surface-sunken px-3 py-1',
-        !first && 'border-t border-border'
-      )}
-    >
-      <span className="shrink-0 text-[10px] tracking-[.07em] text-fg-subtle uppercase">Tools</span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg-subtle select-text">
+    <li data-transcript-tools={String(names.length)} className="flex items-center gap-2 py-0.5">
+      <span aria-hidden className="island-rule min-w-4 flex-1" />
+      <span className="max-w-[70%] shrink truncate font-mono text-[10.5px] text-fg-subtle select-text">
         {summariseTools(names)}
       </span>
+      <span aria-hidden className="island-rule min-w-4 flex-1" />
     </li>
   )
 }
 
-/** Who said it, then what they said. Two speakers, told apart by a label. */
-function Message({ message, first }: { message: ArchiveMessage; first: boolean }): JSX.Element {
+/**
+ * One message, on its speaker's own side.
+ *
+ * The user's is tinted and right-aligned, the assistant's is raised and left -
+ * a DM read back, which is what this is. The tint is `accent-soft` and not a
+ * solid accent (DESIGN.md 7): it is the same tint the app already uses for a
+ * selected row, and it is as close to the blue bubble everyone expects as this
+ * system allows. The timestamp sits under the bubble on that bubble's side, so
+ * a glance down the column reads as a column of turns rather than a column of
+ * times.
+ *
+ * The measure is capped at 80% of the column rather than left to the pane: a
+ * long answer stretched to a 640px-wide detail pane is a paragraph nobody can
+ * track back to the start of. The cap is on the bubble, so a code block inside
+ * one wraps rather than pushing the bubble past it.
+ */
+function Message({ message }: { message: ArchiveMessage }): JSX.Element {
+  const mine = message.role === 'user'
   return (
     <li
       data-transcript-message={message.role}
-      className={cn('px-3 py-2 text-[12px]', !first && 'border-t border-border')}
+      className={cn('flex flex-col', mine ? 'items-end' : 'items-start')}
     >
-      <p className="flex items-baseline gap-2">
-        <span
-          className={cn(
-            'text-[10px] font-semibold tracking-[.07em] uppercase',
-            message.role === 'user' ? 'text-accent-text' : 'text-fg-subtle'
-          )}
-        >
-          {message.role === 'user' ? 'You' : 'Claude'}
-        </span>
-        <span className="flex-1" />
-        <span className="shrink-0 text-[10px] tabular-nums text-fg-subtle" title={formatMoment(message.at)}>
-          {formatAge(message.at)}
-        </span>
-      </p>
-      <p className="mt-1 break-words whitespace-pre-wrap text-fg-muted select-text">
+      <div
+        className={cn(
+          'max-w-[80%] min-w-0 rounded-raised border px-3 py-2 text-[12px] leading-relaxed',
+          'break-words whitespace-pre-wrap text-fg select-text',
+          // `border-strong` on the assistant's, not `border`: the raised step
+          // over the sunken well is 18 levels per channel in light mode
+          // (#F4F5FA on #E2E5EE, measured) against 27 in dark, so in light the
+          // edge is the whole of what separates a bubble from its ground. The
+          // user's is already carried by the accent outline.
+          mine ? 'border-accent/40 bg-accent-soft' : 'border-border-strong bg-surface-raised'
+        )}
+      >
+        {/* Read out, never drawn: the side and the tint say who spoke, and a
+            label on every bubble would be the row header this layout exists to
+            get rid of. A screen reader has neither. */}
+        <span className="sr-only">{mine ? 'You said: ' : 'Claude said: '}</span>
         {message.text}
-      </p>
+      </div>
+      <span
+        className="mt-0.5 px-1 text-[10px] tabular-nums text-fg-subtle"
+        title={formatMoment(message.at)}
+      >
+        {formatAge(message.at)}
+      </span>
     </li>
   )
 }
