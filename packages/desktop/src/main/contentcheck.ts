@@ -2,7 +2,7 @@ import { net, type BrowserWindow, type WebFrameMain } from 'electron'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { basename, join, relative, sep } from 'node:path'
+import { basename, dirname, join, relative, sep } from 'node:path'
 import {
   CURATED_SKIPPED_DIRS,
   countConfigSnapshots,
@@ -441,6 +441,8 @@ interface Fixtures {
   root: string
   notes: string
   bigNote: string
+  /** A long, wide, indented source file - CONT-16 needs one to exist. */
+  bigSource: string
   artifact: string
   hostile: string
   secret: string
@@ -567,6 +569,25 @@ function buildFixtures(dataDir: string): Fixtures {
   const bigNote = join(notes, 'long-document.md')
   writeFileSync(bigNote, buildLongNote())
 
+  /**
+   * A source file long enough to scroll and wide enough to wrap, for CONT-16.
+   *
+   * Planted rather than found. The scope a check runs in is not guaranteed to
+   * hold a long source file, and CONT-16's first run said exactly that - it
+   * failed with "none found", which is honest and is not the failure it exists
+   * to report. Indented deliberately, so the wrapped half of that probe has
+   * continuation rows with something to hang from.
+   */
+  const bigSource = join(root, 'tools', 'fixture-long-source.ts')
+  mkdirSync(dirname(bigSource), { recursive: true })
+  writeFileSync(
+    bigSource,
+    Array.from({ length: 900 }, (_, i) => {
+      const depth = '  '.repeat((i % 4) + 1)
+      return `${depth}export const entry${String(i)} = { id: ${String(i)}, note: 'a deliberately long line so this file is wider than any pane it is read in, which is what gives the wrapped half of CONT-16 something to measure', tail: ${String(i)} }`
+    }).join('\n')
+  )
+
   // A benign artifact: self-contained, silent, and it says so in the DOM so the
   // frame check has something to read back.
   const artifact = join(root, 'lessons', 'artifact.html')
@@ -655,7 +676,7 @@ function buildFixtures(dataDir: string): Fixtures {
   const git = spawnSync('git', ['init', '-q'], { cwd: project, windowsHide: true })
   const projectIsRepo = git.error === undefined && git.status === 0
 
-  return { root, notes, bigNote, artifact, hostile, secret, project, projectIsRepo }
+  return { root, notes, bigNote, bigSource, artifact, hostile, secret, project, projectIsRepo }
 }
 
 // ---------------------------------------------------------------------------
@@ -2849,6 +2870,134 @@ async function editChecks(
 // CONT-10: scrolling a long document, measured
 // ---------------------------------------------------------------------------
 
+interface SourceScrollHold {
+  file: string
+  waitedMs: number
+  scrolledTo: number
+  afterUnwrapped: number
+  sameNodeUnwrapped: boolean
+  wrappedScrolledTo: number
+  afterWrapped: number
+  sameNodeWrapped: boolean
+  innerHtmlWrites: number
+}
+
+/**
+ * Scroll a source file, wait, and see whether it is still there - unwrapped and
+ * wrapped. See CONT-16 for what this is guarding.
+ *
+ * The file is found by opening candidates and measuring, because the row in the
+ * list carries no size and a path written down here would name a short file on
+ * a machine that is not this one.
+ */
+async function sourceScrollHolds(
+  ctx: CheckContext,
+  fixtures: Fixtures
+): Promise<SourceScrollHold | null> {
+  const { win } = ctx
+  const WAIT_MS = 9000
+
+  // The planted file first, then whatever else the scope happens to hold. The
+  // fixture is what makes this probe able to run at all; the fallback is so a
+  // scope that has moved on still gets measured rather than skipped.
+  const planted = relative(fixtures.root, fixtures.bigSource).split(sep).join('/')
+  const found = await js<string[]>(
+    win,
+    `[...document.querySelectorAll('[data-content-file]')]
+       .map((el) => el.dataset.contentFile || '')
+       .filter((p) => /\\.(json|ya?ml|mjs|cjs|js|ts|tsx|py|ps1|sh|css|log|toml|ini)$/i.test(p))`
+  ).catch(() => [] as string[])
+  const candidates = [planted, ...found.filter((p) => p !== planted)]
+
+  for (const file of candidates.slice(0, 14)) {
+    const opened = await js<boolean>(
+      win,
+      `(() => {
+         const el = [...document.querySelectorAll('[data-content-file]')]
+           .find((b) => b.dataset.contentFile === ${JSON.stringify(file)})
+         if (!el) return false
+         el.click()
+         return true
+       })()`
+    ).catch(() => false)
+    if (!opened) continue
+    if (!(await pollJs(win, `document.querySelector('[data-content-source] pre')`, 8000))) continue
+    await sleep(350)
+
+    // Armed: the block is scrolled, and every write to the injected subtree is
+    // counted from here so the cause is reported beside the symptom.
+    const armed = await js<number>(
+      win,
+      `(() => {
+         const view = document.querySelector('.source-view')
+         const pre = view && view.querySelector('pre')
+         if (!pre || pre.scrollHeight <= pre.clientHeight + 200) return 0
+         pre.scrollTop = 600
+         window.__contScroll = { view, pre, writes: 0 }
+         const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML')
+         Object.defineProperty(view, 'innerHTML', {
+           configurable: true,
+           get() { return desc.get.call(this) },
+           set(v) { window.__contScroll.writes += 1; desc.set.call(this, v) }
+         })
+         return pre.scrollTop
+       })()`
+    ).catch(() => 0)
+    if (armed === 0) continue
+
+    await sleep(WAIT_MS)
+
+    const unwrapped = await js<{ top: number; same: boolean }>(
+      win,
+      `(() => {
+         const pre = document.querySelector('[data-content-source] pre')
+         return { top: pre ? pre.scrollTop : -1, same: pre === window.__contScroll.pre }
+       })()`
+    ).catch(() => ({ top: -1, same: false }))
+
+    // Now the same claim with wrapping on, which is the other half of the report.
+    const wrappedTo = await js<number>(
+      win,
+      `(() => {
+         const b = document.querySelector('[data-content-wrap]')
+         if (b && b.getAttribute('aria-pressed') === 'false') b.click()
+         const pre = document.querySelector('[data-content-source] pre')
+         if (!pre) return 0
+         pre.scrollTop = 500
+         window.__contScroll.pre2 = pre
+         return pre.scrollTop
+       })()`
+    ).catch(() => 0)
+
+    await sleep(WAIT_MS)
+
+    const wrapped = await js<{ top: number; same: boolean; writes: number }>(
+      win,
+      `(() => {
+         const pre = document.querySelector('[data-content-source] pre')
+         return {
+           top: pre ? pre.scrollTop : -1,
+           same: pre === window.__contScroll.pre2,
+           writes: window.__contScroll.writes
+         }
+       })()`
+    ).catch(() => ({ top: -1, same: false, writes: -1 }))
+
+    return {
+      file,
+      waitedMs: WAIT_MS,
+      scrolledTo: armed,
+      afterUnwrapped: unwrapped.top,
+      sameNodeUnwrapped: unwrapped.same,
+      wrappedScrolledTo: wrappedTo,
+      afterWrapped: wrapped.top,
+      sameNodeWrapped: wrapped.same,
+      innerHtmlWrites: wrapped.writes
+    }
+  }
+  return null
+}
+
 async function scrollChecks(
   ctx: CheckContext,
   shotDir: string,
@@ -2957,7 +3106,62 @@ async function scrollChecks(
   const budgetMs = 32
   const worstP95 = Math.max(...results.map((result) => Number(result['p95'] ?? 0)))
 
+  const held = await sourceScrollHolds(ctx, fixtures)
+
   return [
+    {
+      /**
+       * CONT-16: a source file stays where it was scrolled to.
+       *
+       * This exists because of a bug that every other check in this file was
+       * blind to. The source view injects shiki's HTML with
+       * `dangerouslySetInnerHTML`, and React re-applies that when the *object*
+       * it is handed differs rather than when the markup does - so a fresh
+       * `{ __html }` per render rebuilt the block on every render of the pane.
+       * Measured: three writes of a byte-identical 50,108-character string in
+       * twelve idle seconds.
+       *
+       * Nothing noticed for as long as the *wrapper* owned the scrollbar, since
+       * React never touches it. The moment the block itself became the scroll
+       * container - which is what puts its horizontal scrollbar at the bottom of
+       * the pane instead of the bottom of the file - a rebuilt element meant
+       * `scrollTop` went back to 0, and reading down a file was interrupted
+       * every few seconds by a jump to the top.
+       *
+       * So the probe waits rather than measuring an instant: the failure is not
+       * visible in any single frame, only in what has happened several seconds
+       * later. It asserts the node's identity as well as the offset, because
+       * "still at 600" and "rebuilt, and something scrolled it back" are
+       * different facts and only one of them is this fixed.
+       *
+       * The positive control is the scroll itself: a probe whose `scrolledTo`
+       * came back 0 would be measuring a block with nothing to scroll, and the
+       * assertion requires it to have moved before it can require it to have
+       * stayed.
+       */
+      id: 'CONT-16',
+      criterion: 'A source file stays where it was scrolled to, wrapped or not',
+      title:
+        held === null
+          ? 'no source file long enough to scroll was found in this scope'
+          : `${held.file}: ${String(held.scrolledTo)}px, still ${String(held.afterUnwrapped)}px unwrapped and ${String(held.afterWrapped)}px wrapped after ${String(held.waitedMs)}ms`,
+      ok:
+        held !== null &&
+        held.scrolledTo > 0 &&
+        held.afterUnwrapped === held.scrolledTo &&
+        held.sameNodeUnwrapped &&
+        held.wrappedScrolledTo > 0 &&
+        held.afterWrapped === held.wrappedScrolledTo &&
+        held.sameNodeWrapped &&
+        held.innerHtmlWrites === 0,
+      detail: held === null ? { measured: false } : { ...held },
+      notes: [
+        'Both states, because the report that found this said "wrap on or off".',
+        '`innerHtmlWrites` counts writes to the injected subtree while nothing is',
+        'happening. It is the cause rather than the symptom, and it is the number that',
+        'goes wrong first: a rebuild is what loses the position.'
+      ]
+    },
     {
       id: 'CONT-10',
       criterion: 'A 20k-word note (the report-center redesign note) scrolls smoothly',

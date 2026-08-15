@@ -1,5 +1,5 @@
 import type { ChangeEvent, CSSProperties, JSX } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ConfigSnapshotMeta,
   ContentDocument,
@@ -574,11 +574,24 @@ function SourceBody({
   const wrapVars = { '--source-wrap-indent': `${String(wrapIndent)}ch` } as CSSProperties
 
   // The per-line `--line-indent` the hang is measured from arrives *in* the
-  // HTML, written by `highlightCode`. It was an effect walking `.line` nodes
-  // first, and that cannot work here: this subtree is rebuilt from the string
-  // on every re-render of the pane - every node measured a different object a
-  // second later - so anything an effect writes onto it is wiped and, its
-  // dependencies being unchanged, never rewritten.
+  // HTML, written by `highlightCode`, rather than from an effect walking `.line`
+  // nodes - see the note there.
+  //
+  // **Memoised on the string, and it is load-bearing.** React re-applies
+  // `dangerouslySetInnerHTML` when the *object* it is handed differs, not when
+  // the markup does, so a fresh `{ __html }` per render rebuilt this subtree on
+  // every render of the pane. Measured in the real window: three writes of a
+  // byte-identical 50,108-character string in twelve idle seconds, each one
+  // discarding the `<pre>` and building a new one.
+  //
+  // That was survivable while the *wrapper* owned the scrollbar, because React
+  // never touches it. It stopped being survivable the moment the block itself
+  // became the scroll container: a new element starts at `scrollTop = 0`, so
+  // reading down a file was interrupted every few seconds by a jump back to the
+  // top. Holding the object stable means React writes only when the markup
+  // really changed, which is when a rebuild is correct anyway.
+  const injected = useMemo(() => ({ __html: source?.html ?? '' }), [source?.html])
+
   return (
     <div data-content-source className="min-w-0 flex-1 overflow-hidden p-3">
       {loading ? (
@@ -597,7 +610,7 @@ function SourceBody({
           // The same argument as the markdown body's: this string was produced
           // by shiki in the main process from bytes on disk, and the renderer
           // injects it rather than evaluating anything in it.
-          dangerouslySetInnerHTML={{ __html: source.html }}
+          dangerouslySetInnerHTML={injected}
         />
       ) : (
         <pre
