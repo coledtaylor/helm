@@ -22,6 +22,14 @@ export {
 } from './harness'
 export { findEnclosingHarness, suggestRoots } from './roots'
 export {
+  TITLE_MAX,
+  cleanPrompt,
+  deriveSessionTitle,
+  sessionTitleFrom,
+  titleRank,
+  type SessionTitle
+} from './title'
+export {
   disprovedProjectPaths,
   isWithin,
   orphanedProjectPaths,

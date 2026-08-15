@@ -12,7 +12,8 @@ import {
   readHistoryProjects,
   readHistoryPrompts,
   readHistorySession,
-  readHistorySessions
+  readHistorySessions,
+  renameHistorySession
 } from './history'
 
 let dir: string
@@ -287,6 +288,123 @@ describe('readHistorySessions', () => {
     expect(page.sessions).toHaveLength(2)
     expect(page.total).toBe(4)
     expect(page.tookMs).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('session titles', () => {
+  /** The rule itself is `discovery/title.test.ts`; this is the index applying it. */
+  it('titles a session from the first prompt that says something', () => {
+    index([
+      { sessionId: 'a', text: '/usage' },
+      { sessionId: 'a', text: '[Image #1]' },
+      { sessionId: 'a', text: 'why is the status bar blank on a fresh install' }
+    ])
+
+    const session = readHistorySession(store, 'a')
+    expect(session?.title).toBe('why is the status bar blank on a fresh install')
+    expect(session?.titleFallback).toBe(false)
+    // The opening prompt is still recorded as what was said first.
+    expect(session?.firstPrompt).toBe('/usage')
+  })
+
+  it('falls back to something legible when no prompt says anything', () => {
+    index([{ sessionId: 'a', text: '/usage' }])
+    expect(readHistorySession(store, 'a')).toMatchObject({
+      title: '/usage',
+      titleFallback: false
+    })
+
+    index([{ sessionId: 'b', text: '[Image #1]' }])
+    expect(readHistorySession(store, 'b')).toMatchObject({
+      title: 'Image only',
+      titleFallback: true
+    })
+  })
+
+  it('re-titles a session when a later pass brings a better prompt', () => {
+    index([{ sessionId: 'a', text: '/usage' }])
+    expect(readHistorySession(store, 'a')?.title).toBe('/usage')
+
+    index([{ sessionId: 'a', text: 'rename the profiles pane' }])
+    expect(readHistorySession(store, 'a')?.title).toBe('rename the profiles pane')
+  })
+
+  it('ranks the prompts a build without the column left unranked', () => {
+    index([
+      { sessionId: 'a', text: '/usage' },
+      { sessionId: 'a', text: 'add geofencing to the map' }
+    ])
+    // What an upgrade finds: rows written before `title_rank` existed.
+    store.raw.prepare('UPDATE history_prompts SET title_rank = NULL').run()
+    store.raw.prepare('UPDATE history_sessions SET title_prompt = NULL').run()
+    expect(readHistorySession(store, 'a')?.title).toBe('/usage')
+
+    // A pass with nothing new to read is enough - there is no next prompt
+    // coming for a session that ended months ago.
+    index([])
+    expect(readHistorySession(store, 'a')?.title).toBe('add geofencing to the map')
+  })
+})
+
+describe('renameHistorySession', () => {
+  beforeEach(() => {
+    index([
+      { sessionId: 'a', text: '/usage' },
+      { sessionId: 'a', text: 'add geofencing to the map' },
+      { sessionId: 'b', text: 'unrelated work', project: BETA }
+    ])
+  })
+
+  it('is what the list shows once it is set', () => {
+    const renamed = renameHistorySession(store, 'a', '  Geofencing  ')
+    expect(renamed?.label).toBe('Geofencing')
+    // The derived title is still there, which is what makes clearing possible.
+    expect(renamed?.title).toBe('add geofencing to the map')
+
+    const { sessions } = readHistorySessions(store)
+    expect(sessions.find((s) => s.sessionId === 'a')?.label).toBe('Geofencing')
+    expect(sessions.find((s) => s.sessionId === 'b')?.label).toBeNull()
+  })
+
+  it('survives a full re-index', () => {
+    renameHistorySession(store, 'a', 'Geofencing')
+    // The whole aggregate thrown away and rebuilt, which is what a rewritten
+    // history file does - and what a label column on it would not survive.
+    index([{ sessionId: 'a', text: 'add geofencing to the map' }], { tail: { reset: true } })
+
+    expect(readHistorySession(store, 'a')?.label).toBe('Geofencing')
+  })
+
+  it('returns the row to its derived title when the name is cleared', () => {
+    renameHistorySession(store, 'a', 'Geofencing')
+    const cleared = renameHistorySession(store, 'a', '   ')
+
+    expect(cleared?.label).toBeNull()
+    expect(cleared?.title).toBe('add geofencing to the map')
+    expect(
+      store.raw.prepare('SELECT COUNT(*) AS n FROM history_names').get()
+    ).toEqual({ n: 0 })
+  })
+
+  it('finds a session by the name it was given', () => {
+    renameHistorySession(store, 'a', 'Monarch budget spike')
+    const { sessions, total } = readHistorySessions(store, { search: 'monarch' })
+    expect(total).toBe(1)
+    expect(sessions[0]?.sessionId).toBe('a')
+  })
+
+  it('keys the name on the id whatever case it is asked with', () => {
+    renameHistorySession(store, 'A', 'Geofencing')
+    expect(readHistorySession(store, 'a')?.label).toBe('Geofencing')
+  })
+
+  it('strips the characters that would corrupt the row it lands in', () => {
+    const renamed = renameHistorySession(store, 'a', 'alpha beta​gamma')
+    expect(renamed?.label).toBe('alpha beta gamma')
+  })
+
+  it('answers null for a session the index does not have', () => {
+    expect(renameHistorySession(store, 'nope', 'whatever')).toBeNull()
   })
 })
 

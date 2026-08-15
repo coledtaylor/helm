@@ -3,6 +3,7 @@ import { basename } from 'node:path'
 import {
   buildResumeArgs,
   finishSession,
+  historyTitle,
   launchRequestFromProfile,
   prepareLaunch,
   readGitBranch,
@@ -456,10 +457,12 @@ export function createSessionHost({
       }
 
       // Helm's own label for the tab, not the session's name - `-n` is not
-      // passed, so nothing here reaches the CLI. The opening prompt is what
-      // makes a conversation recognisable in a strip of tabs.
+      // passed, so nothing here reaches the CLI. The same name the history pane
+      // shows, which is the point: a tab titled `/usage` is a tab nobody can
+      // pick out of a strip, and that is what the opening prompt gave for 291
+      // of this machine's sessions.
       const label = uniqueSessionName(
-        sanitizeSessionName(history.firstPrompt) || history.projectName,
+        sanitizeSessionName(historyTitle(history)) || history.projectName,
         takenNames()
       )
 

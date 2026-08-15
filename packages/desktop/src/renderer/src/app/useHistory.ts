@@ -53,6 +53,9 @@ export interface HistoryState {
   /** What the archive holds. Pushed from main; never polled. */
   archiveStats: ArchiveStats | null
 
+  /** Names a session by hand, or clears the name with null. */
+  rename: (sessionId: string, name: string | null) => Promise<void>
+
   refresh: () => void
   refreshing: boolean
 
@@ -107,6 +110,9 @@ export function useHistory(): HistoryState {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [promptAnswer, setPromptAnswer] = useState<Answered<HistoryPrompt[]> | null>(null)
 
+  /** Bumped by a rename, so the listing is asked for again. See `rename`. */
+  const [nameVersion, setNameVersion] = useState(0)
+
   const [refreshing, setRefreshing] = useState(false)
   const [resuming, setResuming] = useState<string | null>(null)
   const [resumeError, setResumeError] = useState<string | null>(null)
@@ -147,7 +153,8 @@ export function useHistory(): HistoryState {
     resumableOnly,
     project,
     indexVersion,
-    archiveVersion
+    archiveVersion,
+    nameVersion
   ])
   const seq = useRef(0)
 
@@ -214,6 +221,43 @@ export function useHistory(): HistoryState {
       live = false
     }
   }, [conversationKey, selectedId])
+
+  /*
+   * The renamed row, put back into the page and then asked for again.
+   *
+   * Both halves are load-bearing. Patching the page in place is what repaints
+   * the row without a round trip. The version bump is what stops that patch
+   * being undone: a name is not part of the query key - `history_names` is not
+   * the index - so writing one cancels nothing that is *already in flight*, and
+   * this window re-queries whenever `history.jsonl` grows, which on a machine
+   * hosting sessions is every few seconds. A listing that read the database
+   * before the rename committed would then land after the patch and put the
+   * derived title back, and `seq` would not stop it: that listing is still the
+   * current ticket, because a patch is not a query.
+   *
+   * Bumping the version makes it one. The key changes, the effect runs, `seq`
+   * moves, and the older listing's answer is dropped on arrival instead of
+   * adopted - while the query the bump started reads the name back out of the
+   * database, which is the same answer by a route that cannot be raced.
+   */
+  const rename = useCallback(async (sessionId: string, name: string | null) => {
+    const updated = await helm.invoke('history:rename', { sessionId, name })
+    if (updated === null) return
+    setAnswer((current) =>
+      current === null
+        ? current
+        : {
+            ...current,
+            value: {
+              ...current.value,
+              sessions: current.value.sessions.map((s) =>
+                s.sessionId === updated.sessionId ? { ...s, ...updated } : s
+              )
+            }
+          }
+    )
+    setNameVersion((version) => version + 1)
+  }, [])
 
   const refresh = useCallback(() => {
     setRefreshing(true)
@@ -289,6 +333,7 @@ export function useHistory(): HistoryState {
     conversation,
     conversationLoading,
     archiveStats,
+    rename,
     refresh,
     refreshing,
     resume,

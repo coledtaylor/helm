@@ -3,9 +3,14 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import {
   claudeHome,
+  directoryExists,
   historyFileIn,
+  indexHistory,
   projectsDirIn,
+  readHistorySession,
   readHistorySessions,
+  readHistoryTail,
+  scanTranscripts,
   type HistorySession
 } from '@helm/core'
 import { screenshot, sendKey, sleep, squash, stripAnsi, typeText, waitFor } from './bridge'
@@ -156,6 +161,10 @@ async function pollJs(win: BrowserWindow, expression: string, timeoutMs: number)
 interface PaintedRow {
   sessionId: string
   resumable: boolean
+  /** The row's title, read from its own element rather than sliced out of `text`. */
+  title: string
+  /** Whether a name was given by hand, as the row itself reports it. */
+  named: boolean
   /** Whole row text, whitespace collapsed - project, age, prompt count, badge. */
   text: string
   /**
@@ -177,6 +186,8 @@ async function paintedRows(win: BrowserWindow): Promise<PaintedRow[]> {
     `[...document.querySelectorAll('button[data-session]')].map((el) => ({
       sessionId: el.dataset.session,
       resumable: el.dataset.resumable === 'true',
+      title: (el.querySelector('[data-session-title]')?.textContent ?? '').replace(/\\s+/g, ' ').trim(),
+      named: el.dataset.named === 'true',
       text: (el.textContent ?? '').replace(/\\s+/g, ' ').trim(),
       fields: [...(el.lastElementChild?.children ?? [])]
         .map((child) => (child.textContent ?? '').replace(/\\s+/g, ' ').trim())
@@ -300,7 +311,7 @@ async function typeSearch(win: BrowserWindow, term: string): Promise<string> {
  * the wall clock, so being able to re-run the pane checks without them is the
  * difference between a ten-second loop and a five-minute one.
  */
-const GROUPS = ['list', 'search', 'resume', 'reaped', 'outside'] as const
+const GROUPS = ['list', 'search', 'resume', 'reaped', 'titles', 'outside'] as const
 type Group = (typeof GROUPS)[number]
 
 export async function runHistoryChecks(
@@ -360,6 +371,8 @@ export async function runHistoryChecks(
 
   if (!indexAgrees) {
     checks.push({
+      // audit: optional - only reached when HIST-0 has already failed, so a
+      // healthy run never produces it and its absence is not a short report.
       id: 'HIST-SKIP',
       criterion: 'setup',
       title: 'Nothing else can be trusted while the index disagrees with the file',
@@ -954,6 +967,315 @@ export async function runHistoryChecks(
       'of the user is the failure this criterion is about.'
     ]
   })
+
+  // -------------------------------------------------------------------------
+  // HIST-9: a row says what its session was about
+  // -------------------------------------------------------------------------
+  //
+  // Judged on **properties**, not against a second copy of the derivation.
+  // Re-implementing `titleRank` here would be a check that agrees with itself
+  // one indirection away, and it would have to be edited every time the rule
+  // is. What is asserted instead is what the complaint actually was: no row is
+  // titled with a bare slash command while that session said something else, no
+  // row is titled with an attachment placeholder, no row is blank, and a
+  // truncation ends where a word does.
+  //
+  // The predicates below are deliberately crude - "starts with a slash and has
+  // no space in it" is a bare command by anybody's reading - because a crude
+  // predicate cannot quietly encode the same mistake the rule under test made.
+  if (running('titles')) {
+    await showHistory(win)
+    await typeSearch(win, '')
+    const titled = await paintedRows(win)
+
+    const promptsOf = new Map<string, string[]>()
+    for (const prompt of truth.prompts) {
+      const list = promptsOf.get(prompt.sessionId)
+      if (list === undefined) promptsOf.set(prompt.sessionId, [prompt.display])
+      else list.push(prompt.display)
+    }
+
+    const PLACEHOLDER = /\[(?:Image #\d+|Pasted text[^\]]*)\]/g
+    /** A slash command with no arguments at all: `/usage`, `/exit`. */
+    const bare = (text: string): boolean => /^\/\S*$/.test(text.trim())
+    const strip = (text: string): string =>
+      text.replace(PLACEHOLDER, ' ').replace(/\s+/g, ' ').trim()
+    /**
+     * Prompts that are plainly prose, by the strictest reading available.
+     *
+     * Anything beginning with a slash is excluded outright, although the rule
+     * under test will happily title a session from `/spec:quick when a user
+     * clicks...` - the point of a one-sided predicate is that this check can
+     * only ever under-report. A session with one of these in it and a bare
+     * command on its row is a failure nobody has to arbitrate.
+     */
+    const usable = (texts: readonly string[]): string[] =>
+      texts.filter((text) => {
+        const cleaned = strip(text)
+        if (cleaned === '' || cleaned.startsWith('/')) return false
+        return cleaned.split(' ').filter((word) => /[A-Za-z]{2,}/.test(word)).length >= 2
+      })
+    /** The cap, written here rather than imported: a change should reach this file. */
+    const CAP = 60
+
+    // The stand-ins, which are Helm's words rather than anybody's prompt and so
+    // cannot be looked for in the file. Written out here rather than imported:
+    // if one of them changes, this check should have to be told.
+    const STAND_INS = new Set(['No prompt recorded', 'Image only', 'Pasted text only'])
+
+    const blank = titled.filter((row) => row.title === '')
+    const placeholders = titled.filter((row) => PLACEHOLDER.test(row.title))
+    const tooLong = titled.filter((row) => row.title.length > CAP + 1)
+    // A row still titled with a bare command although that session went on to
+    // say something. This is the `/usage` complaint, stated as a predicate.
+    const stillBare = titled.filter(
+      (row) => bare(row.title) && usable(promptsOf.get(row.sessionId) ?? []).length > 0
+    )
+    // A stand-in on a session that had something to read is the opposite
+    // failure, and worth catching separately: it would mean the derivation gave
+    // up where the prompts did not.
+    const wrongStandIn = titled.filter(
+      (row) => STAND_INS.has(row.title) && usable(promptsOf.get(row.sessionId) ?? []).length > 0
+    )
+
+    /*
+     * Every title is either a stand-in or a prefix of something that session
+     * actually said, and where it was cut, it was cut where a word ends.
+     *
+     * "Where a word ends" is a space *or* the punctuation that ended the
+     * sentence, because a title is not left holding a trailing comma. And a
+     * title cut at exactly the cap is exempt: that is the only way the
+     * derivation produces one, and it means the cut fell inside a token longer
+     * than half the cap - a 100-character URL, of which this machine's history
+     * has several. Backing up to the last space there would title the session
+     * "Look at this task…" and throw away the subject.
+     */
+    const unfounded: string[] = []
+    const midWord: string[] = []
+    for (const row of titled) {
+      if (STAND_INS.has(row.title)) continue
+      const cut = row.title.endsWith('…')
+      const kept = cut ? row.title.slice(0, -1) : row.title
+      const source = (promptsOf.get(row.sessionId) ?? [])
+        .map(strip)
+        .find((text) => text.startsWith(kept))
+      if (source === undefined) unfounded.push(row.sessionId)
+      else if (cut && kept.length < CAP && !/[\s,.;:!?-]/.test(source[kept.length] ?? '')) {
+        midWord.push(row.sessionId)
+      }
+    }
+
+    /*
+     * Does this machine's history discriminate at all.
+     *
+     * A pane where no session opens with a slash command would pass every
+     * assertion above by having nothing to get wrong - the `PROF-4` shape, and
+     * the reason this counts the sessions the rule is *for* and requires there
+     * to be some. 1,011 sessions on the machine this was written against, 291
+     * of them opening on a bare command.
+     */
+    const retitled = titled.filter((row) => {
+      const prompts = promptsOf.get(row.sessionId) ?? []
+      const opener = prompts[0] ?? ''
+      return (strip(opener) === '' || bare(opener)) && usable(prompts).length > 0
+    })
+    const retitledCorrectly = retitled.filter((row) => !bare(row.title) && row.title !== '')
+
+    const shotTitles = await screenshot(win, shotDir, 'history-titles.png')
+
+    checks.push({
+      id: 'HIST-9',
+      criterion: 'A row is titled from what the session was about, not from whatever was typed first',
+      title: 'No row is titled with a bare slash command, a placeholder or nothing at all',
+      ok:
+        titled.length > 0 &&
+        retitled.length > 0 &&
+        retitled.length === retitledCorrectly.length &&
+        blank.length === 0 &&
+        placeholders.length === 0 &&
+        tooLong.length === 0 &&
+        stillBare.length === 0 &&
+        wrongStandIn.length === 0 &&
+        unfounded.length === 0 &&
+        midWord.length === 0,
+      detail: {
+        rows: titled.length,
+        openersWorthReadingPast: retitled.length,
+        blank: blank.length,
+        placeholderTitles: placeholders.slice(0, 4).map((r) => r.title),
+        overTheCap: tooLong.slice(0, 4).map((r) => r.title),
+        stillBare: stillBare.slice(0, 4).map((r) => ({ id: r.sessionId, title: r.title })),
+        wrongStandIn: wrongStandIn.slice(0, 4).map((r) => ({ id: r.sessionId, title: r.title })),
+        titleSaidByNobody: unfounded.slice(0, 4),
+        truncatedMidWord: midWord.slice(0, 4),
+        sample: retitled.slice(0, 4).map((row) => ({
+          opener: (promptsOf.get(row.sessionId) ?? [])[0],
+          title: row.title
+        })),
+        screenshot: shotTitles.file
+      },
+      notes: [
+        'Claude Code writes no summary to borrow: 0 of 275 transcripts on this machine carry',
+        'a "type":"summary" record, so the title is derived rather than read.',
+        'Asserted as properties rather than against a second copy of the rule - a check that',
+        're-implements what it checks agrees with itself and proves nothing. Every predicate',
+        'here is one-sided: a session titled `/spec:plan` whose every other prompt is also a',
+        'command is not a failure, and this cannot report it as one.'
+      ]
+    })
+
+    // -----------------------------------------------------------------------
+    // HIST-10: a name given by hand outlives the index it was given against
+    // -----------------------------------------------------------------------
+    //
+    // `history_sessions` is emptied and rebuilt in full on a reset, so this is
+    // the claim that decides whether the rename was put in the right place. The
+    // rebuild is **made to destroy something first**: a canary is written into
+    // the derived column beside the name, and the canary being gone afterwards
+    // is what says the rebuild really happened. Without it, "the name survived"
+    // is also what a reset that silently did nothing would report.
+    const target = titled.find((row) => !row.named)
+    const NAME = `HELM-NAMED-${String(Date.now())}`
+    let renamed: Record<string, unknown> = { skipped: 'no row to rename' }
+    let renameOk = false
+
+    if (target !== undefined) {
+      await click(win, `button[data-session="${target.sessionId}"]`)
+      await pollJs(win, `document.querySelector('[data-history-rename]')`, 8000)
+      await click(win, `button[data-history-rename]`)
+      const fieldOpen = await pollJs(win, `document.querySelector('input[data-history-name]')`, 5000)
+      // The field open over the heading, which is the one state in this pane
+      // design-shot's itinerary cannot reach.
+      const shotField = await screenshot(win, shotDir, 'history-rename-field.png')
+      await typeText(win, NAME, 8)
+      await sendKey(win, 'Enter')
+      /*
+       * The row repaints under the name, and this is **asserted** rather than
+       * merely waited for.
+       *
+       * Its first version polled and dropped the answer on the floor, which
+       * would have let every other assertion here be satisfied by the database
+       * while the pane went on painting the derived title - and the window is
+       * where the criterion binds. A poll whose result nobody reads is a
+       * `waitFor` wearing a claim's clothes.
+       */
+      const paintedAfterRename = await pollJs(
+        win,
+        `document.querySelector('button[data-session="${target.sessionId}"] [data-session-title]')
+          ?.textContent === ${JSON.stringify(NAME)}`,
+        8000
+      )
+
+      const afterRename = readHistorySession(services.store, target.sessionId)
+      // The DOM above is the evidence; this is only the picture. `capturePage`
+      // hands back the last composited frame, and a repaint that has happened
+      // in the tree may not have reached the compositor yet - the first version
+      // of this photographed the old title a frame after the assertion above
+      // had already passed on the new one.
+      await sleep(400)
+      const shotNamed = await screenshot(win, shotDir, 'history-renamed.png')
+
+      // Plant the canary in a column the rebuild owns, then force the rebuild
+      // the way a rewritten history file would: everything derived thrown away
+      // and recomputed from the file itself.
+      const CANARY = 'HELM-REBUILD-CANARY'
+      services.store.raw
+        .prepare('UPDATE history_sessions SET first_prompt = ? WHERE session_id = ?')
+        .run(CANARY, target.sessionId)
+      const home = claudeHome()
+      const file = historyFileIn(home)
+      indexHistory(services.store, {
+        file,
+        tail: { ...readHistoryTail(file, 0), reset: true },
+        transcripts: scanTranscripts(projectsDirIn(home)),
+        directoryExists
+      })
+      const afterReset = readHistorySession(services.store, target.sessionId)
+
+      // Back through the surface: the name is searchable, and the row the
+      // rebuild wrote is still painted under it.
+      await typeSearch(win, NAME)
+      const found = await paintedRows(win)
+
+      // And cleared through the surface too, which is the only way a user has
+      // of asking for the derived title back.
+      //
+      // The box is emptied first, and that is not tidying up: the search that
+      // just proved the name is searchable is a filter *on that name*, so a row
+      // that gives it up leaves the list - correctly - and there would be
+      // nothing left to read the derived title off. The first version of this
+      // asserted against the filtered list and failed for that reason, which is
+      // the check being wrong about the app rather than the other way round.
+      await typeSearch(win, '')
+      await click(win, `button[data-session="${target.sessionId}"]`)
+      await pollJs(win, `document.querySelector('[data-history-rename-clear]')`, 8000)
+      await click(win, 'button[data-history-rename-clear]')
+      // Asserted for the reason above: the row going back to its derived title
+      // is the visible half of "clearing restores it", and the database half
+      // would be satisfied by a pane that never repainted.
+      const paintedAfterClear = await pollJs(
+        win,
+        `(() => {
+          const row = document.querySelector('button[data-session="${target.sessionId}"]');
+          const title = row?.querySelector('[data-session-title]')?.textContent;
+          return row?.dataset.named === 'false' && title !== '' &&
+            title !== ${JSON.stringify(NAME)} &&
+            document.querySelector('[data-history-title]')?.textContent === title
+        })()`,
+        8000
+      )
+      const afterClear = readHistorySession(services.store, target.sessionId)
+      const namesLeft = (
+        services.store.raw
+          .prepare('SELECT COUNT(*) AS n FROM history_names WHERE session_id = ?')
+          .get(target.sessionId.toLowerCase()) as { n: number }
+      ).n
+
+      renameOk =
+        fieldOpen &&
+        paintedAfterRename &&
+        afterRename?.label === NAME &&
+        // The rebuild happened: the derived column was put back from the file.
+        afterReset?.firstPrompt !== CANARY &&
+        afterReset?.label === NAME &&
+        found.length === 1 &&
+        found[0]?.sessionId === target.sessionId &&
+        found[0]?.title === NAME &&
+        paintedAfterClear &&
+        afterClear?.label === null &&
+        afterClear.title.trim() !== '' &&
+        afterClear.title !== NAME &&
+        namesLeft === 0
+
+      renamed = {
+        sessionId: target.sessionId,
+        typed: NAME,
+        paintedAfterRename,
+        labelAfterRename: afterRename?.label ?? null,
+        canaryAfterRebuild: afterReset?.firstPrompt === CANARY,
+        labelAfterRebuild: afterReset?.label ?? null,
+        rowsFoundByName: found.length,
+        paintedAfterClear,
+        titleAfterClear: afterClear?.title ?? null,
+        labelAfterClear: afterClear?.label ?? null,
+        nameRowsLeft: namesLeft,
+        screenshots: [shotField.file, shotNamed.file]
+      }
+    }
+
+    checks.push({
+      id: 'HIST-10',
+      criterion: 'A session can be named by hand, and the name survives a full re-index',
+      title: 'A hand-given name is what the list shows, outlives a rebuild, and clears back to the derived title',
+      ok: renameOk,
+      detail: renamed,
+      notes: [
+        'The rename lives in `history_names`, keyed on the session id. A column on',
+        '`history_sessions` would be deleted by the DELETE + rebuild this probe performs -',
+        'which is what the canary is there to prove actually ran.'
+      ]
+    })
+  }
 
   // -------------------------------------------------------------------------
   // HIST-7: a session started outside the app turns up on its own

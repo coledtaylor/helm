@@ -207,6 +207,29 @@ that shows something that is not on this machine.
 > Search is `LIKE`, not FTS5: a filter box has to match `geofenc` inside
 > `geofencing`, which a tokenising index does not. Measured p95 **3 ms** over
 > 3,472 prompts against a 100 ms budget (`pnpm history-check`, HIST-4).
+
+> [!note] What a row is called - 2026-08-15
+> A row was titled with its opening prompt, and an opening prompt is not a
+> subject. Measured over this machine's 1,011 sessions and 4,084 prompts:
+> **291 sessions open on a bare slash command** (`/exit` 114, `/usage` 43,
+> `/model` 23), 15 open on an empty submission, and 353 prompts are nothing but
+> an `[Image #N]` placeholder where the subject was a screenshot.
+>
+> **There is no summary to borrow.** 0 of 275 surviving transcripts carry a
+> `"type":"summary"` record - the types present are `message`, `assistant`,
+> `user`, `tool_use`, `tool_result`, `text`, `thinking`, `mode` and
+> `attachment` - so a title has to be derived. Reading past the opener to the
+> first prompt that *says something* (`core/discovery/title.ts`) retitles
+> **132 of the 1,011** and leaves the rest alone.
+>
+> Derivation cannot do all of it, and the counter-example is in this
+> repository's own history: six sessions whose first substantive prompt
+> genuinely is the same sentence, because they are check probes. So a session
+> can also be **named by hand**, and that name lives in `history_names`, a
+> table of its own - `indexHistory` empties `history_sessions` and rebuilds it
+> in full on a reset, so anything authored that lived on it would last until
+> the next pass. `pnpm history-check` HIST-10 forces that rebuild and reads the
+> name back afterwards.
 - Per-project git state at a glance: branch, dirty count, ahead/behind
 
 ### 4.2 Config Console

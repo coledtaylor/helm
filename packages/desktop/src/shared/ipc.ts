@@ -341,6 +341,21 @@ export interface RenameSessionRequest {
 }
 
 /**
+ * Naming a session in the history pane.
+ *
+ * Deliberately a second request type rather than a widened `RenameSessionRequest`:
+ * that one names a **running** session by its row id in `sessions`, this one
+ * names a record of one that has already ended, keyed by the id Claude Code
+ * gave it. The two tables have nothing to do with each other, and one shape
+ * covering both would be a shape that has to be read twice to know which.
+ */
+export interface RenameHistorySessionRequest {
+  sessionId: string
+  /** Null, or whitespace, restores the title derived from the prompts. */
+  name: string | null
+}
+
+/**
  * Which file the config editor currently has open.
  *
  * The main process watches it so that a change made in another editor reaches
@@ -567,6 +582,19 @@ export interface IpcRequests {
   'history:projects': { request: void; response: HistoryProject[] }
   /** Forces a pass now. The index also keeps itself current; this is the button. */
   'history:refresh': { request: void; response: HistorySummary }
+  /**
+   * Names one session by hand, or clears the name it was given.
+   *
+   * The one write on this family of channels, and it goes nowhere near
+   * `history.jsonl` - it lands in `history_names`, a table of Helm's own that
+   * the index never rebuilds. Null, or whitespace, clears it and the row goes
+   * back to the title derived from its prompts. Resolves null for a session id
+   * the index does not have, rather than writing a name nothing joins to.
+   */
+  'history:rename': {
+    request: RenameHistorySessionRequest
+    response: HistorySession | null
+  }
   /**
    * Spawns `claude --resume <id>` in the directory history recorded. Rejects
    * with a readable sentence when the transcript or the directory has gone,
@@ -1045,6 +1073,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'history:prompts': true,
   'history:projects': true,
   'history:refresh': true,
+  'history:rename': true,
   'history:resume': true,
   'archive:conversation': true,
   'archive:stats': true,

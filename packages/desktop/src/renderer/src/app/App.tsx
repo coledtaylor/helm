@@ -1481,6 +1481,7 @@ export function App(): JSX.Element {
               promptsLoading={historyState.promptsLoading}
               conversation={historyState.conversation}
               conversationLoading={historyState.conversationLoading}
+              onRename={(sessionId, name) => void historyState.rename(sessionId, name)}
               onRefresh={historyState.refresh}
               refreshing={historyState.refreshing}
               onResume={(session) => void resumeSession(session)}
