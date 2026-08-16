@@ -36,12 +36,19 @@ import type {
   ProfileDraft,
   PullDetailView,
   PullsSnapshot,
+  FolderTemplateKind,
+  FolderTemplatePreview,
   RenameConfigRequest,
   RenameConfigResult,
   RenderedMarkdown,
+  SaveFolderAsTemplateResult,
   SessionRecord,
+  TemplateDeleteResult,
+  TemplateDetail,
+  TemplateImportResult,
   TemplateListing,
   TemplatePreview,
+  TemplateWriteResult,
   ThemePreference,
   UsageSnapshot,
   WriteConfigRequest,
@@ -502,6 +509,86 @@ export interface IpcRequests {
   'template:preview': {
     request: { template: string; mode?: 'new' | 'convert' }
     response: TemplatePreview
+  }
+
+  /**
+   * Authoring, which is the half of templates a file explorer cannot do.
+   *
+   * A template is a plain directory the user can open in any editor, so there
+   * is deliberately **no in-app file editor** on this family and no channel
+   * that reads or writes an arbitrary file inside one - `shell:showItem` opens
+   * the folder and their own editor takes it from there. What is here is what
+   * Explorer has no idea about: the metadata the picker reads, the `.tpl`
+   * convention, copying in a skill the user already wrote, and freezing a
+   * whole harness into a layout.
+   *
+   * Every write behind these lands **inside the templates directory and
+   * nowhere else** (`assertTemplateWritable`), and `template:import` reads its
+   * sources - `~/.claude` among them - without writing a byte back. That is
+   * the CLAUDE.md rule about `~/.claude` unchanged, not a second exception to
+   * it.
+   */
+
+  /** One template's files, with what a harness would receive each one as. */
+  'template:detail': { request: { template: string }; response: TemplateDetail }
+  /** Scaffolds a `template.yaml` and an empty tree. No starter files. */
+  'template:create': {
+    request: { name: string; label?: string; description?: string }
+    response: TemplateWriteResult
+  }
+  /** Moves the directory. The id *is* the folder name, so this is the rename. */
+  'template:rename': { request: { template: string; name: string }; response: TemplateWriteResult }
+  /**
+   * Removes the directory, unlinking any reparse point rather than walking it.
+   * Final: a template holds whatever its author put there, including bytes the
+   * snapshot table cannot hold, so there is no undo behind this one.
+   */
+  'template:delete': { request: { template: string }; response: TemplateDeleteResult }
+  /** The metadata form: `label` and `description`, not raw YAML. */
+  'template:metadata': {
+    request: { template: string; label: string; description: string }
+    response: TemplateWriteResult
+  }
+  /** Renames one file to `x.tpl`, which is how it opts in to substitution. */
+  'template:substitute': {
+    request: { template: string; path: string }
+    response: TemplateWriteResult
+  }
+  /**
+   * Copies chosen entries of a `.claude` tree into a template, as plain files.
+   *
+   * The sources are named by the paths `config:tree` reports for `scopePath`,
+   * which is the one seam that can name them - `ClaudeInventory` is counts and
+   * carries no names at all. The scope is resolved and the tree re-read in the
+   * main process, so what a skill *is* - a directory, not one file - is decided
+   * from the disk rather than from a list the renderer sent.
+   */
+  'template:import': {
+    request: { template: string; scopePath: string; paths: string[] }
+    response: TemplateImportResult
+  }
+  /**
+   * What "Save as template" would copy, before anything is copied.
+   *
+   * Top-level entries with the recursive file count and byte size of each, so
+   * the dialog states the total before writing - a harness with repositories in
+   * it is gigabytes, and the number is what stops that being a surprise.
+   */
+  'template:folderPreview': {
+    request: { dir: string; kind: FolderTemplateKind }
+    response: FolderTemplatePreview
+  }
+  /** Copies the ticked entries in and writes a `template.yaml` over them. */
+  'template:fromFolder': {
+    request: {
+      dir: string
+      kind: FolderTemplateKind
+      name: string
+      label: string
+      description: string
+      include: string[]
+    }
+    response: SaveFolderAsTemplateResult
   }
 
   /**
@@ -1082,6 +1169,15 @@ export const REQUEST_CHANNELS = Object.keys({
   'harness:create': true,
   'template:list': true,
   'template:preview': true,
+  'template:detail': true,
+  'template:create': true,
+  'template:rename': true,
+  'template:delete': true,
+  'template:metadata': true,
+  'template:substitute': true,
+  'template:import': true,
+  'template:folderPreview': true,
+  'template:fromFolder': true,
   'update:check': true,
   'theme:resolved': true,
   'shell:showItem': true,

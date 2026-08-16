@@ -46,6 +46,7 @@ import {
   pullRepoChoices,
   pullsSummaryLine,
   RepoIcon,
+  SaveAsTemplateDialog,
   SessionHistory,
   SettingsPane,
   SetupPane,
@@ -53,6 +54,7 @@ import {
   SlidersIcon,
   StatusBar,
   TabBar,
+  TemplateManager,
   ThemeToggle,
   TitleBar,
   VersionBanner,
@@ -78,6 +80,7 @@ import { forgetPullDetail } from './usePullDetail'
 import { usePulls } from './usePulls'
 import { useSessions } from './useSessions'
 import { useSetup } from './useSetup'
+import { useTemplates } from './useTemplates'
 import { useShells } from './useShells'
 import { useUpdate } from './useUpdate'
 import { useUsage } from './useUsage'
@@ -279,6 +282,15 @@ export function App(): JSX.Element {
       ? { latest: answered.latest, newer: true, url: answered.url }
       : null
   const setup = useSetup(settings, launcher.rescan)
+  /**
+   * Template authoring, held at app level because both of its entry points are.
+   *
+   * The manager is reached from the New Harness dialog and from Settings, and
+   * "Save as template" from a harness's pane - three surfaces, one directory,
+   * so one piece of state rather than a copy each that goes stale the moment
+   * another one writes.
+   */
+  const templates = useTemplates()
   const shells = useShells()
 
   /**
@@ -1251,7 +1263,7 @@ export function App(): JSX.Element {
    * would drift apart.
    */
   const harnessDialog =
-    setup.dialog === null ? null : (
+    setup.dialog === null || templates.managerOpen ? null : (
       <NewHarnessDialog
         mode={setup.dialog}
         dir={setup.dialogDir}
@@ -1263,12 +1275,70 @@ export function App(): JSX.Element {
         template={setup.template}
         onTemplateChange={setup.chooseTemplate}
         templatesDir={setup.templatesDir}
+        onManageTemplates={templates.openManager}
         templateProblems={setup.templateProblems}
         preview={setup.templatePreview}
         onCreate={setup.createHarness}
         onCancel={setup.closeDialog}
       />
     )
+
+  /**
+   * The template manager, and the dialog that freezes a folder into one.
+   *
+   * Rendered beside the harness dialog rather than inside it, and the harness
+   * dialog is **withheld while this is up** - two `Overlay`s at once is two
+   * scrims, and the second would dim the first. Withholding rather than closing
+   * is what makes "Manage templates…" safe to press half way through filling
+   * the harness dialog in: its name, folder and chosen template live in
+   * `useSetup`, so closing the manager paints it back exactly as it was, with a
+   * template list that has been re-read.
+   */
+  const templateDialogs =
+    templates.saveDialog !== null ? (
+      <SaveAsTemplateDialog
+        kind={templates.saveDialog.kind}
+        dir={templates.saveDialog.dir}
+        {...(templates.saveDialog.kind === 'folder'
+          ? { onChooseDir: templates.chooseSaveDir }
+          : {})}
+        preview={templates.savePreview}
+        busy={templates.saveBusy}
+        problems={templates.saveProblems}
+        onSave={templates.save}
+        onCancel={templates.closeSaveDialog}
+      />
+    ) : templates.managerOpen ? (
+      <TemplateManager
+        templates={templates.templates}
+        templatesDir={templates.templatesDir}
+        listProblems={templates.listProblems}
+        selected={templates.selected}
+        onSelect={templates.select}
+        detail={templates.detail}
+        scopes={templates.scopes}
+        importScope={templates.importScope}
+        onImportScopeChange={templates.setImportScope}
+        importTree={templates.importTree}
+        busy={templates.busy}
+        problems={templates.problems}
+        notice={templates.notice}
+        onCreate={templates.create}
+        onSaveMetadata={templates.saveMetadata}
+        onDelete={templates.remove}
+        onReveal={launcher.reveal}
+        onMakeSubstitutable={templates.makeSubstitutable}
+        onImport={templates.importFiles}
+        onImportFolder={templates.openImportFolder}
+        onClose={() => {
+          templates.closeManager()
+          // The harness dialog behind this may be showing a picker built before
+          // a template was created, renamed or deleted. It re-reads on open and
+          // has no other reason to; this is that other reason.
+          setup.refreshTemplates()
+        }}
+      />
+    ) : null
 
   /**
    * New, Rename and Delete for one entry in a `.claude` tree.
@@ -1340,6 +1410,7 @@ export function App(): JSX.Element {
           />
         </div>
         {harnessDialog}
+        {templateDialogs}
         {confirmDialog}
       </div>
     )
@@ -1824,6 +1895,14 @@ export function App(): JSX.Element {
               transcriptArchiveMaxBytes={
                 settings?.transcriptArchiveMaxBytes ?? DEFAULT_SETTINGS.transcriptArchiveMaxBytes
               }
+              // The authored templates, so the built-in Minimal row does not
+              // make an empty templates folder read as one that has something
+              // in it. Read on mount here rather than only when the manager
+              // opens - this is a figure on a pane somebody scrolls past.
+              templateCount={templates.templates.filter((choice) => !choice.builtIn).length}
+              templatesDir={templates.templatesDir}
+              onManageTemplates={templates.openManager}
+              onRevealTemplates={() => launcher.reveal(templates.templatesDir)}
               contentWrap={settings?.contentWrap ?? DEFAULT_SETTINGS.contentWrap}
               onContentWrapChange={(contentWrap) => writeSettings({ contentWrap })}
               contentWrapIndent={
@@ -1897,6 +1976,14 @@ export function App(): JSX.Element {
                 }}
                 onOpenConfig={openConfigAt}
                 onOpenContent={openContentAt}
+                // A harness only. It is the one kind of project with a layout
+                // to freeze - a repo is somebody else's tree, and a folder is
+                // not a scaffold. Decided here rather than in the pane for the
+                // reason `onRemoveRoot` is: the pane is handed a project, and
+                // whether that project is a harness root is discovery's answer.
+                {...(activeHarness !== null
+                  ? { onSaveAsTemplate: (project: Project) => templates.openSaveAs(project.path) }
+                  : {})}
                 // Only where this project *is* a scan root, which is the whole
                 // of what removal can act on. Decided here rather than in the
                 // pane because a root is a setting and the pane is handed
@@ -2075,6 +2162,7 @@ export function App(): JSX.Element {
         )}
 
         {harnessDialog}
+        {templateDialogs}
         {confirmDialog}
         {configEntryDialog}
 

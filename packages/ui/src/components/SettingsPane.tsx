@@ -152,6 +152,23 @@ export interface SettingsPaneProps {
   transcriptArchiveMaxBytes: number
   onTranscriptArchiveMaxBytesChange: (bytes: number) => void
 
+  /**
+   * Harness templates: how many there are, where they live, and the way in to
+   * managing them.
+   *
+   * A group here as well as a link in the New Harness dialog, because
+   * templates are **app-level**: they belong to this Helm rather than to any
+   * one harness, and having to start creating a harness in order to rename or
+   * delete one would be the same mistake as putting "stop scanning this
+   * folder" only in Settings - which is a bug this pane has already been on the
+   * wrong end of once.
+   */
+  templateCount: number
+  templatesDir: string
+  onManageTemplates: () => void
+  /** Opens the templates folder itself, for the editing this app does not do. */
+  onRevealTemplates: () => void
+
   /** The content viewer's wrapping default, and the hang on a continuation. */
   contentWrap: boolean
   onContentWrapChange: (wrap: boolean) => void
@@ -340,6 +357,10 @@ export function SettingsPane({
   archiveStats,
   transcriptArchiveMaxBytes,
   onTranscriptArchiveMaxBytesChange,
+  templateCount,
+  templatesDir,
+  onManageTemplates,
+  onRevealTemplates,
   contentWrap,
   onContentWrapChange,
   contentWrapIndent,
@@ -559,6 +580,16 @@ export function SettingsPane({
           )}
         </Group>
 
+        {/* Beside Workspace rather than further down, because it is the same
+            subject seen from the other end: that group is the folders Helm
+            scans, this one is what a new one gets written from. */}
+        <TemplatesGroup
+          total={templateCount}
+          dir={templatesDir}
+          onManage={onManageTemplates}
+          onReveal={onRevealTemplates}
+        />
+
         <Group name="appearance" title="Appearance">
           <Row
             label="Theme"
@@ -665,6 +696,70 @@ export function SettingsPane({
         />
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Harness templates
+// ---------------------------------------------------------------------------
+
+/**
+ * The templates this Helm has, and the two ways to reach them.
+ *
+ * The path is a button rather than a line of text, and that is the group's
+ * whole argument for existing beside the manager: **there is no file editor in
+ * Helm for these**. A template is a folder, editing one is a job for the editor
+ * somebody already has, and a settings group that named the folder without
+ * opening it would be describing a destination it declined to take you to.
+ *
+ * The count is stated rather than the list drawn. Which template is which is
+ * the manager's question and the picker's; what belongs here is the one fact
+ * Settings is for - whether this Helm has any, and where they are.
+ */
+function TemplatesGroup({
+  total,
+  dir,
+  onManage,
+  onReveal
+}: {
+  total: number
+  dir: string
+  onManage: () => void
+  onReveal: () => void
+}): JSX.Element {
+  return (
+    <Group
+      name="templates"
+      title="Harness templates"
+      hint={total === 0 ? 'none yet' : count(total, 'template')}
+    >
+      <p className="pb-1 text-[12px] leading-[1.55] text-fg-muted">
+        A template is a folder here; creating a harness from one copies it in. The New Harness
+        dialog picks between them, and the built-in <em>Minimal</em> scaffold is always the first
+        row whatever is in this folder.
+      </p>
+
+      <button
+        type="button"
+        data-settings-templates-dir
+        onClick={onReveal}
+        title={`Show ${dir} in Explorer`}
+        className="mt-1.5 block w-full truncate rounded-well border border-border bg-surface-sunken px-3 py-1.5 text-left font-mono text-[11px] text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+      >
+        {dir === '' ? NOTHING : dir}
+      </button>
+      <p className="mt-1.5 text-[11px] leading-[1.55] text-fg-subtle">
+        Edited in your own editor, not in Helm - these are plain files, and most people keep them
+        in git. Deleting the folder puts the shipped README and example back at the next start,
+        which is the whole of &ldquo;reset&rdquo;.
+      </p>
+
+      <Actions>
+        <Action data-settings-manage-templates onClick={onManage} primary={total === 0}>
+          Manage templates
+        </Action>
+      </Actions>
+    </Group>
   )
 }
 

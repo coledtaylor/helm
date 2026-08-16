@@ -140,6 +140,26 @@ hashes, so it cannot tell an edited file from an untouched one. The accepted
 consequence is that an improved example never reaches an existing install, and
 deleting the directory is the whole of "reset".
 
+**`pnpm dev` copies that directory once and then leaves it alone**, which is the
+opposite of what it does to the database and is the same rule one level down.
+The database is a mirror nobody authors into, so a fresh `VACUUM INTO` every
+launch is right; a template is a thing a person *writes*, and the dev app can
+write one - so wiping and re-copying at every launch would lose it. Nothing here
+keeps hashes either, so nothing can tell a template authored in dev from a stale
+copy of a real one, and when the two are indistinguishable the outcome that must
+never happen decides. Dev's copy therefore diverges; the launch banner says so
+every time, and `pnpm dev --fresh` re-copies.
+
+**Helm has no in-app editor for a template file, on purpose.** A template is a
+folder, `shell:showItem` opens it, and the user's own editor is a better one
+than a pane in a modal. What the app does is what a file manager cannot:
+`.tpl` awareness, importing a skill out of a `.claude` tree Helm can already
+see, and freezing a harness into a layout. Anything that walks a template or a
+folder being frozen **unlinks a reparse point rather than following it** - the
+Overlays rule above, in the second place it is load-bearing, and `fs.rm` with
+`recursive: true` is not the mechanism: it was measured returning successfully
+with a junction still in place.
+
 ## Surfaces that degrade
 
 Each of these has one rule that must survive contact with a refactor. The detail

@@ -36,6 +36,11 @@ export {
 export { HealthPanel, type HealthPanelProps } from './components/HealthPanel'
 export { McpPanel, type McpPanelProps } from './components/McpPanel'
 export { NewHarnessDialog, type NewHarnessDialogProps } from './components/NewHarnessDialog'
+export {
+  SaveAsTemplateDialog,
+  type SaveAsTemplateDialogProps
+} from './components/SaveAsTemplateDialog'
+export { TemplateManager, type TemplateManagerProps } from './components/TemplateManager'
 export { Overlay, type OverlayProps } from './components/Overlay'
 export {
   ConfirmSessionDialog,

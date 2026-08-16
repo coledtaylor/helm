@@ -23,6 +23,10 @@
 //   pnpm dev --fresh    isolated, no database at all: the first-run state
 //   pnpm dev:live       today's behaviour, against %APPDATA%\Helm
 //
+// The database and the **templates** directory are seeded on opposite rules,
+// and `seedTemplates` below says why: one is a mirror nobody authors into, and
+// since M14 the other is a place a person writes. `--fresh` resets both.
+//
 // What is deliberately **not** isolated is `~/.claude`. `CLAUDE_CONFIG_DIR`
 // moves credentials too, so a dev app pointed at a fixture home cannot sign in
 // and cannot host a real session - and a dev mode that cannot launch a session
@@ -48,7 +52,7 @@ const passthrough = argv.filter((arg) => arg !== '--fresh' && arg !== driveArg)
 
 const { root, dataDir, env } = isolate('dev', { seed: !fresh, concurrent: true, group: null })
 const gh = writeDevGh(root)
-const templates = seedTemplates(dataDir)
+const templates = seedTemplates(dataDir, fresh)
 
 /**
  * Chromium's remote debugging port, for `scripts/drive-dev.mjs`.
@@ -116,32 +120,68 @@ process.exit(status ?? 1)
  * The real templates directory, and where dev's copy of it goes.
  *
  * `~/.config/helm/templates` is the installed app's, resolved here the same way
- * `paths.ts` resolves it for the run that is not portable. Dev gets a copy
- * under its own data directory, replaced at every launch exactly as the
- * database is - the point of copying at all is that the dev app shows the
- * templates this machine actually has, and a copy taken a week ago is neither
- * that nor a fixture.
+ * `paths.ts` resolves it for the run that is not portable. Dev gets a **copy**
+ * rather than a share, because the dev app can now write templates and a shared
+ * directory would be somebody's real one.
  *
- * It is a copy rather than a share because **M14 makes the dev app a writer**.
- * A shared directory is harmless while dev can only read and is somebody's
- * templates directory the moment it cannot.
+ * **The copy is taken once, when dev's own directory is absent, and never
+ * again** - which is the opposite of what the database does, deliberately. The
+ * database is a mirror: nobody authors into dev's copy of it expecting to keep
+ * it, so a fresh `VACUUM INTO` every launch is right. A template is a thing a
+ * person *writes*, and M14 made the dev app able to write one - so wiping and
+ * re-copying at every launch would mean a template authored in `pnpm dev` is
+ * gone the next time the window opens. That is a data-loss bug, and it is not
+ * one a developer would suspect, because everything else about a dev run is
+ * disposable.
+ *
+ * This is the same rule `seedTemplates` in `core/discovery/templates.ts`
+ * already applies to the real directory, for the same reason: **nothing here
+ * keeps hashes, so nothing here can tell a template you authored from a stale
+ * copy of a real one.** When the two cases are indistinguishable, the one that
+ * must never happen decides, and that one is destroying authored work.
+ *
+ * The accepted cost is stated rather than worked around: dev's templates
+ * *diverge* from the real ones once the first copy is taken. It is not silent -
+ * the launch banner says which of the three happened and how old the copy is -
+ * and there are two one-step remedies, both of which already existed:
+ * `pnpm dev --fresh` re-copies, and deleting the directory is the same "reset"
+ * the shipped README documents for the real one.
  *
  * Reparse points are skipped rather than followed: `cpSync` walking a junction
  * would copy whatever it points at, and the engine refuses one inside a
  * template anyway.
  */
-function seedTemplates(dataDir) {
+function seedTemplates(dataDir, fresh) {
   const source = realTemplatesDir()
   const dest = join(dataDir, 'templates')
+
+  if (fresh) rmSync(dest, { recursive: true, force: true })
+
+  if (existsSync(dest)) {
+    const mine = countTemplates(dest)
+    return (
+      `${dest} (${mine === 1 ? '1 template' : `${String(mine)} templates`}, dev's own - ` +
+      "kept, because anything authored here would otherwise be lost at the next launch. " +
+      '`pnpm dev --fresh` re-copies from the real one.)'
+    )
+  }
   if (!existsSync(source)) {
     return `${dest} (nothing at ${source} to copy; the app seeds its own)`
   }
-  rmSync(dest, { recursive: true, force: true })
   cpSync(source, dest, {
     recursive: true,
     filter: (from) => !lstatSync(from).isSymbolicLink()
   })
   return `${dest} (a copy of ${source}, taken just now)`
+}
+
+/** Directories under the templates directory - a template is a folder. */
+function countTemplates(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).length
+  } catch {
+    return 0
+  }
 }
 
 function realTemplatesDir() {

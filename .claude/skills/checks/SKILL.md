@@ -34,7 +34,7 @@ A change to a surface named here is not done until its check is green.
 | `pnpm usage-check` | the status bar's usage figures | `core/usage/`, the status bar |
 | `pnpm settings-check` | the settings pane, every app setting, terminal/shell preferences | `core/store/settings.ts`, `SettingsPane`, `terminal.ts`, `estimateGrid`, `main/pterm.ts` |
 | `pnpm transcript-check` | the transcript archive: capture, search, the ceiling, read-only | `core/archive/`, `core/store/archive.ts`, `main/archive.ts`, the session-history pane's archive states, anything that reads `projects/*.jsonl` |
-| `pnpm template-check` | harness templates: the engine, the picker, seeding | `core/discovery/templates.ts`, `createHarness`, `NewHarnessDialog`, `templatesDir` in `paths.ts`, the seeding in `createServices` |
+| `pnpm template-check` | harness templates: the engine, the picker, seeding, authoring | `core/discovery/templates.ts`, `core/discovery/template-authoring.ts`, `createHarness`, `NewHarnessDialog`, `TemplateManager`, `SaveAsTemplateDialog`, `templatesDir` in `paths.ts`, the seeding in `createServices` |
 | `pnpm pr-check` | the pull-request surface end to end | `core/github/`, `main/pulls.ts`, `main/gh-cli.ts`, `PullsPane`, `PullRow`, `PullRequestPane`, the project pane's pull-request panel and its Config/Content links, `SessionHost.review` |
 | `pnpm affordance-check` | every clickable control looks clickable | `theme.css`, `lib/segmented.ts`, `Checkbox`, any shared control recipe, any new pane |
 | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
@@ -322,7 +322,34 @@ junction is a sentence in `problems`, and what it pointed at is hashed either
 side so containment is a claim about bytes rather than about a filename absent
 from a listing.
 
-No sessions, no network, about a minute.
+`authoring` (TPL-12 to TPL-18) drives the **template manager**, and every claim
+is read back off the disk by the driver rather than out of the channel that
+wrote it. It creates, describes, renames and deletes a template through the real
+form; imports a skill out of a real `config:scopes` entry and compares sha256 on
+both sides *and* again after making a harness from the result; freezes a fixture
+harness through the project pane's "Save as template" and checks the tick state
+of every previewed row, that the stated total **moves when a row is unticked**,
+and that what landed is what was ticked; and imports a `dot-claude/` folder,
+which stays `dot-claude/` in the template and arrives as `.claude/` in the
+harness.
+
+Three things in it are worth copying. **TPL-13 earns its comparator the way
+TPL-1 does** - a second fixture and a second comparison get their own flipped
+byte, because PROF-4's failure is per-comparison rather than per-driver.
+**Junction safety is proven in both directions** (TPL-15, TPL-16): a save that
+walks into one copies a repository, and a delete that walks into one *removes*
+it, which is the unrecoverable half. And the fixture the import reads from lives
+in the harness's `repos/`, not beside the harness - a root holding any harness
+is a directory *of* harnesses and its non-harness siblings are deliberately not
+projects (`scan.ts`), so a fixture planted as a sibling is never discovered,
+never a scope, and reads as an import bug.
+
+The driver's own teardown does **not** use `rmSync(dir, { recursive: true })`:
+that call was measured returning successfully while leaving a Windows junction
+in place, which is why `nuke()` in the driver and `removeTree` in the engine are
+both written out by hand.
+
+No sessions, no network, about two minutes.
 
 **`fidelity` and `claude-check`** - TUI fidelity inside xterm. These render
 `spike.html`, a separate page from the app, so app layout changes cannot move

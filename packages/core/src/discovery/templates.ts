@@ -43,20 +43,28 @@ import { parse as parseYaml } from 'yaml'
  * gets a directory of its own without a second mechanism being invented.
  */
 
+/**
+ * The five names the format is made of.
+ *
+ * Exported because `template-authoring.ts` writes what this file reads, and a
+ * second copy of `'template.yaml'` over there is how an authoring surface ends
+ * up producing a template the engine will not open.
+ */
+
 /** The metadata file at the root of a template directory. */
-const TEMPLATE_MANIFEST = 'template.yaml'
+export const TEMPLATE_MANIFEST = 'template.yaml'
 
 /** The manifest Helm writes into every harness, template or not. */
-const HARNESS_MANIFEST = 'harness.yaml'
+export const HARNESS_MANIFEST = 'harness.yaml'
 
 /** Written as `.claude`. See the header - the alias is for git and for npm. */
-const DOT_CLAUDE_ALIAS = 'dot-claude'
+export const DOT_CLAUDE_ALIAS = 'dot-claude'
 
 /** Declares a directory that has nothing in it. Not itself written. */
-const KEEP_FILE = '.gitkeep'
+export const KEEP_FILE = '.gitkeep'
 
 /** The one extension that opts a file in to substitution. Stripped on write. */
-const TPL_SUFFIX = '.tpl'
+export const TPL_SUFFIX = '.tpl'
 
 /**
  * What `template:` says when the caller does not name one, and the id of the
@@ -303,7 +311,7 @@ interface TemplatePlan {
 }
 
 /** `dot-claude` -> `.claude`, per segment. Everything else is left alone. */
-function rewriteSegment(name: string): string {
+export function rewriteSegment(name: string): string {
   return name === DOT_CLAUDE_ALIAS ? '.claude' : name
 }
 

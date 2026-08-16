@@ -127,7 +127,13 @@ const RESIZERS = '[role="separator"][aria-orientation]'
  * share a recipe with something here - which, after `SEGMENT_ON` and
  * `Checkbox`, is most of them.
  */
-const VIEWS: Array<{ name: string; open: readonly string[] | null; anchor: string }> = [
+const VIEWS: Array<{
+  name: string
+  open: readonly string[] | null
+  anchor: string
+  /** Clicked after the view is measured. For a view that opened a modal. */
+  close?: readonly string[]
+}> = [
   // Nothing open. Reached by closing everything rather than by a click, hence
   // the null. Audited first, so the chrome that persists across every view -
   // sidebar, title bar, status bar - is measured here and deduped out of all
@@ -190,7 +196,33 @@ const VIEWS: Array<{ name: string; open: readonly string[] | null; anchor: strin
   },
   { name: 'history', open: ['[data-open-history]'], anchor: '[data-history-search]' },
   { name: 'pulls', open: ['[data-open-pulls]'], anchor: '[data-pulls-refresh]' },
-  { name: 'settings', open: ['[data-open-settings]'], anchor: '[data-settings-pane]' }
+  { name: 'settings', open: ['[data-open-settings]'], anchor: '[data-settings-pane]' },
+  /**
+   * The template manager, which is a modal and therefore reachable by no walk
+   * over the panes - exactly the gap AFF-2 is named for. Two rows, because its
+   * right-hand column paints nothing until a template is selected: the first
+   * measures the list, New, Import folder and Done; the second measures the
+   * metadata form, Save, Show in Explorer, Delete, the per-file "make
+   * substitutable" and the import picker.
+   *
+   * `[data-template-row]` is the first authored template, whichever it is - the
+   * same call `config:file` makes about the first file in a scope. There is
+   * normally one, because a first start seeds the shipped `example`; on a
+   * machine where somebody has deleted it the step cannot be clicked and the
+   * driver logs the view as unreachable rather than reporting it measured.
+   */
+  {
+    name: 'templates',
+    open: ['[data-open-settings]', '[data-settings-manage-templates]'],
+    anchor: '[data-template-manager]',
+    close: ['[data-template-close]']
+  },
+  {
+    name: 'templates:one',
+    open: ['[data-open-settings]', '[data-settings-manage-templates]', '[data-template-row]'],
+    anchor: '[data-template-save]',
+    close: ['[data-template-close]']
+  }
 ]
 
 /**
@@ -704,6 +736,25 @@ export async function runAffordanceChecks(
         })
       }
       await unstamp()
+    }
+
+    /*
+     * A view that opened a modal puts it away again.
+     *
+     * The comment on `VIEWS` says a walk that leaves a dialog open poisons
+     * every view after it, and until the template manager arrived that was
+     * enforced by leaving modals out of the table entirely. It is enforced here
+     * instead now that one is in: the manager is a whole surface with a dozen
+     * controls and no other walk reaches it, so the answer is to close it
+     * rather than to leave it unmeasured.
+     *
+     * Measured before it was written: with the manager left up, AFF-7's pointer
+     * landed on the scrim instead of the sidebar row and the probe reported
+     * "the pointer never landed", which is a false red about the sidebar.
+     */
+    for (const step of ('close' in view ? view.close : undefined) ?? []) {
+      await click(win, step)
+      await sleep(350)
     }
   }
 

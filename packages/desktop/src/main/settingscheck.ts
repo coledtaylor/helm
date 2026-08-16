@@ -1343,8 +1343,14 @@ export async function runSettingsChecks(
         // that a group added, removed or reordered all fail here - `archive`
         // arrived with the transcript archive and this went stale, which nobody
         // saw because the probe was already red for the inherited tab strip.
+        //
+        // It went stale twice more the same way and both are corrected here:
+        // `content` arrived with the content viewer's wrapping settings, and
+        // `templates` with in-app template authoring. Each one left this red,
+        // and a probe that is already red is a probe nothing reads - which is
+        // the whole failure mode the paragraph above describes, repeating.
         groups.join(',') ===
-          'claude,workspace,appearance,updates,terminal,archive,github' &&
+          'claude,workspace,templates,appearance,content,updates,terminal,archive,github' &&
         Object.values(controls).every(Boolean) &&
         !internalLeaked &&
         historyUp &&

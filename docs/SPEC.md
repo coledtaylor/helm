@@ -284,6 +284,86 @@ that shows something that is not on this machine.
 > that can themselves fail, over a directory the user can perfectly well look
 > at, finish or delete.
 
+> [!note] Authoring a template - 2026-08-16
+> A template is a plain directory the user can open in any editor, and that one
+> fact decides what is worth building in the app. **There is no in-app file
+> editor**, and there is deliberately no channel that reads or writes an
+> arbitrary file inside a template: `shell:showItem` opens the folder and their
+> own editor takes it from there. A tree view and an editor pane was the
+> largest piece of the original design and the piece most redundant with a
+> folder somebody already owns. If in-app editing ever comes back it comes back
+> as "the config console accepts a template directory as a scope", not as a
+> second editor.
+>
+> What is built is what a file manager cannot do.
+>
+> **The manager** - reachable from the New Harness dialog *and* from Settings,
+> because templates are app-level and nobody should have to start creating a
+> harness to rename one. It lists label, description, file count and age;
+> creates (a `template.yaml` and nothing else - a starter file here would be
+> Helm's opinion arriving inside the feature whose whole point is that the
+> layout is yours); renames, deletes, and shows in Explorer. Metadata is a
+> two-field form rather than a YAML box, because a misspelled `label:` drops a
+> template out of the picker silently.
+>
+> **`.tpl` awareness**, which survives the editor being cut precisely because
+> it is the one part of the format nobody can infer from a folder listing. The
+> file list badges a `.tpl`, shows what each file becomes (`CLAUDE.md.tpl` →
+> `CLAUDE.md`, `dot-claude/` → `.claude/`), names the three variables in a help
+> line, and offers the rename that opts a file in. A binary is refused that
+> rename: substitution reads a file as text and writes it back, so marking a
+> PNG substitutable is arranging for it to be corrupted at creation time.
+>
+> **Skill import.** `ClaudeInventory` cannot feed this - it is counts and
+> carries no names - so the seam is the config console: `config:scopes` lists
+> every `.claude` tree Helm can see, `config:tree` names what is in one, and
+> the picker is that tree with checkboxes. Every scope is a source, `~/.claude`
+> included, and that is a **read**; the writes land inside the templates
+> directory and nowhere else (`assertTemplateWritable`). A skill copies as its
+> whole directory - the console's own `configUnit`, so "copy this skill" means
+> there what it means in the console - as **plain files with no link back**,
+> because a template travels and a reference to `~/.claude/skills/think`
+> produces a different harness on a different machine and none at all on
+> somebody else's.
+>
+> **Save this harness as a template**, and **import a folder as a template** -
+> one operation with two sets of defaults. A preview lists every top-level
+> entry with its recursive file count and byte size, and **nothing is copied
+> until it is shown**: `.git`, `node_modules` and `harness.yaml` are listed and
+> refused rather than pruned silently, `repos/` is listed and unticked but may
+> be ticked, everything else is ticked and the user unticks what is instance
+> data - Helm cannot tell a journal from a scaffold, so it asks. `.git` and
+> `node_modules` are refused **at every depth** and are not merely defaults: a
+> `.git` in a template puts one workspace's history into every harness made
+> from it, and pruning them is also what bounds the walk that states the size.
+> `harness.yaml` is refused rather than merely unticked because `applyTemplate`
+> already refuses one, so copying it would author a template guaranteed to
+> report a problem the first time anybody used it. A `dot-claude/` tree is
+> copied **verbatim**: the alias is the author's choice, applied by the writer
+> when a harness is made, and normalising it on the way in would undo the
+> decision they made for whichever tool needed it.
+>
+> **A reparse point is unlinked, never walked** - every traversal asks
+> `isSymbolicLink()` before `isDirectory()`, because a Windows junction answers
+> yes to both. This is the overlay-shim rule in the second place it is
+> load-bearing, and the deletion half is the unrecoverable one: a delete that
+> walked into a junction removes the contents of a real repository.
+> `removeTree` is written out rather than left to `fs.rm(..., { recursive:
+> true })`, and that is measured rather than defensive - `pnpm template-check`'s
+> own fixture teardown used the built-in call and was found **silently leaving
+> a junction in place**, returning without error.
+>
+> Writes go through `writeSnapshottedFile` with a guard of this surface's own,
+> exactly as the content viewer does it, so there is one write path in the app
+> rather than a third with a third set of bugs. Deleting a *template* has no
+> undo, and that is stated rather than half-provided: the snapshot table holds
+> text and a template holds whatever its author put there.
+>
+> `pnpm template-check`'s **`authoring`** group is the regression test -
+> TPL-12 to TPL-18, driven through the real manager. TPL-13 earns its byte
+> comparison the way TPL-1 does, on its own fixture: clean, then a flipped
+> source byte the same comparator must reject, then restored.
+
 ### 4.2 Config Console
 
 The `.claude/` directory of whatever scope you point at, as a real interface.

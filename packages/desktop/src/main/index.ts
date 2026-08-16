@@ -30,6 +30,7 @@ import {
   type Services
 } from './services'
 import { createConfigService } from './config'
+import { createTemplateService } from './templates'
 import {
   attachArtifactConsole,
   CONTENT_SCHEME,
@@ -458,6 +459,11 @@ function startApp(options: AppOptions = {}): void {
   const content = createContentService({ services })
   attachArtifactConsole(win, (entry) => emit(win, 'content:artifactConsole', entry))
 
+  // Built on the config service rather than beside it: the import picker's
+  // sources are the console's own scopes, and what a skill *is* is the
+  // console's own answer.
+  const templates = createTemplateService(services, config)
+
   registerIpc({
     services,
     sessions,
@@ -468,6 +474,7 @@ function startApp(options: AppOptions = {}): void {
     pulls,
     config,
     content,
+    templates,
     window: () => win,
     ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
     ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),

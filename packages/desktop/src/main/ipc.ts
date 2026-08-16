@@ -15,6 +15,7 @@ import {
 } from '@helm/core'
 import type { ConfigService } from './config'
 import type { ContentService } from './content'
+import type { TemplateService } from './templates'
 import type { ArchiveService } from './archive'
 import type { HistoryService } from './history'
 import type { PullsService } from './pulls'
@@ -99,6 +100,8 @@ export interface IpcContext {
   config: ConfigService
   /** Reads, renders and searches what Claude writes; see `content.ts`. */
   content: ContentService
+  /** Authors what `template:list` reads back; see `templates.ts`. */
+  templates: TemplateService
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
   /**
@@ -377,6 +380,19 @@ export function registerIpc(ctx: IpcContext): void {
         template,
         ...(mode !== undefined ? { mode } : {})
       }),
+
+    // Authoring. Every one of these writes inside the templates directory and
+    // nowhere else; `template:import` is the only one that reads outside it,
+    // and reading is all it does - see `assertTemplateWritable`.
+    'template:detail': ({ template }) => ctx.templates.detail(template),
+    'template:create': (request) => ctx.templates.create(request),
+    'template:rename': (request) => ctx.templates.rename(request),
+    'template:delete': ({ template }) => ctx.templates.remove(template),
+    'template:metadata': (request) => ctx.templates.metadata(request),
+    'template:substitute': (request) => ctx.templates.substitute(request),
+    'template:import': (request) => ctx.templates.importFiles(request),
+    'template:folderPreview': (request) => ctx.templates.folderPreview(request),
+    'template:fromFolder': (request) => ctx.templates.fromFolder(request),
 
     'update:check': () => checkForUpdate(),
 

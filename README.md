@@ -67,6 +67,14 @@ Harness templates are the one thing outside that: they live in
 A portable install keeps them in its own `helm-data\templates`, so it still
 leaves nothing behind on a machine you plug it into.
 
+Helm manages them without trying to replace your editor. **Settings ->
+Harness templates**, or **Manage templates…** in the New Harness dialog, will
+create, rename, describe and delete one, copy a skill you have already written
+into it out of any `.claude` tree Helm can see, and open the folder in
+Explorer - which is where you edit the files. You can also **save a harness you
+have been working in as a template**, ticking off what belongs to that harness
+rather than to the layout, or **import a folder** somebody sent you.
+
 Expect **"Windows protected your PC"** either way. These builds are not
 code-signed, so SmartScreen has no publisher to check and warns about every
 download: **More info** -> **Run anyway**. That warning is doing its job, and

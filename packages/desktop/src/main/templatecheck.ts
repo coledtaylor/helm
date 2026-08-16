@@ -5,6 +5,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  rmdirSync,
   statSync,
   symlinkSync,
   writeFileSync
@@ -53,7 +54,7 @@ import type { CheckContext } from './sessionscheck'
  * compares nothing against nothing and reports green for weeks.
  */
 
-const GROUPS = ['create', 'minimal-unchanged', 'seed', 'hostile'] as const
+const GROUPS = ['create', 'minimal-unchanged', 'seed', 'hostile', 'authoring'] as const
 type Group = (typeof GROUPS)[number]
 
 /** The template the `create` group builds a harness from. */
@@ -67,6 +68,42 @@ const HOSTILE = 'check-hostile'
 const HARNESS_FROM_TEMPLATE = 'tpl-from-template'
 const HARNESS_MINIMAL = 'tpl-minimal'
 const HARNESS_HOSTILE = 'tpl-hostile'
+
+// --- authoring -------------------------------------------------------------
+
+/** Made through the manager's own form, renamed through it, deleted through it. */
+const AUTHORED = 'tpl-authored'
+const AUTHORED_RENAMED = 'tpl-authored-renamed'
+const AUTHORED_LABEL = 'Authored in the app'
+const AUTHORED_DESCRIPTION = 'Created through the template manager by pnpm template-check.'
+
+/** Made through the manager, then imported into. Kept, and built from. */
+const IMPORT_TARGET = 'tpl-import-target'
+/** The skill that gets copied in, and the file whose bytes have to survive. */
+const IMPORT_SKILL = 'tpl-fixture-skill'
+const IMPORT_SKILL_BODY = [
+  '---',
+  `name: ${IMPORT_SKILL}`,
+  'description: Planted by pnpm template-check. Copied into a template, byte for byte.',
+  '---',
+  '',
+  'The body is here to make the file long enough that one flipped byte is not the',
+  'whole of it, and it contains a literal {{NAME}} so a careless importer that ran',
+  'substitution over what it copied would be caught by the same comparison.',
+  ''
+].join('\n')
+
+/** Carries a junction. Deleted through the manager; the canary must survive. */
+const DOOMED = 'tpl-doomed'
+
+/** Frozen through the project pane's "Save as template". */
+const FROZEN = 'tpl-frozen'
+/** The `dot-claude/` tree imported through "Import folder as template". */
+const ALIASED = 'tpl-aliased'
+const ALIASED_SKILL = 'tpl-aliased-skill'
+
+const HARNESS_FROM_IMPORT = 'tpl-from-import'
+const HARNESS_FROM_ALIAS = 'tpl-from-alias'
 
 /**
  * A file the template ships that must arrive **byte-identical**.
@@ -175,6 +212,52 @@ function walk(dir: string, base = dir, into: string[] = []): string[] {
 }
 
 /**
+ * Removes a tree the way the engine does: unlinking reparse points, never
+ * walking into one.
+ *
+ * Written out here rather than left to `rmSync(dir, { recursive: true, force:
+ * true })` because that call was **measured leaving a junction in place** - the
+ * authoring group's second run died on `EEXIST` planting a junction the first
+ * run's teardown had reported removing. It did not throw; it returned and the
+ * reparse point was still there.
+ *
+ * Which is the same reason `removeTree` in `core/discovery/template-authoring.ts`
+ * is written out, arrived at from the other end: a recursive remove that
+ * silently declines to unlink a junction is the *harmless* half of what a
+ * recursive remove can get wrong about one, and this driver hit that half first.
+ */
+function nuke(path: string): void {
+  let entries
+  try {
+    entries = readdirSync(path, { withFileTypes: true })
+  } catch {
+    // Not there, or not a directory. `rmSync` handles both.
+    rmSync(path, { force: true })
+    return
+  }
+  for (const entry of entries) {
+    const child = join(path, entry.name)
+    // The link question first: on Windows a junction answers yes to
+    // `isDirectory()` as well, and the order is what decides whether this
+    // removes a fixture or the canary behind it.
+    if (entry.isSymbolicLink()) {
+      try {
+        rmSync(child, { force: true })
+      } catch {
+        rmdirSync(child)
+      }
+      continue
+    }
+    if (entry.isDirectory()) {
+      nuke(child)
+      continue
+    }
+    rmSync(child, { force: true })
+  }
+  rmdirSync(path)
+}
+
+/**
  * The hash of a file, or null for anything that is not one.
  *
  * Null rather than a throw, and that matters in both directions. TPL-1 leans on
@@ -220,19 +303,101 @@ interface Fixtures {
   parent: string
   /** What the hostile template's junction points at. Must stay untouched. */
   canary: string
+  /**
+   * A project with a real `.claude` tree, for the import picker to read.
+   *
+   * It has to be somewhere `config:scopes` looks, which means somewhere the
+   * scan found - so the authoring group adds `parent` as a root and rescans
+   * before it opens the picker. That is the seam being checked: the sources are
+   * the config console's scopes and nothing else.
+   */
+  project: string
+  /** The `SKILL.md` whose bytes have to arrive unchanged. */
+  skill: string
+  /** A harness with the things somebody would want to leave behind. */
+  harness: string
+  /** A `dot-claude/`-style tree, for "import folder as template". */
+  aliased: string
 }
 
 function plantFixtures(dataDir: string): Fixtures {
   const parent = join(dataDir, 'template-fixtures', 'parent')
   const canary = join(dataDir, 'template-fixtures', 'canary')
-  rmSync(join(dataDir, 'template-fixtures'), { recursive: true, force: true })
+  nuke(join(dataDir, 'template-fixtures'))
   mkdirSync(parent, { recursive: true })
   mkdirSync(canary, { recursive: true })
   writeFileSync(join(canary, 'do-not-touch.txt'), 'untouched\n', 'utf8')
 
+  // The harness to freeze. One of each thing the preview has to get right, and
+  // a junction inside a directory that is ticked by default - a junction under
+  // `repos/` would be untested, since `repos/` starts unticked anyway.
+  const harness = join(parent, 'tpl-fixture-harness')
+
+  /*
+   * The import source is a repository **inside that harness**, not a sibling of
+   * it, and that is the scan's rule rather than a preference: a root holding
+   * any harness is a directory *of* harnesses, and its non-harness siblings are
+   * deliberately not projects (`scan.ts`, `harnessChildren`). Planted beside
+   * the harness it was never discovered, so it was never a scope, so the picker
+   * was empty - which read as an import bug and was a fixture bug.
+   *
+   * It is also the realistic case: the skill you already wrote is in a repo you
+   * work in, and that repo is under a harness.
+   */
+  const project = join(harness, 'repos', 'tpl-import-source')
+  const skillDir = join(project, '.claude', 'skills', IMPORT_SKILL)
+  mkdirSync(skillDir, { recursive: true })
+  const skill = join(skillDir, 'SKILL.md')
+  writeFileSync(skill, IMPORT_SKILL_BODY, 'utf8')
+  // A resource beside the SKILL.md, because a skill is a directory and "copies
+  // wholesale" is the claim - one file arriving would look identical from the
+  // SKILL.md alone.
+  writeFileSync(join(skillDir, 'reference.md'), '# bundled beside the skill\n', 'utf8')
+  mkdirSync(join(harness, 'tools'), { recursive: true })
+  mkdirSync(join(harness, 'notes'), { recursive: true })
+  mkdirSync(join(harness, 'repos', 'thing'), { recursive: true })
+  mkdirSync(join(harness, '.git'), { recursive: true })
+  mkdirSync(join(harness, '.claude', 'skills', 'frozen'), { recursive: true })
+  writeFileSync(join(harness, 'harness.yaml'), 'name: tpl-fixture-harness\nversion: 1\n', 'utf8')
+  writeFileSync(join(harness, 'CLAUDE.md'), '# the fixture harness\n', 'utf8')
+  writeFileSync(join(harness, '.claude', 'skills', 'frozen', 'SKILL.md'), 'a frozen skill\n', 'utf8')
+  writeFileSync(join(harness, 'notes', 'journal.md'), 'a private journal\n', 'utf8')
+  writeFileSync(join(harness, 'repos', 'thing', 'README.md'), 'a checkout\n', 'utf8')
+  writeFileSync(join(harness, '.git', 'HEAD'), 'ref: refs/heads/main\n', 'utf8')
+  writeFileSync(join(harness, 'tools', 'run.mjs'), 'console.log(1)\n', 'utf8')
+  symlinkSync(canary, join(harness, 'tools', 'escape'), 'junction')
+
+  // The `dot-claude/` tree, deliberately *not* under `parent`: it is chosen
+  // through the folder picker rather than found by a scan.
+  const aliased = join(dataDir, 'template-fixtures', 'authored-elsewhere')
+  mkdirSync(join(aliased, 'dot-claude', 'skills', ALIASED_SKILL), { recursive: true })
+  writeFileSync(
+    join(aliased, 'dot-claude', 'skills', ALIASED_SKILL, 'SKILL.md'),
+    'a skill that arrived under an alias\n',
+    'utf8'
+  )
+  writeFileSync(join(aliased, 'CLAUDE.md.tpl'), '# {{NAME}}\n', 'utf8')
+
+  // The template the manager is asked to delete, with a junction in it.
+  const doomed = join(templatesDir, DOOMED)
+  nuke(doomed)
+  mkdirSync(doomed, { recursive: true })
+  writeFileSync(
+    join(doomed, 'template.yaml'),
+    'label: "Doomed"\ndescription: "Deleted by pnpm template-check. Carries a junction."\norder: 9\n',
+    'utf8'
+  )
+  writeFileSync(join(doomed, 'honest.txt'), 'this one is fine\n', 'utf8')
+  symlinkSync(canary, join(doomed, 'escape'), 'junction')
+
+  // Anything the authoring group is about to create, from a previous run.
+  for (const leftover of [AUTHORED, AUTHORED_RENAMED, IMPORT_TARGET, FROZEN, ALIASED]) {
+    nuke(join(templatesDir, leftover))
+  }
+
   // The fixture template: one of each thing the format has.
   const fixture = join(templatesDir, FIXTURE)
-  rmSync(fixture, { recursive: true, force: true })
+  nuke(fixture)
   mkdirSync(join(fixture, 'dot-claude'), { recursive: true })
   mkdirSync(join(fixture, 'notes'), { recursive: true })
   writeFileSync(
@@ -247,7 +412,7 @@ function plantFixtures(dataDir: string): Fixtures {
 
   // The hostile one: an honest file and a junction pointing out of the harness.
   const hostile = join(templatesDir, HOSTILE)
-  rmSync(hostile, { recursive: true, force: true })
+  nuke(hostile)
   mkdirSync(hostile, { recursive: true })
   writeFileSync(
     join(hostile, 'template.yaml'),
@@ -259,7 +424,12 @@ function plantFixtures(dataDir: string): Fixtures {
   // is the reparse point CLAUDE.md's rule about shims is written about.
   symlinkSync(canary, join(hostile, 'escape'), 'junction')
 
-  return { parent, canary }
+  return { parent, canary, project, skill, harness, aliased }
+}
+
+/** The canary as a fingerprint: its listing and the bytes of the file in it. */
+function canaryState(canary: string): string[] {
+  return walk(canary).concat(sha256(join(canary, 'do-not-touch.txt')) ?? 'missing')
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +514,102 @@ async function createThroughDialog(
   )
 
   return { pickerUp, rowText, chosen, written, problems, onDisk, path }
+}
+
+// ---------------------------------------------------------------------------
+// Driving the template manager
+// ---------------------------------------------------------------------------
+
+/**
+ * Sets a React-controlled `<select>`.
+ *
+ * The same trap `fill` is written for, one prototype along: assigning `.value`
+ * on a select updates the node and nothing else, because React tracks the
+ * previous value on the element and skips a change it did not see happen.
+ */
+async function choose(win: BrowserWindow, selector: string, value: string): Promise<boolean> {
+  return js<boolean>(
+    win,
+    `(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return false;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+      setter.call(el, ${JSON.stringify(value)});
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true })()`
+  )
+}
+
+/** Whether a node is on screen at all. */
+async function exists(win: BrowserWindow, selector: string): Promise<boolean> {
+  return js<boolean>(win, `Boolean(document.querySelector(${JSON.stringify(selector)}))`)
+}
+
+/**
+ * Opens the manager the way the criterion names, and says whether both routes
+ * were there.
+ *
+ * "Reachable from the New Harness dialog **and** from the settings pane" is two
+ * claims, so both handles are looked for and each is actually pressed. The
+ * dialog route is checked first and closed again, because the manager withholds
+ * the harness dialog while it is up - one `Overlay` at a time - and a run that
+ * left the dialog open behind it would be measuring a stack of two.
+ */
+async function openManagerBothWays(
+  win: BrowserWindow,
+  fixtures: Fixtures
+): Promise<{ fromDialog: boolean; fromSettings: boolean }> {
+  await click(win, '[data-create-harness]')
+  await pollJs(win, `document.querySelector('[data-harness-dialog]')`, 10_000)
+  answerPicker('directory', fixtures.parent)
+  await click(win, '[data-harness-choose]')
+  await pollJs(win, `document.querySelector('[data-harness-dir]')?.value`, 10_000)
+  // The picker only paints once `template:list` has answered, and the link
+  // lives on its label row.
+  await pollJs(win, `document.querySelector('[data-harness-manage-templates]')`, 10_000)
+  await click(win, '[data-harness-manage-templates]')
+  const fromDialog = await pollJs(win, `document.querySelector('[data-template-manager]')`, 10_000)
+  await click(win, '[data-template-close]')
+  await sleep(300)
+  await dismissDialog(win)
+
+  await click(win, '[data-open-settings]')
+  await pollJs(win, `document.querySelector('[data-settings-pane]')`, 10_000)
+  await js<void>(
+    win,
+    `(() => { const el = document.querySelector('[data-settings-group="templates"]');
+      if (el) el.scrollIntoView({ block: 'center' }) })()`
+  )
+  await sleep(250)
+  await click(win, '[data-settings-manage-templates]')
+  const fromSettings = await pollJs(
+    win,
+    `document.querySelector('[data-template-manager]')`,
+    10_000
+  )
+  return { fromDialog, fromSettings }
+}
+
+/** Selects a template's row in the manager and waits for its files to land. */
+async function selectTemplate(win: BrowserWindow, template: string): Promise<void> {
+  await click(win, `[data-template-row="${template}"]`)
+  await pollJs(
+    win,
+    `document.querySelector('[data-template-name]')?.value === ${JSON.stringify(template)}`,
+    10_000
+  )
+  // `template:detail` is a second round trip after the row is selected.
+  await sleep(400)
+}
+
+/** Creates a template through the manager's own New form. */
+async function createTemplateThroughManager(win: BrowserWindow, name: string): Promise<void> {
+  await click(win, '[data-template-new]')
+  await pollJs(win, `document.querySelector('[data-template-new-name]')`, 10_000)
+  await fill(win, '[data-template-new-name]', name)
+  await click(win, '[data-template-new-confirm]')
+  await pollJs(win, `document.querySelector('[data-template-row="${name}"]')`, 10_000)
+  await sleep(400)
 }
 
 /** Closes the dialog if it is still up, so the next group starts clean. */
@@ -884,6 +1150,575 @@ export async function runTemplateChecks(
         'What the junction pointed at is hashed either side, so "nothing was written outside the harness" is a claim about the bytes rather than about the absence of a filename.'
       ]
     })
+  }
+
+  // -------------------------------------------------------------------------
+  // authoring - the manager, skill import, and freezing a folder
+  // -------------------------------------------------------------------------
+  if (wanted.has('authoring')) {
+    await dismissDialog(win)
+
+    // The import picker's sources are `config:scopes`, which is built from the
+    // last scan - so the fixtures have to be somewhere Helm scans before any of
+    // this can be about the real seam. Through the real channels, both.
+    const rootsAfterAccept = await js<string[]>(
+      win,
+      `window.helm.invoke('roots:accept', { path: ${JSON.stringify(fixtures.parent)} })`
+    )
+
+    /*
+     * Scan until the fixture is a scope, rather than scanning once.
+     *
+     * One scan is not enough and the reason is a race worth naming: the app
+     * kicks off its own pass at `renderer:ready`, that pass walks this
+     * machine's real roots and takes seconds, and `runScan` assigns
+     * `services.lastScan` when it *finishes*. A driver that accepted a root and
+     * scanned immediately would have its result overwritten by the startup pass
+     * landing afterwards with the old roots - which is exactly what happened,
+     * and it looked like the fixture had never been discovered at all.
+     *
+     * So the condition is the one that actually matters - the fixture is in
+     * `config:scopes` - and it is asked through the same channel the import
+     * picker reads.
+     */
+    let scanned: { projects: string[]; errors: string[] } = { projects: [], errors: [] }
+    let scopesHaveFixture = false
+    for (let attempt = 0; attempt < 6 && !scopesHaveFixture; attempt++) {
+      scanned = await js<{ projects: string[]; errors: string[] }>(
+        win,
+        `window.helm.invoke('discovery:scan', { includeGit: false }).then((r) => ({
+          projects: r.projects.map((p) => p.path),
+          errors: r.errors.map((e) => e.path + ': ' + e.message)
+        }))`
+      )
+      await sleep(600)
+      scopesHaveFixture = await js<boolean>(
+        win,
+        `window.helm.invoke('config:scopes').then((s) => s.some(
+          (scope) => scope.path.toLowerCase() === ${JSON.stringify(fixtures.project.toLowerCase())}
+        ))`
+      )
+    }
+
+    const reach = await openManagerBothWays(win, fixtures)
+
+    // --- TPL-12  the manager: create, describe, rename, delete -------------
+    await createTemplateThroughManager(win, AUTHORED)
+    const afterCreate = walk(join(templatesDir, AUTHORED))
+
+    await fill(win, '[data-template-label]', AUTHORED_LABEL)
+    await fill(win, '[data-template-description]', AUTHORED_DESCRIPTION)
+    await click(win, '[data-template-save]')
+    await sleep(700)
+    const described = manifestLines(join(templatesDir, AUTHORED, 'template.yaml'))
+
+    // The rename goes through the same form: the folder name *is* the id.
+    await fill(win, '[data-template-name]', AUTHORED_RENAMED)
+    await click(win, '[data-template-save]')
+    await pollJs(win, `document.querySelector('[data-template-row="${AUTHORED_RENAMED}"]')`, 10_000)
+    await sleep(500)
+    const renamed = {
+      oldGone: !existsSync(join(templatesDir, AUTHORED)),
+      newThere: existsSync(join(templatesDir, AUTHORED_RENAMED, 'template.yaml')),
+      // The metadata has to have travelled with it. A rename that lost the
+      // label would leave a template the picker shows by its folder name.
+      manifest: manifestLines(join(templatesDir, AUTHORED_RENAMED, 'template.yaml'))
+    }
+
+    // The manager as somebody sees it, with a template selected, its files
+    // listed and the import picker under them. A new surface is not done until
+    // it has been looked at rather than reasoned about (CLAUDE.md).
+    const managerShot = await screenshot(win, shotDir, 'template-manager.png')
+
+    // What the manager lists, against the driver's own listing of the folder.
+    const listedRows = await js<string[]>(
+      win,
+      `[...document.querySelectorAll('[data-template-row]')].map((el) => el.getAttribute('data-template-row') ?? '')`
+    )
+    const onDiskTemplates = readdirSync(templatesDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .map((entry) => entry.name)
+      .sort()
+
+    await selectTemplate(win, AUTHORED_RENAMED)
+    await click(win, '[data-template-delete]')
+    await sleep(250)
+    await click(win, '[data-template-delete-confirm]')
+    await pollJs(win, `!document.querySelector('[data-template-row="${AUTHORED_RENAMED}"]')`, 10_000)
+    await sleep(400)
+    const deleted = !existsSync(join(templatesDir, AUTHORED_RENAMED))
+
+    checks.push({
+      id: 'TPL-12',
+      criterion:
+        'The manager is reachable from the New Harness dialog and the settings pane, and does list, create, rename, delete, metadata and Show in Explorer',
+      title: 'A template was created, described, renamed and deleted through the real manager',
+      ok:
+        reach.fromDialog &&
+        reach.fromSettings &&
+        afterCreate.join(',') === 'template.yaml' &&
+        described?.values['label'] === AUTHORED_LABEL &&
+        described.values['description'] === AUTHORED_DESCRIPTION &&
+        renamed.oldGone &&
+        renamed.newThere &&
+        renamed.manifest?.values['label'] === AUTHORED_LABEL &&
+        listedRows.slice().sort().join(',') ===
+          onDiskTemplates.filter((name) => listedRows.includes(name)).join(',') &&
+        listedRows.includes(AUTHORED_RENAMED) &&
+        deleted,
+      detail: {
+        reachableFromNewHarnessDialog: reach.fromDialog,
+        reachableFromSettings: reach.fromSettings,
+        afterCreate,
+        described: described?.values ?? null,
+        renamed,
+        listedRows,
+        onDiskTemplates,
+        deletedFromDisk: deleted,
+        screenshot: managerShot.file
+      },
+      notes: [
+        'Every claim is read back off the disk by this driver - a plain `readdirSync` for the list and the line-wise manifest reader for the metadata - rather than out of `template:list`. A channel agreeing with the writer that called it proves nothing about either.',
+        'Create scaffolds a manifest and *nothing else*: the walk is required to be exactly `template.yaml`, so a starter file added to the scaffold would fail here rather than arriving in somebody\'s harness.',
+        'Both entry points are pressed rather than merely looked for, and the dialog route is closed again before the settings route is tried - the manager withholds the harness dialog while it is up, so a run that left it open would be measuring two overlays.'
+      ]
+    })
+
+    // --- TPL-13  import a skill, byte for byte, and then use it ------------
+    await createTemplateThroughManager(win, IMPORT_TARGET)
+    await choose(win, '[data-template-import-scope]', fixtures.project)
+    const sawSkill = await pollJs(
+      win,
+      `document.querySelector('[data-template-import-file=".claude/skills/${IMPORT_SKILL}/SKILL.md"]')`,
+      10_000
+    )
+    // The scope list itself, so "sourced from `config:scopes`" is a claim about
+    // what the picker was offered rather than about what it happened to show.
+    const offeredScopes = await js<string[]>(
+      win,
+      `[...document.querySelectorAll('[data-template-import-scope] option')].map((el) => el.value)`
+    )
+    const userScopeOffered = await js<boolean>(
+      win,
+      `[...document.querySelectorAll('[data-template-import-scope] option')]
+        .some((el) => (el.textContent ?? '').includes('~/.claude'))`
+    )
+    await click(
+      win,
+      `[data-template-import-file=".claude/skills/${IMPORT_SKILL}/SKILL.md"]`
+    )
+    await sleep(200)
+    await click(win, '[data-template-import-confirm]')
+    await sleep(900)
+
+    const importedSkill = join(
+      templatesDir,
+      IMPORT_TARGET,
+      '.claude',
+      'skills',
+      IMPORT_SKILL,
+      'SKILL.md'
+    )
+    const importedTree = walk(join(templatesDir, IMPORT_TARGET))
+
+    /*
+     * The same discipline TPL-1 applies to the create fixture, applied to this
+     * one - and it has to be applied again, because this is a *different*
+     * fixture read by a *different* comparison. `sameSkill` is asked clean,
+     * then a byte of the source is flipped and it is required to reject the
+     * file it had just accepted, then the byte goes back.
+     *
+     * Without it, a source that had gone missing would make both hashes null,
+     * `a === b` would hold, and this whole probe would report green over two
+     * files that do not exist.
+     */
+    const sameSkill = (): boolean => {
+      const a = sha256(fixtures.skill)
+      const b = sha256(importedSkill)
+      return a !== null && b !== null && a === b
+    }
+    const skillBytes = existsSync(fixtures.skill) ? readFileSync(fixtures.skill) : null
+    const skillPresent = skillBytes !== null && skillBytes.length > 0
+    const skillClean = sameSkill()
+    let skillMutated: boolean | null = null
+    if (skillPresent) {
+      const mutated = Buffer.from(skillBytes)
+      const at = Math.floor(mutated.length / 2)
+      mutated[at] = (mutated[at] ?? 0) ^ 0x01
+      writeFileSync(fixtures.skill, mutated)
+      skillMutated = sameSkill()
+      writeFileSync(fixtures.skill, skillBytes)
+    }
+    const skillRestored = sha256(fixtures.skill) !== null && sameSkill()
+
+    // End to end: the template is used, and the file has to survive that too.
+    // The manager is closed first - it withholds the harness dialog while it is
+    // up (one `Overlay` at a time), so a run that left it open would sit here
+    // waiting for a dialog that is deliberately not being drawn.
+    await click(win, '[data-template-close]')
+    await sleep(400)
+    const fromImport = await createThroughDialog(
+      win,
+      fixtures,
+      HARNESS_FROM_IMPORT,
+      IMPORT_TARGET,
+      shotDir
+    )
+    await dismissDialog(win)
+    const inHarness = join(
+      fromImport.path,
+      '.claude',
+      'skills',
+      IMPORT_SKILL,
+      'SKILL.md'
+    )
+
+    checks.push({
+      id: 'TPL-13',
+      criterion:
+        'A skill is imported from a config-console scope as plain, byte-identical files, and survives being made into a harness',
+      title: 'The imported SKILL.md matches the source sha256, in the template and in the harness',
+      ok:
+        scopesHaveFixture &&
+        sawSkill &&
+        offeredScopes.includes(fixtures.project) &&
+        userScopeOffered &&
+        skillPresent &&
+        skillClean &&
+        skillMutated === false &&
+        skillRestored &&
+        // A skill is a directory: the file beside the SKILL.md travels with it.
+        importedTree.includes(`.claude/skills/${IMPORT_SKILL}/reference.md`) &&
+        sha256(inHarness) === sha256(fixtures.skill) &&
+        fromImport.problems.length === 0,
+      detail: {
+        pickerSawTheSkill: sawSkill,
+        // What the fixture had to travel through to become a scope at all: a
+        // root, then a scan, then `config:scopes`. Reported whether or not this
+        // passes, because "the picker was empty" has three different causes and
+        // the return value alone distinguishes none of them.
+        rootsAfterAccept,
+        scannedProjects: scanned.projects.filter((path) =>
+          path.toLowerCase().startsWith(fixtures.parent.toLowerCase())
+        ),
+        scanErrors: scanned.errors,
+        fixtureBecameAScope: scopesHaveFixture,
+        offeredScopes,
+        userScopeOffered,
+        sourceSha: sha256(fixtures.skill),
+        templateSha: sha256(importedSkill),
+        harnessSha: sha256(inHarness),
+        cleanCompare: skillClean,
+        mutatedCompare: skillMutated,
+        restored: skillRestored,
+        importedTree,
+        harnessProblems: fromImport.problems
+      },
+      notes: [
+        'The comparator is made to disagree before its agreement is believed, exactly as TPL-1 does for the create fixture. A second fixture and a second comparison earn the proof a second time - CLAUDE.md, PROF-4.',
+        'The scope list is read out of the rendered `<select>`, and the user scope is required to be among the options: importing a skill you wrote for yourself is the obvious case, and it is a *read* of `~/.claude` - the only thing Helm does there.',
+        'The bundled `reference.md` has to be in the template too. `skills/<name>/` copies wholesale, and a SKILL.md arriving on its own would look identical from a single hash.',
+        'The harness at the end is created through the real New Harness dialog, so the claim is end to end rather than about the template directory alone.'
+      ]
+    })
+
+    // --- TPL-14 / TPL-15  save a harness as a template ---------------------
+    const canaryBeforeSave = canaryState(fixtures.canary)
+
+    // The harness's own row in the sidebar, then its pane's action.
+    await js<boolean>(
+      win,
+      `(() => { const el = [...document.querySelectorAll('aside button[title]')]
+          .find((b) => b.title.toLowerCase() === ${JSON.stringify(fixtures.harness.toLowerCase())});
+        if (!el) return false; el.click(); return true })()`
+    )
+    await pollJs(win, `document.querySelector('[data-project-save-template]')`, 10_000)
+    await click(win, '[data-project-save-template]')
+    const previewUp = await pollJs(win, `document.querySelector('[data-save-template]')`, 10_000)
+    // The walk behind the preview is real work over a fixture with a repos/ in
+    // it; the total is what is being read, so it has to have landed.
+    await pollJs(
+      win,
+      `!(document.querySelector('[data-save-template-total]')?.textContent ?? '').includes('reading')`,
+      15_000
+    )
+    await sleep(300)
+
+    const previewRows = await js<Array<{ name: string; on: string | null; text: string }>>(
+      win,
+      `[...document.querySelectorAll('[data-save-template-entry]')].map((el) => ({
+        name: el.getAttribute('data-save-template-entry') ?? '',
+        on: el.getAttribute('data-save-template-entry-on'),
+        text: el.textContent ?? ''
+      }))`
+    )
+    const totalBefore = await text(win, '[data-save-template-total]')
+    const saveShot = await screenshot(win, shotDir, 'template-save-as.png')
+
+    // Untick the one thing only a person can judge: `notes/` is a journal here,
+    // and Helm has no way to know that - which is the whole reason it asks.
+    await click(win, '[data-save-template-entry="notes"]')
+    await sleep(200)
+    const totalAfterUntick = await text(win, '[data-save-template-total]')
+
+    await fill(win, '[data-save-template-name]', FROZEN)
+    await fill(win, '[data-save-template-label]', 'Frozen fixture')
+    await click(win, '[data-save-template-confirm]')
+    await sleep(1200)
+
+    const frozenTree = walk(join(templatesDir, FROZEN))
+    const canaryAfterSave = canaryState(fixtures.canary)
+
+    const tickedAtOpen = new Map(previewRows.map((row) => [row.name, row.on === 'true']))
+
+    checks.push({
+      id: 'TPL-14',
+      criterion:
+        'Save as template previews every entry with per-entry checkboxes and sensible defaults, states the file count and total size before writing, and writes only what was ticked',
+      title: 'The preview unticked the instance data, stated the size, and the write matched it',
+      ok:
+        previewUp &&
+        // The four defaults, each read off the row as rendered.
+        tickedAtOpen.get('harness.yaml') === false &&
+        tickedAtOpen.get('repos') === false &&
+        tickedAtOpen.get('.git') === false &&
+        tickedAtOpen.get('.claude') === true &&
+        tickedAtOpen.get('CLAUDE.md') === true &&
+        tickedAtOpen.get('notes') === true &&
+        tickedAtOpen.get('tools') === true &&
+        // Stated, and it is a real figure rather than a placeholder.
+        /\d/.test(totalBefore) &&
+        totalBefore !== totalAfterUntick &&
+        // What landed is what was ticked at the moment Create was pressed.
+        frozenTree.join(',') ===
+          [
+            '.claude',
+            '.claude/skills',
+            '.claude/skills/frozen',
+            '.claude/skills/frozen/SKILL.md',
+            'CLAUDE.md',
+            'template.yaml',
+            'tools',
+            'tools/run.mjs'
+          ].join(','),
+      detail: {
+        previewUp,
+        previewRows,
+        totalBefore,
+        totalAfterUntick,
+        frozenTree,
+        screenshot: saveShot.file
+      },
+      notes: [
+        'The tick state is read off each rendered row rather than from the engine, because the claim is that the *dialog* defaults the way the rule says - "Helm cannot tell a journal from a scaffold, so it asks" is a claim about what is on screen.',
+        'The total is required to change when an entry is unticked. A figure that is merely present would also be produced by a label that states the whole folder however much of it is selected, which is precisely the surprise the number exists to prevent.',
+        'The resulting tree is walked by a recursion in this driver that knows nothing about templates, so anything extra - the `harness.yaml` that would make the template refuse itself later, the `.git` that would put this workspace\'s history into every harness - fails here.'
+      ]
+    })
+
+    checks.push({
+      id: 'TPL-15',
+      criterion:
+        'Neither saving nor deleting follows a junction into a real repository',
+      title: 'The save skipped the planted junction, and deleting a template unlinked its own',
+      ok:
+        // Saving: `tools/` was ticked and holds a junction into the canary.
+        !frozenTree.includes('tools/escape') &&
+        !frozenTree.some((entry) => entry.endsWith('do-not-touch.txt')) &&
+        canaryAfterSave.join(',') === canaryBeforeSave.join(','),
+      detail: {
+        frozenTree,
+        junctionPlantedAt: join(fixtures.harness, 'tools', 'escape'),
+        canaryBefore: canaryBeforeSave,
+        canaryAfter: canaryAfterSave
+      },
+      notes: [
+        'The junction is inside `tools/`, which is ticked by default - a junction under `repos/` would be untested, since `repos/` starts unticked and the walk would never have reached it.',
+        'The canary is hashed either side rather than merely listed: "it did not follow the junction" is a claim about bytes, and a copy that had followed it would show up as `do-not-touch.txt` inside the template.',
+        'The deleting half of this criterion is TPL-16, which removes a template that carries one.'
+      ]
+    })
+
+    // --- TPL-16  deleting a template unlinks rather than walks -------------
+    const canaryBeforeDelete = canaryState(fixtures.canary)
+    // Back to Settings: TPL-14 left the harness's own project pane on screen.
+    await click(win, '[data-open-settings]')
+    await pollJs(win, `document.querySelector('[data-settings-manage-templates]')`, 10_000)
+    await click(win, '[data-settings-manage-templates]')
+    await pollJs(win, `document.querySelector('[data-template-manager]')`, 10_000)
+    await selectTemplate(win, DOOMED)
+    // What the manager said about the junction before it was asked to delete.
+    const doomedFiles = await js<string[]>(
+      win,
+      `[...document.querySelectorAll('[data-template-file]')].map((el) => el.getAttribute('data-template-file') ?? '')`
+    )
+    await click(win, '[data-template-delete]')
+    await sleep(250)
+    await click(win, '[data-template-delete-confirm]')
+    await pollJs(win, `!document.querySelector('[data-template-row="${DOOMED}"]')`, 15_000)
+    await sleep(500)
+    const canaryAfterDelete = canaryState(fixtures.canary)
+
+    checks.push({
+      id: 'TPL-16',
+      criterion: 'Deleting a template unlinks a junction it carries; what it pointed at survives',
+      title: 'A template holding a junction was deleted and the fixture behind it is untouched',
+      ok:
+        doomedFiles.includes('escape') &&
+        !existsSync(join(templatesDir, DOOMED)) &&
+        canaryAfterDelete.join(',') === canaryBeforeDelete.join(','),
+      detail: {
+        listedFiles: doomedFiles,
+        templateGone: !existsSync(join(templatesDir, DOOMED)),
+        canaryBefore: canaryBeforeDelete,
+        canaryAfter: canaryAfterDelete,
+        canaryPath: fixtures.canary
+      },
+      notes: [
+        'This is the overlay-shim deletion discipline proven a second time where it is a second time load-bearing (CLAUDE.md, "Overlays"): a delete that walked into the reparse point instead of unlinking it would remove the contents of a real repository, which is the one unrecoverable failure in this milestone.',
+        'The manager is required to have *listed* the junction first. A template whose link was silently omitted from the file list would be a template whose author cannot see why a file never arrives.',
+        'The canary is hashed either side, so the claim is about bytes rather than about a directory still existing.'
+      ]
+    })
+
+    // --- TPL-17  import a folder as a template, dot-claude and all ---------
+    answerPicker('directory', fixtures.aliased)
+    await click(win, '[data-template-import-folder]')
+    const aliasDialogUp = await pollJs(
+      win,
+      `document.querySelector('[data-save-template="folder"]')`,
+      10_000
+    )
+    await pollJs(
+      win,
+      `!(document.querySelector('[data-save-template-total]')?.textContent ?? '').includes('reading')`,
+      10_000
+    )
+    await fill(win, '[data-save-template-name]', ALIASED)
+    await fill(win, '[data-save-template-label]', 'Aliased fixture')
+    await click(win, '[data-save-template-confirm]')
+    await sleep(1000)
+
+    const aliasedTree = walk(join(templatesDir, ALIASED))
+    await js<void>(
+      win,
+      `(() => { const el = document.querySelector('[data-template-close]'); if (el) el.click() })()`
+    )
+    await sleep(400)
+
+    const fromAlias = await createThroughDialog(win, fixtures, HARNESS_FROM_ALIAS, ALIASED)
+    await dismissDialog(win)
+    const aliasHarnessTree = walk(fromAlias.path)
+
+    checks.push({
+      id: 'TPL-17',
+      criterion:
+        'Import folder as template accepts a dot-claude tree, shows in the picker, and lands as .claude in the harness',
+      title: 'A dot-claude/ folder was imported, offered in the picker, and arrived as .claude/',
+      ok:
+        aliasDialogUp &&
+        // Verbatim in the template: the alias is the author's choice, and the
+        // engine is what applies it. Rewriting it on the way in would undo a
+        // decision made for the tool that needed it.
+        aliasedTree.includes(`dot-claude/skills/${ALIASED_SKILL}/SKILL.md`) &&
+        !aliasedTree.some((entry) => entry.startsWith('.claude')) &&
+        // And it is offered, which is what makes it a template rather than a
+        // folder Helm happened to copy.
+        fromAlias.pickerUp &&
+        fromAlias.chosen === ALIASED &&
+        aliasHarnessTree.includes(`.claude/skills/${ALIASED_SKILL}/SKILL.md`) &&
+        // The `.tpl` in it went through substitution on the way out, so the
+        // import did not quietly flatten the format either.
+        readFileSync(join(fromAlias.path, 'CLAUDE.md'), 'utf8') === `# ${HARNESS_FROM_ALIAS}\n` &&
+        fromAlias.problems.length === 0,
+      detail: {
+        dialogOpened: aliasDialogUp,
+        aliasedTree,
+        pickerOfferedIt: fromAlias.pickerUp,
+        chosen: fromAlias.chosen,
+        harnessTree: aliasHarnessTree,
+        claudeMd: existsSync(join(fromAlias.path, 'CLAUDE.md'))
+          ? readFileSync(join(fromAlias.path, 'CLAUDE.md'), 'utf8')
+          : null,
+        problems: fromAlias.problems
+      },
+      notes: [
+        'The template keeps `dot-claude/` and the *harness* gets `.claude/`. That is the alias working rather than being undone: it exists because tools drop dot directories when a template is packaged, and normalising it on import would throw away the choice the author made for whichever tool needed it.',
+        'The end of this is a real creation through the real dialog, so "lands as .claude/" is checked where a user would see it rather than in the template directory.'
+      ]
+    })
+
+    // --- TPL-18  .tpl awareness in the manager -----------------------------
+    await click(win, '[data-open-settings]')
+    await pollJs(win, `document.querySelector('[data-settings-manage-templates]')`, 10_000)
+    await click(win, '[data-settings-manage-templates]')
+    await pollJs(win, `document.querySelector('[data-template-manager]')`, 10_000)
+    await selectTemplate(win, ALIASED)
+
+    const tplRows = await js<Array<{ path: string; tpl: string | null; badge: boolean }>>(
+      win,
+      `[...document.querySelectorAll('[data-template-file]')].map((el) => ({
+        path: el.getAttribute('data-template-file') ?? '',
+        tpl: el.getAttribute('data-template-file-tpl'),
+        badge: Boolean(el.querySelector('[data-template-file-badge]'))
+      }))`
+    )
+    const variablesLine = await text(win, '[data-template-variables]')
+
+    // "Make substitutable" on the one file in this template that is not one.
+    const plainFile = `dot-claude/skills/${ALIASED_SKILL}/SKILL.md`
+    const substitutableOffered = await exists(
+      win,
+      `[data-template-substitutable="${plainFile}"]`
+    )
+    await click(win, `[data-template-substitutable="${plainFile}"]`)
+    await sleep(900)
+    const renamedOnDisk =
+      existsSync(join(templatesDir, ALIASED, ...`${plainFile}.tpl`.split('/'))) &&
+      !existsSync(join(templatesDir, ALIASED, ...plainFile.split('/')))
+
+    checks.push({
+      id: 'TPL-18',
+      criterion:
+        'The file list badges substitution-bearing files, names the three variables in-UI, and offers "make substitutable"',
+      title: 'The .tpl badge, the three variable names, and a rename that added one',
+      ok:
+        tplRows.some((row) => row.path === 'CLAUDE.md.tpl' && row.tpl === 'true' && row.badge) &&
+        tplRows.some((row) => row.path === plainFile && row.tpl === 'false' && !row.badge) &&
+        variablesLine.includes('{{NAME}}') &&
+        variablesLine.includes('{{CREATED_AT}}') &&
+        variablesLine.includes('{{TEMPLATE}}') &&
+        substitutableOffered &&
+        renamedOnDisk,
+      detail: {
+        rows: tplRows,
+        variablesLine,
+        substitutableOffered,
+        renamedOnDisk,
+        expectedAfterRename: join(templatesDir, ALIASED, ...`${plainFile}.tpl`.split('/'))
+      },
+      notes: [
+        'The badge is read as a rendered element rather than from the attribute alone, and a non-`.tpl` row is required to *not* have one - a badge on everything would pass an assertion that only looked for its presence.',
+        'The three variable names are read out of the help line as it renders. `.tpl` is a Helm invention nobody guesses from a folder listing, so the names being on screen is the acceptance criterion rather than a nicety.',
+        'The rename is verified on disk by this driver, not from the notice the manager printed.'
+      ]
+    })
+
+    await js<void>(
+      win,
+      `(() => { const el = document.querySelector('[data-template-close]'); if (el) el.click() })()`
+    )
+    await sleep(300)
+
+    // The fixture root goes back out of the settings. It is written to the
+    // check's own database, which survives the run - so leaving it in would put
+    // every later run's startup scan through a fixture tree the next
+    // `plantFixtures` is about to delete underneath it.
+    await js<string[]>(
+      win,
+      `window.helm.invoke('roots:remove', { path: ${JSON.stringify(fixtures.parent)} })`
+    )
+    await sleep(300)
   }
 
   return checks

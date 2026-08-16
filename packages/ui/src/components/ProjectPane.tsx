@@ -11,6 +11,7 @@ import {
   LayersIcon,
   RefreshIcon,
   SlidersIcon,
+  SparkIcon,
   TerminalIcon
 } from './icons'
 
@@ -71,6 +72,17 @@ export interface ProjectPaneProps {
   launchError?: string | null | undefined
   /** Opens the profile editor seeded with this project as the root. */
   onSaveAsProfile?: ((project: Project) => void) | undefined
+  /**
+   * Freezes this harness's layout into a template.
+   *
+   * Passed **only for a harness**, which is the only kind of project that has a
+   * layout to freeze - a repo is somebody else's tree and a folder is not a
+   * scaffold. A peer of "Save as profile" rather than a panel of its own: both
+   * turn what is on screen into something reusable, neither touches the folder,
+   * and the dialog that opens states everything it would copy before it copies
+   * any of it.
+   */
+  onSaveAsTemplate?: ((project: Project) => void) | undefined
   /** Opens the config console with this project as its scope. */
   onOpenConfig?: ((project: Project) => void) | undefined
   /** Opens the content viewer with this project as its scope. */
@@ -125,6 +137,7 @@ export function ProjectPane({
   launching = false,
   launchError = null,
   onSaveAsProfile,
+  onSaveAsTemplate,
   onOpenConfig,
   onOpenContent,
   onRemoveRoot,
@@ -207,6 +220,21 @@ export function ProjectPane({
             >
               <LayersIcon width={14} height={14} className="text-accent" />
               Save as profile
+            </button>
+          )}
+          {onSaveAsTemplate && (
+            <button
+              type="button"
+              data-project-save-template
+              onClick={() => onSaveAsTemplate(project)}
+              title={`Freeze ${project.name}'s layout into a template`}
+              className={cn(
+                'flex items-center gap-2 rounded-well border border-border-strong px-3.5 py-1.5',
+                'text-[12px] text-fg transition-colors hover:bg-hover'
+              )}
+            >
+              <SparkIcon width={14} height={14} className="text-accent" />
+              Save as template
             </button>
           )}
           <span className="text-[11px] text-fg-subtle">

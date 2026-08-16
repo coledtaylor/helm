@@ -29,6 +29,7 @@ export {
   MINIMAL_CHOICE,
   MINIMAL_TEMPLATE,
   SHIPPED_TEMPLATES,
+  TEMPLATE_MANIFEST,
   type ApplyTemplateRequest,
   type ApplyTemplateResult,
   type PreviewTemplateRequest,
@@ -38,6 +39,31 @@ export {
   type TemplatePreview,
   type TemplateValues
 } from './templates'
+export {
+  assertTemplateWritable,
+  createTemplate,
+  deleteTemplate,
+  importIntoTemplate,
+  makeSubstitutable,
+  previewFolderAsTemplate,
+  readTemplateDetail,
+  renameTemplate,
+  saveFolderAsTemplate,
+  templateNameProblems,
+  writeTemplateMetadata,
+  DOT_CLAUDE,
+  TEMPLATE_VARIABLES,
+  type FolderEntry,
+  type FolderTemplateKind,
+  type FolderTemplatePreview,
+  type SaveFolderAsTemplateResult,
+  type TemplateDeleteResult,
+  type TemplateDetail,
+  type TemplateFile,
+  type TemplateImportFile,
+  type TemplateImportResult,
+  type TemplateWriteResult
+} from './template-authoring'
 export { findEnclosingHarness, suggestRoots } from './roots'
 export {
   TITLE_MAX,

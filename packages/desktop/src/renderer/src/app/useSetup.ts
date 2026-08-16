@@ -63,6 +63,8 @@ export interface SetupState {
   templates: TemplateChoice[]
   templatesDir: string
   templateProblems: string[]
+  /** Re-reads them, for when the manager has been authoring over this dialog. */
+  refreshTemplates: () => void
   /** Which one is chosen. Reset to `minimal` every time the dialog opens. */
   template: string
   chooseTemplate: (template: string) => void
@@ -153,6 +155,22 @@ export function useSetup(
     void helm.invoke('setup:complete')
   }, [])
 
+  /**
+   * Re-reads the picker's rows.
+   *
+   * Called when the dialog opens, and again when the template manager closes
+   * over the top of it - those are the two moments the list can have changed
+   * under a dialog somebody is still filling in, and the second one is the
+   * whole reason this is a callback rather than three lines inside `openDialog`.
+   */
+  const refreshTemplates = useCallback(() => {
+    void helm.invoke('template:list').then((listing) => {
+      setTemplates(listing.templates)
+      setTemplatesDir(listing.dir)
+      setTemplateProblems(listing.problems)
+    })
+  }, [])
+
   const openDialog = useCallback(
     (mode: HarnessDialogMode) => {
       setDialogProblems([])
@@ -172,13 +190,9 @@ export function useSetup(
       // Read on open rather than at mount: a template is a directory somebody
       // can add while Helm is running, and a list fetched once at startup would
       // be stale for the rest of the session.
-      void helm.invoke('template:list').then((listing) => {
-        setTemplates(listing.templates)
-        setTemplatesDir(listing.dir)
-        setTemplateProblems(listing.problems)
-      })
+      refreshTemplates()
     },
-    [settings]
+    [settings, refreshTemplates]
   )
 
   /**
@@ -295,6 +309,7 @@ export function useSetup(
     templates,
     templatesDir,
     templateProblems,
+    refreshTemplates,
     template,
     chooseTemplate: setTemplate,
     templatePreview,

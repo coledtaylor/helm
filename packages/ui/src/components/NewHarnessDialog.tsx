@@ -36,6 +36,15 @@ export interface NewHarnessDialogProps {
   onTemplateChange?: ((template: string) => void) | undefined
   /** Where the user's templates live, said out loud so they can be written. */
   templatesDir?: string | undefined
+  /**
+   * Opens the template manager.
+   *
+   * One of its two entry points, and the other is Settings. Here because
+   * "there is no template that does what I want" is a thought people have
+   * while looking at this picker; there because templates are app-level and
+   * nobody should have to start creating a harness to tidy them up.
+   */
+  onManageTemplates?: (() => void) | undefined
   /** A template that could not be read, as a sentence. Not fatal to the rest. */
   templateProblems?: readonly string[] | undefined
   /** What "What gets written" lists. Null while the answer is in flight. */
@@ -75,6 +84,7 @@ export function NewHarnessDialog({
   template = 'minimal',
   onTemplateChange,
   templatesDir,
+  onManageTemplates,
   templateProblems = [],
   preview = null,
   onCreate,
@@ -218,7 +228,25 @@ export function NewHarnessDialog({
 
         {mode === 'new' && templates.length > 0 && (
           <div className="mt-[14px]">
-            <span className={cn(labelClass, 'mb-1.5')}>Template</span>
+            <span className="mb-1.5 flex items-baseline gap-2">
+              <span className={labelClass}>Template</span>
+              {onManageTemplates !== undefined && (
+                <>
+                  <span className="flex-1" />
+                  {/* A ghost, not an outlined button: it goes somewhere, where
+                      the two controls in the footer do something. Same call the
+                      project pane's Config and Content links make. */}
+                  <button
+                    type="button"
+                    data-harness-manage-templates
+                    onClick={onManageTemplates}
+                    className="text-[11px] text-fg-muted transition-colors hover:text-accent-text"
+                  >
+                    Manage templates…
+                  </button>
+                </>
+              )}
+            </span>
             <div
               role="radiogroup"
               aria-label="Template"
