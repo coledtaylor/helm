@@ -62,10 +62,22 @@ import type { Services } from './services'
  * spend, and the renderer receiving finished HTML means it injects a string
  * instead of walking a syntax tree on every keystroke of a live preview.
  *
- * **The artifact protocol.** An HTML artifact is the one piece of content Helm
- * shows that it did not produce, so it is served to a sandboxed frame through a
- * scheme of its own, from a directory it is pinned to, under a Content Security
- * Policy that permits no network of any kind. See `registerContentProtocol`.
+ * **The artifact protocol.** An HTML artifact is content Helm did not produce,
+ * so it is served to a sandboxed frame through a scheme of its own, from a
+ * directory it is pinned to, under a Content Security Policy that permits no
+ * network of any kind. See `registerContentProtocol`.
+ *
+ * It stopped being the *only* such content when the browser pane landed (M16),
+ * and the two are opposites worth stating together rather than one being
+ * quietly demoted. An artifact is a **file on this disk**, rendered with the
+ * network taken away - `ARTIFACT_CSP` names no `http:` anywhere, so remote
+ * content is not blocked by policy, it has nowhere to be requested from. A
+ * browser view is the reverse: it exists *to* fetch, and what makes it safe is
+ * a partition of its own, a locked-down `webPreferences`, and every posture
+ * around it stated rather than defaulted (`main/browser.ts`). Neither one's
+ * guarantees are the other's, and the frame here must never acquire the
+ * browser's - `ContentDocumentPane` passes the console panel no evaluator for
+ * exactly that reason.
  */
 
 export interface ContentService {

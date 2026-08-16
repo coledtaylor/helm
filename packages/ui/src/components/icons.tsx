@@ -569,3 +569,69 @@ export function CaretIcon(props: IconProps): JSX.Element {
     </Icon>
   )
 }
+
+/**
+ * The browser pane's glyphs.
+ *
+ * `GlobeIcon` is the pane's mark and the tab's icon. Back and forward are a
+ * mirrored pair rather than one rotated, because a rotation puts the arrowhead
+ * on the wrong optical side at 14px. `ExternalIcon` is the handoff to the
+ * user's own browser, and `ConsoleIcon` is the chevron-and-caret prompt that
+ * says "there is a console under here" without spelling the word.
+ */
+export function GlobeIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <circle cx="8" cy="8" r="5.25" />
+      <path d="M2.75 8h10.5" />
+      <path d="M8 2.75c1.4 1.6 2.1 3.4 2.1 5.25S9.4 11.65 8 13.25c-1.4-1.6-2.1-3.4-2.1-5.25S6.6 4.35 8 2.75Z" />
+    </Icon>
+  )
+}
+
+export function BackIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M9.75 3.5 5.25 8l4.5 4.5" />
+    </Icon>
+  )
+}
+
+export function ForwardIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M6.25 3.5 10.75 8l-4.5 4.5" />
+    </Icon>
+  )
+}
+
+export function ExternalIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M9.5 3h3.5v3.5" />
+      <path d="M13 3 7.75 8.25" />
+      <path d="M11.5 9.5v2.75a1 1 0 0 1-1 1h-6.75a1 1 0 0 1-1-1V5.5a1 1 0 0 1 1-1H6.5" />
+    </Icon>
+  )
+}
+
+export function ConsoleIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <rect x="2.25" y="3.25" width="11.5" height="9.5" rx="1.25" />
+      <path d="M5 6.75 6.75 8.5 5 10.25" />
+      <path d="M8.75 10.25h2.5" />
+    </Icon>
+  )
+}
+
+/** `</>`, for the per-view DevTools - the first one in Helm. */
+export function DevToolsIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M5.75 5.25 3 8l2.75 2.75" />
+      <path d="M10.25 5.25 13 8l-2.75 2.75" />
+      <path d="M9 3.75 7 12.25" />
+    </Icon>
+  )
+}

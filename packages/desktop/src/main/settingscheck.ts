@@ -1242,14 +1242,18 @@ export async function runSettingsChecks(
          prRepos: Boolean(document.querySelector('[data-settings-pr-repos]')),
          prPrompt: Boolean(document.querySelector('[data-settings-pr-prompt]')),
          prPromptReset: Boolean(document.querySelector('[data-settings-pr-prompt-reset]')),
-         prCheckout: Boolean(document.querySelector('[data-settings-pr-checkout]'))
+         prCheckout: Boolean(document.querySelector('[data-settings-pr-checkout]')),
+         // The browser pane's one preference. The two browser keys beside it in
+         // the database - the recent addresses and the per-project ones - are
+         // state, and internalLeaked below is what says they are not here.
+         browserReach: Boolean(document.querySelector('[data-settings-browser-reach]'))
        })`
     )
     // Internal state is not a preference, and the pane must not have grown a
     // row for any of them while nobody was looking.
     const internalLeaked = await js<boolean>(
       win,
-      `/windowBounds|firstRunCompletedAt|workspaceTabs/.test(document.querySelector('[data-settings-pane]')?.textContent ?? '')`
+      `/windowBounds|firstRunCompletedAt|workspaceTabs|browserRecentUrls|browserProjectUrls/.test(document.querySelector('[data-settings-pane]')?.textContent ?? '')`
     )
 
     const shot = await screenshot(win, shotDir, 'settings-1-pane.png')
@@ -1344,13 +1348,14 @@ export async function runSettingsChecks(
         // arrived with the transcript archive and this went stale, which nobody
         // saw because the probe was already red for the inherited tab strip.
         //
-        // It went stale twice more the same way and both are corrected here:
-        // `content` arrived with the content viewer's wrapping settings, and
-        // `templates` with in-app template authoring. Each one left this red,
+        // It went stale three more times the same way and all three are
+        // corrected here: `content` arrived with the content viewer's wrapping
+        // settings, `templates` with in-app template authoring, and `browser`
+        // with the integrated browser's reach posture. Each one left this red,
         // and a probe that is already red is a probe nothing reads - which is
         // the whole failure mode the paragraph above describes, repeating.
         groups.join(',') ===
-          'claude,workspace,templates,appearance,content,updates,terminal,archive,github' &&
+          'claude,workspace,templates,appearance,content,browser,updates,terminal,archive,github' &&
         Object.values(controls).every(Boolean) &&
         !internalLeaked &&
         historyUp &&
@@ -2956,6 +2961,24 @@ export async function runSettingsChecks(
         good: '2026-08-11T20:04:06.641Z',
         bad: 'never',
         why: 'an unparseable instant compares NaN against the throttle, so it would mean “never ask again” rather than “ask now”'
+      },
+      {
+        key: 'browserReach',
+        good: 'local',
+        bad: 'none',
+        why: 'a reach mode nothing recognises would fall through every branch of the one function the whole pane is gated on'
+      },
+      {
+        key: 'browserRecentUrls',
+        good: ['http://localhost:3000/'],
+        bad: ['localhost:3000'],
+        why: 'a row in the address dropdown that is not an absolute URL is a row that does nothing when clicked'
+      },
+      {
+        key: 'browserProjectUrls',
+        good: { [fixtures.rootA.toLowerCase()]: 'http://localhost:5173/' },
+        bad: { [fixtures.rootA]: 'http://localhost:5173/' },
+        why: 'a key that is not lower-cased is a project whose remembered address is never found again, the same trap pinnedProjects has'
       }
     ]
 

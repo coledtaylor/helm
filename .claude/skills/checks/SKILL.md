@@ -37,6 +37,7 @@ A change to a surface named here is not done until its check is green.
 | `pnpm transcript-check` | the transcript archive: capture, search, the ceiling, read-only | `core/archive/`, `core/store/archive.ts`, `main/archive.ts`, the session-history pane's archive states, anything that reads `projects/*.jsonl` |
 | `pnpm template-check` | harness templates: the engine, the picker, seeding, authoring | `core/discovery/templates.ts`, `core/discovery/template-authoring.ts`, `createHarness`, `NewHarnessDialog`, `TemplateManager`, `SaveAsTemplateDialog`, `templatesDir` in `paths.ts`, the seeding in `createServices` |
 | `pnpm pr-check` | the pull-request surface end to end | `core/github/`, `main/pulls.ts`, `main/gh-cli.ts`, `PullsPane`, `PullRow`, `PullRequestPane`, the project pane's pull-request panel and its Config/Content links, `SessionHost.review` |
+| `pnpm browser-check` | the browser pane: the view's lifetime, its bounds, hiding, the console panel, and every posture | `main/browser.ts`, `core/browser/reach.ts`, `BrowserPane`, `ConsolePanel`, the `browser:*` channels, the navigation guard in `main/index.ts`, `browserReach` |
 | `pnpm affordance-check` | every clickable control looks clickable | `theme.css`, `lib/segmented.ts`, `Checkbox`, any shared control recipe, any new pane |
 | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
 
@@ -381,6 +382,46 @@ in place, which is why `nuke()` in the driver and `removeTree` in the engine are
 both written out by hand.
 
 No sessions, no network, about two minutes.
+
+**`browser-check`** - the integrated browser pane, in two app starts. It starts
+its own HTTP and HTTPS fixture servers on `127.0.0.1`, so it spawns no sessions
+and reaches no network; about two minutes.
+
+Four shapes in it are worth copying.
+
+**The witness for "the view is hidden" is a photograph of the window, taken from
+outside it.** That is not the obvious choice and the obvious one does not work:
+`win.webContents.capturePage()` - which `screenshot()` and every other driver
+here uses - **cannot see a `WebContentsView` at all**. Measured while writing
+this, with the view plainly on screen, it returned zero fixture pixels in all
+three states. A hiding probe built on it would have passed for the wrong
+reason forever. So the window is captured through `desktopCapturer`, and
+`document.visibilityState` asked *of the page* is read beside it: one is the
+compositor's opinion, the other is a picture, and Helm writes neither. Helm's
+own `visible` flag is reported in the detail and is never part of a verdict.
+
+**BR-5 makes that counter fail first.** It runs the pixel count over a shown
+frame and a hidden one and requires it to find the page and then not find it,
+before any hiding assertion is believed - a counter stuck at zero would pass
+every one of them. TPL-1's rule, applied to a comparator that is a pixel count.
+
+**BR-3 is the milestone's spike, pinned.** "A tab the user is not on stays
+capturable, scriptable and clickable" is what M17 is built on and would regress
+with nothing on screen looking different. The capture half is made discriminating
+by repainting the page a colour it has **never been** *after* the hide, so a
+`capturePage` handing back the last frame drawn while visible fails.
+
+**The self-signed certificate is minted at run time**, by writing the X.509 DER
+out by hand in the driver. Committing a PEM would put a private key in the
+repository and shelling out to `openssl` would make the check depend on whether
+a machine has one. The same certificate is served on `127.0.0.1` and on
+`127.0.0.2` - both this machine, both reachable - so the only difference between
+the accept and the refuse is the host, which is the rule under test.
+
+Two phases, because a cookie surviving a restart is not a claim the process that
+stored it can make. `run-browser.mjs` starts the app again and the fixture
+rebinds the port phase one wrote down: an origin includes the port, so a new one
+would read as an empty jar however well persistence worked.
 
 **`fidelity` and `claude-check`** - TUI fidelity inside xterm. These render
 `spike.html`, a separate page from the app, so app layout changes cannot move

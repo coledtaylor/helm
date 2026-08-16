@@ -27,6 +27,7 @@ import {
   createServices,
   refreshGit,
   runScan,
+  updateSettings,
   type Services
 } from './services'
 import { createConfigService } from './config'
@@ -37,6 +38,13 @@ import {
   createContentService,
   registerContentProtocol
 } from './content'
+import {
+  browserWillNavigate,
+  browserWindowOpen,
+  createBrowserHost,
+  type BrowserHost
+} from './browser'
+import { runBrowserChecks } from './browsercheck'
 import { createArchiveService } from './archive'
 import { createHistoryService } from './history'
 import { createPullsService } from './pulls'
@@ -106,6 +114,8 @@ type Mode =
   | 'transcript-check'
   | 'transcript-restart'
   | 'template-check'
+  | 'browser-check'
+  | 'browser-restart'
   | 'template-seed'
   | 'shim-sweep'
   | 'shim-hold'
@@ -135,6 +145,8 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--pr-check')) return 'pr-check'
   if (process.argv.includes('--transcript-check')) return 'transcript-check'
   if (process.argv.includes('--transcript-restart')) return 'transcript-restart'
+  if (process.argv.includes('--browser-check')) return 'browser-check'
+  if (process.argv.includes('--browser-restart')) return 'browser-restart'
   if (process.argv.includes('--template-check')) return 'template-check'
   if (process.argv.includes('--template-seed')) return 'template-seed'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
@@ -163,6 +175,8 @@ const isSpikeMode =
   mode !== 'transcript-check' &&
   mode !== 'transcript-restart' &&
   mode !== 'template-check' &&
+  mode !== 'browser-check' &&
+  mode !== 'browser-restart' &&
   mode !== 'shim-hold' &&
   mode !== 'design-shot' &&
   mode !== 'affordance-check' &&
@@ -212,10 +226,33 @@ protocol.registerSchemesAsPrivileged([
   }
 ])
 
-// Every renderer is our own bundle; nothing else may be navigated to or opened.
+/**
+ * Every renderer is our own bundle; nothing else may be navigated to or opened.
+ *
+ * The browser pane's `WebContentsView`s are the one thing in Helm that is
+ * *supposed* to navigate, and they are let through **here**, by id, rather than
+ * by relaxing anything. `browserWillNavigate` answers false for every web
+ * contents that is not a live browser view - the window, the spike page, an
+ * artifact frame - so the app's own renderers keep exactly the lock they had
+ * before this pane existed, and a view that has been destroyed loses the
+ * exemption with it.
+ *
+ * The window-open side is not exempted at all: the action is `deny` for
+ * everything, always. What `browserWindowOpen` adds is that a `window.open`
+ * inside a browser view becomes a new Helm browser tab - a capped one - instead
+ * of nothing at all. No Chromium window is ever created either way.
+ *
+ * Both hooks are read at *navigation* time rather than at creation time, which
+ * is what lets the registry be filled in the view's own constructor path.
+ */
 app.on('web-contents-created', (_e, contents) => {
-  contents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  contents.on('will-navigate', (event) => event.preventDefault())
+  contents.setWindowOpenHandler((details) => {
+    browserWindowOpen(contents.id, details.url)
+    return { action: 'deny' }
+  })
+  contents.on('will-navigate', (event, url) => {
+    if (!browserWillNavigate(contents.id, url)) event.preventDefault()
+  })
 })
 
 function createWindow(
@@ -463,6 +500,30 @@ function startApp(options: AppOptions = {}): void {
   const content = createContentService({ services })
   attachArtifactConsole(win, (entry) => emit(win, 'content:artifactConsole', entry))
 
+  /**
+   * The browser pane's views.
+   *
+   * Settings are read through a function and written through one, for the two
+   * different reasons both shapes exist elsewhere in this file. The reach
+   * posture can change while a view is open, so a captured value would make it
+   * a property of when the tab was made. And the addresses a view has been to
+   * are written by *main*, because main is the side that knows a navigation
+   * succeeded - a redirect, a retry that finally connected and a `window.open`
+   * are all invisible to a window that only saw what it asked for.
+   */
+  const browsers: BrowserHost = createBrowserHost({
+    window: () => win,
+    settings: () => services.settings,
+    writeSettings: (patch) => {
+      const next = updateSettings(services, patch)
+      emit(win, 'settings:changed', next)
+    },
+    onChanged: (state) => emit(win, 'browser:changed', state),
+    onOpened: (state) => emit(win, 'browser:opened', state),
+    onClosed: (id) => emit(win, 'browser:closed', { id }),
+    onLogged: (id, entry) => emit(win, 'browser:logged', { id, entry })
+  })
+
   // Built on the config service rather than beside it: the import picker's
   // sources are the console's own scopes, and what a skill *is* is the
   // console's own answer.
@@ -472,6 +533,7 @@ function startApp(options: AppOptions = {}): void {
     services,
     sessions,
     pterm,
+    browsers,
     history,
     archive,
     usage,
@@ -567,6 +629,7 @@ function startApp(options: AppOptions = {}): void {
           services,
           sessions,
           pterm,
+          browsers,
           history,
           archive,
           usage,
@@ -687,6 +750,22 @@ function startApp(options: AppOptions = {}): void {
     // Synchronously, because this is the last point the main process is
     // guaranteed a turn. Anything deferred here is a process left behind.
     sessions.shutdown()
+    /*
+     * The browser views die here too, and it is the same argument.
+     *
+     * A `WebContentsView` is a render process - the same kind of thing a pty
+     * is, from this file's point of view - and it belongs to the main process
+     * rather than to the window. Destroying it in the window's `closed`
+     * handler would be too late in one direction (a quit that never closed the
+     * window) and too early in the other (`before-quit` runs first, and a view
+     * torn down after the store closed would be a `did-navigate` writing a
+     * remembered URL into a shut database).
+     *
+     * A tab closed by hand goes through `browser:close`; this is the sweep for
+     * whatever is still open when the app ends. Both end at the same
+     * `destroy()`.
+     */
+    browsers.shutdown()
   })
 
   app.on('will-quit', () => {
@@ -1693,6 +1772,59 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`template-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  /**
+   * The browser pane, driven through the real window in two phases.
+   *
+   * The second exists for the reason every second phase in this file does:
+   * "a cookie the fixture set is still there after a restart" is not a claim
+   * the process that set it can make. `run-browser.mjs` starts this again with
+   * `--browser-restart`, against the same isolated data directory and therefore
+   * the same `persist:helm-browser` partition, and the fixture server is
+   * started fresh on the port the first phase wrote down.
+   */
+  if (mode === 'browser-check' || mode === 'browser-restart') {
+    const restart = mode === 'browser-restart'
+    startApp({
+      onReady: (ctx) => {
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runBrowserChecks(ctx, {
+          dataDir,
+          shotDir: join(dataDir, 'screenshots'),
+          phase: restart ? 'restart' : 'main',
+          ...(onlyArg ? { only: onlyArg.slice('--only='.length).split(',') } : {})
+        })
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport(
+              restart ? 'browser-restart-report.json' : 'browser-report.json',
+              {
+                startedAt: new Date().toISOString(),
+                mode: appMode,
+                dataDir,
+                versions: process.versions,
+                pass,
+                checks
+              }
+            )
+            console.log(`${mode} report: ${file}`)
+            for (const c of checks) {
+              console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+              for (const n of c.notes) console.log(`      ${n}`)
+            }
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`${mode} crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

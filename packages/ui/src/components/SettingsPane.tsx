@@ -18,6 +18,7 @@ import {
   USAGE_DISPLAY_MODES,
   type AppSettings,
   type ArchiveStats,
+  type BrowserReach,
   type DetectedShell,
   withRepoIgnored,
   type EffortLevel,
@@ -174,6 +175,16 @@ export interface SettingsPaneProps {
   onContentWrapChange: (wrap: boolean) => void
   contentWrapIndent: number
   onContentWrapIndentChange: (columns: number) => void
+
+  /**
+   * How far the browser pane may reach.
+   *
+   * The one browser key that is a preference. The two beside it in the
+   * database - the recent addresses and the per-project ones - are state, so
+   * they sit with `workspaceTabs` and are deliberately not on this pane.
+   */
+  browserReach: BrowserReach
+  onBrowserReachChange: (reach: BrowserReach) => void
 
   /**
    * What Helm found out about `gh`, out of the pull-request snapshot. Null
@@ -365,6 +376,8 @@ export function SettingsPane({
   onContentWrapChange,
   contentWrapIndent,
   onContentWrapIndentChange,
+  browserReach,
+  onBrowserReachChange,
   gh,
   onLocateGh,
   onClearGhOverride,
@@ -649,6 +662,8 @@ export function SettingsPane({
           indent={contentWrapIndent}
           onIndentChange={onContentWrapIndentChange}
         />
+
+        <BrowserGroup reach={browserReach} onReachChange={onBrowserReachChange} />
 
         <UpdatesGroup
           appVersion={appVersion}
@@ -1024,6 +1039,51 @@ function ContentGroup({
           data-settings-content-wrap-indent={String(indent)}
           onCommit={onIndentChange}
         />
+      </Row>
+    </Group>
+  )
+}
+
+/**
+ * The browser pane's posture.
+ *
+ * One row, because there is one decision: where the pane may go at all.
+ * Everything else about the pane - downloads denied, every permission denied,
+ * self-signed certificates accepted for loopback and nowhere else, an address
+ * bar that never searches - is not a setting and never will be. Those are the
+ * app's postures, and a posture with a switch on it is a posture somebody turns
+ * off on the afternoon it gets in their way.
+ */
+function BrowserGroup({
+  reach,
+  onReachChange
+}: {
+  reach: BrowserReach
+  onReachChange: (reach: BrowserReach) => void
+}): JSX.Element {
+  return (
+    <Group
+      name="browser"
+      title="Browser"
+      hint="A dev-server viewport, not a browser. Nothing is downloaded, every permission is refused, and the address bar never hands anything to a search engine - a page loads because you typed its address."
+    >
+      <Row
+        label="Where the pane may go"
+        hint={
+          reach === 'local'
+            ? 'This machine only. Anything that is not localhost, 127.0.0.1 or ::1 is refused with a sentence and nothing is fetched.'
+            : 'Anywhere. Helm still opens no page you did not ask for - the pane fetches the address you navigate to and nothing else.'
+        }
+      >
+        <Select
+          value={reach}
+          label="Where the browser pane may go"
+          data-settings-browser-reach={reach}
+          onChange={(value) => onReachChange(value as BrowserReach)}
+        >
+          <option value="web">Anywhere I navigate to</option>
+          <option value="local">This machine only</option>
+        </Select>
       </Row>
     </Group>
   )

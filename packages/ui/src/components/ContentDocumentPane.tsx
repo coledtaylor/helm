@@ -10,6 +10,7 @@ import type {
 } from '@helm/core'
 import { cn } from '../lib/cn'
 import { CodeEditor, type EditorStatus } from './CodeEditor'
+import { ConsolePanel } from './ConsolePanel'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes, formatMoment } from '../lib/time'
 // The rendered body and the frontmatter chips are shared with the config
@@ -775,6 +776,7 @@ function ArtifactFrame({
   }, [onOpenWikilink])
 
   const errors = entries.filter((entry) => entry.level === 'error' || entry.level === 'warning')
+  const [consoleOpen, setConsoleOpen] = useState(false)
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -784,17 +786,32 @@ function ArtifactFrame({
           Sandboxed frame · no Node, no network, opaque origin
         </span>
         <span className="flex-1" />
-        <span
+        {/*
+          The count that used to be a dead tooltip.
+          `attachArtifactConsole` has been streaming these since artifacts
+          landed and `useContent` has been keeping them; the only way to read
+          any of it was a `title` attribute, which is a list you cannot scroll,
+          filter or copy out of. It is the panel's toggle now, and the panel is
+          the same component the browser pane uses.
+
+          `data-artifact-console` stays exactly where it was, because
+          `content-check` locates the count by it.
+        */}
+        <button
+          type="button"
           data-artifact-console={errors.length}
-          className={cn('text-[11px] tabular-nums', errors.length > 0 ? 'text-danger' : 'text-fg-subtle')}
-          title={
-            errors.length === 0
-              ? 'The artifact logged no errors or warnings'
-              : errors.map((entry) => `${entry.level}: ${entry.message}`).join('\n')
-          }
+          onClick={() => setConsoleOpen((current) => !current)}
+          aria-expanded={consoleOpen}
+          title={consoleOpen ? "Hide what the artifact logged" : "Show what the artifact logged"}
+          className={cn(
+            'rounded-well px-1.5 py-0.5 text-[11px] tabular-nums transition-colors hover:bg-hover',
+            errors.length > 0 ? 'text-danger' : 'text-fg-subtle hover:text-fg'
+          )}
         >
-          {errors.length === 0 ? 'console clean' : `${errors.length} console errors`}
-        </span>
+          {errors.length === 0
+            ? 'console clean'
+            : `${String(errors.length)} console error${errors.length === 1 ? '' : 's'}`}
+        </button>
       </div>
 
       {url === null ? (
@@ -818,6 +835,23 @@ function ArtifactFrame({
           )}
         />
       )}
+
+      {/*
+        The same panel the browser pane uses, **read-only**.
+
+        `onEvaluate` is absent and that is the design rather than an omission:
+        the frame's origin is opaque and `postMessage` is deliberately the only
+        channel into it (see the wikilink handler above). Helm cannot execute in
+        there and should not gain the ability to, so the half of the panel that
+        would need that is simply not passed.
+      */}
+      <ConsolePanel
+        name="artifact"
+        entries={entries}
+        open={consoleOpen}
+        onToggle={() => setConsoleOpen((current) => !current)}
+        note="Read-only. The frame has an opaque origin, so Helm can watch what it logs and cannot run anything inside it."
+      />
     </div>
   )
 }

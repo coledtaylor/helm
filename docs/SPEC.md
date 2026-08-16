@@ -1004,8 +1004,21 @@ option open and is what makes the app genuinely portable.
 
 ### Network posture
 
-- **Helm's own process opens exactly one outbound connection**: the GitHub
-  releases API, for a version number and a URL. It happens two ways and no
+**Helm contacts nothing on its own initiative except the update check.
+Everything else on the network happens because you asked for it: the
+pull-request surface goes through your own `gh`, and the browser pane fetches
+the page you navigate to.**
+
+That replaced "Helm's own process opens exactly one outbound connection"
+(decided 2026-08-15). The browser pane made the old claim false, and the answer
+is an honest replacement rather than a carve-out: what people care about -
+Helm does not phone home, there is no telemetry - is unchanged, and the app has
+stopped claiming something it no longer does. The same wording appears in the
+README, [PACKAGING.md](PACKAGING.md) and the `update:check` comment in
+`shared/ipc.ts`, and CLAUDE.md's rule that all four move together stays.
+
+- **The update check** reaches the GitHub releases API for a version number and
+  a URL. It happens two ways and no
   others, and never on a timer - at launch, at most once a day
   (`UPDATE_CHECK_EVERY_MS`), when `updateCheck` is ticked; and when a person
   presses Check now in Settings → Updates, which is deliberately unthrottled and
@@ -1026,10 +1039,26 @@ option open and is what makes the app genuinely portable.
   opinion, and its fetch failures as the verdict that overrules it. Nothing
   opens either. A remote URL carrying an embedded token is a credential too, and
   it is stripped before anything is written to the database.
+- **The browser pane fetches the page you navigate to**, and nothing else. It
+  is a dev-server viewport rather than a browser (M16): a `WebContentsView` in
+  a partition of its own, `persist:helm-browser`, whose cookies and storage live
+  under the app's data directory and which the renderer's session never shares.
+  Every request behind it is a page somebody typed the address of or clicked a
+  link to - Helm opens nothing there on its own initiative, the address bar
+  never hands anything to a search engine, downloads are refused and handed to
+  the system browser, and every permission the partition is asked for is denied.
+  `browserReach` can confine the whole pane to `localhost`.
+- **No credential of any kind is stored, read or handled**, and the browser
+  partition is not an exception. It holds whatever cookies the sites you visit
+  set, exactly as a browser profile does, and **Helm reads none of it**: nothing
+  in the app opens that cookie jar, and the only thing it ever does to the
+  partition is `clearStorageData` from the button in the pane.
 - **Nothing else talks to anything.** No telemetry, no crash reporting, no
   fonts, no CDN. The renderer's `will-navigate` is prevented and its window-open
   handler denies, so a link in rendered content is inert without
-  `shell:openExternal`, which is restricted to http, https and mailto.
+  `shell:openExternal`, which is restricted to http, https and mailto. The
+  browser views are the one exemption from that lock and they are exempted **by
+  `webContents.id`**, in the guard itself, so the app's own renderers keep it.
 
 ### Portability
 

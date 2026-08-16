@@ -19,6 +19,25 @@ import type { CreatableKind } from './config/names'
 import { PR_POLL_MINUTES, PR_STALE_DAYS, type PrCheckoutMode } from './github/types'
 // And for the review template's default, which is the prompt module's to state.
 import { DEFAULT_PR_REVIEW_PROMPT } from './github/prompt'
+// The same again: `AppSettings.browserReach` names it.
+import type { BrowserReach } from './browser/reach'
+
+/**
+ * The browser pane's URL rules, re-exported here rather than from the package
+ * root for the reason `PR_CHECKOUT_MODES` and `USAGE_DISPLAY_MODES` are: the
+ * address bar and the settings pane are *renderer* code, and a value import
+ * from `@helm/core` reaches the filesystem through `launch/` and `store/`,
+ * which fails at rollup rather than at typecheck. These are pure by
+ * construction - they decide about a string and touch nothing.
+ */
+export {
+  BROWSER_REACH_MODES,
+  browserReachAllows,
+  isLoopbackUrl,
+  resolveBrowserAddress,
+  type BrowserReach,
+  type ReachDecision
+} from './browser/reach'
 
 export {
   frontmatterField,
@@ -1210,7 +1229,56 @@ export interface AppSettings {
    * developing it looks like, is still one request.
    */
   lastUpdateCheckAt: string | null
+
+  /**
+   * How far the browser pane may reach: anywhere, or this machine only.
+   *
+   * A **posture**, and the one thing about the browser pane that is a
+   * preference rather than something Helm remembers - which is why it is the
+   * only one of the three browser keys that appears in the settings pane. It is
+   * enforced in exactly one function (`browserReachAllows`), because M17 adds a
+   * second, narrower control for agent-driven navigation and the two intersect.
+   */
+  browserReach: BrowserReach
+  /**
+   * The last URLs a browser pane visited, newest first.
+   *
+   * The address bar's dropdown and nothing more elaborate - no history page, no
+   * manager, no search over it (see the milestone's "explicitly out"). State
+   * rather than a preference, so it sits beside `workspaceTabs` and is
+   * deliberately absent from the settings pane. Bounded by
+   * `BROWSER_RECENT_URLS_MAX`.
+   */
+  browserRecentUrls: string[]
+  /**
+   * The last URL a browser pane was on, per project directory.
+   *
+   * Also state. It is what makes opening a browser beside a project cheap: the
+   * dev server's port is a property of the project, and typing it again every
+   * session is the papercut this pane exists to remove. Keyed by the project's
+   * path, lower-cased, the same comparison every other path list here makes.
+   * Bounded by `BROWSER_PROJECT_URLS_MAX`.
+   *
+   * The browser *tabs* themselves are not persisted, and that is the same rule
+   * the session strip follows for the same reason: a `WebContentsView` is
+   * main-owned state with a process behind it, it does not outlive the app, and
+   * a strip of tabs pointing at views that no longer exist is not a workspace
+   * restored. This is the part worth remembering, so this is the part remembered.
+   */
+  browserProjectUrls: Record<string, string>
 }
+
+/** How many addresses the dropdown offers. Ten, and no manager behind it. */
+export const BROWSER_RECENT_URLS_MAX = 10
+
+/**
+ * How many projects keep a remembered URL.
+ *
+ * A ceiling on a value rewritten whole on every navigation, exactly as
+ * `PINNED_PROJECTS_MAX` is - not a statement about how many projects anybody
+ * has. Past this the oldest entries are dropped.
+ */
+export const BROWSER_PROJECT_URLS_MAX = 200
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
@@ -1246,7 +1314,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   prReviewModel: null,
   prReviewEffort: null,
   updateCheck: true,
-  lastUpdateCheckAt: null
+  lastUpdateCheckAt: null,
+  // `web` rather than `local`, and it is a decision. The pane is framed as a
+  // dev-server viewport, but a dev server that pulls an API, a font or a docs
+  // page is the ordinary case, and a viewport that could not follow it is one
+  // people would turn off on the first afternoon. `local` is one click away for
+  // the run where nothing should leave the machine.
+  browserReach: 'web',
+  browserRecentUrls: [],
+  browserProjectUrls: {}
 }
 
 /**

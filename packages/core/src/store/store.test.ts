@@ -151,7 +151,10 @@ describe('settings', () => {
       prReviewModel: 'opus',
       prReviewEffort: 'high',
       updateCheck: false,
-      lastUpdateCheckAt: '2026-08-11T20:04:06.641Z'
+      lastUpdateCheckAt: '2026-08-11T20:04:06.641Z',
+      browserReach: 'local',
+      browserRecentUrls: ['http://localhost:3000/', 'https://example.com/docs'],
+      browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' }
     } satisfies AppSettings
 
     writeSettings(store, written)
@@ -491,6 +494,51 @@ describe('settings validation', () => {
       key: 'lastUpdateCheckAt',
       good: [null, '2026-08-11T20:04:06.641Z', '2026-08-11T14:04:06-06:00'],
       bad: ['never', 'soon', '', 0, 1786478646641, true, {}]
+    },
+    {
+      key: 'browserReach',
+      good: ['web', 'local'],
+      bad: ['none', 'Web', 'loopback', '', null, true, ['web']]
+    },
+    {
+      // The interesting rejections are the ones that would put a row in the
+      // dropdown that does nothing when clicked: a bare word, a relative path,
+      // and `file:` - which the pane refuses to navigate to, so it must not be
+      // offered one either.
+      key: 'browserRecentUrls',
+      good: [[], ['http://localhost:3000/'], ['https://example.com/a', 'http://127.0.0.1:8080/b']],
+      bad: [
+        null,
+        'http://localhost:3000/',
+        ['localhost:3000'],
+        ['file:///C:/tmp/x.html'],
+        ['/docs'],
+        [''],
+        [42],
+        Array.from({ length: 11 }, (_, i) => `http://localhost:${String(3000 + i)}/`)
+      ]
+    },
+    {
+      key: 'browserProjectUrls',
+      good: [
+        {},
+        { [join(tmpdir(), 'alpha').toLowerCase()]: 'http://localhost:5173/' },
+        {
+          [join(tmpdir(), 'alpha').toLowerCase()]: 'http://localhost:5173/',
+          [join(tmpdir(), 'beta').toLowerCase()]: 'https://example.com/'
+        }
+      ],
+      bad: [
+        null,
+        [],
+        'http://localhost:5173/',
+        // Not lower-cased, so two spellings of one project would each keep a
+        // URL and the second would never be found.
+        { [join(tmpdir(), 'Alpha')]: 'http://localhost:5173/' },
+        { 'repos/alpha': 'http://localhost:5173/' },
+        { [join(tmpdir(), 'alpha').toLowerCase()]: 'localhost:5173' },
+        { [join(tmpdir(), 'alpha').toLowerCase()]: null }
+      ]
     }
   ]
 
@@ -589,7 +637,10 @@ describe('settings validation', () => {
       prReviewModel: 'sonnet',
       prReviewEffort: null,
       updateCheck: true,
-      lastUpdateCheckAt: null
+      lastUpdateCheckAt: null,
+      browserReach: 'local',
+      browserRecentUrls: ['http://localhost:3000/'],
+      browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' }
     })
 
     expect(() => writeSettings(store, readSettings(store))).not.toThrow()
@@ -627,7 +678,10 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   prReviewModel: 'sonnet',
   prReviewEffort: null,
   updateCheck: true,
-  lastUpdateCheckAt: null
+  lastUpdateCheckAt: null,
+  browserReach: 'local',
+  browserRecentUrls: ['http://localhost:3000/'],
+  browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' }
 })
 
 describe('pinned projects', () => {

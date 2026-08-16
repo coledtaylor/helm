@@ -433,6 +433,98 @@ export interface SessionConfirmRequest {
 }
 
 // ---------------------------------------------------------------------------
+// The browser pane
+// ---------------------------------------------------------------------------
+
+/**
+ * One browser view, as the window sees it.
+ *
+ * The view itself is a `WebContentsView` living in the main process, like a
+ * pty: React paints a placeholder rectangle and this is everything it knows
+ * about what is inside it. That split is the whole design - a native view
+ * cannot be a React child, its page state must survive the workspace strip's
+ * unmount-on-tab-switch, and the renderer must never be the authority on what a
+ * page is doing.
+ */
+export interface BrowserState {
+  id: number
+  /** Where it actually is, which is not always where it was asked to go. */
+  url: string
+  /** The page's own title, or the host until it has one. Names the tab. */
+  title: string
+  /** The tab's subtitle, and what an address that failed to load still says. */
+  host: string
+  canGoBack: boolean
+  canGoForward: boolean
+  loading: boolean
+  /**
+   * Why the page is not there, as a whole sentence: a reach refusal, a
+   * certificate the pane will not click through, a dev server that is not up.
+   * Null when the page loaded.
+   */
+  problem: string | null
+  /**
+   * When a connection-refused retry gives up, as an epoch millisecond, or null.
+   *
+   * You open the pane before `pnpm dev` is up. Rather than an error, the view
+   * reconnects quietly for about half a minute - and the pane says so, because
+   * a viewport that is retrying and one that has given up look identical.
+   */
+  retryingUntil: number | null
+  /** `webContents.getZoomLevel()`, so the pane's zoom control reads the truth. */
+  zoomLevel: number
+  /** Entries in the ring buffer at level `error` or `warning`. The chip. */
+  errors: number
+  /** Whether this view's detached DevTools window is up. */
+  devtoolsOpen: boolean
+  /** The last `findInPage` and what it found, or null when nothing is being found. */
+  find: { query: string; matches: number; active: number } | null
+  /** The project this tab was opened beside, for the per-project URL memory. */
+  project: string | null
+}
+
+/**
+ * A line a page wrote to its console, or a load that failed.
+ *
+ * The same shape the artifact console already produced, plus the two fields a
+ * *panel* needs that a count did not: which view it came from and when. One
+ * shape, because the panel is one component used in two places.
+ */
+export interface BrowserConsoleEntry {
+  level: string
+  message: string
+  source: string
+  line: number
+  /** Epoch milliseconds. The panel prints a wall clock beside each entry. */
+  at: number
+}
+
+/**
+ * Where the placeholder is, in CSS pixels, and whether the view should show.
+ *
+ * Fire-and-forget for the reason `pty:input` is: a `ResizeObserver` on the
+ * placeholder fires per frame during a split drag, and a promise per frame
+ * would put an IPC round trip inside the gesture. Main converts to DIPs itself
+ * - the zoom factor is the window's, and the window is the side that knows it.
+ *
+ * `visible` is the *renderer's* answer to "should this be on screen", and it
+ * folds together every reason there is: the tab is not in front, an overlay is
+ * up, the workspace column is collapsed, a tab is being dragged. Main does not
+ * reason about any of them; it calls `setVisible`.
+ */
+export interface BrowserBounds {
+  id: number
+  x: number
+  y: number
+  width: number
+  height: number
+  visible: boolean
+}
+
+/** How many browser tabs may be open at once. `window.open` is capped by it. */
+export const BROWSER_TABS_MAX = 10
+
+// ---------------------------------------------------------------------------
 // Renderer -> main, with a response
 // ---------------------------------------------------------------------------
 
@@ -593,8 +685,19 @@ export interface IpcRequests {
   }
 
   /**
-   * Ask GitHub whether there is a newer release. This is the only network
-   * connection Helm's own process opens.
+   * Ask GitHub whether there is a newer release.
+   *
+   * **Helm contacts nothing on its own initiative except the update check.
+   * Everything else on the network happens because you asked for it: the
+   * pull-request surface goes through your own `gh`, and the browser pane
+   * fetches the page you navigate to.**
+   *
+   * That is the whole network posture, and it is written identically here, in
+   * the README, in docs/PACKAGING.md and in SPEC 5. If it moves again, all four
+   * move together - CLAUDE.md says so, and the reason is that four copies of a
+   * claim about what an app does to the network is four chances to ship a lie.
+   * It replaced "the only outbound connection Helm's own process opens" when
+   * the browser pane landed, because a browser makes that false.
    *
    * The app asks on its own too: once per launch, at most once a day, when
    * `updateCheck` is on - see `maybeCheckForUpdate`. Neither path downloads
@@ -969,6 +1072,87 @@ export interface IpcRequests {
    * document - neither of which a hosted TUI can rely on. */
   'clipboard:read': { request: void; response: string }
   'clipboard:write': { request: string; response: void }
+
+  /**
+   * The browser pane.
+   *
+   * Every one of these addresses a view by id, because the view is main's and
+   * the window holds nothing but a rectangle and a number - the same shape the
+   * session channels have, for the same reason. What is deliberately *not* here
+   * is a channel that hands main a URL to fetch on its own: every navigation
+   * behind these is a page the user asked for, in a view they opened.
+   *
+   * The whole family goes through `browserReachAllows`, in `@helm/core`, and
+   * nothing here re-implements any part of it - see `main/browser.ts`.
+   */
+
+  /**
+   * Make a view. `url` is optional: a new tab with no address is an empty pane
+   * with the caret in the address bar, which is what a new-tab button should do.
+   * `project` is the project the tab was opened beside, and it is what the
+   * remembered per-project URL is keyed on.
+   */
+  'browser:open': {
+    request: { url?: string; project?: string | null }
+    response: { state: BrowserState | null; problem: string | null }
+  }
+  /**
+   * Go somewhere. Takes what was **typed**, not a URL: turning `3000` into
+   * `http://localhost:3000/` and refusing a word rather than searching for it
+   * are decisions about the address bar, and they are made in one place
+   * (`resolveBrowserAddress`) so the pane and an agent cannot disagree.
+   */
+  'browser:navigate': { request: { id: number; input: string }; response: BrowserState | null }
+  'browser:back': { request: { id: number }; response: BrowserState | null }
+  'browser:forward': { request: { id: number }; response: BrowserState | null }
+  /** `hard` reloads ignoring the cache - what a stale dev server asset wants. */
+  'browser:reload': { request: { id: number; hard?: boolean }; response: BrowserState | null }
+  /** Destroys the view. The tab closing is what calls this, like `disposeShell`. */
+  'browser:close': { request: { id: number }; response: void }
+  /**
+   * Every view, or one of them.
+   *
+   * With no id it is the adopt list, and it is here for the reason
+   * `session:list` is: a renderer reload (dev HMR, a crashed render process)
+   * leaves main holding views the new window has never heard of, and a strip
+   * that forgot them would leave live pages painting over the app with no tab
+   * to close.
+   */
+  'browser:state': { request: { id?: number }; response: BrowserState[] }
+  /**
+   * Run an expression in the page and answer with what it evaluated to.
+   *
+   * The console panel's input line, and the same plumbing M17's
+   * `browser_evaluate` needs - built once here so that milestone exposes it
+   * rather than writing a second one. The answer is a **string**: whatever a
+   * page returns has to cross a process boundary, and "it did not serialise" is
+   * a thing the panel should print rather than a rejected promise.
+   */
+  'browser:eval': {
+    request: { id: number; source: string }
+    response: { ok: boolean; value: string; error: string | null }
+  }
+  /**
+   * The first DevTools in Helm, scoped to one view's own web contents and
+   * opened detached - docked would put a second, Chromium-owned rectangle
+   * inside the window and join the bounds problem this pane already has.
+   */
+  'browser:devtools': { request: { id: number }; response: BrowserState | null }
+  /** `webContents.findInPage`. What it found arrives on `browser:changed`. */
+  'browser:find': {
+    request: { id: number; query: string; forward?: boolean }
+    response: void
+  }
+  'browser:stopFind': { request: { id: number }; response: void }
+  'browser:zoom': { request: { id: number; level: number }; response: BrowserState | null }
+  /**
+   * `session.clearStorageData()` for this view's partition, so an auth flow can
+   * be tested twice. It clears the **shared** browser profile, because there is
+   * one - see `main/browser.ts` - so the pane asks first.
+   */
+  'browser:clearStorage': { request: { id: number }; response: BrowserState | null }
+  /** The ring buffer, for a panel that has just been opened on an old tab. */
+  'browser:console': { request: { id: number }; response: BrowserConsoleEntry[] }
 }
 
 export type ResolvedTheme = 'light' | 'dark'
@@ -1011,6 +1195,16 @@ export interface IpcSends {
 
   /** Spike harness: the renderer's answer to a `probe:req`. */
   'probe:res': { id: number; value: unknown }
+
+  /**
+   * Where the browser view's placeholder is now, and whether it should paint.
+   *
+   * One-way and debounced by the sender, for the reason the terminal wires are:
+   * a `ResizeObserver` and a split drag both fire per frame, and a round trip
+   * per frame is a round trip inside a gesture. Nothing waits on the answer -
+   * the next frame's bounds supersede this one's.
+   */
+  'browser:bounds': BrowserBounds
 }
 
 // ---------------------------------------------------------------------------
@@ -1131,6 +1325,33 @@ export interface IpcEvents {
 
   /** Spike harness: main asks the renderer to inspect the live terminal. */
   'probe:req': { id: number; req: ProbeOp }
+
+  /**
+   * A browser view moved, loaded, failed or finished finding.
+   *
+   * Pushed rather than polled because a page is the one thing in the app that
+   * changes without anybody in Helm having done something: a dev server
+   * restarts, a redirect lands somewhere else, a retry finally connects. The
+   * tab's title and the address bar are both made of this.
+   */
+  'browser:changed': BrowserState
+
+  /**
+   * A view Helm made that the window did not ask for: `window.open` inside a
+   * page. The strip adopts it as a tab, and the cap is enforced in main - a
+   * page that opens eleven windows gets ten tabs and a console line, not eleven.
+   */
+  'browser:opened': BrowserState
+
+  /**
+   * A view is gone. Sent when main destroyed it for a reason the window did not
+   * cause - the cap, a render process that crashed, `before-quit` - so a tab
+   * pointing at nothing closes itself instead of sitting there.
+   */
+  'browser:closed': { id: number }
+
+  /** A line a page wrote, or a load that failed. Feeds the console panel. */
+  'browser:logged': { id: number; entry: BrowserConsoleEntry }
 }
 
 // ---------------------------------------------------------------------------
@@ -1263,7 +1484,21 @@ export const REQUEST_CHANNELS = Object.keys({
   'content:wikilink': true,
   'shell:openExternal': true,
   'clipboard:read': true,
-  'clipboard:write': true
+  'clipboard:write': true,
+  'browser:open': true,
+  'browser:navigate': true,
+  'browser:back': true,
+  'browser:forward': true,
+  'browser:reload': true,
+  'browser:close': true,
+  'browser:state': true,
+  'browser:eval': true,
+  'browser:devtools': true,
+  'browser:find': true,
+  'browser:stopFind': true,
+  'browser:zoom': true,
+  'browser:clearStorage': true,
+  'browser:console': true
 } satisfies Record<RequestChannel, true>) as RequestChannel[]
 
 export const SEND_CHANNELS = Object.keys({
@@ -1278,7 +1513,8 @@ export const SEND_CHANNELS = Object.keys({
   'pterm:input': true,
   'pterm:resize': true,
   'session:confirmed': true,
-  'probe:res': true
+  'probe:res': true,
+  'browser:bounds': true
 } satisfies Record<SendChannel, true>) as SendChannel[]
 
 export const EVENT_CHANNELS = Object.keys({
@@ -1304,5 +1540,9 @@ export const EVENT_CHANNELS = Object.keys({
   'session:confirm': true,
   'pterm:data': true,
   'pterm:exit': true,
-  'probe:req': true
+  'probe:req': true,
+  'browser:changed': true,
+  'browser:opened': true,
+  'browser:closed': true,
+  'browser:logged': true
 } satisfies Record<EventChannel, true>) as EventChannel[]

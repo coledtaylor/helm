@@ -176,9 +176,12 @@ you may. Settings → Updates also shows this build's version, the newest one He
 has heard of, and a Release notes link that works offline, because it is a link
 rather than a request.
 
-That check is the only network connection Helm's own process opens. With the
-tick off, Helm opens none on its own initiative, and none at all until somebody
-asks for one.
+**Helm contacts nothing on its own initiative except the update check.
+Everything else on the network happens because you asked for it: the
+pull-request surface goes through your own `gh`, and the browser pane fetches
+the page you navigate to.** There is no telemetry, no crash reporting, no
+fonts and no CDN, and with the tick off Helm asks nothing at all unless you
+press something.
 
 The pull-request pane reaches GitHub too, but through **your own `gh` CLI**, on
 a schedule you set - every five minutes by default, and `0` in Settings turns it

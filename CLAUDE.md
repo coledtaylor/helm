@@ -90,7 +90,54 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   `parseGitHubRemote` strips the userinfo before anything reaches the database.
 - The network posture is stated identically in four places - README,
   [docs/PACKAGING.md](docs/PACKAGING.md), the `update:check` comment in
-  `shared/ipc.ts`, and SPEC 5. If it moves again, all four move together.
+  `shared/ipc.ts`, and SPEC 5. If it moves again, all four move together. It
+  currently reads: *"Helm contacts nothing on its own initiative except the
+  update check. Everything else on the network happens because you asked for
+  it: the pull-request surface goes through your own `gh`, and the browser pane
+  fetches the page you navigate to."*
+- **The browser partition is not an exception to the credential rule, and it is
+  the one place that has to say so out loud.** `persist:helm-browser` holds
+  cookies and logins for whatever the user visits, under the app's data
+  directory. Nothing in Helm reads it - no cookie, no storage, no header - and
+  the only call the app ever makes against it is `clearStorageData`, from a
+  button in the pane. A feature that wanted to read that partition would be a
+  feature that made Helm handle credentials.
+
+## The browser pane
+
+Five rules, and each one is a thing that only shows up when it is broken.
+
+- **The renderer's navigation lock is never loosened.** `will-navigate` and
+  `setWindowOpenHandler` are denied on **every** web-contents in
+  `main/index.ts`; browser views are exempted by a registry of `webContents.id`
+  read *inside* those guards. Window-open still answers `deny` for everything -
+  what the exemption adds is that a `window.open` inside a view becomes a new
+  Helm tab, capped. A change that widens the guard instead of the registry is
+  the change this rule exists to stop.
+- **Every navigation goes through `browserReachAllows`, in `@helm/core`.** One
+  function, taking as many restrictions as the caller has, allowing a URL only
+  where all of them do - because M17 adds a second, narrower control for agents
+  and two copies of a URL rule is how they drift. It is also where the scheme
+  rule lives: `file:` and custom schemes are refused by the same call.
+- **A native view paints above all renderer DOM, so it hides for anything drawn
+  over it.** The one subscribable answer is `overlayOpen()` in
+  `packages/ui/src/lib/overlay.ts`, subscribed **once**, in `useBrowsers`. Two
+  transient things get the same treatment for the same reason - a tab drag and
+  the address bar's dropdown - and a **toast does not**, because it is not modal
+  and is not transient; it is required to be drawn clear of the view instead
+  (BR-10). The view must also never enter the top 36px, where Windows draws the
+  window controls; main clamps that rather than trusting the layout.
+- **Hiding is `setVisible(false)` because that leaves the page live.** M17 will
+  drive tabs nobody is looking at, so hidden has to stay capturable, scriptable
+  and clickable. Measured on Electron 43.3.0 and pinned by `BR-3`, which
+  repaints the page a new colour *after* hiding it so a stale frame cannot pass.
+  If that ever stops holding, the mechanism changes - parking the view outside
+  the window is the fallback - and `BR-3` is what says so first.
+- **Self-signed certificates are accepted for loopback and nowhere else**, and
+  there is no click-through: Helm registers no `certificate-error` handler at
+  all. Downloads are refused and handed to the system browser, every permission
+  on the partition is denied, and the address bar never hands anything to a
+  search engine. None of those is a setting; `browserReach` is the only one.
 
 ## Overlays
 

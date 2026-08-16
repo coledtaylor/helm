@@ -13,6 +13,7 @@ import {
   renameHistorySession,
   suggestRoots
 } from '@helm/core'
+import type { BrowserHost } from './browser'
 import type { ConfigService } from './config'
 import { highlightForEditor, type ContentService } from './content'
 import type { TemplateService } from './templates'
@@ -88,6 +89,8 @@ export interface IpcContext {
   sessions: SessionHost
   /** Owns the project shells; see `pterm.ts`. */
   pterm: PtermHost
+  /** Owns the browser pane's `WebContentsView`s; see `browser.ts`. */
+  browsers: BrowserHost
   /** Keeps the index over `~/.claude/history.jsonl` current; see `history.ts`. */
   history: HistoryService
   /** Keeps the conversations Claude Code deletes; see `archive.ts`. */
@@ -576,7 +579,28 @@ export function registerIpc(ctx: IpcContext): void {
     'clipboard:read': () => clipboard.readText(),
     'clipboard:write': (text) => {
       clipboard.writeText(text)
-    }
+    },
+
+    /*
+     * The browser pane. Every handler is a one-line delegation on purpose:
+     * every decision behind them - what a typed address means, whether the
+     * reach posture allows it, what hiding is - lives in `main/browser.ts` and
+     * `@helm/core`, so there is exactly one place either could be got wrong.
+     */
+    'browser:open': (request) => ctx.browsers.open(request),
+    'browser:navigate': ({ id, input }) => ctx.browsers.navigate(id, input),
+    'browser:back': ({ id }) => ctx.browsers.back(id),
+    'browser:forward': ({ id }) => ctx.browsers.forward(id),
+    'browser:reload': ({ id, hard }) => ctx.browsers.reload(id, hard === true),
+    'browser:close': ({ id }) => ctx.browsers.close(id),
+    'browser:state': ({ id }) => ctx.browsers.states(id),
+    'browser:eval': ({ id, source }) => ctx.browsers.evaluate(id, source),
+    'browser:devtools': ({ id }) => ctx.browsers.devtools(id),
+    'browser:find': ({ id, query, forward }) => ctx.browsers.find(id, query, forward !== false),
+    'browser:stopFind': ({ id }) => ctx.browsers.stopFind(id),
+    'browser:zoom': ({ id, level }) => ctx.browsers.zoom(id, level),
+    'browser:clearStorage': ({ id }) => ctx.browsers.clearStorage(id),
+    'browser:console': ({ id }) => ctx.browsers.entries(id)
   }
 
   const sends: SendHandlers = {
@@ -600,6 +624,8 @@ export function registerIpc(ctx: IpcContext): void {
 
     'pterm:input': ({ id, data }) => ctx.pterm.input(id, data),
     'pterm:resize': ({ id, cols, rows }) => ctx.pterm.resize(id, cols, rows),
+
+    'browser:bounds': (payload) => ctx.browsers.bounds(payload),
 
     // Consumed by one-shot `ipcMain.once` listeners in the spike drivers, which
     // register alongside these. A no-op here keeps the contract exhaustive

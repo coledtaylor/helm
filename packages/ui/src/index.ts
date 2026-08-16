@@ -1,5 +1,17 @@
 export { AppShell, type AppShellProps } from './components/AppShell'
+export {
+  BrowserPane,
+  BROWSER_WIDTHS,
+  type BrowserPaneProps,
+  type BrowserPaneState
+} from './components/BrowserPane'
 export { Chip, type ChipProps, type ChipTone } from './components/Chip'
+export {
+  ConsolePanel,
+  type ConsoleEntry,
+  type ConsoleFilter,
+  type ConsolePanelProps
+} from './components/ConsolePanel'
 export {
   ConfigConsole,
   ConfigNothingSelected,

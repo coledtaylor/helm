@@ -194,6 +194,20 @@ const VIEWS: Array<{
     open: ['[data-open-content]', '[data-content-view="tree"]'],
     anchor: '[data-content-tree]'
   },
+  /**
+   * The browser pane, opened empty.
+   *
+   * Empty on purpose: this walk has no fixture server and must not reach the
+   * network, and every control on the pane is drawn whether or not a page is
+   * loaded. Two of them are *disabled* with no history behind them - back and
+   * forward - which is the honest state of a new tab and which AFF-5 has an
+   * opinion about, exactly as `config:file` measures a disabled Rename.
+   *
+   * The tab it opens is left behind for the rest of the walk, which is harmless:
+   * a view with no address fetches nothing and paints nothing, and the next
+   * view's click moves the strip off it.
+   */
+  { name: 'browser', open: ['[data-open-browser]'], anchor: '[data-browser-bar]' },
   { name: 'history', open: ['[data-open-history]'], anchor: '[data-history-search]' },
   { name: 'pulls', open: ['[data-open-pulls]'], anchor: '[data-pulls-refresh]' },
   { name: 'settings', open: ['[data-open-settings]'], anchor: '[data-settings-pane]' },

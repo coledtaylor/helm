@@ -156,9 +156,14 @@ Code-signing the build would retire reason 1. It would not touch 2 or 3.
 
 ## Network posture
 
-The update check is **the only network connection Helm's own process opens**.
-With `updateCheck` off, Helm opens none on its own initiative; the one remaining
-route is a person pressing Check now, so nothing leaves the machine unasked for.
+**Helm contacts nothing on its own initiative except the update check.
+Everything else on the network happens because you asked for it: the
+pull-request surface goes through your own `gh`, and the browser pane fetches
+the page you navigate to.**
+
+There is no telemetry, no crash reporting, no fonts and no CDN. With
+`updateCheck` off, Helm asks nothing by itself at all; the one remaining route
+is a person pressing Check now, so nothing leaves the machine unasked for.
 
 The pull-request pane reaches GitHub as well, but through the user's own `gh`
 CLI: `gh pr list` per repository on a timer (`prPollMinutes`, five minutes by
