@@ -6,6 +6,12 @@ export {
   type ConfigConsoleProps,
   type ConfigViewKind
 } from './components/ConfigConsole'
+export {
+  CodeEditor,
+  type CodeEditorHandle,
+  type CodeEditorProps,
+  type EditorStatus
+} from './components/CodeEditor'
 export { ConfigEditor, type ConfigEditorProps } from './components/ConfigEditor'
 export {
   ConfigDeleteDialog,

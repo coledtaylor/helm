@@ -14,7 +14,7 @@ import {
   suggestRoots
 } from '@helm/core'
 import type { ConfigService } from './config'
-import type { ContentService } from './content'
+import { highlightForEditor, type ContentService } from './content'
 import type { TemplateService } from './templates'
 import type { ArchiveService } from './archive'
 import type { HistoryService } from './history'
@@ -465,6 +465,10 @@ export function registerIpc(ctx: IpcContext): void {
     // pass in the main process, and the ceiling is an ordinary setting.
     'archive:conversation': ({ sessionId }) => readArchivedConversation(services.store, sessionId),
     'archive:stats': () => ctx.archive.stats(),
+
+    // A free function rather than a method on either service: one editor, one
+    // highlighter, and nothing about a draft in a box belongs to a scope.
+    'editor:highlight': ({ path, source }) => highlightForEditor(path, source),
 
     'config:scopes': () => ctx.config.scopes(),
     'config:tree': ({ scopePath }) => ctx.config.tree(scopePath),

@@ -1,4 +1,4 @@
-import type { ChangeEvent, JSX, ReactNode } from 'react'
+import type { JSX, ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ConfigFile,
@@ -6,6 +6,7 @@ import type {
   ConfigLive,
   ConfigRendered,
   ConfigSnapshotMeta,
+  EditorHighlight,
   EffectiveView
 } from '@helm/core'
 // Values, not types, so they come from `@helm/core/types` - the one entry point
@@ -16,9 +17,11 @@ import {
   isRedactedConfigFile,
   isRenamable,
   renameRefusal,
-  validateJson
+  validateJson,
+  wrapsByDefault
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { CodeEditor, type CodeEditorHandle, type EditorStatus } from './CodeEditor'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes, formatMoment } from '../lib/time'
 import { bundledWith, skillHolding } from './ConfigConsole'
@@ -34,7 +37,8 @@ import {
   SaveIcon,
   SparkIcon,
   TrashIcon,
-  WarnIcon
+  WarnIcon,
+  WrapIcon
 } from './icons'
 
 export type ConfigDetailMode = 'read' | 'edit' | 'source'
@@ -67,6 +71,15 @@ export interface ConfigEditorProps {
   onOpenPath: (path: string) => void
   /** Hands a link in a rendered document to the OS browser. */
   onOpenExternal: (url: string) => void
+  /**
+   * Tokenises the draft for the editor's underlay, over IPC.
+   *
+   * Optional, and absent means the text is edited in one colour rather than
+   * none of it appearing: the highlighter is an improvement to the editor, not
+   * a dependency of it. Must be stable across renders - it is an effect
+   * dependency one layer down.
+   */
+  onHighlight?: ((path: string, source: string) => Promise<EditorHighlight>) | null
   /** Told the editor's current text so a parent can warn before switching away. */
   onDirtyChange: (dirty: boolean) => void
   /** Optional, because the two write controls arrived on their own branch and a
@@ -133,13 +146,26 @@ export function ConfigEditor({
   onDirtyChange,
   onRename,
   onDelete,
+  onHighlight = null,
   justCreated = false
 }: ConfigEditorProps): JSX.Element {
   const [draft, setDraft] = useState('')
   const [caret, setCaret] = useState({ line: 1, column: 1 })
   const [showHistory, setShowHistory] = useState(false)
   const [mode, setMode] = useState<ConfigDetailMode>(justCreated ? 'edit' : 'read')
-  const areaRef = useRef<HTMLTextAreaElement>(null)
+  const [status, setStatus] = useState<EditorStatus | null>(null)
+  /**
+   * Whether long lines wrap, seeded from what this kind of file is.
+   *
+   * A `CLAUDE.md` is prose - a paragraph is one very long line - and the box
+   * that would not wrap it put a horizontal scrollbar under every instruction
+   * file in the app. A `settings.json` is the opposite: its structure is the
+   * line breaks. The toggle is per file and resets when another one opens,
+   * because the editor is keyed on the path at its call site: whether a file
+   * reads better wrapped is a question about that file.
+   */
+  const [wrap, setWrap] = useState(() => wrapsByDefault(file.path))
+  const editorRef = useRef<CodeEditorHandle>(null)
 
   // Re-seeded whenever a different file, or a different version of it, arrives.
   // Keyed on the hash rather than the path so that a reload after an external
@@ -202,26 +228,10 @@ export function ConfigEditor({
 
   const problem = useMemo(() => (isJson ? validateJson(draft) : null), [isJson, draft])
 
-  const updateCaret = (): void => {
-    const area = areaRef.current
-    if (!area) return
-    const upTo = area.value.slice(0, area.selectionStart)
-    const lastBreak = upTo.lastIndexOf('\n')
-    setCaret({ line: upTo.split('\n').length, column: upTo.length - lastBreak })
-  }
-
   /** Puts the caret on the character the parser objected to. */
   const goToProblem = (): void => {
-    const area = areaRef.current
-    if (!area || !problem) return
-    area.focus()
-    area.setSelectionRange(problem.offset, Math.min(problem.offset + 1, area.value.length))
-    updateCaret()
-  }
-
-  const onChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
-    setDraft(event.target.value)
-    updateCaret()
+    if (!problem) return
+    editorRef.current?.select(problem.offset, Math.min(problem.offset + 1, draft.length))
   }
 
   const blocked = problem !== null
@@ -306,6 +316,32 @@ export function ConfigEditor({
                 </button>
               )}
             </div>
+          )}
+
+          {/* Only over the box it governs. A lone toggle rather than an On/Off
+              pair, the same shape the content viewer's is, for the same reason:
+              wrapping is one thing that is either happening or not. */}
+          {editingText && (
+            <button
+              type="button"
+              data-config-wrap
+              aria-pressed={wrap}
+              onClick={() => setWrap((on) => !on)}
+              title={
+                wrap
+                  ? 'Long lines wrap. Click to let them run off to the right.'
+                  : 'Long lines run off to the right. Click to wrap them.'
+              }
+              className={cn(
+                'flex shrink-0 items-center gap-1.5 rounded-well border px-2 py-0.5 text-[11px] transition-colors',
+                wrap
+                  ? 'border-accent/50 bg-accent-soft text-accent-text'
+                  : 'border-border text-fg-muted hover:bg-hover hover:text-fg'
+              )}
+            >
+              <WrapIcon width={11} height={11} />
+              Wrap
+            </button>
           )}
 
           {editable && (
@@ -436,22 +472,18 @@ export function ConfigEditor({
           <p className="px-5 py-4 text-[12px] text-fg-subtle">Reading&hellip;</p>
         ) : editingText ? (
           <div className="min-h-0 flex-1 px-5 py-3">
-            <textarea
-              ref={areaRef}
-              data-config-editor
+            <CodeEditor
+              ref={editorRef}
+              surface="config"
+              path={file.path}
               value={draft}
-              onChange={onChange}
-              onKeyUp={updateCaret}
-              onClick={updateCaret}
-              spellCheck={false}
-              wrap="off"
-              aria-label={`Edit ${file.relPath}`}
-              className={cn(
-                'h-full w-full resize-none rounded-raised border bg-surface-sunken p-3',
-                'font-mono text-[12px] leading-[1.55] text-fg select-text',
-                'focus:outline-none',
-                problem !== null ? 'border-danger/50' : 'border-border focus:border-accent'
-              )}
+              onChange={setDraft}
+              onHighlight={onHighlight}
+              wrap={wrap}
+              invalid={problem !== null}
+              onCaretChange={setCaret}
+              onStatusChange={setStatus}
+              ariaLabel={`Edit ${file.relPath}`}
             />
           </div>
         ) : isSettings ? (
@@ -529,6 +561,22 @@ export function ConfigEditor({
                 </span>
                 <span aria-hidden>·</span>
                 <span>{formatBytes(new TextEncoder().encode(draft).length)}</span>
+                {/* Why this file has no colour in it. The ceiling is the read
+                    views' own, so a file that reads as plain text does not
+                    suddenly light up when you press Edit - and a grey editor
+                    with no explanation reads as a highlighter that broke. */}
+                {status?.tooLarge === true && (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span
+                      data-editor-degraded
+                      title="Past the size ceiling the editor drops the highlighted underlay entirely rather than getting slow, so the line-number gutter and match painting are off with it. Typing, find and go to line all still work."
+                      className="text-fg-subtle"
+                    >
+                      plain text: too large to highlight
+                    </span>
+                  </>
+                )}
               </>
             ) : (
               <>

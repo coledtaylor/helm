@@ -8,6 +8,7 @@ import {
   sessionLabel,
   withProjectPinned,
   withRepoIgnored,
+  type EditorHighlight,
   type HistorySession,
   type Profile,
   type ProfileDraft,
@@ -122,6 +123,19 @@ type PaneRef = WorkspaceTab
  */
 const helmOpenExternal = (url: string): Promise<{ opened: boolean }> =>
   helm.invoke('shell:openExternal', { url })
+
+/**
+ * The editors' tokeniser, on the far side of an IPC boundary.
+ *
+ * A module-level constant rather than a `useCallback`, and that is load-bearing
+ * rather than tidy: the editor debounces on this identity, so a new function
+ * per render of `App` would cancel and restart the debounce on every render the
+ * app happens to do - which is the shape of a highlighter that never fires
+ * while anything else on screen is animating. Nothing here closes over state,
+ * so there is nothing for a hook to hold.
+ */
+const helmHighlight = (path: string, source: string): Promise<EditorHighlight> =>
+  helm.invoke('editor:highlight', { path, source })
 
 /**
  * What each build mode is called on the status bar.
@@ -1715,6 +1729,7 @@ export function App(): JSX.Element {
                     onOpenPath={configState.openPath}
                     onOpenExternal={(url) => void helmOpenExternal(url)}
                     onDirtyChange={configState.setDirty}
+                    onHighlight={helmHighlight}
                     onRename={() => configState.openEntryDialog('rename')}
                     onDelete={() => configState.openEntryDialog('delete')}
                     justCreated={configState.selected.path === configState.createdPath}
@@ -1826,6 +1841,7 @@ export function App(): JSX.Element {
                   highlight={contentState.highlight}
                   wrapDefault={settings?.contentWrap ?? DEFAULT_SETTINGS.contentWrap}
                   wrapIndent={settings?.contentWrapIndent ?? DEFAULT_SETTINGS.contentWrapIndent}
+                  onHighlight={helmHighlight}
                   onSave={contentState.save}
                   onReload={contentState.reload}
                   onRestore={contentState.restore}

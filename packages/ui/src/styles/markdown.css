@@ -363,20 +363,33 @@
   pointer-events: none;
 }
 
-.markdown .shiki,
-.markdown .shiki span,
-.source-view .shiki,
-.source-view .shiki span {
+/*
+ * Which of the two themes shiki emitted is the one you see.
+ *
+ * **Unscoped, and that is the point.** These used to be written four times over
+ * - `.markdown .shiki`, `.markdown .shiki span`, and the same pair again for
+ * `.source-view` - which meant a third surface rendering shiki output got no
+ * colour at all and looked like a highlighter that had failed rather than one
+ * that had never been reached. The editors are that third surface. `.shiki` is
+ * a class only shiki's own output carries, so scoping it to the wrappers that
+ * happened to exist first was never buying anything.
+ *
+ * A `<span>` with no `--shiki-light` on it - a line the tokeniser has not
+ * caught up with yet, which the editors render constantly - makes this
+ * declaration invalid at computed-value time, and `color` inherits. So it
+ * falls back to whatever the block sets rather than to nothing, which is why
+ * the editor's underlay can paint plain text through the same rule.
+ */
+.shiki,
+.shiki span {
   color: var(--shiki-light);
   font-style: var(--shiki-light-font-style);
   font-weight: var(--shiki-light-font-weight);
   text-decoration: var(--shiki-light-text-decoration);
 }
 
-.dark .markdown .shiki,
-.dark .markdown .shiki span,
-.dark .source-view .shiki,
-.dark .source-view .shiki span {
+.dark .shiki,
+.dark .shiki span {
   color: var(--shiki-dark);
   font-style: var(--shiki-dark-font-style);
   font-weight: var(--shiki-dark-font-weight);

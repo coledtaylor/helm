@@ -20,7 +20,8 @@ import { auditReport, reportAudit } from './report-audit.mjs'
  * there is no report to be short.
  */
 const AUDITED = {
-  'affordance-check': { report: 'affordance-report.json', driver: 'affordancecheck.ts' }
+  'affordance-check': { report: 'affordance-report.json', driver: 'affordancecheck.ts' },
+  'highlight-check': { report: 'highlight-report.json', driver: 'highlightcheck.ts' }
 }
 
 const [name, ...rest] = process.argv.slice(2)

@@ -487,6 +487,79 @@ Read what Claude writes without a detour through Explorer and a text editor.
 > reach would make it a code search engine over `node_modules`, which is a
 > different product.
 
+#### The editors: a textarea with an overlay, not a code editor
+
+> [!note] Decided 2026-08-16
+> Helm edits files in two places - the config console and the content viewer -
+> and both are **one component**: a `<textarea>` with an `aria-hidden`
+> highlighted `<pre>` under it, the textarea's own text transparent and its
+> caret painted. Not CodeMirror, not Monaco. This is written down here because
+> the argument had already evaporated once: it lived in a comment in
+> `ConfigEditor.tsx`, the file was rewritten, and nothing in `packages/` or
+> `docs/` carried it afterwards.
+>
+> Four reasons, in the order they matter:
+>
+> 1. **The read views already highlight with shiki.** CodeMirror tokenises with
+>    Lezer - a different grammar family, different scopes, different themes - so
+>    the same file would be coloured one way when read and another way when
+>    edited. Two colour schemes for one file is worse than no colour in the
+>    editor.
+> 2. **Ten check sites drive these two boxes** through
+>    `HTMLTextAreaElement.prototype`'s value setter - `configcheck.ts` eight
+>    times, `contentcheck.ts` twice. The overlay keeps every one of them green
+>    because the element they query is still there and still a textarea; an
+>    editor framework breaks all ten at once.
+> 3. **The overlay is what *enables* two of the features**, rather than being a
+>    cost paid for them. Find-in-file paints its matches by wrapping the actual
+>    characters in the underlay, and the line-number gutter is measured off the
+>    underlay's line boxes - so both are wrap-aware by construction, with
+>    nothing positioned by arithmetic and nothing that can drift.
+> 4. **Bundle.** A megabyte of editor for a gutter. This was once the only
+>    reason and is now the fourth.
+>
+> **The decision is held under a performance condition, and the condition is
+> measurable.** If keystroke-to-glyph cannot be kept inside one frame on a
+> textarea, that is new evidence and CodeMirror is back on the table.
+> `pnpm highlight-check --only=latency` is the instrument: an `input` listener
+> counts `requestAnimationFrame` callbacks to the first one where the painted
+> layer holds what the box holds, and anything but 1 fails. Measured on this
+> machine at three sizes, worst frame in each set: **7.5 ms** on a 9 KB file,
+> **61 ms** on a 464 KB one, **12 ms** past the size ceiling. Colour arrives
+> **157 ms** after the last keystroke on a 3,000-line file, against a ~250 ms
+> target.
+>
+> Three mechanisms make that true and each is load-bearing:
+>
+> - **The underlay takes the raw text synchronously.** Keystrokes never wait for
+>   a tokeniser, an IPC round trip or a debounce. When the tokeniser answers, a
+>   common-prefix/common-suffix line diff keeps the colour of every line the
+>   edit did not touch, so typing on line 40 of a 900-line file leaves 899 lines
+>   coloured rather than dropping the document to grey for 110 ms per keypress.
+> - **Highlighting runs in main, over debounced IPC** (`editor:highlight`),
+>   through the same `core/src/content/highlight.ts` the read views use.
+>   `highlightLines` is the same tokenise stopped a step earlier, handed over
+>   per line. Main is externalised, so `import('@shikijs/langs/<name>')`
+>   resolves through Node and **every grammar shiki ships is reachable with no
+>   list to maintain**; a renderer-side highlighter would need a hand-written
+>   map, capping the languages at whatever somebody remembered.
+> - **Above a line threshold the coloured layer renders the visible window**,
+>   and a full-file mirror underneath it - one text node, painting nothing -
+>   is what places that window exactly in both wrap modes.
+>
+> **Above the size ceiling the whole overlay is dropped**, not just the colour,
+> and that came out of the measurement rather than out of the design: with the
+> underlay up, a keystroke into a 1.29 MB file took **1,920 ms** to reach the
+> frame that painted it, because a text layer holding the file is laid out again
+> on every one. Past the ceiling the textarea paints its own glyphs, the gutter
+> and match painting go with the overlay, and the footer says so - **12 ms**.
+> The criterion is "degrades rather than gets slow", and 1,920 ms was getting
+> slow.
+>
+> Out of scope and written down so it does not creep: multi-cursor, code
+> folding, autocomplete, diagnostics, a minimap, virtualised rendering beyond
+> the window described above, and project-wide search-and-replace.
+
 ### 4.4 Terminal
 
 `xterm.js` + `node-pty` hosting the **real** `claude` TUI, in tabs. Helm renders no

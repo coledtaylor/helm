@@ -5,6 +5,13 @@
  * can be expressed as a utility on a call site - there is no call site. */
 @import './markdown.css';
 
+/* The editors. Separated for a different reason: none of it can be a utility
+ * either, because the claim these rules make is that four boxes are laying
+ * text out identically, and four class strings that happen to agree is not a
+ * claim - it is a coincidence waiting to be broken. Imported after
+ * `markdown.css` so the shiki colour rules it borrows are already in. */
+@import './editor.css';
+
 /*
  * Tailwind v4 detects source files by walking up from the Vite root, which here
  * is `packages/desktop/src/renderer`. That never reaches `packages/ui`, so

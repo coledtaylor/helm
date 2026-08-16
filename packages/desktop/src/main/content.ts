@@ -9,7 +9,9 @@ import {
   contentFileKind,
   contentScope,
   corpusIsCurrent,
+  editorExtension,
   highlightCode,
+  highlightLines,
   parseWikilink,
   readConfigFileContent,
   readConfigSnapshots,
@@ -31,6 +33,7 @@ import {
   type ContentScope,
   type ContentSource,
   type ContentSearchResult,
+  type EditorHighlight,
   type ContentTree,
   type RenderedMarkdown,
   type WikiIndex,
@@ -408,6 +411,43 @@ const TREE_TTL_MS = 30_000
  * that hung on one file would be worse than one that is occasionally grey.
  */
 const HIGHLIGHT_MAX_BYTES = 512 * 1024
+
+/**
+ * A draft being typed, tokenised for the editor's underlay.
+ *
+ * The one highlighter, reached from both editors - the config console's and the
+ * content viewer's - which is why this is a free function rather than a method
+ * on either service. It reads nothing: the bytes come in on the channel,
+ * because the point of the editor is that what it colours is not on disk yet.
+ *
+ * **Main, over IPC, rather than a second shiki in the window**, and that is the
+ * decision SPEC records. Main is externalised, so `import('@shikijs/langs/x')`
+ * resolves through Node and every grammar shiki ships is reachable with no list
+ * to maintain; a renderer-side highlighter needs a hand-written map, which caps
+ * the languages at whatever somebody remembered and grows the bundle per
+ * grammar. Where the tokeniser runs was never the latency question - the DOM
+ * build is, and it happens in the window either way. What keeps typing fast is
+ * that the underlay never waits for this: see `CodeEditor`.
+ */
+export async function highlightForEditor(
+  path: string,
+  source: string
+): Promise<EditorHighlight> {
+  const started = Date.now()
+  // The same ceiling the read views use, measured the same way, so a file that
+  // reads as plain text does not suddenly colour when you press Edit.
+  if (Buffer.byteLength(source, 'utf8') > HIGHLIGHT_MAX_BYTES) {
+    return { lines: [], language: 'plaintext', highlighted: false, tooLarge: true, tookMs: 0 }
+  }
+  const out = await highlightLines(source, editorExtension(path))
+  return {
+    lines: out.lines,
+    language: out.language,
+    highlighted: out.highlighted,
+    tooLarge: false,
+    tookMs: Date.now() - started
+  }
+}
 
 /**
  * The source view's half of a document.

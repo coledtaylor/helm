@@ -53,6 +53,7 @@ import { TITLEBAR_OVERLAY } from './chrome'
 import { createPtermHost } from './pterm'
 import { runDesignShot } from './designshot'
 import { runAffordanceChecks } from './affordancecheck'
+import { runHighlightChecks } from './highlightcheck'
 import { runProfilesChecks } from './profilescheck'
 import { HOLD_REPORT, runShimHold } from './shimhold'
 import { runHistoryChecks } from './historycheck'
@@ -110,10 +111,12 @@ type Mode =
   | 'shim-hold'
   | 'design-shot'
   | 'affordance-check'
+  | 'highlight-check'
 
 function modeFromArgv(): Mode {
   if (process.argv.includes('--design-shot')) return 'design-shot'
   if (process.argv.includes('--affordance-check')) return 'affordance-check'
+  if (process.argv.includes('--highlight-check')) return 'highlight-check'
   if (process.argv.includes('--selftest')) return 'selftest'
   if (process.argv.includes('--fidelity')) return 'fidelity'
   if (process.argv.includes('--claude-check')) return 'claude-check'
@@ -162,7 +165,8 @@ const isSpikeMode =
   mode !== 'template-check' &&
   mode !== 'shim-hold' &&
   mode !== 'design-shot' &&
-  mode !== 'affordance-check'
+  mode !== 'affordance-check' &&
+  mode !== 'highlight-check'
 
 /**
  * A check's window keeps rendering when something else is in front of it.
@@ -1016,6 +1020,44 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`design-shot crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  if (mode === 'highlight-check') {
+    startApp({
+      onReady: (ctx) => {
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runHighlightChecks(
+          ctx,
+          join(dataDir, 'screenshots'),
+          dataDir,
+          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
+        )
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('highlight-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`highlight-check report: ${file}`)
+            for (const c of checks) {
+              console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+              for (const n of c.notes) console.log(`      ${n}`)
+            }
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`highlight-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

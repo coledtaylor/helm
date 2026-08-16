@@ -38,6 +38,7 @@
     "pr-check": "pnpm --filter @helm/desktop pr-check",
     "transcript-check": "pnpm --filter @helm/desktop transcript-check",
     "template-check": "pnpm --filter @helm/desktop template-check",
+    "highlight-check": "pnpm --filter @helm/desktop highlight-check",
     "dist:win": "pnpm --filter @helm/desktop dist:win",
     "verify:artifact": "pnpm --filter @helm/desktop verify:artifact",
     "db:generate": "pnpm --filter @helm/core db:generate",

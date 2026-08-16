@@ -1,13 +1,15 @@
-import type { ChangeEvent, CSSProperties, JSX } from 'react'
+import type { CSSProperties, JSX } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   ConfigSnapshotMeta,
   ContentDocument,
   ContentFile,
   ContentSource,
+  EditorHighlight,
   RenderedMarkdown
 } from '@helm/core'
 import { cn } from '../lib/cn'
+import { CodeEditor, type EditorStatus } from './CodeEditor'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes, formatMoment } from '../lib/time'
 // The rendered body and the frontmatter chips are shared with the config
@@ -75,6 +77,12 @@ export interface ContentDocumentPaneProps {
   wrapDefault: boolean
   wrapIndent: number
 
+  /**
+   * Tokenises the draft for the editor's underlay, over IPC. Must be stable
+   * across renders - it is an effect dependency one layer down.
+   */
+  onHighlight?: ((path: string, source: string) => Promise<EditorHighlight>) | null
+
   onSave: (content: string) => void
   onReload: () => void
   onRestore: (snapshot: ConfigSnapshotMeta) => void
@@ -119,6 +127,7 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
     highlight,
     wrapDefault,
     wrapIndent,
+    onHighlight = null,
     onSave,
     onReload,
     onRestore,
@@ -132,10 +141,16 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
 
   const [draft, setDraft] = useState('')
   const [showHistory, setShowHistory] = useState(false)
+  const [status, setStatus] = useState<EditorStatus | null>(null)
   // Seeded from the setting, then owned by the toggle for as long as this file
   // is open. See `wrapDefault`.
-  const [wrap, setWrap] = useState(wrapDefault)
-  const areaRef = useRef<HTMLTextAreaElement>(null)
+  //
+  // Markdown overrides the setting rather than following it, and one state
+  // covers both the reading view and the editor. A note is prose - a paragraph
+  // is one very long line - so there is no reading of `contentWrap` under which
+  // the answer for a note is "off"; and a reader who turns wrapping on and then
+  // presses Edit should find it still on, which two states would not give.
+  const [wrap, setWrap] = useState(file.kind === 'markdown' ? true : wrapDefault)
 
   // Re-seeded whenever a different file, or a different version of it, arrives.
   // Keyed on the hash rather than the path so a reload after an external change
@@ -169,8 +184,7 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
   const showsSource = mode === 'read' && !isMarkdown && !isHtml && file.kind !== 'binary'
   const rendered = mode === 'edit' && preview !== null ? preview : (loaded?.rendered ?? null)
   const canSave = loaded !== null && dirty && !saving && external === null && !loaded.content.binary
-
-  const onChange = (event: ChangeEvent<HTMLTextAreaElement>): void => setDraft(event.target.value)
+  const editing = mode === 'edit' && loaded !== null && !loaded.content.binary
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -184,7 +198,9 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
         onModeChange={onModeChange}
         onReveal={onReveal}
         editable={!loaded?.content.binary}
-        showWrap={showsSource}
+        // Over the editor as well as over the reading view, because both are
+        // made of lines and both had the same horizontal scrollbar.
+        showWrap={showsSource || editing}
         wrap={wrap}
         onWrapChange={setWrap}
       />
@@ -258,23 +274,19 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
                 cannot read as text.
               </p>
             ) : (
-              <textarea
-                ref={areaRef}
-                data-content-editor
+              <CodeEditor
+                surface="content"
+                path={file.path}
                 value={draft}
-                onChange={onChange}
-                spellCheck={false}
-                // Soft wrap, unlike the config editor's. That one edits JSON,
-                // where a wrapped line hides the structure; this one edits
-                // prose, where a paragraph is one very long line and a
-                // horizontal scrollbar under it is unusable.
-                wrap="soft"
-                aria-label={`Edit ${file.relPath}`}
-                className={cn(
-                  'h-full w-full resize-none rounded-raised border border-border bg-surface-sunken p-3',
-                  'font-mono text-[12px] leading-[1.55] text-fg select-text',
-                  'focus:border-accent focus:outline-none'
-                )}
+                onChange={setDraft}
+                onHighlight={onHighlight}
+                // Whatever the header's toggle says. It starts on for a note,
+                // because a paragraph is one very long line and a horizontal
+                // scrollbar under it is unusable; a `.json` in the vault starts
+                // off, where the line breaks are the structure.
+                wrap={wrap}
+                onStatusChange={setStatus}
+                ariaLabel={`Edit ${file.relPath}`}
               />
             )}
           </div>
@@ -333,6 +345,21 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
                 <span aria-hidden>·</span>
                 <span data-content-render-ms={loaded.rendered.tookMs}>
                   rendered in {loaded.rendered.tookMs} ms
+                </span>
+              </>
+            )}
+            {/* Why the editor has no colour in it. The same ceiling the
+                reading view degrades at, so pressing Edit does not change the
+                answer - and a grey editor with nothing said about it reads as
+                a highlighter that broke. */}
+            {editing && status?.tooLarge === true && (
+              <>
+                <span aria-hidden>·</span>
+                <span
+                  data-editor-degraded
+                  title="Past the size ceiling the editor drops the highlighted underlay entirely rather than getting slow, so the line-number gutter and match painting are off with it. Typing, find and go to line all still work."
+                >
+                  plain text: too large to highlight
                 </span>
               </>
             )}

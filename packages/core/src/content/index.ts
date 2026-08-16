@@ -38,7 +38,9 @@ export {
   LIGHT_THEME,
   ensureLanguage,
   highlightCode,
-  normaliseLanguage
+  highlightLines,
+  normaliseLanguage,
+  type HighlightedLines
 } from './highlight'
 export {
   buildCorpus,

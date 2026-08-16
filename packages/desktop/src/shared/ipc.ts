@@ -20,6 +20,7 @@ import type {
   DetectedShell,
   DiscoveryResult,
   DoctorReport,
+  EditorHighlight,
   EffectiveView,
   GitState,
   HistoryPage,
@@ -747,6 +748,26 @@ export interface IpcRequests {
    * nothing else - the snapshot is taken there, and a second path into the
    * filesystem would be a path with no undo behind it.
    */
+  /**
+   * A draft, tokenised for an editor's underlay.
+   *
+   * One channel for both editors, because there is one editor component and one
+   * highlighter. It takes the source rather than a path to read, for the reason
+   * `config:render` does: what is being coloured is what is in the box, which is
+   * not on disk and may never be.
+   *
+   * Read-only in the strongest sense - it opens no file and writes none - so it
+   * is not a second route into a `.claude` tree. Every byte Helm writes still
+   * goes through `config:write`.
+   *
+   * The window debounces this and drops stale answers against a revision
+   * counter; nothing here is on the path between a keystroke and a glyph.
+   */
+  'editor:highlight': {
+    request: { path: string; source: string }
+    response: EditorHighlight
+  }
+
   'config:scopes': { request: void; response: ConfigScope[] }
   'config:tree': { request: { scopePath: string }; response: ConfigTree }
   'config:read': { request: { path: string }; response: ConfigFileContent }
@@ -1204,6 +1225,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'history:resume': true,
   'archive:conversation': true,
   'archive:stats': true,
+  'editor:highlight': true,
   'config:scopes': true,
   'config:tree': true,
   'config:read': true,

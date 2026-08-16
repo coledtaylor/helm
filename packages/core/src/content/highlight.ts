@@ -28,8 +28,27 @@
 /** Minimal structural types, so this file does not import shiki for its types. */
 interface Highlighter {
   codeToHtml: (code: string, options: Record<string, unknown>) => string
+  codeToTokens: (code: string, options: Record<string, unknown>) => ThemedTokens
   loadLanguage: (lang: unknown) => Promise<void>
   getLoadedLanguages: () => string[]
+}
+
+/**
+ * One token, as `codeToTokens` hands it over with two themes loaded.
+ *
+ * `htmlStyle` is the pair of custom properties `codeToHtml` would have written
+ * into the `style` attribute - `--shiki-light` and `--shiki-dark`, plus the
+ * font-style and weight variants where the theme sets them. Shiki has emitted
+ * it as an object since v2; the string form is still accepted below because a
+ * structural type is a promise about a shape rather than a version.
+ */
+interface ThemedToken {
+  content: string
+  htmlStyle?: Record<string, string> | string
+}
+
+interface ThemedTokens {
+  tokens: ThemedToken[][]
 }
 
 /**
@@ -198,6 +217,109 @@ function indentColumns(line: string): number {
     else break
   }
   return columns
+}
+
+const ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;'
+}
+
+/** Text going into an HTML text node. Three characters, and they are the three. */
+function escapeText(text: string): string {
+  return text.replace(/[&<>]/g, (ch) => ESCAPES[ch] ?? ch)
+}
+
+/**
+ * A theme's colours are the only thing allowed into a `style` attribute here.
+ *
+ * The values come from a bundled theme JSON rather than from anything a user
+ * typed, so this is a belt on top of braces - but the string it guards is
+ * assembled into markup by hand, and a hand-assembled string with no whitelist
+ * on it is exactly the shape that stops being safe the day somebody adds a
+ * caller. Anything outside the set is dropped rather than escaped: a colour
+ * that needs a quote in it is not a colour.
+ */
+const SAFE_STYLE_VALUE = /^[#\w\s,.()%/+-]*$/
+const SAFE_STYLE_PROP = /^--?[a-z-]+$/
+
+function styleAttribute(htmlStyle: Record<string, string> | string | undefined): string {
+  if (htmlStyle === undefined) return ''
+  const pairs =
+    typeof htmlStyle === 'string'
+      ? htmlStyle
+          .split(';')
+          .map((part) => part.split(':'))
+          .filter((part): part is [string, string] => part.length === 2)
+          .map(([prop, value]) => [prop.trim(), value.trim()] as const)
+      : Object.entries(htmlStyle)
+  const kept = pairs.filter(
+    ([prop, value]) => SAFE_STYLE_PROP.test(prop) && SAFE_STYLE_VALUE.test(value)
+  )
+  if (kept.length === 0) return ''
+  return ` style="${kept.map(([prop, value]) => `${prop}:${value}`).join(';')}"`
+}
+
+/** What the editor's underlay is built from: one string of markup per line. */
+export interface HighlightedLines {
+  /** The inner HTML of each line, in source order. */
+  lines: string[]
+  language: string
+  highlighted: boolean
+}
+
+/**
+ * The same tokenise, handed over **per line** rather than as one block.
+ *
+ * The editor's underlay renders a window of the file rather than all of it, so
+ * it needs the lines as separate strings; `codeToHtml` returns one `<pre>` and
+ * splitting generated markup back apart with a regular expression is the kind
+ * of thing that works until a theme adds a property. `codeToTokens` is the same
+ * pass through the same grammar with the assembly left to the caller, so this
+ * is not a second highlighter - it is the same one, stopped a step earlier.
+ *
+ * The markup written here is deliberately what `codeToHtml` writes: a `<span>`
+ * per token carrying `--shiki-light` and `--shiki-dark` as custom properties,
+ * so one stylesheet rule picks a side and a theme toggle re-colours the editor
+ * with no re-highlight. `defaultColor` is not passed through anywhere - see the
+ * note on `highlightCode`.
+ *
+ * A trailing newline produces a final empty line here, exactly as it does in a
+ * textarea, because shiki tokenises it as one. That is the overlay's
+ * height-parity bug solved by the tokeniser rather than by a fudge factor.
+ */
+export async function highlightLines(
+  code: string,
+  language: string
+): Promise<HighlightedLines> {
+  const plain = (): HighlightedLines => ({
+    lines: code.split('\n').map(escapeText),
+    language: 'plaintext',
+    highlighted: false
+  })
+
+  const lang = await ensureLanguage(language)
+  const core = await getHighlighter()
+  if (!core || lang === 'plaintext') return plain()
+
+  try {
+    const { tokens } = core.codeToTokens(code, {
+      lang,
+      themes: { light: LIGHT_THEME, dark: DARK_THEME },
+      defaultColor: false
+    })
+    return {
+      lines: tokens.map((line) =>
+        line
+          .map((token) => `<span${styleAttribute(token.htmlStyle)}>${escapeText(token.content)}</span>`)
+          .join('')
+      ),
+      language: lang,
+      highlighted: true
+    }
+  } catch {
+    return plain()
+  }
 }
 
 export async function highlightCode(

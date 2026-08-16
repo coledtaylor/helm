@@ -30,6 +30,7 @@ A change to a surface named here is not done until its check is green.
 | `pnpm history-check` | session index, resume | history parsing, the history pane, resume |
 | `pnpm config-check` | config console, effective view, MCP | `core/config/`, anything that writes into a `.claude` tree |
 | `pnpm content-check` | markdown, artifacts, wikilinks, editor | `core/content/`, the content viewer |
+| `pnpm highlight-check` | the editors: the overlay, the highlighting, the editing behaviour | `CodeEditor`, `core/content/editing.ts`, `highlightLines`, `editor:highlight`, `editor.css`, the two panes' editing halves |
 | `pnpm packaging-check` | first run, packaging, personal-path audit | setup, portable mode, the installer |
 | `pnpm usage-check` | the status bar's usage figures | `core/usage/`, the status bar |
 | `pnpm settings-check` | the settings pane, every app setting, terminal/shell preferences | `core/store/settings.ts`, `SettingsPane`, `terminal.ts`, `estimateGrid`, `main/pterm.ts` |
@@ -173,6 +174,36 @@ harness vault and checks the DOM against a regex read of the same source,
 navigates a wikilink, interrogates the artifact frame's sandbox from inside it,
 measures search latency and scroll frame intervals, and edits a real note with
 a hash-verified restore. Spawns no sessions, so it takes about a minute.
+
+**`highlight-check`** - the editors. Drives the config console and the content
+viewer against a fixture harness the driver owns, reached the way a folder
+outside every scanned root is: a profile points at it. It **never clicks Save**,
+and `HL-16` hashes the fixture tree either side of the whole run to say so -
+this is the surface that writes into a `.claude` tree, and proving an editor
+works by writing through it would be asserting the wrong thing.
+
+Four shapes in it are worth copying. The **scroll claim is made in two
+currencies**: the transform the component wrote onto the layer stack, and the
+underlay's own bounding rectangle, because a string that reads correctly over an
+element that did not move passes one and fails the other. The **parity
+comparator is made to fail first** (HL-2) - a font size is forced onto one layer
+and the same function has to reject the pair it had just accepted - and the
+trailing-newline half gets its own mutation, injecting a stylesheet that switches
+off the pseudo-element materialising the last line and requiring the two heights
+to *stop* matching. That is TPL-1's rule applied per comparison. **Latency is
+counted in frames, not milliseconds**, because "inside one frame" is a discrete
+claim: an `input` listener the driver installs counts `requestAnimationFrame`
+callbacks to the first one where the painted layer holds what the box holds, and
+`keystrokesMeasured` must equal `keysSent` - a sample that never resolves is
+left *out* of the set, and a maximum over a set missing its worst member is the
+PROF-4 shape. And **undo is asserted against the previous user state**: a word
+typed key by key, then Tab, then Ctrl+Z, which has to give the word back. The
+naive implementation - assigning `.value` - passes every assertion about the
+result of the edit and empties Chromium's undo stack, so
+`data-editor-direct-writes` counts the times the component had to do that and
+zero is part of the claim.
+
+No sessions, no network, about two minutes.
 
 **`packaging-check`** - first run and the built artefacts, in three phases. Two shapes
 matter before touching it. **First run is a second process**: "a fresh

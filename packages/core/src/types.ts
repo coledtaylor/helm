@@ -194,6 +194,31 @@ export {
   type PullPromptPlaceholder
 } from './github/prompt'
 
+/**
+ * What the editors do when you press a key.
+ *
+ * Re-exported here rather than reached for through the package root, because
+ * the component that calls them runs in the browser bundle and this file is the
+ * one entry point with no `node:` behind it. `content/editing.ts` imports
+ * nothing at all, which is what makes that safe - and is why the editing rules
+ * live away from both the DOM and shiki.
+ */
+export {
+  backspaceAction,
+  caretAt,
+  editorExtension,
+  editorKeyAction,
+  enterAction,
+  findMatchesIn,
+  indentAction,
+  lineStarts,
+  pairAction,
+  syntaxFor,
+  wrapsByDefault,
+  type EditAction,
+  type EditorSyntax
+} from './content/editing'
+
 /** What a discovered directory turned out to be. */
 export type ProjectKind =
   /** Has a `harness.yaml`. Its `repos/*` children are projects in their own right. */
@@ -1938,6 +1963,28 @@ export interface ContentSource {
   highlighted: boolean
   /** True when the file was past the ceiling; `html` is empty and that is why. */
   tooLarge: boolean
+}
+
+/**
+ * A draft, tokenised, for the editor's underlay.
+ *
+ * Per line rather than as one block of HTML, because the underlay builds DOM
+ * for a window of the file rather than all of it - see `CodeEditor`. The whole
+ * file is tokenised even so: a string opened two hundred lines up changes the
+ * colour of everything below it, so a window tokenised on its own would be
+ * confidently wrong rather than merely late.
+ *
+ * `tooLarge` is the same ceiling the read views use, and it degrades the same
+ * way: the text still edits, in one colour, and the pane says why.
+ */
+export interface EditorHighlight {
+  /** The inner HTML of each line. Empty when `tooLarge`. */
+  lines: string[]
+  language: string
+  highlighted: boolean
+  tooLarge: boolean
+  /** How long the tokenise took in main, for the latency group to report. */
+  tookMs: number
 }
 
 /** A file, its bytes, and - for markdown - what they render to. */
