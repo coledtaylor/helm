@@ -1,6 +1,6 @@
 {
   "name": "@helm/desktop",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Helm's Electron shell: main process, preload, renderer.",
   "//productName": "Electron derives app.getName() - and therefore %APPDATA%\\<name> - from this file. Without productName a scoped package name puts the database in %APPDATA%\\@helm/desktop, creating a nested folder from the scope. electron-builder sets the same value for packaged builds.",
   "productName": "Helm",
@@ -26,7 +26,7 @@
     "affordance-check": "electron-vite build && node scripts/run-isolated.mjs affordance-check --affordance-check",
     "//sessions-check": "Session lifecycle - launching, tabs and teardown - driven through the real app window. Spawns real claude sessions and ends them; see src/main/sessionscheck.ts.",
     "sessions-check": "electron-vite build && node scripts/run-sessions.mjs",
-    "//profiles-check": "Profiles and overlay composition. Builds a profile through the real form, launches it, and asks the live session whether the composition worked. Three phases, orchestrated by run-profiles.mjs rather than by && because node-pty's teardown loses the exit code; the report is the verdict. Pass --only=compose|fixture|shims through to re-run one group.",
+    "//profiles-check": "Profiles and overlay composition. Builds a profile through the real form, launches it, and asks the live session whether the composition worked. Three phases, orchestrated by run-profiles.mjs rather than by && because node-pty's teardown loses the exit code; the report is the verdict. Pass --only=form|compose|fixture|shims through to re-run one group; form spawns no session.",
     "profiles-check": "electron-vite build && node scripts/run-profiles.mjs",
     "//history-check": "The session index and resume. Drives the session-history pane through the real window and checks every count against an independent read of ~/.claude/history.jsonl. Spawns two real claude sessions - one resumed through the app, one on its own pty to prove the index notices a session Helm did not start - so it takes minutes. Verdict is in history-report.json; run-history.mjs exists for the same reason run-profiles.mjs does.",
     "history-check": "electron-vite build && node scripts/run-history.mjs",

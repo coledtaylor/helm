@@ -251,6 +251,46 @@ function transportOf(config: unknown): string {
 }
 
 /**
+ * `~/.claude.json`'s `projects` entry for a directory, found by what the key
+ * *means* rather than by what it says.
+ *
+ * The keys are whatever string the CLI was started with, and on Windows that is
+ * not one string per directory. Counted on one machine: 75 keys, 72 written
+ * with forward slashes and 3 with backslashes, and one home directory present
+ * under **both** forms as two separate entries. An exact match against
+ * `resolve(cwd)` - which always produces backslashes - therefore missed the
+ * local-scope MCP servers of essentially every project on disk, and the config
+ * console reported "no servers configured" for a directory whose session had
+ * one loaded.
+ *
+ * Both separators are folded and the comparison is case-insensitive, because
+ * these are Windows paths. Where a directory really is present twice, the entry
+ * that actually defines servers is the one returned - two entries are one
+ * directory, and picking whichever came first in the file would answer "no
+ * servers" for a directory that has them.
+ *
+ * Exported for its own unit tests: the document it reads is the real
+ * `~/.claude.json` wherever `computeEffectiveView` is called, so this is the
+ * only level at which the key-shape rule can be stated hermetically.
+ */
+export function projectEntry(projects: unknown, cwd: string): Record<string, unknown> | undefined {
+  if (projects === null || typeof projects !== 'object' || Array.isArray(projects)) return undefined
+  const fold = (path: string): string =>
+    path.replace(/[\\/]+/g, '\\').replace(/\\$/, '').toLowerCase()
+  const wanted = fold(resolve(cwd))
+
+  let fallback: Record<string, unknown> | undefined
+  for (const [name, value] of Object.entries(projects as Record<string, unknown>)) {
+    if (fold(name) !== wanted) continue
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) continue
+    const entry = value as Record<string, unknown>
+    if (Object.keys(serversIn(entry)).length > 0) return entry
+    fallback ??= entry
+  }
+  return fallback
+}
+
+/**
  * Every MCP server a session in `cwd` could load, and whether it would.
  *
  * Three places, which is not obvious from anywhere: `.mcp.json` in the project
@@ -265,11 +305,7 @@ function effectiveMcp(cwd: string, chain: LoadedLayer[]): EffectiveMcpServer[] {
   const claudeJson = claudeJsonPath()
   const globalDoc = readJsonObject(claudeJson)
 
-  const projects = globalDoc?.['projects']
-  const perProject =
-    projects !== null && typeof projects === 'object' && !Array.isArray(projects)
-      ? ((projects as Record<string, unknown>)[resolve(cwd)] as Record<string, unknown> | undefined)
-      : undefined
+  const perProject = projectEntry(globalDoc?.['projects'], cwd)
 
   // Approval is a settings question, and the settings chain has already been
   // resolved - so it is read from there rather than from the files again.

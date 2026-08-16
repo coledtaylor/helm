@@ -59,7 +59,11 @@ export {
 export { VersionBanner, type VersionBannerProps } from './components/VersionBanner'
 export { GitChip, type GitChipProps } from './components/GitChip'
 export { InventoryChips, type InventoryChipsProps } from './components/InventoryChips'
-export { ProfileEditor, type ProfileEditorProps } from './components/ProfileEditor'
+export {
+  ProfileEditor,
+  type ProfileEditorProps,
+  type ProfilePrediction
+} from './components/ProfileEditor'
 export { ProfileList, type ProfileListProps } from './components/ProfileList'
 export { ProjectPane, projectPulls, type ProjectPaneProps } from './components/ProjectPane'
 export { PullRow, useNow, type PullRowProps } from './components/PullRow'

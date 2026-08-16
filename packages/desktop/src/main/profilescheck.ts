@@ -1,6 +1,6 @@
 import { type BrowserWindow } from 'electron'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
   createProfile,
@@ -56,6 +56,9 @@ const OPENING_PROMPT = `Reply with exactly the token ${OPENING_TOKEN} and nothin
 
 const PROFILE_NAME = 'Overlay composition'
 const FIXTURE_PROFILE = 'Skill refresh'
+const FORM_PROFILE = 'Picker probe'
+/** Stands in for a profile written before the two fields became pickers. */
+const LEGACY_PROFILE = 'Unresolvable names'
 
 // ---------------------------------------------------------------------------
 // Talking to the renderer
@@ -293,11 +296,44 @@ export interface ComposeFixtures {
   beta: string
   /** A fact that exists only in alpha's CLAUDE.md, for PROF-5. */
   alphaFact: string
+  /**
+   * A root of its own for the form probes, holding an agent and an `.mcp.json`.
+   *
+   * Separate from the compose harness, and outside the registered scan parent,
+   * because no session is ever launched here. An `.mcp.json` at the composed
+   * root would put an MCP enablement gate in front of the session PROF-2 opens
+   * and start two servers nothing in this check wants running.
+   */
+  formRoot: string
+  /** A root with no `.claude` at all, for the unresolved states. */
+  emptyRoot: string
 }
 
 const FIXTURE_HARNESS = 'helm-profiles-harness'
 const FIXTURE_ALPHA = 'helm-profiles-alpha'
 const FIXTURE_BETA = 'helm-profiles-beta'
+
+/**
+ * An agent file, named the way `readConfigTree` names one: by its path under
+ * `agents/`, not by the `name:` in its frontmatter. They are written to agree
+ * here, so a probe that reads the filename is reading what a session addresses.
+ */
+function writeAgent(base: string, name: string): void {
+  const dir = join(base, '.claude', 'agents')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(
+    join(dir, `${name}.md`),
+    [
+      '---',
+      `name: ${name}`,
+      "description: Probe agent used by Helm's profile check.",
+      '---',
+      '',
+      'This agent exists to be offered by a picker. It is never launched.',
+      ''
+    ].join('\n')
+  )
+}
 
 function writeComposeSkill(repo: string, name: string, token: string): void {
   const dir = join(repo, '.claude', 'skills', name)
@@ -372,7 +408,49 @@ export function buildComposeFixtures(dataDir: string): ComposeFixtures {
     )
   }
 
-  return { root, alpha, beta, alphaFact }
+  // Composed into the form probe, so the agent picker has a *namespaced* entry
+  // in it - which is the prediction worth making, and the one a text box could
+  // never have been typed correctly into.
+  writeAgent(alpha, 'helm-overlay-agent')
+
+  return { root, alpha, beta, alphaFact, ...buildFormFixtures(dataDir) }
+}
+
+/**
+ * The two roots the form probes point at, neither of which is ever launched.
+ *
+ * `formRoot` is what the pickers should have something to offer for: one agent
+ * of its own, two MCP servers in an `.mcp.json`. `emptyRoot` is the opposite -
+ * a directory with no `.claude` and no `.mcp.json`, so a saved agent and a
+ * saved server name have nowhere to resolve and the unresolved states are
+ * reachable without inventing anything.
+ */
+function buildFormFixtures(dataDir: string): { formRoot: string; emptyRoot: string } {
+  const formRoot = join(dataDir, 'profiles-form-fixture')
+  const emptyRoot = join(dataDir, 'profiles-form-empty')
+  rmSync(formRoot, { recursive: true, force: true })
+  rmSync(emptyRoot, { recursive: true, force: true })
+  mkdirSync(emptyRoot, { recursive: true })
+
+  writeAgent(formRoot, 'helm-form-agent')
+  // Two, so "the picker offers what is configured" is a claim about a list
+  // rather than about a single row, and ticking one can be told from ticking
+  // whatever happened to be there.
+  writeFileSync(
+    join(formRoot, '.mcp.json'),
+    `${JSON.stringify(
+      {
+        mcpServers: {
+          'helm-form-one': { command: 'node', args: ['-e', 'process.exit(0)'] },
+          'helm-form-two': { command: 'node', args: ['-e', 'process.exit(0)'] }
+        }
+      },
+      null,
+      2
+    )}\n`
+  )
+
+  return { formRoot, emptyRoot }
 }
 
 /**
@@ -502,8 +580,10 @@ function pick(services: Services, content: ComposeFixtures): Fixtures | null {
  * them the useful thing to re-run while fixing one of them, given a full pass
  * spawns three real sessions and takes minutes.
  */
-type Group = 'compose' | 'fixture' | 'shims'
-const ALL_GROUPS: Group[] = ['compose', 'fixture', 'shims']
+type Group = 'form' | 'compose' | 'fixture' | 'shims'
+// `form` first: it spawns nothing, so `--only=form` is the seconds-long re-run
+// while the profile dialog is being worked on.
+const ALL_GROUPS: Group[] = ['form', 'compose', 'fixture', 'shims']
 
 function selectedGroups(): Group[] {
   const arg = process.argv.find((a) => a.startsWith('--only='))
@@ -577,12 +657,15 @@ export async function runProfilesChecks(
   })
 
   // Left over from an earlier run of this driver; the names are unique-indexed.
-  for (const name of [PROFILE_NAME, FIXTURE_PROFILE]) {
+  for (const name of [PROFILE_NAME, FIXTURE_PROFILE, FORM_PROFILE, LEGACY_PROFILE]) {
     const existing = findProfileByName(ctx.services.store, name)
     if (existing) deleteProfile(ctx.services.store, existing.id)
   }
 
   try {
+    if (wants('form')) {
+      checks.push(...(await runFormChecks(ctx, shotDir, fixtures)))
+    }
     if (wants('compose')) {
       checks.push(...(await runComposeChecks(ctx, collector, shotDir, fixtures)))
     }
@@ -947,6 +1030,316 @@ async function runComposeChecks(
 
   const remaining = listProfiles(ctx.services.store).find((p) => p.name === PROFILE_NAME)
   if (remaining) deleteProfile(ctx.services.store, remaining.id)
+
+  return checks
+}
+
+// ---------------------------------------------------------------------------
+// The form's two name pickers
+// ---------------------------------------------------------------------------
+
+/** An agent, as `readConfigTree` names one: its path under `agents/`, no `.md`. */
+function agentNamesIn(base: string): string[] {
+  try {
+    return readdirSync(join(base, '.claude', 'agents'))
+      .filter((entry) => entry.toLowerCase().endsWith('.md'))
+      .map((entry) => entry.replace(/\.md$/i, ''))
+      .sort()
+  } catch {
+    return []
+  }
+}
+
+/** The keys of an `.mcp.json`'s `mcpServers`, parsed here rather than by Helm. */
+function serverNamesIn(file: string): string[] {
+  try {
+    const doc: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    const servers = (doc as { mcpServers?: unknown }).mcpServers
+    return servers !== null && typeof servers === 'object' && !Array.isArray(servers)
+      ? Object.keys(servers as Record<string, unknown>).sort()
+      : []
+  } catch {
+    return []
+  }
+}
+
+/** `document.querySelector` for one server's checkbox, as page-side JS. */
+function serverBox(name: string): string {
+  return `document.querySelector(${JSON.stringify(`input[aria-label="MCP server ${name}"]`)})`
+}
+
+/**
+ * PROF-11 and PROF-12: the Agent and MCP fields are pickers over the effective
+ * view, and they say what they do.
+ *
+ * Both were free text boxes and neither said anything. An agent name typed into
+ * one saved whether or not a session would resolve it; an MCP name typed into
+ * the other went into a field that never reaches the argv at all - `Profile.mcp`
+ * is persisted and exported and nothing more (SPEC 4.2). So the questions a
+ * person asked of those boxes - "will this be available", "will this resolve" -
+ * had an answer Helm already computes and did not show.
+ *
+ * These two probes are about the prediction being the one the *files* support,
+ * so every expected value is read out of a fixture this driver wrote and none
+ * of it is compared against Helm's own answer.
+ *
+ * No sessions, no network, a few seconds. This is the group to re-run while
+ * working on the dialog: `pnpm profiles-check --only=form`.
+ */
+async function runFormChecks(
+  ctx: ProfilesContext,
+  shotDir: string,
+  fixtures: Fixtures
+): Promise<Check[]> {
+  const checks: Check[] = []
+  const { win } = ctx
+  const { alpha, content } = fixtures
+
+  // The second reader: the fixture files, parsed here.
+  const formAgents = agentNamesIn(content.formRoot)
+  const alphaAgents = agentNamesIn(alpha.path)
+  const servers = serverNamesIn(join(content.formRoot, '.mcp.json'))
+  const overlayAgent = `${overlayName(alpha)}:${alphaAgents[0] ?? ''}`
+
+  /**
+   * A picker with nothing in it satisfies every "does not offer" test, and an
+   * expected name of `''` is a substring of every option there could be. That
+   * is the PROF-4 shape and it reported green for weeks, so the fixtures are
+   * asserted before any answer from the form is believed.
+   */
+  const usable =
+    formAgents.length === 1 &&
+    alphaAgents.length === 1 &&
+    servers.length === 2 &&
+    new Set(servers).size === 2 &&
+    [...formAgents, ...alphaAgents, ...servers].every((entry) => entry.trim() !== '')
+
+  if (!usable) {
+    checks.push({
+      id: 'PROF-11',
+      criterion: 'The profile form offers the agents and MCP servers the effective view predicts',
+      title: 'The picker fixtures are not discriminating, so no answer would be evidence',
+      ok: false,
+      detail: { formRoot: content.formRoot, formAgents, alphaAgents, servers },
+      notes: ['Written by `buildFormFixtures`, so this failing means the driver is broken.']
+    })
+    return checks
+  }
+
+  // -------------------------------------------------------------------------
+  // PROF-11: what the two pickers offer, and what saving one writes
+  // -------------------------------------------------------------------------
+  const opened = await clickByLabel(win, 'New profile')
+  await sleep(500)
+  await fill(win, 'Profile name', FORM_PROFILE)
+
+  // With no root there is nothing to predict *from*, and an empty picker that
+  // said nothing would read as "this root has no servers" - a claim about the
+  // user's disk made by a form that has not looked at it. The sentence is
+  // asserted before the root is typed, because it is the only moment it shows.
+  await fill(win, 'Root directory', '')
+  await sleep(400)
+  const beforeRoot = await js<string>(
+    win,
+    `(() => { const p = document.querySelector('[data-mcp-empty]');
+       return p ? (p.textContent ?? '') : '' })()`
+  )
+
+  await fill(win, 'Root directory', content.formRoot)
+  await sleep(200)
+  // Composed, so the agent list has to carry a *namespaced* entry - the name a
+  // free text box could never have been typed correctly into, since the prefix
+  // is chosen by the shim builder rather than by the user.
+  await clickByLabel(win, `Compose ${alpha.name}`)
+
+  const populated = await pollJs(
+    win,
+    `(() => {
+       const s = document.querySelector('select[aria-label="Agent"]');
+       if (!s) return false;
+       const values = [...s.options].map((o) => o.value);
+       return values.includes(${JSON.stringify(overlayAgent)})
+         && values.includes(${JSON.stringify(formAgents[0])})
+         && Boolean(${serverBox(servers[0] ?? '')}) })()`,
+    20_000
+  )
+
+  const shape = await js<{
+    agentTag: string
+    agentOptions: string[]
+    offered: string[]
+    boxTypes: string[]
+    freeTextField: boolean
+  }>(
+    win,
+    `(() => {
+       const a = document.querySelector('[aria-label="Agent"]');
+       const boxes = [...document.querySelectorAll('input[aria-label^="MCP server "]')];
+       return {
+         agentTag: a ? a.tagName : '',
+         agentOptions: a && a.options ? [...a.options].map((o) => o.value) : [],
+         offered: boxes.map((b) => (b.getAttribute('aria-label') ?? '').slice(11)).sort(),
+         boxTypes: [...new Set(boxes.map((b) => b.type))],
+         freeTextField: Boolean(document.querySelector('input[aria-label="MCP servers"]'))
+       } })()`
+  )
+
+  await fill(win, 'Agent', overlayAgent)
+  await sleep(150)
+  await js<unknown>(win, `${serverBox(servers[0] ?? '')}.click()`)
+  await sleep(150)
+  // Scrolled to the two controls this check is about. The dialog is taller than
+  // an 820px window, so a shot of it at rest is a picture of the fields above
+  // them and no evidence of anything here.
+  await js<unknown>(
+    win,
+    `(() => { const box = ${serverBox(servers[0] ?? '')};
+       if (box) box.closest('fieldset').scrollIntoView({ block: 'end' }) })()`
+  )
+  await sleep(250)
+  const pickerShot = await screenshot(win, shotDir, 'profiles-pickers.png')
+  await clickButtonText(win, 'Save profile')
+  await sleep(800)
+
+  const saved = findProfileByName(ctx.services.store, FORM_PROFILE)
+
+  checks.push({
+    id: 'PROF-11',
+    criterion: 'The profile form offers the agents and MCP servers the effective view predicts',
+    title: 'Both fields are pickers over what resolves, and what is picked is what is stored',
+    ok:
+      opened &&
+      populated &&
+      /set a root/i.test(beforeRoot) &&
+      shape.agentTag === 'SELECT' &&
+      !shape.freeTextField &&
+      shape.agentOptions.includes(overlayAgent) &&
+      shape.agentOptions.includes(formAgents[0] ?? '') &&
+      JSON.stringify(shape.offered) === JSON.stringify(servers) &&
+      JSON.stringify(shape.boxTypes) === JSON.stringify(['checkbox']) &&
+      saved !== null &&
+      saved.agent === overlayAgent &&
+      JSON.stringify(saved.mcp) === JSON.stringify([servers[0]]),
+    detail: {
+      root: content.formRoot,
+      expected: { agents: [formAgents[0], overlayAgent], servers },
+      offered: { agents: shape.agentOptions, servers: shape.offered },
+      controls: { agent: shape.agentTag, boxes: shape.boxTypes, freeText: shape.freeTextField },
+      withNoRoot: beforeRoot,
+      populated,
+      saved: saved && profileDraft(saved),
+      screenshot: pickerShot.file
+    },
+    notes: [
+      'The expected names are read from the fixture files by this driver - the agent from the',
+      'filename `readConfigTree` addresses it by, the servers from `.mcp.json`’s own keys.',
+      'The namespaced entry is the point: `<overlay>:<agent>` is chosen by the shim builder,',
+      'so it is a prediction rather than a name anybody could have typed.',
+      'Neither control accepts free text, which is asserted rather than assumed: the old',
+      'comma-separated `MCP servers` input must not be in the document at all.'
+    ]
+  })
+
+  // -------------------------------------------------------------------------
+  // PROF-12: a saved name nothing resolves survives, and says so
+  // -------------------------------------------------------------------------
+  const ghostAgent = 'nowhere:helm-missing-agent'
+  const ghostServer = 'helm-missing-server'
+  const legacy = {
+    name: LEGACY_PROFILE,
+    root: content.emptyRoot,
+    overlays: [],
+    access: [],
+    model: null,
+    effort: null,
+    permissionMode: null,
+    agent: ghostAgent,
+    mcp: [ghostServer],
+    openingPrompt: null,
+    pinnedOrder: null
+  }
+
+  // Through the app's own channel, not the store: this is a profile as the form
+  // used to be able to write one, and it has to arrive in the list the same way.
+  const legacyId = await js<number | null>(
+    win,
+    `window.helm.invoke('profile:save', { draft: ${JSON.stringify(legacy)}, id: null })
+       .then((r) => (r.profile ? r.profile.id : null))`
+  )
+  const listed =
+    legacyId !== null &&
+    (await pollJs(win, `document.querySelector('[data-profile="${String(legacyId)}"]')`, 10_000))
+
+  const editorOpened = listed && (await clickByLabel(win, `Edit ${LEGACY_PROFILE}`))
+  const marked = await pollJs(
+    win,
+    `Boolean(document.querySelector('[data-agent-unresolved]')
+       && document.querySelector('[data-mcp-unresolved]'))`,
+    20_000
+  )
+
+  const shown = await js<{
+    agentValue: string
+    agentOption: string
+    agentNote: string
+    serverPill: string
+    serverChecked: boolean
+  }>(
+    win,
+    `(() => {
+       const s = document.querySelector('select[aria-label="Agent"]');
+       const note = document.querySelector('[data-agent-unresolved]');
+       const pill = document.querySelector('[data-mcp-unresolved]');
+       const box = ${serverBox(ghostServer)};
+       return {
+         agentValue: s ? s.value : '',
+         agentOption: (s && s.selectedOptions[0] ? s.selectedOptions[0].textContent : '') ?? '',
+         agentNote: (note ? note.textContent : '') ?? '',
+         serverPill: pill ? (pill.getAttribute('data-mcp-unresolved') ?? '') : '',
+         serverChecked: Boolean(box && box.checked)
+       } })()`
+  )
+
+  await clickButtonText(win, 'Save changes')
+  await sleep(800)
+  const kept = legacyId === null ? null : readProfile(ctx.services.store, legacyId)
+
+  checks.push({
+    id: 'PROF-12',
+    criterion: 'A saved agent or MCP server the root does not resolve is shown, by name, and kept',
+    title: 'Names nothing resolves are marked unresolved and survive a save through the form',
+    ok:
+      editorOpened &&
+      marked &&
+      shown.agentValue === ghostAgent &&
+      shown.agentOption.includes(ghostAgent) &&
+      shown.agentOption.toLowerCase().includes('unresolved') &&
+      shown.agentNote.includes(ghostAgent) &&
+      shown.serverPill === ghostServer &&
+      shown.serverChecked &&
+      kept !== null &&
+      kept.agent === ghostAgent &&
+      JSON.stringify(kept.mcp) === JSON.stringify([ghostServer]),
+    detail: {
+      root: content.emptyRoot,
+      wrote: { agent: ghostAgent, mcp: [ghostServer] },
+      shown,
+      kept: kept && profileDraft(kept)
+    },
+    notes: [
+      'The root has no `.claude` and no `.mcp.json`, so neither name can resolve there and the',
+      'unresolved state is reached without arranging anything.',
+      'A profile may legitimately be written before the overlay that supplies its agent exists,',
+      'so the requirement is that the name is *marked*, not that it is refused - and the save',
+      'is asserted from the database, because a picker that dropped the value silently would',
+      'look identical on screen the moment the dialog closed.'
+    ]
+  })
+
+  for (const name of [FORM_PROFILE, LEGACY_PROFILE]) {
+    const leftover = findProfileByName(ctx.services.store, name)
+    if (leftover) deleteProfile(ctx.services.store, leftover.id)
+  }
 
   return checks
 }

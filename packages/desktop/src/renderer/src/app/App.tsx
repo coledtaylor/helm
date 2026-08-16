@@ -57,6 +57,7 @@ import {
   TitleBar,
   VersionBanner,
   WelcomePane,
+  type ProfilePrediction,
   type Tab,
   type TabIndicator
 } from '@helm/ui'
@@ -771,6 +772,22 @@ export function App(): JSX.Element {
       openingPrompt: null,
       pinnedOrder: null
     }),
+    []
+  )
+
+  /**
+   * What the profile editor's agent and MCP pickers offer.
+   *
+   * The same `config:effective` the config console calls, asked about the
+   * composition being *typed* rather than a saved one - so the request carries a
+   * cwd and overlays rather than a profile id, which is the branch that exists
+   * for exactly this.
+   */
+  const predictProfile = useCallback(
+    async (root: string, overlays: string[]): Promise<ProfilePrediction> => {
+      const view = await helm.invoke('config:effective', { cwd: root, overlays })
+      return { agents: view.agents, mcpServers: view.mcpServers }
+    },
     []
   )
 
@@ -2071,6 +2088,7 @@ export function App(): JSX.Element {
           <ProfileEditor
             initial={editing}
             projects={discovery?.projects ?? []}
+            predict={predictProfile}
             problems={saveProblems}
             saving={saving}
             onSave={(draft) => void saveProfile(draft)}
