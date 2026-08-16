@@ -7,6 +7,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   EFFORT_LEVELS,
   PERMISSION_MODES,
+  type EffectiveEntry,
+  type EffectiveMcpServer,
   type EffortLevel,
   type PermissionMode,
   type Profile,
@@ -17,11 +19,35 @@ import { cn } from '../lib/cn'
 import { Checkbox } from './Checkbox'
 import { CaretIcon, CloseIcon, HelmMarkIcon } from './icons'
 
+/**
+ * The half of the effective view the two name pickers need.
+ *
+ * Both fields used to be free text, and both questions a person asked of them -
+ * "is this agent going to resolve", "will this server be available" - already
+ * had an answer Helm computes and was not showing. This is that answer, narrowed
+ * to the two lists.
+ */
+export interface ProfilePrediction {
+  /** Agents a session at this root, with these overlays, would resolve. */
+  agents: EffectiveEntry[]
+  /** MCP servers configured for this root, however they got there. */
+  mcpServers: EffectiveMcpServer[]
+}
+
 export interface ProfileEditorProps {
   /** The profile being edited, or a draft to seed a new one. */
   initial: Profile | ProfileDraft
   /** Discovered projects, for the overlay and access pickers. */
   projects: Project[]
+  /**
+   * What a session at `root` with `overlays` would resolve.
+   *
+   * Asked again whenever either changes - both are edited in this form, so the
+   * prediction is about the composition being typed rather than the one on
+   * disk. The editor owns the debounce and discards answers to questions it has
+   * stopped asking.
+   */
+  predict: (root: string, overlays: string[]) => Promise<ProfilePrediction>
   /** Problems from the last save attempt. */
   problems?: readonly string[] | undefined
   saving?: boolean | undefined
@@ -30,6 +56,24 @@ export interface ProfileEditorProps {
   /** Deleting an existing profile. Absent on a new one, which has nothing to delete. */
   onDelete?: (() => void) | undefined
 }
+
+/**
+ * The prediction, and the three reasons there might not be one.
+ *
+ * "Nothing resolves here" and "nobody has asked yet" are different answers and
+ * an empty picker says neither, so each state carries its own sentence.
+ */
+type Prediction =
+  | { state: 'no-root' }
+  | { state: 'predicting' }
+  | { state: 'ready'; value: ProfilePrediction }
+  | { state: 'failed'; message: string }
+
+/** One prediction, tagged with the root-and-overlays it is an answer to. */
+type Answer = { key: string } & (
+  | { ok: true; value: ProfilePrediction }
+  | { ok: false; message: string }
+)
 
 const MODELS = ['opus', 'sonnet', 'haiku', 'fable'] as const
 
@@ -46,10 +90,26 @@ const MODELS = ['opus', 'sonnet', 'haiku', 'fable'] as const
  * project's skills and then denying the session its files produces skills that
  * cannot do anything. Unticking access afterwards is allowed; it is just not
  * the default anyone wants.
+ *
+ * **Agent and MCP are pickers over the effective view**, and they were both
+ * text boxes. The questions a person asked of those boxes - is this agent going
+ * to resolve, will this server be available - are exactly what
+ * `EffectiveView.agents` and `EffectiveView.mcpServers` answer, and the form was
+ * the one place holding that answer back. An overlay's agent settles it: it
+ * resolves as `<overlay>:<agent>`, a prefix the shim builder chooses, so it is
+ * not a name anybody could have typed correctly by guessing.
+ *
+ * The two fields still differ in what they *do*, and the form now says so
+ * rather than looking alike. `agent` becomes `--agent` on the argv. `mcp` does
+ * not reach the argv at all - it is persisted and exported and nothing more -
+ * so its picker says that, and points at the console that does configure
+ * servers. Making it apply at launch is a separate change to `launch/plan.ts`,
+ * not a caption here.
  */
 export function ProfileEditor({
   initial,
   projects,
+  predict,
   problems = [],
   saving = false,
   onSave,
@@ -64,7 +124,7 @@ export function ProfileEditor({
   const [effort, setEffort] = useState(initial.effort ?? '')
   const [permissionMode, setPermissionMode] = useState(initial.permissionMode ?? '')
   const [agent, setAgent] = useState(initial.agent ?? '')
-  const [mcp, setMcp] = useState(initial.mcp.join(', '))
+  const [mcp, setMcp] = useState<string[]>(initial.mcp)
   const [openingPrompt, setOpeningPrompt] = useState(initial.openingPrompt ?? '')
   const [filter, setFilter] = useState('')
 
@@ -80,6 +140,84 @@ export function ProfileEditor({
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onCancel])
+
+  // ---------------------------------------------------------------------
+  // What this composition would resolve
+  // ---------------------------------------------------------------------
+  /**
+   * The answer is stored against the question it answers, and the two
+   * disagreeing is what "still waiting" *means*.
+   *
+   * The same shape `useConfig` keeps the config console's effective view in, and
+   * for the same reason: a `loading` flag set beside the request is a second
+   * copy of a fact the key already carries, and the two come apart the moment a
+   * slow answer lands after the root has moved on.
+   */
+  const [answer, setAnswer] = useState<Answer | null>(null)
+  const question = `${root.trim()} ${JSON.stringify(overlays)}`
+
+  useEffect(() => {
+    const trimmed = root.trim()
+    if (trimmed === '') return
+    let live = true
+    // Debounced: the root is a path somebody types one character at a time, and
+    // each answer walks three `.claude` trees plus every overlay's.
+    const timer = setTimeout(() => {
+      predict(trimmed, overlays)
+        .then((value) => {
+          if (live) setAnswer({ key: question, ok: true, value })
+        })
+        .catch((error: unknown) => {
+          if (live) {
+            setAnswer({
+              key: question,
+              ok: false,
+              message: error instanceof Error ? error.message : String(error)
+            })
+          }
+        })
+    }, 250)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [root, overlays, question, predict])
+
+  const prediction = useMemo<Prediction>(() => {
+    if (root.trim() === '') return { state: 'no-root' }
+    if (answer === null || answer.key !== question) return { state: 'predicting' }
+    return answer.ok
+      ? { state: 'ready', value: answer.value }
+      : { state: 'failed', message: answer.message }
+  }, [root, question, answer])
+
+  const predictedAgents = prediction.state === 'ready' ? prediction.value.agents : []
+
+  /**
+   * One row per server name, since the picker saves names.
+   *
+   * Two scopes may define the same name and the effective view reports both -
+   * which is the right answer to "what is configured" and the wrong shape for a
+   * checkbox, so the row kept is the one that is not shadowed.
+   */
+  const predictedServers = useMemo(() => {
+    const winners = new Map<string, EffectiveMcpServer>()
+    for (const server of prediction.state === 'ready' ? prediction.value.mcpServers : []) {
+      if (server.shadowedBy === null || !winners.has(server.name)) winners.set(server.name, server)
+    }
+    return [...winners.values()]
+  }, [prediction])
+
+  // A saved name the prediction does not carry. Kept selectable rather than
+  // dropped: a profile may legitimately be written before the overlay that
+  // supplies the agent, or the server, exists.
+  const agentUnlisted = agent !== '' && !predictedAgents.some((e) => e.invocation === agent)
+  const serversUnlisted = mcp.filter((server) => !predictedServers.some((s) => s.name === server))
+  // Only once an answer is in is "not in the list" the same thing as "does not
+  // resolve" - before that it is just a list nobody has filled in yet.
+  const settled = prediction.state === 'ready'
+  const agentNote = predictionNote(prediction, 'agents')
+  const serverNote = predictionNote(prediction, 'servers')
 
   const has = (list: string[], path: string): boolean =>
     list.some((entry) => entry.toLowerCase() === path.toLowerCase())
@@ -98,6 +236,16 @@ export function ProfileEditor({
       has(current, path)
         ? current.filter((entry) => entry.toLowerCase() !== path.toLowerCase())
         : [...current, path]
+    )
+  }
+
+  // Exactly, not case-insensitively like the paths above: a server name is a
+  // JSON key in `.mcp.json`, and the CLI addresses it as written.
+  const toggleServer = (server: string): void => {
+    setMcp((current) =>
+      current.includes(server)
+        ? current.filter((entry) => entry !== server)
+        : [...current, server]
     )
   }
 
@@ -131,10 +279,7 @@ export function ProfileEditor({
       effort: (effort as EffortLevel) || null,
       permissionMode: (permissionMode as PermissionMode) || null,
       agent: agent.trim() || null,
-      mcp: mcp
-        .split(',')
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0),
+      mcp,
       openingPrompt: openingPrompt.trim() || null,
       pinnedOrder: 'pinnedOrder' in initial ? initial.pinnedOrder : null
     })
@@ -212,7 +357,13 @@ export function ProfileEditor({
             </Field>
           </div>
 
-          <fieldset className="mt-4">
+          {/* `min-w-0` is not decoration. A `<fieldset>` carries a UA
+              `min-inline-size: min-content`, so it refuses to shrink below its
+              widest content and pushes a horizontal scrollbar onto the dialog
+              body instead - measured at 471px against a 408px body, which cut
+              the Compose and Access columns off the right edge of this table
+              at 1280x820. Both fieldsets here take it. */}
+          <fieldset className="mt-4 min-w-0">
             <legend className={labelClass}>Composition</legend>
             <p className="mt-1.5 mb-2 text-[11px] leading-[1.55] text-fg-muted">
               <strong className="font-medium text-fg">Compose</strong> loads a project&rsquo;s
@@ -314,24 +465,50 @@ export function ProfileEditor({
                 ))}
               </Select>
             </Field>
-            <Field label="Agent" hint="Optional. Overrides the session's agent.">
-              <input
-                value={agent}
-                aria-label="Agent"
-                onChange={(e) => setAgent(e.target.value)}
-                spellCheck={false}
-                className={inputClass}
-              />
+            <Field
+              label="Agent"
+              hint={
+                <>
+                  Placed on the session&rsquo;s argv as <code className={codeClass}>--agent</code>,
+                  so it starts as that subagent.
+                  {agentNote !== null && (
+                    <span className={cn('mt-[3px] block', agentNote.tone)}>{agentNote.text}</span>
+                  )}
+                  {settled && agentUnlisted && (
+                    <span data-agent-unresolved={agent} className="mt-[3px] block text-warn">
+                      Nothing at this root resolves <span className="font-mono">{agent}</span>. It
+                      is still saved.
+                    </span>
+                  )}
+                  {/* Not alongside the warning above, which already says the
+                      list has nothing for this name in it. */}
+                  {settled && !agentUnlisted && predictedAgents.length === 0 && (
+                    <span className="mt-[3px] block">
+                      No agents resolve here - neither this root nor the composed projects define
+                      one.
+                    </span>
+                  )}
+                </>
+              }
+            >
+              <Select value={agent} onChange={setAgent} label="Agent">
+                <option value="">Default</option>
+                {/* A saved name the prediction does not carry still has to be
+                    the select's value, or the control would silently move the
+                    profile off it the moment anybody opened the form. */}
+                {agentUnlisted && (
+                  <option value={agent}>{settled ? `${agent} - unresolved` : agent}</option>
+                )}
+                {predictedAgents.map((entry) => (
+                  <option key={entry.invocation} value={entry.invocation}>
+                    {entry.invocation}
+                  </option>
+                ))}
+              </Select>
             </Field>
-            <Field label="MCP servers" hint="Comma separated. Saved and exported; see the config console.">
-              <input
-                value={mcp}
-                aria-label="MCP servers"
-                onChange={(e) => setMcp(e.target.value)}
-                spellCheck={false}
-                className={inputClass}
-              />
-            </Field>
+          </div>
+
+          <div className="mt-[14px]">
             <Field label="Opening prompt" hint="Submitted as the first message, e.g. /recap.">
               <input
                 value={openingPrompt}
@@ -343,6 +520,78 @@ export function ProfileEditor({
               />
             </Field>
           </div>
+
+          {/* ----------------------------------------------------------------
+              MCP servers.
+
+              A picker over what is configured, and a sentence saying the pick
+              does not reach the session - because it does not. `Profile.mcp` is
+              persisted and exported and never placed on the argv: no CLI flag
+              selects an already-configured server by name, and resolving names
+              into a `--mcp-config` document is the config console's job (SPEC
+              4.2). This field was a comma-separated text box that said none of
+              that, so the honest thing to show was a list of names that would
+              not be used - not a box implying they would.
+              ---------------------------------------------------------------- */}
+          <fieldset className="mt-4 min-w-0">
+            <legend className={labelClass}>MCP servers</legend>
+            <p className="mt-1.5 mb-2 text-[11px] leading-[1.55] text-fg-muted">
+              Saved with the profile and carried by its YAML export.{' '}
+              <strong className="font-medium text-fg">Not applied at launch</strong> - a session
+              loads whatever is configured for its root, which is the config console&rsquo;s MCP
+              view, not this list.
+            </p>
+
+            <div className="overflow-hidden rounded-raised border border-border">
+              {serversUnlisted.length + predictedServers.length === 0 ? (
+                <p
+                  data-mcp-empty
+                  className="px-3 py-5 text-center text-[11.5px] text-fg-subtle"
+                >
+                  {settled
+                    ? 'No MCP servers are configured for this root.'
+                    : (serverNote?.text ?? '')}
+                </p>
+              ) : (
+                <div className="max-h-40 overflow-y-auto">
+                  {serversUnlisted.map((server) => (
+                    <ServerRow
+                      key={server}
+                      name={server}
+                      checked
+                      onToggle={() => toggleServer(server)}
+                    >
+                      {settled && (
+                        <span
+                          data-mcp-unresolved={server}
+                          className="shrink-0 rounded-sm border border-warn/40 px-1 text-[8.5px] tracking-[.05em] text-warn uppercase"
+                        >
+                          unresolved
+                        </span>
+                      )}
+                    </ServerRow>
+                  ))}
+                  {predictedServers.map((server) => (
+                    <ServerRow
+                      key={`${server.scope}:${server.name}`}
+                      name={server.name}
+                      checked={mcp.includes(server.name)}
+                      onToggle={() => toggleServer(server.name)}
+                    >
+                      <span className="shrink-0 rounded-full bg-accent-soft px-[7px] py-px text-[8.5px] tracking-[.05em] text-accent-text uppercase">
+                        {server.scope}
+                      </span>
+                    </ServerRow>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Only where the box has rows in it - the empty box carries the
+                same sentence itself, and two of them is one too many. */}
+            {serverNote !== null && serversUnlisted.length + predictedServers.length > 0 && (
+              <p className={cn('mt-[5px] text-[10px]', serverNote.tone)}>{serverNote.text}</p>
+            )}
+          </fieldset>
         </div>
 
         <footer className="mx-[22px] flex shrink-0 items-center gap-2 border-t border-border py-3.5">
@@ -389,13 +638,64 @@ const inputClass = cn(
 const labelClass =
   'block text-[9.5px] font-semibold tracking-[.08em] text-fg-subtle uppercase'
 
+/** A flag quoted inside a hint. Mono, because it is machine data (DESIGN.md 2). */
+const codeClass = 'rounded-sm bg-surface-sunken px-1 py-px font-mono text-[9.5px] text-fg-muted'
+
+/**
+ * Why a picker is empty, when the reason is not "nothing resolves here".
+ *
+ * Returns null once an answer is in, at which point an empty list means what it
+ * looks like. Until then it does not: "nothing is configured" and "nobody has
+ * asked yet" are different facts and a blank list states neither.
+ */
+function predictionNote(
+  prediction: Prediction,
+  plural: string
+): { text: string; tone: string } | null {
+  switch (prediction.state) {
+    case 'no-root':
+      return { text: `Set a root to see which ${plural} resolve here.`, tone: 'text-fg-subtle' }
+    case 'predicting':
+      return { text: 'Resolving what this root and its overlays offer…', tone: 'text-fg-subtle' }
+    case 'failed':
+      return { text: `This root could not be resolved: ${prediction.message}`, tone: 'text-warn' }
+    case 'ready':
+      return null
+  }
+}
+
+/** One MCP server, ticked or not, with whatever badge the caller gives it. */
+function ServerRow({
+  name,
+  checked,
+  onToggle,
+  children
+}: {
+  name: string
+  checked: boolean
+  onToggle: () => void
+  children?: ReactNode | undefined
+}): JSX.Element {
+  // A label, so the whole row is the hit target. The pointer cursor comes from
+  // `theme.css`'s `label:has(input[type=checkbox])`, not from here.
+  return (
+    <label className="flex items-center gap-[9px] border-b border-border px-3 py-[7px] transition-colors last:border-b-0 hover:bg-hover">
+      <Checkbox checked={checked} onChange={onToggle} label={`MCP server ${name}`} />
+      <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg">{name}</span>
+      {children}
+    </label>
+  )
+}
+
 function Field({
   label,
   hint,
   children
 }: {
   label: string
-  hint?: string | undefined
+  /** A node rather than a string: the two pickers say what state they are in
+   * here, and that sentence is tinted when it is a failure. */
+  hint?: ReactNode | undefined
   children: ReactNode
 }): JSX.Element {
   return (

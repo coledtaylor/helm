@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { openStore, type Store } from '../store/db'
 import { countConfigSnapshots, readConfigSnapshots } from '../store/config'
-import { computeEffectiveView } from './effective'
+import { computeEffectiveView, projectEntry } from './effective'
 import { diffLines, previewMcpAdd } from './mcp'
 import { projectConfigScope, readConfigTree, userConfigScope } from './tree'
 import { readConfigFileContent, restoreConfigSnapshot, writeConfigFile } from './write'
@@ -335,6 +335,55 @@ describe('computeEffectiveView', () => {
 
     expect(view.settingsLayers.find((layer) => layer.kind === 'project')?.error).not.toBeNull()
     expect(view.warnings.join(' ')).toMatch(/not valid JSON/)
+  })
+})
+
+/**
+ * The `local` MCP scope, which is keyed by a path string the CLI wrote.
+ *
+ * Counted on the machine this was written on: 75 keys in `~/.claude.json`, 72
+ * with forward slashes and 3 with backslashes, one directory present under both
+ * forms. An exact match against `resolve(cwd)` found three of them, so the
+ * config console reported "no MCP servers" for a directory whose own session
+ * had one loaded.
+ */
+describe('projectEntry', () => {
+  const servers = { mcpServers: { clickup: { command: 'npx' } } }
+
+  it('finds an entry the CLI wrote with forward slashes', () => {
+    const doc = { 'C:/Users/x/repos/helm': servers }
+    expect(projectEntry(doc, 'C:\\Users\\x\\repos\\helm')).toEqual(servers)
+  })
+
+  it('finds an entry the CLI wrote with backslashes', () => {
+    const doc = { 'C:\\Users\\x\\repos\\helm': servers }
+    expect(projectEntry(doc, 'C:/Users/x/repos/helm')).toEqual(servers)
+  })
+
+  it('matches case-insensitively, because these are Windows paths', () => {
+    const doc = { 'c:/users/X/Repos/Helm': servers }
+    expect(projectEntry(doc, 'C:\\Users\\x\\repos\\helm')).toEqual(servers)
+  })
+
+  it('prefers the duplicate that actually defines servers', () => {
+    const doc = { 'C:\\Users\\x': { history: [] }, 'C:/Users/x': servers }
+    expect(projectEntry(doc, 'C:\\Users\\x')).toEqual(servers)
+  })
+
+  it('still answers with a matching entry that defines none', () => {
+    const doc = { 'C:/Users/x': { history: [] } }
+    expect(projectEntry(doc, 'C:\\Users\\x')).toEqual({ history: [] })
+  })
+
+  it('does not match a different directory, or a prefix of one', () => {
+    const doc = { 'C:/Users/x/repos/helmet': servers, 'C:/Users/x/repos': servers }
+    expect(projectEntry(doc, 'C:\\Users\\x\\repos\\helm')).toBeUndefined()
+  })
+
+  it('tolerates a document with no projects at all', () => {
+    expect(projectEntry(undefined, 'C:\\Users\\x')).toBeUndefined()
+    expect(projectEntry(null, 'C:\\Users\\x')).toBeUndefined()
+    expect(projectEntry([], 'C:\\Users\\x')).toBeUndefined()
   })
 })
 
