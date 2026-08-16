@@ -9,14 +9,16 @@ import {
   readSettings,
   reconcileRunningSessions,
   scan,
+  seedTemplates,
   suggestRoots,
   writeSettings,
   type AppSettings,
   type DiscoveryResult,
   type GitState,
+  type SeedResult,
   type Store
 } from '@helm/core'
-import { dbFile, shimRoot } from './paths'
+import { dbFile, shimRoot, templatesDir } from './paths'
 
 /**
  * The main process's stateful bits, in one object rather than module-level
@@ -40,6 +42,11 @@ export interface Services {
    * same reason lost sessions are: it is evidence of how the last run ended.
    */
   staleShims: number
+  /**
+   * What the templates directory needed on the way in. `seeded: false` is the
+   * ordinary case - it was already there and nothing was touched.
+   */
+  templates: SeedResult
 }
 
 export function createServices(): Services {
@@ -66,7 +73,18 @@ export function createServices(): Services {
      * establish is dead. This is still the only place they are swept: doing it
      * per launch would churn directories a session in *this* app is reading.
      */
-    staleShims: cleanStaleShims(shimRoot).length
+    staleShims: cleanStaleShims(shimRoot).length,
+    /*
+     * The shipped README and example template, written once.
+     *
+     * At start rather than lazily when the dialog opens, and for the same
+     * reason the shim sweep is here: it is a claim about the state a Helm
+     * begins in, and a directory created the first time somebody happens to
+     * open a dialog is a directory whose contents depend on what they did
+     * first. It never overwrites - the trigger is the directory being absent -
+     * so this costs one `existsSync` on every start after the first.
+     */
+    templates: seedTemplates(templatesDir)
   }
 }
 
@@ -129,7 +147,7 @@ export async function runScan(
 ): Promise<DiscoveryResult> {
   const roots = await ensureScanRoots(services)
   const result = await scan({ roots, includeGit: opts.includeGit ?? true })
-  cacheProjects(services.store, result.projects)
+  cacheProjects(services.store, result.projects, result.harnesses)
   // The cache is written to on every pass and read from at every start, so a
   // row a scan can *disprove* has to go: otherwise a project that has been
   // deleted, or one an older Helm listed by a rule since corrected, paints for
@@ -165,7 +183,10 @@ export async function refreshGit(services: Services): Promise<Record<string, Git
     for (const project of services.lastScan.projects) {
       project.git = states.get(project.path) ?? null
     }
-    cacheProjects(services.store, services.lastScan.projects)
+    // The harnesses go in with them: this write is an upsert over the same
+    // rows, so passing the projects alone would put null over every recorded
+    // `template:` the moment the window regained focus.
+    cacheProjects(services.store, services.lastScan.projects, services.lastScan.harnesses)
   }
   return asRecord
 }

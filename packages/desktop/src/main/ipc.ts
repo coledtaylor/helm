@@ -3,7 +3,9 @@ import {
   createHarness,
   forgetProjects,
   isWithin,
+  listTemplates,
   orphanedProjectPaths,
+  previewTemplate,
   readArchivedConversation,
   readHistoryProjects,
   readHistoryPrompts,
@@ -11,8 +13,11 @@ import {
   renameHistorySession,
   suggestRoots
 } from '@helm/core'
+import type { BrowserHost } from './browser'
+import type { BrowserMcpHost } from './browser-mcp'
 import type { ConfigService } from './config'
-import type { ContentService } from './content'
+import { highlightForEditor, type ContentService } from './content'
+import type { TemplateService } from './templates'
 import type { ArchiveService } from './archive'
 import type { HistoryService } from './history'
 import type { PullsService } from './pulls'
@@ -23,7 +28,7 @@ import { readClaudeVersion, setClaudeOverride } from './claude-cli'
 import { setGhOverride } from './gh-cli'
 import { readClaudeStatus, verifyClaudeAt } from './setup'
 import { checkForUpdate, RELEASES_PAGE } from './update'
-import { appMode, dataDir, dbFile } from './paths'
+import { appMode, dataDir, dbFile, templatesDir } from './paths'
 import { activePty, windowsBuildNumber } from './pty'
 import {
   exportProfile,
@@ -85,6 +90,17 @@ export interface IpcContext {
   sessions: SessionHost
   /** Owns the project shells; see `pterm.ts`. */
   pterm: PtermHost
+  /** Owns the browser pane's `WebContentsView`s; see `browser.ts`. */
+  browsers: BrowserHost
+  /**
+   * Serves those views to the sessions Helm hosts; see `browser-mcp.ts`.
+   *
+   * Here only so `browserMcp` can take effect at once rather than at the next
+   * restart. Nothing on any channel reaches it, and nothing ever should: a
+   * renderer that could ask the endpoint for anything would be a page away from
+   * a token.
+   */
+  browserMcp: BrowserMcpHost | null
   /** Keeps the index over `~/.claude/history.jsonl` current; see `history.ts`. */
   history: HistoryService
   /** Keeps the conversations Claude Code deletes; see `archive.ts`. */
@@ -97,6 +113,8 @@ export interface IpcContext {
   config: ConfigService
   /** Reads, renders and searches what Claude writes; see `content.ts`. */
   content: ContentService
+  /** Authors what `template:list` reads back; see `templates.ts`. */
+  templates: TemplateService
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
   /**
@@ -189,6 +207,25 @@ export function registerIpc(ctx: IpcContext): void {
       if (patch.prIgnoredRepos !== undefined) {
         ctx.pulls.republish()
         void ctx.pulls.refresh()
+      }
+      /*
+       * The endpoint follows its own tick, immediately.
+       *
+       * `browserMcpLocalOnly` is deliberately **not** here: it is read through
+       * a function at every tool call, so it takes effect on the next one
+       * without anything being told. This one is different because it owns a
+       * socket - and an off switch for a listener that only takes effect at the
+       * next restart is an off switch somebody would reasonably believe had
+       * already worked.
+       *
+       * Sessions already running keep their tokens until it stops, and stopping
+       * revokes them: a session that had the tools loses them mid-task, which
+       * is the honest consequence of turning them off and is what the sentence
+       * in the pane says.
+       */
+      if (patch.browserMcp !== undefined && ctx.browserMcp !== null) {
+        if (next.browserMcp) void ctx.browserMcp.start()
+        else void ctx.browserMcp.stop()
       }
       if (patch.theme !== undefined) {
         nativeTheme.themeSource = patch.theme
@@ -345,7 +382,14 @@ export function registerIpc(ctx: IpcContext): void {
       const result = await createHarness({
         mode: request.mode,
         dir: request.dir,
-        ...(request.name !== undefined ? { name: request.name } : {})
+        templatesDir,
+        ...(request.name !== undefined ? { name: request.name } : {}),
+        // 'new' only. The contract says so and `createHarness` enforces it, but
+        // dropping it here as well means a renderer that sent one by mistake
+        // cannot even reach the code that would have to ignore it.
+        ...(request.template !== undefined && request.mode === 'new'
+          ? { template: request.template }
+          : {})
       })
       if (result.path === null) {
         return { ...result, roots: services.settings.scanRoots }
@@ -359,6 +403,28 @@ export function registerIpc(ctx: IpcContext): void {
       const roots = covered ? services.settings.scanRoots : addRoots([result.path])
       return { ...result, roots }
     },
+
+    'template:list': () => listTemplates(templatesDir),
+
+    'template:preview': ({ template, mode }) =>
+      previewTemplate({
+        templatesDir,
+        template,
+        ...(mode !== undefined ? { mode } : {})
+      }),
+
+    // Authoring. Every one of these writes inside the templates directory and
+    // nowhere else; `template:import` is the only one that reads outside it,
+    // and reading is all it does - see `assertTemplateWritable`.
+    'template:detail': ({ template }) => ctx.templates.detail(template),
+    'template:create': (request) => ctx.templates.create(request),
+    'template:rename': (request) => ctx.templates.rename(request),
+    'template:delete': ({ template }) => ctx.templates.remove(template),
+    'template:metadata': (request) => ctx.templates.metadata(request),
+    'template:substitute': (request) => ctx.templates.substitute(request),
+    'template:import': (request) => ctx.templates.importFiles(request),
+    'template:folderPreview': (request) => ctx.templates.folderPreview(request),
+    'template:fromFolder': (request) => ctx.templates.fromFolder(request),
 
     'update:check': () => checkForUpdate(),
 
@@ -431,6 +497,10 @@ export function registerIpc(ctx: IpcContext): void {
     // pass in the main process, and the ceiling is an ordinary setting.
     'archive:conversation': ({ sessionId }) => readArchivedConversation(services.store, sessionId),
     'archive:stats': () => ctx.archive.stats(),
+
+    // A free function rather than a method on either service: one editor, one
+    // highlighter, and nothing about a draft in a box belongs to a scope.
+    'editor:highlight': ({ path, source }) => highlightForEditor(path, source),
 
     'config:scopes': () => ctx.config.scopes(),
     'config:tree': ({ scopePath }) => ctx.config.tree(scopePath),
@@ -538,7 +608,28 @@ export function registerIpc(ctx: IpcContext): void {
     'clipboard:read': () => clipboard.readText(),
     'clipboard:write': (text) => {
       clipboard.writeText(text)
-    }
+    },
+
+    /*
+     * The browser pane. Every handler is a one-line delegation on purpose:
+     * every decision behind them - what a typed address means, whether the
+     * reach posture allows it, what hiding is - lives in `main/browser.ts` and
+     * `@helm/core`, so there is exactly one place either could be got wrong.
+     */
+    'browser:open': (request) => ctx.browsers.open(request),
+    'browser:navigate': ({ id, input }) => ctx.browsers.navigate(id, input),
+    'browser:back': ({ id }) => ctx.browsers.back(id),
+    'browser:forward': ({ id }) => ctx.browsers.forward(id),
+    'browser:reload': ({ id, hard }) => ctx.browsers.reload(id, hard === true),
+    'browser:close': ({ id }) => ctx.browsers.close(id),
+    'browser:state': ({ id }) => ctx.browsers.states(id),
+    'browser:eval': ({ id, source }) => ctx.browsers.evaluate(id, source),
+    'browser:devtools': ({ id }) => ctx.browsers.devtools(id),
+    'browser:find': ({ id, query, forward }) => ctx.browsers.find(id, query, forward !== false),
+    'browser:stopFind': ({ id }) => ctx.browsers.stopFind(id),
+    'browser:zoom': ({ id, level }) => ctx.browsers.zoom(id, level),
+    'browser:clearStorage': ({ id }) => ctx.browsers.clearStorage(id),
+    'browser:console': ({ id }) => ctx.browsers.entries(id)
   }
 
   const sends: SendHandlers = {
@@ -562,6 +653,8 @@ export function registerIpc(ctx: IpcContext): void {
 
     'pterm:input': ({ id, data }) => ctx.pterm.input(id, data),
     'pterm:resize': ({ id, cols, rows }) => ctx.pterm.resize(id, cols, rows),
+
+    'browser:bounds': (payload) => ctx.browsers.bounds(payload),
 
     // Consumed by one-shot `ipcMain.once` listeners in the spike drivers, which
     // register alongside these. A no-op here keeps the contract exhaustive

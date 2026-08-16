@@ -2,6 +2,7 @@ import type { JSX } from 'react'
 import { useEffect, useRef } from 'react'
 import { cn } from '../lib/cn'
 import { TerminalIcon } from './icons'
+import { Overlay } from './Overlay'
 
 export interface ConfirmSessionDialogProps {
   /** Ending one tab's session, or ending every session because Helm is quitting. */
@@ -50,101 +51,83 @@ export function ConfirmSessionDialog({
     cancelRef.current?.focus()
   }, [])
 
-  useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (event.key === 'Escape') onCancel()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onCancel])
-
   const listed = sessionNames.slice(0, LIST_LIMIT)
   const rest = sessionNames.length - listed.length
 
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-6"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onCancel()
-      }}
+    // Escape and the backdrop both mean "no", and both are `Overlay`'s - see
+    // its header for why the scrim is not described here any more.
+    <Overlay
+      role="alertdialog"
+      aria-label={message}
+      data-confirm-session={kind}
+      className="max-w-[440px]"
+      onDismiss={onCancel}
     >
-      <div
-        role="alertdialog"
-        aria-modal="true"
-        aria-label={message}
-        data-confirm-session={kind}
-        className={cn(
-          // The modal island, same as NewHarnessDialog: 12px radius, stronger
-          // hairline, and the one shadow the system allows (DESIGN.md).
-          'flex max-h-full w-full max-w-[440px] flex-col overflow-hidden rounded-xl',
-          'border border-border-strong bg-surface shadow-panel'
+      <div className="px-[22px] pt-[18px]">
+        <header className="flex items-start gap-[9px]">
+          <TerminalIcon width={13} height={13} className="mt-[3px] shrink-0 text-accent" />
+          <h2 className="text-[15px] leading-[1.35] font-medium tracking-tight text-fg">
+            {message}
+          </h2>
+        </header>
+
+        <p className="mt-2 text-[12px] leading-[1.55] text-fg-muted">{detail}</p>
+
+        {/* One session is already named in the message; listing it again
+            would be the same string twice. */}
+        {sessionNames.length > 1 && (
+          <ul className="mt-3 space-y-0.5 rounded-raised border border-border bg-surface-raised px-3 py-2">
+            {listed.map((name) => (
+              <li key={name} className="truncate font-mono text-[11px] text-fg-muted" title={name}>
+                {name}
+              </li>
+            ))}
+            {rest > 0 && (
+              <li className="text-[11px] text-fg-subtle">
+                and {rest} more session{rest === 1 ? '' : 's'}
+              </li>
+            )}
+          </ul>
         )}
-      >
-        <div className="px-[22px] pt-[18px]">
-          <header className="flex items-start gap-[9px]">
-            <TerminalIcon width={13} height={13} className="mt-[3px] shrink-0 text-accent" />
-            <h2 className="text-[15px] leading-[1.35] font-medium tracking-tight text-fg">
-              {message}
-            </h2>
-          </header>
-
-          <p className="mt-2 text-[12px] leading-[1.55] text-fg-muted">{detail}</p>
-
-          {/* One session is already named in the message; listing it again
-              would be the same string twice. */}
-          {sessionNames.length > 1 && (
-            <ul className="mt-3 space-y-0.5 rounded-raised border border-border bg-surface-raised px-3 py-2">
-              {listed.map((name) => (
-                <li key={name} className="truncate font-mono text-[11px] text-fg-muted" title={name}>
-                  {name}
-                </li>
-              ))}
-              {rest > 0 && (
-                <li className="text-[11px] text-fg-subtle">
-                  and {rest} more session{rest === 1 ? '' : 's'}
-                </li>
-              )}
-            </ul>
-          )}
-        </div>
-
-        <footer className="mx-[22px] mt-4 flex shrink-0 items-center justify-end gap-2 border-t border-border py-3.5">
-          <button
-            ref={cancelRef}
-            type="button"
-            data-confirm-cancel
-            onClick={onCancel}
-            className={cn(
-              'rounded-well border border-border-strong px-3.5 py-1.5 text-[12px] text-fg',
-              'transition-colors hover:bg-hover',
-              // `:focus`, not the global `:focus-visible`. Focus is placed here
-              // by script when the dialog opens, and Chromium does not count
-              // that as visible focus - so the ring the rest of the app gets
-              // for free never paints, and the one button Enter would press
-              // looks no different from the one it would not. The indication is
-              // the form-field one - border turns accent, no offset ring - and
-              // the global ring is suppressed so tabbing here matches opening.
-              'focus:border-accent focus:outline-none'
-            )}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            data-confirm-accept
-            onClick={onConfirm}
-            className={cn(
-              // Danger is carried by the text and the hover wash, not by a
-              // solid fill: the accent never solid-fills anything and neither
-              // does this (DESIGN.md).
-              'rounded-well border border-danger/50 px-3.5 py-1.5 text-[12px] font-medium',
-              'text-danger transition-colors hover:bg-danger/10'
-            )}
-          >
-            {confirmLabel}
-          </button>
-        </footer>
       </div>
-    </div>
+
+      <footer className="mx-[22px] mt-4 flex shrink-0 items-center justify-end gap-2 border-t border-border py-3.5">
+        <button
+          ref={cancelRef}
+          type="button"
+          data-confirm-cancel
+          onClick={onCancel}
+          className={cn(
+            'rounded-well border border-border-strong px-3.5 py-1.5 text-[12px] text-fg',
+            'transition-colors hover:bg-hover',
+            // `:focus`, not the global `:focus-visible`. Focus is placed here
+            // by script when the dialog opens, and Chromium does not count
+            // that as visible focus - so the ring the rest of the app gets
+            // for free never paints, and the one button Enter would press
+            // looks no different from the one it would not. The indication is
+            // the form-field one - border turns accent, no offset ring - and
+            // the global ring is suppressed so tabbing here matches opening.
+            'focus:border-accent focus:outline-none'
+          )}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          data-confirm-accept
+          onClick={onConfirm}
+          className={cn(
+            // Danger is carried by the text and the hover wash, not by a
+            // solid fill: the accent never solid-fills anything and neither
+            // does this (DESIGN.md).
+            'rounded-well border border-danger/50 px-3.5 py-1.5 text-[12px] font-medium',
+            'text-danger transition-colors hover:bg-danger/10'
+          )}
+        >
+          {confirmLabel}
+        </button>
+      </footer>
+    </Overlay>
   )
 }

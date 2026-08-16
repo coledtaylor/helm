@@ -1310,6 +1310,29 @@ async function harnessGroup(
   await click(win, '[data-harness-choose]')
   await pollJs(win, `document.querySelector('[data-harness-dir]')?.value`, 10_000)
   await fill(win, '[data-harness-name]', HARNESS_NAME)
+
+  /*
+   * Which template this creation is from, chosen rather than assumed.
+   *
+   * PKG-11 below is a claim about the **minimal** scaffold - three entries,
+   * four keys, no opinions - and since the dialog grew a picker that claim is
+   * only true of one of the rows in it. So the row is clicked and the checked
+   * one is read back out of the DOM, and PKG-11 asserts on that value: a
+   * default that quietly changed would fail the probe rather than silently
+   * re-point it at a tree it was never written about.
+   */
+  const pickerUp = await pollJs(win, `document.querySelector('[data-harness-templates]')`, 10_000)
+  await click(win, '[data-harness-template="minimal"]')
+  await sleep(200)
+  const chosenTemplate = await js<string | null>(
+    win,
+    `(() => { const el = document.querySelector('[data-harness-templates] [role="radio"][aria-checked="true"]');
+      return el ? el.getAttribute('data-harness-template') : null })()`
+  )
+  const writtenList = await js<string[]>(
+    win,
+    `[...document.querySelectorAll('[data-harness-written] li')].map((li) => li.textContent ?? '')`
+  )
   await sleep(200)
   const preview = await text(win, '[data-harness-target]')
   const dialogShot = await screenshot(win, shotDir, 'packaging-create-harness.png')
@@ -1349,9 +1372,12 @@ async function harnessGroup(
 
   checks.push({
     id: 'PKG-11',
-    criterion: 'The scaffold contains no author-specific or workflow-opinion content',
-    title: 'Three entries, four keys, and nothing that presumes how anyone works',
+    criterion:
+      'The minimal scaffold contains no author-specific or workflow-opinion content',
+    title: 'Minimal: three entries, four keys, and nothing that presumes how anyone works',
     ok:
+      pickerUp &&
+      chosenTemplate === 'minimal' &&
       onDisk &&
       tree.join(',') === '.claude,harness.yaml,repos' &&
       manifest !== null &&
@@ -1363,6 +1389,9 @@ async function harnessGroup(
       !manifest.raw.includes('#'),
     detail: {
       path: created,
+      templatePickerPresent: pickerUp,
+      templateChosen: chosenTemplate,
+      whatGetsWritten: writtenList,
       tree,
       totalBytes: scaffoldBytes,
       manifestKeys: manifest?.keys ?? [],
@@ -1372,6 +1401,7 @@ async function harnessGroup(
       personalPatternsFound: personalHits
     },
     notes: [
+      'Scoped to the minimal template since the dialog grew a picker: a user template writes its own tree, so "exactly these three entries" is a claim about the built-in scaffold and about nothing else. The selected row is read back out of the DOM rather than assumed, so a changed default fails here instead of quietly re-pointing this probe.',
       'The tree is read by a plain recursion that knows nothing about harnesses, so it disagrees with the scaffolder if the scaffolder writes anything extra.',
       'The manifest is parsed line by line rather than with a YAML library, which is what makes "exactly four keys, in this order, no comments" checkable - a parser would forgive a repeat, a stray key or a comment.',
       `Nothing in it matches any of ${String(OPINION_WORDS.length - 1)} workflow words or any of ${String(personal().length)} personal-path patterns. The whole scaffold is ${String(scaffoldBytes)} bytes.`

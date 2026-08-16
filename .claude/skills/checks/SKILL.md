@@ -30,11 +30,14 @@ A change to a surface named here is not done until its check is green.
 | `pnpm history-check` | session index, resume | history parsing, the history pane, resume |
 | `pnpm config-check` | config console, effective view, MCP | `core/config/`, anything that writes into a `.claude` tree |
 | `pnpm content-check` | markdown, artifacts, wikilinks, editor | `core/content/`, the content viewer |
+| `pnpm highlight-check` | the editors: the overlay, the highlighting, the editing behaviour | `CodeEditor`, `core/content/editing.ts`, `highlightLines`, `editor:highlight`, `editor.css`, the two panes' editing halves |
 | `pnpm packaging-check` | first run, packaging, personal-path audit | setup, portable mode, the installer |
 | `pnpm usage-check` | the status bar's usage figures | `core/usage/`, the status bar |
 | `pnpm settings-check` | the settings pane, every app setting, terminal/shell preferences | `core/store/settings.ts`, `SettingsPane`, `terminal.ts`, `estimateGrid`, `main/pterm.ts` |
 | `pnpm transcript-check` | the transcript archive: capture, search, the ceiling, read-only | `core/archive/`, `core/store/archive.ts`, `main/archive.ts`, the session-history pane's archive states, anything that reads `projects/*.jsonl` |
+| `pnpm template-check` | harness templates: the engine, the picker, seeding, authoring | `core/discovery/templates.ts`, `core/discovery/template-authoring.ts`, `createHarness`, `NewHarnessDialog`, `TemplateManager`, `SaveAsTemplateDialog`, `templatesDir` in `paths.ts`, the seeding in `createServices` |
 | `pnpm pr-check` | the pull-request surface end to end | `core/github/`, `main/pulls.ts`, `main/gh-cli.ts`, `PullsPane`, `PullRow`, `PullRequestPane`, the project pane's pull-request panel and its Config/Content links, `SessionHost.review` |
+| `pnpm browser-check` | the browser pane and the tools a session drives it with: the view's lifetime, its bounds, hiding, the console panel, every posture, the MCP endpoint, the reach intersection and tab ownership | `main/browser.ts`, `main/browser-mcp.ts`, `core/browser/reach.ts`, `core/launch/mcp.ts`, `BrowserPane`, `ConsolePanel`, the `browser:*` channels, the navigation guard in `main/index.ts`, `browserReach`, `browserMcp`, `browserMcpLocalOnly` |
 | `pnpm affordance-check` | every clickable control looks clickable | `theme.css`, `lib/segmented.ts`, `Checkbox`, any shared control recipe, any new pane |
 | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
 
@@ -173,6 +176,36 @@ navigates a wikilink, interrogates the artifact frame's sandbox from inside it,
 measures search latency and scroll frame intervals, and edits a real note with
 a hash-verified restore. Spawns no sessions, so it takes about a minute.
 
+**`highlight-check`** - the editors. Drives the config console and the content
+viewer against a fixture harness the driver owns, reached the way a folder
+outside every scanned root is: a profile points at it. It **never clicks Save**,
+and `HL-16` hashes the fixture tree either side of the whole run to say so -
+this is the surface that writes into a `.claude` tree, and proving an editor
+works by writing through it would be asserting the wrong thing.
+
+Four shapes in it are worth copying. The **scroll claim is made in two
+currencies**: the transform the component wrote onto the layer stack, and the
+underlay's own bounding rectangle, because a string that reads correctly over an
+element that did not move passes one and fails the other. The **parity
+comparator is made to fail first** (HL-2) - a font size is forced onto one layer
+and the same function has to reject the pair it had just accepted - and the
+trailing-newline half gets its own mutation, injecting a stylesheet that switches
+off the pseudo-element materialising the last line and requiring the two heights
+to *stop* matching. That is TPL-1's rule applied per comparison. **Latency is
+counted in frames, not milliseconds**, because "inside one frame" is a discrete
+claim: an `input` listener the driver installs counts `requestAnimationFrame`
+callbacks to the first one where the painted layer holds what the box holds, and
+`keystrokesMeasured` must equal `keysSent` - a sample that never resolves is
+left *out* of the set, and a maximum over a set missing its worst member is the
+PROF-4 shape. And **undo is asserted against the previous user state**: a word
+typed key by key, then Tab, then Ctrl+Z, which has to give the word back. The
+naive implementation - assigning `.value` - passes every assertion about the
+result of the edit and empties Chromium's undo stack, so
+`data-editor-direct-writes` counts the times the component had to do that and
+zero is part of the claim.
+
+No sessions, no network, about two minutes.
+
 **`packaging-check`** - first run and the built artefacts, in three phases. Two shapes
 matter before touching it. **First run is a second process**: "a fresh
 `~/.claude` and no harness at all" is not a state this machine can enter, so
@@ -284,6 +317,140 @@ absent from `history_prompts`, which is what says the search is over messages
 a claim the process that wrote the rows can make - `run-transcript.mjs` deletes
 the transcript between the phases and a second real app start has to find the
 conversation still there (T-7). No sessions, no network, about ninety seconds.
+
+**`template-check`** - harness templates, in **five app starts**. Three of them
+are windowless `--template-seed` runs, and they are the shape worth copying: "a
+first start seeds the directory", "a second overwrites nothing" and "deleting it
+re-seeds" are three claims about *startup*, and no process that has already
+started can make one about itself. `run-template.mjs` arranges the directory
+between them and each start writes down what it found; the driver reads those
+three files and turns them into TPL-7/8/9, so every verdict still lives in one
+report. **The runner edits a seeded file between two of the starts**, and that
+edit is the probe rather than preparation: Helm keeps no hashes of what it
+seeded and so cannot tell an edited file from an untouched one, which is exactly
+why it must never overwrite - "the file is still what the user made it" is the
+assertion, where "the file is still there" would pass over a rewrite.
+
+The fourth start drives the real New Harness dialog against a fixture template
+planted in the check's own templates directory (free, through `isolate.mjs` -
+`templatesDir` reads the same `PORTABLE_EXECUTABLE_DIR`). It picks the fixture
+out of the real picker, creates, and walks the result with a recursion that
+knows nothing about templates. The load-bearing one is TPL-4: a **non-`.tpl`
+file full of literal `{{...}}`** - two GitHub Actions expressions, a Jinja
+block, and a `{{NAME}}` - has to arrive identical to the byte, which is what
+says substitution stayed inside `.tpl`. TPL-1 comes first and is the reason any
+of that is believed: the byte comparator is run clean, then **a byte of the
+fixture is flipped and the same function is required to reject the file it had
+just accepted**, then the byte is put back. That is the PROF-4 rule applied
+before the fact rather than after it.
+
+`hostile` refuses four template names that are paths (`../escape`,
+`C:\Windows\System32` and friends) through the real `harness:create` channel -
+the picker cannot produce one, so the channel is where the refusal has to hold -
+and walks the parent either side, because "it refused" and "it refused after
+making the folder" look identical from a return value. Then it creates from a
+template carrying a real Windows **junction**: the honest half is written, the
+junction is a sentence in `problems`, and what it pointed at is hashed either
+side so containment is a claim about bytes rather than about a filename absent
+from a listing.
+
+`authoring` (TPL-12 to TPL-18) drives the **template manager**, and every claim
+is read back off the disk by the driver rather than out of the channel that
+wrote it. It creates, describes, renames and deletes a template through the real
+form; imports a skill out of a real `config:scopes` entry and compares sha256 on
+both sides *and* again after making a harness from the result; freezes a fixture
+harness through the project pane's "Save as template" and checks the tick state
+of every previewed row, that the stated total **moves when a row is unticked**,
+and that what landed is what was ticked; and imports a `dot-claude/` folder,
+which stays `dot-claude/` in the template and arrives as `.claude/` in the
+harness.
+
+Three things in it are worth copying. **TPL-13 earns its comparator the way
+TPL-1 does** - a second fixture and a second comparison get their own flipped
+byte, because PROF-4's failure is per-comparison rather than per-driver.
+**Junction safety is proven in both directions** (TPL-15, TPL-16): a save that
+walks into one copies a repository, and a delete that walks into one *removes*
+it, which is the unrecoverable half. And the fixture the import reads from lives
+in the harness's `repos/`, not beside the harness - a root holding any harness
+is a directory *of* harnesses and its non-harness siblings are deliberately not
+projects (`scan.ts`), so a fixture planted as a sibling is never discovered,
+never a scope, and reads as an import bug.
+
+The driver's own teardown does **not** use `rmSync(dir, { recursive: true })`:
+that call was measured returning successfully while leaving a Windows junction
+in place, which is why `nuke()` in the driver and `removeTree` in the engine are
+both written out by hand.
+
+No sessions, no network, about two minutes.
+
+**`browser-check`** - the integrated browser pane and the tools a session drives
+it with, in two app starts. It starts its own HTTP and HTTPS fixture servers on
+`127.0.0.1` and `127.0.0.2`, so it reaches no network; **one** `claude` session
+on haiku, in the `live` group and nowhere else, so `--only=` anything but `live`
+still costs no tokens. About three minutes.
+
+Seven shapes in it are worth copying. The first four are M16's, about the pane.
+
+**The witness for "the view is hidden" is a photograph of the window, taken from
+outside it.** That is not the obvious choice and the obvious one does not work:
+`win.webContents.capturePage()` - which `screenshot()` and every other driver
+here uses - **cannot see a `WebContentsView` at all**. Measured while writing
+this, with the view plainly on screen, it returned zero fixture pixels in all
+three states. A hiding probe built on it would have passed for the wrong
+reason forever. So the window is captured through `desktopCapturer`, and
+`document.visibilityState` asked *of the page* is read beside it: one is the
+compositor's opinion, the other is a picture, and Helm writes neither. Helm's
+own `visible` flag is reported in the detail and is never part of a verdict.
+
+**BR-5 makes that counter fail first.** It runs the pixel count over a shown
+frame and a hidden one and requires it to find the page and then not find it,
+before any hiding assertion is believed - a counter stuck at zero would pass
+every one of them. TPL-1's rule, applied to a comparator that is a pixel count.
+
+**BR-3 is the milestone's spike, pinned.** "A tab the user is not on stays
+capturable, scriptable and clickable" is what M17 is built on and would regress
+with nothing on screen looking different. The capture half is made discriminating
+by repainting the page a colour it has **never been** *after* the hide, so a
+`capturePage` handing back the last frame drawn while visible fails.
+
+**The self-signed certificate is minted at run time**, by writing the X.509 DER
+out by hand in the driver. Committing a PEM would put a private key in the
+repository and shelling out to `openssl` would make the check depend on whether
+a machine has one. The same certificate is served on `127.0.0.1` and on
+`127.0.0.2` - both this machine, both reachable - so the only difference between
+the accept and the refuse is the host, which is the rule under test.
+
+The last three are M17's, about an agent driving it.
+
+**The tool groups speak MCP over the wire.** The driver registers with
+`browserMcp` as though it were a session, gets a bearer token, and makes real
+HTTP requests to `127.0.0.1:<port>/mcp` - it never calls a tool handler as a
+function. So one probe exercises the listener, the token gate, the JSON-RPC
+framing and the handler at once, and a tool that only worked in-process fails
+all of them. The expected tool list is **typed out in the driver**, because a
+list read from the server and compared to itself agrees with itself.
+
+**BR-32 is C1's exact-pixel discipline applied to a screenshot the model would
+see.** The tool hands back base64 PNG; the driver decodes it with `nativeImage`
+- Chromium's decoder rather than the encoder that made the bytes - and counts
+the fixture's colour. Then the page is repainted a colour it has never been and
+the *same* comparator has to stop finding the first and start finding the
+second. A path returning a stale frame, an empty image, or a picture of the
+window rather than the page fails that pair - and the window is the plausible
+mistake here, since `win.webContents.capturePage()` cannot see a
+`WebContentsView` at all.
+
+**BR-33 is the milestone's premise and it needs a decoy.** Every tool has to
+work against a tab that is not on screen, judged by photographing the window.
+The workspace makes its only pane the active one, so without a second tab
+holding the front the agent's own tab *is* the tab in front and the group
+measures nothing. The decoy is a fixture route in a colour the counter can never
+mistake for the page under test.
+
+Two phases, because a cookie surviving a restart is not a claim the process that
+stored it can make. `run-browser.mjs` starts the app again and the fixture
+rebinds the port phase one wrote down: an origin includes the port, so a new one
+would read as an empty jar however well persistence worked.
 
 **`fidelity` and `claude-check`** - TUI fidelity inside xterm. These render
 `spike.html`, a separate page from the app, so app layout changes cannot move

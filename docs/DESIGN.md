@@ -87,6 +87,26 @@ Three elevations, encoded as radius tokens:
 it. The one exception is modals: `rounded-xl border-border-strong
 shadow-panel` over a dimmed backdrop.
 
+**`Overlay` is the one owner of that treatment.** The scrim, the centring, the
+z-index, the island and its shadow, and Escape-to-dismiss all live in
+`packages/ui/src/components/Overlay.tsx`, and every dialog routes through it -
+a call site says how wide its island is and nothing else. This is the only
+place in `packages/ui` or the renderer allowed to write `fixed inset-0`;
+**`no-raw-overlay`** in `eslint.config.js` refuses it everywhere else, and
+exempts that one file by name.
+
+It is a rule the linter holds because it is a rule that gets forgotten. The
+four dialogs each had their own copy of the backdrop, so nothing in the app
+knew a dialog was open - and the integrated browser pane is a
+`WebContentsView`, a native view that paints above all renderer DOM and has to
+get out of the way while one is. `Overlay` records that in `lib/overlay.ts`,
+which anything can subscribe to (`useOverlayOpen`, `subscribeOverlay`); the
+alternative was a fifth dialog, written a year from now, that nobody
+remembered to tell.
+
+A toast is not a modal. The launch toast has no scrim and does not acquire one
+to satisfy this mechanism.
+
 **Helm draws its own dialogs, including the ones the main process asks for.**
 A `dialog.showMessageBox` is a Win32 window - system typeface, system ground,
 a blue circled "i" - and nothing in this document can reach it. Where main owns
@@ -533,6 +553,7 @@ Don't:
 - No solid accent fills - not on buttons, not on selections (checkboxes are
   the one exception)
 - No stacked shadows; elevation is edge + ambient darkness (modals excepted)
+- No hand-written backdrop - a modal is `Overlay`, and `no-raw-overlay` says so
 - No pure black or white; every value from the ramps
 - No text weight past 500 (600 only on ≤11px caps labels)
 - No borders on chips at row density - tone carries them

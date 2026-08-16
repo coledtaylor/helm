@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { emit, registerIpc, resolvedTheme } from './ipc'
-import { appMode, dataDir, initDataDir, shimRoot } from './paths'
+import { appMode, dataDir, initDataDir, mcpConfigDir, shimRoot, templatesDir } from './paths'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
 import {
   adoptExistingProfile,
@@ -27,15 +27,25 @@ import {
   createServices,
   refreshGit,
   runScan,
+  updateSettings,
   type Services
 } from './services'
 import { createConfigService } from './config'
+import { createTemplateService } from './templates'
 import {
   attachArtifactConsole,
   CONTENT_SCHEME,
   createContentService,
   registerContentProtocol
 } from './content'
+import {
+  browserWillNavigate,
+  browserWindowOpen,
+  createBrowserHost,
+  type BrowserHost
+} from './browser'
+import { createBrowserMcp, type BrowserMcpHost } from './browser-mcp'
+import { runBrowserChecks } from './browsercheck'
 import { createArchiveService } from './archive'
 import { createHistoryService } from './history'
 import { createPullsService } from './pulls'
@@ -52,6 +62,7 @@ import { TITLEBAR_OVERLAY } from './chrome'
 import { createPtermHost } from './pterm'
 import { runDesignShot } from './designshot'
 import { runAffordanceChecks } from './affordancecheck'
+import { runHighlightChecks } from './highlightcheck'
 import { runProfilesChecks } from './profilescheck'
 import { HOLD_REPORT, runShimHold } from './shimhold'
 import { runHistoryChecks } from './historycheck'
@@ -61,6 +72,7 @@ import { runUsageChecks } from './usagecheck'
 import { runSettingsChecks } from './settingscheck'
 import { runPrChecks } from './prcheck'
 import { runTranscriptChecks, runTranscriptRestartChecks } from './transcriptcheck'
+import { hashTemplatesDir, runTemplateChecks } from './templatecheck'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -102,14 +114,20 @@ type Mode =
   | 'pr-check'
   | 'transcript-check'
   | 'transcript-restart'
+  | 'template-check'
+  | 'browser-check'
+  | 'browser-restart'
+  | 'template-seed'
   | 'shim-sweep'
   | 'shim-hold'
   | 'design-shot'
   | 'affordance-check'
+  | 'highlight-check'
 
 function modeFromArgv(): Mode {
   if (process.argv.includes('--design-shot')) return 'design-shot'
   if (process.argv.includes('--affordance-check')) return 'affordance-check'
+  if (process.argv.includes('--highlight-check')) return 'highlight-check'
   if (process.argv.includes('--selftest')) return 'selftest'
   if (process.argv.includes('--fidelity')) return 'fidelity'
   if (process.argv.includes('--claude-check')) return 'claude-check'
@@ -128,6 +146,10 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--pr-check')) return 'pr-check'
   if (process.argv.includes('--transcript-check')) return 'transcript-check'
   if (process.argv.includes('--transcript-restart')) return 'transcript-restart'
+  if (process.argv.includes('--browser-check')) return 'browser-check'
+  if (process.argv.includes('--browser-restart')) return 'browser-restart'
+  if (process.argv.includes('--template-check')) return 'template-check'
+  if (process.argv.includes('--template-seed')) return 'template-seed'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
   if (process.argv.includes('--shim-hold')) return 'shim-hold'
   if (process.argv.includes('--claude')) return 'claude'
@@ -153,9 +175,13 @@ const isSpikeMode =
   mode !== 'pr-check' &&
   mode !== 'transcript-check' &&
   mode !== 'transcript-restart' &&
+  mode !== 'template-check' &&
+  mode !== 'browser-check' &&
+  mode !== 'browser-restart' &&
   mode !== 'shim-hold' &&
   mode !== 'design-shot' &&
-  mode !== 'affordance-check'
+  mode !== 'affordance-check' &&
+  mode !== 'highlight-check'
 
 /**
  * A check's window keeps rendering when something else is in front of it.
@@ -201,10 +227,33 @@ protocol.registerSchemesAsPrivileged([
   }
 ])
 
-// Every renderer is our own bundle; nothing else may be navigated to or opened.
+/**
+ * Every renderer is our own bundle; nothing else may be navigated to or opened.
+ *
+ * The browser pane's `WebContentsView`s are the one thing in Helm that is
+ * *supposed* to navigate, and they are let through **here**, by id, rather than
+ * by relaxing anything. `browserWillNavigate` answers false for every web
+ * contents that is not a live browser view - the window, the spike page, an
+ * artifact frame - so the app's own renderers keep exactly the lock they had
+ * before this pane existed, and a view that has been destroyed loses the
+ * exemption with it.
+ *
+ * The window-open side is not exempted at all: the action is `deny` for
+ * everything, always. What `browserWindowOpen` adds is that a `window.open`
+ * inside a browser view becomes a new Helm browser tab - a capped one - instead
+ * of nothing at all. No Chromium window is ever created either way.
+ *
+ * Both hooks are read at *navigation* time rather than at creation time, which
+ * is what lets the registry be filled in the view's own constructor path.
+ */
 app.on('web-contents-created', (_e, contents) => {
-  contents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  contents.on('will-navigate', (event) => event.preventDefault())
+  contents.setWindowOpenHandler((details) => {
+    browserWindowOpen(contents.id, details.url)
+    return { action: 'deny' }
+  })
+  contents.on('will-navigate', (event, url) => {
+    if (!browserWillNavigate(contents.id, url)) event.preventDefault()
+  })
 })
 
 function createWindow(
@@ -366,12 +415,29 @@ function startApp(options: AppOptions = {}): void {
   if (services.staleShims > 0) {
     console.log(`removed ${String(services.staleShims)} overlay shim(s) left by the last run`)
   }
+  if (services.templates.seeded) {
+    console.log(`seeded ${String(services.templates.created.length)} template file(s) into ${templatesDir}`)
+  }
+  if (services.templates.problem !== null) console.warn(services.templates.problem)
 
   let win: BrowserWindow | null = createWindow('index', services.settings.windowBounds ?? null)
+
+  /**
+   * Helm's own MCP endpoint, reached through a getter.
+   *
+   * It cannot be created here: it drives the browser host, which is created
+   * further down because it needs the window. And the session host cannot be
+   * created after it, because the browser host's `writeSettings` and this
+   * file's shutdown order both already depend on the order these three are in.
+   * So the session host is handed a *function*, which is the shape it already
+   * uses for the window for the same reason.
+   */
+  let browserMcp: BrowserMcpHost | null = null
 
   const sessions = createSessionHost({
     services,
     window: () => win,
+    browserMcp: () => browserMcp,
     observer: options.observer,
     confirm: options.confirm
   })
@@ -448,16 +514,76 @@ function startApp(options: AppOptions = {}): void {
   const content = createContentService({ services })
   attachArtifactConsole(win, (entry) => emit(win, 'content:artifactConsole', entry))
 
+  /**
+   * The browser pane's views.
+   *
+   * Settings are read through a function and written through one, for the two
+   * different reasons both shapes exist elsewhere in this file. The reach
+   * posture can change while a view is open, so a captured value would make it
+   * a property of when the tab was made. And the addresses a view has been to
+   * are written by *main*, because main is the side that knows a navigation
+   * succeeded - a redirect, a retry that finally connected and a `window.open`
+   * are all invisible to a window that only saw what it asked for.
+   */
+  const browsers: BrowserHost = createBrowserHost({
+    window: () => win,
+    settings: () => services.settings,
+    writeSettings: (patch) => {
+      const next = updateSettings(services, patch)
+      emit(win, 'settings:changed', next)
+    },
+    onChanged: (state) => emit(win, 'browser:changed', state),
+    onOpened: (state) => emit(win, 'browser:opened', state),
+    onClosed: (id) => emit(win, 'browser:closed', { id }),
+    onLogged: (id, entry) => emit(win, 'browser:logged', { id, entry })
+  })
+
+  /**
+   * And the endpoint that lets a session drive those views.
+   *
+   * Started here rather than lazily at the first launch, because "there is no
+   * listener when `browserMcp` is off" has to be true of the *app* rather than
+   * of a code path nobody has taken yet - a port that appears the first time
+   * somebody starts a session is a port whose absence proves nothing.
+   *
+   * `start()` answers rather than throws: a machine where the loopback bind
+   * fails is a machine where Helm still works, with no browser tools and a line
+   * on the console saying so.
+   */
+  browserMcp = createBrowserMcp({
+    browsers,
+    settings: () => services.settings,
+    dir: mcpConfigDir
+  })
+  void browserMcp.start().then(({ started, problem }) => {
+    if (started) {
+      const bound = browserMcp?.address()
+      console.log(
+        `browser tools on http://${bound?.address ?? '?'}:${String(bound?.port ?? 0)} (loopback, token-gated)`
+      )
+    } else if (services.settings.browserMcp) {
+      console.warn(`Helm's browser tools are not available: ${problem ?? 'unknown'}`)
+    }
+  })
+
+  // Built on the config service rather than beside it: the import picker's
+  // sources are the console's own scopes, and what a skill *is* is the
+  // console's own answer.
+  const templates = createTemplateService(services, config)
+
   registerIpc({
     services,
     sessions,
     pterm,
+    browsers,
+    browserMcp,
     history,
     archive,
     usage,
     pulls,
     config,
     content,
+    templates,
     window: () => win,
     ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
     ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),
@@ -546,6 +672,8 @@ function startApp(options: AppOptions = {}): void {
           services,
           sessions,
           pterm,
+          browsers,
+          browserMcp,
           history,
           archive,
           usage,
@@ -663,9 +791,39 @@ function startApp(options: AppOptions = {}): void {
     usage.stop()
     pulls.stop()
     config.stop()
+    /*
+     * The endpoint goes **before** the sessions, and the order is the point.
+     *
+     * A session being torn down can still be mid-tool-call, and a tool that
+     * ran after its session's process was gone would be an agent driving a
+     * browser on behalf of nothing. Stopping first revokes every token, so
+     * anything still in flight is answered with a 401 by a listener that is on
+     * its way out - and the ephemeral config files go with it, which is the
+     * only sweep that catches a session whose exit never got a turn.
+     *
+     * Not awaited: `before-quit` is synchronous, and the close is a formality
+     * once the tokens are gone.
+     */
+    void browserMcp?.stop()
     // Synchronously, because this is the last point the main process is
     // guaranteed a turn. Anything deferred here is a process left behind.
     sessions.shutdown()
+    /*
+     * The browser views die here too, and it is the same argument.
+     *
+     * A `WebContentsView` is a render process - the same kind of thing a pty
+     * is, from this file's point of view - and it belongs to the main process
+     * rather than to the window. Destroying it in the window's `closed`
+     * handler would be too late in one direction (a quit that never closed the
+     * window) and too early in the other (`before-quit` runs first, and a view
+     * torn down after the store closed would be a `did-navigate` writing a
+     * remembered URL into a shut database).
+     *
+     * A tab closed by hand goes through `browser:close`; this is the sweep for
+     * whatever is still open when the app ends. Both end at the same
+     * `destroy()`.
+     */
+    browsers.shutdown()
   })
 
   app.on('will-quit', () => {
@@ -878,6 +1036,39 @@ app.whenReady().then(() => {
   }
 
   /**
+   * One real app start, so `pnpm template-check` can ask what a start does to
+   * the templates directory.
+   *
+   * Three claims need this and none of them can be made by a process that has
+   * already started: a first start seeds, a second overwrites nothing, and a
+   * start with the directory deleted seeds again. So `run-template.mjs` runs
+   * this three times, arranging the directory between them, and each run writes
+   * down what `createServices` found and the sha256 of every file in there.
+   * The verdicts are `templatecheck.ts`'s - TPL-7/8/9 - because the report is
+   * where a multi-phase check keeps its verdict. Same shape as `--shim-sweep`.
+   *
+   * No window: the claim is about startup, and a window would only add a scan.
+   */
+  if (mode === 'template-seed') {
+    const services = createServices()
+    const reportArg = process.argv.find((a) => a.startsWith('--report='))
+    const file = writeReport(reportArg?.slice('--report='.length) ?? 'template-seed.json', {
+      startedAt: new Date().toISOString(),
+      dir: templatesDir,
+      seeded: services.templates.seeded,
+      created: services.templates.created,
+      problem: services.templates.problem,
+      files: hashTemplatesDir(templatesDir)
+    })
+    console.log(
+      `template seed: ${services.templates.seeded ? `wrote ${String(services.templates.created.length)} file(s)` : 'already there, nothing written'}; report: ${file}`
+    )
+    services.store.close()
+    app.exit(0)
+    return
+  }
+
+  /**
    * The second phase of `usage-check`, and the whole of it.
    *
    * "The mode survives a restart" is a claim about a process that has not
@@ -966,6 +1157,44 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`design-shot crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  if (mode === 'highlight-check') {
+    startApp({
+      onReady: (ctx) => {
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runHighlightChecks(
+          ctx,
+          join(dataDir, 'screenshots'),
+          dataDir,
+          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
+        )
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('highlight-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`highlight-check report: ${file}`)
+            for (const c of checks) {
+              console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+              for (const n of c.notes) console.log(`      ${n}`)
+            }
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`highlight-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }
@@ -1548,6 +1777,112 @@ app.whenReady().then(() => {
             )
             console.log(`${mode} report: ${file}`)
             for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`${mode} crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  /**
+   * Harness templates, driven through the real window.
+   *
+   * The directory picker is answered by the driver for the reason
+   * `--settings-check` answers it: "Choose…" opens a native dialog with no
+   * automation surface, and everything after it - the handler, the write, the
+   * rescan - is the real thing. The seed phases that precede this one are
+   * `--template-seed` above.
+   */
+  if (mode === 'template-check') {
+    startApp({
+      chooseDirectory: (title: string) => pickerAnswer('directory', title),
+      onReady: (ctx) => {
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runTemplateChecks(ctx, {
+          dataDir,
+          shotDir: join(dataDir, 'screenshots'),
+          ...(onlyArg ? { only: onlyArg.slice('--only='.length).split(',') } : {})
+        })
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('template-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              templatesDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`template-check report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`template-check crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  /**
+   * The browser pane, driven through the real window in two phases.
+   *
+   * The second exists for the reason every second phase in this file does:
+   * "a cookie the fixture set is still there after a restart" is not a claim
+   * the process that set it can make. `run-browser.mjs` starts this again with
+   * `--browser-restart`, against the same isolated data directory and therefore
+   * the same `persist:helm-browser` partition, and the fixture server is
+   * started fresh on the port the first phase wrote down.
+   */
+  if (mode === 'browser-check' || mode === 'browser-restart') {
+    const restart = mode === 'browser-restart'
+    // A collector, because M17's `live` group spawns a real `claude` and the
+    // only witness for what a session said is its output. Every other group in
+    // this driver spawns nothing and never reads it.
+    const collector = createCollector()
+    startApp({
+      observer: collector,
+      confirm: collector.confirm,
+      onReady: (ctx) => {
+        collector.answerWith(true)
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runBrowserChecks(ctx, collector, {
+          dataDir,
+          shotDir: join(dataDir, 'screenshots'),
+          phase: restart ? 'restart' : 'main',
+          ...(onlyArg ? { only: onlyArg.slice('--only='.length).split(',') } : {})
+        })
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport(
+              restart ? 'browser-restart-report.json' : 'browser-report.json',
+              {
+                startedAt: new Date().toISOString(),
+                mode: appMode,
+                dataDir,
+                versions: process.versions,
+                pass,
+                checks
+              }
+            )
+            console.log(`${mode} report: ${file}`)
+            for (const c of checks) {
+              console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+              for (const n of c.notes) console.log(`      ${n}`)
+            }
 
             app.once('quit', () => process.exit(pass ? 0 : 1))
             setTimeout(() => app.exit(pass ? 0 : 1), 60_000)

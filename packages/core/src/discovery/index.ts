@@ -16,10 +16,54 @@ export {
   createHarness,
   harnessNameProblems,
   HARNESS_FORMAT_VERSION,
-  MINIMAL_TEMPLATE,
   type CreateHarnessRequest,
   type CreateHarnessResult
 } from './harness'
+export {
+  applyTemplate,
+  listTemplates,
+  previewTemplate,
+  seedTemplates,
+  substituteTemplate,
+  templateIdProblems,
+  MINIMAL_CHOICE,
+  MINIMAL_TEMPLATE,
+  SHIPPED_TEMPLATES,
+  TEMPLATE_MANIFEST,
+  type ApplyTemplateRequest,
+  type ApplyTemplateResult,
+  type PreviewTemplateRequest,
+  type SeedResult,
+  type TemplateChoice,
+  type TemplateListing,
+  type TemplatePreview,
+  type TemplateValues
+} from './templates'
+export {
+  assertTemplateWritable,
+  createTemplate,
+  deleteTemplate,
+  importIntoTemplate,
+  makeSubstitutable,
+  previewFolderAsTemplate,
+  readTemplateDetail,
+  renameTemplate,
+  saveFolderAsTemplate,
+  templateNameProblems,
+  writeTemplateMetadata,
+  DOT_CLAUDE,
+  TEMPLATE_VARIABLES,
+  type FolderEntry,
+  type FolderTemplateKind,
+  type FolderTemplatePreview,
+  type SaveFolderAsTemplateResult,
+  type TemplateDeleteResult,
+  type TemplateDetail,
+  type TemplateFile,
+  type TemplateImportFile,
+  type TemplateImportResult,
+  type TemplateWriteResult
+} from './template-authoring'
 export { findEnclosingHarness, suggestRoots } from './roots'
 export {
   TITLE_MAX,

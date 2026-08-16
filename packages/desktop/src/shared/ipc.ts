@@ -20,6 +20,7 @@ import type {
   DetectedShell,
   DiscoveryResult,
   DoctorReport,
+  EditorHighlight,
   EffectiveView,
   GitState,
   HistoryPage,
@@ -36,10 +37,19 @@ import type {
   ProfileDraft,
   PullDetailView,
   PullsSnapshot,
+  FolderTemplateKind,
+  FolderTemplatePreview,
   RenameConfigRequest,
   RenameConfigResult,
   RenderedMarkdown,
+  SaveFolderAsTemplateResult,
   SessionRecord,
+  TemplateDeleteResult,
+  TemplateDetail,
+  TemplateImportResult,
+  TemplateListing,
+  TemplatePreview,
+  TemplateWriteResult,
   ThemePreference,
   UsageSnapshot,
   WriteConfigRequest,
@@ -145,7 +155,12 @@ export interface CreateHarnessOutcome {
   path: string | null
   /** Paths written, relative to `path`. */
   created: string[]
-  /** Why nothing was written. Non-empty means `path` is null. */
+  /**
+   * What went wrong, as sentences. With `path` null it is why nothing was
+   * written; with `path` set it is a template that was applied *partly* -
+   * `created` is what landed, these are the entries that did not, and no
+   * rollback is claimed.
+   */
   problems: string[]
   /** The scan roots after the new harness was added to them. */
   roots: string[]
@@ -418,6 +433,108 @@ export interface SessionConfirmRequest {
 }
 
 // ---------------------------------------------------------------------------
+// The browser pane
+// ---------------------------------------------------------------------------
+
+/**
+ * One browser view, as the window sees it.
+ *
+ * The view itself is a `WebContentsView` living in the main process, like a
+ * pty: React paints a placeholder rectangle and this is everything it knows
+ * about what is inside it. That split is the whole design - a native view
+ * cannot be a React child, its page state must survive the workspace strip's
+ * unmount-on-tab-switch, and the renderer must never be the authority on what a
+ * page is doing.
+ */
+export interface BrowserState {
+  id: number
+  /** Where it actually is, which is not always where it was asked to go. */
+  url: string
+  /** The page's own title, or the host until it has one. Names the tab. */
+  title: string
+  /** The tab's subtitle, and what an address that failed to load still says. */
+  host: string
+  canGoBack: boolean
+  canGoForward: boolean
+  loading: boolean
+  /**
+   * Why the page is not there, as a whole sentence: a reach refusal, a
+   * certificate the pane will not click through, a dev server that is not up.
+   * Null when the page loaded.
+   */
+  problem: string | null
+  /**
+   * When a connection-refused retry gives up, as an epoch millisecond, or null.
+   *
+   * You open the pane before `pnpm dev` is up. Rather than an error, the view
+   * reconnects quietly for about half a minute - and the pane says so, because
+   * a viewport that is retrying and one that has given up look identical.
+   */
+  retryingUntil: number | null
+  /** `webContents.getZoomLevel()`, so the pane's zoom control reads the truth. */
+  zoomLevel: number
+  /** Entries in the ring buffer at level `error` or `warning`. The chip. */
+  errors: number
+  /** Whether this view's detached DevTools window is up. */
+  devtoolsOpen: boolean
+  /** The last `findInPage` and what it found, or null when nothing is being found. */
+  find: { query: string; matches: number; active: number } | null
+  /** The project this tab was opened beside, for the per-project URL memory. */
+  project: string | null
+  /**
+   * The name of the session that opened this tab, or null when the user did.
+   *
+   * The **name**, never the token it is looked up by: attribution is something
+   * the strip paints, and the bearer token that decides which tabs a session
+   * may drive stays in the main process. A tab with a name here is one an agent
+   * opened, it says so in the strip, and it is the only kind `browser_close`
+   * will close.
+   */
+  openedBy: string | null
+}
+
+/**
+ * A line a page wrote to its console, or a load that failed.
+ *
+ * The same shape the artifact console already produced, plus the two fields a
+ * *panel* needs that a count did not: which view it came from and when. One
+ * shape, because the panel is one component used in two places.
+ */
+export interface BrowserConsoleEntry {
+  level: string
+  message: string
+  source: string
+  line: number
+  /** Epoch milliseconds. The panel prints a wall clock beside each entry. */
+  at: number
+}
+
+/**
+ * Where the placeholder is, in CSS pixels, and whether the view should show.
+ *
+ * Fire-and-forget for the reason `pty:input` is: a `ResizeObserver` on the
+ * placeholder fires per frame during a split drag, and a promise per frame
+ * would put an IPC round trip inside the gesture. Main converts to DIPs itself
+ * - the zoom factor is the window's, and the window is the side that knows it.
+ *
+ * `visible` is the *renderer's* answer to "should this be on screen", and it
+ * folds together every reason there is: the tab is not in front, an overlay is
+ * up, the workspace column is collapsed, a tab is being dragged. Main does not
+ * reason about any of them; it calls `setVisible`.
+ */
+export interface BrowserBounds {
+  id: number
+  x: number
+  y: number
+  width: number
+  height: number
+  visible: boolean
+}
+
+/** How many browser tabs may be open at once. `window.open` is capped by it. */
+export const BROWSER_TABS_MAX = 10
+
+// ---------------------------------------------------------------------------
 // Renderer -> main, with a response
 // ---------------------------------------------------------------------------
 
@@ -466,18 +583,137 @@ export interface IpcRequests {
 
   /**
    * Scaffold a harness, or turn a folder that already holds repositories into
-   * one. The minimum only - `harness.yaml`, `repos/`, an empty `.claude/` - and
-   * the new harness becomes a scan root in the same call, because a harness the
-   * user cannot see is not one they created.
+   * one. The new harness becomes a scan root in the same call, because a
+   * harness the user cannot see is not one they created.
+   *
+   * `template` applies in `'new'` mode only. Absent or `minimal` writes the
+   * built-in scaffold - `harness.yaml`, `repos/`, an empty `.claude/` - and
+   * anything else names a directory in the templates directory, whose tree is
+   * written into the new harness. Converting is deliberately template-free: it
+   * writes a manifest and a `.claude/` into a folder somebody already has, and
+   * a layout written into their work is not a scaffold.
    */
   'harness:create': {
-    request: { mode: 'new' | 'convert'; dir: string; name?: string }
+    request: { mode: 'new' | 'convert'; dir: string; name?: string; template?: string }
     response: CreateHarnessOutcome
   }
 
   /**
-   * Ask GitHub whether there is a newer release. This is the only network
-   * connection Helm's own process opens.
+   * The picker's rows: `minimal` first and always, then whatever is in the
+   * templates directory. A template whose `template.yaml` cannot be read is
+   * left out with a sentence in `problems` rather than breaking the list.
+   */
+  'template:list': { request: void; response: TemplateListing }
+  /**
+   * What "What gets written" shows. Answered from the same walk that does the
+   * writing, so the dialog cannot describe a layout the writer would not
+   * produce - which is what the hardcoded three-line list could do.
+   */
+  'template:preview': {
+    request: { template: string; mode?: 'new' | 'convert' }
+    response: TemplatePreview
+  }
+
+  /**
+   * Authoring, which is the half of templates a file explorer cannot do.
+   *
+   * A template is a plain directory the user can open in any editor, so there
+   * is deliberately **no in-app file editor** on this family and no channel
+   * that reads or writes an arbitrary file inside one - `shell:showItem` opens
+   * the folder and their own editor takes it from there. What is here is what
+   * Explorer has no idea about: the metadata the picker reads, the `.tpl`
+   * convention, copying in a skill the user already wrote, and freezing a
+   * whole harness into a layout.
+   *
+   * Every write behind these lands **inside the templates directory and
+   * nowhere else** (`assertTemplateWritable`), and `template:import` reads its
+   * sources - `~/.claude` among them - without writing a byte back. That is
+   * the CLAUDE.md rule about `~/.claude` unchanged, not a second exception to
+   * it.
+   */
+
+  /** One template's files, with what a harness would receive each one as. */
+  'template:detail': { request: { template: string }; response: TemplateDetail }
+  /** Scaffolds a `template.yaml` and an empty tree. No starter files. */
+  'template:create': {
+    request: { name: string; label?: string; description?: string }
+    response: TemplateWriteResult
+  }
+  /** Moves the directory. The id *is* the folder name, so this is the rename. */
+  'template:rename': { request: { template: string; name: string }; response: TemplateWriteResult }
+  /**
+   * Removes the directory, unlinking any reparse point rather than walking it.
+   * Final: a template holds whatever its author put there, including bytes the
+   * snapshot table cannot hold, so there is no undo behind this one.
+   */
+  'template:delete': { request: { template: string }; response: TemplateDeleteResult }
+  /** The metadata form: `label` and `description`, not raw YAML. */
+  'template:metadata': {
+    request: { template: string; label: string; description: string }
+    response: TemplateWriteResult
+  }
+  /** Renames one file to `x.tpl`, which is how it opts in to substitution. */
+  'template:substitute': {
+    request: { template: string; path: string }
+    response: TemplateWriteResult
+  }
+  /**
+   * Copies chosen entries of a `.claude` tree into a template, as plain files.
+   *
+   * The sources are named by the paths `config:tree` reports for `scopePath`,
+   * which is the one seam that can name them - `ClaudeInventory` is counts and
+   * carries no names at all. The scope is resolved and the tree re-read in the
+   * main process, so what a skill *is* - a directory, not one file - is decided
+   * from the disk rather than from a list the renderer sent.
+   */
+  'template:import': {
+    request: { template: string; scopePath: string; paths: string[] }
+    response: TemplateImportResult
+  }
+  /**
+   * What "Save as template" would copy, before anything is copied.
+   *
+   * Top-level entries with the recursive file count and byte size of each, so
+   * the dialog states the total before writing - a harness with repositories in
+   * it is gigabytes, and the number is what stops that being a surprise.
+   */
+  'template:folderPreview': {
+    request: { dir: string; kind: FolderTemplateKind }
+    response: FolderTemplatePreview
+  }
+  /** Copies the ticked entries in and writes a `template.yaml` over them. */
+  'template:fromFolder': {
+    request: {
+      dir: string
+      kind: FolderTemplateKind
+      name: string
+      label: string
+      description: string
+      include: string[]
+    }
+    response: SaveFolderAsTemplateResult
+  }
+
+  /**
+   * Ask GitHub whether there is a newer release.
+   *
+   * **Helm contacts nothing on its own initiative except the update check.
+   * Everything else on the network happens because you asked for it: the
+   * pull-request surface goes through your own `gh`, and the browser pane
+   * fetches the page you navigate to.**
+   *
+   * That is the whole network posture, and it is written identically here, in
+   * the README, in docs/PACKAGING.md and in SPEC 5. If it moves again, all four
+   * move together - CLAUDE.md says so, and the reason is that four copies of a
+   * claim about what an app does to the network is four chances to ship a lie.
+   * It replaced "the only outbound connection Helm's own process opens" when
+   * the browser pane landed, because a browser makes that false.
+   *
+   * M17 did **not** move it, and the reasoning is worth keeping: that sentence
+   * is about what Helm *contacts*, and an MCP endpoint bound to `127.0.0.1` for
+   * the sessions Helm hosts contacts nothing. What it does do is **listen**,
+   * which the app had never done before, so that fact is stated separately - in
+   * the same four places, and in `main/browser-mcp.ts` where the rules are.
    *
    * The app asks on its own too: once per launch, at most once a day, when
    * `updateCheck` is on - see `maybeCheckForUpdate`. Neither path downloads
@@ -631,6 +867,26 @@ export interface IpcRequests {
    * nothing else - the snapshot is taken there, and a second path into the
    * filesystem would be a path with no undo behind it.
    */
+  /**
+   * A draft, tokenised for an editor's underlay.
+   *
+   * One channel for both editors, because there is one editor component and one
+   * highlighter. It takes the source rather than a path to read, for the reason
+   * `config:render` does: what is being coloured is what is in the box, which is
+   * not on disk and may never be.
+   *
+   * Read-only in the strongest sense - it opens no file and writes none - so it
+   * is not a second route into a `.claude` tree. Every byte Helm writes still
+   * goes through `config:write`.
+   *
+   * The window debounces this and drops stale answers against a revision
+   * counter; nothing here is on the path between a keystroke and a glyph.
+   */
+  'editor:highlight': {
+    request: { path: string; source: string }
+    response: EditorHighlight
+  }
+
   'config:scopes': { request: void; response: ConfigScope[] }
   'config:tree': { request: { scopePath: string }; response: ConfigTree }
   'config:read': { request: { path: string }; response: ConfigFileContent }
@@ -832,6 +1088,87 @@ export interface IpcRequests {
    * document - neither of which a hosted TUI can rely on. */
   'clipboard:read': { request: void; response: string }
   'clipboard:write': { request: string; response: void }
+
+  /**
+   * The browser pane.
+   *
+   * Every one of these addresses a view by id, because the view is main's and
+   * the window holds nothing but a rectangle and a number - the same shape the
+   * session channels have, for the same reason. What is deliberately *not* here
+   * is a channel that hands main a URL to fetch on its own: every navigation
+   * behind these is a page the user asked for, in a view they opened.
+   *
+   * The whole family goes through `browserReachAllows`, in `@helm/core`, and
+   * nothing here re-implements any part of it - see `main/browser.ts`.
+   */
+
+  /**
+   * Make a view. `url` is optional: a new tab with no address is an empty pane
+   * with the caret in the address bar, which is what a new-tab button should do.
+   * `project` is the project the tab was opened beside, and it is what the
+   * remembered per-project URL is keyed on.
+   */
+  'browser:open': {
+    request: { url?: string; project?: string | null }
+    response: { state: BrowserState | null; problem: string | null }
+  }
+  /**
+   * Go somewhere. Takes what was **typed**, not a URL: turning `3000` into
+   * `http://localhost:3000/` and refusing a word rather than searching for it
+   * are decisions about the address bar, and they are made in one place
+   * (`resolveBrowserAddress`) so the pane and an agent cannot disagree.
+   */
+  'browser:navigate': { request: { id: number; input: string }; response: BrowserState | null }
+  'browser:back': { request: { id: number }; response: BrowserState | null }
+  'browser:forward': { request: { id: number }; response: BrowserState | null }
+  /** `hard` reloads ignoring the cache - what a stale dev server asset wants. */
+  'browser:reload': { request: { id: number; hard?: boolean }; response: BrowserState | null }
+  /** Destroys the view. The tab closing is what calls this, like `disposeShell`. */
+  'browser:close': { request: { id: number }; response: void }
+  /**
+   * Every view, or one of them.
+   *
+   * With no id it is the adopt list, and it is here for the reason
+   * `session:list` is: a renderer reload (dev HMR, a crashed render process)
+   * leaves main holding views the new window has never heard of, and a strip
+   * that forgot them would leave live pages painting over the app with no tab
+   * to close.
+   */
+  'browser:state': { request: { id?: number }; response: BrowserState[] }
+  /**
+   * Run an expression in the page and answer with what it evaluated to.
+   *
+   * The console panel's input line, and the same plumbing M17's
+   * `browser_evaluate` needs - built once here so that milestone exposes it
+   * rather than writing a second one. The answer is a **string**: whatever a
+   * page returns has to cross a process boundary, and "it did not serialise" is
+   * a thing the panel should print rather than a rejected promise.
+   */
+  'browser:eval': {
+    request: { id: number; source: string }
+    response: { ok: boolean; value: string; error: string | null }
+  }
+  /**
+   * The first DevTools in Helm, scoped to one view's own web contents and
+   * opened detached - docked would put a second, Chromium-owned rectangle
+   * inside the window and join the bounds problem this pane already has.
+   */
+  'browser:devtools': { request: { id: number }; response: BrowserState | null }
+  /** `webContents.findInPage`. What it found arrives on `browser:changed`. */
+  'browser:find': {
+    request: { id: number; query: string; forward?: boolean }
+    response: void
+  }
+  'browser:stopFind': { request: { id: number }; response: void }
+  'browser:zoom': { request: { id: number; level: number }; response: BrowserState | null }
+  /**
+   * `session.clearStorageData()` for this view's partition, so an auth flow can
+   * be tested twice. It clears the **shared** browser profile, because there is
+   * one - see `main/browser.ts` - so the pane asks first.
+   */
+  'browser:clearStorage': { request: { id: number }; response: BrowserState | null }
+  /** The ring buffer, for a panel that has just been opened on an old tab. */
+  'browser:console': { request: { id: number }; response: BrowserConsoleEntry[] }
 }
 
 export type ResolvedTheme = 'light' | 'dark'
@@ -874,6 +1211,16 @@ export interface IpcSends {
 
   /** Spike harness: the renderer's answer to a `probe:req`. */
   'probe:res': { id: number; value: unknown }
+
+  /**
+   * Where the browser view's placeholder is now, and whether it should paint.
+   *
+   * One-way and debounced by the sender, for the reason the terminal wires are:
+   * a `ResizeObserver` and a split drag both fire per frame, and a round trip
+   * per frame is a round trip inside a gesture. Nothing waits on the answer -
+   * the next frame's bounds supersede this one's.
+   */
+  'browser:bounds': BrowserBounds
 }
 
 // ---------------------------------------------------------------------------
@@ -994,6 +1341,33 @@ export interface IpcEvents {
 
   /** Spike harness: main asks the renderer to inspect the live terminal. */
   'probe:req': { id: number; req: ProbeOp }
+
+  /**
+   * A browser view moved, loaded, failed or finished finding.
+   *
+   * Pushed rather than polled because a page is the one thing in the app that
+   * changes without anybody in Helm having done something: a dev server
+   * restarts, a redirect lands somewhere else, a retry finally connects. The
+   * tab's title and the address bar are both made of this.
+   */
+  'browser:changed': BrowserState
+
+  /**
+   * A view Helm made that the window did not ask for: `window.open` inside a
+   * page. The strip adopts it as a tab, and the cap is enforced in main - a
+   * page that opens eleven windows gets ten tabs and a console line, not eleven.
+   */
+  'browser:opened': BrowserState
+
+  /**
+   * A view is gone. Sent when main destroyed it for a reason the window did not
+   * cause - the cap, a render process that crashed, `before-quit` - so a tab
+   * pointing at nothing closes itself instead of sitting there.
+   */
+  'browser:closed': { id: number }
+
+  /** A line a page wrote, or a load that failed. Feeds the console panel. */
+  'browser:logged': { id: number; entry: BrowserConsoleEntry }
 }
 
 // ---------------------------------------------------------------------------
@@ -1051,6 +1425,17 @@ export const REQUEST_CHANNELS = Object.keys({
   'path:chooseDirectory': true,
   'path:chooseFile': true,
   'harness:create': true,
+  'template:list': true,
+  'template:preview': true,
+  'template:detail': true,
+  'template:create': true,
+  'template:rename': true,
+  'template:delete': true,
+  'template:metadata': true,
+  'template:substitute': true,
+  'template:import': true,
+  'template:folderPreview': true,
+  'template:fromFolder': true,
   'update:check': true,
   'theme:resolved': true,
   'shell:showItem': true,
@@ -1077,6 +1462,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'history:resume': true,
   'archive:conversation': true,
   'archive:stats': true,
+  'editor:highlight': true,
   'config:scopes': true,
   'config:tree': true,
   'config:read': true,
@@ -1114,7 +1500,21 @@ export const REQUEST_CHANNELS = Object.keys({
   'content:wikilink': true,
   'shell:openExternal': true,
   'clipboard:read': true,
-  'clipboard:write': true
+  'clipboard:write': true,
+  'browser:open': true,
+  'browser:navigate': true,
+  'browser:back': true,
+  'browser:forward': true,
+  'browser:reload': true,
+  'browser:close': true,
+  'browser:state': true,
+  'browser:eval': true,
+  'browser:devtools': true,
+  'browser:find': true,
+  'browser:stopFind': true,
+  'browser:zoom': true,
+  'browser:clearStorage': true,
+  'browser:console': true
 } satisfies Record<RequestChannel, true>) as RequestChannel[]
 
 export const SEND_CHANNELS = Object.keys({
@@ -1129,7 +1529,8 @@ export const SEND_CHANNELS = Object.keys({
   'pterm:input': true,
   'pterm:resize': true,
   'session:confirmed': true,
-  'probe:res': true
+  'probe:res': true,
+  'browser:bounds': true
 } satisfies Record<SendChannel, true>) as SendChannel[]
 
 export const EVENT_CHANNELS = Object.keys({
@@ -1155,5 +1556,9 @@ export const EVENT_CHANNELS = Object.keys({
   'session:confirm': true,
   'pterm:data': true,
   'pterm:exit': true,
-  'probe:req': true
+  'probe:req': true,
+  'browser:changed': true,
+  'browser:opened': true,
+  'browser:closed': true,
+  'browser:logged': true
 } satisfies Record<EventChannel, true>) as EventChannel[]

@@ -6,8 +6,8 @@
          inline handlers, no eval. Vite's dev server needs its own origin and a
          websocket for HMR, which is what `connect-src` allows.
 
-         `frame-src helm-content:` is the content viewer's HTML artifacts (M6),
-         and it is the narrowest thing that could be written here: that scheme
+         `frame-src helm-content:` is the content viewer's HTML artifacts, and
+         it is the narrowest thing that could be written here: that scheme
          is served by the main process from a directory pinned to a token, under
          a policy of its own with `default-src 'none'` in it, into an iframe
          with no `allow-same-origin`. Widening `default-src` instead would have

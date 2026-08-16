@@ -1,0 +1,374 @@
+/* ===========================================================================
+ * The editors
+ *
+ * A `<textarea>` with a highlighted `<pre>` underneath it, which is the shape
+ * SPEC records the argument for. Everything here exists to keep four boxes -
+ * the gutter, the geometry mirror, the coloured underlay and the textarea
+ * itself - laying text out at exactly the same place, because the whole
+ * illusion is that they are one box.
+ *
+ * The metrics live in **one** class, `.helm-editor-layer`, which every layer
+ * carries including the textarea. Two lists of font rules that happen to agree
+ * is the version of this that breaks the first time somebody changes one of
+ * them, and `pnpm highlight-check --only=parity` asserts the computed values
+ * against each other rather than trusting that they were written down twice
+ * correctly.
+ * ======================================================================== */
+
+.helm-editor {
+  position: relative;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--helm-border);
+  border-radius: var(--radius-raised);
+  background: var(--helm-surface-sunken);
+}
+
+.helm-editor:focus-within {
+  border-color: var(--helm-accent);
+}
+
+.helm-editor[data-editor-invalid='true'],
+.helm-editor[data-editor-invalid='true']:focus-within {
+  border-color: color-mix(in srgb, var(--helm-danger) 50%, transparent);
+}
+
+/*
+ * The metrics. Every one of these is shared by the textarea and by both `pre`
+ * layers, and each is here rather than in a utility class because the claim is
+ * that they are *identical*, not that they are similar.
+ *
+ * `border: 0` is one of them: the island's hairline is drawn by `.helm-editor`
+ * above, so no layer has a border to disagree about. A textarea's default 1px
+ * inset border would shift the text one pixel down and right of the underlay,
+ * which is the classic "the colours are slightly off" report.
+ */
+.helm-editor-layer {
+  margin: 0;
+  padding: 0.75rem;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.55;
+  letter-spacing: normal;
+  text-transform: none;
+  tab-size: 2;
+  text-align: left;
+  box-sizing: border-box;
+}
+
+.helm-editor[data-editor-wrap='on'] .helm-editor-layer {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.helm-editor[data-editor-wrap='off'] .helm-editor-layer {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+/*
+ * The two `pre`s take the textarea's *content* width, written from a
+ * ResizeObserver - not the container's.
+ *
+ * A vertical scrollbar takes width out of the textarea and out of nothing
+ * else. A layer sized to the container therefore wraps one column later than
+ * the text does, and the two drift apart by a word per paragraph - visible
+ * only on files long enough to scroll, which is to say on exactly the files
+ * where it matters. The textarea is deliberately not in this rule: sizing it
+ * from a measurement of itself is a loop.
+ */
+.helm-editor-mirror,
+.helm-editor-highlight {
+  width: var(--editor-view-width, 100%);
+}
+
+/* Wider than the box when the text is, so the pair scrolls sideways together
+ * rather than the underlay clipping while the textarea keeps going. */
+.helm-editor[data-editor-wrap='off'] .helm-editor-mirror,
+.helm-editor[data-editor-wrap='off'] .helm-editor-highlight {
+  min-width: max-content;
+}
+
+/* ---------------------------------------------------------------------------
+ * The columns
+ * ------------------------------------------------------------------------ */
+
+.helm-editor-gutter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--editor-gutter-width, 3rem);
+  overflow: hidden;
+  border-right: 1px solid var(--helm-border);
+  /* Nothing here is clickable, and a gutter that ate a click aimed at the
+   * first column of a line would be worse than no gutter. */
+  pointer-events: none;
+  user-select: none;
+}
+
+.helm-editor-gutter-rows {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  will-change: transform;
+}
+
+.helm-editor-number {
+  position: absolute;
+  right: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+  color: var(--helm-fg-subtle);
+}
+
+.helm-editor-number[data-editor-current='true'] {
+  color: var(--helm-fg-muted);
+}
+
+.helm-editor-body {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--editor-gutter-width, 3rem);
+}
+
+.helm-editor-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Translated on both axes: this is the scroll sync. The textarea is the only
+ * thing that really scrolls; everything under it is moved to match. */
+.helm-editor-layers {
+  position: absolute;
+  top: 0;
+  left: 0;
+  will-change: transform;
+}
+
+/* Translated vertically only, because what it holds spans the visible width
+ * rather than the text's width. A current-line band that scrolled sideways
+ * with the text would run off the left edge of a wide line. */
+.helm-editor-rows {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  will-change: transform;
+}
+
+.helm-editor-layers > * {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * The layers themselves
+ * ------------------------------------------------------------------------ */
+
+/*
+ * The mirror: the whole file, as one text node, painting nothing.
+ *
+ * It is what says how tall the stack is and where each line sits, and it is
+ * cheap enough to hold the whole file at any size because it is one text node
+ * rather than a span per token. The coloured layer above it renders a window;
+ * this one does not, which is what lets that window be positioned exactly in
+ * both wrap modes.
+ *
+ * Its `textContent` is the textarea's value, character for character, and
+ * `pnpm highlight-check --only=edit` asserts that after driving the value
+ * setter the ten existing check sites use.
+ */
+.helm-editor-mirror {
+  color: transparent;
+}
+
+/*
+ * The trailing newline.
+ *
+ * A `<pre>` ending in a line break does not lay out a box for the empty line
+ * after it; a textarea does, and puts the caret on it. The two then disagree
+ * about their height by one line for every file that ends the way every file
+ * should. A zero-width space in a pseudo-element materialises that last line
+ * without putting a character into `textContent`, so the mirror stays byte-
+ * identical to the value it mirrors.
+ */
+.helm-editor-mirror::after {
+  content: '\200b';
+}
+
+/*
+ * What an uncoloured line falls back to.
+ *
+ * `.shiki span { color: var(--shiki-light) }` in `markdown.css` is invalid at
+ * computed-value time for a span the tokeniser has not reached, and `color`
+ * inherits - so a line rendered as plain text while the highlight is in flight
+ * takes this. It has to be the ordinary foreground: the alternative is text
+ * that changes colour when it gets coloured, which is a flash on every
+ * keystroke.
+ *
+ * Same specificity as `.shiki`, later in the cascade, which is why
+ * `editor.css` is imported after `markdown.css`.
+ */
+.helm-editor-highlight {
+  color: var(--helm-fg);
+}
+
+.helm-editor-highlight code,
+.helm-editor-mirror code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  tab-size: inherit;
+}
+
+/* One block per source line, and a line with nothing on it still takes a row. */
+.helm-editor .line {
+  display: block;
+  min-height: 1lh;
+}
+
+/* Shiki's own background is the theme's, and Helm's chrome is Helm's: the
+ * island's fill is `--helm-surface-sunken` and nothing shiki emits may
+ * override it. Only the text colours come from the grammar. */
+.helm-editor .shiki,
+.helm-editor .shiki code {
+  background: transparent !important;
+}
+
+/*
+ * Matches, painted under the text rather than over it.
+ *
+ * They live in the mirror, which already holds the whole file laid out exactly
+ * where the textarea lays it out - so a match is positioned by *being the
+ * text*, with no rectangle measured and nothing to drift. The glyphs on top
+ * are the coloured layer's; these are transparent like the rest of the mirror.
+ */
+.helm-editor mark {
+  color: transparent;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--helm-fg-subtle) 34%, transparent);
+}
+
+.helm-editor mark[data-editor-match-current='true'] {
+  background: color-mix(in srgb, var(--helm-accent) 42%, transparent);
+}
+
+/* The line the caret is on. `--helm-hover` is the same wash a list row takes,
+ * so the editor reads as part of the app rather than as a widget with its own
+ * palette. */
+.helm-editor-caret-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: var(--helm-hover);
+  /* Only while the caret is real. An unfocused editor still knows where the
+   * caret was, and a band painted across a box nobody is typing in reads as a
+   * selected row rather than as a caret. */
+  opacity: 0;
+}
+
+.helm-editor:focus-within .helm-editor-caret-line {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------------
+ * The textarea
+ * ------------------------------------------------------------------------ */
+
+.helm-editor-input {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  height: 100%;
+  resize: none;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: transparent;
+  /* The glyphs come from the layer underneath; this element contributes the
+   * caret, the selection and the text itself, invisibly. */
+  color: transparent;
+  caret-color: var(--helm-fg);
+  outline: none;
+}
+
+/*
+ * The selection has to be see-through, and that is not decoration.
+ *
+ * Chromium's default selection fill is opaque, and painted by the textarea it
+ * would cover the only layer that has any glyphs on it - so selecting a line
+ * would make it blank. A translucent fill leaves the text underneath visible,
+ * which is what a selection looks like everywhere else.
+ */
+.helm-editor-input::selection {
+  background: color-mix(in srgb, var(--helm-accent) 34%, transparent);
+}
+
+/*
+ * Past the size ceiling: no overlay at all, so the textarea paints its own
+ * glyphs.
+ *
+ * The gutter goes with it and the body takes the whole width, because the
+ * gutter's rows are measured off line boxes that are no longer being drawn -
+ * an evenly spaced column beside wrapped text would be numbers pointing at the
+ * wrong lines, which is worse than no numbers. The footer says what is off.
+ */
+.helm-editor[data-editor-plain='true'] .helm-editor-input {
+  color: var(--helm-fg);
+}
+
+.helm-editor[data-editor-plain='true'] .helm-editor-gutter {
+  display: none;
+}
+
+.helm-editor[data-editor-plain='true'] .helm-editor-body {
+  left: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Find and go-to-line
+ * ------------------------------------------------------------------------ */
+
+.helm-editor-find {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.75rem;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.375rem;
+  border: 1px solid var(--helm-border-strong);
+  border-radius: var(--radius-well);
+  background: var(--helm-surface-raised);
+}
+
+.helm-editor-find input {
+  width: 11rem;
+  padding: 0.125rem 0.25rem;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--helm-fg);
+  outline: none;
+}
+
+.helm-editor-find input[data-editor-goto] {
+  width: 5rem;
+}

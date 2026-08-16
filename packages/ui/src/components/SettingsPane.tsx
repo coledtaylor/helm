@@ -18,6 +18,7 @@ import {
   USAGE_DISPLAY_MODES,
   type AppSettings,
   type ArchiveStats,
+  type BrowserReach,
   type DetectedShell,
   withRepoIgnored,
   type EffortLevel,
@@ -152,11 +153,47 @@ export interface SettingsPaneProps {
   transcriptArchiveMaxBytes: number
   onTranscriptArchiveMaxBytesChange: (bytes: number) => void
 
+  /**
+   * Harness templates: how many there are, where they live, and the way in to
+   * managing them.
+   *
+   * A group here as well as a link in the New Harness dialog, because
+   * templates are **app-level**: they belong to this Helm rather than to any
+   * one harness, and having to start creating a harness in order to rename or
+   * delete one would be the same mistake as putting "stop scanning this
+   * folder" only in Settings - which is a bug this pane has already been on the
+   * wrong end of once.
+   */
+  templateCount: number
+  templatesDir: string
+  onManageTemplates: () => void
+  /** Opens the templates folder itself, for the editing this app does not do. */
+  onRevealTemplates: () => void
+
   /** The content viewer's wrapping default, and the hang on a continuation. */
   contentWrap: boolean
   onContentWrapChange: (wrap: boolean) => void
   contentWrapIndent: number
   onContentWrapIndentChange: (columns: number) => void
+
+  /**
+   * How far the browser pane may reach.
+   *
+   * The one browser key that is a preference. The two beside it in the
+   * database - the recent addresses and the per-project ones - are state, so
+   * they sit with `workspaceTabs` and are deliberately not on this pane.
+   */
+  browserReach: BrowserReach
+  onBrowserReachChange: (reach: BrowserReach) => void
+  /**
+   * The two M17 keys: whether Helm serves its browser tools to the sessions it
+   * hosts, and whether those tools are held to this machine when the pane is
+   * not. Both are preferences rather than state, so both are here.
+   */
+  browserMcp: boolean
+  onBrowserMcpChange: (next: boolean) => void
+  browserMcpLocalOnly: boolean
+  onBrowserMcpLocalOnlyChange: (next: boolean) => void
 
   /**
    * What Helm found out about `gh`, out of the pull-request snapshot. Null
@@ -340,10 +377,20 @@ export function SettingsPane({
   archiveStats,
   transcriptArchiveMaxBytes,
   onTranscriptArchiveMaxBytesChange,
+  templateCount,
+  templatesDir,
+  onManageTemplates,
+  onRevealTemplates,
   contentWrap,
   onContentWrapChange,
   contentWrapIndent,
   onContentWrapIndentChange,
+  browserReach,
+  onBrowserReachChange,
+  browserMcp,
+  onBrowserMcpChange,
+  browserMcpLocalOnly,
+  onBrowserMcpLocalOnlyChange,
   gh,
   onLocateGh,
   onClearGhOverride,
@@ -559,6 +606,16 @@ export function SettingsPane({
           )}
         </Group>
 
+        {/* Beside Workspace rather than further down, because it is the same
+            subject seen from the other end: that group is the folders Helm
+            scans, this one is what a new one gets written from. */}
+        <TemplatesGroup
+          total={templateCount}
+          dir={templatesDir}
+          onManage={onManageTemplates}
+          onReveal={onRevealTemplates}
+        />
+
         <Group name="appearance" title="Appearance">
           <Row
             label="Theme"
@@ -619,6 +676,15 @@ export function SettingsPane({
           onIndentChange={onContentWrapIndentChange}
         />
 
+        <BrowserGroup
+          reach={browserReach}
+          onReachChange={onBrowserReachChange}
+          mcp={browserMcp}
+          onMcpChange={onBrowserMcpChange}
+          mcpLocalOnly={browserMcpLocalOnly}
+          onMcpLocalOnlyChange={onBrowserMcpLocalOnlyChange}
+        />
+
         <UpdatesGroup
           appVersion={appVersion}
           releasesUrl={releasesUrl}
@@ -665,6 +731,70 @@ export function SettingsPane({
         />
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Harness templates
+// ---------------------------------------------------------------------------
+
+/**
+ * The templates this Helm has, and the two ways to reach them.
+ *
+ * The path is a button rather than a line of text, and that is the group's
+ * whole argument for existing beside the manager: **there is no file editor in
+ * Helm for these**. A template is a folder, editing one is a job for the editor
+ * somebody already has, and a settings group that named the folder without
+ * opening it would be describing a destination it declined to take you to.
+ *
+ * The count is stated rather than the list drawn. Which template is which is
+ * the manager's question and the picker's; what belongs here is the one fact
+ * Settings is for - whether this Helm has any, and where they are.
+ */
+function TemplatesGroup({
+  total,
+  dir,
+  onManage,
+  onReveal
+}: {
+  total: number
+  dir: string
+  onManage: () => void
+  onReveal: () => void
+}): JSX.Element {
+  return (
+    <Group
+      name="templates"
+      title="Harness templates"
+      hint={total === 0 ? 'none yet' : count(total, 'template')}
+    >
+      <p className="pb-1 text-[12px] leading-[1.55] text-fg-muted">
+        A template is a folder here; creating a harness from one copies it in. The New Harness
+        dialog picks between them, and the built-in <em>Minimal</em> scaffold is always the first
+        row whatever is in this folder.
+      </p>
+
+      <button
+        type="button"
+        data-settings-templates-dir
+        onClick={onReveal}
+        title={`Show ${dir} in Explorer`}
+        className="mt-1.5 block w-full truncate rounded-well border border-border bg-surface-sunken px-3 py-1.5 text-left font-mono text-[11px] text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+      >
+        {dir === '' ? NOTHING : dir}
+      </button>
+      <p className="mt-1.5 text-[11px] leading-[1.55] text-fg-subtle">
+        Edited in your own editor, not in Helm - these are plain files, and most people keep them
+        in git. Deleting the folder puts the shipped README and example back at the next start,
+        which is the whole of &ldquo;reset&rdquo;.
+      </p>
+
+      <Actions>
+        <Action data-settings-manage-templates onClick={onManage} primary={total === 0}>
+          Manage templates
+        </Action>
+      </Actions>
+    </Group>
   )
 }
 
@@ -929,6 +1059,104 @@ function ContentGroup({
           data-settings-content-wrap-indent={String(indent)}
           onCommit={onIndentChange}
         />
+      </Row>
+    </Group>
+  )
+}
+
+/**
+ * The browser pane's posture, and what a Claude session may do with it.
+ *
+ * Three rows, because there are three decisions: where the pane may go at all,
+ * whether the sessions Helm hosts can drive it, and whether they are held to
+ * this machine when the pane is not. Everything else about the pane - downloads
+ * denied, every permission denied, self-signed certificates accepted for
+ * loopback and nowhere else, an address bar that never searches - is not a
+ * setting and never will be. Those are the app's postures, and a posture with a
+ * switch on it is a posture somebody turns off on the afternoon it gets in
+ * their way.
+ *
+ * The two reach rows are deliberately adjacent and worded as a pair, because
+ * the rule between them is an intersection and the failure to avoid is somebody
+ * setting the second and believing it widened the first.
+ */
+function BrowserGroup({
+  reach,
+  onReachChange,
+  mcp,
+  onMcpChange,
+  mcpLocalOnly,
+  onMcpLocalOnlyChange
+}: {
+  reach: BrowserReach
+  onReachChange: (reach: BrowserReach) => void
+  mcp: boolean
+  onMcpChange: (next: boolean) => void
+  mcpLocalOnly: boolean
+  onMcpLocalOnlyChange: (next: boolean) => void
+}): JSX.Element {
+  return (
+    <Group
+      name="browser"
+      title="Browser"
+      hint="A dev-server viewport, not a browser. Nothing is downloaded, every permission is refused, and the address bar never hands anything to a search engine - a page loads because you typed its address."
+    >
+      <Row
+        label="Where the pane may go"
+        hint={
+          reach === 'local'
+            ? 'This machine only. Anything that is not localhost, 127.0.0.1 or ::1 is refused with a sentence and nothing is fetched.'
+            : 'Anywhere. Helm still opens no page you did not ask for - the pane fetches the address you navigate to and nothing else.'
+        }
+      >
+        <Select
+          value={reach}
+          label="Where the browser pane may go"
+          data-settings-browser-reach={reach}
+          onChange={(value) => onReachChange(value as BrowserReach)}
+        >
+          <option value="web">Anywhere I navigate to</option>
+          <option value="local">This machine only</option>
+        </Select>
+      </Row>
+
+      <Row
+        label="Let Claude drive the browser"
+        hint={
+          mcp
+            ? 'Sessions Helm hosts can open pages, read them, click and type. Helm serves the tools on a loopback port with a token unique to each session, and its tabs are labelled with the session that opened them.'
+            : 'Off. Helm opens no port at all and sessions are started without the tools, exactly as they were before.'
+        }
+      >
+        <span data-settings-browser-mcp={String(mcp)}>
+          <Checkbox
+            checked={mcp}
+            onChange={() => onMcpChange(!mcp)}
+            label="Let Claude drive the browser"
+          />
+        </span>
+      </Row>
+
+      <Row
+        label="…but only on this machine"
+        hint={
+          mcpLocalOnly
+            ? 'Claude’s tools are held to localhost even where the pane may go further. You can still navigate the pane anywhere yourself.'
+            : 'Claude’s tools reach as far as the pane does, and never further - the narrower of these two settings always wins.'
+        }
+      >
+        {/* Not disabled when the tools are off, deliberately. The value is a
+            standing preference: somebody who has confined the tools and then
+            turns them off for an afternoon should find them still confined when
+            they turn them back on, and a control that greys out is a control
+            whose state people stop trusting. */}
+        <span data-settings-browser-mcp-local={String(mcpLocalOnly)}>
+          <Checkbox
+            checked={mcpLocalOnly}
+            onChange={() => onMcpLocalOnlyChange(!mcpLocalOnly)}
+            label="Confine Claude’s browser tools to this machine"
+          />
+        </span>
       </Row>
     </Group>
   )

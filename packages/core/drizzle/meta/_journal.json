@@ -71,6 +71,13 @@
       "when": 1786834128788,
       "tag": "0009_wet_ozymandias",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786857051534,
+      "tag": "0010_shocking_starbolt",
+      "breakpoints": true
     }
   ]
 }

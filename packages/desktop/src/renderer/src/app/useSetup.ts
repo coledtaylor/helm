@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { AppSettings } from '@helm/core'
+import type { AppSettings, TemplateChoice, TemplatePreview } from '@helm/core'
 import type { ClaudeStatus } from '../../../shared/ipc'
 import { helm } from './bridge'
 
@@ -18,6 +18,18 @@ import { helm } from './bridge'
  */
 
 export type HarnessDialogMode = 'new' | 'convert'
+
+/**
+ * The built-in scaffold's id, written out rather than imported.
+ *
+ * `MINIMAL_TEMPLATE` is a *value* in `@helm/core`, and a value import of the
+ * package root from the renderer reaches `launch/` and `store/` and fails at
+ * rollup rather than at typecheck (CLAUDE.md, "Boundaries"). It is one word and
+ * it is also the string the main process would answer with, so the two cannot
+ * drift without `template:list` disagreeing with the picker's default in a way
+ * `pnpm template-check` sees.
+ */
+const MINIMAL = 'minimal'
 
 export interface SetupState {
   status: ClaudeStatus | null
@@ -38,7 +50,26 @@ export interface SetupState {
   openDialog: (mode: HarnessDialogMode) => void
   closeDialog: () => void
   chooseDialogDir: () => void
-  createHarness: (request: { mode: HarnessDialogMode; dir: string; name: string }) => void
+  /** The dialog owns its mode once open; the preview has to follow it. */
+  setDialogMode: (mode: HarnessDialogMode) => void
+  createHarness: (request: {
+    mode: HarnessDialogMode
+    dir: string
+    name: string
+    template: string
+  }) => void
+
+  /** The picker: `minimal` first, then whatever is in the templates directory. */
+  templates: TemplateChoice[]
+  templatesDir: string
+  templateProblems: string[]
+  /** Re-reads them, for when the manager has been authoring over this dialog. */
+  refreshTemplates: () => void
+  /** Which one is chosen. Reset to `minimal` every time the dialog opens. */
+  template: string
+  chooseTemplate: (template: string) => void
+  /** What "What gets written" lists. Null until the first answer lands. */
+  templatePreview: TemplatePreview | null
 
   /** Set for the session once the version banner has been dismissed. */
   bannerDismissed: boolean
@@ -55,9 +86,15 @@ export function useSetup(
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [dialog, setDialog] = useState<HarnessDialogMode | null>(null)
   const [dialogDir, setDialogDir] = useState('')
+  const [dialogMode, setDialogMode] = useState<HarnessDialogMode>('new')
   const [dialogProblems, setDialogProblems] = useState<string[]>([])
   const [creating, setCreating] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState(false)
+  const [templates, setTemplates] = useState<TemplateChoice[]>([])
+  const [templatesDir, setTemplatesDir] = useState('')
+  const [templateProblems, setTemplateProblems] = useState<string[]>([])
+  const [template, setTemplate] = useState(MINIMAL)
+  const [templatePreview, setTemplatePreview] = useState<TemplatePreview | null>(null)
 
   /** The button. Shows a spinner, because the user asked and is waiting. */
   const recheck = useCallback(() => {
@@ -118,6 +155,22 @@ export function useSetup(
     void helm.invoke('setup:complete')
   }, [])
 
+  /**
+   * Re-reads the picker's rows.
+   *
+   * Called when the dialog opens, and again when the template manager closes
+   * over the top of it - those are the two moments the list can have changed
+   * under a dialog somebody is still filling in, and the second one is the
+   * whole reason this is a callback rather than three lines inside `openDialog`.
+   */
+  const refreshTemplates = useCallback(() => {
+    void helm.invoke('template:list').then((listing) => {
+      setTemplates(listing.templates)
+      setTemplatesDir(listing.dir)
+      setTemplateProblems(listing.problems)
+    })
+  }, [])
+
   const openDialog = useCallback(
     (mode: HarnessDialogMode) => {
       setDialogProblems([])
@@ -125,14 +178,50 @@ export function useSetup(
       // parent of an existing root for a new harness, and nothing at all for a
       // conversion, which has to be pointed at a specific folder.
       setDialogDir(mode === 'new' ? (settings?.scanRoots[0] ?? '') : '')
+      setDialogMode(mode)
+      // Back to `minimal` every time, deliberately. The picker is not a
+      // preference: someone who used a template once has a harness from it, and
+      // the next one is a fresh decision rather than a repeat of the last.
+      setTemplate(MINIMAL)
+      // Nothing from the last open: the effect below fills this in, and until
+      // it does an empty list is the truthful thing to show.
+      setTemplatePreview(null)
       setDialog(mode)
+      // Read on open rather than at mount: a template is a directory somebody
+      // can add while Helm is running, and a list fetched once at startup would
+      // be stale for the rest of the session.
+      refreshTemplates()
     },
-    [settings]
+    [settings, refreshTemplates]
   )
+
+  /**
+   * The file list, re-read whenever the answer would change.
+   *
+   * Only while the dialog is open, because it is the only thing that shows it.
+   * Clearing is `openDialog`'s and `closeDialog`'s job rather than this
+   * effect's - a `setState` in an effect body is a cascading render and the
+   * lint rule that says so is right here, since "there is no preview" is
+   * something those two *know* rather than something to be synchronised.
+   */
+  useEffect(() => {
+    if (dialog === null) return
+    let cancelled = false
+    void helm
+      .invoke('template:preview', { template, mode: dialogMode })
+      .then((next) => {
+        if (!cancelled) setTemplatePreview(next)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [dialog, dialogMode, template])
 
   const closeDialog = useCallback(() => {
     setDialog(null)
     setDialogProblems([])
+    setTemplatePreview(null)
   }, [])
 
   const chooseDialogDir = useCallback(() => {
@@ -146,24 +235,45 @@ export function useSetup(
   }, [dialog])
 
   const createHarness = useCallback(
-    (request: { mode: HarnessDialogMode; dir: string; name: string }) => {
+    (request: { mode: HarnessDialogMode; dir: string; name: string; template: string }) => {
       setCreating(true)
       setDialogProblems([])
       void helm
         .invoke('harness:create', {
           mode: request.mode,
           dir: request.dir,
-          ...(request.name !== '' ? { name: request.name } : {})
+          ...(request.name !== '' ? { name: request.name } : {}),
+          ...(request.mode === 'new' ? { template: request.template } : {})
         })
         .then((result) => {
           if (result.path === null) {
             setDialogProblems(result.problems)
             return
           }
-          setDialog(null)
-          // The root was added by the main process in the same call, so what is
-          // left is to look at the disk again.
+          // The root was added by the main process in the same call, so the
+          // disk is worth another look either way.
           onRootsChanged()
+          if (result.problems.length > 0) {
+            /*
+             * A template that applied only partly. The harness exists and is in
+             * the tree behind this dialog, so closing would take the only
+             * account of what did *not* get written off the screen with it -
+             * there is no second place that list is kept. It stays up, saying
+             * so, and Cancel is what dismisses it.
+             *
+             * The first line names what *did* happen, and it is not decoration:
+             * this box is the same red one a refusal uses, and a list of
+             * problems with no preamble over a harness that was in fact created
+             * reads as "nothing happened". Honest about the partial write means
+             * honest about both halves of it.
+             */
+            setDialogProblems([
+              `${result.path} was created, but not everything in the template could be written:`,
+              ...result.problems
+            ])
+            return
+          }
+          setDialog(null)
         })
         .catch((err: unknown) => {
           setDialogProblems([err instanceof Error ? err.message : String(err)])
@@ -194,7 +304,15 @@ export function useSetup(
     openDialog,
     closeDialog,
     chooseDialogDir,
+    setDialogMode,
     createHarness,
+    templates,
+    templatesDir,
+    templateProblems,
+    refreshTemplates,
+    template,
+    chooseTemplate: setTemplate,
+    templatePreview,
     bannerDismissed,
     dismissBanner: () => setBannerDismissed(true)
   }

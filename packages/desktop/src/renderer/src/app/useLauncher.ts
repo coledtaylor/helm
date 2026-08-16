@@ -51,7 +51,12 @@ function discoveryFromCache(cached: CachedProject[], roots: string[]): Discovery
       .map((p) => ({
         path: p.path,
         name: p.name,
-        template: null,
+        // Carried by the cache since M13, so the template a harness was built
+        // from is on its row in the first painted frame rather than appearing
+        // when the scan lands. `version` is still null here: nothing reads it
+        // back and nothing shows it, so there is nothing for a column to be
+        // worth yet.
+        template: p.template,
         version: null,
         repoPaths: cached.filter((c) => c.harnessPath === p.path).map((c) => c.path)
       })),

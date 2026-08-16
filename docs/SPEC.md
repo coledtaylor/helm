@@ -232,6 +232,138 @@ that shows something that is not on this machine.
 > name back afterwards.
 - Per-project git state at a glance: branch, dirty count, ahead/behind
 
+> [!note] Harness templates - 2026-08-15
+> A harness could be scaffolded from the launcher from the start, and the
+> scaffold was three entries with no opinion in them, deliberately: a starter
+> layout is one person's way of working. That argument still holds for the
+> *default*, and it is why `minimal` stays built-in code rather than becoming an
+> editable directory - nothing anybody puts in the templates directory can
+> change or break the row that always works.
+>
+> What it does not hold for is somebody's **own** layout. So a template is a
+> user-authored directory tree in `~/.config/helm/templates` (portable:
+> `helm-data/templates` beside the exe, on the same `PORTABLE_EXECUTABLE_DIR`
+> branch as `dataDir`, so a portable install stays self-contained and every
+> check is isolated with no new mechanism). The New Harness dialog grows a
+> picker, and the "What gets written" list stops being three lines in a
+> component and is read from the engine that does the writing.
+>
+> **Substitution is `.tpl`-only**, and that restriction is the one design
+> decision here worth the words. `x.yml.tpl` is written as `x.yml` with
+> `{{NAME}}`, `{{CREATED_AT}}` and `{{TEMPLATE}}` filled in; every other file is
+> copied byte for byte. A whole-file `replaceAll` over the tree would silently
+> corrupt any template that legitimately contains `{{...}}` - a GitHub Actions
+> workflow, a Jinja fixture, a Go template - in a file its author never thought
+> of as a template. `pnpm template-check` TPL-4 creates from a fixture carrying
+> exactly that and requires the file to arrive identical to the byte.
+>
+> Three more rules, each because the obvious alternative is wrong.
+> `dot-claude/` is accepted as an alias for `.claude/`, since a template is a
+> directory people keep in a repository and tooling drops dot directories. An
+> empty folder is declared with a `.gitkeep`, which is *not* itself copied -
+> folders arrive as the parents of files, so the marker exists to survive git
+> rather than to be part of anybody's harness. And entries that are absolute,
+> climb out with `..`, or are junctions are refused with a sentence: a template
+> is a file that can travel, which is the same threat model the `repos:` key
+> already refuses those three for.
+>
+> **What was deliberately cut**, having been designed and then removed before
+> any of it was built: a creation manifest (`.helm-template.json`), per-file
+> post-substitution hashes, a three-way template/disk/manifest compare, an
+> update-from-template pass with a plan/apply split, and a preview-of-changes
+> dialog. A template makes a harness; from that moment the harness belongs to
+> the user and their agents, to change as they please. Helm records no history
+> of it and re-applies nothing - anyone who wants that has git. `template:` in
+> the manifest survives as **provenance only**: it is shown on the harness row
+> and its pane, it is carried through the projects cache so it is right on the
+> first painted frame, and nothing reads it back to decide anything.
+>
+> Applying is **honest rather than atomic**. A dozen files can fail on the
+> eighth, so the writer goes in a deterministic order, reports what actually
+> landed, and lists the rest as problems. A rollback would be four more deletes
+> that can themselves fail, over a directory the user can perfectly well look
+> at, finish or delete.
+
+> [!note] Authoring a template - 2026-08-16
+> A template is a plain directory the user can open in any editor, and that one
+> fact decides what is worth building in the app. **There is no in-app file
+> editor**, and there is deliberately no channel that reads or writes an
+> arbitrary file inside a template: `shell:showItem` opens the folder and their
+> own editor takes it from there. A tree view and an editor pane was the
+> largest piece of the original design and the piece most redundant with a
+> folder somebody already owns. If in-app editing ever comes back it comes back
+> as "the config console accepts a template directory as a scope", not as a
+> second editor.
+>
+> What is built is what a file manager cannot do.
+>
+> **The manager** - reachable from the New Harness dialog *and* from Settings,
+> because templates are app-level and nobody should have to start creating a
+> harness to rename one. It lists label, description, file count and age;
+> creates (a `template.yaml` and nothing else - a starter file here would be
+> Helm's opinion arriving inside the feature whose whole point is that the
+> layout is yours); renames, deletes, and shows in Explorer. Metadata is a
+> two-field form rather than a YAML box, because a misspelled `label:` drops a
+> template out of the picker silently.
+>
+> **`.tpl` awareness**, which survives the editor being cut precisely because
+> it is the one part of the format nobody can infer from a folder listing. The
+> file list badges a `.tpl`, shows what each file becomes (`CLAUDE.md.tpl` →
+> `CLAUDE.md`, `dot-claude/` → `.claude/`), names the three variables in a help
+> line, and offers the rename that opts a file in. A binary is refused that
+> rename: substitution reads a file as text and writes it back, so marking a
+> PNG substitutable is arranging for it to be corrupted at creation time.
+>
+> **Skill import.** `ClaudeInventory` cannot feed this - it is counts and
+> carries no names - so the seam is the config console: `config:scopes` lists
+> every `.claude` tree Helm can see, `config:tree` names what is in one, and
+> the picker is that tree with checkboxes. Every scope is a source, `~/.claude`
+> included, and that is a **read**; the writes land inside the templates
+> directory and nowhere else (`assertTemplateWritable`). A skill copies as its
+> whole directory - the console's own `configUnit`, so "copy this skill" means
+> there what it means in the console - as **plain files with no link back**,
+> because a template travels and a reference to `~/.claude/skills/think`
+> produces a different harness on a different machine and none at all on
+> somebody else's.
+>
+> **Save this harness as a template**, and **import a folder as a template** -
+> one operation with two sets of defaults. A preview lists every top-level
+> entry with its recursive file count and byte size, and **nothing is copied
+> until it is shown**: `.git`, `node_modules` and `harness.yaml` are listed and
+> refused rather than pruned silently, `repos/` is listed and unticked but may
+> be ticked, everything else is ticked and the user unticks what is instance
+> data - Helm cannot tell a journal from a scaffold, so it asks. `.git` and
+> `node_modules` are refused **at every depth** and are not merely defaults: a
+> `.git` in a template puts one workspace's history into every harness made
+> from it, and pruning them is also what bounds the walk that states the size.
+> `harness.yaml` is refused rather than merely unticked because `applyTemplate`
+> already refuses one, so copying it would author a template guaranteed to
+> report a problem the first time anybody used it. A `dot-claude/` tree is
+> copied **verbatim**: the alias is the author's choice, applied by the writer
+> when a harness is made, and normalising it on the way in would undo the
+> decision they made for whichever tool needed it.
+>
+> **A reparse point is unlinked, never walked** - every traversal asks
+> `isSymbolicLink()` before `isDirectory()`, because a Windows junction answers
+> yes to both. This is the overlay-shim rule in the second place it is
+> load-bearing, and the deletion half is the unrecoverable one: a delete that
+> walked into a junction removes the contents of a real repository.
+> `removeTree` is written out rather than left to `fs.rm(..., { recursive:
+> true })`, and that is measured rather than defensive - `pnpm template-check`'s
+> own fixture teardown used the built-in call and was found **silently leaving
+> a junction in place**, returning without error.
+>
+> Writes go through `writeSnapshottedFile` with a guard of this surface's own,
+> exactly as the content viewer does it, so there is one write path in the app
+> rather than a third with a third set of bugs. Deleting a *template* has no
+> undo, and that is stated rather than half-provided: the snapshot table holds
+> text and a template holds whatever its author put there.
+>
+> `pnpm template-check`'s **`authoring`** group is the regression test -
+> TPL-12 to TPL-18, driven through the real manager. TPL-13 earns its byte
+> comparison the way TPL-1 does, on its own fixture: clean, then a flipped
+> source byte the same comparator must reject, then restored.
+
 ### 4.2 Config Console
 
 The `.claude/` directory of whatever scope you point at, as a real interface.
@@ -354,6 +486,79 @@ Read what Claude writes without a detour through Explorer and a text editor.
 > define X" is a vault question. Extending the corpus to everything a tree can
 > reach would make it a code search engine over `node_modules`, which is a
 > different product.
+
+#### The editors: a textarea with an overlay, not a code editor
+
+> [!note] Decided 2026-08-16
+> Helm edits files in two places - the config console and the content viewer -
+> and both are **one component**: a `<textarea>` with an `aria-hidden`
+> highlighted `<pre>` under it, the textarea's own text transparent and its
+> caret painted. Not CodeMirror, not Monaco. This is written down here because
+> the argument had already evaporated once: it lived in a comment in
+> `ConfigEditor.tsx`, the file was rewritten, and nothing in `packages/` or
+> `docs/` carried it afterwards.
+>
+> Four reasons, in the order they matter:
+>
+> 1. **The read views already highlight with shiki.** CodeMirror tokenises with
+>    Lezer - a different grammar family, different scopes, different themes - so
+>    the same file would be coloured one way when read and another way when
+>    edited. Two colour schemes for one file is worse than no colour in the
+>    editor.
+> 2. **Ten check sites drive these two boxes** through
+>    `HTMLTextAreaElement.prototype`'s value setter - `configcheck.ts` eight
+>    times, `contentcheck.ts` twice. The overlay keeps every one of them green
+>    because the element they query is still there and still a textarea; an
+>    editor framework breaks all ten at once.
+> 3. **The overlay is what *enables* two of the features**, rather than being a
+>    cost paid for them. Find-in-file paints its matches by wrapping the actual
+>    characters in the underlay, and the line-number gutter is measured off the
+>    underlay's line boxes - so both are wrap-aware by construction, with
+>    nothing positioned by arithmetic and nothing that can drift.
+> 4. **Bundle.** A megabyte of editor for a gutter. This was once the only
+>    reason and is now the fourth.
+>
+> **The decision is held under a performance condition, and the condition is
+> measurable.** If keystroke-to-glyph cannot be kept inside one frame on a
+> textarea, that is new evidence and CodeMirror is back on the table.
+> `pnpm highlight-check --only=latency` is the instrument: an `input` listener
+> counts `requestAnimationFrame` callbacks to the first one where the painted
+> layer holds what the box holds, and anything but 1 fails. Measured on this
+> machine at three sizes, worst frame in each set: **7.5 ms** on a 9 KB file,
+> **61 ms** on a 464 KB one, **12 ms** past the size ceiling. Colour arrives
+> **157 ms** after the last keystroke on a 3,000-line file, against a ~250 ms
+> target.
+>
+> Three mechanisms make that true and each is load-bearing:
+>
+> - **The underlay takes the raw text synchronously.** Keystrokes never wait for
+>   a tokeniser, an IPC round trip or a debounce. When the tokeniser answers, a
+>   common-prefix/common-suffix line diff keeps the colour of every line the
+>   edit did not touch, so typing on line 40 of a 900-line file leaves 899 lines
+>   coloured rather than dropping the document to grey for 110 ms per keypress.
+> - **Highlighting runs in main, over debounced IPC** (`editor:highlight`),
+>   through the same `core/src/content/highlight.ts` the read views use.
+>   `highlightLines` is the same tokenise stopped a step earlier, handed over
+>   per line. Main is externalised, so `import('@shikijs/langs/<name>')`
+>   resolves through Node and **every grammar shiki ships is reachable with no
+>   list to maintain**; a renderer-side highlighter would need a hand-written
+>   map, capping the languages at whatever somebody remembered.
+> - **Above a line threshold the coloured layer renders the visible window**,
+>   and a full-file mirror underneath it - one text node, painting nothing -
+>   is what places that window exactly in both wrap modes.
+>
+> **Above the size ceiling the whole overlay is dropped**, not just the colour,
+> and that came out of the measurement rather than out of the design: with the
+> underlay up, a keystroke into a 1.29 MB file took **1,920 ms** to reach the
+> frame that painted it, because a text layer holding the file is laid out again
+> on every one. Past the ceiling the textarea paints its own glyphs, the gutter
+> and match painting go with the overlay, and the footer says so - **12 ms**.
+> The criterion is "degrades rather than gets slow", and 1,920 ms was getting
+> slow.
+>
+> Out of scope and written down so it does not creep: multi-cursor, code
+> folding, autocomplete, diagnostics, a minimap, virtualised rendering beyond
+> the window described above, and project-wide search-and-replace.
 
 ### 4.4 Terminal
 
@@ -770,6 +975,76 @@ session is a feature that belongs somewhere else.
 
 ---
 
+### 4.7 Browser
+
+A dev-server viewport in a workspace tab (M16), and since M17 something a Claude
+session can drive. The pane itself is described in the network posture above and
+its rules live in CLAUDE.md; what follows is the agent half, because it is the
+part with a security surface.
+
+**What a session gets.** Ten tools, served by `main/browser-mcp.ts`:
+`browser_open`, `browser_tabs`, `browser_snapshot`, `browser_screenshot`,
+`browser_console`, `browser_click`, `browser_type`, `browser_press`,
+`browser_evaluate` and `browser_close`. `browser_snapshot` is the one that makes
+the rest work - a trimmed structural view of the page, each interesting node
+carrying a `[ref=...]` that `browser_click` and `browser_type` take - because
+finding an element by reading structure is cheaper in tokens and far more
+reliable than squinting at a PNG. Click, type and press exist alongside
+`browser_evaluate`, which makes them technically redundant, because an explicit
+click is more reliable than generated JavaScript and enormously more legible in
+a transcript.
+
+**This is not Helm hosting a client.** Nothing here reads a session's output,
+renders a message or answers a prompt. A session calls a tool the way it calls
+any other MCP tool, and Helm's whole part is to be at the other end of it - the
+same boundary the transcript archive was admitted under, from the other
+direction. See 4.4 and CLAUDE.md's Scope.
+
+**How a session reaches it.** An MCP endpoint over HTTP on `127.0.0.1`, on a
+port the kernel picks per run, with a bearer token minted per *session*.
+Registration is a per-session `--mcp-config` file written under Helm's data
+directory and appended to the argv by `prepareLaunch`, so the composition stays
+in the one place every other launch flag comes from. `claude mcp add-json -s
+local` was rejected: it writes into the user's `~/.claude.json` on every launch
+and leaves the entry behind. A Windows named pipe was rejected too - its default
+ACL admits every process running as the same user, which is exactly the reach a
+loopback port plus a token file already has, and it would cost a shim process
+per session.
+
+**The token is the identity.** Tabs a session opens carry its name in the tab
+subtitle, and a tool drives only the tabs its own session opened - a tab the
+user opened is a page they chose to be on, in a partition holding their cookies,
+so it is not screenshot, scripted or closed by any tool. A session ending leaves
+its tabs standing: the page is the user's then.
+
+**Two reach controls that intersect.** `browserReach` (`web` | `local`,
+default `web`) is where the pane may go at all. `browserMcpLocalOnly` (default
+off) is where Claude's tools may go. An agent navigation is allowed only where
+both allow it - the narrower wins, with no special cases, because both are
+handed to the one `browserReachAllows` rather than written twice.
+`browserMcp` (default on) is the whole endpoint's off switch, and off means no
+bind, no token and no flag.
+
+**What it cost to make a tab nobody is looking at driveable.** M16 measured that
+`setVisible(false)` leaves a view capturable, scriptable and clickable. That
+turned out to have an unstated precondition: the *document* has to have painted
+once while the view was shown. A tab an agent opens is never mounted by the
+window, so without something it has a zero viewport, an empty `capturePage` and
+clicks that land on nothing - while `executeJavaScript` answers perfectly, so
+nothing looks broken. Parking the view outside the window does not help
+(occluded), and `enableDeviceEmulation` crashes the process. The answer is
+`AGENT_PEEK`: the page loads into a full-size view positioned so that all but a
+two-pixel corner falls outside the window and is clipped, and the view is hidden
+- and only ever *moved*, never resized - once it has painted.
+
+`pnpm browser-check` covers all of it: the endpoint and its 401s, the ten tools
+driven over the wire independently of `claude`, every tool against a tab that is
+never on screen, the four-cell reach matrix, the lifetime rules, argv hygiene,
+and one real `claude` session asked to open the fixture and click a planted
+element.
+
+---
+
 ## 5. Architecture
 
 ```
@@ -799,8 +1074,21 @@ option open and is what makes the app genuinely portable.
 
 ### Network posture
 
-- **Helm's own process opens exactly one outbound connection**: the GitHub
-  releases API, for a version number and a URL. It happens two ways and no
+**Helm contacts nothing on its own initiative except the update check.
+Everything else on the network happens because you asked for it: the
+pull-request surface goes through your own `gh`, and the browser pane fetches
+the page you navigate to.**
+
+That replaced "Helm's own process opens exactly one outbound connection"
+(decided 2026-08-15). The browser pane made the old claim false, and the answer
+is an honest replacement rather than a carve-out: what people care about -
+Helm does not phone home, there is no telemetry - is unchanged, and the app has
+stopped claiming something it no longer does. The same wording appears in the
+README, [PACKAGING.md](PACKAGING.md) and the `update:check` comment in
+`shared/ipc.ts`, and CLAUDE.md's rule that all four move together stays.
+
+- **The update check** reaches the GitHub releases API for a version number and
+  a URL. It happens two ways and no
   others, and never on a timer - at launch, at most once a day
   (`UPDATE_CHECK_EVERY_MS`), when `updateCheck` is ticked; and when a person
   presses Check now in Settings → Updates, which is deliberately unthrottled and
@@ -821,10 +1109,37 @@ option open and is what makes the app genuinely portable.
   opinion, and its fetch failures as the verdict that overrules it. Nothing
   opens either. A remote URL carrying an embedded token is a credential too, and
   it is stripped before anything is written to the database.
+- **The browser pane fetches the page you navigate to**, and nothing else. It
+  is a dev-server viewport rather than a browser (M16): a `WebContentsView` in
+  a partition of its own, `persist:helm-browser`, whose cookies and storage live
+  under the app's data directory and which the renderer's session never shares.
+  Every request behind it is a page somebody typed the address of or clicked a
+  link to - Helm opens nothing there on its own initiative, the address bar
+  never hands anything to a search engine, downloads are refused and handed to
+  the system browser, and every permission the partition is asked for is denied.
+  `browserReach` can confine the whole pane to `localhost`.
+- **Helm listens on loopback, for the sessions it hosts, and nowhere else**
+  (M17). A Claude session Helm starts can drive that pane - open a page, read
+  it, screenshot it, click, type and evaluate - and the way it reaches those
+  tools is an MCP endpoint bound to `127.0.0.1` on a port the kernel picks for
+  the run. It is the app's **only inbound listener**. Every request needs a
+  bearer token minted for one session and revoked when that session ends; there
+  is no unauthenticated route; the whole thing is off in one tick
+  (`browserMcp`), and off means no bind, no token and no flag. An agent
+  navigation is allowed only where `browserReach` **and** `browserMcpLocalOnly`
+  both allow it - the narrower wins, so an agent can never reach further than
+  the pane it is driving. See 4.7 and CLAUDE.md's rules.
+- **No credential of any kind is stored, read or handled**, and the browser
+  partition is not an exception. It holds whatever cookies the sites you visit
+  set, exactly as a browser profile does, and **Helm reads none of it**: nothing
+  in the app opens that cookie jar, and the only thing it ever does to the
+  partition is `clearStorageData` from the button in the pane.
 - **Nothing else talks to anything.** No telemetry, no crash reporting, no
   fonts, no CDN. The renderer's `will-navigate` is prevented and its window-open
   handler denies, so a link in rendered content is inert without
-  `shell:openExternal`, which is restricted to http, https and mailto.
+  `shell:openExternal`, which is restricted to http, https and mailto. The
+  browser views are the one exemption from that lock and they are exempted **by
+  `webContents.id`**, in the guard itself, so the app's own renderers keep it.
 
 ### Portability
 
@@ -863,6 +1178,53 @@ option open and is what makes the app genuinely portable.
   written on, README. Enforced rather than asserted: `pnpm packaging-check --only=audit`
   greps the checkout for personal paths and names, and proves it can catch one
   before believing that it found none.
+
+### What 1.0 promises
+
+Added for the 1.0.0 release, because a version number that stops disclaiming
+invites the question and answering it by implication is how a promise gets made
+by accident.
+
+**1.0 promises one thing: an existing `helm.db` keeps working.** A newer Helm
+opens a database an older one wrote, and it does that by construction rather
+than by intention:
+
+- Migrations only ever roll forward, are journalled by tag in
+  `__helm_migrations`, and each runs in its own transaction, so a failure leaves
+  the file on the last complete one rather than half-way through
+  (`core/store/migrate.ts`). They are embedded in the bundle, so the exe carries
+  its own and needs nothing shipped beside it.
+- Settings reads are tolerant in both directions - an unknown key is ignored and
+  a missing one falls back to its default - so a database written by an older
+  *or a newer* build loads (`core/store/settings.ts`). Writes stay strict; the
+  asymmetry is argued at that code site.
+
+**Everything else is internal and may change in a patch release.** The overlay
+shim layout, the `--mcp-config` document, the IPC channel contract, the
+`app_settings` key set, the shape of an exported profile and the layout of the
+templates directory are all Helm's own, and none of them is a format anything
+outside Helm is asked to write.
+
+Two of those are files a person edits by hand, so the distinction is worth
+stating rather than leaving to be discovered - and in both cases what protects
+the user is the same rule the settings table follows, not a version number.
+
+**A template is a folder of ordinary files.** Helm's interest in it is `.tpl`
+substitution and nothing else, and a directory that is only ever *read* cannot
+be broken by a change to what Helm does with it. Nothing there is overwritten
+either, because Helm keeps no hashes and so cannot tell an edited file from an
+untouched one.
+
+**An exported profile is read tolerantly.** `profileFromYaml` throws only for a
+document that is not a profile at all - not a mapping, or missing `name` or
+`root`. A field whose value this build does not recognise is *dropped*, not
+fatal, because the alternative is refusing a whole file over one setting the
+user can see and fix in the editor afterwards. So a profile written by another
+version imports, minus anything this one cannot honour.
+
+What none of this promises is the Claude Code CLI, which is a separate product
+on its own release schedule. `CLAUDE_TESTED_RANGE` is a measurement, not a
+dependency bound - outside it Helm warns and starts anyway (7).
 
 ---
 

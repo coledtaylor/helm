@@ -8,6 +8,7 @@ import {
   syncOverlay,
   type OverlayPlan
 } from './overlay'
+import { writeSessionMcpConfig, type SessionMcpServer } from './mcp'
 import { sanitizeSessionName } from './session'
 
 /**
@@ -35,6 +36,16 @@ export interface LaunchRequest {
   openingPrompt?: string | null | undefined
   /** Where synthesised overlay shims live. Owned by the host. */
   shimRoot: string
+  /**
+   * Helm's own MCP endpoint, registered for this session alone.
+   *
+   * Null - the ordinary case for anything that is not the app - passes no
+   * `--mcp-config` at all, which is what `browserMcp: false` produces and what
+   * every launch looked like before M17. `dir` is where the ephemeral file goes
+   * and is the host's to supply for the same reason `shimRoot` is: core does
+   * not know where this install keeps its data.
+   */
+  mcp?: { dir: string; server: SessionMcpServer } | null | undefined
 }
 
 /** The launch shape of a stored profile. */
@@ -72,6 +83,8 @@ export function buildLaunchArgs(
     pluginDirs?: readonly string[] | undefined
     /** Composed project instructions, already written. */
     memoryFile?: string | null | undefined
+    /** The ephemeral per-session MCP config, already written. */
+    mcpConfigFile?: string | null | undefined
   }
 ): string[] {
   const argv: string[] = []
@@ -83,6 +96,10 @@ export function buildLaunchArgs(
 
   for (const dir of req.pluginDirs ?? []) argv.push('--plugin-dir', dir)
   if (req.memoryFile) argv.push('--append-system-prompt-file', req.memoryFile)
+  // One value, so it is safe anywhere after `-n`. Here rather than at the end
+  // because the opening prompt is positional and everything before it has to
+  // be a flag with its argument.
+  if (req.mcpConfigFile) argv.push('--mcp-config', req.mcpConfigFile)
 
   if (req.model) argv.push('--model', req.model)
   if (req.effort) argv.push('--effort', req.effort)
@@ -170,6 +187,30 @@ export function prepareLaunch(req: LaunchRequest): LaunchPlan {
     return false
   })
 
+  /*
+   * Helm's own endpoint, registered for this session and no other.
+   *
+   * Written here rather than by the host so that the file and the flag are
+   * produced by the same call - a launch path that composed the argv in one
+   * place and the file in another would have a state where one exists without
+   * the other, and the failure would be a session holding a token for a file
+   * that is not there.
+   */
+  let mcpConfigFile: string | null = null
+  if (req.mcp) {
+    try {
+      mcpConfigFile = writeSessionMcpConfig(req.mcp.dir, req.mcp.server)
+    } catch (err) {
+      // A session without its browser tools is a working session. A launch that
+      // failed because a JSON file could not be written is not.
+      warnings.push(
+        `Helm's browser tools were not registered for this session: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      )
+    }
+  }
+
   const argv = buildLaunchArgs({
     root: req.root,
     name: req.name,
@@ -180,7 +221,8 @@ export function prepareLaunch(req: LaunchRequest): LaunchPlan {
     agent: req.agent,
     openingPrompt: req.openingPrompt,
     pluginDirs: shims.map((shim) => shim.dir),
-    memoryFile
+    memoryFile,
+    mcpConfigFile
   })
 
   return {
@@ -189,6 +231,7 @@ export function prepareLaunch(req: LaunchRequest): LaunchPlan {
     argv,
     overlays: shims,
     memoryFile,
+    mcpConfigFile,
     warnings
   }
 }

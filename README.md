@@ -62,6 +62,19 @@ your user only, into `%LOCALAPPDATA%\Programs\Helm`, and keeps its data in
 `%APPDATA%\Helm`. Uninstalling removes the program and **keeps** your data - the
 database holds your profiles, session index and config snapshots.
 
+Harness templates are the one thing outside that: they live in
+`~/.config/helm/templates`, because they are folders you write and edit by hand.
+A portable install keeps them in its own `helm-data\templates`, so it still
+leaves nothing behind on a machine you plug it into.
+
+Helm manages them without trying to replace your editor. **Settings ->
+Harness templates**, or **Manage templates…** in the New Harness dialog, will
+create, rename, describe and delete one, copy a skill you have already written
+into it out of any `.claude` tree Helm can see, and open the folder in
+Explorer - which is where you edit the files. You can also **save a harness you
+have been working in as a template**, ticking off what belongs to that harness
+rather than to the layout, or **import a folder** somebody sent you.
+
 Expect **"Windows protected your PC"** either way. These builds are not
 code-signed, so SmartScreen has no publisher to check and warns about every
 download: **More info** -> **Run anyway**. That warning is doing its job, and
@@ -163,9 +176,23 @@ you may. Settings → Updates also shows this build's version, the newest one He
 has heard of, and a Release notes link that works offline, because it is a link
 rather than a request.
 
-That check is the only network connection Helm's own process opens. With the
-tick off, Helm opens none on its own initiative, and none at all until somebody
-asks for one.
+**Helm contacts nothing on its own initiative except the update check.
+Everything else on the network happens because you asked for it: the
+pull-request surface goes through your own `gh`, and the browser pane fetches
+the page you navigate to.** There is no telemetry, no crash reporting, no
+fonts and no CDN, and with the tick off Helm asks nothing at all unless you
+press something.
+
+Helm does **listen** in one place, and it is worth saying out loud because it is
+the only one. A Claude session Helm hosts can drive the browser pane - open a
+page, read it, screenshot it, click and type - and it reaches those tools
+through a small server bound to `127.0.0.1`, on a port picked fresh for each run
+of the app. Nothing outside this machine can reach it, every request needs a
+token Helm mints for one session and destroys when that session ends, and
+Settings → Browser turns the whole thing off, in which case no port is opened at
+all. The same settings decide how far it may go: the tools can never reach
+further than the pane itself may, and can be held to this machine while the pane
+is not.
 
 The pull-request pane reaches GitHub too, but through **your own `gh` CLI**, on
 a schedule you set - every five minutes by default, and `0` in Settings turns it

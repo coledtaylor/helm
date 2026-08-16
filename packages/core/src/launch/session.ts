@@ -49,9 +49,16 @@ export function buildClaudeArgs(spec: SessionSpec): string[] {
  * Everything else - a model, an effort level, an overlay set. The conversation
  * was had under whatever it was had under; a resume that quietly changed the
  * model would be a different session wearing the same id.
+ *
+ * The one thing that *is* passed is `--mcp-config`, when the host has written
+ * one. It is not a property of the conversation being reopened - it names a
+ * loopback port that only exists in this app run - so leaving it out would mean
+ * a resumed session silently lacking the browser tools every other session has.
  */
-export function buildResumeArgs(sessionId: string): string[] {
-  return ['--resume', sessionId]
+export function buildResumeArgs(sessionId: string, mcpConfigFile: string | null = null): string[] {
+  const argv = ['--resume', sessionId]
+  if (mcpConfigFile !== null) argv.push('--mcp-config', mcpConfigFile)
+  return argv
 }
 
 /**

@@ -21,6 +21,12 @@ export {
   type SyncedOverlay
 } from './overlay'
 export {
+  cleanStaleMcpConfigs,
+  removeSessionMcpConfig,
+  writeSessionMcpConfig,
+  type SessionMcpServer
+} from './mcp'
+export {
   buildLaunchArgs,
   launchRequestFromProfile,
   prepareLaunch,

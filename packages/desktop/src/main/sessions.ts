@@ -9,16 +9,20 @@ import {
   readGitBranch,
   readHistorySession,
   readProfile,
+  removeSessionMcpConfig,
   renameSession,
   runningSessionNames,
   sanitizeSessionName,
   sessionLabel,
   startSession,
   uniqueSessionName,
+  writeSessionMcpConfig,
   type LaunchedReviewPlan,
   type LaunchPlan,
+  type SessionMcpServer,
   type SessionRecord
 } from '@helm/core'
+import type { BrowserMcpHost } from './browser-mcp'
 import { resolveClaudeCommand } from './claude-cli'
 import { emit } from './ipc'
 import { shimRoot } from './paths'
@@ -57,6 +61,17 @@ interface Hosted {
    * to `lost`, which is a lie about a session Helm ended on purpose.
    */
   closed: boolean
+  /**
+   * The bearer token this session was given for Helm's browser endpoint, and
+   * the ephemeral file carrying it. Both null when `browserMcp` is off.
+   *
+   * Held here rather than in the endpoint's own bookkeeping because this map is
+   * what knows a session has *ended*, and the token has to die with it: a token
+   * that outlived its session would be a live credential for a listener,
+   * belonging to a process that is gone.
+   */
+  mcpToken: string | null
+  mcpConfigFile: string | null
 }
 
 /**
@@ -220,6 +235,15 @@ export interface SessionHost {
 export interface SessionHostDeps {
   services: Services
   window: () => BrowserWindow | null
+  /**
+   * Helm's browser endpoint, or null where there is none.
+   *
+   * A function for the reason `window` is one: it is created after this host,
+   * because it drives the browser views and those need the window. Null - or a
+   * `register` that answers null - is the ordinary state with `browserMcp` off,
+   * and it produces a launch with no `--mcp-config` in it at all.
+   */
+  browserMcp?: (() => BrowserMcpHost | null) | undefined
   observer?: SessionObserver | undefined
   /** Defaults to asking the renderer, with the native box behind it. */
   confirm?: Confirm | undefined
@@ -228,6 +252,7 @@ export interface SessionHostDeps {
 export function createSessionHost({
   services,
   window,
+  browserMcp,
   observer,
   confirm = rendererConfirm(window, nativeConfirm(window))
 }: SessionHostDeps): SessionHost {
@@ -269,6 +294,9 @@ export function createSessionHost({
     // was already recorded, in which case there is nothing to announce.
     const record = finishSession(services.store, id, { exitCode })
     const entry = hosted.get(id)
+    // Before every branch below, because every one of them ends this session:
+    // the process is gone, so its token is a credential nothing owns.
+    if (entry) releaseBrowserTools(entry)
     if (!record || !entry || entry.closed) {
       // Already recorded, or nobody is watching: there is no pane to tell.
       hosted.delete(id)
@@ -308,6 +336,41 @@ export function createSessionHost({
   }
 
   /**
+   * A token for the session about to start, or null.
+   *
+   * Minted before `prepareLaunch` because the argv is what carries it: the file
+   * `prepareLaunch` writes *is* the registration, and a token that existed
+   * without a file - or a file without a token - would be a session holding
+   * half a credential.
+   */
+  const registerBrowserTools = (
+    name: string
+  ): { token: string; mcp: { dir: string; server: SessionMcpServer } } | null => {
+    const registration = browserMcp?.()?.register(name) ?? null
+    return registration === null ? null : { token: registration.token, mcp: registration.launch }
+  }
+
+  /** Tell the endpoint where the file went, so `stop()` can take it away. */
+  const attachBrowserTools = (token: string | null, file: string | null): void => {
+    if (token !== null) browserMcp?.()?.attach(token, file)
+  }
+
+  /**
+   * The token dies with the session, and this is the only place that decides
+   * so.
+   *
+   * Called on exit, on close and on shutdown, and safe to call twice - a
+   * session that ends while its tab is still open, and one whose tab is closed
+   * while it runs, are two orders for the same two events.
+   */
+  const releaseBrowserTools = (entry: Hosted): void => {
+    browserMcp?.()?.release(entry.mcpToken)
+    removeSessionMcpConfig(entry.mcpConfigFile)
+    entry.mcpToken = null
+    entry.mcpConfigFile = null
+  }
+
+  /**
    * The one path a session is spawned by, whether it came from a project row or
    * from a profile. Both produce a `LaunchPlan` first - the only difference
    * between them is how many flags ended up in it.
@@ -318,7 +381,8 @@ export function createSessionHost({
   async function spawn(
     plan: LaunchPlan,
     grid: { cols: number; rows: number },
-    origin: { projectPath?: string | null | undefined; profileId?: number | null | undefined }
+    origin: { projectPath?: string | null | undefined; profileId?: number | null | undefined },
+    mcpToken: string | null = null
   ): Promise<SessionRecord> {
     const command = resolveClaudeCommand()
     if (!command) {
@@ -386,23 +450,37 @@ export function createSessionHost({
       })
     } catch (err) {
       finishSession(services.store, record.id, { exitCode: null })
+      // The token would otherwise outlive a session that never existed, and
+      // the file with it.
+      browserMcp?.()?.release(mcpToken)
+      removeSessionMcpConfig(plan.mcpConfigFile)
       const detail = err instanceof Error ? err.message : String(err)
       throw new Error(`Could not start a session in ${plan.cwd}: ${detail}`, { cause: err })
     }
 
-    hosted.set(record.id, { record, handle, closed: false })
+    hosted.set(record.id, {
+      record,
+      handle,
+      closed: false,
+      mcpToken,
+      mcpConfigFile: plan.mcpConfigFile
+    })
     return record
   }
 
   return {
     async start(req) {
       const base = req.name?.trim() || basename(req.cwd) || 'session'
+      const name = uniqueSessionName(base, takenNames())
+      const tools = registerBrowserTools(name)
       const plan = prepareLaunch({
         root: req.cwd,
-        name: uniqueSessionName(base, takenNames()),
-        shimRoot
+        name,
+        shimRoot,
+        mcp: tools?.mcp ?? null
       })
-      return spawn(plan, req, { projectPath: req.projectPath })
+      attachBrowserTools(tools?.token ?? null, plan.mcpConfigFile)
+      return spawn(plan, req, { projectPath: req.projectPath }, tools?.token ?? null)
     },
 
     async launchProfile(req) {
@@ -413,12 +491,17 @@ export function createSessionHost({
       // sessions from one profile is the normal case, and `/resume` shows only
       // the name.
       const name = uniqueSessionName(profile.name, takenNames())
-      const plan = prepareLaunch(launchRequestFromProfile(profile, shimRoot, name))
+      const tools = registerBrowserTools(name)
+      const plan = prepareLaunch({
+        ...launchRequestFromProfile(profile, shimRoot, name),
+        mcp: tools?.mcp ?? null
+      })
+      attachBrowserTools(tools?.token ?? null, plan.mcpConfigFile)
 
       // The overlay work happens before the row exists, so a profile pointing
       // at a repo that has been deleted fails here rather than as a session
       // that starts and quietly composes nothing.
-      const session = await spawn(plan, req, { profileId: profile.id })
+      const session = await spawn(plan, req, { profileId: profile.id }, tools?.token ?? null)
 
       return {
         session,
@@ -466,17 +549,32 @@ export function createSessionHost({
         takenNames()
       )
 
+      /*
+       * A resumed session gets the browser tools too, and it goes through the
+       * same core writer rather than a second one - `writeSessionMcpConfig` is
+       * what `prepareLaunch` calls, and this is the one launch path that does
+       * not build its argv there. What it must **not** borrow from
+       * `prepareLaunch` is everything else: `-n`, a model, an overlay set. The
+       * conversation was had under whatever it was had under.
+       */
+      const tools = registerBrowserTools(label)
+      const mcpConfigFile =
+        tools === null ? null : writeSessionMcpConfig(tools.mcp.dir, tools.mcp.server)
+      attachBrowserTools(tools?.token ?? null, mcpConfigFile)
+
       const session = await spawn(
         {
           cwd: history.project,
           name: label,
-          argv: buildResumeArgs(history.sessionId),
+          argv: buildResumeArgs(history.sessionId, mcpConfigFile),
           overlays: [],
           memoryFile: null,
+          mcpConfigFile,
           warnings: []
         },
         req,
-        { projectPath: history.project }
+        { projectPath: history.project },
+        tools?.token ?? null
       )
 
       return { session, history }
@@ -498,19 +596,23 @@ export function createSessionHost({
      */
     async review(plan, grid) {
       const repo = plan.slug.split('/')[1] ?? basename(plan.repoPath)
+      // Named for what it is, and uniqued like every other launch: reviewing
+      // two pull requests at once is the normal case.
+      const name = uniqueSessionName(`PR #${String(plan.number)} review - ${repo}`, takenNames())
+      const tools = registerBrowserTools(name)
       const launch = prepareLaunch({
         root: plan.repoPath,
-        // Named for what it is, and uniqued like every other launch: reviewing
-        // two pull requests at once is the normal case.
-        name: uniqueSessionName(`PR #${String(plan.number)} review - ${repo}`, takenNames()),
+        name,
         shimRoot,
         openingPrompt: plan.prompt,
         // Null for either of these passes no flag at all, which is what keeps a
         // Helm nobody has configured launching exactly what `claude` would.
         model: plan.model,
-        effort: plan.effort
+        effort: plan.effort,
+        mcp: tools?.mcp ?? null
       })
-      return spawn(launch, grid, { projectPath: plan.repoPath })
+      attachBrowserTools(tools?.token ?? null, launch.mcpConfigFile)
+      return spawn(launch, grid, { projectPath: plan.repoPath }, tools?.token ?? null)
     },
 
     /**
@@ -554,7 +656,12 @@ export function createSessionHost({
 
       entry.closed = true
       if (isRunning(entry)) killSession(String(req.id))
-      else hosted.delete(req.id)
+      else {
+        // The exit already released it; this is the other order - a tab closed
+        // on a session that had already ended, whose entry is going now.
+        releaseBrowserTools(entry)
+        hosted.delete(req.id)
+      }
       if (focused === req.id) focused = null
       return { closed: true }
     },
@@ -608,6 +715,10 @@ export function createSessionHost({
         if (isRunning(entry)) {
           finishSession(services.store, entry.record.id, { exitCode: entry.handle.exitCode() })
         }
+        // Belt and braces: `before-quit` has already stopped the endpoint,
+        // which revoked everything. This is what makes the file go away when
+        // this host is shut down without one - which is what the check does.
+        releaseBrowserTools(entry)
       }
       killAllSessionsSync()
       hosted.clear()

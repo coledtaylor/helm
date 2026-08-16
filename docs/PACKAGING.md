@@ -40,6 +40,20 @@ and shares the installed app's database, shims and Chromium profile. That is
 or checkout, and `PORTABLE_EXECUTABLE_DIR` says whether the data is its own -
 `installed`, `portable`, `dev`, `dev-live`.
 
+**Harness templates take the same branch.** `templatesDir` reads the same
+variable: set, they live in `<exe dir>\helm-data\templates`, so **a portable
+install keeps its templates on the stick and leaves nothing on a machine it is
+plugged into**; unset, they live in `~/.config/helm/templates` rather than under
+`%APPDATA%`, because a template is a directory somebody authors by hand and
+likely keeps in git. One rule, four run modes, and no second override
+mechanism - `pnpm dev` and every check get a templates directory of their own
+for free, because both already set that variable for the database.
+
+The shipped `README.md` and example template are written on a start that finds
+the directory **absent**, and nothing there is ever overwritten. Helm records no
+hashes of what it seeded, so it cannot distinguish an edited file from an
+untouched one; deleting the directory is what puts the originals back.
+
 ## What the installer does, and what it deliberately does not
 
 - **Per-user**, into `%LOCALAPPDATA%\Programs\Helm`. Nothing Helm does needs
@@ -142,9 +156,24 @@ Code-signing the build would retire reason 1. It would not touch 2 or 3.
 
 ## Network posture
 
-The update check is **the only network connection Helm's own process opens**.
-With `updateCheck` off, Helm opens none on its own initiative; the one remaining
-route is a person pressing Check now, so nothing leaves the machine unasked for.
+**Helm contacts nothing on its own initiative except the update check.
+Everything else on the network happens because you asked for it: the
+pull-request surface goes through your own `gh`, and the browser pane fetches
+the page you navigate to.**
+
+There is no telemetry, no crash reporting, no fonts and no CDN. With
+`updateCheck` off, Helm asks nothing by itself at all; the one remaining route
+is a person pressing Check now, so nothing leaves the machine unasked for.
+
+**Inbound is one listener and it is loopback.** Since M17 a Claude session Helm
+hosts can drive the browser pane, and it reaches those tools through an MCP
+endpoint bound to `127.0.0.1` on a port chosen per app run. It is the only
+socket Helm has ever accepted a connection on. Nothing off this machine can
+reach it; every request carries a bearer token minted for one session and
+revoked when that session ends; and `browserMcp` turns it off entirely, in which
+case no port is bound. Worth knowing for a packaged build in particular: an
+installer that a firewall prompt follows is a bad first impression, and a
+loopback bind produces no prompt on Windows.
 
 The pull-request pane reaches GitHub as well, but through the user's own `gh`
 CLI: `gh pr list` per repository on a timer (`prPollMinutes`, five minutes by

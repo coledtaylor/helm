@@ -1,11 +1,29 @@
 export { AppShell, type AppShellProps } from './components/AppShell'
+export {
+  BrowserPane,
+  BROWSER_WIDTHS,
+  type BrowserPaneProps,
+  type BrowserPaneState
+} from './components/BrowserPane'
 export { Chip, type ChipProps, type ChipTone } from './components/Chip'
+export {
+  ConsolePanel,
+  type ConsoleEntry,
+  type ConsoleFilter,
+  type ConsolePanelProps
+} from './components/ConsolePanel'
 export {
   ConfigConsole,
   ConfigNothingSelected,
   type ConfigConsoleProps,
   type ConfigViewKind
 } from './components/ConfigConsole'
+export {
+  CodeEditor,
+  type CodeEditorHandle,
+  type CodeEditorProps,
+  type EditorStatus
+} from './components/CodeEditor'
 export { ConfigEditor, type ConfigEditorProps } from './components/ConfigEditor'
 export {
   ConfigDeleteDialog,
@@ -36,6 +54,12 @@ export {
 export { HealthPanel, type HealthPanelProps } from './components/HealthPanel'
 export { McpPanel, type McpPanelProps } from './components/McpPanel'
 export { NewHarnessDialog, type NewHarnessDialogProps } from './components/NewHarnessDialog'
+export {
+  SaveAsTemplateDialog,
+  type SaveAsTemplateDialogProps
+} from './components/SaveAsTemplateDialog'
+export { TemplateManager, type TemplateManagerProps } from './components/TemplateManager'
+export { Overlay, type OverlayProps } from './components/Overlay'
 export {
   ConfirmSessionDialog,
   type ConfirmSessionDialogProps
@@ -100,4 +124,7 @@ export { TitleBar, type TitleBarProps } from './components/TitleBar'
 export { WelcomePane, type WelcomePaneProps } from './components/WelcomePane'
 export * from './components/icons'
 export { cn } from './lib/cn'
+// Whether a dialog is up, for anything that has to get out of its way - the
+// browser pane's `WebContentsView` first. `Overlay` is the only writer.
+export { overlayOpen, subscribeOverlay, useOverlayOpen } from './lib/overlay'
 export { formatAge, formatBytes, formatMoment, formatResetsIn } from './lib/time'

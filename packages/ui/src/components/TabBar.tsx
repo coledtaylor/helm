@@ -61,6 +61,19 @@ export interface TabBarProps {
   /** Trailing controls - theme switch, about. Kept out of the tab strip's
    * scroll so they stay reachable when tabs overflow. */
   actions?: ReactNode | undefined
+  /**
+   * Whether a tab is being dragged right now.
+   *
+   * Reported because something outside the DOM needs to know. The browser
+   * pane's `WebContentsView` paints above every pixel the renderer draws,
+   * including the drop indicator and the ghost of the tab being moved - so it
+   * gets out of the way for the length of the gesture. A drag is a fraction of
+   * a second and the page keeps running behind it, which is why this is the
+   * cheap answer and a scrim would not be: a drag is not modal.
+   *
+   * A **toast** deliberately does not do this. See `App.tsx`.
+   */
+  onDragging?: ((dragging: boolean) => void) | undefined
 }
 
 const INDICATOR_CLASS: Record<TabIndicator, string> = {
@@ -99,7 +112,8 @@ export function TabBar({
   onClose,
   onReorder,
   onRename,
-  actions
+  actions,
+  onDragging
 }: TabBarProps): JSX.Element | null {
   const [dragging, setDragging] = useState<string | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
@@ -129,6 +143,7 @@ export function TabBar({
   const finishDrag = (): void => {
     setDragging(null)
     setDropIndex(null)
+    onDragging?.(false)
   }
 
   const dropOn = (index: number, event: DragEvent<HTMLDivElement>): void => {
@@ -216,6 +231,7 @@ export function TabBar({
               draggable={reorderable}
               onDragStart={(event) => {
                 setDragging(tab.id)
+                onDragging?.(true)
                 event.dataTransfer.effectAllowed = 'move'
                 // Firefox and Chromium both refuse to start a drag with no
                 // payload, even when nothing reads it.

@@ -90,7 +90,105 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   `parseGitHubRemote` strips the userinfo before anything reaches the database.
 - The network posture is stated identically in four places - README,
   [docs/PACKAGING.md](docs/PACKAGING.md), the `update:check` comment in
-  `shared/ipc.ts`, and SPEC 5. If it moves again, all four move together.
+  `shared/ipc.ts`, and SPEC 5. If it moves again, all four move together. It
+  currently reads: *"Helm contacts nothing on its own initiative except the
+  update check. Everything else on the network happens because you asked for
+  it: the pull-request surface goes through your own `gh`, and the browser pane
+  fetches the page you navigate to."*
+
+  That sentence is about what Helm **contacts**, and M17 did not change it. What
+  M17 did change is that Helm now **listens**, on loopback, for the sessions it
+  hosts - see "The browser tools" below. That is stated separately, in the same
+  four places, rather than folded into a sentence about outbound traffic.
+- **The browser partition is not an exception to the credential rule, and it is
+  the one place that has to say so out loud.** `persist:helm-browser` holds
+  cookies and logins for whatever the user visits, under the app's data
+  directory. Nothing in Helm reads it - no cookie, no storage, no header - and
+  the only call the app ever makes against it is `clearStorageData`, from a
+  button in the pane. A feature that wanted to read that partition would be a
+  feature that made Helm handle credentials.
+
+## The browser pane
+
+Five rules, and each one is a thing that only shows up when it is broken.
+
+- **The renderer's navigation lock is never loosened.** `will-navigate` and
+  `setWindowOpenHandler` are denied on **every** web-contents in
+  `main/index.ts`; browser views are exempted by a registry of `webContents.id`
+  read *inside* those guards. Window-open still answers `deny` for everything -
+  what the exemption adds is that a `window.open` inside a view becomes a new
+  Helm tab, capped. A change that widens the guard instead of the registry is
+  the change this rule exists to stop.
+- **Every navigation goes through `browserReachAllows`, in `@helm/core`.** One
+  function, taking as many restrictions as the caller has, allowing a URL only
+  where all of them do - and the agent's restrictions are composed by
+  `agentReach`, in the same file, so the pane's rule and the tools' rule cannot
+  drift. It is also where the scheme rule lives: `file:` and custom schemes are
+  refused by the same call.
+- **A native view paints above all renderer DOM, so it hides for anything drawn
+  over it.** The one subscribable answer is `overlayOpen()` in
+  `packages/ui/src/lib/overlay.ts`, subscribed **once**, in `useBrowsers`. Two
+  transient things get the same treatment for the same reason - a tab drag and
+  the address bar's dropdown - and a **toast does not**, because it is not modal
+  and is not transient; it is required to be drawn clear of the view instead
+  (BR-10). The view must also never enter the top 36px, where Windows draws the
+  window controls; main clamps that rather than trusting the layout.
+- **Hiding is `setVisible(false)` because that leaves the page live.** M17 will
+  drive tabs nobody is looking at, so hidden has to stay capturable, scriptable
+  and clickable. Measured on Electron 43.3.0 and pinned by `BR-3`, which
+  repaints the page a new colour *after* hiding it so a stale frame cannot pass.
+  If that ever stops holding, the mechanism changes - parking the view outside
+  the window is the fallback - and `BR-3` is what says so first.
+- **Self-signed certificates are accepted for loopback and nowhere else**, and
+  there is no click-through: Helm registers no `certificate-error` handler at
+  all. Downloads are refused and handed to the system browser, every permission
+  on the partition is denied, and the address bar never hands anything to a
+  search engine. None of those is a setting; `browserReach` is the only one.
+
+## The browser tools - the app's one inbound listener
+
+A Claude session Helm hosts can drive that pane: open, read, screenshot, click,
+type, press keys and evaluate. `main/browser-mcp.ts` serves MCP over HTTP and is
+**the only thing in Helm that has ever listened for a connection**. Six rules,
+and they are here rather than only at the code site because they are the ones a
+future change would weaken without meaning to.
+
+- **Loopback and a token, always.** `listen(0, '127.0.0.1')` - never
+  `0.0.0.0`, never a chosen port. Every request carries `Authorization: Bearer`
+  or it is 401 before anything is parsed, and there is **no unauthenticated
+  route at all**, not even a health check: a route that answered without a token
+  would tell a local process which port to start guessing at.
+- **A token per session, minted at launch and revoked when the session ends.**
+  It is also the *identity*: attribution is which token arrived, never something
+  the caller says. That is what makes "only a tab this session opened" a
+  comparison. `before-quit` stops the endpoint **before** sessions shut down, so
+  nothing can still be driving a browser on behalf of a process that is gone.
+- **`browserMcp` off is off.** No bind, no token, no `--mcp-config` - the app is
+  then the process it was before M17. `BR-29` asserts all three.
+- **Registration is `--mcp-config`, written per session under the data
+  directory.** Never `claude mcp add-json`, which writes into the user's
+  `~/.claude.json` on every launch and leaves the entry there. The file is
+  removed with its session, and what a crash leaves is swept by the rule the
+  overlay shims are swept by: the owning pid is asked about, and anything not
+  provably dead is left alone.
+- **The reach rule is an intersection with no special cases.** An agent
+  navigation is allowed only where `browserReach` **and** `browserMcpLocalOnly`
+  both allow it; the narrower always wins, and an agent can never exceed the
+  reach of the pane it is driving. Both restrictions are composed by
+  `agentReach` and handed to `browserReachAllows` - the same function the pane's
+  `will-navigate` calls. `browser_evaluate` is an escape hatch by design and a
+  page it navigates is still held to `browserReach`.
+- **A tool drives only the tabs its own session opened.** Not just closing:
+  a tab the user opened is a page they chose to be on, in a partition that holds
+  their cookies, and a tool that could screenshot or script it would be the
+  credential rule defeated through a picture. `browser_tabs` lists everything,
+  because listing is not driving.
+
+One more thing is worth knowing before touching `browser.ts`: **a view whose
+document has never painted while shown is not scriptable in the ways M17
+needs** - zero viewport, empty `capturePage`, clicks that land on nothing - and
+an agent's tab is never mounted by the window. `AGENT_PEEK` is the answer and
+the comment there has the three approaches that were measured and rejected.
 
 ## Overlays
 
@@ -125,6 +223,40 @@ shares a directory with another Helm, and it is opt-in:
 
 A check gets its own directory too, under `%LOCALAPPDATA%\Helm\checks\<name>`;
 see the **`checks`** skill.
+
+**Harness templates are the one thing not under the data directory**, and they
+take the same branch rather than a mechanism of their own. `templatesDir` in
+`paths.ts` reads `PORTABLE_EXECUTABLE_DIR`: set, it is `helm-data/templates`
+beside the exe, so a portable install stays on the stick and leaves nothing on a
+machine it is plugged into, and `pnpm dev` and every check get their own for
+free through `isolate.mjs`. Unset - installed and `dev:live` - it is
+**`~/.config/helm/templates`**, not `%APPDATA%`, because these are files a
+person writes by hand and probably keeps in git, and that is where somebody
+looks for those. The shipped README and example are written **only when the
+directory is absent** and nothing there is ever overwritten: Helm keeps no
+hashes, so it cannot tell an edited file from an untouched one. The accepted
+consequence is that an improved example never reaches an existing install, and
+deleting the directory is the whole of "reset".
+
+**`pnpm dev` copies that directory once and then leaves it alone**, which is the
+opposite of what it does to the database and is the same rule one level down.
+The database is a mirror nobody authors into, so a fresh `VACUUM INTO` every
+launch is right; a template is a thing a person *writes*, and the dev app can
+write one - so wiping and re-copying at every launch would lose it. Nothing here
+keeps hashes either, so nothing can tell a template authored in dev from a stale
+copy of a real one, and when the two are indistinguishable the outcome that must
+never happen decides. Dev's copy therefore diverges; the launch banner says so
+every time, and `pnpm dev --fresh` re-copies.
+
+**Helm has no in-app editor for a template file, on purpose.** A template is a
+folder, `shell:showItem` opens it, and the user's own editor is a better one
+than a pane in a modal. What the app does is what a file manager cannot:
+`.tpl` awareness, importing a skill out of a `.claude` tree Helm can already
+see, and freezing a harness into a layout. Anything that walks a template or a
+folder being frozen **unlinks a reparse point rather than following it** - the
+Overlays rule above, in the second place it is load-bearing, and `fs.rm` with
+`recursive: true` is not the mechanism: it was measured returning successfully
+with a junction still in place.
 
 ## Surfaces that degrade
 

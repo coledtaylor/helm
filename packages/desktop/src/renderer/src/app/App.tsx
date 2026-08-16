@@ -2,12 +2,14 @@ import type { JSX, PointerEvent as ReactPointerEvent } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_SETTINGS,
+  isLoopbackUrl,
   isProjectPinned,
   PROJECT_SHELL_HEIGHT_PCT,
   SESSION_SPLIT_PCT,
   sessionLabel,
   withProjectPinned,
   withRepoIgnored,
+  type EditorHighlight,
   type HistorySession,
   type Profile,
   type ProfileDraft,
@@ -18,6 +20,7 @@ import {
 import {
   AppShell,
   BookIcon,
+  BrowserPane,
   cn,
   ConfigConsole,
   ConfigDeleteDialog,
@@ -28,11 +31,13 @@ import {
   ConfigRenameDialog,
   ConfirmSessionDialog,
   ContentDocumentPane,
+  type ConsoleEntry,
   ContentNothingSelected,
   ContentViewer,
   EffectiveViewPane,
   FolderIcon,
   GearIcon,
+  GlobeIcon,
   HarnessIcon,
   HealthPanel,
   HistoryIcon,
@@ -46,6 +51,7 @@ import {
   pullRepoChoices,
   pullsSummaryLine,
   RepoIcon,
+  SaveAsTemplateDialog,
   SessionHistory,
   SettingsPane,
   SetupPane,
@@ -53,6 +59,7 @@ import {
   SlidersIcon,
   StatusBar,
   TabBar,
+  TemplateManager,
   ThemeToggle,
   TitleBar,
   VersionBanner,
@@ -78,6 +85,8 @@ import { forgetPullDetail } from './usePullDetail'
 import { usePulls } from './usePulls'
 import { useSessions } from './useSessions'
 import { useSetup } from './useSetup'
+import { useTemplates } from './useTemplates'
+import { useBrowsers } from './useBrowsers'
 import { useShells } from './useShells'
 import { useUpdate } from './useUpdate'
 import { useUsage } from './useUsage'
@@ -107,18 +116,49 @@ const KIND_ICON = {
  * is identified by the project it was opened from and not by the repository
  * slug: two checkouts of one repository are two projects, and closing one must
  * not close the other's tabs.
+ *
+ * **A browser pane is the one kind that is not persisted**, which is why this
+ * is a union rather than an alias any more. It is not a view of data: it is a
+ * `WebContentsView` in the main process, with a render process behind it, and
+ * `before-quit` destroys it exactly as it ends every session. A strip that
+ * wrote down browser tabs would restore tabs pointing at views that do not
+ * exist - the reasoning `AppSettings.workspaceTabs` already gives for leaving
+ * the *session* strip out. What is worth remembering is remembered instead:
+ * `browserProjectUrls` puts a new tab back on the address the project was last
+ * looked at, which is the part somebody would have had to type again.
  */
-type PaneRef = WorkspaceTab
+type PaneRef = WorkspaceTab | { kind: 'browser'; id: number }
 
 /**
  * A link in a rendered note, handed to the OS browser.
  *
- * Not a hook, because it holds nothing: `will-navigate` is prevented and the
- * window-open handler denies, so the only thing an `https://` link in a
- * document can do is ask main to open it somewhere else.
+ * Not a hook, because it holds nothing. The renderer's navigation posture is
+ * unchanged by the browser pane and is the reason this exists at all:
+ * `will-navigate` is still prevented on this window and its window-open handler
+ * still denies, so the only thing an `https://` link in a document can do is
+ * ask main to open it somewhere else. What the browser pane added is a set of
+ * `WebContentsView`s that are exempt **by id**, in `main/index.ts`; this window
+ * is not one of them and never will be.
  */
 const helmOpenExternal = (url: string): Promise<{ opened: boolean }> =>
   helm.invoke('shell:openExternal', { url })
+
+/** A stable empty list, so a view with no console entries does not hand
+ * `BrowserPane` a fresh array to re-render against on every render. */
+const EMPTY_CONSOLE: ConsoleEntry[] = []
+
+/**
+ * The editors' tokeniser, on the far side of an IPC boundary.
+ *
+ * A module-level constant rather than a `useCallback`, and that is load-bearing
+ * rather than tidy: the editor debounces on this identity, so a new function
+ * per render of `App` would cancel and restart the debounce on every render the
+ * app happens to do - which is the shape of a highlighter that never fires
+ * while anything else on screen is animating. Nothing here closes over state,
+ * so there is nothing for a hook to hold.
+ */
+const helmHighlight = (path: string, source: string): Promise<EditorHighlight> =>
+  helm.invoke('editor:highlight', { path, source })
 
 /**
  * What each build mode is called on the status bar.
@@ -143,6 +183,7 @@ const SETTINGS_TAB = 'settings'
 
 const tabId = (ref: PaneRef): string => {
   if (ref.kind === 'project') return `project:${ref.path}`
+  if (ref.kind === 'browser') return `browser:${String(ref.id)}`
   if (ref.kind === 'pulls') return PULLS_TAB
   // Compared, never taken apart again: a Windows path can contain a `#` and a
   // `:`, so this string is an identity and not a record. Whatever needs the
@@ -241,6 +282,16 @@ export function App(): JSX.Element {
   const paneRef = useRef<HTMLDivElement>(null)
   /** The project page's column, measured by its shell's drag handle. */
   const projectColumnRef = useRef<HTMLDivElement>(null)
+  /**
+   * The project the workspace is looking at, as a ref.
+   *
+   * A ref because the thing that reads it - "open a browser tab beside whatever
+   * project is in front" - is a callback declared long before `selectedPath` is
+   * derived, and threading the value through would mean re-creating that
+   * callback on every tab change for a value it only reads at the moment it is
+   * pressed.
+   */
+  const activePaneProjectRef = useRef<string | null>(null)
 
   const activateSession = useCallback((id: number) => {
     setRequestedSession(id)
@@ -279,7 +330,25 @@ export function App(): JSX.Element {
       ? { latest: answered.latest, newer: true, url: answered.url }
       : null
   const setup = useSetup(settings, launcher.rescan)
+  /**
+   * Template authoring, held at app level because both of its entry points are.
+   *
+   * The manager is reached from the New Harness dialog and from Settings, and
+   * "Save as template" from a harness's pane - three surfaces, one directory,
+   * so one piece of state rather than a copy each that goes stale the moment
+   * another one writes.
+   */
+  const templates = useTemplates()
   const shells = useShells()
+  /**
+   * The browser pane's views, which live in the main process.
+   *
+   * The recent-address list is handed in rather than kept here because main is
+   * what writes it - it is the side that knows a navigation succeeded - so it
+   * arrives on `settings:changed` like any other setting.
+   */
+  const browsers = useBrowsers(settings?.browserRecentUrls ?? DEFAULT_SETTINGS.browserRecentUrls)
+  const browserViews = browsers.views
 
   /**
    * What the Terminal group shows, and one writer for them.
@@ -441,15 +510,31 @@ export function App(): JSX.Element {
   const settingsLoaded = settings !== null
 
   const openPanes = useMemo(() => {
-    return placedOrder.filter((ref) => {
+    const placed = placedOrder.filter((ref) => {
       if (ref.kind === 'project') return !discovery || projectsByPath.has(ref.path)
       // A pull request tab follows its project, by the same rule: the project
       // is where it was opened from and where a review would run, so a rescan
       // that no longer sees the directory closes the tab with it.
       if (ref.kind === 'pr') return !discovery || projectsByPath.has(ref.repoPath)
+      // A browser tab follows its view, which main owns: a view that has gone -
+      // the cap, a crashed render process, `before-quit` - takes its tab.
+      if (ref.kind === 'browser') return browserViews.has(ref.id)
       return true
     })
-  }, [placedOrder, discovery, projectsByPath])
+    /*
+     * Views main is holding that this strip has never heard of.
+     *
+     * Derived rather than synced in an effect, for the reason `sessionIds` is:
+     * a `window.open` inside a page, and a renderer reload that left live views
+     * behind, both produce a view with no tab, and writing that as
+     * `useEffect` + `setState` renders once with the wrong strip.
+     */
+    const known = new Set(placed.filter((ref) => ref.kind === 'browser').map((ref) => ref.id))
+    const appended: PaneRef[] = [...browserViews.keys()]
+      .filter((id) => !known.has(id))
+      .map((id) => ({ kind: 'browser' as const, id }))
+    return appended.length === 0 ? placed : [...placed, ...appended]
+  }, [placedOrder, discovery, projectsByPath, browserViews])
 
   const sessionIds = useMemo(() => {
     const placed = sessionOrder.filter((id) => sessionsById.has(id))
@@ -495,7 +580,11 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (!settingsLoaded) return
     const timer = setTimeout(() => {
-      writeSettings({ workspaceTabs: { panes: openPanes, activeId } })
+      // Browser panes are dropped here rather than being made persistable, and
+      // the type is what says so: `WorkspaceTab` has no browser variant, so
+      // this filter is what makes the write compile. See `PaneRef`.
+      const panes = openPanes.filter((ref): ref is WorkspaceTab => ref.kind !== 'browser')
+      writeSettings({ workspaceTabs: { panes, activeId } })
     }, 500)
     return () => clearTimeout(timer)
   }, [settingsLoaded, openPanes, activeId, writeSettings])
@@ -507,6 +596,22 @@ export function App(): JSX.Element {
   const effectiveMaximize = hasSessions ? maximize : null
   const showSessions = hasSessions && effectiveMaximize !== 'workspace'
   const showWorkspace = !showSessions || effectiveMaximize !== 'sessions'
+
+  /**
+   * Which browser view is the one in front, told to every view.
+   *
+   * The pane reports its own rectangle while it is mounted; a tab switch
+   * unmounts it, so the view it was showing has to be stood down by something
+   * that is still rendering. This is that. The rectangle is kept on the other
+   * side, so returning to the tab puts the page straight back where it was -
+   * which is the whole reason the view is not destroyed on unmount.
+   */
+  const { setShowing: setBrowserShowing } = browsers
+  useEffect(() => {
+    const front =
+      showWorkspace && activePane?.kind === 'browser' ? activePane.id : null
+    for (const id of browserViews.keys()) setBrowserShowing(id, id === front)
+  }, [browserViews, activePane, showWorkspace, setBrowserShowing])
 
   // Main decides whether an exiting session is worth a notification, and that
   // turns on which session is actually in view - which only this side knows.
@@ -682,6 +787,60 @@ export function App(): JSX.Element {
    */
   const openSettings = useCallback(() => openPane({ kind: 'settings' }), [openPane])
 
+  /**
+   * A browser tab.
+   *
+   * The strip's `+` opens one on whichever project is in front, so the pane
+   * arrives on that project's last address rather than empty - which is the
+   * whole of "last URL remembered per project" from a user's side. Main decides
+   * that from `browserProjectUrls`; nothing here reads it.
+   */
+  const openBrowser = useCallback(
+    (request: { url?: string; project?: string | null } = {}) => {
+      void browsers
+        .open({
+          ...request,
+          project: request.project ?? activePaneProjectRef.current
+        })
+        .then((state) => {
+          if (state !== null) setRequestedId(`browser:${String(state.id)}`)
+        })
+    },
+    [browsers]
+  )
+
+  /**
+   * Ctrl+L focuses the address bar, as it does in every browser.
+   *
+   * A counter rather than a boolean, because "focus it" is an event and not a
+   * state: pressing it twice while the bar already has focus has to re-select,
+   * and a boolean that is already true does nothing the second time.
+   */
+  const [focusAddressAt, setFocusAddressAt] = useState(0)
+
+  /**
+   * A link in rendered content: "Open in Helm browser" where URLs already are.
+   *
+   * This is the entry point the milestone asks for, and it is a **rule rather
+   * than a second button**, because the honest answer to "which of these two
+   * browsers did you mean" is knowable from the address. A loopback URL - a
+   * note saying the dev server is on 3000, a README linking `localhost:8080` -
+   * is by definition a thing running on this machine, which is precisely what
+   * this pane exists to look at; and the handoff back out is one click away in
+   * the pane's own toolbar. Everything else still goes straight to the browser
+   * the user actually uses, because Helm will never beat it and must not try.
+   *
+   * `isLoopbackUrl` is the same function the certificate exception and the
+   * reach rule are made of, so "what counts as this machine" has one answer.
+   */
+  const openLink = useCallback(
+    (url: string) => {
+      if (isLoopbackUrl(url)) openBrowser({ url })
+      else void helmOpenExternal(url)
+    },
+    [openBrowser]
+  )
+
   /** A launched session lands in the session strip and takes the front. */
   const adoptIntoStrip = useCallback((id: number) => {
     setSessionOrder((current) => (current.includes(id) ? current : [...current, id]))
@@ -825,9 +984,13 @@ export function App(): JSX.Element {
       // unmount so a tab switch does not flash, and a *closed* tab is the point
       // at which nobody is coming back to it.
       if (ref.kind === 'pr') forgetPullDetail(ref.repoPath, ref.number)
+      // And the same rule again for the native view: hiding the pane keeps the
+      // page, closing the tab destroys it. This is `disposeShell`'s counterpart
+      // - the one moment a `WebContentsView` is torn down other than quitting.
+      if (ref.kind === 'browser') browsers.close(ref.id)
       setOrder(openPanes.filter((candidate) => tabId(candidate) !== id))
     },
-    [openPanes]
+    [openPanes, browsers]
   )
 
   const closeSession = useCallback(
@@ -874,6 +1037,27 @@ export function App(): JSX.Element {
   // the focused terminal. Ctrl+Shift+Tab is not bound by Claude Code either;
   // Shift+Tab alone is (it cycles permission modes) and is deliberately left
   // alone.
+  /**
+   * Ctrl+L, the address bar, and only while a browser tab is in front.
+   *
+   * In capture like the Ctrl+Tab ring above and for the same reason - a focused
+   * terminal would otherwise eat it - but gated on the active pane, because
+   * Ctrl+L is *clear the screen* in every shell Helm hosts and stealing it from
+   * a session would be a worse bug than not having the shortcut.
+   */
+  useEffect(() => {
+    if (activePane?.kind !== 'browser') return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'l' || !event.ctrlKey || event.altKey || event.shiftKey) return
+      if (document.activeElement?.closest('.xterm')) return
+      event.preventDefault()
+      event.stopPropagation()
+      setFocusAddressAt((at) => at + 1)
+    }
+    window.addEventListener('keydown', onKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
+  }, [activePane])
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Tab' || !event.ctrlKey || event.altKey) return
@@ -976,6 +1160,37 @@ export function App(): JSX.Element {
       ]
     }
 
+    if (ref.kind === 'browser') {
+      const view = browserViews.get(ref.id)
+      if (!view) return []
+      // The page's own title, and the host underneath it - which is what tells
+      // three tabs on one dev server apart while every one of them is called
+      // "Vite + React". An empty page is "New tab" rather than blank: a tab
+      // with no label is a tab you cannot aim at.
+      //
+      // And, where a session opened it, that session's name beside the host.
+      // A tab that appeared because Claude opened it and one the user opened
+      // are otherwise identical in the strip, and the first is the one somebody
+      // will want to know the provenance of.
+      const subtitle =
+        view.openedBy === null
+          ? view.host
+          : view.host === ''
+            ? view.openedBy
+            : `${view.host} · ${view.openedBy}`
+      return [
+        {
+          id: tabId(ref),
+          title: view.title === '' ? 'New tab' : truncate(view.title, 34),
+          ...(subtitle === '' ? {} : { subtitle: truncate(subtitle, 40), subtitleMono: true }),
+          hint:
+            (view.url === '' ? 'A browser tab with no address yet' : view.url) +
+            (view.openedBy === null ? '' : `\nOpened by the session “${view.openedBy}”`),
+          icon: <GlobeIcon width={13} height={13} />
+        }
+      ]
+    }
+
     const project = projectsByPath.get(ref.path)
     if (!project) return []
     const Icon = KIND_ICON[project.kind]
@@ -1038,6 +1253,12 @@ export function App(): JSX.Element {
   const activeProject =
     activePane?.kind === 'project' ? (projectsByPath.get(activePane.path) ?? null) : null
   const selectedPath = activeProject?.path ?? null
+  // Kept for `openBrowser`, which runs long after this. Written in an effect
+  // rather than during render because it is a ref: assigning one while
+  // rendering is a write during the render phase, which React may discard.
+  useEffect(() => {
+    activePaneProjectRef.current = selectedPath
+  }, [selectedPath])
 
   /**
    * Whether the open project is itself one of the scanned folders, which is
@@ -1061,6 +1282,29 @@ export function App(): JSX.Element {
         (root) => root.toLowerCase() === selectedPath.toLowerCase()
       ),
     [settings, selectedPath]
+  )
+
+  /**
+   * The harness the open project *is*, when it is one.
+   *
+   * Only its `template:` is wanted, and that lives on the harness discovery
+   * built rather than on the project row. Found by path rather than carried
+   * down from the row that was clicked, because the pane is also reached from a
+   * tab restored across a restart, where no row was involved.
+   *
+   * A `useMemo` for the reason `activeProjectIsRoot` above is one, and it is
+   * the same trap: calling `.toLowerCase()` on `selectedPath` in the render
+   * body makes the React Compiler treat it as possibly mutated and give up on
+   * the shell drag's memoization two hundred lines away.
+   */
+  const activeHarness = useMemo(
+    () =>
+      selectedPath === null
+        ? null
+        : (launcher.discovery?.harnesses.find(
+            (harness) => harness.path.toLowerCase() === selectedPath.toLowerCase()
+          ) ?? null),
+    [launcher.discovery, selectedPath]
   )
 
   // -------------------------------------------------------------------------
@@ -1228,17 +1472,82 @@ export function App(): JSX.Element {
    * would drift apart.
    */
   const harnessDialog =
-    setup.dialog === null ? null : (
+    setup.dialog === null || templates.managerOpen ? null : (
       <NewHarnessDialog
         mode={setup.dialog}
         dir={setup.dialogDir}
         onChooseDir={setup.chooseDialogDir}
+        onModeChange={setup.setDialogMode}
         problems={setup.dialogProblems}
         busy={setup.creating}
+        templates={setup.templates}
+        template={setup.template}
+        onTemplateChange={setup.chooseTemplate}
+        templatesDir={setup.templatesDir}
+        onManageTemplates={templates.openManager}
+        templateProblems={setup.templateProblems}
+        preview={setup.templatePreview}
         onCreate={setup.createHarness}
         onCancel={setup.closeDialog}
       />
     )
+
+  /**
+   * The template manager, and the dialog that freezes a folder into one.
+   *
+   * Rendered beside the harness dialog rather than inside it, and the harness
+   * dialog is **withheld while this is up** - two `Overlay`s at once is two
+   * scrims, and the second would dim the first. Withholding rather than closing
+   * is what makes "Manage templates…" safe to press half way through filling
+   * the harness dialog in: its name, folder and chosen template live in
+   * `useSetup`, so closing the manager paints it back exactly as it was, with a
+   * template list that has been re-read.
+   */
+  const templateDialogs =
+    templates.saveDialog !== null ? (
+      <SaveAsTemplateDialog
+        kind={templates.saveDialog.kind}
+        dir={templates.saveDialog.dir}
+        {...(templates.saveDialog.kind === 'folder'
+          ? { onChooseDir: templates.chooseSaveDir }
+          : {})}
+        preview={templates.savePreview}
+        busy={templates.saveBusy}
+        problems={templates.saveProblems}
+        onSave={templates.save}
+        onCancel={templates.closeSaveDialog}
+      />
+    ) : templates.managerOpen ? (
+      <TemplateManager
+        templates={templates.templates}
+        templatesDir={templates.templatesDir}
+        listProblems={templates.listProblems}
+        selected={templates.selected}
+        onSelect={templates.select}
+        detail={templates.detail}
+        scopes={templates.scopes}
+        importScope={templates.importScope}
+        onImportScopeChange={templates.setImportScope}
+        importTree={templates.importTree}
+        busy={templates.busy}
+        problems={templates.problems}
+        notice={templates.notice}
+        onCreate={templates.create}
+        onSaveMetadata={templates.saveMetadata}
+        onDelete={templates.remove}
+        onReveal={launcher.reveal}
+        onMakeSubstitutable={templates.makeSubstitutable}
+        onImport={templates.importFiles}
+        onImportFolder={templates.openImportFolder}
+        onClose={() => {
+          templates.closeManager()
+          // The harness dialog behind this may be showing a picker built before
+          // a template was created, renamed or deleted. It re-reads on open and
+          // has no other reason to; this is that other reason.
+          setup.refreshTemplates()
+        }}
+      />
+    ) : null
 
   /**
    * New, Rename and Delete for one entry in a `.claude` tree.
@@ -1310,6 +1619,7 @@ export function App(): JSX.Element {
           />
         </div>
         {harnessDialog}
+        {templateDialogs}
         {confirmDialog}
       </div>
     )
@@ -1461,16 +1771,33 @@ export function App(): JSX.Element {
               onActivate={setRequestedId}
               onClose={closeTab}
               onReorder={reorderTabs}
+              // A native view paints over the drop indicator and the dragged
+              // tab's ghost, so it stands down for the length of the gesture.
+              onDragging={browsers.setSuppressed}
               actions={
-                hasSessions ? (
-                  <PaneMaxButton
-                    maximized={effectiveMaximize === 'workspace'}
-                    what="workspace"
-                    onToggle={() =>
-                      setMaximize((current) => (current === 'workspace' ? null : 'workspace'))
-                    }
-                  />
-                ) : undefined
+                <>
+                  {/* The general way in. Beside the maximize control because
+                      both are about the strip rather than about a pane. */}
+                  <button
+                    type="button"
+                    data-open-browser
+                    onClick={() => openBrowser()}
+                    aria-label="New browser tab"
+                    title="New browser tab"
+                    className="grid size-6 place-items-center rounded text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+                  >
+                    <GlobeIcon width={13} height={13} />
+                  </button>
+                  {hasSessions ? (
+                    <PaneMaxButton
+                      maximized={effectiveMaximize === 'workspace'}
+                      what="workspace"
+                      onToggle={() =>
+                        setMaximize((current) => (current === 'workspace' ? null : 'workspace'))
+                      }
+                    />
+                  ) : null}
+                </>
               }
             />
             <div ref={paneRef} className="relative min-h-0 flex-1 overflow-hidden">
@@ -1612,8 +1939,9 @@ export function App(): JSX.Element {
                     onRestore={configState.restore}
                     onReveal={launcher.reveal}
                     onOpenPath={configState.openPath}
-                    onOpenExternal={(url) => void helmOpenExternal(url)}
+                    onOpenExternal={openLink}
                     onDirtyChange={configState.setDirty}
+                    onHighlight={helmHighlight}
                     onRename={() => configState.openEntryDialog('rename')}
                     onDelete={() => configState.openEntryDialog('delete')}
                     justCreated={configState.selected.path === configState.createdPath}
@@ -1725,6 +2053,7 @@ export function App(): JSX.Element {
                   highlight={contentState.highlight}
                   wrapDefault={settings?.contentWrap ?? DEFAULT_SETTINGS.contentWrap}
                   wrapIndent={settings?.contentWrapIndent ?? DEFAULT_SETTINGS.contentWrapIndent}
+                  onHighlight={helmHighlight}
                   onSave={contentState.save}
                   onReload={contentState.reload}
                   onRestore={contentState.restore}
@@ -1733,12 +2062,47 @@ export function App(): JSX.Element {
                   onDraftChange={contentState.setDraft}
                   onOpenPath={contentState.openPath}
                   onOpenWikilink={contentState.openWikilink}
-                  onOpenExternal={(url) => void helmOpenExternal(url)}
+                  onOpenExternal={openLink}
                 />
               )}
             </ContentViewer>
           </div>
         )}
+
+        {activePane?.kind === 'browser' &&
+          (() => {
+            const view = browserViews.get(activePane.id)
+            if (!view) return null
+            return (
+              <div className="absolute inset-0">
+                <BrowserPane
+                  // Keyed on the view, so switching between two browser tabs
+                  // rebuilds the bar rather than leaving one page's address in
+                  // the other's box for a frame.
+                  key={view.id}
+                  state={view}
+                  entries={browsers.entries.get(view.id) ?? EMPTY_CONSOLE}
+                  recent={browsers.recent}
+                  focusAddressAt={focusAddressAt}
+                  onBounds={(rect) => browsers.sendBounds(view.id, rect, true)}
+                  onNavigate={(input) => browsers.navigate(view.id, input)}
+                  onBack={() => browsers.back(view.id)}
+                  onForward={() => browsers.forward(view.id)}
+                  onReload={(hard) => browsers.reload(view.id, hard)}
+                  onDevTools={() => browsers.devtools(view.id)}
+                  onOpenExternal={(url) => void helmOpenExternal(url)}
+                  onFind={(query, forward) => browsers.find(view.id, query, forward)}
+                  onStopFind={() => browsers.stopFind(view.id)}
+                  onZoom={(level) => browsers.zoom(view.id, level)}
+                  onClearStorage={() => browsers.clearStorage(view.id)}
+                  onEvaluate={(source) => browsers.evaluate(view.id, source)}
+                  // The address dropdown hangs over the page; the view stands
+                  // down for it, the same way it does for a tab drag.
+                  onCovering={browsers.setSuppressed}
+                />
+              </div>
+            )
+          })()}
 
         {activePane?.kind === 'settings' && (
           <div className="absolute inset-0">
@@ -1793,6 +2157,24 @@ export function App(): JSX.Element {
               archiveStats={historyState.archiveStats}
               transcriptArchiveMaxBytes={
                 settings?.transcriptArchiveMaxBytes ?? DEFAULT_SETTINGS.transcriptArchiveMaxBytes
+              }
+              // The authored templates, so the built-in Minimal row does not
+              // make an empty templates folder read as one that has something
+              // in it. Read on mount here rather than only when the manager
+              // opens - this is a figure on a pane somebody scrolls past.
+              templateCount={templates.templates.filter((choice) => !choice.builtIn).length}
+              templatesDir={templates.templatesDir}
+              onManageTemplates={templates.openManager}
+              onRevealTemplates={() => launcher.reveal(templates.templatesDir)}
+              browserReach={settings?.browserReach ?? DEFAULT_SETTINGS.browserReach}
+              onBrowserReachChange={(browserReach) => writeSettings({ browserReach })}
+              browserMcp={settings?.browserMcp ?? DEFAULT_SETTINGS.browserMcp}
+              onBrowserMcpChange={(browserMcp) => writeSettings({ browserMcp })}
+              browserMcpLocalOnly={
+                settings?.browserMcpLocalOnly ?? DEFAULT_SETTINGS.browserMcpLocalOnly
+              }
+              onBrowserMcpLocalOnlyChange={(browserMcpLocalOnly) =>
+                writeSettings({ browserMcpLocalOnly })
               }
               contentWrap={settings?.contentWrap ?? DEFAULT_SETTINGS.contentWrap}
               onContentWrapChange={(contentWrap) => writeSettings({ contentWrap })}
@@ -1850,6 +2232,7 @@ export function App(): JSX.Element {
               <ProjectPane
                 key={activeProject.path}
                 project={activeProject}
+                harness={activeHarness}
                 onReveal={launcher.reveal}
                 onLaunch={(project) => void launch(project)}
                 launching={launching}
@@ -1866,6 +2249,14 @@ export function App(): JSX.Element {
                 }}
                 onOpenConfig={openConfigAt}
                 onOpenContent={openContentAt}
+                // A harness only. It is the one kind of project with a layout
+                // to freeze - a repo is somebody else's tree, and a folder is
+                // not a scaffold. Decided here rather than in the pane for the
+                // reason `onRemoveRoot` is: the pane is handed a project, and
+                // whether that project is a harness root is discovery's answer.
+                {...(activeHarness !== null
+                  ? { onSaveAsTemplate: (project: Project) => templates.openSaveAs(project.path) }
+                  : {})}
                 // Only where this project *is* a scan root, which is the whole
                 // of what removal can act on. Decided here rather than in the
                 // pane because a root is a setting and the pane is handed
@@ -2044,6 +2435,7 @@ export function App(): JSX.Element {
         )}
 
         {harnessDialog}
+        {templateDialogs}
         {confirmDialog}
         {configEntryDialog}
 

@@ -151,7 +151,12 @@ describe('settings', () => {
       prReviewModel: 'opus',
       prReviewEffort: 'high',
       updateCheck: false,
-      lastUpdateCheckAt: '2026-08-11T20:04:06.641Z'
+      lastUpdateCheckAt: '2026-08-11T20:04:06.641Z',
+      browserReach: 'local',
+      browserMcp: false,
+      browserMcpLocalOnly: true,
+      browserRecentUrls: ['http://localhost:3000/', 'https://example.com/docs'],
+      browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' }
     } satisfies AppSettings
 
     writeSettings(store, written)
@@ -491,8 +496,83 @@ describe('settings validation', () => {
       key: 'lastUpdateCheckAt',
       good: [null, '2026-08-11T20:04:06.641Z', '2026-08-11T14:04:06-06:00'],
       bad: ['never', 'soon', '', 0, 1786478646641, true, {}]
+    },
+    {
+      key: 'browserReach',
+      good: ['web', 'local'],
+      bad: ['none', 'Web', 'loopback', '', null, true, ['web']]
+    },
+    {
+      // `'false'` is the interesting rejection for both, and it is the same one
+      // `updateCheck` has: a row hand-edited into that string would switch the
+      // endpoint **on** while the pane read it as off, since every non-empty
+      // string is truthy.
+      key: 'browserMcp',
+      good: [true, false],
+      bad: ['false', 'true', 0, 1, null, [], {}]
+    },
+    {
+      key: 'browserMcpLocalOnly',
+      good: [true, false],
+      bad: ['false', 'true', 0, 1, null, [], {}]
+    },
+    {
+      // The interesting rejections are the ones that would put a row in the
+      // dropdown that does nothing when clicked: a bare word, a relative path,
+      // and `file:` - which the pane refuses to navigate to, so it must not be
+      // offered one either.
+      key: 'browserRecentUrls',
+      good: [[], ['http://localhost:3000/'], ['https://example.com/a', 'http://127.0.0.1:8080/b']],
+      bad: [
+        null,
+        'http://localhost:3000/',
+        ['localhost:3000'],
+        ['file:///C:/tmp/x.html'],
+        ['/docs'],
+        [''],
+        [42],
+        Array.from({ length: 11 }, (_, i) => `http://localhost:${String(3000 + i)}/`)
+      ]
+    },
+    {
+      key: 'browserProjectUrls',
+      good: [
+        {},
+        { [join(tmpdir(), 'alpha').toLowerCase()]: 'http://localhost:5173/' },
+        {
+          [join(tmpdir(), 'alpha').toLowerCase()]: 'http://localhost:5173/',
+          [join(tmpdir(), 'beta').toLowerCase()]: 'https://example.com/'
+        }
+      ],
+      bad: [
+        null,
+        [],
+        'http://localhost:5173/',
+        // Not lower-cased, so two spellings of one project would each keep a
+        // URL and the second would never be found.
+        { [join(tmpdir(), 'Alpha')]: 'http://localhost:5173/' },
+        { 'repos/alpha': 'http://localhost:5173/' },
+        { [join(tmpdir(), 'alpha').toLowerCase()]: 'localhost:5173' },
+        { [join(tmpdir(), 'alpha').toLowerCase()]: null }
+      ]
     }
   ]
+
+  /**
+   * A key with no row above generates no test, and generates it silently.
+   *
+   * The table is an array, so nothing makes a missing key an error - it simply
+   * produces one `it` fewer, in a file that already prints seventy of them. The
+   * same table one level up, in `settingscheck.ts`, went stale exactly this way
+   * when the content viewer's two wrapping keys landed: both were validated,
+   * neither was probed, and the only thing that noticed was a boolean buried in
+   * a check that takes minutes to reach. That one is a
+   * `Record<keyof AppSettings, ...>` now and fails to compile. This one cannot
+   * be, so it is asserted instead - and here, where it costs a second.
+   */
+  it('has a case for every key of AppSettings', () => {
+    expect(cases.map((entry) => entry.key).sort()).toEqual(Object.keys(DEFAULT_SETTINGS).sort())
+  })
 
   for (const { key, good, bad } of cases) {
     it(`accepts every valid ${key} and rejects the rest`, () => {
@@ -589,7 +669,12 @@ describe('settings validation', () => {
       prReviewModel: 'sonnet',
       prReviewEffort: null,
       updateCheck: true,
-      lastUpdateCheckAt: null
+      lastUpdateCheckAt: null,
+      browserReach: 'local',
+      browserMcp: false,
+      browserMcpLocalOnly: true,
+      browserRecentUrls: ['http://localhost:3000/'],
+      browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' }
     })
 
     expect(() => writeSettings(store, readSettings(store))).not.toThrow()
@@ -627,7 +712,12 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   prReviewModel: 'sonnet',
   prReviewEffort: null,
   updateCheck: true,
-  lastUpdateCheckAt: null
+  lastUpdateCheckAt: null,
+  browserReach: 'local',
+  browserMcp: false,
+  browserMcpLocalOnly: true,
+  browserRecentUrls: ['http://localhost:3000/'],
+  browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' }
 })
 
 describe('pinned projects', () => {
@@ -676,7 +766,7 @@ describe('pinned projects', () => {
 
 describe('project cache', () => {
   it('round-trips a project including its inventory and git state', () => {
-    cacheProjects(store, [project()])
+    cacheProjects(store, [project()], [])
 
     const [cached] = readCachedProjects(store)
     expect(cached).toMatchObject({
@@ -690,8 +780,8 @@ describe('project cache', () => {
   })
 
   it('upserts on path rather than duplicating', () => {
-    cacheProjects(store, [project()])
-    cacheProjects(store, [project({ git: { branch: 'main', detached: false, dirty: 0, ahead: 0, behind: 0 } })])
+    cacheProjects(store, [project()], [])
+    cacheProjects(store, [project({ git: { branch: 'main', detached: false, dirty: 0, ahead: 0, behind: 0 } })], [])
 
     const cached = readCachedProjects(store)
     expect(cached).toHaveLength(1)
@@ -699,14 +789,34 @@ describe('project cache', () => {
   })
 
   it('stores a null git state for a directory that is not a repo', () => {
-    cacheProjects(store, [project({ git: null })])
+    cacheProjects(store, [project({ git: null })], [])
     expect(readCachedProjects(store)[0]?.git).toBeNull()
+  })
+
+  /*
+   * The harness's `template:` is the one thing a cached row carries that is not
+   * on the `Project` object, so it comes in beside the projects rather than on
+   * them. The second half of this is the one that matters: a later write that
+   * forgot to pass the harnesses would put null over it, and the launcher would
+   * paint a harness with no provenance for the first frame of every start.
+   */
+  it('carries a harness template through the cache, and only for the harness row', () => {
+    const harnessRow = project({ path: dir, name: 'work', kind: 'harness' })
+    const harness = { path: dir, name: 'work', template: 'demo', version: '1', repoPaths: [] }
+    cacheProjects(store, [harnessRow, project()], [harness])
+
+    const cached = readCachedProjects(store)
+    expect(cached.find((p) => p.kind === 'harness')?.template).toBe('demo')
+    expect(cached.find((p) => p.kind === 'repo')?.template).toBeNull()
+
+    cacheProjects(store, [harnessRow, project()], [harness])
+    expect(readCachedProjects(store).find((p) => p.kind === 'harness')?.template).toBe('demo')
   })
 
   it('forgets rows by path, however they were spelled, and only those', () => {
     const alpha = join(dir, 'repos', 'alpha')
     const beta = join(dir, 'repos', 'beta')
-    cacheProjects(store, [project(), project({ path: beta, name: 'beta' })])
+    cacheProjects(store, [project(), project({ path: beta, name: 'beta' })], [])
 
     expect(forgetProjects(store, [alpha.toUpperCase()])).toBe(1)
     expect(readCachedProjects(store).map((p) => p.path)).toEqual([beta])

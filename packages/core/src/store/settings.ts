@@ -1,6 +1,10 @@
 import { isAbsolute } from 'node:path'
 import { sql } from 'drizzle-orm'
 import {
+  BROWSER_PROJECT_URLS_MAX,
+  BROWSER_REACH_MODES,
+  BROWSER_RECENT_URLS_MAX,
+  browserReachAllows,
   CONTENT_WRAP_INDENT,
   DEFAULT_SETTINGS,
   EFFORT_LEVELS,
@@ -505,6 +509,62 @@ export const SETTING_VALIDATORS: SettingValidators = {
     if (value === null) return null
     if (typeof value !== 'string') return 'must be an ISO 8601 string or null'
     return Number.isFinite(Date.parse(value)) ? null : 'must be an ISO 8601 instant'
+  },
+
+  browserReach: oneOf(BROWSER_REACH_MODES),
+
+  /**
+   * The two agent controls, and a boolean is checked as a boolean for the
+   * reason `updateCheck` is: `'false'` is truthy, and a row hand-edited into a
+   * string would switch the endpoint **on** while reading as off in the pane.
+   */
+  browserMcp: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
+  browserMcpLocalOnly: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
+
+  /**
+   * Addresses the browser pane has been to, newest first.
+   *
+   * Every entry has to be something `browserReachAllows` would allow with the
+   * widest posture - which is to say an absolute http or https URL. A dropdown
+   * whose rows are not addresses is a dropdown whose rows do nothing when
+   * clicked, and the value is written by Helm rather than typed, so a row that
+   * is not one is a bug in this build and not a fact about the past.
+   */
+  browserRecentUrls: (value) => {
+    if (!Array.isArray(value)) return `expected an array of URLs, got ${describe(value)}`
+    if (value.length > BROWSER_RECENT_URLS_MAX) {
+      return `expected at most ${String(BROWSER_RECENT_URLS_MAX)}, got ${String(value.length)}`
+    }
+    for (const entry of value) {
+      if (typeof entry !== 'string') return `expected URLs, got ${describe(entry)}`
+      if (!browserReachAllows(entry, 'web').allowed) {
+        return `expected an http or https URL, got ${JSON.stringify(entry)}`
+      }
+    }
+    return null
+  },
+
+  /** The same, keyed by the project directory the browser was opened beside. */
+  browserProjectUrls: (value) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return `expected an object of path to URL, got ${describe(value)}`
+    }
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (entries.length > BROWSER_PROJECT_URLS_MAX) {
+      return `expected at most ${String(BROWSER_PROJECT_URLS_MAX)}, got ${String(entries.length)}`
+    }
+    for (const [path, url] of entries) {
+      // Absolute for the reason `scanRoots` is: a relative key resolves against
+      // whatever the working directory happened to be when it was written.
+      if (!isAbsolute(path)) return `expected absolute project paths, got ${JSON.stringify(path)}`
+      if (path !== path.toLowerCase()) {
+        return `expected lower-cased project paths, got ${JSON.stringify(path)}`
+      }
+      if (typeof url !== 'string' || !browserReachAllows(url, 'web').allowed) {
+        return `expected an http or https URL for ${JSON.stringify(path)}, got ${describe(url)}`
+      }
+    }
+    return null
   }
 }
 

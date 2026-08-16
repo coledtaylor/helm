@@ -19,6 +19,26 @@ import type { CreatableKind } from './config/names'
 import { PR_POLL_MINUTES, PR_STALE_DAYS, type PrCheckoutMode } from './github/types'
 // And for the review template's default, which is the prompt module's to state.
 import { DEFAULT_PR_REVIEW_PROMPT } from './github/prompt'
+// The same again: `AppSettings.browserReach` names it.
+import type { BrowserReach } from './browser/reach'
+
+/**
+ * The browser pane's URL rules, re-exported here rather than from the package
+ * root for the reason `PR_CHECKOUT_MODES` and `USAGE_DISPLAY_MODES` are: the
+ * address bar and the settings pane are *renderer* code, and a value import
+ * from `@helm/core` reaches the filesystem through `launch/` and `store/`,
+ * which fails at rollup rather than at typecheck. These are pure by
+ * construction - they decide about a string and touch nothing.
+ */
+export {
+  agentReach,
+  BROWSER_REACH_MODES,
+  browserReachAllows,
+  isLoopbackUrl,
+  resolveBrowserAddress,
+  type BrowserReach,
+  type ReachDecision
+} from './browser/reach'
 
 export {
   frontmatterField,
@@ -193,6 +213,31 @@ export {
   type PullPromptFacts,
   type PullPromptPlaceholder
 } from './github/prompt'
+
+/**
+ * What the editors do when you press a key.
+ *
+ * Re-exported here rather than reached for through the package root, because
+ * the component that calls them runs in the browser bundle and this file is the
+ * one entry point with no `node:` behind it. `content/editing.ts` imports
+ * nothing at all, which is what makes that safe - and is why the editing rules
+ * live away from both the DOM and shiki.
+ */
+export {
+  backspaceAction,
+  caretAt,
+  editorExtension,
+  editorKeyAction,
+  enterAction,
+  findMatchesIn,
+  indentAction,
+  lineStarts,
+  pairAction,
+  syntaxFor,
+  wrapsByDefault,
+  type EditAction,
+  type EditorSyntax
+} from './content/editing'
 
 /** What a discovered directory turned out to be. */
 export type ProjectKind =
@@ -684,6 +729,14 @@ export interface LaunchPlan {
    * `--append-system-prompt-file`, or null when no overlay had a CLAUDE.md.
    */
   memoryFile: string | null
+  /**
+   * The ephemeral `--mcp-config` document written for this session, or null.
+   *
+   * Returned so the host can delete it when the session ends: it carries a
+   * bearer token for Helm's own loopback endpoint, and a token file that
+   * outlives the run that minted it is a file nothing collects.
+   */
+  mcpConfigFile: string | null
   /** Things the user should know that did not stop the launch. */
   warnings: string[]
 }
@@ -1185,7 +1238,77 @@ export interface AppSettings {
    * developing it looks like, is still one request.
    */
   lastUpdateCheckAt: string | null
+
+  /**
+   * How far the browser pane may reach: anywhere, or this machine only.
+   *
+   * A **posture**, and the widest of the two reach controls: it governs the
+   * pane itself, whoever is driving. It is enforced in exactly one function
+   * (`browserReachAllows`), which `browserMcpLocalOnly` composes with rather
+   * than copying - see `agentReach`.
+   */
+  browserReach: BrowserReach
+  /**
+   * Whether Helm serves its browser tools to the sessions it hosts.
+   *
+   * On by default, because the stated purpose is that Claude can open things in
+   * Helm: a session that cannot reach the pane beside it is a pane the user has
+   * to drive twice. Off is a real off - `main/browser-mcp.ts` never binds a
+   * port, no token exists, and no `--mcp-config` reaches any argv - so the app
+   * has no inbound listener at all, which is the state it was in before M17.
+   */
+  browserMcp: boolean
+  /**
+   * Whether the tools are confined to this machine even when the pane is not.
+   *
+   * The **narrower** of the two reach controls, and off by default because the
+   * pane's default is `web` and a tool that could not follow the page the user
+   * is looking at would be a tool nobody used. On, an agent navigation is
+   * allowed only where `browserReach` **and** this both allow it - the
+   * intersection, taken by passing both to `browserReachAllows` rather than by
+   * writing a second rule (`agentReach`). An agent can therefore never exceed
+   * the reach of the pane it is driving, in either setting's direction.
+   */
+  browserMcpLocalOnly: boolean
+  /**
+   * The last URLs a browser pane visited, newest first.
+   *
+   * The address bar's dropdown and nothing more elaborate - no history page, no
+   * manager, no search over it (see the milestone's "explicitly out"). State
+   * rather than a preference, so it sits beside `workspaceTabs` and is
+   * deliberately absent from the settings pane. Bounded by
+   * `BROWSER_RECENT_URLS_MAX`.
+   */
+  browserRecentUrls: string[]
+  /**
+   * The last URL a browser pane was on, per project directory.
+   *
+   * Also state. It is what makes opening a browser beside a project cheap: the
+   * dev server's port is a property of the project, and typing it again every
+   * session is the papercut this pane exists to remove. Keyed by the project's
+   * path, lower-cased, the same comparison every other path list here makes.
+   * Bounded by `BROWSER_PROJECT_URLS_MAX`.
+   *
+   * The browser *tabs* themselves are not persisted, and that is the same rule
+   * the session strip follows for the same reason: a `WebContentsView` is
+   * main-owned state with a process behind it, it does not outlive the app, and
+   * a strip of tabs pointing at views that no longer exist is not a workspace
+   * restored. This is the part worth remembering, so this is the part remembered.
+   */
+  browserProjectUrls: Record<string, string>
 }
+
+/** How many addresses the dropdown offers. Ten, and no manager behind it. */
+export const BROWSER_RECENT_URLS_MAX = 10
+
+/**
+ * How many projects keep a remembered URL.
+ *
+ * A ceiling on a value rewritten whole on every navigation, exactly as
+ * `PINNED_PROJECTS_MAX` is - not a statement about how many projects anybody
+ * has. Past this the oldest entries are dropped.
+ */
+export const BROWSER_PROJECT_URLS_MAX = 200
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
@@ -1221,7 +1344,22 @@ export const DEFAULT_SETTINGS: AppSettings = {
   prReviewModel: null,
   prReviewEffort: null,
   updateCheck: true,
-  lastUpdateCheckAt: null
+  lastUpdateCheckAt: null,
+  // `web` rather than `local`, and it is a decision. The pane is framed as a
+  // dev-server viewport, but a dev server that pulls an API, a font or a docs
+  // page is the ordinary case, and a viewport that could not follow it is one
+  // people would turn off on the first afternoon. `local` is one click away for
+  // the run where nothing should leave the machine.
+  browserReach: 'web',
+  // On, because the whole point of the endpoint is that a session can open a
+  // page in the app that is hosting it; off is one tick away and removes the
+  // listener entirely.
+  browserMcp: true,
+  // Off, because the pane defaults to `web`: an agent confined to loopback
+  // beside a pane that is not would be a surprise rather than a posture.
+  browserMcpLocalOnly: false,
+  browserRecentUrls: [],
+  browserProjectUrls: {}
 }
 
 /**
@@ -1938,6 +2076,28 @@ export interface ContentSource {
   highlighted: boolean
   /** True when the file was past the ceiling; `html` is empty and that is why. */
   tooLarge: boolean
+}
+
+/**
+ * A draft, tokenised, for the editor's underlay.
+ *
+ * Per line rather than as one block of HTML, because the underlay builds DOM
+ * for a window of the file rather than all of it - see `CodeEditor`. The whole
+ * file is tokenised even so: a string opened two hundred lines up changes the
+ * colour of everything below it, so a window tokenised on its own would be
+ * confidently wrong rather than merely late.
+ *
+ * `tooLarge` is the same ceiling the read views use, and it degrades the same
+ * way: the text still edits, in one colour, and the pane says why.
+ */
+export interface EditorHighlight {
+  /** The inner HTML of each line. Empty when `tooLarge`. */
+  lines: string[]
+  language: string
+  highlighted: boolean
+  tooLarge: boolean
+  /** How long the tokenise took in main, for the latency group to report. */
+  tookMs: number
 }
 
 /** A file, its bytes, and - for markdown - what they render to. */

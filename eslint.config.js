@@ -135,6 +135,52 @@ export default tseslint.config(
   },
 
   // ---------------------------------------------------------------------------
+  // The other discipline: one component paints the modal overlay.
+  //
+  // Four dialogs each carried their own copy of `fixed inset-0 z-50 grid
+  // place-items-center bg-black/60 p-6`, and nothing in the app knew a dialog
+  // was open. That matters beyond tidiness: the browser pane is a
+  // `WebContentsView`, a native view paints above all renderer DOM, and it has
+  // to hide whenever a dialog is up. With four backdrops there is nothing to
+  // subscribe to and every dialog written afterwards has to *remember* - which
+  // produces a bug that only appears when a browser tab happens to be open.
+  //
+  // So it is a rule the linter holds instead of a rule a person holds, for the
+  // same reason `no-electron-in-core` above is one.
+  //
+  // Matched as two whole words in one class string rather than as the literal
+  // pair, so `inset-0 fixed` and `fixed z-50 inset-0` are caught too. Both
+  // string literals and template chunks are checked - the second is what
+  // someone reaches for once the first has failed. `absolute inset-0` is
+  // untouched and common: it is a pane filling its own box, not an overlay.
+  // ---------------------------------------------------------------------------
+  {
+    name: 'no-raw-overlay',
+    files: ['packages/ui/**/*.{ts,tsx}', 'packages/desktop/src/renderer/**/*.{ts,tsx}'],
+    // The one place that may say it. Exempting the component by name is the
+    // whole mechanism: the boundary is only worth having if crossing it has to
+    // be deliberate enough to show up in a diff of this file.
+    ignores: ['packages/ui/src/components/Overlay.tsx'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "Literal[value=/(^|\\s)fixed(\\s|$)/][value=/(^|\\s)inset-0(\\s|$)/]",
+          message:
+            'A modal overlay is `Overlay` (packages/ui/src/components/Overlay.tsx), which owns the scrim, the centring, the z-index, the island shadow, Escape - and the state that says a dialog is up. A raw `fixed inset-0` is a fifth copy of that decision and a backdrop nothing can subscribe to.'
+        },
+        {
+          selector:
+            "TemplateElement[value.raw=/(^|\\s)fixed(\\s|$)/][value.raw=/(^|\\s)inset-0(\\s|$)/]",
+          message:
+            'A modal overlay is `Overlay` (packages/ui/src/components/Overlay.tsx), which owns the scrim, the centring, the z-index, the island shadow, Escape - and the state that says a dialog is up. A raw `fixed inset-0` is a fifth copy of that decision and a backdrop nothing can subscribe to.'
+        }
+      ]
+    }
+  },
+
+  // ---------------------------------------------------------------------------
   // Tests
   // ---------------------------------------------------------------------------
   {

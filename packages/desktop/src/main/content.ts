@@ -9,7 +9,9 @@ import {
   contentFileKind,
   contentScope,
   corpusIsCurrent,
+  editorExtension,
   highlightCode,
+  highlightLines,
   parseWikilink,
   readConfigFileContent,
   readConfigSnapshots,
@@ -31,6 +33,7 @@ import {
   type ContentScope,
   type ContentSource,
   type ContentSearchResult,
+  type EditorHighlight,
   type ContentTree,
   type RenderedMarkdown,
   type WikiIndex,
@@ -59,10 +62,22 @@ import type { Services } from './services'
  * spend, and the renderer receiving finished HTML means it injects a string
  * instead of walking a syntax tree on every keystroke of a live preview.
  *
- * **The artifact protocol.** An HTML artifact is the one piece of content Helm
- * shows that it did not produce, so it is served to a sandboxed frame through a
- * scheme of its own, from a directory it is pinned to, under a Content Security
- * Policy that permits no network of any kind. See `registerContentProtocol`.
+ * **The artifact protocol.** An HTML artifact is content Helm did not produce,
+ * so it is served to a sandboxed frame through a scheme of its own, from a
+ * directory it is pinned to, under a Content Security Policy that permits no
+ * network of any kind. See `registerContentProtocol`.
+ *
+ * It stopped being the *only* such content when the browser pane landed (M16),
+ * and the two are opposites worth stating together rather than one being
+ * quietly demoted. An artifact is a **file on this disk**, rendered with the
+ * network taken away - `ARTIFACT_CSP` names no `http:` anywhere, so remote
+ * content is not blocked by policy, it has nowhere to be requested from. A
+ * browser view is the reverse: it exists *to* fetch, and what makes it safe is
+ * a partition of its own, a locked-down `webPreferences`, and every posture
+ * around it stated rather than defaulted (`main/browser.ts`). Neither one's
+ * guarantees are the other's, and the frame here must never acquire the
+ * browser's - `ContentDocumentPane` passes the console panel no evaluator for
+ * exactly that reason.
  */
 
 export interface ContentService {
@@ -408,6 +423,43 @@ const TREE_TTL_MS = 30_000
  * that hung on one file would be worse than one that is occasionally grey.
  */
 const HIGHLIGHT_MAX_BYTES = 512 * 1024
+
+/**
+ * A draft being typed, tokenised for the editor's underlay.
+ *
+ * The one highlighter, reached from both editors - the config console's and the
+ * content viewer's - which is why this is a free function rather than a method
+ * on either service. It reads nothing: the bytes come in on the channel,
+ * because the point of the editor is that what it colours is not on disk yet.
+ *
+ * **Main, over IPC, rather than a second shiki in the window**, and that is the
+ * decision SPEC records. Main is externalised, so `import('@shikijs/langs/x')`
+ * resolves through Node and every grammar shiki ships is reachable with no list
+ * to maintain; a renderer-side highlighter needs a hand-written map, which caps
+ * the languages at whatever somebody remembered and grows the bundle per
+ * grammar. Where the tokeniser runs was never the latency question - the DOM
+ * build is, and it happens in the window either way. What keeps typing fast is
+ * that the underlay never waits for this: see `CodeEditor`.
+ */
+export async function highlightForEditor(
+  path: string,
+  source: string
+): Promise<EditorHighlight> {
+  const started = Date.now()
+  // The same ceiling the read views use, measured the same way, so a file that
+  // reads as plain text does not suddenly colour when you press Edit.
+  if (Buffer.byteLength(source, 'utf8') > HIGHLIGHT_MAX_BYTES) {
+    return { lines: [], language: 'plaintext', highlighted: false, tooLarge: true, tookMs: 0 }
+  }
+  const out = await highlightLines(source, editorExtension(path))
+  return {
+    lines: out.lines,
+    language: out.language,
+    highlighted: out.highlighted,
+    tooLarge: false,
+    tookMs: Date.now() - started
+  }
+}
 
 /**
  * The source view's half of a document.
