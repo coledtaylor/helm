@@ -1179,6 +1179,53 @@ README, [PACKAGING.md](PACKAGING.md) and the `update:check` comment in
   greps the checkout for personal paths and names, and proves it can catch one
   before believing that it found none.
 
+### What 1.0 promises
+
+Added for the 1.0.0 release, because a version number that stops disclaiming
+invites the question and answering it by implication is how a promise gets made
+by accident.
+
+**1.0 promises one thing: an existing `helm.db` keeps working.** A newer Helm
+opens a database an older one wrote, and it does that by construction rather
+than by intention:
+
+- Migrations only ever roll forward, are journalled by tag in
+  `__helm_migrations`, and each runs in its own transaction, so a failure leaves
+  the file on the last complete one rather than half-way through
+  (`core/store/migrate.ts`). They are embedded in the bundle, so the exe carries
+  its own and needs nothing shipped beside it.
+- Settings reads are tolerant in both directions - an unknown key is ignored and
+  a missing one falls back to its default - so a database written by an older
+  *or a newer* build loads (`core/store/settings.ts`). Writes stay strict; the
+  asymmetry is argued at that code site.
+
+**Everything else is internal and may change in a patch release.** The overlay
+shim layout, the `--mcp-config` document, the IPC channel contract, the
+`app_settings` key set, the shape of an exported profile and the layout of the
+templates directory are all Helm's own, and none of them is a format anything
+outside Helm is asked to write.
+
+Two of those are files a person edits by hand, so the distinction is worth
+stating rather than leaving to be discovered - and in both cases what protects
+the user is the same rule the settings table follows, not a version number.
+
+**A template is a folder of ordinary files.** Helm's interest in it is `.tpl`
+substitution and nothing else, and a directory that is only ever *read* cannot
+be broken by a change to what Helm does with it. Nothing there is overwritten
+either, because Helm keeps no hashes and so cannot tell an edited file from an
+untouched one.
+
+**An exported profile is read tolerantly.** `profileFromYaml` throws only for a
+document that is not a profile at all - not a mapping, or missing `name` or
+`root`. A field whose value this build does not recognise is *dropped*, not
+fatal, because the alternative is refusing a whole file over one setting the
+user can see and fix in the editor afterwards. So a profile written by another
+version imports, minus anything this one cannot honour.
+
+What none of this promises is the Claude Code CLI, which is a separate product
+on its own release schedule. `CLAUDE_TESTED_RANGE` is a measurement, not a
+dependency bound - outside it Helm warns and starts anyway (7).
+
 ---
 
 ## 6. Out of Scope for v1

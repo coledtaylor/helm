@@ -14,6 +14,120 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 1.0.0
+
+The version number stops disclaiming. 1.0 does not mean finished - it means
+Helm is no longer a preview of itself, and that what is below is the shape it
+was meant to have. Read **What 1.0 does not promise** at the bottom before you
+read that as a guarantee; two of the things people reasonably expect from a
+1.0 are not here, and saying so is the point of that section.
+
+**A browser, in the window**
+
+- Helm has a browser in it, beside your session rather than in another
+  application. It is a **dev-server viewport** first: type a bare port number
+  and it goes there, so `5173` is a valid address.
+- It remembers the last page per project. A dev server's port belongs to the
+  project, and typing it again every session was the papercut this exists to
+  remove.
+- It is deliberately not a general browser. Nothing downloads - a download is
+  handed to your real browser instead. Every permission a page asks for is
+  refused. The address bar never hands what you typed to a search engine: a
+  page loads because you gave its address. Self-signed certificates are
+  accepted for this machine and nowhere else, and there is no click-through
+  for a bad one anywhere.
+- **Settings → Browser** decides where it may go: anywhere you navigate it, or
+  this machine only.
+- It keeps its own logins, in its own profile under Helm's data directory,
+  separate from your real browser. Nothing in Helm reads that profile; the one
+  thing the app can do to it is the **clear** button in the pane.
+
+**Claude can drive it**
+
+- Ask the session beside you to open a page, read it, click something, fill a
+  field or take a picture, and it will. Reading a page it has just changed, or
+  finding out why a page is blank, no longer means you relaying it.
+- Its tabs are labelled with the session that opened them, so with three
+  sessions running you can tell whose page you are looking at.
+- **A session drives only the tabs it opened itself.** A tab you opened is a
+  page you chose to be on, in a profile holding your logins, and no tool can
+  read, script or photograph it. Listing tabs is allowed; that is not driving.
+- One tick in **Settings → Browser** turns the whole thing off, and off is a
+  real off - no port is opened, no token exists, and sessions start exactly as
+  they did before. A second tick keeps the tools on this machine even when the
+  pane itself may go further.
+
+**Harness templates**
+
+- **New Harness** can start from a template instead of the bare scaffold, so
+  the layout you always end up building is there on the first day.
+- **Settings → Harness templates** manages them: create, rename, describe and
+  delete, copy a skill you have already written into one out of any `.claude`
+  tree Helm can see, or import a folder somebody sent you.
+- **Save a harness you have been working in as a template**, ticking off what
+  belongs to that particular harness rather than to the layout. The running
+  total moves as you untick, so you can see what you are about to keep.
+- Templates live in `~/.config/helm/templates` - beside the exe if you run the
+  portable build, so a stick leaves nothing on a machine you plug it into.
+  They are ordinary folders, and Helm opens them in Explorer for editing
+  rather than pretending to be your editor.
+- Only `.tpl` files are substituted. Everything else arrives byte for byte,
+  which is what makes it safe to keep a workflow file full of `${{ ... }}` in
+  a template.
+
+**The editors**
+
+- Source files are syntax highlighted, in the content viewer and in the config
+  console, and in both themes.
+- Editing behaves the way editing behaves: undo gives back what you typed
+  rather than the whole box, brackets close, and indentation follows the line
+  above.
+- Quotes do not auto-close in prose files. `don't` becoming `don''t` in a
+  CLAUDE.md is worse than a missing convenience.
+- On a very large file the highlighting steps aside rather than the typing
+  getting slow. A megabyte-and-a-quarter file used to take nearly two seconds
+  to answer a keystroke; it now answers in about twelve milliseconds, without
+  colour.
+
+**Throughout**
+
+- Every dialog in the app now paints the same overlay, so they dim the same
+  way, sit in the same place and close on the same key.
+
+**What Helm talks to**
+
+> Helm contacts nothing on its own initiative except the update check.
+> Everything else on the network happens because you asked for it: the
+> pull-request surface goes through your own `gh`, and the browser pane fetches
+> the page you navigate to.
+
+There is no telemetry, no crash reporting, no fonts and no CDN. Turn the update
+check off and Helm asks nothing by itself at all.
+
+What is new in 1.0 is that Helm now also **listens**, on loopback, so the
+sessions it hosts can reach the browser tools - `127.0.0.1` only, on a port the
+operating system picks, with a token minted per session and revoked when that
+session ends. There is no route that answers without one, not even a health
+check. With the browser tools off it binds nothing.
+
+**What 1.0 does not promise**
+
+- **These builds are not code-signed, and 1.0 does not change that.** Windows
+  will say **"Windows protected your PC"** on the download: **More info** →
+  **Run anyway**. That warning is doing its job. If you would rather check than
+  trust, both artefacts are built from the tagged commit by the release
+  workflow and the run is linked from this page.
+- **There is no auto-updater, deliberately.** Helm tells you when a release is
+  out and links it; installing it is yours. An unsigned replacement installer
+  would put that same SmartScreen prompt in front of every update, the portable
+  build has no install location to replace, and a background restart would end
+  a `claude` session you were in the middle of.
+- **Your data keeps working, and that is the whole of the compatibility
+  promise.** A newer Helm opens the database an older one wrote; settings it
+  does not recognise are ignored rather than fatal, in both directions.
+  Everything else - the internal file layouts, the exported profile format,
+  what the app keeps where - is Helm's own and may change.
+
 ## 0.5.0
 
 **Session history**
