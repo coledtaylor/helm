@@ -442,10 +442,10 @@ export async function runHistoryChecks(
   // The cost one is measured **against itself**, with the rule turned off and
   // on again in the same window on the same list in the same second, and the
   // assertion is the ratio. An absolute millisecond bound would be a claim
-  // about the machine the check is running on, and this suite already has two
-  // probes that fail on a developer's machine for reasons that have nothing to
-  // do with what they measure (868kqvrn4); adding a third would be worse than
-  // adding none. A ratio is the same number on a fast machine and a slow one.
+  // about the machine the check is running on rather than about the app, and a
+  // probe that goes red on a slow afternoon is a probe people learn to skip -
+  // which costs more than never having written it. A ratio is the same number on
+  // a fast machine and a slow one.
   //
   // The first draft of this probe asserted the *mechanism* - that rows below
   // the fold have unrendered subtrees - and it failed, correctly, because that
