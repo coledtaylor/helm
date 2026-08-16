@@ -1,8 +1,8 @@
 @import 'tailwindcss';
 
-/* Rendered markdown (M6). Separated because it styles HTML that arrives as a
- * string from the main process, so none of it can be expressed as a utility on
- * a call site - there is no call site. */
+/* Rendered markdown, as the content viewer paints it. Separated because it
+ * styles HTML that arrives as a string from the main process, so none of it
+ * can be expressed as a utility on a call site - there is no call site. */
 @import './markdown.css';
 
 /*
