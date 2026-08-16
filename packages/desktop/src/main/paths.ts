@@ -1,5 +1,6 @@
 import { app } from 'electron'
 import { mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { AppMode } from '../shared/ipc'
 
@@ -47,6 +48,34 @@ export function initDataDir(): void {
 }
 
 export const dbFile: string = join(dataDir, 'helm.db')
+
+/**
+ * Where the user's harness templates live.
+ *
+ * The same `PORTABLE_EXECUTABLE_DIR` branch `dataDir` takes, and that is the
+ * whole of the mechanism - one rule covering all four run modes rather than a
+ * second override invented for this one:
+ *
+ *   installed, dev:live   `~/.config/helm/templates`
+ *   portable              `helm-data/templates` beside the exe
+ *   pnpm dev              its own, under `%LOCALAPPDATA%\Helm\dev`
+ *   every check           its own, under `%LOCALAPPDATA%\Helm\checks\<name>`
+ *
+ * The last two come for free: both go through `scripts/isolate.mjs`, which sets
+ * the variable. `pnpm dev` needs its own rather than sharing because in-app
+ * authoring makes the dev app a *writer* of templates - harmless while it can
+ * only read, and somebody's templates directory the moment it cannot.
+ * `scripts/run-dev.mjs` seeds it by copying the real one, the way the database
+ * is seeded from a `VACUUM INTO` copy.
+ *
+ * Not under `%APPDATA%\Helm` for the installed case, and that is deliberate:
+ * these are files a person writes and edits by hand, likely keeps in git, and
+ * has to be able to find. `~/.config/helm` is where somebody looks for that;
+ * `%APPDATA%` is where an application keeps things about itself.
+ */
+export const templatesDir: string = portableDir
+  ? join(dataDir, 'templates')
+  : join(homedir(), '.config', 'helm', 'templates')
 
 /**
  * Where synthesised overlay plugins go.

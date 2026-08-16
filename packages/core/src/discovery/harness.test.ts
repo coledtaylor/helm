@@ -27,16 +27,43 @@ async function tree(dir: string, base = dir): Promise<string[]> {
 }
 
 describe('createHarness', () => {
-  it('scaffolds the minimum and nothing else', async () => {
-    const result = await createHarness({ mode: 'new', dir: root, name: 'work' })
+  /*
+   * These two are about the **minimal template**, and say so.
+   *
+   * They used to be about creation full stop - "scaffolds the minimum and
+   * nothing else" over whatever `createHarness` did - which was the same claim
+   * while there was only one thing it could do. A template writes its own tree,
+   * so the exact-three-entries assertion is now a statement about `minimal`
+   * specifically, and pinning it to every creation would have made adding a
+   * template a red test rather than a new one. `minimal` is passed explicitly
+   * even though it is the default: the point of the test is which scaffold is
+   * being asserted about.
+   */
+  it('scaffolds the minimum and nothing else, for the minimal template', async () => {
+    const result = await createHarness({
+      mode: 'new',
+      dir: root,
+      name: 'work',
+      template: 'minimal'
+    })
 
     expect(result.problems).toEqual([])
     expect(result.path).toBe(join(root, 'work'))
     expect(await tree(join(root, 'work'))).toEqual(['.claude', 'harness.yaml', 'repos'])
   })
 
+  it('defaults to the minimal template when none is named', async () => {
+    const result = await createHarness({ mode: 'new', dir: root, name: 'work' })
+
+    expect(result.created).toEqual(['repos', '.claude', 'harness.yaml'])
+    expect(await tree(join(root, 'work'))).toEqual(['.claude', 'harness.yaml', 'repos'])
+    expect(await readFile(join(root, 'work', 'harness.yaml'), 'utf8')).toMatch(
+      /^template: "minimal"$/m
+    )
+  })
+
   it('writes four keys and no prose', async () => {
-    await createHarness({ mode: 'new', dir: root, name: 'work' })
+    await createHarness({ mode: 'new', dir: root, name: 'work', template: 'minimal' })
     const manifest = await readFile(join(root, 'work', 'harness.yaml'), 'utf8')
 
     const lines = manifest.trim().split('\n')

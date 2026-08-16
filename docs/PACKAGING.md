@@ -40,6 +40,20 @@ and shares the installed app's database, shims and Chromium profile. That is
 or checkout, and `PORTABLE_EXECUTABLE_DIR` says whether the data is its own -
 `installed`, `portable`, `dev`, `dev-live`.
 
+**Harness templates take the same branch.** `templatesDir` reads the same
+variable: set, they live in `<exe dir>\helm-data\templates`, so **a portable
+install keeps its templates on the stick and leaves nothing on a machine it is
+plugged into**; unset, they live in `~/.config/helm/templates` rather than under
+`%APPDATA%`, because a template is a directory somebody authors by hand and
+likely keeps in git. One rule, four run modes, and no second override
+mechanism - `pnpm dev` and every check get a templates directory of their own
+for free, because both already set that variable for the database.
+
+The shipped `README.md` and example template are written on a start that finds
+the directory **absent**, and nothing there is ever overwritten. Helm records no
+hashes of what it seeded, so it cannot distinguish an edited file from an
+untouched one; deleting the directory is what puts the originals back.
+
 ## What the installer does, and what it deliberately does not
 
 - **Per-user**, into `%LOCALAPPDATA%\Programs\Helm`. Nothing Helm does needs

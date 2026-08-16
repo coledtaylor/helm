@@ -31,9 +31,10 @@
 // console still writes the real settings through its snapshot path.
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { cpSync, existsSync, lstatSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join, resolve } from 'node:path'
+import { homedir } from 'node:os'
+import { join, relative, resolve } from 'node:path'
 import { isolate, realDataDir } from './isolate.mjs'
 import { writeDevGh } from './dev-gh.mjs'
 
@@ -47,6 +48,7 @@ const passthrough = argv.filter((arg) => arg !== '--fresh' && arg !== driveArg)
 
 const { root, dataDir, env } = isolate('dev', { seed: !fresh, concurrent: true, group: null })
 const gh = writeDevGh(root)
+const templates = seedTemplates(dataDir)
 
 /**
  * Chromium's remote debugging port, for `scripts/drive-dev.mjs`.
@@ -68,6 +70,7 @@ console.log('')
 console.log(`Helm dev is isolated: ${dataDir}`)
 console.log(`  database   ${fresh ? 'none - this is the first-run state' : 'a copy of the real one, taken just now'}`)
 console.log(`  gh         ${gh} (synthetic; no network, and it refuses pr checkout)`)
+console.log(`  templates  ${templates}`)
 console.log(`  ~/.claude  the real one, so sessions are real sessions`)
 if (drivePort !== null) {
   console.log(`  drive      127.0.0.1:${drivePort} - node scripts/drive-dev.mjs text`)
@@ -79,6 +82,7 @@ console.log('')
 // than asserted. A listing and one mtime: reading the code cannot tell you
 // whether some path still resolves `userData` the old way.
 const before = snapshot(realDataDir())
+const templatesBefore = templatesSnapshot()
 
 /**
  * `electron-vite dev --watch`, run through Node rather than the `.bin` shim.
@@ -105,7 +109,90 @@ const { status } = spawnSync(
 )
 
 report(before, snapshot(realDataDir()))
+reportTemplates(templatesBefore, templatesSnapshot())
 process.exit(status ?? 1)
+
+/**
+ * The real templates directory, and where dev's copy of it goes.
+ *
+ * `~/.config/helm/templates` is the installed app's, resolved here the same way
+ * `paths.ts` resolves it for the run that is not portable. Dev gets a copy
+ * under its own data directory, replaced at every launch exactly as the
+ * database is - the point of copying at all is that the dev app shows the
+ * templates this machine actually has, and a copy taken a week ago is neither
+ * that nor a fixture.
+ *
+ * It is a copy rather than a share because **M14 makes the dev app a writer**.
+ * A shared directory is harmless while dev can only read and is somebody's
+ * templates directory the moment it cannot.
+ *
+ * Reparse points are skipped rather than followed: `cpSync` walking a junction
+ * would copy whatever it points at, and the engine refuses one inside a
+ * template anyway.
+ */
+function seedTemplates(dataDir) {
+  const source = realTemplatesDir()
+  const dest = join(dataDir, 'templates')
+  if (!existsSync(source)) {
+    return `${dest} (nothing at ${source} to copy; the app seeds its own)`
+  }
+  rmSync(dest, { recursive: true, force: true })
+  cpSync(source, dest, {
+    recursive: true,
+    filter: (from) => !lstatSync(from).isSymbolicLink()
+  })
+  return `${dest} (a copy of ${source}, taken just now)`
+}
+
+function realTemplatesDir() {
+  return join(homedir(), '.config', 'helm', 'templates')
+}
+
+/** Every file under the real templates directory, with size and mtime. */
+function templatesSnapshot(dir = realTemplatesDir(), base = dir, into = []) {
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return into.sort()
+  }
+  for (const entry of entries) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      templatesSnapshot(path, base, into)
+      continue
+    }
+    try {
+      const stat = statSync(path)
+      into.push(`${relative(base, path)} ${String(stat.size)}@${String(Math.floor(stat.mtimeMs))}`)
+    } catch {
+      into.push(`${relative(base, path)} ?`)
+    }
+  }
+  return into.sort()
+}
+
+/**
+ * Says whether the real templates directory moved while dev was up.
+ *
+ * The same shape as `report` above and for a stronger reason: "the dev app
+ * never writes to `~/.config/helm`" is a criterion, and the installed Helm
+ * writes there only once ever - at its own first start - so unlike the
+ * database, a change here is almost certainly this run's. Printed rather than
+ * thrown all the same; the installed app is allowed to be running.
+ */
+function reportTemplates(start, end) {
+  if (start.join('\n') === end.join('\n')) {
+    console.log(
+      `${realTemplatesDir()} is unchanged: ${String(end.length)} file(s) (size@mtime compared).`
+    )
+    return
+  }
+  console.log(`\n${realTemplatesDir()} CHANGED while dev was up:`)
+  for (const line of end.filter((entry) => !start.includes(entry))) console.log(`  now      ${line}`)
+  for (const line of start.filter((entry) => !end.includes(entry))) console.log(`  was      ${line}`)
+  console.log('  Dev is supposed to write only to its own copy under %LOCALAPPDATA%\\Helm\\dev.')
+}
 
 /** Entry names and the database's size and mtime, which is what a run moves. */
 function snapshot(dir) {

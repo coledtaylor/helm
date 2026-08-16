@@ -1,5 +1,6 @@
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
+import { applyTemplate, MINIMAL_TEMPLATE, templateIdProblems } from './templates'
 
 /**
  * Making a harness, as opposed to finding one.
@@ -12,27 +13,27 @@ import { basename, join, resolve } from 'node:path'
  * Two shapes, because there are two ways someone arrives here:
  *
  *   'new'     - a directory that does not exist yet. Gets `harness.yaml`,
- *               `repos/` and `.claude/`, and nothing else.
+ *               `repos/` and `.claude/`, and nothing else - or, given a
+ *               `template:`, that template's tree and a manifest.
  *   'convert' - a directory that already holds repositories. Gets a
  *               `harness.yaml` and `repos: .` so the repos already sitting at
  *               its top level stay visible; without that key a harness only
  *               ever lists `repos/*` and converting a folder would hide
- *               everything in it.
+ *               everything in it. **Templates do not apply here**: converting
+ *               is about a directory somebody already has, and writing a
+ *               layout into it would be writing into their work.
  *
- * What is deliberately *not* here is a layout. No notes convention, no rules,
- * no starter skills, no CLAUDE.md - those are one person's way of working, and
- * a scaffold that bakes them in is a scaffold that has an opinion about someone
- * else's workspace. A fuller layout is a named `template:`, which this records
- * and does not invent.
+ * What is deliberately *not* in the minimal scaffold is a layout. No notes
+ * convention, no rules, no starter skills, no CLAUDE.md - those are one
+ * person's way of working, and a default that bakes them in is a default with
+ * an opinion about someone else's workspace. A fuller layout is a named
+ * `template:`, which the user writes and this applies (`templates.ts`).
  */
 
 const HARNESS_MANIFEST = 'harness.yaml'
 
 /** The manifest format this writer produces. Not Helm's version, nor the harness's. */
 export const HARNESS_FORMAT_VERSION = '1'
-
-/** What `template:` says when the caller does not name one. */
-export const MINIMAL_TEMPLATE = 'minimal'
 
 /**
  * Reserved on Windows regardless of extension, and unusable as a directory
@@ -55,8 +56,18 @@ export interface CreateHarnessRequest {
   dir: string
   /** For 'new', the directory name and the manifest's `name`. */
   name?: string | undefined
-  /** Recorded in `template:`. The scaffold is the same either way. */
+  /**
+   * Recorded in `template:`, and in 'new' mode the tree that gets written.
+   * Absent or `minimal` is the built-in scaffold; anything else names a
+   * directory in `templatesDir`.
+   */
   template?: string | undefined
+  /**
+   * Where the user's templates live. The host resolves it - see
+   * `desktop/src/main/paths.ts` - because core does not know which of the four
+   * run modes this is. Absent means only `minimal` can be built.
+   */
+  templatesDir?: string | undefined
 }
 
 export interface CreateHarnessResult {
@@ -64,7 +75,15 @@ export interface CreateHarnessResult {
   path: string | null
   /** Paths created, relative to `path`, in the order they were written. */
   created: string[]
-  /** Why nothing was written. Non-empty means `path` is null. */
+  /**
+   * What went wrong, as sentences.
+   *
+   * With `path` null this is why nothing was written. With `path` set it is a
+   * **partial** template: the harness is there, `created` is what actually
+   * landed in it, and these are the entries that did not. Multi-file writes can
+   * fail halfway and this reports that rather than pretending a rollback
+   * happened - see `applyTemplate`.
+   */
   problems: string[]
 }
 
@@ -147,8 +166,27 @@ export async function createHarness(
 
   if (request.mode === 'new') {
     const name = (request.name ?? '').trim()
+    const template = (request.template ?? MINIMAL_TEMPLATE).trim() || MINIMAL_TEMPLATE
     problems.push(...harnessNameProblems(name))
     if (!(await isDirectory(dir))) problems.push(`${dir} is not a folder.`)
+    if (template !== MINIMAL_TEMPLATE) {
+      const idProblems = templateIdProblems(template)
+      problems.push(...idProblems)
+      if (request.templatesDir === undefined) {
+        problems.push('Templates are not available in this run.')
+      } else if (
+        idProblems.length === 0 &&
+        !(await isDirectory(join(request.templatesDir, template)))
+      ) {
+        // Asked here rather than left to `applyTemplate`, which is called after
+        // the directory has been made: a template that is not there must leave
+        // no directory behind, and "nothing was written" is only true before
+        // the first `mkdir`.
+        problems.push(`There is no template called "${template}".`)
+      }
+    }
+    // Every refusal above is about the request, so none of them has written
+    // anything: this is the last point at which "nothing happened" is true.
     if (problems.length > 0) return { path: null, created: [], problems }
 
     const target = join(dir, name)
@@ -168,23 +206,48 @@ export async function createHarness(
     }
 
     const created: string[] = []
+    const createdAt = new Date().toISOString()
     await mkdir(target, { recursive: true })
-    await mkdir(join(target, 'repos'), { recursive: true })
-    created.push('repos')
-    await mkdir(join(target, '.claude'), { recursive: true })
-    created.push('.claude')
+
+    if (template === MINIMAL_TEMPLATE) {
+      await mkdir(join(target, 'repos'), { recursive: true })
+      created.push('repos')
+      await mkdir(join(target, '.claude'), { recursive: true })
+      created.push('.claude')
+    } else {
+      /*
+       * The template's tree first, the manifest last.
+       *
+       * That order is the guarantee that `template:` is what Helm wrote:
+       * a template supplying its own `harness.yaml` is refused by
+       * `applyTemplate` rather than allowed to win, and writing ours after
+       * means a partial apply still leaves a directory the launcher can see and
+       * the user can finish or delete. `repos/` and `.claude/` are not created
+       * here - a template is the whole of its own layout, and the two
+       * directories the minimal scaffold makes are its opinion, not Helm's.
+       */
+      const applied = await applyTemplate({
+        templatesDir: request.templatesDir as string,
+        template,
+        target,
+        values: { NAME: name, CREATED_AT: createdAt, TEMPLATE: template }
+      })
+      created.push(...applied.created)
+      problems.push(...applied.problems)
+    }
+
     await writeFile(
       join(target, HARNESS_MANIFEST),
       manifestYaml({
         name,
-        template: request.template ?? MINIMAL_TEMPLATE,
+        template,
         version: HARNESS_FORMAT_VERSION,
-        created: new Date().toISOString()
+        created: createdAt
       }),
       'utf8'
     )
     created.push(HARNESS_MANIFEST)
-    return { path: target, created, problems: [] }
+    return { path: target, created, problems }
   }
 
   // convert
@@ -201,7 +264,11 @@ export async function createHarness(
     join(dir, HARNESS_MANIFEST),
     manifestYaml({
       name: (request.name ?? '').trim() || basename(dir),
-      template: request.template ?? MINIMAL_TEMPLATE,
+      // Always `minimal`, whatever the caller passed. A conversion writes a
+      // manifest and a `.claude/` into a directory somebody already has, and
+      // recording a template a converted folder was never built from would be
+      // provenance that is simply untrue.
+      template: MINIMAL_TEMPLATE,
       version: HARNESS_FORMAT_VERSION,
       created: new Date().toISOString(),
       ...(reposAtTopLevel ? { repos: '.' } : {})

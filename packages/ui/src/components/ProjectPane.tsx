@@ -1,5 +1,5 @@
 import type { JSX, ReactNode } from 'react'
-import type { Project } from '@helm/core'
+import type { Harness, Project } from '@helm/core'
 import type { IgnoredRepo, PullRepo, PullsSnapshot, PullSummary } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { GitChip } from './GitChip'
@@ -54,6 +54,14 @@ export function projectPulls(
 
 export interface ProjectPaneProps {
   project: Project
+  /**
+   * The harness this pane is *about*, when the project is a harness root.
+   *
+   * Only for its `template:`, which is provenance and lives in the manifest
+   * rather than on the project row discovery builds. Absent for every other
+   * kind of project, and for a harness whose manifest names no template.
+   */
+  harness?: Harness | null | undefined
   onReveal: (path: string) => void
   /** Opens a Claude Code session with this project as the working directory. */
   onLaunch: (project: Project) => void
@@ -111,6 +119,7 @@ export interface ProjectPaneProps {
  */
 export function ProjectPane({
   project,
+  harness = null,
   onReveal,
   onLaunch,
   launching = false,
@@ -155,6 +164,21 @@ export function ProjectPane({
             {KIND_LABEL[project.kind]}
           </span>
         </header>
+
+        {/* The template this harness was built from, and nothing more is made
+            of it: it is a record of where the directory came from, not a
+            relationship Helm maintains. Nothing re-applies a template and
+            nothing compares against one - the harness belongs to whoever works
+            in it from the moment it exists. */}
+        {harness?.template && (
+          <p className="mt-1.5 text-[11px] leading-[1.55] text-fg-subtle">
+            Created from the{' '}
+            <span data-harness-template-name className="font-mono text-fg-muted">
+              {harness.template}
+            </span>{' '}
+            template.
+          </p>
+        )}
 
         <div className="mt-4 flex flex-wrap items-center gap-2.5">
           <button

@@ -34,6 +34,7 @@ A change to a surface named here is not done until its check is green.
 | `pnpm usage-check` | the status bar's usage figures | `core/usage/`, the status bar |
 | `pnpm settings-check` | the settings pane, every app setting, terminal/shell preferences | `core/store/settings.ts`, `SettingsPane`, `terminal.ts`, `estimateGrid`, `main/pterm.ts` |
 | `pnpm transcript-check` | the transcript archive: capture, search, the ceiling, read-only | `core/archive/`, `core/store/archive.ts`, `main/archive.ts`, the session-history pane's archive states, anything that reads `projects/*.jsonl` |
+| `pnpm template-check` | harness templates: the engine, the picker, seeding | `core/discovery/templates.ts`, `createHarness`, `NewHarnessDialog`, `templatesDir` in `paths.ts`, the seeding in `createServices` |
 | `pnpm pr-check` | the pull-request surface end to end | `core/github/`, `main/pulls.ts`, `main/gh-cli.ts`, `PullsPane`, `PullRow`, `PullRequestPane`, the project pane's pull-request panel and its Config/Content links, `SessionHost.review` |
 | `pnpm affordance-check` | every clickable control looks clickable | `theme.css`, `lib/segmented.ts`, `Checkbox`, any shared control recipe, any new pane |
 | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
@@ -284,6 +285,44 @@ absent from `history_prompts`, which is what says the search is over messages
 a claim the process that wrote the rows can make - `run-transcript.mjs` deletes
 the transcript between the phases and a second real app start has to find the
 conversation still there (T-7). No sessions, no network, about ninety seconds.
+
+**`template-check`** - harness templates, in **five app starts**. Three of them
+are windowless `--template-seed` runs, and they are the shape worth copying: "a
+first start seeds the directory", "a second overwrites nothing" and "deleting it
+re-seeds" are three claims about *startup*, and no process that has already
+started can make one about itself. `run-template.mjs` arranges the directory
+between them and each start writes down what it found; the driver reads those
+three files and turns them into TPL-7/8/9, so every verdict still lives in one
+report. **The runner edits a seeded file between two of the starts**, and that
+edit is the probe rather than preparation: Helm keeps no hashes of what it
+seeded and so cannot tell an edited file from an untouched one, which is exactly
+why it must never overwrite - "the file is still what the user made it" is the
+assertion, where "the file is still there" would pass over a rewrite.
+
+The fourth start drives the real New Harness dialog against a fixture template
+planted in the check's own templates directory (free, through `isolate.mjs` -
+`templatesDir` reads the same `PORTABLE_EXECUTABLE_DIR`). It picks the fixture
+out of the real picker, creates, and walks the result with a recursion that
+knows nothing about templates. The load-bearing one is TPL-4: a **non-`.tpl`
+file full of literal `{{...}}`** - two GitHub Actions expressions, a Jinja
+block, and a `{{NAME}}` - has to arrive identical to the byte, which is what
+says substitution stayed inside `.tpl`. TPL-1 comes first and is the reason any
+of that is believed: the byte comparator is run clean, then **a byte of the
+fixture is flipped and the same function is required to reject the file it had
+just accepted**, then the byte is put back. That is the PROF-4 rule applied
+before the fact rather than after it.
+
+`hostile` refuses four template names that are paths (`../escape`,
+`C:\Windows\System32` and friends) through the real `harness:create` channel -
+the picker cannot produce one, so the channel is where the refusal has to hold -
+and walks the parent either side, because "it refused" and "it refused after
+making the folder" look identical from a return value. Then it creates from a
+template carrying a real Windows **junction**: the honest half is written, the
+junction is a sentence in `problems`, and what it pointed at is hashed either
+side so containment is a claim about bytes rather than about a filename absent
+from a listing.
+
+No sessions, no network, about a minute.
 
 **`fidelity` and `claude-check`** - TUI fidelity inside xterm. These render
 `spike.html`, a separate page from the app, so app layout changes cannot move

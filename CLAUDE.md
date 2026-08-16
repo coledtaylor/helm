@@ -126,6 +126,20 @@ shares a directory with another Helm, and it is opt-in:
 A check gets its own directory too, under `%LOCALAPPDATA%\Helm\checks\<name>`;
 see the **`checks`** skill.
 
+**Harness templates are the one thing not under the data directory**, and they
+take the same branch rather than a mechanism of their own. `templatesDir` in
+`paths.ts` reads `PORTABLE_EXECUTABLE_DIR`: set, it is `helm-data/templates`
+beside the exe, so a portable install stays on the stick and leaves nothing on a
+machine it is plugged into, and `pnpm dev` and every check get their own for
+free through `isolate.mjs`. Unset - installed and `dev:live` - it is
+**`~/.config/helm/templates`**, not `%APPDATA%`, because these are files a
+person writes by hand and probably keeps in git, and that is where somebody
+looks for those. The shipped README and example are written **only when the
+directory is absent** and nothing there is ever overwritten: Helm keeps no
+hashes, so it cannot tell an edited file from an untouched one. The accepted
+consequence is that an improved example never reaches an existing install, and
+deleting the directory is the whole of "reset".
+
 ## Surfaces that degrade
 
 Each of these has one rule that must survive contact with a refactor. The detail

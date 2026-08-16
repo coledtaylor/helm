@@ -62,6 +62,16 @@ export const projects = sqliteTable(
     name: text('name').notNull(),
     kind: text('kind', { enum: ['harness', 'repo', 'folder'] }).notNull(),
     harnessPath: text('harness_path'),
+    /**
+     * `template:` from the harness manifest, for a `kind: 'harness'` row only.
+     *
+     * Provenance rather than behaviour: nothing reads it back to decide
+     * anything, and a harness is free to stop resembling the template it came
+     * from the moment it exists. It is here because the launcher paints from
+     * this cache before the first scan lands, and a fact that the cache drops
+     * is a fact that flickers on every start.
+     */
+    template: text('template'),
     hasClaudeDir: integer('has_claude_dir', { mode: 'boolean' }).notNull().default(false),
     /** JSON `ClaudeInventory`. */
     inventory: text('inventory', { mode: 'json' }).notNull(),

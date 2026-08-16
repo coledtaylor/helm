@@ -92,5 +92,11 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "ALTER TABLE `history_prompts` ADD `title_rank` integer;",
       "ALTER TABLE `history_sessions` ADD `title_prompt` text;"
     ]
+  },
+  {
+    "tag": "0010_shocking_starbolt",
+    "statements": [
+      "ALTER TABLE `projects` ADD `template` text;"
+    ]
   }
 ]

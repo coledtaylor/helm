@@ -62,6 +62,11 @@ your user only, into `%LOCALAPPDATA%\Programs\Helm`, and keeps its data in
 `%APPDATA%\Helm`. Uninstalling removes the program and **keeps** your data - the
 database holds your profiles, session index and config snapshots.
 
+Harness templates are the one thing outside that: they live in
+`~/.config/helm/templates`, because they are folders you write and edit by hand.
+A portable install keeps them in its own `helm-data\templates`, so it still
+leaves nothing behind on a machine you plug it into.
+
 Expect **"Windows protected your PC"** either way. These builds are not
 code-signed, so SmartScreen has no publisher to check and warns about every
 download: **More info** -> **Run anyway**. That warning is doing its job, and

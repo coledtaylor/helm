@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { emit, registerIpc, resolvedTheme } from './ipc'
-import { appMode, dataDir, initDataDir, shimRoot } from './paths'
+import { appMode, dataDir, initDataDir, shimRoot, templatesDir } from './paths'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
 import {
   adoptExistingProfile,
@@ -61,6 +61,7 @@ import { runUsageChecks } from './usagecheck'
 import { runSettingsChecks } from './settingscheck'
 import { runPrChecks } from './prcheck'
 import { runTranscriptChecks, runTranscriptRestartChecks } from './transcriptcheck'
+import { hashTemplatesDir, runTemplateChecks } from './templatecheck'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -102,6 +103,8 @@ type Mode =
   | 'pr-check'
   | 'transcript-check'
   | 'transcript-restart'
+  | 'template-check'
+  | 'template-seed'
   | 'shim-sweep'
   | 'shim-hold'
   | 'design-shot'
@@ -128,6 +131,8 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--pr-check')) return 'pr-check'
   if (process.argv.includes('--transcript-check')) return 'transcript-check'
   if (process.argv.includes('--transcript-restart')) return 'transcript-restart'
+  if (process.argv.includes('--template-check')) return 'template-check'
+  if (process.argv.includes('--template-seed')) return 'template-seed'
   if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
   if (process.argv.includes('--shim-hold')) return 'shim-hold'
   if (process.argv.includes('--claude')) return 'claude'
@@ -153,6 +158,7 @@ const isSpikeMode =
   mode !== 'pr-check' &&
   mode !== 'transcript-check' &&
   mode !== 'transcript-restart' &&
+  mode !== 'template-check' &&
   mode !== 'shim-hold' &&
   mode !== 'design-shot' &&
   mode !== 'affordance-check'
@@ -366,6 +372,10 @@ function startApp(options: AppOptions = {}): void {
   if (services.staleShims > 0) {
     console.log(`removed ${String(services.staleShims)} overlay shim(s) left by the last run`)
   }
+  if (services.templates.seeded) {
+    console.log(`seeded ${String(services.templates.created.length)} template file(s) into ${templatesDir}`)
+  }
+  if (services.templates.problem !== null) console.warn(services.templates.problem)
 
   let win: BrowserWindow | null = createWindow('index', services.settings.windowBounds ?? null)
 
@@ -872,6 +882,39 @@ app.whenReady().then(() => {
       removed: services.staleShims
     })
     console.log(`shim sweep: removed ${String(services.staleShims)} shim(s); report: ${file}`)
+    services.store.close()
+    app.exit(0)
+    return
+  }
+
+  /**
+   * One real app start, so `pnpm template-check` can ask what a start does to
+   * the templates directory.
+   *
+   * Three claims need this and none of them can be made by a process that has
+   * already started: a first start seeds, a second overwrites nothing, and a
+   * start with the directory deleted seeds again. So `run-template.mjs` runs
+   * this three times, arranging the directory between them, and each run writes
+   * down what `createServices` found and the sha256 of every file in there.
+   * The verdicts are `templatecheck.ts`'s - TPL-7/8/9 - because the report is
+   * where a multi-phase check keeps its verdict. Same shape as `--shim-sweep`.
+   *
+   * No window: the claim is about startup, and a window would only add a scan.
+   */
+  if (mode === 'template-seed') {
+    const services = createServices()
+    const reportArg = process.argv.find((a) => a.startsWith('--report='))
+    const file = writeReport(reportArg?.slice('--report='.length) ?? 'template-seed.json', {
+      startedAt: new Date().toISOString(),
+      dir: templatesDir,
+      seeded: services.templates.seeded,
+      created: services.templates.created,
+      problem: services.templates.problem,
+      files: hashTemplatesDir(templatesDir)
+    })
+    console.log(
+      `template seed: ${services.templates.seeded ? `wrote ${String(services.templates.created.length)} file(s)` : 'already there, nothing written'}; report: ${file}`
+    )
     services.store.close()
     app.exit(0)
     return
@@ -1555,6 +1598,52 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`${mode} crashed: ${String(err)}`)
+            setTimeout(() => app.exit(1), 200)
+          })
+      }
+    })
+    return
+  }
+
+  /**
+   * Harness templates, driven through the real window.
+   *
+   * The directory picker is answered by the driver for the reason
+   * `--settings-check` answers it: "Choose…" opens a native dialog with no
+   * automation surface, and everything after it - the handler, the write, the
+   * rescan - is the real thing. The seed phases that precede this one are
+   * `--template-seed` above.
+   */
+  if (mode === 'template-check') {
+    startApp({
+      chooseDirectory: (title: string) => pickerAnswer('directory', title),
+      onReady: (ctx) => {
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runTemplateChecks(ctx, {
+          dataDir,
+          shotDir: join(dataDir, 'screenshots'),
+          ...(onlyArg ? { only: onlyArg.slice('--only='.length).split(',') } : {})
+        })
+          .then((checks) => {
+            const pass = checks.every((c) => c.ok)
+            const file = writeReport('template-report.json', {
+              startedAt: new Date().toISOString(),
+              mode: appMode,
+              dataDir,
+              templatesDir,
+              versions: process.versions,
+              pass,
+              checks
+            })
+            console.log(`template-check report: ${file}`)
+            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
+
+            app.once('quit', () => process.exit(pass ? 0 : 1))
+            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
+            setTimeout(() => app.quit(), 200)
+          })
+          .catch((err: unknown) => {
+            console.error(`template-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

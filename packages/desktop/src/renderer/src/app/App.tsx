@@ -1063,6 +1063,29 @@ export function App(): JSX.Element {
     [settings, selectedPath]
   )
 
+  /**
+   * The harness the open project *is*, when it is one.
+   *
+   * Only its `template:` is wanted, and that lives on the harness discovery
+   * built rather than on the project row. Found by path rather than carried
+   * down from the row that was clicked, because the pane is also reached from a
+   * tab restored across a restart, where no row was involved.
+   *
+   * A `useMemo` for the reason `activeProjectIsRoot` above is one, and it is
+   * the same trap: calling `.toLowerCase()` on `selectedPath` in the render
+   * body makes the React Compiler treat it as possibly mutated and give up on
+   * the shell drag's memoization two hundred lines away.
+   */
+  const activeHarness = useMemo(
+    () =>
+      selectedPath === null
+        ? null
+        : (launcher.discovery?.harnesses.find(
+            (harness) => harness.path.toLowerCase() === selectedPath.toLowerCase()
+          ) ?? null),
+    [launcher.discovery, selectedPath]
+  )
+
   // -------------------------------------------------------------------------
   // The project shell's drag handle
   // -------------------------------------------------------------------------
@@ -1233,8 +1256,15 @@ export function App(): JSX.Element {
         mode={setup.dialog}
         dir={setup.dialogDir}
         onChooseDir={setup.chooseDialogDir}
+        onModeChange={setup.setDialogMode}
         problems={setup.dialogProblems}
         busy={setup.creating}
+        templates={setup.templates}
+        template={setup.template}
+        onTemplateChange={setup.chooseTemplate}
+        templatesDir={setup.templatesDir}
+        templateProblems={setup.templateProblems}
+        preview={setup.templatePreview}
         onCreate={setup.createHarness}
         onCancel={setup.closeDialog}
       />
@@ -1850,6 +1880,7 @@ export function App(): JSX.Element {
               <ProjectPane
                 key={activeProject.path}
                 project={activeProject}
+                harness={activeHarness}
                 onReveal={launcher.reveal}
                 onLaunch={(project) => void launch(project)}
                 launching={launching}

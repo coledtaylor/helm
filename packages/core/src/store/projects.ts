@@ -1,5 +1,5 @@
 import { eq, sql } from 'drizzle-orm'
-import type { ClaudeInventory, GitState, Project, ProjectKind } from '../types'
+import type { ClaudeInventory, GitState, Harness, Project, ProjectKind } from '../types'
 import { EMPTY_INVENTORY } from '../types'
 import type { Store } from './db'
 import { projects } from './schema'
@@ -11,8 +11,23 @@ import { projects } from './schema'
  * rather than disappearing.
  */
 
-export function cacheProjects(store: Store, found: Project[]): void {
+/**
+ * Writes the rows a scan found.
+ *
+ * `harnesses` is not optional, and that is the compiler being asked to prevent
+ * one bug: the only thing a `Project` row carries that is not on the `Project`
+ * object is the harness's `template:`, so a caller that passed the projects
+ * alone would silently write null over it on the next `refreshGit`. Making it a
+ * parameter means every call site has to have the answer in hand.
+ */
+export function cacheProjects(store: Store, found: Project[], harnesses: readonly Harness[]): void {
   const seenAt = new Date().toISOString()
+  const templates = new Map(
+    harnesses.map((harness) => [harness.path.toLowerCase(), harness.template])
+  )
+  const templateOf = (project: Project): string | null =>
+    project.kind === 'harness' ? (templates.get(project.path.toLowerCase()) ?? null) : null
+
   const write = store.raw.transaction(() => {
     for (const project of found) {
       store.db
@@ -22,6 +37,7 @@ export function cacheProjects(store: Store, found: Project[]): void {
           name: project.name,
           kind: project.kind,
           harnessPath: project.harnessPath,
+          template: templateOf(project),
           hasClaudeDir: project.hasClaudeDir,
           inventory: project.inventory,
           git: project.git,
@@ -33,6 +49,7 @@ export function cacheProjects(store: Store, found: Project[]): void {
             name: project.name,
             kind: project.kind,
             harnessPath: project.harnessPath,
+            template: templateOf(project),
             hasClaudeDir: project.hasClaudeDir,
             inventory: project.inventory,
             git: project.git,
@@ -75,6 +92,8 @@ export function forgetProjects(store: Store, paths: readonly string[]): number {
 
 export interface CachedProject extends Project {
   lastSeenAt: string
+  /** The harness manifest's `template:`, for a harness row. Null otherwise. */
+  template: string | null
 }
 
 export function readCachedProjects(store: Store): CachedProject[] {
@@ -88,6 +107,7 @@ export function readCachedProjects(store: Store): CachedProject[] {
       name: row.name,
       kind: row.kind as ProjectKind,
       harnessPath: row.harnessPath,
+      template: row.template,
       hasClaudeDir: row.hasClaudeDir,
       inventory: (row.inventory as ClaudeInventory | null) ?? EMPTY_INVENTORY,
       git: (row.git as GitState | null) ?? null,

@@ -16,10 +16,28 @@ export {
   createHarness,
   harnessNameProblems,
   HARNESS_FORMAT_VERSION,
-  MINIMAL_TEMPLATE,
   type CreateHarnessRequest,
   type CreateHarnessResult
 } from './harness'
+export {
+  applyTemplate,
+  listTemplates,
+  previewTemplate,
+  seedTemplates,
+  substituteTemplate,
+  templateIdProblems,
+  MINIMAL_CHOICE,
+  MINIMAL_TEMPLATE,
+  SHIPPED_TEMPLATES,
+  type ApplyTemplateRequest,
+  type ApplyTemplateResult,
+  type PreviewTemplateRequest,
+  type SeedResult,
+  type TemplateChoice,
+  type TemplateListing,
+  type TemplatePreview,
+  type TemplateValues
+} from './templates'
 export { findEnclosingHarness, suggestRoots } from './roots'
 export {
   TITLE_MAX,

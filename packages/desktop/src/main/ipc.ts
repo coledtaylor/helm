@@ -3,7 +3,9 @@ import {
   createHarness,
   forgetProjects,
   isWithin,
+  listTemplates,
   orphanedProjectPaths,
+  previewTemplate,
   readArchivedConversation,
   readHistoryProjects,
   readHistoryPrompts,
@@ -23,7 +25,7 @@ import { readClaudeVersion, setClaudeOverride } from './claude-cli'
 import { setGhOverride } from './gh-cli'
 import { readClaudeStatus, verifyClaudeAt } from './setup'
 import { checkForUpdate, RELEASES_PAGE } from './update'
-import { appMode, dataDir, dbFile } from './paths'
+import { appMode, dataDir, dbFile, templatesDir } from './paths'
 import { activePty, windowsBuildNumber } from './pty'
 import {
   exportProfile,
@@ -345,7 +347,14 @@ export function registerIpc(ctx: IpcContext): void {
       const result = await createHarness({
         mode: request.mode,
         dir: request.dir,
-        ...(request.name !== undefined ? { name: request.name } : {})
+        templatesDir,
+        ...(request.name !== undefined ? { name: request.name } : {}),
+        // 'new' only. The contract says so and `createHarness` enforces it, but
+        // dropping it here as well means a renderer that sent one by mistake
+        // cannot even reach the code that would have to ignore it.
+        ...(request.template !== undefined && request.mode === 'new'
+          ? { template: request.template }
+          : {})
       })
       if (result.path === null) {
         return { ...result, roots: services.settings.scanRoots }
@@ -359,6 +368,15 @@ export function registerIpc(ctx: IpcContext): void {
       const roots = covered ? services.settings.scanRoots : addRoots([result.path])
       return { ...result, roots }
     },
+
+    'template:list': () => listTemplates(templatesDir),
+
+    'template:preview': ({ template, mode }) =>
+      previewTemplate({
+        templatesDir,
+        template,
+        ...(mode !== undefined ? { mode } : {})
+      }),
 
     'update:check': () => checkForUpdate(),
 

@@ -676,7 +676,7 @@ describe('pinned projects', () => {
 
 describe('project cache', () => {
   it('round-trips a project including its inventory and git state', () => {
-    cacheProjects(store, [project()])
+    cacheProjects(store, [project()], [])
 
     const [cached] = readCachedProjects(store)
     expect(cached).toMatchObject({
@@ -690,8 +690,8 @@ describe('project cache', () => {
   })
 
   it('upserts on path rather than duplicating', () => {
-    cacheProjects(store, [project()])
-    cacheProjects(store, [project({ git: { branch: 'main', detached: false, dirty: 0, ahead: 0, behind: 0 } })])
+    cacheProjects(store, [project()], [])
+    cacheProjects(store, [project({ git: { branch: 'main', detached: false, dirty: 0, ahead: 0, behind: 0 } })], [])
 
     const cached = readCachedProjects(store)
     expect(cached).toHaveLength(1)
@@ -699,14 +699,34 @@ describe('project cache', () => {
   })
 
   it('stores a null git state for a directory that is not a repo', () => {
-    cacheProjects(store, [project({ git: null })])
+    cacheProjects(store, [project({ git: null })], [])
     expect(readCachedProjects(store)[0]?.git).toBeNull()
+  })
+
+  /*
+   * The harness's `template:` is the one thing a cached row carries that is not
+   * on the `Project` object, so it comes in beside the projects rather than on
+   * them. The second half of this is the one that matters: a later write that
+   * forgot to pass the harnesses would put null over it, and the launcher would
+   * paint a harness with no provenance for the first frame of every start.
+   */
+  it('carries a harness template through the cache, and only for the harness row', () => {
+    const harnessRow = project({ path: dir, name: 'work', kind: 'harness' })
+    const harness = { path: dir, name: 'work', template: 'demo', version: '1', repoPaths: [] }
+    cacheProjects(store, [harnessRow, project()], [harness])
+
+    const cached = readCachedProjects(store)
+    expect(cached.find((p) => p.kind === 'harness')?.template).toBe('demo')
+    expect(cached.find((p) => p.kind === 'repo')?.template).toBeNull()
+
+    cacheProjects(store, [harnessRow, project()], [harness])
+    expect(readCachedProjects(store).find((p) => p.kind === 'harness')?.template).toBe('demo')
   })
 
   it('forgets rows by path, however they were spelled, and only those', () => {
     const alpha = join(dir, 'repos', 'alpha')
     const beta = join(dir, 'repos', 'beta')
-    cacheProjects(store, [project(), project({ path: beta, name: 'beta' })])
+    cacheProjects(store, [project(), project({ path: beta, name: 'beta' })], [])
 
     expect(forgetProjects(store, [alpha.toUpperCase()])).toBe(1)
     expect(readCachedProjects(store).map((p) => p.path)).toEqual([beta])

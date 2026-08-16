@@ -536,6 +536,11 @@ function HarnessGroup({
               project={group.root}
               selected={group.root.path === selectedPath}
               liveNames={liveSessions?.get(group.root.path.toLowerCase())}
+              // The harness's own row, so it is where its `template:` belongs.
+              // A harness from before the manifest carried one has null here
+              // and gets no second line, which is the honest answer: Helm does
+              // not know what it was built from.
+              {...(group.harness?.template ? { meta: group.harness.template } : {})}
               onSelect={onSelect}
               onTogglePin={(project) => onTogglePin(project.path)}
             />

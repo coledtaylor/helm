@@ -232,6 +232,58 @@ that shows something that is not on this machine.
 > name back afterwards.
 - Per-project git state at a glance: branch, dirty count, ahead/behind
 
+> [!note] Harness templates - 2026-08-15
+> A harness could be scaffolded from the launcher from the start, and the
+> scaffold was three entries with no opinion in them, deliberately: a starter
+> layout is one person's way of working. That argument still holds for the
+> *default*, and it is why `minimal` stays built-in code rather than becoming an
+> editable directory - nothing anybody puts in the templates directory can
+> change or break the row that always works.
+>
+> What it does not hold for is somebody's **own** layout. So a template is a
+> user-authored directory tree in `~/.config/helm/templates` (portable:
+> `helm-data/templates` beside the exe, on the same `PORTABLE_EXECUTABLE_DIR`
+> branch as `dataDir`, so a portable install stays self-contained and every
+> check is isolated with no new mechanism). The New Harness dialog grows a
+> picker, and the "What gets written" list stops being three lines in a
+> component and is read from the engine that does the writing.
+>
+> **Substitution is `.tpl`-only**, and that restriction is the one design
+> decision here worth the words. `x.yml.tpl` is written as `x.yml` with
+> `{{NAME}}`, `{{CREATED_AT}}` and `{{TEMPLATE}}` filled in; every other file is
+> copied byte for byte. A whole-file `replaceAll` over the tree would silently
+> corrupt any template that legitimately contains `{{...}}` - a GitHub Actions
+> workflow, a Jinja fixture, a Go template - in a file its author never thought
+> of as a template. `pnpm template-check` TPL-4 creates from a fixture carrying
+> exactly that and requires the file to arrive identical to the byte.
+>
+> Three more rules, each because the obvious alternative is wrong.
+> `dot-claude/` is accepted as an alias for `.claude/`, since a template is a
+> directory people keep in a repository and tooling drops dot directories. An
+> empty folder is declared with a `.gitkeep`, which is *not* itself copied -
+> folders arrive as the parents of files, so the marker exists to survive git
+> rather than to be part of anybody's harness. And entries that are absolute,
+> climb out with `..`, or are junctions are refused with a sentence: a template
+> is a file that can travel, which is the same threat model the `repos:` key
+> already refuses those three for.
+>
+> **What was deliberately cut**, having been designed and then removed before
+> any of it was built: a creation manifest (`.helm-template.json`), per-file
+> post-substitution hashes, a three-way template/disk/manifest compare, an
+> update-from-template pass with a plan/apply split, and a preview-of-changes
+> dialog. A template makes a harness; from that moment the harness belongs to
+> the user and their agents, to change as they please. Helm records no history
+> of it and re-applies nothing - anyone who wants that has git. `template:` in
+> the manifest survives as **provenance only**: it is shown on the harness row
+> and its pane, it is carried through the projects cache so it is right on the
+> first painted frame, and nothing reads it back to decide anything.
+>
+> Applying is **honest rather than atomic**. A dozen files can fail on the
+> eighth, so the writer goes in a deterministic order, reports what actually
+> landed, and lists the rest as problems. A rollback would be four more deletes
+> that can themselves fail, over a directory the user can perfectly well look
+> at, finish or delete.
+
 ### 4.2 Config Console
 
 The `.claude/` directory of whatever scope you point at, as a real interface.

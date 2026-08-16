@@ -29,6 +29,16 @@ export interface ProjectRowProps {
   pinned?: boolean | undefined
   /** Omitted, the row carries no star at all. */
   onTogglePin?: ((project: Project) => void) | undefined
+  /**
+   * One machine fact about the row, on the second line in mono.
+   *
+   * Only the harness root passes one, and only ever its `template:` - the
+   * provenance the manifest records. It sits above the git chip rather than
+   * instead of it: a harness root can be a repository too, and dropping the
+   * branch to make room for the template would trade a fact somebody uses for
+   * one they read once.
+   */
+  meta?: string | undefined
 }
 
 /**
@@ -58,7 +68,8 @@ export function ProjectRow({
   onSelect,
   liveNames,
   pinned = false,
-  onTogglePin
+  onTogglePin,
+  meta
 }: ProjectRowProps): JSX.Element {
   const KindIcon = KIND_ICON[project.kind]
   const live = liveNames !== undefined && liveNames.length > 0
@@ -124,6 +135,15 @@ export function ProjectRow({
               />
             )}
           </span>
+
+          {meta !== undefined && meta !== '' && (
+            <span
+              data-project-meta={meta}
+              className="mt-px block min-w-0 truncate font-mono text-[10px] leading-[13px] text-fg-subtle"
+            >
+              {meta}
+            </span>
+          )}
 
           {project.git !== null && <GitChip git={project.git} dense className="mt-px min-w-0" />}
         </span>

@@ -40,6 +40,8 @@ import type {
   RenameConfigResult,
   RenderedMarkdown,
   SessionRecord,
+  TemplateListing,
+  TemplatePreview,
   ThemePreference,
   UsageSnapshot,
   WriteConfigRequest,
@@ -145,7 +147,12 @@ export interface CreateHarnessOutcome {
   path: string | null
   /** Paths written, relative to `path`. */
   created: string[]
-  /** Why nothing was written. Non-empty means `path` is null. */
+  /**
+   * What went wrong, as sentences. With `path` null it is why nothing was
+   * written; with `path` set it is a template that was applied *partly* -
+   * `created` is what landed, these are the entries that did not, and no
+   * rollback is claimed.
+   */
   problems: string[]
   /** The scan roots after the new harness was added to them. */
   roots: string[]
@@ -466,13 +473,35 @@ export interface IpcRequests {
 
   /**
    * Scaffold a harness, or turn a folder that already holds repositories into
-   * one. The minimum only - `harness.yaml`, `repos/`, an empty `.claude/` - and
-   * the new harness becomes a scan root in the same call, because a harness the
-   * user cannot see is not one they created.
+   * one. The new harness becomes a scan root in the same call, because a
+   * harness the user cannot see is not one they created.
+   *
+   * `template` applies in `'new'` mode only. Absent or `minimal` writes the
+   * built-in scaffold - `harness.yaml`, `repos/`, an empty `.claude/` - and
+   * anything else names a directory in the templates directory, whose tree is
+   * written into the new harness. Converting is deliberately template-free: it
+   * writes a manifest and a `.claude/` into a folder somebody already has, and
+   * a layout written into their work is not a scaffold.
    */
   'harness:create': {
-    request: { mode: 'new' | 'convert'; dir: string; name?: string }
+    request: { mode: 'new' | 'convert'; dir: string; name?: string; template?: string }
     response: CreateHarnessOutcome
+  }
+
+  /**
+   * The picker's rows: `minimal` first and always, then whatever is in the
+   * templates directory. A template whose `template.yaml` cannot be read is
+   * left out with a sentence in `problems` rather than breaking the list.
+   */
+  'template:list': { request: void; response: TemplateListing }
+  /**
+   * What "What gets written" shows. Answered from the same walk that does the
+   * writing, so the dialog cannot describe a layout the writer would not
+   * produce - which is what the hardcoded three-line list could do.
+   */
+  'template:preview': {
+    request: { template: string; mode?: 'new' | 'convert' }
+    response: TemplatePreview
   }
 
   /**
@@ -1051,6 +1080,8 @@ export const REQUEST_CHANNELS = Object.keys({
   'path:chooseDirectory': true,
   'path:chooseFile': true,
   'harness:create': true,
+  'template:list': true,
+  'template:preview': true,
   'update:check': true,
   'theme:resolved': true,
   'shell:showItem': true,
