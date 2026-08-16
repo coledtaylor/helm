@@ -18,6 +18,7 @@ import {
 import { cn } from '../lib/cn'
 import { Checkbox } from './Checkbox'
 import { CaretIcon, CloseIcon, HelmMarkIcon } from './icons'
+import { Overlay } from './Overlay'
 
 /**
  * The half of the effective view the two name pickers need.
@@ -130,16 +131,6 @@ export function ProfileEditor({
 
   const nameRef = useRef<HTMLInputElement>(null)
   useEffect(() => nameRef.current?.focus(), [])
-
-  // Escape closes. Captured on the window, because the focus may be inside any
-  // of a dozen fields and each of them would otherwise need the handler.
-  useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (event.key === 'Escape') onCancel()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onCancel])
 
   // ---------------------------------------------------------------------
   // What this composition would resolve
@@ -286,346 +277,334 @@ export function ProfileEditor({
   }
 
   return (
-    // `fixed`, not `absolute`: this is mounted inside the pane, and an absolute
-    // backdrop would dim the pane while leaving the sidebar lit and clickable -
-    // which is not what `aria-modal` promises.
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-6"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onCancel()
-      }}
+    // This is mounted inside the pane, and `Overlay`'s scrim is `fixed` rather
+    // than `absolute` for its sake: an absolute backdrop would dim the pane
+    // while leaving the sidebar lit and clickable, which is not what
+    // `aria-modal` promises.
+    <Overlay
+      aria-label={'id' in initial ? `Edit ${initial.name}` : 'New profile'}
+      className="max-w-[620px]"
+      onDismiss={onCancel}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={'id' in initial ? `Edit ${initial.name}` : 'New profile'}
-        className={cn(
-          // A modal is the one surface that gets a shadow (DESIGN.md): a 12px
-          // island lifted off a dimmed canvas, with the stronger hairline.
-          'flex max-h-full w-full max-w-[620px] flex-col overflow-hidden rounded-xl',
-          'border border-border-strong bg-surface shadow-panel'
-        )}
-      >
-        <header className="flex shrink-0 items-center gap-[9px] px-[22px] pt-[18px]">
-          <HelmMarkIcon width={13} height={13} className="shrink-0 text-accent" />
-          <h2 className="text-[15px] font-medium tracking-tight text-fg">
-            {'id' in initial ? 'Edit profile' : 'New profile'}
-          </h2>
-          <span className="flex-1" />
-          <button
-            type="button"
-            onClick={onCancel}
-            aria-label="Close"
-            title="Close"
-            className="grid size-6 shrink-0 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+      <header className="flex shrink-0 items-center gap-[9px] px-[22px] pt-[18px]">
+        <HelmMarkIcon width={13} height={13} className="shrink-0 text-accent" />
+        <h2 className="text-[15px] font-medium tracking-tight text-fg">
+          {'id' in initial ? 'Edit profile' : 'New profile'}
+        </h2>
+        <span className="flex-1" />
+        <button
+          type="button"
+          onClick={onCancel}
+          aria-label="Close"
+          title="Close"
+          className="grid size-6 shrink-0 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+        >
+          <CloseIcon width={12} height={12} />
+        </button>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-4 pb-1">
+        {problems.length > 0 && (
+          <ul
+            role="alert"
+            className="mb-4 rounded-raised border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
           >
-            <CloseIcon width={12} height={12} />
-          </button>
-        </header>
+            {problems.map((problem) => (
+              <li key={problem}>{problem}</li>
+            ))}
+          </ul>
+        )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-4 pb-1">
-          {problems.length > 0 && (
-            <ul
-              role="alert"
-              className="mb-4 rounded-raised border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger"
-            >
-              {problems.map((problem) => (
-                <li key={problem}>{problem}</li>
-              ))}
-            </ul>
-          )}
-
-          <div className="grid gap-[14px] sm:grid-cols-2">
-            <Field label="Name" hint="Shown in the launcher and used as the session name.">
-              <input
-                ref={nameRef}
-                aria-label="Profile name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                spellCheck={false}
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Root" hint="The working directory. Config resolves from here.">
-              <input
-                value={root}
-                aria-label="Root directory"
-                onChange={(e) => setRoot(e.target.value)}
-                spellCheck={false}
-                className={cn(inputClass, 'font-mono text-[11px] text-fg-muted')}
-              />
-            </Field>
-          </div>
-
-          {/* `min-w-0` is not decoration. A `<fieldset>` carries a UA
-              `min-inline-size: min-content`, so it refuses to shrink below its
-              widest content and pushes a horizontal scrollbar onto the dialog
-              body instead - measured at 471px against a 408px body, which cut
-              the Compose and Access columns off the right edge of this table
-              at 1280x820. Both fieldsets here take it. */}
-          <fieldset className="mt-4 min-w-0">
-            <legend className={labelClass}>Composition</legend>
-            <p className="mt-1.5 mb-2 text-[11px] leading-[1.55] text-fg-muted">
-              <strong className="font-medium text-fg">Compose</strong> loads a project&rsquo;s
-              skills, agents and commands under its own namespace.{' '}
-              <strong className="font-medium text-fg">Access</strong> lets the session read and
-              write its files.
-            </p>
-
+        <div className="grid gap-[14px] sm:grid-cols-2">
+          <Field label="Name" hint="Shown in the launcher and used as the session name.">
             <input
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="Filter projects"
+              ref={nameRef}
+              aria-label="Profile name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
               spellCheck={false}
-              aria-label="Filter projects"
-              className={cn(inputClass, 'h-[26px] text-[11.5px]')}
+              className={inputClass}
             />
-
-            <div className="mt-2 overflow-hidden rounded-raised border border-border">
-              <div className="flex items-center bg-surface-raised px-3 py-1.5">
-                <span className={cn(labelClass, 'flex-1 text-[9px]')}>Project</span>
-                <span className={cn(labelClass, 'w-[70px] text-center text-[9px]')}>Compose</span>
-                <span className={cn(labelClass, 'w-[70px] text-center text-[9px]')}>Access</span>
-              </div>
-              <div className="max-h-56 overflow-y-auto">
-                {visible.length === 0 ? (
-                  <p className="border-t border-border px-3 py-6 text-center text-[12px] text-fg-subtle">
-                    No projects match.
-                  </p>
-                ) : (
-                  visible.map((project) => (
-                    <div
-                      key={project.path}
-                      className="flex items-center border-t border-border px-3 py-[7px] transition-colors hover:bg-hover"
-                    >
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-[7px]">
-                          <span className="min-w-0 truncate text-[12px] text-fg">
-                            {project.name}
-                          </span>
-                          {project.kind === 'harness' && (
-                            <span className="shrink-0 rounded-full bg-accent-soft px-[7px] py-px text-[8.5px] tracking-[.05em] text-accent-text uppercase">
-                              harness root
-                            </span>
-                          )}
-                        </span>
-                        <span className="block truncate font-mono text-[9.5px] text-fg-subtle">
-                          {project.path}
-                        </span>
-                      </span>
-                      <span className="flex w-[70px] justify-center">
-                        <Checkbox
-                          checked={has(overlays, project.path)}
-                          onChange={() => toggleOverlay(project.path)}
-                          label={`Compose ${project.name}`}
-                        />
-                      </span>
-                      <span className="flex w-[70px] justify-center">
-                        <Checkbox
-                          checked={has(access, project.path)}
-                          onChange={() => toggleAccess(project.path)}
-                          label={`Grant access to ${project.name}`}
-                        />
-                      </span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </fieldset>
-
-          <div className="mt-4 grid gap-[14px] sm:grid-cols-2">
-            <Field label="Model">
-              <Select value={model} onChange={setModel} label="Model">
-                <option value="">Default</option>
-                {MODELS.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Effort">
-              <Select value={effort} onChange={setEffort} label="Effort">
-                <option value="">Default</option>
-                {EFFORT_LEVELS.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Permission mode">
-              <Select value={permissionMode} onChange={setPermissionMode} label="Permission mode">
-                <option value="">Default</option>
-                {PERMISSION_MODES.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field
-              label="Agent"
-              hint={
-                <>
-                  Placed on the session&rsquo;s argv as <code className={codeClass}>--agent</code>,
-                  so it starts as that subagent.
-                  {agentNote !== null && (
-                    <span className={cn('mt-[3px] block', agentNote.tone)}>{agentNote.text}</span>
-                  )}
-                  {settled && agentUnlisted && (
-                    <span data-agent-unresolved={agent} className="mt-[3px] block text-warn">
-                      Nothing at this root resolves <span className="font-mono">{agent}</span>. It
-                      is still saved.
-                    </span>
-                  )}
-                  {/* Not alongside the warning above, which already says the
-                      list has nothing for this name in it. */}
-                  {settled && !agentUnlisted && predictedAgents.length === 0 && (
-                    <span className="mt-[3px] block">
-                      No agents resolve here - neither this root nor the composed projects define
-                      one.
-                    </span>
-                  )}
-                </>
-              }
-            >
-              <Select value={agent} onChange={setAgent} label="Agent">
-                <option value="">Default</option>
-                {/* A saved name the prediction does not carry still has to be
-                    the select's value, or the control would silently move the
-                    profile off it the moment anybody opened the form. */}
-                {agentUnlisted && (
-                  <option value={agent}>{settled ? `${agent} - unresolved` : agent}</option>
-                )}
-                {predictedAgents.map((entry) => (
-                  <option key={entry.invocation} value={entry.invocation}>
-                    {entry.invocation}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          </div>
-
-          <div className="mt-[14px]">
-            <Field label="Opening prompt" hint="Submitted as the first message, e.g. /recap.">
-              <input
-                value={openingPrompt}
-                aria-label="Opening prompt"
-                onChange={(e) => setOpeningPrompt(e.target.value)}
-                spellCheck={false}
-                placeholder="e.g. /recap"
-                className={inputClass}
-              />
-            </Field>
-          </div>
-
-          {/* ----------------------------------------------------------------
-              MCP servers.
-
-              A picker over what is configured, and a sentence saying the pick
-              does not reach the session - because it does not. `Profile.mcp` is
-              persisted and exported and never placed on the argv: no CLI flag
-              selects an already-configured server by name, and resolving names
-              into a `--mcp-config` document is the config console's job (SPEC
-              4.2). This field was a comma-separated text box that said none of
-              that, so the honest thing to show was a list of names that would
-              not be used - not a box implying they would.
-              ---------------------------------------------------------------- */}
-          <fieldset className="mt-4 min-w-0">
-            <legend className={labelClass}>MCP servers</legend>
-            <p className="mt-1.5 mb-2 text-[11px] leading-[1.55] text-fg-muted">
-              Saved with the profile and carried by its YAML export.{' '}
-              <strong className="font-medium text-fg">Not applied at launch</strong> - a session
-              loads whatever is configured for its root, which is the config console&rsquo;s MCP
-              view, not this list.
-            </p>
-
-            <div className="overflow-hidden rounded-raised border border-border">
-              {serversUnlisted.length + predictedServers.length === 0 ? (
-                <p
-                  data-mcp-empty
-                  className="px-3 py-5 text-center text-[11.5px] text-fg-subtle"
-                >
-                  {settled
-                    ? 'No MCP servers are configured for this root.'
-                    : (serverNote?.text ?? '')}
-                </p>
-              ) : (
-                <div className="max-h-40 overflow-y-auto">
-                  {serversUnlisted.map((server) => (
-                    <ServerRow
-                      key={server}
-                      name={server}
-                      checked
-                      onToggle={() => toggleServer(server)}
-                    >
-                      {settled && (
-                        <span
-                          data-mcp-unresolved={server}
-                          className="shrink-0 rounded-sm border border-warn/40 px-1 text-[8.5px] tracking-[.05em] text-warn uppercase"
-                        >
-                          unresolved
-                        </span>
-                      )}
-                    </ServerRow>
-                  ))}
-                  {predictedServers.map((server) => (
-                    <ServerRow
-                      key={`${server.scope}:${server.name}`}
-                      name={server.name}
-                      checked={mcp.includes(server.name)}
-                      onToggle={() => toggleServer(server.name)}
-                    >
-                      <span className="shrink-0 rounded-full bg-accent-soft px-[7px] py-px text-[8.5px] tracking-[.05em] text-accent-text uppercase">
-                        {server.scope}
-                      </span>
-                    </ServerRow>
-                  ))}
-                </div>
-              )}
-            </div>
-            {/* Only where the box has rows in it - the empty box carries the
-                same sentence itself, and two of them is one too many. */}
-            {serverNote !== null && serversUnlisted.length + predictedServers.length > 0 && (
-              <p className={cn('mt-[5px] text-[10px]', serverNote.tone)}>{serverNote.text}</p>
-            )}
-          </fieldset>
+          </Field>
+          <Field label="Root" hint="The working directory. Config resolves from here.">
+            <input
+              value={root}
+              aria-label="Root directory"
+              onChange={(e) => setRoot(e.target.value)}
+              spellCheck={false}
+              className={cn(inputClass, 'font-mono text-[11px] text-fg-muted')}
+            />
+          </Field>
         </div>
 
-        <footer className="mx-[22px] flex shrink-0 items-center gap-2 border-t border-border py-3.5">
-          {onDelete && (
-            <button
-              type="button"
-              onClick={onDelete}
-              className="rounded-well border border-border-strong px-3 py-1.5 text-[12px] text-warn transition-colors hover:bg-hover"
-            >
-              Delete profile
-            </button>
-          )}
-          <span className="flex-1" />
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-well border border-border-strong px-3.5 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
+        {/* `min-w-0` is not decoration. A `<fieldset>` carries a UA
+            `min-inline-size: min-content`, so it refuses to shrink below its
+            widest content and pushes a horizontal scrollbar onto the dialog
+            body instead - measured at 471px against a 408px body, which cut
+            the Compose and Access columns off the right edge of this table
+            at 1280x820. Both fieldsets here take it. */}
+        <fieldset className="mt-4 min-w-0">
+          <legend className={labelClass}>Composition</legend>
+          <p className="mt-1.5 mb-2 text-[11px] leading-[1.55] text-fg-muted">
+            <strong className="font-medium text-fg">Compose</strong> loads a project&rsquo;s
+            skills, agents and commands under its own namespace.{' '}
+            <strong className="font-medium text-fg">Access</strong> lets the session read and
+            write its files.
+          </p>
+
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter projects"
+            spellCheck={false}
+            aria-label="Filter projects"
+            className={cn(inputClass, 'h-[26px] text-[11.5px]')}
+          />
+
+          <div className="mt-2 overflow-hidden rounded-raised border border-border">
+            <div className="flex items-center bg-surface-raised px-3 py-1.5">
+              <span className={cn(labelClass, 'flex-1 text-[9px]')}>Project</span>
+              <span className={cn(labelClass, 'w-[70px] text-center text-[9px]')}>Compose</span>
+              <span className={cn(labelClass, 'w-[70px] text-center text-[9px]')}>Access</span>
+            </div>
+            <div className="max-h-56 overflow-y-auto">
+              {visible.length === 0 ? (
+                <p className="border-t border-border px-3 py-6 text-center text-[12px] text-fg-subtle">
+                  No projects match.
+                </p>
+              ) : (
+                visible.map((project) => (
+                  <div
+                    key={project.path}
+                    className="flex items-center border-t border-border px-3 py-[7px] transition-colors hover:bg-hover"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-[7px]">
+                        <span className="min-w-0 truncate text-[12px] text-fg">
+                          {project.name}
+                        </span>
+                        {project.kind === 'harness' && (
+                          <span className="shrink-0 rounded-full bg-accent-soft px-[7px] py-px text-[8.5px] tracking-[.05em] text-accent-text uppercase">
+                            harness root
+                          </span>
+                        )}
+                      </span>
+                      <span className="block truncate font-mono text-[9.5px] text-fg-subtle">
+                        {project.path}
+                      </span>
+                    </span>
+                    <span className="flex w-[70px] justify-center">
+                      <Checkbox
+                        checked={has(overlays, project.path)}
+                        onChange={() => toggleOverlay(project.path)}
+                        label={`Compose ${project.name}`}
+                      />
+                    </span>
+                    <span className="flex w-[70px] justify-center">
+                      <Checkbox
+                        checked={has(access, project.path)}
+                        onChange={() => toggleAccess(project.path)}
+                        label={`Grant access to ${project.name}`}
+                      />
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </fieldset>
+
+        <div className="mt-4 grid gap-[14px] sm:grid-cols-2">
+          <Field label="Model">
+            <Select value={model} onChange={setModel} label="Model">
+              <option value="">Default</option>
+              {MODELS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Effort">
+            <Select value={effort} onChange={setEffort} label="Effort">
+              <option value="">Default</option>
+              {EFFORT_LEVELS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Permission mode">
+            <Select value={permissionMode} onChange={setPermissionMode} label="Permission mode">
+              <option value="">Default</option>
+              {PERMISSION_MODES.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field
+            label="Agent"
+            hint={
+              <>
+                Placed on the session&rsquo;s argv as <code className={codeClass}>--agent</code>,
+                so it starts as that subagent.
+                {agentNote !== null && (
+                  <span className={cn('mt-[3px] block', agentNote.tone)}>{agentNote.text}</span>
+                )}
+                {settled && agentUnlisted && (
+                  <span data-agent-unresolved={agent} className="mt-[3px] block text-warn">
+                    Nothing at this root resolves <span className="font-mono">{agent}</span>. It
+                    is still saved.
+                  </span>
+                )}
+                {/* Not alongside the warning above, which already says the
+                    list has nothing for this name in it. */}
+                {settled && !agentUnlisted && predictedAgents.length === 0 && (
+                  <span className="mt-[3px] block">
+                    No agents resolve here - neither this root nor the composed projects define
+                    one.
+                  </span>
+                )}
+              </>
+            }
           >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={saving}
-            className={cn(
-              'rounded-well border border-accent px-3.5 py-1.5 text-[12px] font-medium text-accent-text transition-colors',
-              saving ? 'cursor-default opacity-60' : 'hover:bg-accent-soft active:bg-active'
+            <Select value={agent} onChange={setAgent} label="Agent">
+              <option value="">Default</option>
+              {/* A saved name the prediction does not carry still has to be
+                  the select's value, or the control would silently move the
+                  profile off it the moment anybody opened the form. */}
+              {agentUnlisted && (
+                <option value={agent}>{settled ? `${agent} - unresolved` : agent}</option>
+              )}
+              {predictedAgents.map((entry) => (
+                <option key={entry.invocation} value={entry.invocation}>
+                  {entry.invocation}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+
+        <div className="mt-[14px]">
+          <Field label="Opening prompt" hint="Submitted as the first message, e.g. /recap.">
+            <input
+              value={openingPrompt}
+              aria-label="Opening prompt"
+              onChange={(e) => setOpeningPrompt(e.target.value)}
+              spellCheck={false}
+              placeholder="e.g. /recap"
+              className={inputClass}
+            />
+          </Field>
+        </div>
+
+        {/* ----------------------------------------------------------------
+            MCP servers.
+
+            A picker over what is configured, and a sentence saying the pick
+            does not reach the session - because it does not. `Profile.mcp` is
+            persisted and exported and never placed on the argv: no CLI flag
+            selects an already-configured server by name, and resolving names
+            into a `--mcp-config` document is the config console's job (SPEC
+            4.2). This field was a comma-separated text box that said none of
+            that, so the honest thing to show was a list of names that would
+            not be used - not a box implying they would.
+            ---------------------------------------------------------------- */}
+        <fieldset className="mt-4 min-w-0">
+          <legend className={labelClass}>MCP servers</legend>
+          <p className="mt-1.5 mb-2 text-[11px] leading-[1.55] text-fg-muted">
+            Saved with the profile and carried by its YAML export.{' '}
+            <strong className="font-medium text-fg">Not applied at launch</strong> - a session
+            loads whatever is configured for its root, which is the config console&rsquo;s MCP
+            view, not this list.
+          </p>
+
+          <div className="overflow-hidden rounded-raised border border-border">
+            {serversUnlisted.length + predictedServers.length === 0 ? (
+              <p
+                data-mcp-empty
+                className="px-3 py-5 text-center text-[11.5px] text-fg-subtle"
+              >
+                {settled
+                  ? 'No MCP servers are configured for this root.'
+                  : (serverNote?.text ?? '')}
+              </p>
+            ) : (
+              <div className="max-h-40 overflow-y-auto">
+                {serversUnlisted.map((server) => (
+                  <ServerRow
+                    key={server}
+                    name={server}
+                    checked
+                    onToggle={() => toggleServer(server)}
+                  >
+                    {settled && (
+                      <span
+                        data-mcp-unresolved={server}
+                        className="shrink-0 rounded-sm border border-warn/40 px-1 text-[8.5px] tracking-[.05em] text-warn uppercase"
+                      >
+                        unresolved
+                      </span>
+                    )}
+                  </ServerRow>
+                ))}
+                {predictedServers.map((server) => (
+                  <ServerRow
+                    key={`${server.scope}:${server.name}`}
+                    name={server.name}
+                    checked={mcp.includes(server.name)}
+                    onToggle={() => toggleServer(server.name)}
+                  >
+                    <span className="shrink-0 rounded-full bg-accent-soft px-[7px] py-px text-[8.5px] tracking-[.05em] text-accent-text uppercase">
+                      {server.scope}
+                    </span>
+                  </ServerRow>
+                ))}
+              </div>
             )}
-          >
-            {saving ? 'Saving…' : 'id' in initial ? 'Save changes' : 'Save profile'}
-          </button>
-        </footer>
+          </div>
+          {/* Only where the box has rows in it - the empty box carries the
+              same sentence itself, and two of them is one too many. */}
+          {serverNote !== null && serversUnlisted.length + predictedServers.length > 0 && (
+            <p className={cn('mt-[5px] text-[10px]', serverNote.tone)}>{serverNote.text}</p>
+          )}
+        </fieldset>
       </div>
-    </div>
+
+      <footer className="mx-[22px] flex shrink-0 items-center gap-2 border-t border-border py-3.5">
+        {onDelete && (
+          <button
+            type="button"
+            onClick={onDelete}
+            className="rounded-well border border-border-strong px-3 py-1.5 text-[12px] text-warn transition-colors hover:bg-hover"
+          >
+            Delete profile
+          </button>
+        )}
+        <span className="flex-1" />
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-well border border-border-strong px-3.5 py-1.5 text-[12px] text-fg transition-colors hover:bg-hover"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={saving}
+          className={cn(
+            'rounded-well border border-accent px-3.5 py-1.5 text-[12px] font-medium text-accent-text transition-colors',
+            saving ? 'cursor-default opacity-60' : 'hover:bg-accent-soft active:bg-active'
+          )}
+        >
+          {saving ? 'Saving…' : 'id' in initial ? 'Save changes' : 'Save profile'}
+        </button>
+      </footer>
+    </Overlay>
   )
 }
 

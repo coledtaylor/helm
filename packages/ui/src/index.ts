@@ -36,6 +36,7 @@ export {
 export { HealthPanel, type HealthPanelProps } from './components/HealthPanel'
 export { McpPanel, type McpPanelProps } from './components/McpPanel'
 export { NewHarnessDialog, type NewHarnessDialogProps } from './components/NewHarnessDialog'
+export { Overlay, type OverlayProps } from './components/Overlay'
 export {
   ConfirmSessionDialog,
   type ConfirmSessionDialogProps
@@ -100,4 +101,7 @@ export { TitleBar, type TitleBarProps } from './components/TitleBar'
 export { WelcomePane, type WelcomePaneProps } from './components/WelcomePane'
 export * from './components/icons'
 export { cn } from './lib/cn'
+// Whether a dialog is up, for anything that has to get out of its way - the
+// browser pane's `WebContentsView` first. `Overlay` is the only writer.
+export { overlayOpen, subscribeOverlay, useOverlayOpen } from './lib/overlay'
 export { formatAge, formatBytes, formatMoment, formatResetsIn } from './lib/time'

@@ -15,6 +15,7 @@ import {
 import { cn } from '../lib/cn'
 import { formatBytes } from '../lib/time'
 import { CaretIcon, CloseIcon, PlusIcon, TrashIcon, WarnIcon } from './icons'
+import { Overlay } from './Overlay'
 
 /**
  * New, Rename and Delete for one entry in a `.claude` tree.
@@ -59,39 +60,6 @@ function primaryButton(ready: boolean): string {
       : 'cursor-default border-border text-fg-subtle opacity-60'
   )
 }
-
-function Backdrop({
-  onCancel,
-  children
-}: {
-  onCancel: () => void
-  children: JSX.Element
-}): JSX.Element {
-  useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (event.key === 'Escape') onCancel()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onCancel])
-
-  return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-6"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onCancel()
-      }}
-    >
-      {children}
-    </div>
-  )
-}
-
-/** The modal island: 12px radius, stronger hairline, the one allowed shadow. */
-const modalIsland = cn(
-  'flex max-h-full w-full flex-col overflow-hidden rounded-xl',
-  'border border-border-strong bg-surface shadow-panel'
-)
 
 function Problem({ children }: { children: ReactNode }): JSX.Element {
   return (
@@ -182,148 +150,145 @@ export function ConfigNewDialog({
   }
 
   return (
-    <Backdrop onCancel={onCancel}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`New in ${scope.label}`}
-        data-config-new-dialog
-        className={cn(modalIsland, 'max-w-[520px]')}
-      >
-        <header className="flex shrink-0 items-center gap-[9px] px-[22px] pt-[18px]">
-          <PlusIcon width={13} height={13} className="shrink-0 text-accent" />
-          <h2 className="min-w-0 truncate text-[15px] font-medium tracking-tight text-fg">
-            New in {scope.label}
-          </h2>
-          <span className="flex-1" />
-          <button
-            type="button"
-            onClick={onCancel}
-            aria-label="Close"
-            title="Close"
-            className="grid size-6 shrink-0 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
-          >
-            <CloseIcon width={12} height={12} />
-          </button>
-        </header>
+    <Overlay
+      aria-label={`New in ${scope.label}`}
+      data-config-new-dialog
+      className="max-w-[520px]"
+      onDismiss={onCancel}
+    >
+      <header className="flex shrink-0 items-center gap-[9px] px-[22px] pt-[18px]">
+        <PlusIcon width={13} height={13} className="shrink-0 text-accent" />
+        <h2 className="min-w-0 truncate text-[15px] font-medium tracking-tight text-fg">
+          New in {scope.label}
+        </h2>
+        <span className="flex-1" />
+        <button
+          type="button"
+          onClick={onCancel}
+          aria-label="Close"
+          title="Close"
+          className="grid size-6 shrink-0 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+        >
+          <CloseIcon width={12} height={12} />
+        </button>
+      </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-2 pb-1">
-          <p className="text-[11px] leading-[1.55] text-fg-muted">
-            Written into this scope&rsquo;s <span className="font-mono">.claude</span> tree, with a
-            snapshot taken first - so anything created here can be un-created from its history.
-          </p>
+      <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-2 pb-1">
+        <p className="text-[11px] leading-[1.55] text-fg-muted">
+          Written into this scope&rsquo;s <span className="font-mono">.claude</span> tree, with a
+          snapshot taken first - so anything created here can be un-created from its history.
+        </p>
 
-          <label className="mt-4 block">
-            <span className={cn(labelClass, 'mb-1.5')}>What</span>
-            <span className="relative block">
-              <select
-                data-config-new-kind
-                value={kind}
-                onChange={(event) => setKind(event.target.value as CreatableKind)}
-                aria-label="What to create"
-                // A real fill, never transparent: the dropped-open list is an OS
-                // window that reads this control's own background (DESIGN.md).
-                className={cn(inputClass, 'appearance-none pr-7')}
-              >
-                <optgroup label="Things you name">
-                  {CREATABLE_KINDS.filter((candidate) => candidate.named).map((candidate) => (
-                    <option key={candidate.kind} value={candidate.kind}>
+        <label className="mt-4 block">
+          <span className={cn(labelClass, 'mb-1.5')}>What</span>
+          <span className="relative block">
+            <select
+              data-config-new-kind
+              value={kind}
+              onChange={(event) => setKind(event.target.value as CreatableKind)}
+              aria-label="What to create"
+              // A real fill, never transparent: the dropped-open list is an OS
+              // window that reads this control's own background (DESIGN.md).
+              className={cn(inputClass, 'appearance-none pr-7')}
+            >
+              <optgroup label="Things you name">
+                {CREATABLE_KINDS.filter((candidate) => candidate.named).map((candidate) => (
+                  <option key={candidate.kind} value={candidate.kind}>
+                    {candidate.label}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="One per scope">
+                {CREATABLE_KINDS.filter((candidate) => !candidate.named).map((candidate) => {
+                  const present = files.some((file) => file.kind === candidate.kind)
+                  const barred = candidate.projectOnly && userScope
+                  return (
+                    <option
+                      key={candidate.kind}
+                      value={candidate.kind}
+                      disabled={present || barred}
+                    >
                       {candidate.label}
+                      {present ? ' (already there)' : barred ? ' (projects only)' : ''}
                     </option>
-                  ))}
-                </optgroup>
-                <optgroup label="One per scope">
-                  {CREATABLE_KINDS.filter((candidate) => !candidate.named).map((candidate) => {
-                    const present = files.some((file) => file.kind === candidate.kind)
-                    const barred = candidate.projectOnly && userScope
-                    return (
-                      <option
-                        key={candidate.kind}
-                        value={candidate.kind}
-                        disabled={present || barred}
-                      >
-                        {candidate.label}
-                        {present ? ' (already there)' : barred ? ' (projects only)' : ''}
-                      </option>
-                    )
-                  })}
-                </optgroup>
-              </select>
-              <CaretDown />
-            </span>
+                  )
+                })}
+              </optgroup>
+            </select>
+            <CaretDown />
+          </span>
+          <span className="mt-[5px] block text-[10px] leading-[1.5] text-fg-subtle">
+            {spec?.hint}
+          </span>
+        </label>
+
+        {named && (
+          <label className="mt-[14px] block">
+            <span className={cn(labelClass, 'mb-1.5')}>Name</span>
+            <input
+              ref={nameRef}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') submit()
+              }}
+              spellCheck={false}
+              data-config-new-name
+              aria-label="Name"
+              placeholder={kind === 'skill' ? 'e.g. brew-coffee' : 'e.g. spec:plan'}
+              className={cn(inputClass, 'font-mono text-[12px]')}
+            />
             <span className="mt-[5px] block text-[10px] leading-[1.5] text-fg-subtle">
-              {spec?.hint}
+              {kind === 'skill'
+                ? 'Lowercase words joined by hyphens. The folder gets this name and so does the frontmatter.'
+                : 'Lowercase words joined by hyphens; a colon or a slash starts a namespace.'}
             </span>
           </label>
+        )}
 
-          {named && (
-            <label className="mt-[14px] block">
-              <span className={cn(labelClass, 'mb-1.5')}>Name</span>
-              <input
-                ref={nameRef}
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') submit()
-                }}
-                spellCheck={false}
-                data-config-new-name
-                aria-label="Name"
-                placeholder={kind === 'skill' ? 'e.g. brew-coffee' : 'e.g. spec:plan'}
-                className={cn(inputClass, 'font-mono text-[12px]')}
-              />
-              <span className="mt-[5px] block text-[10px] leading-[1.5] text-fg-subtle">
-                {kind === 'skill'
-                  ? 'Lowercase words joined by hyphens. The folder gets this name and so does the frontmatter.'
-                  : 'Lowercase words joined by hyphens; a colon or a slash starts a namespace.'}
-              </span>
-            </label>
-          )}
+        {problem !== null && problem !== '' && <Problem>{problem}</Problem>}
 
-          {problem !== null && problem !== '' && <Problem>{problem}</Problem>}
-
-          <div className="mt-4">
-            <span className={cn(labelClass, 'mb-1.5')}>What gets written</span>
-            <div className="rounded-raised border border-border bg-surface-sunken px-3 py-2.5">
-              <p className="truncate font-mono text-[11px] text-fg-muted" data-config-new-target>
-                {planned.plan?.relPath ?? '…'}
-              </p>
-              {planned.plan !== null && (
-                <>
-                  <p className="mt-1.5 text-[11px] leading-[1.55] text-fg-subtle">
-                    Claude Code addresses it as{' '}
-                    <span className="font-mono text-fg-muted">{planned.plan.address}</span>.
-                  </p>
-                  {/* The scaffold itself, wrapped rather than scrolled sideways:
-                      a horizontal bar under a preview turns "what gets written"
-                      into a thing to operate. The vertical cap is behind a rule
-                      so a part-shown last line reads as more below rather than
-                      as a clipped box. */}
-                  <pre className="mt-2 max-h-28 overflow-y-auto border-t border-border pt-2 font-mono text-[10.5px] leading-[1.5] break-words whitespace-pre-wrap text-fg-subtle">
-                    {planned.plan.content.trimEnd()}
-                  </pre>
-                </>
-              )}
-            </div>
+        <div className="mt-4">
+          <span className={cn(labelClass, 'mb-1.5')}>What gets written</span>
+          <div className="rounded-raised border border-border bg-surface-sunken px-3 py-2.5">
+            <p className="truncate font-mono text-[11px] text-fg-muted" data-config-new-target>
+              {planned.plan?.relPath ?? '…'}
+            </p>
+            {planned.plan !== null && (
+              <>
+                <p className="mt-1.5 text-[11px] leading-[1.55] text-fg-subtle">
+                  Claude Code addresses it as{' '}
+                  <span className="font-mono text-fg-muted">{planned.plan.address}</span>.
+                </p>
+                {/* The scaffold itself, wrapped rather than scrolled sideways:
+                    a horizontal bar under a preview turns "what gets written"
+                    into a thing to operate. The vertical cap is behind a rule
+                    so a part-shown last line reads as more below rather than
+                    as a clipped box. */}
+                <pre className="mt-2 max-h-28 overflow-y-auto border-t border-border pt-2 font-mono text-[10.5px] leading-[1.5] break-words whitespace-pre-wrap text-fg-subtle">
+                  {planned.plan.content.trimEnd()}
+                </pre>
+              </>
+            )}
           </div>
         </div>
-
-        <footer className="mx-[22px] flex shrink-0 items-center justify-end gap-2 border-t border-border py-3.5">
-          <button type="button" onClick={onCancel} className={secondaryButton}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            data-config-new-create
-            disabled={!ready}
-            onClick={submit}
-            className={primaryButton(ready)}
-          >
-            {busy ? 'Creating…' : 'Create'}
-          </button>
-        </footer>
       </div>
-    </Backdrop>
+
+      <footer className="mx-[22px] flex shrink-0 items-center justify-end gap-2 border-t border-border py-3.5">
+        <button type="button" onClick={onCancel} className={secondaryButton}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          data-config-new-create
+          disabled={!ready}
+          onClick={submit}
+          className={primaryButton(ready)}
+        >
+          {busy ? 'Creating…' : 'Create'}
+        </button>
+      </footer>
+    </Overlay>
   )
 }
 
@@ -429,122 +394,119 @@ export function ConfigRenameDialog({
   }
 
   return (
-    <Backdrop onCancel={onCancel}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Rename ${file.name}`}
-        data-config-rename-dialog
-        className={cn(modalIsland, 'max-w-[520px]')}
-      >
-        <header className="flex shrink-0 items-center gap-[9px] px-[22px] pt-[18px]">
-          <h2 className="min-w-0 truncate text-[15px] font-medium tracking-tight text-fg">
-            Rename {file.name}
-          </h2>
-          <span className="flex-1" />
-          <button
-            type="button"
-            onClick={onCancel}
-            aria-label="Close"
-            title="Close"
-            className="grid size-6 shrink-0 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
-          >
-            <CloseIcon width={12} height={12} />
-          </button>
-        </header>
+    <Overlay
+      aria-label={`Rename ${file.name}`}
+      data-config-rename-dialog
+      className="max-w-[520px]"
+      onDismiss={onCancel}
+    >
+      <header className="flex shrink-0 items-center gap-[9px] px-[22px] pt-[18px]">
+        <h2 className="min-w-0 truncate text-[15px] font-medium tracking-tight text-fg">
+          Rename {file.name}
+        </h2>
+        <span className="flex-1" />
+        <button
+          type="button"
+          onClick={onCancel}
+          aria-label="Close"
+          title="Close"
+          className="grid size-6 shrink-0 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+        >
+          <CloseIcon width={12} height={12} />
+        </button>
+      </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-2 pb-1">
-          <p className="text-[11px] leading-[1.55] text-fg-muted">
-            {file.kind === 'skill'
-              ? unit.length > 1
-                ? `The whole folder moves - the SKILL.md and the ${unit.length === 2 ? 'file' : `${String(unit.length - 1)} files`} beside it.`
-                : 'A skill is its folder, so the folder is what moves.'
-              : 'A command, agent or rule is addressed by its path, so the name is the path.'}{' '}
-            Every file is snapshotted on the way, at both ends.
-            {/* Stated as a condition, not as a fact: the dialog has the file's
-                description but not its frontmatter, and the write path only
-                rewrites a `name:` that is exactly the old address. */}
-            {declaresName && (
+      <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-2 pb-1">
+        <p className="text-[11px] leading-[1.55] text-fg-muted">
+          {file.kind === 'skill'
+            ? unit.length > 1
+              ? `The whole folder moves - the SKILL.md and the ${unit.length === 2 ? 'file' : `${String(unit.length - 1)} files`} beside it.`
+              : 'A skill is its folder, so the folder is what moves.'
+            : 'A command, agent or rule is addressed by its path, so the name is the path.'}{' '}
+          Every file is snapshotted on the way, at both ends.
+          {/* Stated as a condition, not as a fact: the dialog has the file's
+              description but not its frontmatter, and the write path only
+              rewrites a `name:` that is exactly the old address. */}
+          {declaresName && (
+            <>
+              {' '}
+              If its frontmatter still reads{' '}
+              <span className="font-mono text-fg-subtle">
+                name: {file.name.split('/').at(-1)}
+              </span>
+              , that follows the rename too.
+            </>
+          )}
+        </p>
+
+        <label className="mt-4 block">
+          <span className={cn(labelClass, 'mb-1.5')}>New name</span>
+          <input
+            ref={nameRef}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') submit()
+            }}
+            spellCheck={false}
+            data-config-rename-name
+            aria-label="New name"
+            className={cn(inputClass, 'font-mono text-[12px]')}
+          />
+        </label>
+
+        {problem !== null && problem !== '' && <Problem>{problem}</Problem>}
+
+        <div className="mt-4">
+          <span className={cn(labelClass, 'mb-1.5')}>Where it goes</span>
+          <div className="rounded-raised border border-border bg-surface-sunken px-3 py-2.5">
+            <p className="truncate font-mono text-[11px] text-fg-subtle" title={file.relPath}>
+              {file.relPath}
+            </p>
+            {/* The destination line only once there *is* one. Printing the
+                same path twice under an arrow reads as a rendering fault, and
+                the field opens holding the current name - so that is the
+                state the dialog is in every time it is opened. */}
+            {unchanged || preview.relPath === null ? (
+              <p className="mt-1 text-[11px] text-fg-subtle" data-config-rename-target>
+                Type a different name to see where it would go.
+              </p>
+            ) : (
               <>
-                {' '}
-                If its frontmatter still reads{' '}
-                <span className="font-mono text-fg-subtle">
-                  name: {file.name.split('/').at(-1)}
-                </span>
-                , that follows the rename too.
+                <p
+                  className="mt-1 truncate font-mono text-[11px] text-fg-muted"
+                  data-config-rename-target
+                  title={preview.relPath}
+                >
+                  &rarr; {preview.relPath}
+                </p>
+                {preview.address !== null && (
+                  <p className="mt-1.5 text-[11px] leading-[1.55] text-fg-subtle">
+                    Addressed as{' '}
+                    <span className="font-mono text-fg-muted">{preview.address}</span> afterwards.
+                  </p>
+                )}
               </>
             )}
-          </p>
-
-          <label className="mt-4 block">
-            <span className={cn(labelClass, 'mb-1.5')}>New name</span>
-            <input
-              ref={nameRef}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') submit()
-              }}
-              spellCheck={false}
-              data-config-rename-name
-              aria-label="New name"
-              className={cn(inputClass, 'font-mono text-[12px]')}
-            />
-          </label>
-
-          {problem !== null && problem !== '' && <Problem>{problem}</Problem>}
-
-          <div className="mt-4">
-            <span className={cn(labelClass, 'mb-1.5')}>Where it goes</span>
-            <div className="rounded-raised border border-border bg-surface-sunken px-3 py-2.5">
-              <p className="truncate font-mono text-[11px] text-fg-subtle" title={file.relPath}>
-                {file.relPath}
-              </p>
-              {/* The destination line only once there *is* one. Printing the
-                  same path twice under an arrow reads as a rendering fault, and
-                  the field opens holding the current name - so that is the
-                  state the dialog is in every time it is opened. */}
-              {unchanged || preview.relPath === null ? (
-                <p className="mt-1 text-[11px] text-fg-subtle" data-config-rename-target>
-                  Type a different name to see where it would go.
-                </p>
-              ) : (
-                <>
-                  <p
-                    className="mt-1 truncate font-mono text-[11px] text-fg-muted"
-                    data-config-rename-target
-                    title={preview.relPath}
-                  >
-                    &rarr; {preview.relPath}
-                  </p>
-                  {preview.address !== null && (
-                    <p className="mt-1.5 text-[11px] leading-[1.55] text-fg-subtle">
-                      Addressed as{' '}
-                      <span className="font-mono text-fg-muted">{preview.address}</span> afterwards.
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
           </div>
         </div>
-
-        <footer className="mx-[22px] flex shrink-0 items-center justify-end gap-2 border-t border-border py-3.5">
-          <button type="button" onClick={onCancel} className={secondaryButton}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            data-config-rename-apply
-            disabled={!ready}
-            onClick={submit}
-            className={primaryButton(ready)}
-          >
-            {busy ? 'Renaming…' : 'Rename'}
-          </button>
-        </footer>
       </div>
-    </Backdrop>
+
+      <footer className="mx-[22px] flex shrink-0 items-center justify-end gap-2 border-t border-border py-3.5">
+        <button type="button" onClick={onCancel} className={secondaryButton}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          data-config-rename-apply
+          disabled={!ready}
+          onClick={submit}
+          className={primaryButton(ready)}
+        >
+          {busy ? 'Renaming…' : 'Rename'}
+        </button>
+      </footer>
+    </Overlay>
   )
 }
 
@@ -590,89 +552,87 @@ export function ConfigDeleteDialog({
   const bytes = unit.reduce((total, member) => total + member.size, 0)
 
   return (
-    <Backdrop onCancel={onCancel}>
-      <div
-        role="alertdialog"
-        aria-modal="true"
-        aria-label={`Delete ${file.name}`}
-        data-config-delete-dialog
-        className={cn(modalIsland, 'max-w-[440px]')}
-      >
-        <div className="px-[22px] pt-[18px]">
-          <header className="flex items-start gap-[9px]">
-            <TrashIcon width={13} height={13} className="mt-[3px] shrink-0 text-danger" />
-            <h2 className="min-w-0 text-[15px] leading-[1.35] font-medium tracking-tight text-fg">
-              Delete {file.name}?
-            </h2>
-          </header>
+    <Overlay
+      role="alertdialog"
+      aria-label={`Delete ${file.name}`}
+      data-config-delete-dialog
+      className="max-w-[440px]"
+      onDismiss={onCancel}
+    >
+      <div className="px-[22px] pt-[18px]">
+        <header className="flex items-start gap-[9px]">
+          <TrashIcon width={13} height={13} className="mt-[3px] shrink-0 text-danger" />
+          <h2 className="min-w-0 text-[15px] leading-[1.35] font-medium tracking-tight text-fg">
+            Delete {file.name}?
+          </h2>
+        </header>
 
-          <p className="mt-2 text-[12px] leading-[1.55] text-fg-muted">
-            {unit.length === 1
-              ? 'This file comes off the disk.'
-              : `A skill is its folder, so ${unit.length === 2 ? 'both files' : `all ${String(unit.length)} files`} in it come off the disk.`}{' '}
-            Helm records every one of them first, and{' '}
-            <strong className="font-medium text-fg">Undo puts them back</strong> - the same version
-            history the editor restores from.
-          </p>
+        <p className="mt-2 text-[12px] leading-[1.55] text-fg-muted">
+          {unit.length === 1
+            ? 'This file comes off the disk.'
+            : `A skill is its folder, so ${unit.length === 2 ? 'both files' : `all ${String(unit.length)} files`} in it come off the disk.`}{' '}
+          Helm records every one of them first, and{' '}
+          <strong className="font-medium text-fg">Undo puts them back</strong> - the same version
+          history the editor restores from.
+        </p>
 
-          <ul
-            data-config-delete-files
-            className="mt-3 max-h-40 space-y-0.5 overflow-y-auto rounded-raised border border-border bg-surface-raised px-3 py-2"
-          >
-            {unit.map((member) => (
-              <li
-                key={member.path}
-                className="flex items-baseline gap-2 font-mono text-[11px] text-fg-muted"
-                title={member.path}
-              >
-                <span className="min-w-0 flex-1 truncate">{member.relPath}</span>
-                <span className="shrink-0 tabular-nums text-fg-subtle">
-                  {formatBytes(member.size)}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-1.5 text-[10px] tabular-nums text-fg-subtle">
-            {formatBytes(bytes)} in total.
-          </p>
+        <ul
+          data-config-delete-files
+          className="mt-3 max-h-40 space-y-0.5 overflow-y-auto rounded-raised border border-border bg-surface-raised px-3 py-2"
+        >
+          {unit.map((member) => (
+            <li
+              key={member.path}
+              className="flex items-baseline gap-2 font-mono text-[11px] text-fg-muted"
+              title={member.path}
+            >
+              <span className="min-w-0 flex-1 truncate">{member.relPath}</span>
+              <span className="shrink-0 tabular-nums text-fg-subtle">
+                {formatBytes(member.size)}
+              </span>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-1.5 text-[10px] tabular-nums text-fg-subtle">
+          {formatBytes(bytes)} in total.
+        </p>
 
-          {error !== null && error !== '' && <Problem>{error}</Problem>}
-        </div>
-
-        <footer className="mx-[22px] mt-4 flex shrink-0 items-center justify-end gap-2 border-t border-border py-3.5">
-          <button
-            ref={cancelRef}
-            type="button"
-            data-config-delete-cancel
-            onClick={onCancel}
-            className={cn(
-              secondaryButton,
-              // `:focus`, not `:focus-visible`. Focus is placed here by script,
-              // Chromium does not count that as visible, and the one button
-              // Enter would press must not look like the one it would not.
-              'focus:border-accent focus:outline-none'
-            )}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            data-config-delete-confirm
-            disabled={busy}
-            onClick={onDelete}
-            className={cn(
-              // Carried by the text and the hover wash, never by a fill - the
-              // same rule the accent follows (DESIGN.md).
-              'rounded-well border border-danger/50 px-3.5 py-1.5 text-[12px] font-medium',
-              'text-danger transition-colors hover:bg-danger/10',
-              busy && 'cursor-default opacity-60'
-            )}
-          >
-            {busy ? 'Deleting…' : 'Delete'}
-          </button>
-        </footer>
+        {error !== null && error !== '' && <Problem>{error}</Problem>}
       </div>
-    </Backdrop>
+
+      <footer className="mx-[22px] mt-4 flex shrink-0 items-center justify-end gap-2 border-t border-border py-3.5">
+        <button
+          ref={cancelRef}
+          type="button"
+          data-config-delete-cancel
+          onClick={onCancel}
+          className={cn(
+            secondaryButton,
+            // `:focus`, not `:focus-visible`. Focus is placed here by script,
+            // Chromium does not count that as visible, and the one button
+            // Enter would press must not look like the one it would not.
+            'focus:border-accent focus:outline-none'
+          )}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          data-config-delete-confirm
+          disabled={busy}
+          onClick={onDelete}
+          className={cn(
+            // Carried by the text and the hover wash, never by a fill - the
+            // same rule the accent follows (DESIGN.md).
+            'rounded-well border border-danger/50 px-3.5 py-1.5 text-[12px] font-medium',
+            'text-danger transition-colors hover:bg-danger/10',
+            busy && 'cursor-default opacity-60'
+          )}
+        >
+          {busy ? 'Deleting…' : 'Delete'}
+        </button>
+      </footer>
+    </Overlay>
   )
 }
 
