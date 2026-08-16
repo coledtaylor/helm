@@ -90,6 +90,26 @@ const DEFAULT_TERMINAL = {
 } as const
 
 /**
+ * The content viewer's wrap defaults, written out here for the same reason.
+ *
+ * Off, following the config editor rather than the prose one, and a four-column
+ * hang. The content group writes these back before it measures anything: the
+ * validation group parks both keys on values of its own on the way past, and a
+ * check runs against a *copy of the real database*, so neither "off" nor "four"
+ * is a state this driver may assume it inherited.
+ */
+const DEFAULT_CONTENT_WRAP = { wrap: false, indent: 4 } as const
+
+/**
+ * The hang the content group sets and then measures, in columns.
+ *
+ * One constant rather than a 7 in the setter and another in the expected
+ * geometry: those two numbers being the same number is the whole of S-12c's
+ * second half.
+ */
+const WRAP_INDENT_COLUMNS = 7
+
+/**
  * The project shell's own bounds, restated here rather than imported.
  *
  * The same reason `DEFAULT_FONT_STACK` is written out: importing
@@ -813,117 +833,184 @@ async function openSettings(win: BrowserWindow): Promise<boolean> {
   return pollJs(win, `document.querySelector('[data-settings-pane]')`, 10_000)
 }
 
-interface WrappedSource {
-  file: string
+/** Whether the planted source file could be got on screen, and how far it got. */
+interface SourceOpened {
+  scopeOffered: boolean
+  scopeChosen: boolean
+  rowClicked: boolean
+  rendered: boolean
+}
+
+/**
+ * Put the content group's planted source file on screen, from a closed pane.
+ *
+ * Called from a closed pane on purpose. `contentWrap` is the *default* a
+ * document takes when it mounts - the header's toggle overrides it per file
+ * afterwards - so a pane that was already open when the setting changed is a
+ * pane holding the answer to a different question. Closing and reopening is
+ * what makes "it opened wrapped because the settings say so" a claim about the
+ * settings.
+ *
+ * The scope is chosen rather than inherited, and the view is put on curated:
+ * the file list is what carries `[data-content-file]`, and which of the two
+ * modes a scope opens in depends on whether it is a harness or a project.
+ */
+async function openPlantedSource(
+  win: BrowserWindow,
+  scopePath: string,
+  relPath: string
+): Promise<SourceOpened> {
+  const out: SourceOpened = {
+    scopeOffered: false,
+    scopeChosen: false,
+    rowClicked: false,
+    rendered: false
+  }
+
+  await click(win, '[data-open-content]')
+  if (!(await pollJs(win, `document.querySelector('select[data-content-scope]')`, 15_000))) {
+    return out
+  }
+  // The option itself may still be arriving: the switcher is built from the
+  // last scan, and the root this scope lives under was added moments ago.
+  await pollJs(
+    win,
+    `[...document.querySelectorAll('select[data-content-scope] option')]
+       .some((o) => o.value.toLowerCase() === ${JSON.stringify(scopePath.toLowerCase())})`,
+    30_000
+  )
+
+  const picked = await chooseOption(win, 'select[data-content-scope]', scopePath)
+  out.scopeOffered = picked.offered
+  out.scopeChosen = picked.set
+  await sleep(700)
+  await click(win, '[data-content-view="curated"]')
+  await pollJs(win, `document.querySelector('[data-content-status]')`, 15_000)
+  await sleep(500)
+
+  out.rowClicked = await pollJs(
+    win,
+    `(() => {
+       const el = [...document.querySelectorAll('[data-content-file]')]
+         .find((b) => b.dataset.contentFile === ${JSON.stringify(relPath)})
+       if (!el) return false
+       el.click()
+       return true
+     })()`,
+    20_000
+  )
+  if (!out.rowClicked) return out
+
+  out.rendered = await pollJs(
+    win,
+    `document.querySelector('.source-view .line')`,
+    15_000
+  )
+  await sleep(500)
+  return out
+}
+
+/** The geometry of the source block on screen, in pixels it measured itself. */
+interface SourceGeometry {
   wrapAttr: string | null
   togglePressed: string | null
   clientWidth: number
   scrollWidth: number
-  /** Columns of leading whitespace on the line that was measured. */
+  /** `.line` spans seen, and how many of them are more than one visual row. */
+  linesSeen: number
+  wrappedLines: number
+  tallestLinePx: number
+  /** Columns of leading whitespace on the line the hang was measured on, or -1. */
   indentColumns: number
-  /** How far the continuation row starts past the line's own first row. */
+  /** How far the continuation row starts past the line's own code, or -1. */
   hangPx: number
-  expectedHangPx: number
   charPx: number
 }
 
 /**
- * Open a source file in the content viewer and measure how a long line wraps.
+ * Measure how the source block on screen is laid out.
  *
- * The file is chosen by *shape* - long enough to wrap at this width - by
- * opening candidates and measuring, because the DOM row carries no size and a
- * path written down here would name a forty-line file on somebody else's
- * machine. The same reason `design-shot` picks its code shot this way.
+ * Geometry, deliberately, and the same function is run in both states so that
+ * the two answers have to disagree. "It wrapped" is `scrollWidth` back at
+ * `clientWidth` with lines taller than one row; "it hung" is the second visual
+ * row of a line starting further right than the line's own code. A `data-wrap`
+ * attribute would report all of that whether or not any of it happened, which
+ * is why the attribute is read *beside* the pixels rather than instead of them.
  *
- * What comes back is geometry, deliberately. "It wrapped" is `scrollWidth`
- * returning to `clientWidth`; "it hung" is the second visual row of a line
- * starting further right than the first. A class name would say both of those
- * things whether or not they happened.
+ * `charPx` is one character of the block's **own** font, measured by a ruler
+ * injected into it, so an expected hang is in the unit the browser resolved
+ * `ch` with rather than a guess about the stylesheet.
  */
-async function openWrappedSource(win: BrowserWindow): Promise<WrappedSource | null> {
-  await click(win, '[data-open-content]')
-  if (!(await pollJs(win, `document.querySelector('[data-content-scope]')`, 10_000))) return null
-  await sleep(600)
-
-  const candidates = await js<string[]>(
+async function measureSource(win: BrowserWindow): Promise<SourceGeometry | null> {
+  return js<SourceGeometry | null>(
     win,
-    `[...document.querySelectorAll('[data-content-file]')]
-       .map((el) => el.dataset.contentFile || '')
-       .filter((p) => /\\.(json|ya?ml|mjs|cjs|js|ts|tsx|py|ps1|sh|css|log|toml|ini)$/i.test(p))`
-  ).catch(() => [] as string[])
+    `(() => {
+       const view = document.querySelector('.source-view')
+       const pre = document.querySelector('[data-content-source] pre')
+       const toggle = document.querySelector('[data-content-wrap]')
+       if (!view || !pre) return null
+       const ruler = document.createElement('span')
+       ruler.textContent = '0'.repeat(100)
+       ruler.style.cssText = 'position:absolute;visibility:hidden;white-space:pre'
+       pre.appendChild(ruler)
+       const charPx = ruler.getBoundingClientRect().width / 100
+       ruler.remove()
 
-  for (const file of candidates.slice(0, 14)) {
-    const opened = await js<boolean>(
-      win,
-      `(() => {
-         const el = [...document.querySelectorAll('[data-content-file]')]
-           .find((b) => b.dataset.contentFile === ${JSON.stringify(file)})
-         if (!el) return false
-         el.click()
-         return true
-       })()`
-    ).catch(() => false)
-    if (!opened) continue
-    if (!(await pollJs(win, `document.querySelector('[data-content-source] pre')`, 8000))) continue
-    await sleep(350)
-
-    const measured = await js<WrappedSource | null>(
-      win,
-      `(() => {
-         const view = document.querySelector('.source-view')
-         const pre = document.querySelector('[data-content-source] pre')
-         const toggle = document.querySelector('[data-content-wrap]')
-         if (!view || !pre) return null
-         // One character of the block's own font, so the expected hang is in the
-         // same unit the browser resolved 'ch' with rather than a guess.
-         const ruler = document.createElement('span')
-         ruler.textContent = '0'.repeat(100)
-         ruler.style.cssText = 'position:absolute;visibility:hidden;white-space:pre'
-         pre.appendChild(ruler)
-         const charPx = ruler.getBoundingClientRect().width / 100
-         ruler.remove()
-
-         const indentCols = (el) => {
-           const m = /--line-indent:(\\d+)ch/.exec(el.getAttribute('style') || '')
-           return m ? Number(m[1]) : 0
+       const indentCols = (el) => {
+         const m = /--line-indent:(\\d+)ch/.exec(el.getAttribute('style') || '')
+         return m ? Number(m[1]) : 0
+       }
+       const preLeft = pre.getBoundingClientRect().left
+       const lines = [...view.querySelectorAll('.line')]
+       let wrappedLines = 0
+       let tallest = 0
+       let found = null
+       for (const line of lines) {
+         const height = line.getBoundingClientRect().height
+         if (height > tallest) tallest = height
+         // One visual row of this face is about 19px, so 25 is comfortably
+         // between "one row" and "two" without being a claim about either.
+         if (height < 25) continue
+         wrappedLines++
+         if (found) continue
+         const range = document.createRange()
+         range.selectNodeContents(line)
+         const rows = new Map()
+         for (const r of range.getClientRects()) {
+           if (!r.width) continue
+           const top = Math.round(r.top)
+           const x = Math.round(r.left - preLeft)
+           if (!rows.has(top) || rows.get(top) > x) rows.set(top, x)
          }
-         const preLeft = pre.getBoundingClientRect().left
-         let found = null
-         for (const line of view.querySelectorAll('.line')) {
-           if (line.getBoundingClientRect().height < 25) continue
-           const range = document.createRange()
-           range.selectNodeContents(line)
-           const rows = new Map()
-           for (const r of range.getClientRects()) {
-             if (!r.width) continue
-             const top = Math.round(r.top)
-             const x = Math.round(r.left - preLeft)
-             if (!rows.has(top) || rows.get(top) > x) rows.set(top, x)
-           }
-           const xs = [...rows.entries()].sort((a, b) => a[0] - b[0]).map((e) => e[1])
-           if (xs.length < 2) continue
-           found = { line, xs, cols: indentCols(line) }
-           break
-         }
-         if (!found) return null
-         const codeStartsAt = found.xs[0] + found.cols * charPx
-         return {
-           file: ${JSON.stringify(file)},
-           wrapAttr: view.getAttribute('data-wrap'),
-           togglePressed: toggle ? toggle.getAttribute('aria-pressed') : null,
-           clientWidth: pre.clientWidth,
-           scrollWidth: pre.scrollWidth,
-           indentColumns: found.cols,
-           hangPx: Math.round(found.xs[1] - codeStartsAt),
-           expectedHangPx: Math.round(7 * charPx),
-           charPx: Math.round(charPx * 100) / 100
-         }
-       })()`
-    ).catch(() => null)
+         const xs = [...rows.entries()].sort((a, b) => a[0] - b[0]).map((e) => e[1])
+         if (xs.length < 2) continue
+         found = { xs, cols: indentCols(line) }
+       }
+       return {
+         wrapAttr: view.getAttribute('data-wrap'),
+         togglePressed: toggle ? toggle.getAttribute('aria-pressed') : null,
+         clientWidth: pre.clientWidth,
+         scrollWidth: pre.scrollWidth,
+         linesSeen: lines.length,
+         wrappedLines,
+         tallestLinePx: Math.round(tallest * 10) / 10,
+         indentColumns: found ? found.cols : -1,
+         hangPx: found ? Math.round(found.xs[1] - (found.xs[0] + found.cols * charPx)) : -1,
+         charPx: Math.round(charPx * 100) / 100
+       }
+     })()`
+  ).catch(() => null)
+}
 
-    if (measured !== null) return measured
-  }
-  return null
+/** Shut the content tab, so the next open is a mount rather than a re-render. */
+async function closeContentTab(win: BrowserWindow): Promise<boolean> {
+  return js<boolean>(
+    win,
+    `(() => { const tab = [...document.querySelectorAll('[role="tab"]')]
+        .find((t) => t.dataset.tab === 'content');
+      const close = tab?.parentElement?.querySelector('button[aria-label^="Close "]');
+      if (!close) return false; close.click(); return true })()`
+  ).catch(() => false)
 }
 
 // ---------------------------------------------------------------------------
@@ -963,6 +1050,18 @@ interface Fixtures {
   pinProjects: string[]
   /** A path under `pinRoot` that was never created. Pinnable, never found. */
   pinGone: string
+  /**
+   * A scan root for the content group, holding one harness with one source
+   * file in it - long lines, and every line indented.
+   *
+   * `wrapScope` is the harness, which is what the content viewer's scope
+   * switcher offers; `wrapSourceRel` is the planted file as the file list
+   * addresses it, relative to the scope and slash-separated.
+   */
+  wrapRoot: string
+  wrapScope: string
+  wrapSource: string
+  wrapSourceRel: string
   /**
    * A folder somebody would add meaning *this one*: subdirectories, and not a
    * project among them. The shape the folder-root bug turned into four rows.
@@ -1006,6 +1105,41 @@ function buildFixtures(dataDir: string): Fixtures {
   }
   // Deliberately not created. This is the pinned path whose folder has gone.
   const pinGone = join(pinRoot, 'pin harness one', 'repos', 'unplugged drive')
+
+  /**
+   * A harness of the content group's own, with a source file planted in it.
+   *
+   * S-12c used to pick a file **by shape** out of whatever scope the content
+   * viewer happened to open on, and on this machine it found none: it reported
+   * "no source file in this scope could be measured", which is honest and is
+   * not the failure it exists to report. `content-check` met the same wall
+   * writing CONT-16 and answered it the same way, and the comment there is the
+   * argument - "the scope a check runs in is not guaranteed to hold a long
+   * source file". So the file is planted, and the probe reads it out of a scope
+   * it made.
+   *
+   * Two properties are what make it a fixture rather than a file. Every line is
+   * far wider than any pane it can be read in, so **not** wrapping is a
+   * measurable state and not just an absence; and every line carries leading
+   * whitespace of its own, varying, so the hanging indent is measured from the
+   * line's own indentation the way `--line-indent` intends rather than from the
+   * block's edge, where a hang of zero would look the same as a hang that
+   * worked. `.ts` because the source view's geometry lives on shiki's `.line`
+   * spans, and a file with no grammar falls back to a plain `<pre>` with none.
+   */
+  const wrapRoot = join(dir, 'root wrap')
+  const wrapScope = join(wrapRoot, 'wrap harness')
+  const wrapSourceRel = 'tools/wrapping-fixture.ts'
+  const wrapSource = join(wrapScope, ...wrapSourceRel.split('/'))
+  mkdirSync(join(wrapSource, '..'), { recursive: true })
+  writeFileSync(join(wrapScope, 'harness.yaml'), 'name: wrap harness\n')
+  writeFileSync(
+    wrapSource,
+    Array.from({ length: 200 }, (_, i) => {
+      const depth = '  '.repeat((i % 4) + 1)
+      return `${depth}export const entry${String(i)} = { id: ${String(i)}, note: 'a deliberately long line, wider than any pane this file can be read in, so that whether it wrapped is a question the geometry can answer rather than one an attribute claims', tail: ${String(i)} }`
+    }).join('\n')
+  )
 
   // A tool directory, with a space in its name like the rest of these. Nothing
   // in it carries `.git`, `.claude` or a `CLAUDE.md`, which is what makes it a
@@ -1060,6 +1194,10 @@ function buildFixtures(dataDir: string): Fixtures {
     pinRoot,
     pinProjects,
     pinGone,
+    wrapRoot,
+    wrapScope,
+    wrapSource,
+    wrapSourceRel,
     leafRoot,
     leafChildren
   }
@@ -1260,6 +1398,38 @@ export async function runSettingsChecks(
       `/windowBounds|firstRunCompletedAt|workspaceTabs|browserRecentUrls|browserProjectUrls/.test(document.querySelector('[data-settings-pane]')?.textContent ?? '')`
     )
 
+    /**
+     * The expected group list, and the three ways it can be wrong, named apart.
+     *
+     * The list stays written out by hand - it is this driver's own statement of
+     * what the pane holds, and one read off the pane would agree with itself.
+     * What it does not have to stay is *ambiguous when it fails*: this list has
+     * gone stale four times, once per group that arrived (`archive`, `content`,
+     * `templates`, `browser`), and each time the report said only that a
+     * string comparison failed. "A group this driver has never heard of" and "a
+     * group that has stopped rendering" are opposite findings - the first is a
+     * list to update, the second is the bug this probe exists for - and they
+     * are separated here rather than left to whoever reads the red line.
+     */
+    const EXPECTED_GROUPS = [
+      'claude',
+      'workspace',
+      'templates',
+      'appearance',
+      'content',
+      'browser',
+      'updates',
+      'terminal',
+      'archive',
+      'github'
+    ]
+    const groupsUnexpected = groups.filter((name) => !EXPECTED_GROUPS.includes(name))
+    const groupsMissing = EXPECTED_GROUPS.filter((name) => !groups.includes(name))
+    const groupsReordered =
+      groupsUnexpected.length === 0 &&
+      groupsMissing.length === 0 &&
+      groups.join(',') !== EXPECTED_GROUPS.join(',')
+
     const shot = await screenshot(win, shotDir, 'settings-1-pane.png')
 
     // Two more workspace tabs, so the ring is three long and a cycle through it
@@ -1352,14 +1522,14 @@ export async function runSettingsChecks(
         // arrived with the transcript archive and this went stale, which nobody
         // saw because the probe was already red for the inherited tab strip.
         //
-        // It went stale three more times the same way and all three are
-        // corrected here: `content` arrived with the content viewer's wrapping
-        // settings, `templates` with in-app template authoring, and `browser`
-        // with the integrated browser's reach posture. Each one left this red,
-        // and a probe that is already red is a probe nothing reads - which is
-        // the whole failure mode the paragraph above describes, repeating.
-        groups.join(',') ===
-          'claude,workspace,templates,appearance,content,browser,updates,terminal,archive,github' &&
+        // It went stale three more times the same way: `content` arrived with
+        // the content viewer's wrapping settings, `templates` with in-app
+        // template authoring, and `browser` with the integrated browser's reach
+        // posture. Each one left this red, and a probe that is already red is a
+        // probe nothing reads - which is the whole failure mode the paragraph
+        // above describes, repeating. What is different now is that the report
+        // says which of the three happened; see `EXPECTED_GROUPS`.
+        groups.join(',') === EXPECTED_GROUPS.join(',') &&
         Object.values(controls).every(Boolean) &&
         !internalLeaked &&
         historyUp &&
@@ -1372,6 +1542,12 @@ export async function runSettingsChecks(
         gearInTitleBar: gearThere,
         paneBeforeClick: paneBefore,
         groups,
+        // Named apart, because "this driver's list is stale" and "a group has
+        // stopped rendering" are opposite findings behind one string mismatch.
+        groupsExpected: EXPECTED_GROUPS,
+        groupsOnScreenThisDriverDoesNotKnow: groupsUnexpected,
+        groupsThisDriverExpectedAndDidNotFind: groupsMissing,
+        groupsReordered,
         tabSelected,
         controlsPresent: controls,
         internalKeysOnScreen: internalLeaked,
@@ -1398,7 +1574,13 @@ export async function runSettingsChecks(
         'that inherits the developer’s panes measures a different ring on every',
         'machine - see scripts/isolate.mjs.',
         '`windowBounds` and `firstRunCompletedAt` are state rather than',
-        'preferences, and the pane is checked for not having grown a row for them.'
+        'preferences, and the pane is checked for not having grown a row for them.',
+        'The expected group list is written out here rather than read off the',
+        'pane, which would be the pane agreeing with itself. It has gone stale',
+        'four times, so the detail names the three cases apart: a group on',
+        'screen this driver does not know is a list to update, a group it',
+        'expected and did not find is the failure this exists for, and the same',
+        'ten in a different order is a third thing again.'
       ]
     })
   }
@@ -1796,11 +1978,38 @@ export async function runSettingsChecks(
   // its folder
   // -------------------------------------------------------------------------
   if (run('pins')) {
+    await openSettings(win)
+    await sleep(300)
+
+    /**
+     * From no pins at all, whatever this machine had.
+     *
+     * The same move S-13 opens with - "the group is only meaningful from a
+     * known state" - and here it is load-bearing rather than tidy. A check runs
+     * against a copy of the real database (`scripts/isolate.mjs`), and
+     * `pinnedProjects` is a preference somebody made, so it comes across; on
+     * the machine this was found on, eight projects were already pinned. Every
+     * count below is an absolute one - "two pins", "three once the unresolvable
+     * one is written", "one after unpinning" - and against an inherited list
+     * they were all counting the user's pins plus this group's. Worse, the
+     * fixture's own discriminator went with them: "no Pinned section before
+     * anything is pinned" cannot be asserted on a machine that arrives with a
+     * Pinned section.
+     *
+     * Counting the delta instead was the other option and is the weaker one: it
+     * would pass a section that had also quietly grown a row. Clearing first
+     * keeps every count exact. The user's list comes back with `original` in
+     * phase two, and `original` has this driver's own paths scrubbed out of it
+     * already.
+     */
+    const pinsAsFound = rowValue(dbFile, 'pinnedProjects') as string[] | undefined
+    const pinsCleared = await sendWrite(win, { pinnedProjects: [] })
+    await sleep(500)
+    const pinsAtStart = rowValue(dbFile, 'pinnedProjects') as string[] | undefined
+
     // A root of this group's own, so `--only=pins` is a run that means
     // something. Two harnesses under it, because "flat and cross-harness" is
     // the claim and one harness cannot distinguish it from a renamed group.
-    await openSettings(win)
-    await sleep(300)
     answerPicker('directory', fixtures.pinRoot)
     await click(win, '[data-settings-add-root]')
     await pollJs(win, byData('settings-root', fixtures.pinRoot), 20_000)
@@ -1902,6 +2111,10 @@ export async function runSettingsChecks(
       title: 'The star lifts a project out of its harness; a pin whose folder has gone says so and offers no launch',
       ok:
         scanned &&
+        // The known state this group is counted from. Without it every count
+        // below is the user's pins plus this group's - see `pinsAsFound`.
+        pinsCleared.accepted &&
+        (pinsAtStart ?? []).length === 0 &&
         // The fixture has to discriminate: unless both projects started inside
         // their harness groups, "it moved to the Pinned section" proves nothing.
         beforeAnyPin.section === false &&
@@ -1961,6 +2174,11 @@ export async function runSettingsChecks(
           neverCreated: fixtures.pinGone,
           scanFound: scanned
         },
+        startedFrom: {
+          pinsInTheSeededDatabase: pinsAsFound ?? [],
+          clearedThroughSettingsWrite: pinsCleared,
+          rowAfterClearing: pinsAtStart ?? []
+        },
         beforeAnyPin,
         afterFirstStar: { state: afterFirst, databaseRow: rowFirst },
         afterSecondStar: { state: afterSecond, databaseRow: rowBoth },
@@ -1979,6 +2197,10 @@ export async function runSettingsChecks(
         }
       },
       notes: [
+        'The group clears `pinnedProjects` first and asserts it is empty. A',
+        'check runs against a copy of the real database and a pin is a real',
+        'preference, so it comes across: every count here is an exact one, and',
+        'without the clear they were all the user`s pins plus this group`s.',
         'Pinned through the star on the row, not through `settings:write`: the',
         'setting is only half of this and the affordance is the other half.',
         'Every value is then read back out of the database file through this',
@@ -2789,222 +3011,233 @@ export async function runSettingsChecks(
   // -------------------------------------------------------------------------
   if (run('validation')) {
     const now = readSettings(services.store)
-    const cases: Array<{
-      key: keyof AppSettings
-      good: unknown
-      bad: unknown
-      why: string
-    }> = [
-      { key: 'theme', good: 'light', bad: 'purple', why: 'not one of the three preferences' },
-      { key: 'usageDisplay', good: 'off', bad: 'dollars', why: 'not one of the three modes' },
-      {
-        key: 'scanRoots',
-        good: [fixtures.rootA],
-        bad: ['projects/alpha'],
-        why: 'a relative path resolves against whatever the cwd happens to be'
-      },
-      {
-        key: 'pinnedProjects',
-        good: [fixtures.pinProjects[0] ?? fixtures.rootA],
-        // Two spellings of one path. Windows compares paths case-insensitively
-        // and so does the sidebar, so this would print one project as two rows
-        // in a section where un-pinning either takes both away.
-        bad: [fixtures.rootA, fixtures.rootA.toUpperCase()],
-        why: 'one project under two spellings is a pin that cannot be taken off'
-      },
-      {
-        key: 'claudePath',
-        good: fixtures.stubCli,
-        bad: 'claude',
-        why: 'a bare name is not an executable Helm can hand to a pty'
-      },
-      {
-        key: 'windowBounds',
-        good: now.windowBounds ?? { width: 1280, height: 820 },
-        bad: { width: 'wide', height: 820 },
-        why: 'a width that is not a number reaches BrowserWindow'
-      },
-      {
-        key: 'workspaceTabs',
-        good: { panes: [{ kind: 'project', path: fixtures.rootA }], activeId: 'history' },
-        bad: { panes: [{ kind: 'project' }], activeId: null },
-        why: 'a project pane with no path is a tab that restores pointing nowhere'
-      },
-      {
-        key: 'firstRunCompletedAt',
-        good: '2026-08-11T00:00:00.000Z',
-        bad: 'soon',
-        why: 'not a timestamp anything can order'
-      },
-      {
-        key: 'terminalFontFamily',
-        good: 'Consolas',
-        bad: 'Consolas; color: red',
-        why: 'xterm puts this in an inline style, where a semicolon ends the declaration'
-      },
-      {
-        key: 'terminalFontSize',
-        good: 16,
-        bad: 200,
-        why: 'a grid two columns wide is not a terminal any TUI can lay out in'
-      },
-      {
-        key: 'terminalCursorStyle',
-        good: 'bar',
-        bad: 'beam',
-        why: 'not one of the three shapes xterm draws'
-      },
-      {
-        key: 'terminalCursorBlink',
-        good: false,
-        bad: 'false',
-        why: 'the string is truthy, so it would switch blinking on'
-      },
-      {
-        key: 'terminalScrollback',
-        good: 5000,
-        bad: 5_000_000,
-        why: 'a line is about a kilobyte of cell data, per pane'
-      },
-      {
-        key: 'terminalShell',
-        good: now.terminalShell ?? whereIs('cmd.exe')[0] ?? null,
-        bad: 'cmd.exe',
-        why: 'a bare name is resolved against whatever PATH Helm was started with'
-      },
-      {
-        key: 'projectShellHeightPct',
-        good: 40,
-        // Above the ceiling rather than below the floor, because the ceiling is
-        // the half of this bound somebody asked for: past 50 the project pane
-        // is the smaller part of the page it names.
-        bad: 51,
-        why: 'the project pane may not be given less than half of its own page'
-      },
-      {
-        key: 'sessionSplitPct',
-        good: 60,
-        // Either bound would do here - neither side of this divider is the
-        // subordinate one - so the floor, which is the one a drag reaches by
-        // pushing the sessions column shut.
-        bad: 19,
-        why: 'below the floor the divider itself enforces'
-      },
-      {
-        key: 'transcriptArchiveMaxBytes',
-        good: 512 * 1024 * 1024,
-        // Not "too small" - the floor is deliberately a kilobyte so a check can
-        // drive eviction. Too *large* is the interesting rejection: this bounds
-        // how much of the user's `helm.db` one feature may take, and an
-        // unbounded archive is the state the whole ceiling exists to prevent.
-        bad: 1024 ** 4,
-        why: 'a terabyte is not a ceiling, and a ceiling is the point of the key'
-      },
-      {
-        key: 'ghPath',
-        good: whereIs('gh.exe')[0] ?? fixtures.stubCli,
-        bad: 'gh',
-        why: 'a bare name is not an executable Helm can run for a fetch'
-      },
-      {
-        key: 'prPollMinutes',
-        good: 15,
-        bad: 1,
-        why: 'a one-minute sweep is one gh per remote against the user’s own rate limit'
-      },
-      {
-        key: 'prStaleDays',
-        good: 7,
-        // Not "too small" - zero is legal and means no split at all. Past the
-        // ceiling is the interesting rejection: at four months the cutoff has
-        // stopped being a statement about attention.
-        bad: 120,
-        why: 'a cutoff past a quarter is sorting by archaeology rather than by attention'
-      },
-      {
-        key: 'prIgnoredRepos',
-        good: ['acme/widget'],
-        // Two spellings of one repository. The matcher is case-insensitive, so
-        // this would behave as one entry while presenting as two rows - a tick
-        // that cannot be cleared because clearing one leaves the other.
-        bad: ['acme/widget', 'ACME/Widget'],
-        why: 'one repository under two spellings is a checkbox that will not stay unticked'
-      },
-      {
-        key: 'prReviewPrompt',
-        good: '/code-review {number}',
-        bad: '   ',
-        why: 'an empty template makes the review button start an ordinary session'
-      },
-      {
-        key: 'prCheckout',
-        good: 'none',
-        bad: 'worktree',
-        why: 'a mode that is planned and not built would silently do nothing'
-      },
-      {
-        key: 'prReviewModel',
-        good: 'opus',
-        bad: '--model',
-        why: 'this becomes an argv word, and a flag written into it is a second flag'
-      },
-      {
-        key: 'prReviewEffort',
-        good: 'high',
-        bad: 'maximum',
-        why: 'the five levels are the CLI’s own, and a sixth would be rejected by it'
-      },
-      {
-        key: 'updateCheck',
-        good: false,
-        bad: 'false',
-        why: 'a string that reads as a boolean is the shape a hand-edited row arrives in'
-      },
-      {
-        key: 'lastUpdateCheckAt',
-        good: '2026-08-11T20:04:06.641Z',
-        bad: 'never',
-        why: 'an unparseable instant compares NaN against the throttle, so it would mean “never ask again” rather than “ask now”'
-      },
-      {
-        key: 'browserReach',
-        good: 'local',
-        bad: 'none',
-        why: 'a reach mode nothing recognises would fall through every branch of the one function the whole pane is gated on'
-      },
-      {
-        key: 'browserMcp',
-        good: false,
-        // The same rejection `updateCheck` has, and for the sharper reason: a
-        // row hand-edited into this string is truthy, so it would **start** the
-        // inbound listener while the pane read it as off.
-        bad: 'false',
-        why: 'a string that reads as a boolean would open a port the pane says is shut'
-      },
-      {
-        key: 'browserMcpLocalOnly',
-        good: true,
-        bad: 'true',
-        why: 'the same, pointing the other way: a truthy string would confine the agent while the pane read it as unconfined'
-      },
-      {
-        key: 'browserRecentUrls',
-        good: ['http://localhost:3000/'],
-        bad: ['localhost:3000'],
-        why: 'a row in the address dropdown that is not an absolute URL is a row that does nothing when clicked'
-      },
-      {
-        key: 'browserProjectUrls',
-        good: { [fixtures.rootA.toLowerCase()]: 'http://localhost:5173/' },
-        bad: { [fixtures.rootA]: 'http://localhost:5173/' },
-        why: 'a key that is not lower-cased is a project whose remembered address is never found again, the same trap pinnedProjects has'
-      }
-    ]
 
-    // A key with no case here is a key nothing proves is validated, and the
-    // table is hand-written, so it is checked against the settings object
-    // itself rather than trusted to have kept up.
-    const covered = cases.map((entry) => entry.key).sort()
+    /**
+     * One case per key of `AppSettings`, **enforced by the compiler**.
+     *
+     * A mapped type rather than an array, and the shape is deliberately the one
+     * `SETTING_VALIDATORS` uses next door, for the reason that map uses it: a
+     * key added to the interface without an entry here does not compile. This
+     * table is hand-written - it has to be, since the whole probe is a second
+     * opinion about what a bad value looks like - and a hand-written list that
+     * has to be *remembered* goes stale. It did: `contentWrap` and
+     * `contentWrapIndent` arrived with the content viewer's wrapping and
+     * nothing here noticed, so two validated keys sat unprobed while
+     * `everyKeyCovered` reported it as one `false` buried in a probe that takes
+     * minutes to reach. The failure is the same one `PROF-4` is on record for,
+     * one level up: a table that quietly stopped covering what it claims to.
+     *
+     * Now `pnpm typecheck` says so - in a second, in CI, before the app starts.
+     * `everyKeyCovered` below stays as the runtime half and is not redundant:
+     * the type is a claim about the interface, and that is a claim about the
+     * object `readSettings` actually handed back.
+     */
+    const cases: { [K in keyof AppSettings]: { good: AppSettings[K]; bad: unknown; why: string } } =
+      {
+        theme: { good: 'light', bad: 'purple', why: 'not one of the three preferences' },
+        usageDisplay: { good: 'off', bad: 'dollars', why: 'not one of the three modes' },
+        scanRoots: {
+          good: [fixtures.rootA],
+          bad: ['projects/alpha'],
+          why: 'a relative path resolves against whatever the cwd happens to be'
+        },
+        pinnedProjects: {
+          good: [fixtures.pinProjects[0] ?? fixtures.rootA],
+          // Two spellings of one path. Windows compares paths case-insensitively
+          // and so does the sidebar, so this would print one project as two rows
+          // in a section where un-pinning either takes both away.
+          bad: [fixtures.rootA, fixtures.rootA.toUpperCase()],
+          why: 'one project under two spellings is a pin that cannot be taken off'
+        },
+        claudePath: {
+          good: fixtures.stubCli,
+          bad: 'claude',
+          why: 'a bare name is not an executable Helm can hand to a pty'
+        },
+        windowBounds: {
+          good: now.windowBounds ?? { width: 1280, height: 820 },
+          bad: { width: 'wide', height: 820 },
+          why: 'a width that is not a number reaches BrowserWindow'
+        },
+        workspaceTabs: {
+          good: { panes: [{ kind: 'project', path: fixtures.rootA }], activeId: 'history' },
+          bad: { panes: [{ kind: 'project' }], activeId: null },
+          why: 'a project pane with no path is a tab that restores pointing nowhere'
+        },
+        firstRunCompletedAt: {
+          good: '2026-08-11T00:00:00.000Z',
+          bad: 'soon',
+          why: 'not a timestamp anything can order'
+        },
+        terminalFontFamily: {
+          good: 'Consolas',
+          bad: 'Consolas; color: red',
+          why: 'xterm puts this in an inline style, where a semicolon ends the declaration'
+        },
+        terminalFontSize: {
+          good: 16,
+          bad: 200,
+          why: 'a grid two columns wide is not a terminal any TUI can lay out in'
+        },
+        terminalCursorStyle: {
+          good: 'bar',
+          bad: 'beam',
+          why: 'not one of the three shapes xterm draws'
+        },
+        terminalCursorBlink: {
+          good: false,
+          bad: 'false',
+          why: 'the string is truthy, so it would switch blinking on'
+        },
+        terminalScrollback: {
+          good: 5000,
+          bad: 5_000_000,
+          why: 'a line is about a kilobyte of cell data, per pane'
+        },
+        terminalShell: {
+          good: now.terminalShell ?? whereIs('cmd.exe')[0] ?? null,
+          bad: 'cmd.exe',
+          why: 'a bare name is resolved against whatever PATH Helm was started with'
+        },
+        projectShellHeightPct: {
+          good: 40,
+          // Above the ceiling rather than below the floor, because the ceiling is
+          // the half of this bound somebody asked for: past 50 the project pane
+          // is the smaller part of the page it names.
+          bad: 51,
+          why: 'the project pane may not be given less than half of its own page'
+        },
+        sessionSplitPct: {
+          good: 60,
+          // Either bound would do here - neither side of this divider is the
+          // subordinate one - so the floor, which is the one a drag reaches by
+          // pushing the sessions column shut.
+          bad: 19,
+          why: 'below the floor the divider itself enforces'
+        },
+        contentWrap: {
+          // Not the default, so the control write is a change rather than a
+          // no-op, and the same shape `terminalCursorBlink` is rejected in: a
+          // hand-edited row arrives as a string, and `'false'` is truthy.
+          good: true,
+          bad: 'false',
+          why: 'the string is truthy, so a row that reads as off would open every source file wrapped'
+        },
+        contentWrapIndent: {
+          good: 8,
+          // Below the floor rather than above the ceiling, because this is the
+          // end with a silent failure behind it. The hang is
+          // `padding-left: calc(--line-indent + --source-wrap-indent)` with the
+          // negation as `text-indent`, so a negative indent computes a negative
+          // padding - which is invalid, dropped by the parser, and leaves the
+          // positive `text-indent` standing on its own. The continuation rows
+          // then start *left* of the code they belong to: the exact failure the
+          // per-line indent was added to prevent, arriving as a setting.
+          bad: -4,
+          why: 'a negative hang computes an invalid padding, which is dropped, and hangs the continuation rows the wrong way'
+        },
+        transcriptArchiveMaxBytes: {
+          good: 512 * 1024 * 1024,
+          // Not "too small" - the floor is deliberately a kilobyte so a check can
+          // drive eviction. Too *large* is the interesting rejection: this bounds
+          // how much of the user's `helm.db` one feature may take, and an
+          // unbounded archive is the state the whole ceiling exists to prevent.
+          bad: 1024 ** 4,
+          why: 'a terabyte is not a ceiling, and a ceiling is the point of the key'
+        },
+        ghPath: {
+          good: whereIs('gh.exe')[0] ?? fixtures.stubCli,
+          bad: 'gh',
+          why: 'a bare name is not an executable Helm can run for a fetch'
+        },
+        prPollMinutes: {
+          good: 15,
+          bad: 1,
+          why: 'a one-minute sweep is one gh per remote against the user’s own rate limit'
+        },
+        prStaleDays: {
+          good: 7,
+          // Not "too small" - zero is legal and means no split at all. Past the
+          // ceiling is the interesting rejection: at four months the cutoff has
+          // stopped being a statement about attention.
+          bad: 120,
+          why: 'a cutoff past a quarter is sorting by archaeology rather than by attention'
+        },
+        prIgnoredRepos: {
+          good: ['acme/widget'],
+          // Two spellings of one repository. The matcher is case-insensitive, so
+          // this would behave as one entry while presenting as two rows - a tick
+          // that cannot be cleared because clearing one leaves the other.
+          bad: ['acme/widget', 'ACME/Widget'],
+          why: 'one repository under two spellings is a checkbox that will not stay unticked'
+        },
+        prReviewPrompt: {
+          good: '/code-review {number}',
+          bad: '   ',
+          why: 'an empty template makes the review button start an ordinary session'
+        },
+        prCheckout: {
+          good: 'none',
+          bad: 'worktree',
+          why: 'a mode that is planned and not built would silently do nothing'
+        },
+        prReviewModel: {
+          good: 'opus',
+          bad: '--model',
+          why: 'this becomes an argv word, and a flag written into it is a second flag'
+        },
+        prReviewEffort: {
+          good: 'high',
+          bad: 'maximum',
+          why: 'the five levels are the CLI’s own, and a sixth would be rejected by it'
+        },
+        updateCheck: {
+          good: false,
+          bad: 'false',
+          why: 'a string that reads as a boolean is the shape a hand-edited row arrives in'
+        },
+        lastUpdateCheckAt: {
+          good: '2026-08-11T20:04:06.641Z',
+          bad: 'never',
+          why: 'an unparseable instant compares NaN against the throttle, so it would mean “never ask again” rather than “ask now”'
+        },
+        browserReach: {
+          good: 'local',
+          bad: 'none',
+          why: 'a reach mode nothing recognises would fall through every branch of the one function the whole pane is gated on'
+        },
+        browserMcp: {
+          good: false,
+          // The same rejection `updateCheck` has, and for the sharper reason: a
+          // row hand-edited into this string is truthy, so it would **start** the
+          // inbound listener while the pane read it as off.
+          bad: 'false',
+          why: 'a string that reads as a boolean would open a port the pane says is shut'
+        },
+        browserMcpLocalOnly: {
+          good: true,
+          bad: 'true',
+          why: 'the same, pointing the other way: a truthy string would confine the agent while the pane read it as unconfined'
+        },
+        browserRecentUrls: {
+          good: ['http://localhost:3000/'],
+          bad: ['localhost:3000'],
+          why: 'a row in the address dropdown that is not an absolute URL is a row that does nothing when clicked'
+        },
+        browserProjectUrls: {
+          good: { [fixtures.rootA.toLowerCase()]: 'http://localhost:5173/' },
+          bad: { [fixtures.rootA]: 'http://localhost:5173/' },
+          why: 'a key that is not lower-cased is a project whose remembered address is never found again, the same trap pinnedProjects has'
+        }
+      }
+
+    // The runtime half of the same claim. The type above is about
+    // `AppSettings`; this is about the object `readSettings` returned, and a key
+    // present in one and not the other is a key nothing proves is validated.
+    const entries = Object.entries(cases) as Array<
+      [keyof AppSettings, { good: unknown; bad: unknown; why: string }]
+    >
+    const covered = entries.map(([key]) => key).sort()
     const everyKey = Object.keys(now).sort()
     const everyKeyCovered = covered.join(',') === everyKey.join(',')
 
@@ -3012,27 +3245,27 @@ export async function runSettingsChecks(
     let allRejected = true
     let allControlsLanded = true
 
-    for (const testCase of cases) {
+    for (const [key, testCase] of entries) {
       // The control first. Without it, "the row did not change" is also what a
       // channel that writes nothing at all would report.
-      const control = await sendWrite(win, { [testCase.key]: testCase.good })
+      const control = await sendWrite(win, { [key]: testCase.good })
       await sleep(250)
-      const afterGood = rowValue(dbFile, testCase.key)
+      const afterGood = rowValue(dbFile, key)
       const controlLanded =
         control.accepted && JSON.stringify(afterGood) === JSON.stringify(testCase.good)
       if (!controlLanded) allControlsLanded = false
 
-      const attempt = await sendWrite(win, { [testCase.key]: testCase.bad })
+      const attempt = await sendWrite(win, { [key]: testCase.bad })
       await sleep(250)
-      const afterBad = rowValue(dbFile, testCase.key)
+      const afterBad = rowValue(dbFile, key)
       const rejected =
         !attempt.accepted &&
-        attempt.error.includes(testCase.key) &&
+        attempt.error.includes(key) &&
         JSON.stringify(afterBad) === JSON.stringify(testCase.good)
       if (!rejected) allRejected = false
 
       results.push({
-        key: testCase.key,
+        key,
         why: testCase.why,
         control: { wrote: testCase.good, accepted: control.accepted, rowAfter: afterGood, landed: controlLanded },
         rejection: {
@@ -3099,8 +3332,11 @@ export async function runSettingsChecks(
         'Reads are tolerant and writes are strict on purpose. A row from another',
         'build is a fact about the past; a malformed write is a bug happening now,',
         'and before this it reached `nativeTheme.themeSource`.',
-        'The table of cases is checked against the keys of `AppSettings` itself,',
-        'so a setting added later cannot quietly go unprobed.'
+        'The table of cases is a `Record<keyof AppSettings, ...>`, so a setting',
+        'added later without a case here does not compile - the same enforcement',
+        '`SETTING_VALIDATORS` gets, and it fires in `pnpm typecheck` rather than',
+        'here. It is checked against the keys of the settings object at run time',
+        'as well, which is the claim the type cannot make.'
       ]
     })
   }
@@ -4373,13 +4609,68 @@ export async function runSettingsChecks(
   // hanging indent is a second visual row starting further right than the
   // first. Both are measured off the real window; neither can be satisfied by
   // an attribute that says the right thing while the block runs off the side.
+  //
+  // The group owns its scope and the file in it, and it measures that file
+  // **twice** - once with wrapping off, once with it on - because geometry is a
+  // comparator like any other and a comparator is not believed until it has
+  // been made to disagree. See `wrapSource` and `controlDiscriminates`.
   if (run('content')) {
+    // A scope of this group's own, so `--only=content` is a run that means
+    // something and so the file being measured is one this driver wrote. The
+    // argument for planting it rather than finding one is at `wrapSource`.
+    await openSettings(win)
+    await sleep(300)
+    answerPicker('directory', fixtures.wrapRoot)
+    await click(win, '[data-settings-add-root]')
+    await pollJs(win, byData('settings-root', fixtures.wrapRoot), 20_000)
+    const wrapScopeScanned = await pollJs(
+      win,
+      `[...document.querySelectorAll('aside nav button[title]')]
+        .some((b) => b.title.toLowerCase() === ${JSON.stringify(fixtures.wrapScope.toLowerCase())})`,
+      45_000
+    )
+    await sleep(600)
+
+    // Both wrap keys back to their documented defaults first, the way the
+    // terminal group starts from its own. The validation group parks each of
+    // them on a value of its choosing on the way past, and the database this
+    // runs against is a copy of the user's - so "off" and "four" are a state to
+    // establish rather than one to assume. Without this, S-12b's "the row
+    // changed" is only true on a machine that happened to have wrapping off.
+    const primed = await sendWrite(win, {
+      contentWrap: DEFAULT_CONTENT_WRAP.wrap,
+      contentWrapIndent: DEFAULT_CONTENT_WRAP.indent
+    })
+    await sleep(500)
+    const wrapPrimed = rowValue(dbFile, 'contentWrap')
+    const indentPrimed = rowValue(dbFile, 'contentWrapIndent')
+
+    // ---------------------------------------------------------------------
+    // The control, before anything is believed: the same file, the same
+    // measuring function, wrapping **off**.
+    //
+    // TPL-1's rule, applied to a comparator made of geometry. A file that fits
+    // the pane would satisfy "wrapped" - `scrollWidth === clientWidth` - by
+    // being short, and a measurement that never finds a two-row line would
+    // report a hang of -1 in both states. So the fixture has to be shown to
+    // overflow and to lay out in single rows before "it wrapped" is worth
+    // anything, and this is the run where the same function must disagree.
+    // ---------------------------------------------------------------------
+    const openedUnwrapped = await openPlantedSource(
+      win,
+      fixtures.wrapScope,
+      fixtures.wrapSourceRel
+    )
+    const unwrapped = await measureSource(win)
+    const shotUnwrapped = await screenshot(win, shotDir, 'settings-12c-unwrapped.png')
+    // Shut, so the measured pane below is one that *mounted* holding the new
+    // settings rather than one that was on screen while they changed.
+    const closedBetween = await closeContentTab(win)
+    await sleep(500)
+
     await openSettings(win)
     await sleep(300)
 
-    // Parked on values that are not the defaults, so "the row changed" and "the
-    // row was always this" cannot be confused - `contentWrap` defaults to false
-    // and the indent to 4.
     const wrapBox = '[data-settings-content-wrap] input[type="checkbox"]'
     const indentField = '[data-settings-content-wrap-indent]'
 
@@ -4399,7 +4690,7 @@ export async function runSettingsChecks(
          const el = document.querySelector('${indentField}')
          if (!el) return false
          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
-         setter.call(el, '7')
+         setter.call(el, '${String(WRAP_INDENT_COLUMNS)}')
          el.dispatchEvent(new Event('input', { bubbles: true }))
          el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
          return true
@@ -4412,8 +4703,16 @@ export async function runSettingsChecks(
       id: 'S-12b',
       criterion: 'The content viewer’s wrap default and indent are settings that round-trip',
       title: `contentWrap ${JSON.stringify(wrapBefore)} -> ${JSON.stringify(wrapAfter)}, contentWrapIndent -> ${JSON.stringify(indentAfter)}`,
-      ok: clickedWrap && wrapAfter === true && setIndent && indentAfter === 7,
+      ok:
+        primed.accepted &&
+        wrapPrimed === DEFAULT_CONTENT_WRAP.wrap &&
+        indentPrimed === DEFAULT_CONTENT_WRAP.indent &&
+        clickedWrap &&
+        wrapAfter === true &&
+        setIndent &&
+        indentAfter === WRAP_INDENT_COLUMNS,
       detail: {
+        primedToTheDefaults: { write: primed, wrap: wrapPrimed, indent: indentPrimed },
         clickedWrap,
         wrapBefore,
         wrapAfter,
@@ -4422,41 +4721,125 @@ export async function runSettingsChecks(
         readBy: 'this driver’s own read-only connection to helm.db, not services.store'
       },
       notes: [
-        'Parked on values that are not the defaults - `contentWrap` defaults to false',
-        'and the indent to 4 - so "the row changed" cannot be confused with "the row',
-        'was always this".'
+        'Both keys are written back to their documented defaults first and read',
+        'back, because neither is a state this group may assume: the validation',
+        'group parks both on the way past, and the database is a copy of the',
+        'user’s. Without it "the row changed" was only true on a machine that',
+        'happened to have wrapping switched off.',
+        'The values it moves to are then not the defaults - true, and a hang of',
+        '7 - so "the row changed" cannot be confused with "the row was always',
+        'this".'
       ]
     })
 
-    // Now the half that matters: does a document obey them? Opened *after* the
-    // settings were parked, so what is measured is a pane that read them on the
-    // way in rather than one that was already open and happened to re-render.
-    const doc = await openWrappedSource(win)
+    // Now the half that matters: does a document obey them? A second mount, of
+    // a tab that was shut while the settings changed, so what is measured is a
+    // pane that read them on the way in. `contentWrap` is the *default* a
+    // document takes; a pane already on screen holds a per-file answer instead.
+    const openedWrapped = await openPlantedSource(win, fixtures.wrapScope, fixtures.wrapSourceRel)
+    const wrapped = await measureSource(win)
+    const shotWrapped = await screenshot(win, shotDir, 'settings-12c-wrapped.png')
+
+    const expectedHangPx = wrapped === null ? -1 : Math.round(WRAP_INDENT_COLUMNS * wrapped.charPx)
+    /**
+     * The fixture is discriminating, proven by the same function disagreeing.
+     *
+     * Overflowing while unwrapped is what says the file is wider than the pane
+     * - without it "no horizontal overflow" is what a short file reports - and
+     * no line taller than one row is what says the two-row search below found
+     * something rather than always finding something.
+     */
+    const controlDiscriminates =
+      unwrapped !== null &&
+      unwrapped.wrapAttr === 'off' &&
+      unwrapped.togglePressed === 'false' &&
+      unwrapped.linesSeen > 50 &&
+      unwrapped.scrollWidth > unwrapped.clientWidth &&
+      unwrapped.wrappedLines === 0 &&
+      unwrapped.hangPx === -1
+
     checks.push({
       id: 'S-12c',
       criterion: 'A source file opens wrapped, hanging by the setting, because the settings say so',
       title:
-        doc === null
-          ? 'no source file in this scope could be measured'
-          : `${doc.file}: block ${String(doc.clientWidth)}px wide holding ${String(doc.scrollWidth)}px, hang ${String(doc.hangPx)}px for ${String(doc.indentColumns)} columns`,
+        wrapped === null || unwrapped === null
+          ? `the planted source file could not be measured (${fixtures.wrapSourceRel})`
+          : `${fixtures.wrapSourceRel}: ${String(unwrapped.clientWidth)}px block holding ${String(unwrapped.scrollWidth)}px unwrapped, ${String(wrapped.scrollWidth)}px wrapped, hang ${String(wrapped.hangPx)}px for ${String(wrapped.indentColumns)} columns`,
       ok:
-        doc !== null &&
-        doc.wrapAttr === 'on' &&
-        doc.togglePressed === 'true' &&
+        wrapScopeScanned &&
+        openedUnwrapped.scopeChosen &&
+        openedUnwrapped.rendered &&
+        closedBetween &&
+        openedWrapped.scopeChosen &&
+        openedWrapped.rendered &&
+        controlDiscriminates &&
+        wrapped !== null &&
+        // The same document in both states, not two that happened to open.
+        wrapped.linesSeen === unwrapped?.linesSeen &&
+        wrapped.wrapAttr === 'on' &&
+        wrapped.togglePressed === 'true' &&
         // Wrapped means the horizontal overflow is gone, not that a class is set.
-        doc.scrollWidth === doc.clientWidth &&
-        // And the hang is the setting, measured: 7 columns of this mono face.
-        doc.hangPx > 0 &&
-        Math.abs(doc.hangPx - doc.expectedHangPx) <= 2,
-      detail: doc === null ? { measured: false } : { ...doc },
+        wrapped.scrollWidth === wrapped.clientWidth &&
+        // ...and that lines actually became more than one visual row, which is
+        // the half a block that had simply been made narrow would fail.
+        wrapped.wrappedLines > 0 &&
+        // And the hang is the setting, measured: 7 columns of this mono face,
+        // from the line's own indentation rather than from the block's edge.
+        wrapped.indentColumns > 0 &&
+        wrapped.hangPx > 0 &&
+        Math.abs(wrapped.hangPx - expectedHangPx) <= 2,
+      detail: {
+        fixture: {
+          scope: fixtures.wrapScope,
+          file: fixtures.wrapSource,
+          asListed: fixtures.wrapSourceRel,
+          scanFound: wrapScopeScanned
+        },
+        unwrapped: { opened: openedUnwrapped, geometry: unwrapped, screenshot: shotUnwrapped.file },
+        closedBetween,
+        wrapped: {
+          opened: openedWrapped,
+          geometry: wrapped,
+          expectedHangPx,
+          indentColumnsSet: WRAP_INDENT_COLUMNS,
+          screenshot: shotWrapped.file
+        },
+        controlDiscriminates
+      },
       notes: [
-        'Geometry, not class names: "wrapped" is `scrollWidth` back at `clientWidth`,',
-        'and "hung" is the second visual row of a line starting further right than the',
-        'first. A `data-wrap` attribute would report both whether or not they happened.',
-        'The expected hang is computed from a ruler measured in the block’s own font,',
-        'so it is in the unit the browser resolved `ch` with rather than a guess.'
+        'The file is planted by this driver, in a harness of its own added as a',
+        'scan root. It used to be chosen by shape out of whatever scope the',
+        'machine opened on, and on this machine there was none - the probe',
+        'reported "no source file in this scope could be measured", which is',
+        'honest and is not the failure it exists to report. CONT-16 met the same',
+        'wall and answered it the same way.',
+        'The comparator is made to disagree before it is believed - TPL-1’s',
+        'rule, applied to geometry. The same measuring function is run over the',
+        'same file with the setting off, and it has to find the block',
+        'overflowing and every line one row tall. A file that fitted the pane',
+        'would satisfy "wrapped" by being short.',
+        'Geometry, not class names: "wrapped" is `scrollWidth` back at',
+        '`clientWidth` *and* lines taller than one row, and "hung" is the second',
+        'visual row of a line starting further right than the line’s own code. A',
+        '`data-wrap` attribute would report all of it whether or not it happened.',
+        'The expected hang is computed from a ruler measured in the block’s own',
+        'font, so it is in the unit the browser resolved `ch` with.',
+        'The tab is shut between the two: `contentWrap` is the default a',
+        'document *mounts* with, so a pane that was already open is answering a',
+        'different question.'
       ]
     })
+
+    // The tree this group leaves is the tree it found: its own root back out,
+    // and its tab shut. A content tab left open is a pane the next group has to
+    // click past, and the root would otherwise sit in `scanRoots` until the
+    // restore.
+    await closeContentTab(win)
+    await sleep(400)
+    await openSettings(win)
+    await sleep(300)
+    await clickByData(win, 'settings-remove-root', fixtures.wrapRoot)
+    await sleep(800)
   }
 
   // -------------------------------------------------------------------------
