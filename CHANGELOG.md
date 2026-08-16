@@ -14,6 +14,67 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 0.5.0
+
+**Session history**
+
+- A session is called what it was about. Rows were titled with the opening
+  prompt, and an opening prompt is often `/exit`, `/usage` or an image you
+  pasted - 291 of this machine's 1,011 sessions opened on a bare command. The
+  title now reads past those to the first thing you actually said.
+- You can name a session yourself, by double-clicking its title, and the name
+  you give it is searchable alongside everything said in it. It survives the
+  history being rebuilt from scratch.
+- An archived conversation reads as a conversation: your messages and Claude's
+  in bubbles down opposite sides, tool runs kept out of the way, timestamps
+  under the message they belong to. It used to be a table.
+
+**Content viewer**
+
+- A code file is read inside the pane. It used to grow to the length of the
+  file, which put the sideways scrollbar at the bottom of the *file* - you had
+  to scroll through a minified payload to reach the bar that would move it
+  sideways - and clipped the last line mid-glyph. It now scrolls in both
+  directions inside its own well, with both bars at the edge of the pane.
+- Source files can wrap, per file, from a toggle in the document header. A
+  wrapped line hangs from its own indentation rather than from the margin, so
+  a deeply nested line's continuation does not read as a new shallow one. Off
+  by default, and both the default and the hang are under
+  **Settings → Content**.
+- A source file stays where you scrolled it. It used to snap back to the top a
+  few seconds later, wrap on or off.
+
+**Profiles**
+
+- **Agent** is a picker over the agents that root and the projects composed
+  into it would actually resolve - including the ones an overlay contributes,
+  which arrive under a prefix you could not have guessed. It says what it does:
+  it becomes `--agent` on the session's command line.
+- **MCP servers** is a picker over the servers configured for that root, with
+  the scope each comes from. It also says plainly what it does *not* do - the
+  selection is saved with the profile and travels with its export, but it is
+  not applied at launch, and the config console is where a session's servers
+  are configured. Both fields used to be text boxes that said none of this.
+- A saved agent or server the root no longer resolves is marked **unresolved**
+  by name and kept. A profile written before the project that supplies its
+  agent exists is a reasonable thing to have.
+- The profile dialog no longer scrolls sideways on a shorter screen, which had
+  been cutting the Compose and Access columns off the right edge.
+
+**Config console**
+
+- MCP servers configured for a project now appear. Claude Code records them
+  against the directory you started it in, writing that path however it was
+  given - and Helm was matching it one way only, so it missed the servers of
+  very nearly every project and reported "no servers configured" for
+  directories whose sessions had one loaded.
+
+**Welcome**
+
+- The empty workspace opens with the ship's wheel rather than the word "Helm"
+  above it, which was saying the name twice to somebody already looking at
+  the app.
+
 ## 0.4.0
 
 **Folders**
