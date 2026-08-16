@@ -481,6 +481,16 @@ export interface BrowserState {
   find: { query: string; matches: number; active: number } | null
   /** The project this tab was opened beside, for the per-project URL memory. */
   project: string | null
+  /**
+   * The name of the session that opened this tab, or null when the user did.
+   *
+   * The **name**, never the token it is looked up by: attribution is something
+   * the strip paints, and the bearer token that decides which tabs a session
+   * may drive stays in the main process. A tab with a name here is one an agent
+   * opened, it says so in the strip, and it is the only kind `browser_close`
+   * will close.
+   */
+  openedBy: string | null
 }
 
 /**
@@ -698,6 +708,12 @@ export interface IpcRequests {
    * claim about what an app does to the network is four chances to ship a lie.
    * It replaced "the only outbound connection Helm's own process opens" when
    * the browser pane landed, because a browser makes that false.
+   *
+   * M17 did **not** move it, and the reasoning is worth keeping: that sentence
+   * is about what Helm *contacts*, and an MCP endpoint bound to `127.0.0.1` for
+   * the sessions Helm hosts contacts nothing. What it does do is **listen**,
+   * which the app had never done before, so that fact is stated separately - in
+   * the same four places, and in `main/browser-mcp.ts` where the rules are.
    *
    * The app asks on its own too: once per launch, at most once a day, when
    * `updateCheck` is on - see `maybeCheckForUpdate`. Neither path downloads

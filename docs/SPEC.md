@@ -975,6 +975,76 @@ session is a feature that belongs somewhere else.
 
 ---
 
+### 4.7 Browser
+
+A dev-server viewport in a workspace tab (M16), and since M17 something a Claude
+session can drive. The pane itself is described in the network posture above and
+its rules live in CLAUDE.md; what follows is the agent half, because it is the
+part with a security surface.
+
+**What a session gets.** Ten tools, served by `main/browser-mcp.ts`:
+`browser_open`, `browser_tabs`, `browser_snapshot`, `browser_screenshot`,
+`browser_console`, `browser_click`, `browser_type`, `browser_press`,
+`browser_evaluate` and `browser_close`. `browser_snapshot` is the one that makes
+the rest work - a trimmed structural view of the page, each interesting node
+carrying a `[ref=...]` that `browser_click` and `browser_type` take - because
+finding an element by reading structure is cheaper in tokens and far more
+reliable than squinting at a PNG. Click, type and press exist alongside
+`browser_evaluate`, which makes them technically redundant, because an explicit
+click is more reliable than generated JavaScript and enormously more legible in
+a transcript.
+
+**This is not Helm hosting a client.** Nothing here reads a session's output,
+renders a message or answers a prompt. A session calls a tool the way it calls
+any other MCP tool, and Helm's whole part is to be at the other end of it - the
+same boundary the transcript archive was admitted under, from the other
+direction. See 4.4 and CLAUDE.md's Scope.
+
+**How a session reaches it.** An MCP endpoint over HTTP on `127.0.0.1`, on a
+port the kernel picks per run, with a bearer token minted per *session*.
+Registration is a per-session `--mcp-config` file written under Helm's data
+directory and appended to the argv by `prepareLaunch`, so the composition stays
+in the one place every other launch flag comes from. `claude mcp add-json -s
+local` was rejected: it writes into the user's `~/.claude.json` on every launch
+and leaves the entry behind. A Windows named pipe was rejected too - its default
+ACL admits every process running as the same user, which is exactly the reach a
+loopback port plus a token file already has, and it would cost a shim process
+per session.
+
+**The token is the identity.** Tabs a session opens carry its name in the tab
+subtitle, and a tool drives only the tabs its own session opened - a tab the
+user opened is a page they chose to be on, in a partition holding their cookies,
+so it is not screenshot, scripted or closed by any tool. A session ending leaves
+its tabs standing: the page is the user's then.
+
+**Two reach controls that intersect.** `browserReach` (`web` | `local`,
+default `web`) is where the pane may go at all. `browserMcpLocalOnly` (default
+off) is where Claude's tools may go. An agent navigation is allowed only where
+both allow it - the narrower wins, with no special cases, because both are
+handed to the one `browserReachAllows` rather than written twice.
+`browserMcp` (default on) is the whole endpoint's off switch, and off means no
+bind, no token and no flag.
+
+**What it cost to make a tab nobody is looking at driveable.** M16 measured that
+`setVisible(false)` leaves a view capturable, scriptable and clickable. That
+turned out to have an unstated precondition: the *document* has to have painted
+once while the view was shown. A tab an agent opens is never mounted by the
+window, so without something it has a zero viewport, an empty `capturePage` and
+clicks that land on nothing - while `executeJavaScript` answers perfectly, so
+nothing looks broken. Parking the view outside the window does not help
+(occluded), and `enableDeviceEmulation` crashes the process. The answer is
+`AGENT_PEEK`: the page loads into a full-size view positioned so that all but a
+two-pixel corner falls outside the window and is clipped, and the view is hidden
+- and only ever *moved*, never resized - once it has painted.
+
+`pnpm browser-check` covers all of it: the endpoint and its 401s, the ten tools
+driven over the wire independently of `claude`, every tool against a tab that is
+never on screen, the four-cell reach matrix, the lifetime rules, argv hygiene,
+and one real `claude` session asked to open the fixture and click a planted
+element.
+
+---
+
 ## 5. Architecture
 
 ```
@@ -1048,6 +1118,17 @@ README, [PACKAGING.md](PACKAGING.md) and the `update:check` comment in
   never hands anything to a search engine, downloads are refused and handed to
   the system browser, and every permission the partition is asked for is denied.
   `browserReach` can confine the whole pane to `localhost`.
+- **Helm listens on loopback, for the sessions it hosts, and nowhere else**
+  (M17). A Claude session Helm starts can drive that pane - open a page, read
+  it, screenshot it, click, type and evaluate - and the way it reaches those
+  tools is an MCP endpoint bound to `127.0.0.1` on a port the kernel picks for
+  the run. It is the app's **only inbound listener**. Every request needs a
+  bearer token minted for one session and revoked when that session ends; there
+  is no unauthenticated route; the whole thing is off in one tick
+  (`browserMcp`), and off means no bind, no token and no flag. An agent
+  navigation is allowed only where `browserReach` **and** `browserMcpLocalOnly`
+  both allow it - the narrower wins, so an agent can never reach further than
+  the pane it is driving. See 4.7 and CLAUDE.md's rules.
 - **No credential of any kind is stored, read or handled**, and the browser
   partition is not an exception. It holds whatever cookies the sites you visit
   set, exactly as a browser profile does, and **Helm reads none of it**: nothing

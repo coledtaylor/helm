@@ -95,6 +95,11 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   update check. Everything else on the network happens because you asked for
   it: the pull-request surface goes through your own `gh`, and the browser pane
   fetches the page you navigate to."*
+
+  That sentence is about what Helm **contacts**, and M17 did not change it. What
+  M17 did change is that Helm now **listens**, on loopback, for the sessions it
+  hosts - see "The browser tools" below. That is stated separately, in the same
+  four places, rather than folded into a sentence about outbound traffic.
 - **The browser partition is not an exception to the credential rule, and it is
   the one place that has to say so out loud.** `persist:helm-browser` holds
   cookies and logins for whatever the user visits, under the app's data
@@ -116,9 +121,10 @@ Five rules, and each one is a thing that only shows up when it is broken.
   the change this rule exists to stop.
 - **Every navigation goes through `browserReachAllows`, in `@helm/core`.** One
   function, taking as many restrictions as the caller has, allowing a URL only
-  where all of them do - because M17 adds a second, narrower control for agents
-  and two copies of a URL rule is how they drift. It is also where the scheme
-  rule lives: `file:` and custom schemes are refused by the same call.
+  where all of them do - and the agent's restrictions are composed by
+  `agentReach`, in the same file, so the pane's rule and the tools' rule cannot
+  drift. It is also where the scheme rule lives: `file:` and custom schemes are
+  refused by the same call.
 - **A native view paints above all renderer DOM, so it hides for anything drawn
   over it.** The one subscribable answer is `overlayOpen()` in
   `packages/ui/src/lib/overlay.ts`, subscribed **once**, in `useBrowsers`. Two
@@ -138,6 +144,51 @@ Five rules, and each one is a thing that only shows up when it is broken.
   all. Downloads are refused and handed to the system browser, every permission
   on the partition is denied, and the address bar never hands anything to a
   search engine. None of those is a setting; `browserReach` is the only one.
+
+## The browser tools - the app's one inbound listener
+
+A Claude session Helm hosts can drive that pane: open, read, screenshot, click,
+type, press keys and evaluate. `main/browser-mcp.ts` serves MCP over HTTP and is
+**the only thing in Helm that has ever listened for a connection**. Six rules,
+and they are here rather than only at the code site because they are the ones a
+future change would weaken without meaning to.
+
+- **Loopback and a token, always.** `listen(0, '127.0.0.1')` - never
+  `0.0.0.0`, never a chosen port. Every request carries `Authorization: Bearer`
+  or it is 401 before anything is parsed, and there is **no unauthenticated
+  route at all**, not even a health check: a route that answered without a token
+  would tell a local process which port to start guessing at.
+- **A token per session, minted at launch and revoked when the session ends.**
+  It is also the *identity*: attribution is which token arrived, never something
+  the caller says. That is what makes "only a tab this session opened" a
+  comparison. `before-quit` stops the endpoint **before** sessions shut down, so
+  nothing can still be driving a browser on behalf of a process that is gone.
+- **`browserMcp` off is off.** No bind, no token, no `--mcp-config` - the app is
+  then the process it was before M17. `BR-29` asserts all three.
+- **Registration is `--mcp-config`, written per session under the data
+  directory.** Never `claude mcp add-json`, which writes into the user's
+  `~/.claude.json` on every launch and leaves the entry there. The file is
+  removed with its session, and what a crash leaves is swept by the rule the
+  overlay shims are swept by: the owning pid is asked about, and anything not
+  provably dead is left alone.
+- **The reach rule is an intersection with no special cases.** An agent
+  navigation is allowed only where `browserReach` **and** `browserMcpLocalOnly`
+  both allow it; the narrower always wins, and an agent can never exceed the
+  reach of the pane it is driving. Both restrictions are composed by
+  `agentReach` and handed to `browserReachAllows` - the same function the pane's
+  `will-navigate` calls. `browser_evaluate` is an escape hatch by design and a
+  page it navigates is still held to `browserReach`.
+- **A tool drives only the tabs its own session opened.** Not just closing:
+  a tab the user opened is a page they chose to be on, in a partition that holds
+  their cookies, and a tool that could screenshot or script it would be the
+  credential rule defeated through a picture. `browser_tabs` lists everything,
+  because listing is not driving.
+
+One more thing is worth knowing before touching `browser.ts`: **a view whose
+document has never painted while shown is not scriptable in the ways M17
+needs** - zero viewport, empty `capturePage`, clicks that land on nothing - and
+an agent's tab is never mounted by the window. `AGENT_PEEK` is the answer and
+the comment there has the three approaches that were measured and rejected.
 
 ## Overlays
 

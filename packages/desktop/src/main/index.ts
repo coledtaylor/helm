@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { emit, registerIpc, resolvedTheme } from './ipc'
-import { appMode, dataDir, initDataDir, shimRoot, templatesDir } from './paths'
+import { appMode, dataDir, initDataDir, mcpConfigDir, shimRoot, templatesDir } from './paths'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
 import {
   adoptExistingProfile,
@@ -44,6 +44,7 @@ import {
   createBrowserHost,
   type BrowserHost
 } from './browser'
+import { createBrowserMcp, type BrowserMcpHost } from './browser-mcp'
 import { runBrowserChecks } from './browsercheck'
 import { createArchiveService } from './archive'
 import { createHistoryService } from './history'
@@ -421,9 +422,22 @@ function startApp(options: AppOptions = {}): void {
 
   let win: BrowserWindow | null = createWindow('index', services.settings.windowBounds ?? null)
 
+  /**
+   * Helm's own MCP endpoint, reached through a getter.
+   *
+   * It cannot be created here: it drives the browser host, which is created
+   * further down because it needs the window. And the session host cannot be
+   * created after it, because the browser host's `writeSettings` and this
+   * file's shutdown order both already depend on the order these three are in.
+   * So the session host is handed a *function*, which is the shape it already
+   * uses for the window for the same reason.
+   */
+  let browserMcp: BrowserMcpHost | null = null
+
   const sessions = createSessionHost({
     services,
     window: () => win,
+    browserMcp: () => browserMcp,
     observer: options.observer,
     confirm: options.confirm
   })
@@ -524,6 +538,34 @@ function startApp(options: AppOptions = {}): void {
     onLogged: (id, entry) => emit(win, 'browser:logged', { id, entry })
   })
 
+  /**
+   * And the endpoint that lets a session drive those views.
+   *
+   * Started here rather than lazily at the first launch, because "there is no
+   * listener when `browserMcp` is off" has to be true of the *app* rather than
+   * of a code path nobody has taken yet - a port that appears the first time
+   * somebody starts a session is a port whose absence proves nothing.
+   *
+   * `start()` answers rather than throws: a machine where the loopback bind
+   * fails is a machine where Helm still works, with no browser tools and a line
+   * on the console saying so.
+   */
+  browserMcp = createBrowserMcp({
+    browsers,
+    settings: () => services.settings,
+    dir: mcpConfigDir
+  })
+  void browserMcp.start().then(({ started, problem }) => {
+    if (started) {
+      const bound = browserMcp?.address()
+      console.log(
+        `browser tools on http://${bound?.address ?? '?'}:${String(bound?.port ?? 0)} (loopback, token-gated)`
+      )
+    } else if (services.settings.browserMcp) {
+      console.warn(`Helm's browser tools are not available: ${problem ?? 'unknown'}`)
+    }
+  })
+
   // Built on the config service rather than beside it: the import picker's
   // sources are the console's own scopes, and what a skill *is* is the
   // console's own answer.
@@ -534,6 +576,7 @@ function startApp(options: AppOptions = {}): void {
     sessions,
     pterm,
     browsers,
+    browserMcp,
     history,
     archive,
     usage,
@@ -630,6 +673,7 @@ function startApp(options: AppOptions = {}): void {
           sessions,
           pterm,
           browsers,
+          browserMcp,
           history,
           archive,
           usage,
@@ -747,6 +791,20 @@ function startApp(options: AppOptions = {}): void {
     usage.stop()
     pulls.stop()
     config.stop()
+    /*
+     * The endpoint goes **before** the sessions, and the order is the point.
+     *
+     * A session being torn down can still be mid-tool-call, and a tool that
+     * ran after its session's process was gone would be an agent driving a
+     * browser on behalf of nothing. Stopping first revokes every token, so
+     * anything still in flight is answered with a 401 by a listener that is on
+     * its way out - and the ephemeral config files go with it, which is the
+     * only sweep that catches a session whose exit never got a turn.
+     *
+     * Not awaited: `before-quit` is synchronous, and the close is a formality
+     * once the tokens are gone.
+     */
+    void browserMcp?.stop()
     // Synchronously, because this is the last point the main process is
     // guaranteed a turn. Anything deferred here is a process left behind.
     sessions.shutdown()
@@ -1791,10 +1849,17 @@ app.whenReady().then(() => {
    */
   if (mode === 'browser-check' || mode === 'browser-restart') {
     const restart = mode === 'browser-restart'
+    // A collector, because M17's `live` group spawns a real `claude` and the
+    // only witness for what a session said is its output. Every other group in
+    // this driver spawns nothing and never reads it.
+    const collector = createCollector()
     startApp({
+      observer: collector,
+      confirm: collector.confirm,
       onReady: (ctx) => {
+        collector.answerWith(true)
         const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runBrowserChecks(ctx, {
+        void runBrowserChecks(ctx, collector, {
           dataDir,
           shotDir: join(dataDir, 'screenshots'),
           phase: restart ? 'restart' : 'main',

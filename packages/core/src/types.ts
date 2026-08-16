@@ -31,6 +31,7 @@ import type { BrowserReach } from './browser/reach'
  * construction - they decide about a string and touch nothing.
  */
 export {
+  agentReach,
   BROWSER_REACH_MODES,
   browserReachAllows,
   isLoopbackUrl,
@@ -728,6 +729,14 @@ export interface LaunchPlan {
    * `--append-system-prompt-file`, or null when no overlay had a CLAUDE.md.
    */
   memoryFile: string | null
+  /**
+   * The ephemeral `--mcp-config` document written for this session, or null.
+   *
+   * Returned so the host can delete it when the session ends: it carries a
+   * bearer token for Helm's own loopback endpoint, and a token file that
+   * outlives the run that minted it is a file nothing collects.
+   */
+  mcpConfigFile: string | null
   /** Things the user should know that did not stop the launch. */
   warnings: string[]
 }
@@ -1233,13 +1242,34 @@ export interface AppSettings {
   /**
    * How far the browser pane may reach: anywhere, or this machine only.
    *
-   * A **posture**, and the one thing about the browser pane that is a
-   * preference rather than something Helm remembers - which is why it is the
-   * only one of the three browser keys that appears in the settings pane. It is
-   * enforced in exactly one function (`browserReachAllows`), because M17 adds a
-   * second, narrower control for agent-driven navigation and the two intersect.
+   * A **posture**, and the widest of the two reach controls: it governs the
+   * pane itself, whoever is driving. It is enforced in exactly one function
+   * (`browserReachAllows`), which `browserMcpLocalOnly` composes with rather
+   * than copying - see `agentReach`.
    */
   browserReach: BrowserReach
+  /**
+   * Whether Helm serves its browser tools to the sessions it hosts.
+   *
+   * On by default, because the stated purpose is that Claude can open things in
+   * Helm: a session that cannot reach the pane beside it is a pane the user has
+   * to drive twice. Off is a real off - `main/browser-mcp.ts` never binds a
+   * port, no token exists, and no `--mcp-config` reaches any argv - so the app
+   * has no inbound listener at all, which is the state it was in before M17.
+   */
+  browserMcp: boolean
+  /**
+   * Whether the tools are confined to this machine even when the pane is not.
+   *
+   * The **narrower** of the two reach controls, and off by default because the
+   * pane's default is `web` and a tool that could not follow the page the user
+   * is looking at would be a tool nobody used. On, an agent navigation is
+   * allowed only where `browserReach` **and** this both allow it - the
+   * intersection, taken by passing both to `browserReachAllows` rather than by
+   * writing a second rule (`agentReach`). An agent can therefore never exceed
+   * the reach of the pane it is driving, in either setting's direction.
+   */
+  browserMcpLocalOnly: boolean
   /**
    * The last URLs a browser pane visited, newest first.
    *
@@ -1321,6 +1351,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // people would turn off on the first afternoon. `local` is one click away for
   // the run where nothing should leave the machine.
   browserReach: 'web',
+  // On, because the whole point of the endpoint is that a session can open a
+  // page in the app that is hosting it; off is one tick away and removes the
+  // listener entirely.
+  browserMcp: true,
+  // Off, because the pane defaults to `web`: an agent confined to loopback
+  // beside a pane that is not would be a surprise rather than a posture.
+  browserMcpLocalOnly: false,
   browserRecentUrls: [],
   browserProjectUrls: {}
 }

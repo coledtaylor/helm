@@ -1,5 +1,6 @@
 import { app, session, shell, WebContentsView, type BrowserWindow, type Session } from 'electron'
 import {
+  agentReach,
   BROWSER_PROJECT_URLS_MAX,
   BROWSER_RECENT_URLS_MAX,
   browserReachAllows,
@@ -58,6 +59,13 @@ import { BROWSER_TABS_MAX, type BrowserConsoleEntry, type BrowserState } from '.
  * mechanism, because it is the one that also stops the view painting;
  * `BROWSER_LIVE_WHILE_HIDDEN` below is that answer pinned where the code is,
  * and `pnpm browser-check --only=hidden` is it pinned as an assertion.
+ *
+ * **And a sixth thing, which M17 added.** A tab a session opened is never
+ * mounted by the window, so it never reports a rectangle and its document would
+ * never paint - and every one of the three guarantees above turns out to have
+ * required a document that has painted once. `AGENT_PEEK` is the answer and the
+ * comment there is the measurement; `openFor`, `showAgentView` and
+ * `primeAgentView` are the three lines of it.
  */
 
 /**
@@ -83,6 +91,89 @@ export const BROWSER_LIVE_WHILE_HIDDEN = true
 
 /** The partition every browser view shares. Never the window's session. */
 export const BROWSER_PARTITION = 'persist:helm-browser'
+
+/**
+ * Which session opened a tab, and the identity a tool is checked against.
+ *
+ * `key` is the session's bearer token and is never shown anywhere: it is what
+ * makes "only a tab this session opened" a comparison rather than a promise,
+ * and it cannot be guessed or spoofed from inside a page. `name` is the tab's
+ * label - the thing a person reads in the strip and the whole of the
+ * attribution affordance.
+ */
+export interface BrowserOpener {
+  key: string
+  name: string
+}
+
+/**
+ * The rectangle a view gets when **nothing is looking at it**.
+ *
+ * A tab the window has mounted reports its own rectangle every frame. A tab an
+ * agent opened has no pane at all - the workspace strip only mounts the pane
+ * for the tab in front - so without this it would sit at the 0x0 every view is
+ * constructed with, and every claim M17 makes about a tab nobody is looking at
+ * would be a claim about a view with no pixels: a screenshot of nothing, a
+ * click at a coordinate outside the page, a layout that never ran.
+ *
+ * So an agent-opened view is given a page-sized rectangle up front, hidden. It
+ * is replaced the moment the user brings that tab to the front and the pane
+ * starts reporting - this is the *floor*, not a second layout.
+ */
+const AGENT_VIEW_SIZE = { width: 1280, height: 800 }
+
+/**
+ * The rectangle an agent's first page is loaded into, and the ceiling on how
+ * long it stays there.
+ *
+ * **M16's guarantee has a precondition nobody had reason to notice: the
+ * document has to have painted once while the view was shown.**
+ * `setVisible(false)` leaves a view capturable, scriptable and clickable - that
+ * is the spike, and `BR-3` pins it - but every measurement behind it was made
+ * on a page that had been on screen first, and BR-3's freshness probe repaints
+ * a document that is *already* composited. A view whose document has never
+ * painted is a different thing, and it was measured while writing M17, on
+ * Electron 43.3.0:
+ *
+ *   - `executeJavaScript` answers perfectly, so nothing looks broken;
+ *   - `window.innerWidth` and `innerHeight` are **0**, whatever `setBounds` was
+ *     told, so `body` is 0x0 and every element reads as invisible to a
+ *     snapshot;
+ *   - `capturePage()` comes back empty;
+ *   - and a synthesised click lands on nothing, because hit-testing needs the
+ *     compositor data a frame would have produced.
+ *
+ * Which is four of the five things M17 exists to do. Three ways round it were
+ * tried and measured before this one:
+ *
+ *   - **parking the view outside the window** leaves it occluded, so the
+ *     viewport stays 0x0 - `setVisible` is not the deciding factor;
+ *   - **`webContents.enableDeviceEmulation`**, which forces a viewport size for
+ *     DevTools, **crashes the process** on a `WebContentsView`: the run died
+ *     with no report at all;
+ *   - **showing it empty before the load** gives the page a viewport and a
+ *     snapshot, and still leaves capture and click dead - which is what says
+ *     the precondition is about the *document* painting rather than about the
+ *     view having been shown.
+ *
+ * So the document is loaded into a view that is genuinely on screen, at the
+ * **full size a page expects**, positioned so that all but a two-pixel corner
+ * of it falls outside the window and is clipped away. Chromium sees a shown,
+ * unoccluded, 1280-wide widget and gives the page a real viewport and a real
+ * frame; the user sees two pixels in the bottom corner for as long as the page
+ * takes to load. Then it is hidden, and only *moved* - never resized, because a
+ * `setBounds` on a hidden view does not reach the renderer either, so a view
+ * loaded small and enlarged afterwards keeps the small viewport for ever. That
+ * was measured too.
+ *
+ * `BR-33` is what says all of it still holds, and it reads the screen rather
+ * than this file: the window is photographed while every tool runs against the
+ * tab, and the page's colour must appear nowhere in it.
+ */
+const AGENT_PEEK = 2
+/** A page that never finishes loading is still a page. Past this it is hidden
+ * anyway, with whatever it has painted. */
+const AGENT_PRIME_MAX_MS = 15_000
 
 /** How long a refused connection is retried before the pane gives up. */
 const RETRY_FOR_MS = 30_000
@@ -113,10 +204,18 @@ interface View {
   /** The address a retry is trying to reach, and when it gives up. */
   retry: { url: string; until: number; step: number; timer: NodeJS.Timeout | null } | null
   find: { query: string; matches: number; active: number } | null
+  /** The session that opened this tab, or null when the user did. */
+  openedBy: BrowserOpener | null
   /** Whether this view is attached to the window's content view right now. */
   attached: boolean
   /** What Helm last told Electron about painting. Read by `inspect`. */
   visible: boolean
+  /**
+   * Whether this view is sitting outside the window because nothing has ever
+   * reported a rectangle for it. True only for a tab an agent opened that the
+   * user has not brought to the front; `bounds()` clears it for good.
+   */
+  parked: boolean
 }
 
 export interface BrowserHost {
@@ -167,6 +266,8 @@ export interface BrowserHost {
   inspect(id: number): {
     bounds: { x: number; y: number; width: number; height: number }
     visible: boolean
+    /** Whether this view is sitting outside the window - see `PARKED_X`. */
+    parked: boolean
     partition: string
     webContentsId: number
     url: string
@@ -175,6 +276,55 @@ export interface BrowserHost {
   capture(id: number): Promise<{ width: number; height: number; bitmap: Buffer } | null>
   /** A synthesised click **into the view**, which is the third of the three. */
   click(id: number, x: number, y: number): Promise<void>
+
+  // -------------------------------------------------------------------------
+  // The agent surface (M17)
+  //
+  // Separate entry points rather than an extra argument on the ones above, and
+  // that is the point: every call that carries a `BrowserOpener` is a call a
+  // session made, and the two things that make an agent different from the
+  // pane - attribution, and the narrower reach - are visible at the call site
+  // rather than folded into a boolean somewhere inside.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Open a tab **for a session**, at a URL that has already been through the
+   * reach rule. The tab carries the session's name and is hidden, with a
+   * rectangle, because nothing is looking at it.
+   */
+  openFor(
+    opener: BrowserOpener,
+    url: string
+  ): Promise<{ state: BrowserState | null; problem: string | null }>
+  /** Navigate a tab the session opened. Refuses anything else, in a sentence. */
+  navigateFor(
+    opener: BrowserOpener,
+    id: number,
+    url: string
+  ): { state: BrowserState | null; problem: string | null }
+  /** Close a tab the session opened. Refuses anything else, in a sentence. */
+  closeFor(opener: BrowserOpener, id: number): { closed: boolean; problem: string | null }
+  /** Who opened a view, or null. The comparison behind `closeFor`. */
+  openerOf(id: number): BrowserOpener | null
+  /** The view's rectangle and page-side size, for aiming input at it. */
+  viewport(id: number): { width: number; height: number; zoom: number } | null
+  /** The view's own frame as PNG bytes. What `browser_screenshot` returns. */
+  capturePng(id: number): Promise<{ width: number; height: number; png: Buffer } | null>
+  /** A real mouse press and release at a point in the view. */
+  pointer(
+    id: number,
+    x: number,
+    y: number,
+    options?: { button?: 'left' | 'right' | 'middle'; clickCount?: number }
+  ): Promise<void>
+  /** Real key events for each character. Goes wherever the page's focus is. */
+  typeInto(id: number, text: string): Promise<void>
+  /** One key, with modifiers. `Enter`, `Tab`, `ArrowDown`, `a`. */
+  press(
+    id: number,
+    key: string,
+    modifiers?: readonly ('shift' | 'control' | 'alt' | 'meta')[]
+  ): Promise<void>
 }
 
 export interface BrowserHostOptions {
@@ -388,7 +538,10 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       errors,
       devtoolsOpen: alive && wc.isDevToolsOpened(),
       find: entry.find,
-      project: entry.project
+      project: entry.project,
+      // The name, never the key. This crosses to the renderer and is painted
+      // in the tab strip; the token it is derived from stays in this process.
+      openedBy: entry.openedBy?.name ?? null
     }
   }
 
@@ -528,7 +681,7 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     if (tellTheWindow) options.onClosed(entry.id)
   }
 
-  const create = (project: string | null): View => {
+  const create = (project: string | null, openedBy: BrowserOpener | null = null): View => {
     const view = new WebContentsView({
       webPreferences: {
         // Every one of these is stated, and the ones that are Electron's
@@ -564,11 +717,14 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       problem: null,
       retry: null,
       find: null,
+      openedBy,
       attached: false,
       // A new view paints nothing until the window has said where it goes. The
       // alternative is a view at whatever bounds Electron defaults to, over
-      // the app, for the frame between construction and the first report.
-      visible: false
+      // the app, for the frame between construction and the first report. An
+      // agent's view is primed and then hidden instead - see `primeAgentView`.
+      visible: false,
+      parked: openedBy !== null
     }
     views.set(entry.id, entry)
 
@@ -693,6 +849,72 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     return entry
   }
 
+  /**
+   * Give an agent's view a viewport, then take it off the screen.
+   *
+   * See `AGENT_PRIME_MS`. The size is the window's, floored at
+   * `AGENT_VIEW_SIZE`, so a page an agent opens lays out at something a page is
+   * normally laid out at rather than at whatever the user happens to have
+   * dragged the window to - and `y` clears the title bar for the same reason
+   * `bounds()` clamps it, since this rectangle really is on screen for a
+   * moment.
+   *
+   * Awaited by the caller **before** anything is loaded, which is what keeps
+   * that moment empty.
+   */
+  /** The window's content size, floored at the size a page expects. */
+  const agentSize = (): { width: number; height: number } => {
+    const win = options.window()
+    const content = win !== null && !win.isDestroyed() ? win.getContentBounds() : null
+    return {
+      width: Math.max(AGENT_VIEW_SIZE.width, content?.width ?? 0),
+      height: Math.max(AGENT_VIEW_SIZE.height, content?.height ?? 0)
+    }
+  }
+
+  /**
+   * Step one: full size, on screen, and all but `AGENT_PEEK` of it clipped away
+   * by the window's own edge.
+   */
+  const showAgentView = (entry: View): void => {
+    const win = options.window()
+    const content = win !== null && !win.isDestroyed() ? win.getContentBounds() : null
+    const size = agentSize()
+    entry.view.setBounds({
+      x: Math.max(0, (content?.width ?? size.width) - AGENT_PEEK),
+      y: Math.max(TITLEBAR_OVERLAY.dark.height, (content?.height ?? size.height) - AGENT_PEEK),
+      ...size
+    })
+    entry.view.setVisible(true)
+    entry.visible = true
+  }
+
+  /** Step two: once the document has painted, off the screen and up to size. */
+  const primeAgentView = async (entry: View): Promise<void> => {
+    const deadline = Date.now() + AGENT_PRIME_MAX_MS
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      if (entry.view.webContents.isDestroyed()) return
+      if (!entry.view.webContents.isLoading()) break
+      if (Date.now() > deadline) break
+    }
+    // A couple of frames past the load, so the paint the whole prime is for has
+    // actually happened rather than been scheduled.
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    if (entry.view.webContents.isDestroyed()) return
+    // `parked` is cleared by `bounds()`, so a user who brought this tab to the
+    // front during the prime keeps it: the window's rectangle wins over this.
+    if (!entry.parked) return
+    entry.view.setVisible(false)
+    entry.visible = false
+    // Position only. The **size** has been right since before the load, which
+    // is the reason nothing has to be propagated to a hidden renderer: measured
+    // on Electron 43.3.0, `setBounds` on a view that is not visible does not
+    // reach it, so a view loaded small and enlarged afterwards keeps the small
+    // viewport for ever.
+    entry.view.setBounds({ x: 0, y: TITLEBAR_OVERLAY.dark.height, ...agentSize() })
+  }
+
   const host: BrowserHost & InternalHost = {
     owns(webContentsId) {
       for (const entry of views.values()) {
@@ -707,7 +929,25 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       for (const entry of views.values()) {
         if (entry.view.webContents.isDestroyed()) continue
         if (entry.view.webContents.id !== webContentsId) continue
-        const decision = browserReachAllows(url, reach())
+        /*
+         * The intersection, in the second of its two places.
+         *
+         * `will-navigate` is what a *page* does - a link, a redirect, a
+         * `location.href` an agent set through `browser_evaluate`. For a tab a
+         * session opened, the agent's restriction applies to that too, or
+         * `browserMcpLocalOnly` would be a rule about the tool names rather
+         * than about where the agent's tabs may go. Both calls compose through
+         * `agentReach`, so the two cannot drift.
+         *
+         * The pane's own navigation does not come through here at all -
+         * Electron does not emit `will-navigate` for `loadURL` - which is why
+         * "the pane may still go there by hand" stays true on the same tab.
+         */
+        const restrictions =
+          entry.openedBy === null
+            ? [reach()]
+            : agentReach(reach(), settings().browserMcpLocalOnly)
+        const decision = browserReachAllows(url, ...restrictions)
         if (decision.allowed) return true
         entry.problem = decision.problem
         log(entry, {
@@ -739,9 +979,19 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
           announce(entry)
           return
         }
-        const opened = create(entry.project)
-        load(opened, url)
-        options.onOpened(state(opened))
+        // The new tab belongs to whoever the opening one belonged to. A page an
+        // agent opened that opens another window has produced another of the
+        // agent's tabs, and the agent is the one that can tidy it up.
+        const opened = create(entry.project, entry.openedBy)
+        if (entry.openedBy === null) {
+          load(opened, url)
+          options.onOpened(state(opened))
+        } else {
+          showAgentView(opened)
+          load(opened, url)
+          options.onOpened(state(opened))
+          void primeAgentView(opened)
+        }
         return
       }
     },
@@ -955,6 +1205,9 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       const y = Math.max(top, wantedY)
       const height = Math.max(0, wantedHeight - (y - wantedY))
 
+      // The window has a pane for this tab, so it is no longer parked and never
+      // will be again: from here it hides and shows like every other view.
+      entry.parked = false
       entry.view.setBounds({ x, y, width, height })
       /*
        * Hiding, and every reason for it, folded into one boolean by the window.
@@ -979,6 +1232,7 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       return {
         bounds: entry.view.getBounds(),
         visible: entry.visible,
+        parked: entry.parked,
         partition: BROWSER_PARTITION,
         webContentsId: entry.view.webContents.id,
         url: entry.view.webContents.getURL()
@@ -994,12 +1248,133 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     },
 
     async click(id, x, y) {
+      await host.pointer(id, x, y)
+    },
+
+    // -----------------------------------------------------------------------
+    // The agent surface
+    // -----------------------------------------------------------------------
+
+    async openFor(opener, url) {
+      if (views.size >= BROWSER_TABS_MAX) {
+        return {
+          state: null,
+          problem: `Helm is already holding ${String(
+            BROWSER_TABS_MAX
+          )} browser tabs, which is the cap. Close one of yours with browser_close, or ask the user to close one of theirs.`
+        }
+      }
+      const entry = create(null, opener)
+      showAgentView(entry)
+      const next = load(entry, url)
+      options.onOpened(next)
+      await primeAgentView(entry)
+      return { state: next, problem: next.problem }
+    },
+
+    navigateFor(opener, id, url) {
+      const entry = viewFor(id)
+      if (entry === null) return { state: null, problem: unknownTab(id) }
+      if (entry.openedBy?.key !== opener.key) return { state: null, problem: notYours(id, entry) }
+      const next = load(entry, url)
+      return { state: next, problem: next.problem }
+    },
+
+    closeFor(opener, id) {
+      const entry = viewFor(id)
+      if (entry === null) return { closed: false, problem: unknownTab(id) }
+      if (entry.openedBy?.key !== opener.key) return { closed: false, problem: notYours(id, entry) }
+      // `true`, so the window is told: an agent-opened tab is in the strip like
+      // any other, and a tab left painting nothing would be one the user has to
+      // close by hand.
+      destroy(entry, true)
+      return { closed: true, problem: null }
+    },
+
+    openerOf(id) {
+      return viewFor(id)?.openedBy ?? null
+    },
+
+    viewport(id) {
+      const entry = viewFor(id)
+      if (entry === null || entry.view.webContents.isDestroyed()) return null
+      const bounds = entry.view.getBounds()
+      return {
+        width: bounds.width,
+        height: bounds.height,
+        zoom: entry.view.webContents.getZoomFactor()
+      }
+    },
+
+    async capturePng(id) {
+      const entry = viewFor(id)
+      if (entry === null || entry.view.webContents.isDestroyed()) return null
+      /*
+       * The **view's own** `capturePage`, and that distinction is the whole of
+       * why this method exists rather than a `nativeImage` built in the caller.
+       *
+       * `window.webContents.capturePage()` - which every driver in this
+       * repository uses, and the obvious thing to reach for - cannot see a
+       * `WebContentsView` at all: measured during M16 with the page plainly on
+       * screen, it returned zero of the page's pixels in every state. A native
+       * child view is composited beside the window's web contents rather than
+       * into it. So a screenshot tool built on the window would have handed
+       * back a picture of a hole, forever, and looked like it worked.
+       */
+      const image = await entry.view.webContents.capturePage()
+      const size = image.getSize()
+      return { width: size.width, height: size.height, png: image.toPNG() }
+    },
+
+    async pointer(id, x, y, opts) {
       const entry = viewFor(id)
       if (entry === null || entry.view.webContents.isDestroyed()) return
-      const at = { x: Math.round(x), y: Math.round(y), button: 'left' as const, clickCount: 1 }
-      entry.view.webContents.sendInputEvent({ type: 'mouseDown', ...at })
-      entry.view.webContents.sendInputEvent({ type: 'mouseUp', ...at })
-      await new Promise((resolve) => setTimeout(resolve, 120))
+      const at = {
+        x: Math.round(x),
+        y: Math.round(y),
+        button: opts?.button ?? ('left' as const),
+        clickCount: opts?.clickCount ?? 1
+      }
+      const wc = entry.view.webContents
+      // The move first. A page that only reacts on hover - a menu, a control
+      // that arms itself - has had no pointer over it at all otherwise, and a
+      // press arriving out of nowhere is not the sequence a person produces.
+      wc.sendInputEvent({ type: 'mouseMove', x: at.x, y: at.y })
+      wc.sendInputEvent({ type: 'mouseDown', ...at })
+      wc.sendInputEvent({ type: 'mouseUp', ...at })
+      await settle()
+    },
+
+    async typeInto(id, text) {
+      const entry = viewFor(id)
+      if (entry === null || entry.view.webContents.isDestroyed()) return
+      const wc = entry.view.webContents
+      for (const ch of text) {
+        // The same three events `bridge.ts` sends, and for the same measured
+        // reason: Chromium inserts text only when a `char` follows a `keyDown`,
+        // and without the shift modifier a capital arrives lower-cased.
+        const shifted = ch !== ch.toLowerCase() && ch === ch.toUpperCase()
+        const modifiers = shifted ? (['shift'] as const) : ([] as const)
+        wc.sendInputEvent({ type: 'keyDown', keyCode: ch, modifiers: [...modifiers] })
+        wc.sendInputEvent({ type: 'char', keyCode: ch, modifiers: [...modifiers] })
+        wc.sendInputEvent({ type: 'keyUp', keyCode: ch, modifiers: [...modifiers] })
+        await new Promise((resolve) => setTimeout(resolve, 8))
+      }
+      await settle()
+    },
+
+    async press(id, key, modifiers = []) {
+      const entry = viewFor(id)
+      if (entry === null || entry.view.webContents.isDestroyed()) return
+      const wc = entry.view.webContents
+      const mods = [...modifiers]
+      wc.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: mods })
+      // Only for an unmodified printable key, or Ctrl+A would insert an "a".
+      if (/^[\x20-\x7e]$/.test(key) && !mods.some((m) => m === 'control' || m === 'alt')) {
+        wc.sendInputEvent({ type: 'char', keyCode: key, modifiers: mods })
+      }
+      wc.sendInputEvent({ type: 'keyUp', keyCode: key, modifiers: mods })
+      await settle()
     }
   }
 
@@ -1007,6 +1382,24 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
   app.once('will-quit', () => hosts.delete(host))
   return host
 }
+
+/**
+ * Long enough for the page to have run its handler.
+ *
+ * A tool that returned the instant the event was posted would let the next call
+ * read the page before it had reacted, and the model would see a click that did
+ * nothing. 120ms is what M16's click probe used and measured working.
+ */
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 120))
+
+/** The two refusals a tool makes about a tab, as whole sentences. */
+const unknownTab = (id: number): string =>
+  `There is no browser tab ${String(id)} in Helm. Call browser_tabs to see what is open.`
+
+const notYours = (id: number, entry: View): string =>
+  entry.openedBy === null
+    ? `Browser tab ${String(id)} was opened by the user, so it is not yours to drive. Open your own with browser_open.`
+    : `Browser tab ${String(id)} belongs to the session "${entry.openedBy.name}". A session may only drive the tabs it opened itself.`
 
 /**
  * What a value evaluated to, as a string the panel can print.

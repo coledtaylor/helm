@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
+import { cleanStaleMcpConfigs, removeSessionMcpConfig, writeSessionMcpConfig } from './mcp'
 import { buildLaunchArgs, prepareLaunch } from './plan'
 
 let root: string
@@ -182,5 +183,119 @@ describe('prepareLaunch', () => {
     expect(readFileSync(join(first.overlays[0]!.dir, '.claude-plugin', 'plugin.json'), 'utf8')).toContain(
       'alpha'
     )
+  })
+
+  /*
+   * Helm's own MCP endpoint, registered per session.
+   *
+   * The two halves are asserted together on purpose: an argv carrying
+   * `--mcp-config` and no file, or a file nothing points at, are both states
+   * that would look fine from one side.
+   */
+  describe('the per-session MCP registration', () => {
+    const server = {
+      name: 'helm-browser',
+      url: 'http://127.0.0.1:51234/mcp',
+      headers: { Authorization: 'Bearer 0123456789abcdef' }
+    }
+
+    it('writes a file under the directory it was given and points the argv at it', () => {
+      const dir = join(root, 'mcp')
+      const plan = prepareLaunch({ root, name: 'with tools', shimRoot, mcp: { dir, server } })
+
+      expect(plan.mcpConfigFile).not.toBeNull()
+      expect(resolve(plan.mcpConfigFile!)).toBe(resolve(join(dir, basename(plan.mcpConfigFile!))))
+      const at = plan.argv.indexOf('--mcp-config')
+      expect(at).toBeGreaterThan(-1)
+      expect(plan.argv[at + 1]).toBe(plan.mcpConfigFile)
+
+      const written = JSON.parse(readFileSync(plan.mcpConfigFile!, 'utf8')) as {
+        mcpServers: Record<string, { type: string; url: string; headers: Record<string, string> }>
+      }
+      expect(written.mcpServers['helm-browser']).toEqual({
+        type: 'http',
+        url: server.url,
+        headers: server.headers
+      })
+    })
+
+    it('passes no flag at all when there is nothing to register', () => {
+      const plan = prepareLaunch({ root, name: 'no tools', shimRoot })
+      expect(plan.mcpConfigFile).toBeNull()
+      expect(plan.argv).not.toContain('--mcp-config')
+    })
+
+    it('gives two sessions two files, so releasing one cannot disarm the other', () => {
+      const dir = join(root, 'mcp')
+      const first = prepareLaunch({ root, name: 'one', shimRoot, mcp: { dir, server } })
+      const second = prepareLaunch({ root, name: 'two', shimRoot, mcp: { dir, server } })
+      expect(first.mcpConfigFile).not.toBe(second.mcpConfigFile)
+    })
+
+    /**
+     * The flag lands where the CLI can read it: after `-n`, which terminates
+     * the variadic `--add-dir` list, and before the positional prompt.
+     */
+    it('sits between the name and the opening prompt', () => {
+      const dir = join(root, 'mcp')
+      const plan = prepareLaunch({
+        root,
+        name: 'ordered',
+        shimRoot,
+        access: [root],
+        openingPrompt: 'go',
+        mcp: { dir, server }
+      })
+      const at = plan.argv.indexOf('--mcp-config')
+      expect(at).toBeGreaterThan(plan.argv.indexOf('-n'))
+      expect(at + 1).toBeLessThan(plan.argv.length - 1)
+      expect(plan.argv[plan.argv.length - 1]).toBe('go')
+    })
+  })
+})
+
+describe('the ephemeral MCP config sweep', () => {
+  const server = {
+    name: 'helm-browser',
+    url: 'http://127.0.0.1:51234/mcp',
+    headers: { Authorization: 'Bearer 0123456789abcdef' }
+  }
+
+  it('removes what a dead process left and keeps everything else', () => {
+    const dir = join(root, 'mcp')
+    const mine = writeSessionMcpConfig(dir, server)
+    writeFileSync(join(dir, 'mcp-999999-deadbeef.json'), '{}')
+    writeFileSync(join(dir, 'mcp-424242-c0ffee.json'), '{}')
+    writeFileSync(join(dir, 'not-ours.json'), '{}')
+
+    // `999999` is gone; `424242` answers EPERM, which means alive.
+    const removed = cleanStaleMcpConfigs(dir, (pid) =>
+      pid === 999999 ? 'gone' : pid === 424242 ? 'alive' : 'unknown'
+    )
+
+    expect(removed.map((path) => basename(path))).toEqual(['mcp-999999-deadbeef.json'])
+    // This process's own file is not stale, whatever the probe says about it.
+    expect(existsSync(mine)).toBe(true)
+    expect(existsSync(join(dir, 'mcp-424242-c0ffee.json'))).toBe(true)
+    expect(existsSync(join(dir, 'not-ours.json'))).toBe(true)
+  })
+
+  it('leaves a file alone when the owner cannot be established', () => {
+    const dir = join(root, 'mcp')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'mcp-777777-abc123.json'), '{}')
+    expect(cleanStaleMcpConfigs(dir, () => 'unknown')).toEqual([])
+    expect(existsSync(join(dir, 'mcp-777777-abc123.json'))).toBe(true)
+  })
+
+  it('removes one by name, and says nothing about one that is already gone', () => {
+    const dir = join(root, 'mcp')
+    const file = writeSessionMcpConfig(dir, server)
+    removeSessionMcpConfig(file)
+    expect(existsSync(file)).toBe(false)
+    expect(() => {
+      removeSessionMcpConfig(file)
+      removeSessionMcpConfig(null)
+    }).not.toThrow()
   })
 })

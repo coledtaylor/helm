@@ -109,6 +109,24 @@ export function browserReachAllows(
 }
 
 /**
+ * The restrictions that apply to a navigation **an agent asked for**.
+ *
+ * The intersection, expressed once. `browserReach` says how far the pane may
+ * go and `browserMcpLocalOnly` says how far a tool may go, and the rule has no
+ * special cases: the narrower wins, always, because both are handed to
+ * `browserReachAllows` and it allows a URL only where every restriction does.
+ *
+ * A function rather than an inline array at two call sites, because there are
+ * two call sites - `browser-mcp.ts`'s tool entry and `browser.ts`'s
+ * `will-navigate` for a session-opened tab - and "the agent's rule" drifting
+ * between them is the failure `browserReachAllows` was written as one function
+ * to prevent, one level up.
+ */
+export function agentReach(reach: BrowserReach, mcpLocalOnly: boolean): BrowserReach[] {
+  return mcpLocalOnly ? [reach, 'local'] : [reach]
+}
+
+/**
  * What somebody typed into the address bar, as a URL - or a refusal.
  *
  * **This never searches, and that is the decision rather than an omission.**

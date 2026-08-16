@@ -13,10 +13,15 @@
 // that dies before writing fails the run because there is then no report at all
 // rather than a passing one.
 //
-// The fixture servers are the driver's own, on 127.0.0.1, so this run touches
-// no network. Phase one writes the port it bound into the data directory and
-// phase two binds the same one, because a cookie belongs to an origin and an
-// origin includes the port.
+// The fixture servers are the driver's own, on 127.0.0.1 and 127.0.0.2, so this
+// run touches no network. Phase one writes the port it bound into the data
+// directory and phase two binds the same one, because a cookie belongs to an
+// origin and an origin includes the port.
+//
+// Since M17 phase one also spawns **one** real `claude` on haiku - the `live`
+// group, which asks a session to drive the browser through Helm's own MCP
+// endpoint. Nothing else here spawns anything, so `--only=` without `live` is
+// still a run that costs no tokens.
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync } from 'node:fs'

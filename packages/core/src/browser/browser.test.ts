@@ -1,9 +1,58 @@
 import { describe, expect, it } from 'vitest'
 import {
+  agentReach,
   browserReachAllows,
   isLoopbackUrl,
   resolveBrowserAddress
 } from './reach'
+
+describe('agentReach', () => {
+  /*
+   * The whole of the M17 reach rule, as a truth table.
+   *
+   * All four combinations, because the interesting one is `web` + on: the pane
+   * may go anywhere and the agent may not, which is the only cell where the two
+   * settings disagree and therefore the only one a broken intersection would
+   * still get right by accident.
+   */
+  const cases: Array<{
+    reach: 'web' | 'local'
+    localOnly: boolean
+    remote: boolean
+    loopback: boolean
+  }> = [
+    { reach: 'web', localOnly: false, remote: true, loopback: true },
+    { reach: 'web', localOnly: true, remote: false, loopback: true },
+    { reach: 'local', localOnly: false, remote: false, loopback: true },
+    { reach: 'local', localOnly: true, remote: false, loopback: true }
+  ]
+
+  for (const entry of cases) {
+    it(`${entry.reach} + ${entry.localOnly ? 'localOnly' : 'anywhere'} allows what the narrower of the two allows`, () => {
+      const restrictions = agentReach(entry.reach, entry.localOnly)
+      expect(browserReachAllows('http://example.com/', ...restrictions).allowed).toBe(entry.remote)
+      expect(browserReachAllows('http://localhost:3000/', ...restrictions).allowed).toBe(
+        entry.loopback
+      )
+    })
+  }
+
+  it('never widens the pane: an agent restriction is added, never substituted', () => {
+    // The failure this rules out is the plausible one - reading
+    // `browserMcpLocalOnly: false` as "the agent may go anywhere" and dropping
+    // the pane's own setting on the floor.
+    expect(agentReach('local', false)).toEqual(['local'])
+    expect(browserReachAllows('http://example.com/', ...agentReach('local', false)).allowed).toBe(
+      false
+    )
+  })
+
+  it('refuses a non-http scheme whatever the two settings say', () => {
+    for (const restrictions of [agentReach('web', false), agentReach('local', true)]) {
+      expect(browserReachAllows('file:///C:/x.html', ...restrictions).allowed).toBe(false)
+    }
+  })
+})
 
 describe('browserReachAllows', () => {
   it('allows http and https anywhere on the wide posture', () => {

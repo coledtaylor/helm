@@ -91,3 +91,19 @@ export const templatesDir: string = portableDir
  * and `cleanStaleShims` at startup is the only thing that removes them.
  */
 export const shimRoot: string = join(dataDir, 'overlays')
+
+/**
+ * Where the per-session `--mcp-config` documents go.
+ *
+ * Under the data directory for the same reason the shims are, and one reason
+ * more: each file carries a **bearer token** for Helm's loopback endpoint, and
+ * a token written into `%TEMP%` is a token in a directory every process on the
+ * machine enumerates by habit. Here it travels with a portable install, it
+ * moves with `PORTABLE_EXECUTABLE_DIR` so a check writes its own, and
+ * `cleanStaleMcpConfigs` is the only thing that removes what a crash left.
+ *
+ * Not `overlays/`, though it could have been: a sweep that has to tell a shim
+ * directory from a token file by filename is a sweep with a rule in it, and the
+ * rule would be the thing that went wrong.
+ */
+export const mcpConfigDir: string = join(dataDir, 'mcp')

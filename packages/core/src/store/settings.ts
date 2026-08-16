@@ -514,6 +514,14 @@ export const SETTING_VALIDATORS: SettingValidators = {
   browserReach: oneOf(BROWSER_REACH_MODES),
 
   /**
+   * The two agent controls, and a boolean is checked as a boolean for the
+   * reason `updateCheck` is: `'false'` is truthy, and a row hand-edited into a
+   * string would switch the endpoint **on** while reading as off in the pane.
+   */
+  browserMcp: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
+  browserMcpLocalOnly: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
+
+  /**
    * Addresses the browser pane has been to, newest first.
    *
    * Every entry has to be something `browserReachAllows` would allow with the

@@ -3886,9 +3886,21 @@ async function reviewChecks({
       defaultRow.name.startsWith(`PR #${String(PR_A)} review`) &&
       stripHasIt &&
       pid !== null &&
-      // Nothing between `-n <name>` and the prompt: the prompt is the trailing
-      // positional and not a flag's value.
-      defaultRow.argv[defaultRow.argv.length - 3] === '-n',
+      /*
+       * The prompt is a trailing **positional**, not some flag's value.
+       *
+       * This used to read `argv[length - 3] === '-n'`, which is the same claim
+       * for an argv of exactly `-n <name> <prompt>` and stops being one the
+       * moment a launch carries any other flag - M17's `--mcp-config <file>`
+       * goes between them, correctly, and that assertion went red for a launch
+       * that was entirely right. What actually matters is the property: `-n`
+       * opens the argv with its name, and the word before the prompt is a
+       * *value* rather than a flag whose value the prompt would be swallowed
+       * as. A `--effort` left immediately before the prompt still fails this.
+       */
+      defaultRow.argv[0] === '-n' &&
+      defaultRow.argv[1] === defaultRow.name &&
+      !String(defaultRow.argv.at(-2) ?? '-').startsWith('-'),
     detail: {
       row: defaultRow,
       promptRenderedByDriver: expectedDefault,
@@ -3906,7 +3918,11 @@ async function reviewChecks({
       'The pty really opened: the pid is a live process, and the row was written before the',
       'spawn so a session that died in its first second would still be a session that happened.',
       'The pane said what it would run before the button was pressed; the disclosure sentence',
-      'is recorded above.'
+      'is recorded above.',
+      'A review launch also carries Helm\'s own `--mcp-config`, like every other launch, so',
+      'the session can drive the browser pane. That is asserted by `browser-check`; what is',
+      'asserted here is only that whatever else is on the argv, the prompt is still the',
+      'trailing positional.'
     ]
   })
 

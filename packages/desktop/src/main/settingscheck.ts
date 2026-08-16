@@ -1243,10 +1243,14 @@ export async function runSettingsChecks(
          prPrompt: Boolean(document.querySelector('[data-settings-pr-prompt]')),
          prPromptReset: Boolean(document.querySelector('[data-settings-pr-prompt-reset]')),
          prCheckout: Boolean(document.querySelector('[data-settings-pr-checkout]')),
-         // The browser pane's one preference. The two browser keys beside it in
-         // the database - the recent addresses and the per-project ones - are
-         // state, and internalLeaked below is what says they are not here.
-         browserReach: Boolean(document.querySelector('[data-settings-browser-reach]'))
+         // The browser pane's three preferences: where the pane may go, whether
+         // Claude may drive it, and whether Claude is held to this machine when
+         // the pane is not. The two browser keys beside them in the database -
+         // the recent addresses and the per-project ones - are state, and
+         // internalLeaked below is what says they are not here.
+         browserReach: Boolean(document.querySelector('[data-settings-browser-reach]')),
+         browserMcp: Boolean(document.querySelector('[data-settings-browser-mcp]')),
+         browserMcpLocal: Boolean(document.querySelector('[data-settings-browser-mcp-local]'))
        })`
     )
     // Internal state is not a preference, and the pane must not have grown a
@@ -2967,6 +2971,21 @@ export async function runSettingsChecks(
         good: 'local',
         bad: 'none',
         why: 'a reach mode nothing recognises would fall through every branch of the one function the whole pane is gated on'
+      },
+      {
+        key: 'browserMcp',
+        good: false,
+        // The same rejection `updateCheck` has, and for the sharper reason: a
+        // row hand-edited into this string is truthy, so it would **start** the
+        // inbound listener while the pane read it as off.
+        bad: 'false',
+        why: 'a string that reads as a boolean would open a port the pane says is shut'
+      },
+      {
+        key: 'browserMcpLocalOnly',
+        good: true,
+        bad: 'true',
+        why: 'the same, pointing the other way: a truthy string would confine the agent while the pane read it as unconfined'
       },
       {
         key: 'browserRecentUrls',

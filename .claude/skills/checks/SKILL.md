@@ -37,7 +37,7 @@ A change to a surface named here is not done until its check is green.
 | `pnpm transcript-check` | the transcript archive: capture, search, the ceiling, read-only | `core/archive/`, `core/store/archive.ts`, `main/archive.ts`, the session-history pane's archive states, anything that reads `projects/*.jsonl` |
 | `pnpm template-check` | harness templates: the engine, the picker, seeding, authoring | `core/discovery/templates.ts`, `core/discovery/template-authoring.ts`, `createHarness`, `NewHarnessDialog`, `TemplateManager`, `SaveAsTemplateDialog`, `templatesDir` in `paths.ts`, the seeding in `createServices` |
 | `pnpm pr-check` | the pull-request surface end to end | `core/github/`, `main/pulls.ts`, `main/gh-cli.ts`, `PullsPane`, `PullRow`, `PullRequestPane`, the project pane's pull-request panel and its Config/Content links, `SessionHost.review` |
-| `pnpm browser-check` | the browser pane: the view's lifetime, its bounds, hiding, the console panel, and every posture | `main/browser.ts`, `core/browser/reach.ts`, `BrowserPane`, `ConsolePanel`, the `browser:*` channels, the navigation guard in `main/index.ts`, `browserReach` |
+| `pnpm browser-check` | the browser pane and the tools a session drives it with: the view's lifetime, its bounds, hiding, the console panel, every posture, the MCP endpoint, the reach intersection and tab ownership | `main/browser.ts`, `main/browser-mcp.ts`, `core/browser/reach.ts`, `core/launch/mcp.ts`, `BrowserPane`, `ConsolePanel`, the `browser:*` channels, the navigation guard in `main/index.ts`, `browserReach`, `browserMcp`, `browserMcpLocalOnly` |
 | `pnpm affordance-check` | every clickable control looks clickable | `theme.css`, `lib/segmented.ts`, `Checkbox`, any shared control recipe, any new pane |
 | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
 
@@ -383,11 +383,13 @@ both written out by hand.
 
 No sessions, no network, about two minutes.
 
-**`browser-check`** - the integrated browser pane, in two app starts. It starts
-its own HTTP and HTTPS fixture servers on `127.0.0.1`, so it spawns no sessions
-and reaches no network; about two minutes.
+**`browser-check`** - the integrated browser pane and the tools a session drives
+it with, in two app starts. It starts its own HTTP and HTTPS fixture servers on
+`127.0.0.1` and `127.0.0.2`, so it reaches no network; **one** `claude` session
+on haiku, in the `live` group and nowhere else, so `--only=` anything but `live`
+still costs no tokens. About three minutes.
 
-Four shapes in it are worth copying.
+Seven shapes in it are worth copying. The first four are M16's, about the pane.
 
 **The witness for "the view is hidden" is a photograph of the window, taken from
 outside it.** That is not the obvious choice and the obvious one does not work:
@@ -417,6 +419,33 @@ repository and shelling out to `openssl` would make the check depend on whether
 a machine has one. The same certificate is served on `127.0.0.1` and on
 `127.0.0.2` - both this machine, both reachable - so the only difference between
 the accept and the refuse is the host, which is the rule under test.
+
+The last three are M17's, about an agent driving it.
+
+**The tool groups speak MCP over the wire.** The driver registers with
+`browserMcp` as though it were a session, gets a bearer token, and makes real
+HTTP requests to `127.0.0.1:<port>/mcp` - it never calls a tool handler as a
+function. So one probe exercises the listener, the token gate, the JSON-RPC
+framing and the handler at once, and a tool that only worked in-process fails
+all of them. The expected tool list is **typed out in the driver**, because a
+list read from the server and compared to itself agrees with itself.
+
+**BR-32 is C1's exact-pixel discipline applied to a screenshot the model would
+see.** The tool hands back base64 PNG; the driver decodes it with `nativeImage`
+- Chromium's decoder rather than the encoder that made the bytes - and counts
+the fixture's colour. Then the page is repainted a colour it has never been and
+the *same* comparator has to stop finding the first and start finding the
+second. A path returning a stale frame, an empty image, or a picture of the
+window rather than the page fails that pair - and the window is the plausible
+mistake here, since `win.webContents.capturePage()` cannot see a
+`WebContentsView` at all.
+
+**BR-33 is the milestone's premise and it needs a decoy.** Every tool has to
+work against a tab that is not on screen, judged by photographing the window.
+The workspace makes its only pane the active one, so without a second tab
+holding the front the agent's own tab *is* the tab in front and the group
+measures nothing. The decoy is a fixture route in a colour the counter can never
+mistake for the page under test.
 
 Two phases, because a cookie surviving a restart is not a claim the process that
 stored it can make. `run-browser.mjs` starts the app again and the fixture

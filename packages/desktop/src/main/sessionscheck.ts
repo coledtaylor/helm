@@ -17,6 +17,7 @@ import {
   type PointerTrace
 } from './bridge'
 import type { BrowserHost } from './browser'
+import type { BrowserMcpHost } from './browser-mcp'
 import type { ConfigService } from './config'
 import type { ContentService } from './content'
 import type { Check } from './fidelity'
@@ -77,6 +78,14 @@ export interface CheckContext {
    * `WebContentsView` is not in the DOM at all.
    */
   browsers: BrowserHost
+  /**
+   * Helm's browser endpoint. `browser-check` registers with it as though it
+   * were a session and then speaks MCP to it over the wire, which is the only
+   * way to exercise the tools independently of `claude`. Null where the app
+   * started with `browserMcp` off - which is itself one of the things the check
+   * asserts.
+   */
+  browserMcp: BrowserMcpHost | null
 }
 
 // ---------------------------------------------------------------------------

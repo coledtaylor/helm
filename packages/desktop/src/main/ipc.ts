@@ -14,6 +14,7 @@ import {
   suggestRoots
 } from '@helm/core'
 import type { BrowserHost } from './browser'
+import type { BrowserMcpHost } from './browser-mcp'
 import type { ConfigService } from './config'
 import { highlightForEditor, type ContentService } from './content'
 import type { TemplateService } from './templates'
@@ -91,6 +92,15 @@ export interface IpcContext {
   pterm: PtermHost
   /** Owns the browser pane's `WebContentsView`s; see `browser.ts`. */
   browsers: BrowserHost
+  /**
+   * Serves those views to the sessions Helm hosts; see `browser-mcp.ts`.
+   *
+   * Here only so `browserMcp` can take effect at once rather than at the next
+   * restart. Nothing on any channel reaches it, and nothing ever should: a
+   * renderer that could ask the endpoint for anything would be a page away from
+   * a token.
+   */
+  browserMcp: BrowserMcpHost | null
   /** Keeps the index over `~/.claude/history.jsonl` current; see `history.ts`. */
   history: HistoryService
   /** Keeps the conversations Claude Code deletes; see `archive.ts`. */
@@ -197,6 +207,25 @@ export function registerIpc(ctx: IpcContext): void {
       if (patch.prIgnoredRepos !== undefined) {
         ctx.pulls.republish()
         void ctx.pulls.refresh()
+      }
+      /*
+       * The endpoint follows its own tick, immediately.
+       *
+       * `browserMcpLocalOnly` is deliberately **not** here: it is read through
+       * a function at every tool call, so it takes effect on the next one
+       * without anything being told. This one is different because it owns a
+       * socket - and an off switch for a listener that only takes effect at the
+       * next restart is an off switch somebody would reasonably believe had
+       * already worked.
+       *
+       * Sessions already running keep their tokens until it stops, and stopping
+       * revokes them: a session that had the tools loses them mid-task, which
+       * is the honest consequence of turning them off and is what the sentence
+       * in the pane says.
+       */
+      if (patch.browserMcp !== undefined && ctx.browserMcp !== null) {
+        if (next.browserMcp) void ctx.browserMcp.start()
+        else void ctx.browserMcp.stop()
       }
       if (patch.theme !== undefined) {
         nativeTheme.themeSource = patch.theme

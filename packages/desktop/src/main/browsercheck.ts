@@ -1,32 +1,47 @@
-import { type BrowserWindow, desktopCapturer, session } from 'electron'
-import { createServer as createHttpServer, get as httpGet, type Server } from 'node:http'
+import { type BrowserWindow, desktopCapturer, nativeImage, session } from 'electron'
+import {
+  createServer as createHttpServer,
+  get as httpGet,
+  request as httpRequest,
+  type Server
+} from 'node:http'
 import { createServer as createHttpsServer } from 'node:https'
 import { createSign, generateKeyPairSync, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { connect } from 'node:net'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   browserReachAllows,
   createProfile,
   deleteProfile,
   findProfileByName,
+  prepareLaunch,
   resolveBrowserAddress
 } from '@helm/core'
-import { screenshot, sendKey, sendMouse, sleep, typeText } from './bridge'
+import { screenshot, sendKey, sendMouse, sleep, squash, stripAnsi, typeText, waitFor } from './bridge'
 import { BROWSER_PARTITION, exemptedWebContents } from './browser'
+import { createBrowserMcp, MCP_SERVER_NAME } from './browser-mcp'
 import type { Check } from './fidelity'
-import type { CheckContext } from './sessionscheck'
+import { mcpConfigDir } from './paths'
+import { atPrompt, type CheckContext, type Collector } from './sessionscheck'
 import { BROWSER_TABS_MAX } from '../shared/ipc'
 
 /**
- * `pnpm browser-check` - the integrated browser, driven through the real window.
+ * `pnpm browser-check` - the integrated browser, driven through the real window
+ * and, since M17, through Helm's own MCP endpoint.
  *
- * **What a run costs:** no `claude` sessions, no tokens, and no network beyond
- * `127.0.0.1`. The driver starts its own HTTP and HTTPS servers on loopback and
- * every page in the run comes from them. About two minutes, in two phases.
+ * **What a run costs:** **one** `claude` session on haiku - the `live` group,
+ * and only that group - and no network beyond `127.0.0.1` / `127.0.0.2`. The
+ * driver starts its own HTTP and HTTPS servers and every page in the run comes
+ * from them. About three minutes, in two phases. `--only=` anything but `live`
+ * spawns nothing and costs no tokens.
  *
- * Nine groups, and `GROUPS` below is the only authority for the list.
+ * `GROUPS` below is the only authority for the list.
  *
- * Three things in it are worth reading before touching it.
+ * Six things in it are worth reading before touching it. The first three are
+ * M16's, about the pane; the last three are M17's, about an agent driving it.
  *
  * **BR-3 is the spike, pinned.** "A tab the user is not on stays capturable,
  * scriptable and clickable" is what M17 is built on, and it is exactly the kind
@@ -51,6 +66,28 @@ import { BROWSER_TABS_MAX } from '../shared/ipc'
  * assembled by hand below (`selfSignedCertificate`) because Node can make a key
  * pair and sign bytes but cannot mint an X.509, and shelling out to `openssl`
  * would make this check pass or fail on whether a machine happens to have it.
+ *
+ * **The M17 groups speak MCP to the endpoint themselves.** They do not go
+ * through `claude` and they do not call the tool handlers as functions: the
+ * driver registers with `browserMcp` as though it were a session, gets a bearer
+ * token, and makes real HTTP requests to `127.0.0.1:<port>/mcp`. So every one
+ * of those probes exercises the listener, the token gate, the JSON-RPC framing
+ * and the handler at once, and a tool that worked only when called in-process
+ * would fail all of them.
+ *
+ * **The screenshot proof is exact-pixel and is made to fail first.** The tool
+ * hands back base64 PNG; the driver decodes it with `nativeImage` - Chromium's
+ * decoder, not the encoder that made it - and counts the fixture's colour.
+ * Then the page is repainted a colour it has never been and the *same*
+ * comparator is required to stop finding the first one and start finding the
+ * second. A screenshot path that returned a stale frame, an empty image or a
+ * picture of the window instead of the page fails that pair.
+ *
+ * **`live` is one real session and it is the only thing here that costs
+ * anything.** A prediction about a session is worth what a session says about
+ * it: the driver asks a real `claude` to open the fixture and click the planted
+ * element, and then confirms the tab, the click and the resulting title against
+ * its own reads rather than against what the session claimed.
  */
 
 const GROUPS = [
@@ -63,7 +100,14 @@ const GROUPS = [
   'isolation',
   'postures',
   'persist',
-  'intact'
+  'intact',
+  // M17: the endpoint, the tools, and a real session driving them.
+  'endpoint',
+  'tools',
+  'unwatched',
+  'mcpreach',
+  'lifetime',
+  'live'
 ] as const
 type Group = (typeof GROUPS)[number]
 
@@ -101,6 +145,26 @@ const EVAL_VALUE = 'FIXTURE-EVAL-VALUE-1907'
 const FIND_TOKEN = 'HELMFINDTOKEN'
 const COOKIE_NAME = 'helmbrowsercheck'
 const COOKIE_VALUE = 'persisted-4711'
+
+/**
+ * The M17 fixture's planted element, and what clicking it does.
+ *
+ * Planted rather than found, and every one of these is a token no page anywhere
+ * else could produce: "the snapshot named the element" and "the click changed
+ * the page" are only claims if the thing named and the thing changed could have
+ * come from nowhere but this fixture.
+ */
+const PLANT_LABEL = 'HELMPLANTEDBUTTON5150'
+/** What the button writes into the document when it is really clicked. */
+const PLANT_CLICKED = 'HELMCLICKED8420'
+/** The title the page takes on afterwards - a second, independent witness. */
+const PLANT_TITLE = `Helm fixture clicked ${PLANT_CLICKED}`
+/** What the fixture logs on load, for `browser_console`. */
+const PLANT_LOG = 'HELM-PLANTED-CONSOLE-3391'
+/** What `browser_evaluate` is asked for and must get back. */
+const PLANT_EVAL = 'HELM-PLANTED-EVAL-6604'
+/** What `browser_type` is asked to land in the field. */
+const PLANT_TYPED = 'helm-typed-2208'
 
 /** Where phase one writes the port, so phase two can bind the same origin -
  * a cookie belongs to a scheme, a host **and a port**. */
@@ -315,9 +379,22 @@ interface Fixture {
   httpsLoopback: Server
   /** The same certificate, served on a host that is not loopback. */
   httpsNamed: Server
+  /**
+   * Plain HTTP on `127.0.0.2`, which is this machine and is **not loopback**
+   * by the reach rule's list.
+   *
+   * The reach matrix needs an address that `web` allows and `local` refuses,
+   * and it must not be on the internet: a check that proved "the wide posture
+   * lets an agent out" by actually going out would be a check that made a
+   * network request every time it ran. `127.0.0.2` is reachable, is served by
+   * this driver, and is refused by `isLoopbackUrl` - which is exactly the
+   * distinction under test.
+   */
+  httpNamed: Server
   httpPort: number
   httpsPort: number
   httpsNamedPort: number
+  httpNamedPort: number
   /** Every request path the servers were actually asked for, in order. */
   asked: string[]
   /** The request headers, in step with `asked` - the only way to tell a hard
@@ -426,6 +503,61 @@ function respond(url: string, host: string): { status: number; headers: Record<s
       body: 'helm-browser-check payload'
     }
   }
+  /*
+   * The page M17's tools are driven against.
+   *
+   * Everything on it is a planted token: a heading, a button whose click is
+   * recorded in three independent places (a counter, a paragraph and the
+   * document title), a text field that echoes what is typed into it, a value
+   * for `browser_evaluate` and a line for `browser_console`. It is written as
+   * its own route rather than added to `/` so the M16 groups keep the fixture
+   * they were measured against.
+   */
+  if (path === '/planted') {
+    return {
+      status: 200,
+      headers: html,
+      body: `<!doctype html><html><head><meta charset="utf-8"><title>Helm fixture planted</title></head>
+<body style="margin:0;background:${BACKGROUND};height:100vh;font:14px system-ui;color:#f0f0f0">
+<h1 id="heading" style="margin:0;padding:8px">Planted page ${PLANT_LABEL}</h1>
+<button id="plant" type="button" style="margin:8px;padding:8px 12px">${PLANT_LABEL}</button>
+<input id="field" type="text" placeholder="planted field" style="margin:8px;padding:6px" />
+<p id="result" style="margin:8px">not clicked</p>
+<p id="echo" style="margin:8px">typed: (nothing)</p>
+<script>
+  window.__helmPlanted = ${JSON.stringify(PLANT_EVAL)}
+  window.__plantClicks = 0
+  console.log(${JSON.stringify(PLANT_LOG)})
+  document.getElementById('plant').addEventListener('click', () => {
+    window.__plantClicks++
+    document.getElementById('result').textContent = ${JSON.stringify(PLANT_CLICKED)}
+    document.title = ${JSON.stringify(PLANT_TITLE)}
+  })
+  document.getElementById('field').addEventListener('input', (event) => {
+    document.getElementById('echo').textContent = 'typed: ' + event.target.value
+  })
+</script></body></html>`
+    }
+  }
+  /*
+   * A page that is deliberately **not** the fixture colour.
+   *
+   * The unwatched group needs a tab in front that is not the one under test:
+   * with nothing else open, the workspace makes the agent's own tab the active
+   * pane and it is then a tab somebody *is* looking at. This is what occupies
+   * the front, and it paints a colour `countColour` will never mistake for the
+   * fixture's.
+   */
+  if (path === '/decoy') {
+    return {
+      status: 200,
+      headers: html,
+      body: `<!doctype html><html><head><meta charset="utf-8"><title>Helm fixture decoy</title></head>
+<body style="margin:0;background:rgb(9,9,9);height:100vh;color:#888;font:12px monospace">
+<p style="margin:0;padding:6px">decoy - deliberately not the fixture colour</p>
+</body></html>`
+    }
+  }
   if (path === '/cookie') {
     return {
       status: 200,
@@ -499,6 +631,13 @@ async function startFixture(dataDir: string, wantedHttpPort: number | null): Pro
   const namedAddress = httpsNamed.address()
   httpsNamedPort = typeof namedAddress === 'object' && namedAddress !== null ? namedAddress.port : 0
 
+  let httpNamedPort = 0
+  const httpNamed = createHttpServer(handler(() => httpNamedPort))
+  await listen(httpNamed, 0, '127.0.0.2')
+  const httpNamedAddress = httpNamed.address()
+  httpNamedPort =
+    typeof httpNamedAddress === 'object' && httpNamedAddress !== null ? httpNamedAddress.port : 0
+
   mkdirSync(dataDir, { recursive: true })
   writeFileSync(join(dataDir, FIXTURE_FILE), JSON.stringify({ httpPort }, null, 2))
 
@@ -506,16 +645,18 @@ async function startFixture(dataDir: string, wantedHttpPort: number | null): Pro
     http,
     httpsLoopback,
     httpsNamed,
+    httpNamed,
     httpPort,
     httpsPort,
     httpsNamedPort,
+    httpNamedPort,
     asked,
     askedHeaders,
     close() {
       // Connections destroyed first, for the reason `close()` above gives: a
       // browser holds its socket open and the servers would otherwise linger
       // past the end of the run.
-      for (const server of [http, httpsLoopback, httpsNamed]) {
+      for (const server of [http, httpsLoopback, httpsNamed, httpNamed]) {
         server.closeAllConnections()
         server.close()
       }
@@ -579,6 +720,7 @@ function fetchTitle(url: string): Promise<string | null> {
 
 export async function runBrowserChecks(
   ctx: CheckContext,
+  collector: Collector,
   options: BrowserCheckOptions
 ): Promise<Check[]> {
   const checks: Check[] = []
@@ -619,6 +761,14 @@ export async function runBrowserChecks(
     if (run('postures')) checks.push(...(await posturesGroup(ctx, fixture, origin)))
     if (run('persist')) checks.push(await persistPhaseOne(ctx, origin))
     if (run('intact')) checks.push(await postureIntact(ctx, origin))
+
+    // M17. Everything below drives the tools rather than the pane.
+    if (run('endpoint')) checks.push(...(await endpointGroup(ctx)))
+    if (run('tools')) checks.push(...(await toolsGroup(ctx, origin)))
+    if (run('unwatched')) checks.push(...(await unwatchedGroup(ctx, origin, options)))
+    if (run('mcpreach')) checks.push(...(await mcpReachGroup(ctx, fixture, origin)))
+    if (run('lifetime')) checks.push(...(await lifetimeGroup(ctx, origin)))
+    if (run('live')) checks.push(...(await liveGroup(ctx, collector, origin, options)))
   } finally {
     fixture.close()
     // Every view this run made, gone - the next phase starts from an app with
@@ -2479,6 +2629,1268 @@ async function postureIntact(ctx: CheckContext, origin: string): Promise<Check> 
       'says the document was never replaced.'
     ]
   }
+}
+
+// ---------------------------------------------------------------------------
+// M17 - the endpoint, and an agent driving the pane through it
+// ---------------------------------------------------------------------------
+
+/**
+ * The ten tools, written out **here**.
+ *
+ * Deliberately not read from `browserMcp.toolNames()`: a list compared against
+ * itself agrees with itself. This is the table in the milestone, typed in by
+ * hand, and the wire's answer has to equal it exactly - so a tool renamed,
+ * added or quietly dropped fails this rather than passing with a new list.
+ */
+const EXPECTED_TOOLS = [
+  'browser_open',
+  'browser_tabs',
+  'browser_snapshot',
+  'browser_screenshot',
+  'browser_console',
+  'browser_click',
+  'browser_type',
+  'browser_press',
+  'browser_evaluate',
+  'browser_close'
+]
+
+interface RpcAnswer {
+  status: number
+  body: Record<string, unknown> | null
+  text: string
+}
+
+/** One JSON-RPC request over the wire, exactly as `claude` would make it. */
+function rpc(
+  url: string,
+  token: string | null,
+  payload: unknown,
+  method = 'POST'
+): Promise<RpcAnswer> {
+  return new Promise((resolve) => {
+    const body = JSON.stringify(payload)
+    const target = new URL(url)
+    const req = httpRequest(
+      {
+        host: target.hostname,
+        port: Number(target.port),
+        path: target.pathname,
+        method,
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'content-length': Buffer.byteLength(body),
+          ...(token === null ? {} : { authorization: `Bearer ${token}` })
+        }
+      },
+      (res) => {
+        let text = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk: string) => (text += chunk))
+        res.on('end', () => {
+          let parsed: Record<string, unknown> | null
+          try {
+            parsed = JSON.parse(text) as Record<string, unknown>
+          } catch {
+            parsed = null
+          }
+          resolve({ status: res.statusCode ?? 0, body: parsed, text })
+        })
+      }
+    )
+    req.on('error', (err) => resolve({ status: 0, body: null, text: String(err) }))
+    req.setTimeout(30_000, () => {
+      req.destroy()
+      resolve({ status: 0, body: null, text: 'timed out' })
+    })
+    if (method !== 'GET') req.write(body)
+    req.end()
+  })
+}
+
+/** Whether anything is listening. Used to say what "off" looks like. */
+function probePort(port: number): Promise<'connected' | 'refused'> {
+  return new Promise((resolve) => {
+    const socket = connect({ host: '127.0.0.1', port })
+    const done = (answer: 'connected' | 'refused'): void => {
+      socket.destroy()
+      resolve(answer)
+    }
+    socket.once('connect', () => done('connected'))
+    socket.once('error', () => done('refused'))
+    socket.setTimeout(3000, () => done('refused'))
+  })
+}
+
+/**
+ * The driver, registered with the endpoint as though it were a session.
+ *
+ * This is what makes the tool probes independent of `claude`: everything below
+ * goes over the wire, through the token gate, in JSON-RPC, exactly as a session
+ * would. The registration is real - it is the same `register` a launch calls -
+ * so the tabs it opens carry a name and belong to it in the same way.
+ */
+interface Agent {
+  name: string
+  token: string
+  url: string
+  id: number
+  call(method: string, params?: unknown): Promise<RpcAnswer>
+  tool(
+    name: string,
+    args?: Record<string, unknown>
+  ): Promise<{ ok: boolean; text: string; images: string[]; status: number }>
+  release(): void
+}
+
+let nextAgent = 1
+
+async function agentFor(ctx: CheckContext, name: string): Promise<Agent | null> {
+  const host = ctx.browserMcp
+  if (host === null) return null
+  const registration = host.register(name)
+  if (registration === null) return null
+  const url = registration.launch.server.url
+  const token = registration.token
+  const id = nextAgent++
+
+  const agent: Agent = {
+    name,
+    token,
+    url,
+    id,
+    call: (method, params) =>
+      rpc(url, token, { jsonrpc: '2.0', id: nextAgent++, method, ...(params === undefined ? {} : { params }) }),
+    async tool(toolName, args) {
+      const answer = await agent.call('tools/call', { name: toolName, arguments: args ?? {} })
+      const result = (answer.body?.['result'] ?? null) as {
+        content?: Array<{ type?: string; text?: string; data?: string }>
+        isError?: boolean
+      } | null
+      const content = result?.content ?? []
+      return {
+        // `isError` absent is a success. A transport error - anything but 200 -
+        // is never a tool answer, so it is reported as a failure too.
+        ok: answer.status === 200 && result !== null && result.isError !== true,
+        text: content
+          .filter((part) => part.type === 'text')
+          .map((part) => part.text ?? '')
+          .join('\n'),
+        images: content.filter((part) => part.type === 'image').map((part) => part.data ?? ''),
+        status: answer.status
+      }
+    },
+    release: () => host.release(token)
+  }
+
+  // The handshake, because a client that skipped it would be testing a server
+  // nothing real talks to.
+  await agent.call('initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'browser-check', version: '1.0.0' }
+  })
+  await rpc(url, token, { jsonrpc: '2.0', method: 'notifications/initialized' })
+  return agent
+}
+
+/** The check every M17 group produces when the endpoint is not there at all. */
+const noEndpoint = (id: string, criterion: string): Check => ({
+  id,
+  criterion,
+  title: 'Helm’s browser endpoint was not running, so nothing below could be measured',
+  ok: false,
+  detail: { browserMcp: null },
+  notes: [
+    'This is a failure rather than a skip on purpose: an M17 group that quietly',
+    'produced no checks would report green in every runner.'
+  ]
+})
+
+/** The tab a named agent has open, read from the browser host rather than from
+ * what the tool said. */
+const tabOf = (ctx: CheckContext, agent: Agent): number | null =>
+  ctx.browsers.states().find((state) => ctx.browsers.openerOf(state.id)?.key === agent.token)?.id ??
+  null
+
+/** Every view gone, so a group starts from a known strip. */
+async function clearViews(ctx: CheckContext): Promise<void> {
+  for (const state of ctx.browsers.states()) ctx.browsers.close(state.id)
+  await sleep(400)
+}
+
+// ---------------------------------------------------------------------------
+// endpoint
+// ---------------------------------------------------------------------------
+
+async function endpointGroup(ctx: CheckContext): Promise<Check[]> {
+  const host = ctx.browserMcp
+  if (host === null) {
+    return [noEndpoint('BR-28', 'Loopback-only, token-gated MCP endpoint serving exactly ten tools')]
+  }
+
+  const bound = host.address()
+  const agent = await agentFor(ctx, 'browser-check endpoint probe')
+  if (bound === null || agent === null) {
+    return [noEndpoint('BR-28', 'Loopback-only, token-gated MCP endpoint serving exactly ten tools')]
+  }
+
+  const list = { jsonrpc: '2.0', id: 1, method: 'tools/list' }
+  const tokenless = await rpc(agent.url, null, list)
+  const wrongToken = await rpc(agent.url, `${agent.token.slice(0, -1)}0`, list)
+  const wrongPath = await rpc(agent.url.replace('/mcp', '/tools'), agent.token, list)
+  const withToken = await rpc(agent.url, agent.token, list)
+  const asGet = await rpc(agent.url, agent.token, {}, 'GET')
+
+  const served = (
+    ((withToken.body?.['result'] ?? null) as { tools?: Array<{ name?: string }> } | null)?.tools ?? []
+  ).map((tool) => tool.name ?? '')
+
+  // The port is really open, and this driver can tell an open one from a shut
+  // one - which is what makes "no listener when off", below, a claim.
+  const live = await probePort(bound.port)
+  const spare = createHttpServer(() => undefined)
+  await listen(spare, 0)
+  const spareAddress = spare.address()
+  const freePort = typeof spareAddress === 'object' && spareAddress !== null ? spareAddress.port : 0
+  await close(spare)
+  const dead = await probePort(freePort)
+
+  agent.release()
+
+  return [
+    {
+      id: 'BR-28',
+      criterion: 'Loopback-only, token-gated MCP endpoint serving exactly the ten tools',
+      title:
+        'The socket is bound to 127.0.0.1, a tokenless or wrong-token request is 401, and the tool list matches the table exactly',
+      ok:
+        bound.address === '127.0.0.1' &&
+        bound.port > 0 &&
+        tokenless.status === 401 &&
+        wrongToken.status === 401 &&
+        wrongPath.status === 404 &&
+        asGet.status === 405 &&
+        withToken.status === 200 &&
+        served.join(',') === EXPECTED_TOOLS.join(',') &&
+        live === 'connected' &&
+        dead === 'refused',
+      detail: {
+        boundTo: bound,
+        tokenless: { status: tokenless.status, said: tokenless.text.slice(0, 160) },
+        wrongToken: { status: wrongToken.status },
+        wrongPath: { status: wrongPath.status },
+        get: { status: asGet.status },
+        withToken: { status: withToken.status },
+        toolsServed: served,
+        toolsExpected: EXPECTED_TOOLS,
+        portProbe: { live, aPortNothingIsOn: dead }
+      },
+      notes: [
+        'The bind address is read off `server.address()`, which is a fact about the',
+        'socket. "We call listen with 127.0.0.1" is a fact about a source file.',
+        'The wrong-token request differs from the good one by **one character**, so a',
+        'gate that merely looked for the word Bearer would pass the first and fail',
+        'this.',
+        'The expected tool list is typed out in this driver rather than read from the',
+        'server, because a list compared against itself agrees with itself.',
+        'The port probe is exercised both ways here so that "nothing is listening" is',
+        'something this driver has been shown to be able to detect.'
+      ]
+    },
+    await offIsOff(ctx)
+  ]
+}
+
+/**
+ * What the app looks like with `browserMcp` unticked.
+ *
+ * Built as a **second** endpoint rather than by stopping the live one, because
+ * the claim is about the setting rather than about `stop()`: a host constructed
+ * with the tick off must never bind, never mint a token, and produce a launch
+ * whose argv has no `--mcp-config` in it at all.
+ */
+async function offIsOff(ctx: CheckContext): Promise<Check> {
+  const off = createBrowserMcp({
+    browsers: ctx.browsers,
+    settings: () => ({ ...ctx.services.settings, browserMcp: false }),
+    dir: join(mcpConfigDir, 'off-probe')
+  })
+  const started = await off.start()
+  const registration = off.register('would-be session')
+  const boundTo = off.address()
+
+  // And the argv that produces. The same `prepareLaunch` every launch goes
+  // through, with the registration the off endpoint refused to make.
+  const shimRoot = join(mcpConfigDir, 'off-probe-shims')
+  const plan = prepareLaunch({
+    root: homedir(),
+    name: 'browser-check argv with the endpoint off',
+    shimRoot,
+    mcp: registration?.launch ?? null
+  })
+  await off.stop()
+
+  return {
+    id: 'BR-29',
+    criterion: 'browserMcp off means no listener, no token and no --mcp-config',
+    title: 'An endpoint built with the tick off binds nothing, registers nothing, and composes an argv with no --mcp-config',
+    ok:
+      !started.started &&
+      started.problem !== null &&
+      boundTo === null &&
+      registration === null &&
+      plan.mcpConfigFile === null &&
+      !plan.argv.includes('--mcp-config'),
+    detail: {
+      start: started,
+      address: boundTo,
+      registration,
+      argv: plan.argv,
+      mcpConfigFile: plan.mcpConfigFile
+    },
+    notes: [
+      'A second host rather than `stop()` on the live one: the question is what the',
+      'setting does, and stopping a listener that had already bound would answer a',
+      'different one.',
+      'The argv is composed by the real `prepareLaunch`, so this is the same code',
+      'path a launch takes rather than a claim about it.'
+    ]
+  }
+}
+
+// ---------------------------------------------------------------------------
+// tools - driven over the wire, against a tab nobody is looking at
+// ---------------------------------------------------------------------------
+
+/** The `[ref=...]` of the snapshot line naming a role and a token. */
+function refFor(snapshot: string, role: string, token: string): string | null {
+  for (const line of snapshot.split('\n')) {
+    if (!line.includes(`- ${role}`)) continue
+    if (!line.includes(token)) continue
+    return /\[ref=([0-9.]*)\]/.exec(line)?.[1] ?? null
+  }
+  return null
+}
+
+async function toolsGroup(ctx: CheckContext, origin: string): Promise<Check[]> {
+  const checks: Check[] = []
+  const agent = await agentFor(ctx, 'browser-check tools')
+  if (agent === null) {
+    return [noEndpoint('BR-30', 'The tools are driven over the wire, independently of claude')]
+  }
+
+  const opened = await agent.tool('browser_open', { url: `${origin}/planted` })
+  await sleep(600)
+  const tabId = tabOf(ctx, agent)
+  const tabs = await agent.tool('browser_tabs')
+
+  // What the strip says, which is the affordance rather than the state.
+  const subtitle = await js<string>(
+    ctx.win,
+    `(() => { const el = document.querySelector('[data-tab="browser:${String(
+      tabId ?? -1
+    )}"] [data-tab-subtitle]');
+      return el ? el.textContent : '' })()`
+  )
+
+  checks.push({
+    id: 'BR-30',
+    criterion: 'browser_open makes a real tab, attributed to the session that asked for it',
+    title: 'A tool call over the wire opens a Helm tab whose opener is this session, and the strip says so',
+    ok:
+      opened.ok &&
+      tabId !== null &&
+      opened.text.includes(`tab: ${String(tabId)}`) &&
+      opened.text.includes('/planted') &&
+      opened.text.includes('Helm fixture planted') &&
+      ctx.browsers.openerOf(tabId)?.name === agent.name &&
+      ctx.browsers.states(tabId)[0]?.openedBy === agent.name &&
+      subtitle.includes(agent.name) &&
+      tabs.ok &&
+      tabs.text.includes(`#${String(tabId)}`) &&
+      tabs.text.includes('yours'),
+    detail: {
+      opened: opened.text,
+      tabIdAccordingToTheBrowserHost: tabId,
+      openerName: tabId === null ? null : ctx.browsers.openerOf(tabId)?.name,
+      tabSubtitleInTheStrip: subtitle,
+      tabs: tabs.text
+    },
+    notes: [
+      'The tab id is read out of `browsers.states()` rather than out of the tool’s own',
+      'answer, so the two sides of the comparison are the wire and the host.',
+      'The attribution is asserted **on screen** as well as in the state: a name',
+      'nothing paints is the same as no name.'
+    ]
+  })
+
+  if (tabId === null) {
+    agent.release()
+    return checks
+  }
+
+  // --- snapshot, click, type, press, evaluate, console -----------------------
+  const snapshot = await agent.tool('browser_snapshot')
+  const buttonRef = refFor(snapshot.text, 'button', PLANT_LABEL)
+  const fieldRef = refFor(snapshot.text, 'input', 'planted field')
+
+  const before = await ctx.browsers.evaluate(tabId, 'document.getElementById("result").textContent')
+  const clicked =
+    buttonRef === null ? null : await agent.tool('browser_click', { ref: buttonRef })
+  await sleep(400)
+  // Read back by the driver, from the page, through a reader the tool did not
+  // touch - three independent traces of one click.
+  const after = await ctx.browsers.evaluate(tabId, 'document.getElementById("result").textContent')
+  const titleAfter = await ctx.browsers.evaluate(tabId, 'document.title')
+  const clickCount = await ctx.browsers.evaluate(tabId, 'window.__plantClicks')
+
+  const typed = await agent.tool('browser_type', {
+    selector: '#field',
+    text: PLANT_TYPED,
+    clear: true
+  })
+  await sleep(300)
+  const echoed = await ctx.browsers.evaluate(tabId, 'document.getElementById("echo").textContent')
+  const pressed = await agent.tool('browser_press', { key: 'Backspace' })
+  await sleep(300)
+  const echoedAfterBackspace = await ctx.browsers.evaluate(
+    tabId,
+    'document.getElementById("echo").textContent'
+  )
+
+  const evaluated = await agent.tool('browser_evaluate', { expression: 'window.__helmPlanted' })
+  const console1 = await agent.tool('browser_console')
+  const cursor = Number(/cursor: (\d+)/.exec(console1.text)?.[1] ?? -1)
+  const console2 = await agent.tool('browser_console', { cursor })
+
+  checks.push({
+    id: 'BR-31',
+    criterion:
+      'browser_snapshot names a planted element; click, type, press, evaluate and console all reach the page',
+    title:
+      'The snapshot names the planted button with a ref, a real click on it changes the page in three places, typed text lands, Backspace removes one character, and the console carries the fixture’s token',
+    ok:
+      snapshot.ok &&
+      snapshot.text.includes(PLANT_LABEL) &&
+      buttonRef !== null &&
+      fieldRef !== null &&
+      before.value === 'not clicked' &&
+      clicked?.ok === true &&
+      after.value === PLANT_CLICKED &&
+      titleAfter.value === PLANT_TITLE &&
+      Number(clickCount.value) === 1 &&
+      typed.ok &&
+      echoed.value === `typed: ${PLANT_TYPED}` &&
+      pressed.ok &&
+      echoedAfterBackspace.value === `typed: ${PLANT_TYPED.slice(0, -1)}` &&
+      evaluated.ok &&
+      evaluated.text === PLANT_EVAL &&
+      console1.ok &&
+      console1.text.includes(PLANT_LOG) &&
+      cursor > 0 &&
+      console2.ok &&
+      console2.text.includes('(nothing new)'),
+    detail: {
+      snapshot: snapshot.text.slice(0, 1400),
+      refs: { button: buttonRef, field: fieldRef },
+      click: {
+        resultBefore: before.value,
+        toolSaid: clicked?.text ?? null,
+        resultAfter: after.value,
+        documentTitleAfter: titleAfter.value,
+        handlerRanTimes: clickCount.value
+      },
+      type: { toolSaid: typed.text, pageEcho: echoed.value },
+      press: { toolSaid: pressed.text, pageEchoAfterBackspace: echoedAfterBackspace.value },
+      evaluate: { toolSaid: evaluated.text, expected: PLANT_EVAL },
+      console: { first: console1.text.slice(0, 600), cursor, second: console2.text.slice(0, 200) }
+    },
+    notes: [
+      'The `result` paragraph is required to have said "not clicked" **first**. A page',
+      'that had already been clicked, or a probe reading a token that was in the',
+      'document all along, would pass a bare "does it contain the token".',
+      'Three traces of the one click - a paragraph, the document title and a counter -',
+      'because a JS-dispatched click and a real input event are indistinguishable from',
+      'any one of them, and the counter is what says it happened exactly once.',
+      'Backspace is asserted to have removed **one** character rather than to have',
+      'done something: a key event that never arrived and one that cleared the field',
+      'are both "not equal to what was typed".',
+      'The second console call passes the cursor back and must find nothing new, which',
+      'is what makes it a cursor rather than a re-read.'
+    ]
+  })
+
+  // --- screenshot, with the comparator made to fail --------------------------
+  const shot = await agent.tool('browser_screenshot')
+  const first = decodePng(shot.images[0] ?? '')
+
+  /*
+   * The mutant: the page is repainted a colour it has never been, and the same
+   * comparator has to stop finding the fixture and start finding the new one.
+   *
+   * Written the way `BR-3` writes it, and for the reason that probe records:
+   * the colour is **read back off the document** before anything is captured,
+   * so a race with a page that has not settled cannot read as a stale frame;
+   * and the capture is then retried, because one attempt cannot tell "the
+   * compositor needed a moment" from "a hidden view never repaints", which are
+   * opposite answers. Both were needed - this failed once, on a hidden tab,
+   * with a single capture half a second after the repaint.
+   */
+  const wanted = `rgb(${String(REPAINT_RGB.r)}, ${String(REPAINT_RGB.g)}, ${String(REPAINT_RGB.b)})`
+  let painted = ''
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await ctx.browsers.evaluate(tabId, `document.body.style.background = ${q(wanted)}`)
+    await sleep(150)
+    painted = (await ctx.browsers.evaluate(tabId, 'getComputedStyle(document.body).backgroundColor'))
+      .value
+    if (painted === wanted) break
+  }
+  let mutantShot = await agent.tool('browser_screenshot')
+  let mutant = decodePng(mutantShot.images[0] ?? '')
+  let mutantAttempts = 1
+  for (; mutantAttempts < 25 && (mutant?.repaint ?? 0) <= 1000; mutantAttempts++) {
+    await sleep(200)
+    mutantShot = await agent.tool('browser_screenshot')
+    mutant = decodePng(mutantShot.images[0] ?? '')
+  }
+  await ctx.browsers.evaluate(tabId, `document.body.style.background = '${BACKGROUND}'`)
+
+  checks.push({
+    id: 'BR-32',
+    criterion: 'browser_screenshot returns a PNG of the page, at exact-pixel fidelity',
+    title:
+      'The PNG the tool returns carries the fixture’s exact colour, and the same comparator rejects it once the page is repainted',
+    ok:
+      shot.ok &&
+      first !== null &&
+      first.width > 4 &&
+      first.fixture > 1000 &&
+      first.repaint === 0 &&
+      painted === wanted &&
+      mutantShot.ok &&
+      mutant !== null &&
+      mutant.repaint > 1000 &&
+      mutant.fixture === 0,
+    detail: {
+      fixtureColour: FIXTURE_RGB,
+      repaintColour: REPAINT_RGB,
+      firstShot: first === null ? 'not a PNG' : first,
+      pageReportsItsBackgroundAs: painted,
+      afterRepainting: mutant === null ? 'not a PNG' : mutant,
+      captureAttemptsAfterTheRepaint: mutantAttempts,
+      base64Bytes: (shot.images[0] ?? '').length
+    },
+    notes: [
+      'The PNG is decoded by `nativeImage`, which is Chromium’s decoder rather than',
+      'the encoder that produced the bytes, and the pixels are counted by the same',
+      'function every hiding claim in this file uses.',
+      'The mutant is the half that makes this mean anything: a screenshot path that',
+      'returned a stale frame, a blank image, or a picture of the window instead of',
+      'the page would pass the first count and fail the second. Note in particular',
+      'that `win.webContents.capturePage()` cannot see a WebContentsView at all - the',
+      'tool goes through the **view’s own** capture, and this pair is what says so.'
+    ]
+  })
+
+  agent.release()
+  return checks
+}
+
+/** Base64 PNG to a pair of pixel counts, or null when it was not an image. */
+function decodePng(
+  base64: string
+): { width: number; height: number; fixture: number; repaint: number } | null {
+  if (base64 === '') return null
+  const image = nativeImage.createFromBuffer(Buffer.from(base64, 'base64'))
+  if (image.isEmpty()) return null
+  const size = image.getSize()
+  const bitmap = image.toBitmap()
+  return {
+    width: size.width,
+    height: size.height,
+    fixture: countColour(bitmap, FIXTURE_RGB),
+    repaint: countColour(bitmap, REPAINT_RGB)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// unwatched - the milestone's premise
+// ---------------------------------------------------------------------------
+
+/**
+ * Every tool, against a tab that is not on the screen at all.
+ *
+ * This is the group the milestone is only worth building if it passes, and the
+ * two readers are the ones M16 established: a photograph of the window taken
+ * from outside it, and Chromium's own `document.visibilityState` asked of the
+ * page. Helm's own `visible` flag appears in the detail and is not part of any
+ * verdict.
+ *
+ * The strip is cleared first so that the fixture's colour can only have come
+ * from the agent's own tab - with a pane tab still open on the same fixture,
+ * "the page is not on screen" would be a statement about the wrong page.
+ */
+async function unwatchedGroup(
+  ctx: CheckContext,
+  origin: string,
+  options: BrowserCheckOptions
+): Promise<Check[]> {
+  const agent = await agentFor(ctx, 'browser-check unwatched')
+  if (agent === null) {
+    return [noEndpoint('BR-33', 'Every tool works against a tab the user is not looking at')]
+  }
+  await clearViews(ctx)
+
+  /*
+   * A tab for the *user* first, and it is load-bearing.
+   *
+   * The workspace strip makes the only pane it has the active one, so with
+   * nothing else open the agent's tab is put in front and this group would be
+   * measuring a tab somebody is looking at. The decoy occupies the front and
+   * paints a colour that is not the fixture's, so the pixel count below is
+   * still a statement about the agent's page alone.
+   */
+  const decoy = ctx.browsers.open({ url: `${origin}/decoy` }).state?.id ?? null
+  if (decoy !== null) {
+    await waitForUrl(ctx, decoy, (url) => url.endsWith('/decoy'))
+    await showBrowserTab(ctx.win, decoy)
+  }
+  await sleep(500)
+
+  const opened = await agent.tool('browser_open', { url: `${origin}/planted` })
+  await sleep(800)
+  const tabId = tabOf(ctx, agent)
+  if (tabId === null) {
+    agent.release()
+    return [
+      {
+        id: 'BR-33',
+        criterion: 'Every tool works against a tab the user is not looking at',
+        title: 'browser_open produced no tab, so nothing below could be measured',
+        ok: false,
+        detail: { opened: opened.text },
+        notes: []
+      }
+    ]
+  }
+
+  const onScreen = await fixturePixelsUntil(
+    ctx,
+    options.shotDir,
+    'browser-agent-unwatched.png',
+    'gone'
+  )
+  const visibility = await pageVisibility(ctx, tabId)
+  const inspected = ctx.browsers.inspect(tabId)
+  /*
+   * The layout the page actually got, reported whatever the verdict.
+   *
+   * "The tools worked" and "the page has a viewport" are different facts, and
+   * the second is the one that decides whether the first can be true at all: a
+   * view Chromium never laid out answers `executeJavaScript` perfectly well and
+   * reports every element as zero-sized, which reads as a snapshot finding
+   * nothing rather than as a view with no layout.
+   */
+  const layout = await ctx.browsers.evaluate(
+    tabId,
+    `JSON.stringify({ innerWidth: window.innerWidth, innerHeight: window.innerHeight,
+      body: (() => { const b = document.body.getBoundingClientRect(); return [b.width, b.height] })(),
+      button: (() => { const el = document.getElementById('plant');
+        if (!el) return null; const b = el.getBoundingClientRect(); return [b.width, b.height] })() })`
+  )
+
+  const snapshot = await agent.tool('browser_snapshot')
+  const buttonRef = refFor(snapshot.text, 'button', PLANT_LABEL)
+  const clicked = buttonRef === null ? null : await agent.tool('browser_click', { ref: buttonRef })
+  await sleep(400)
+  const result = await ctx.browsers.evaluate(tabId, 'document.getElementById("result").textContent')
+  const typed = await agent.tool('browser_type', { selector: '#field', text: PLANT_TYPED })
+  await sleep(300)
+  const echoed = await ctx.browsers.evaluate(tabId, 'document.getElementById("echo").textContent')
+  const evaluated = await agent.tool('browser_evaluate', { expression: 'window.__helmPlanted' })
+  const consoled = await agent.tool('browser_console')
+  const shot = await agent.tool('browser_screenshot')
+  const decoded = decodePng(shot.images[0] ?? '')
+
+  // And nothing of it reached the screen while all of that happened.
+  const stillOffScreen = await fixturePixelsUntil(
+    ctx,
+    options.shotDir,
+    'browser-agent-unwatched-after.png',
+    'gone'
+  )
+
+  agent.release()
+
+  return [
+    {
+      id: 'BR-33',
+      criterion: 'Every tool works against a tab the user is not looking at',
+      title:
+        'A tab that is never on screen is still readable, clickable, typable, scriptable and capturable - and stays off screen throughout',
+      ok:
+        onScreen === 0 &&
+        inspected?.parked === true &&
+        // `visibilityState` is recorded rather than asserted, and the reason is
+        // the mechanism: a parked view is `visible` to Chromium, which is what
+        // stops the page throttling its own timers and unloading lazy content -
+        // an agent driving a page the browser has decided is asleep is the
+        // failure this avoids. "Not on screen" is settled by the photograph.
+        snapshot.ok &&
+        snapshot.text.includes(PLANT_LABEL) &&
+        buttonRef !== null &&
+        clicked?.ok === true &&
+        result.value === PLANT_CLICKED &&
+        typed.ok &&
+        echoed.value === `typed: ${PLANT_TYPED}` &&
+        evaluated.ok &&
+        evaluated.text === PLANT_EVAL &&
+        consoled.ok &&
+        consoled.text.includes(PLANT_LOG) &&
+        shot.ok &&
+        decoded !== null &&
+        decoded.fixture > 1000 &&
+        stillOffScreen === 0,
+      detail: {
+        fixturePixelsOnTheWindow: { atTheStart: onScreen, afterEverything: stillOffScreen },
+        pageVisibilityState: visibility,
+        theTabInFront: decoy === null ? null : (ctx.browsers.states(decoy)[0]?.url ?? null),
+        layoutThePageGot: layout.value,
+        whatHelmThinksItToldElectron: inspected,
+        snapshotNamedThePlantedButton: snapshot.text.includes(PLANT_LABEL),
+        click: { toolSaid: clicked?.text ?? null, pageSays: result.value },
+        type: { pageEcho: echoed.value },
+        evaluate: evaluated.text,
+        console: consoled.text.slice(0, 240),
+        screenshot: decoded
+      },
+      notes: [
+        'This tab was opened by a tool and has never been the tab in front, so it has',
+        'no pane, has never been mounted, and nothing in the window has ever reported a',
+        'rectangle for it. That is the case M17 rests on and it is the one that would',
+        'not work by accident: a view left at the 0x0 every view is constructed with',
+        'has no layout, so a snapshot would find nothing visible and a screenshot would',
+        'be a few pixels of nothing. `AGENT_VIEW_SIZE` in `browser.ts` is why it does.',
+        '"Not on screen" is settled by photographing the window from outside it, which',
+        'is the strongest reader available and is completely outside Helm. What Helm',
+        'thinks it told Electron is in the detail and is never part of the verdict.',
+        'Chromium’s `document.visibilityState` reads **visible** here, and that is the',
+        'mechanism working rather than failing: a parked view is a shown widget outside',
+        'the window, so the page does not throttle its timers or unload lazy content -',
+        'which is what a tab hidden from birth does, and what would make an agent’s read',
+        'of it wrong. M16’s `setVisible(false)` guarantee is about a view that has',
+        'already been shown, and `BR-3` is still the check for that one.',
+        'The screenshot count is the converse reading of the same colour: absent from',
+        'the window, present in the view’s own capture, at the same moment.',
+        'A decoy tab holds the front, because the workspace makes its only pane the',
+        'active one - so without it the agent’s tab would be the tab in front and this',
+        'group would be measuring the wrong thing entirely.'
+      ]
+    }
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// mcpreach - the intersection, all four cells
+// ---------------------------------------------------------------------------
+
+async function mcpReachGroup(
+  ctx: CheckContext,
+  fixture: Fixture,
+  origin: string
+): Promise<Check[]> {
+  const agent = await agentFor(ctx, 'browser-check reach')
+  if (agent === null) {
+    return [noEndpoint('BR-34', 'browserReach and browserMcpLocalOnly intersect, narrower wins')]
+  }
+  await clearViews(ctx)
+
+  const restore = {
+    browserReach: ctx.services.settings.browserReach,
+    browserMcpLocalOnly: ctx.services.settings.browserMcpLocalOnly
+  }
+  // Not loopback by the rule, and still this machine - so a refusal is the rule
+  // declining rather than a request that could not have been made anyway.
+  const remote = `http://127.0.0.2:${String(fixture.httpNamedPort)}/`
+
+  const cells: Array<{
+    reach: 'web' | 'local'
+    localOnly: boolean
+    expected: 'allowed' | 'refused'
+    toolSaid: string
+    fetched: number
+    urlAfter: string | null
+  }> = []
+
+  for (const reach of ['web', 'local'] as const) {
+    for (const localOnly of [false, true]) {
+      ctx.services.settings = {
+        ...ctx.services.settings,
+        browserReach: reach,
+        browserMcpLocalOnly: localOnly
+      }
+      const askedBefore = fixture.asked.length
+      const answer = await agent.tool('browser_open', { url: remote })
+      await sleep(900)
+      const tab = tabOf(ctx, agent)
+      cells.push({
+        reach,
+        localOnly,
+        expected: reach === 'web' && !localOnly ? 'allowed' : 'refused',
+        toolSaid: answer.text.slice(0, 240),
+        fetched: fixture.asked.length - askedBefore,
+        urlAfter: tab === null ? null : (ctx.browsers.states(tab)[0]?.url ?? null)
+      })
+      for (const state of ctx.browsers.states()) ctx.browsers.close(state.id)
+      await sleep(300)
+    }
+  }
+
+  /*
+   * And the half that makes `web` + on a *narrowing of the agent* rather than
+   * of the app: with the tools confined, the pane may still be pointed at the
+   * same address by hand.
+   */
+  ctx.services.settings = {
+    ...ctx.services.settings,
+    browserReach: 'web',
+    browserMcpLocalOnly: true
+  }
+  const refusedForTheTool = await agent.tool('browser_open', { url: remote })
+  const paneTab = ctx.browsers.open({ url: `${origin}/` }).state?.id ?? null
+  let paneReached = false
+  if (paneTab !== null) {
+    await waitForUrl(ctx, paneTab, (url) => url.startsWith(origin))
+    ctx.browsers.navigate(paneTab, remote)
+    paneReached = await waitForUrl(ctx, paneTab, (url) => url.startsWith('http://127.0.0.2'), 12_000)
+    ctx.browsers.close(paneTab)
+  }
+
+  ctx.services.settings = { ...ctx.services.settings, ...restore }
+  agent.release()
+
+  const sentence = (cell: (typeof cells)[number]): boolean =>
+    cell.toolSaid.includes('This machine only') && cell.toolSaid.includes('127.0.0.2')
+
+  return [
+    {
+      id: 'BR-34',
+      criterion:
+        'browserReach and browserMcpLocalOnly intersect through one shared function; the narrower always wins',
+      title:
+        'All four combinations: only web+off lets a tool reach a non-loopback address, and every refusal is a sentence with nothing fetched',
+      ok:
+        cells.length === 4 &&
+        cells.every((cell) =>
+          cell.expected === 'allowed'
+            ? cell.fetched > 0 && cell.urlAfter?.startsWith('http://127.0.0.2') === true
+            : cell.fetched === 0 && sentence(cell) && cell.urlAfter === null
+        ) &&
+        !refusedForTheTool.ok &&
+        paneReached,
+      detail: {
+        address: remote,
+        cells,
+        whileTheToolWasConfined: {
+          toolSaid: refusedForTheTool.text.slice(0, 240),
+          paneReachedItByHand: paneReached
+        }
+      },
+      notes: [
+        '"Nothing was fetched" is counted on the fixture server’s own request log, which',
+        'is a reader on the other side of the wire - a navigation that was refused and',
+        'one that failed look identical from inside the app.',
+        'The refusals are required to be **sentences** naming the setting and the host,',
+        'not merely falsy answers.',
+        '127.0.0.2 is this machine, so the wide cell really does fetch a page rather',
+        'than reaching the internet: the difference between the cells is the rule under',
+        'test and nothing else.',
+        'The last figure is what makes `browserMcpLocalOnly` a control over the agent',
+        'rather than over the app: with the tool refused, the pane went to the same',
+        'address by hand in the same second.'
+      ]
+    }
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// lifetime
+// ---------------------------------------------------------------------------
+
+async function lifetimeGroup(ctx: CheckContext, origin: string): Promise<Check[]> {
+  const alpha = await agentFor(ctx, 'browser-check session alpha')
+  const beta = await agentFor(ctx, 'browser-check session beta')
+  if (alpha === null || beta === null) {
+    return [noEndpoint('BR-35', 'An agent closes only the tabs it opened; a session ending leaves them')]
+  }
+  await clearViews(ctx)
+
+  // A tab the user opened, through the same path the pane uses.
+  const userTab = ctx.browsers.open({ url: `${origin}/two` }).state?.id ?? null
+  if (userTab !== null) await waitForUrl(ctx, userTab, (url) => url.endsWith('/two'))
+
+  await alpha.tool('browser_open', { url: `${origin}/planted` })
+  await sleep(500)
+  const alphaTab = tabOf(ctx, alpha)
+
+  // Beta cannot close alpha's tab, and neither can close the user's.
+  const betaOnAlpha =
+    alphaTab === null ? null : await beta.tool('browser_close', { tab: alphaTab })
+  const alphaOnUser = userTab === null ? null : await alpha.tool('browser_close', { tab: userTab })
+  // Nor drive it: reading a page the user opened is the same trespass as
+  // closing it, and this is the assertion that says so.
+  const alphaReadsUser =
+    userTab === null ? null : await alpha.tool('browser_snapshot', { tab: userTab })
+  const afterRefusals = ctx.browsers.states().map((state) => state.id)
+
+  // Alpha closes its own.
+  const alphaOnOwn =
+    alphaTab === null ? null : await alpha.tool('browser_close', { tab: alphaTab })
+  await sleep(400)
+  const afterClose = ctx.browsers.states().map((state) => state.id)
+
+  // A session ending leaves its tabs standing. `release` is exactly what
+  // `sessions.ts` calls when a hosted session exits.
+  await alpha.tool('browser_open', { url: `${origin}/planted` })
+  await sleep(500)
+  const survivor = tabOf(ctx, alpha)
+  alpha.release()
+  await sleep(500)
+  const afterRelease = ctx.browsers.states().map((state) => state.id)
+  const survivorStillLabelled =
+    survivor === null ? null : (ctx.browsers.states(survivor)[0]?.openedBy ?? null)
+  // And its token is dead: the same call with the same token is now 401.
+  const afterReleaseCall = await alpha.tool('browser_tabs')
+
+  beta.release()
+  await clearViews(ctx)
+
+  return [
+    {
+      id: 'BR-35',
+      criterion:
+        'An agent closes only tabs it opened; user tabs are untouchable by tools; a session ending leaves its tabs standing',
+      title:
+        'Another session’s tab and the user’s are both refused in a sentence, a session closes its own, and a session ending leaves its tab open with its label',
+      ok:
+        userTab !== null &&
+        alphaTab !== null &&
+        betaOnAlpha?.ok === false &&
+        betaOnAlpha.text.includes('browser-check session alpha') &&
+        alphaOnUser?.ok === false &&
+        alphaOnUser.text.includes('opened by the user') &&
+        alphaReadsUser?.ok === false &&
+        afterRefusals.includes(userTab) &&
+        afterRefusals.includes(alphaTab) &&
+        alphaOnOwn?.ok === true &&
+        !afterClose.includes(alphaTab) &&
+        afterClose.includes(userTab) &&
+        survivor !== null &&
+        afterRelease.includes(survivor) &&
+        survivorStillLabelled === 'browser-check session alpha' &&
+        afterReleaseCall.status === 401,
+      detail: {
+        userTab,
+        alphaTab,
+        betaTryingToCloseAlphas: betaOnAlpha?.text ?? null,
+        alphaTryingToCloseTheUsers: alphaOnUser?.text ?? null,
+        alphaTryingToReadTheUsers: alphaReadsUser?.text ?? null,
+        tabsAfterTheRefusals: afterRefusals,
+        alphaClosingItsOwn: alphaOnOwn?.text ?? null,
+        tabsAfterThat: afterClose,
+        afterTheSessionEnded: {
+          tabStillOpen: survivor !== null && afterRelease.includes(survivor),
+          stillLabelled: survivorStillLabelled,
+          theOldTokenNowAnswers: afterReleaseCall.status
+        }
+      },
+      notes: [
+        'Two sessions rather than one, because "only tabs it opened" and "only tabs an',
+        'agent opened" are different rules and the second would pass a probe that used',
+        'one session and one user tab.',
+        'The refusals are required to name **who** the tab belongs to, and the tab is',
+        'required to still be there afterwards: "it refused" and "it refused after',
+        'closing it" look identical from a return value.',
+        'A session ending is `release`, which is the same call `sessions.ts` makes when',
+        'a hosted process exits - so this is the mechanism rather than a stand-in. The',
+        'tab survives it, keeps the name of the session that is gone, and the token',
+        'that opened it no longer authenticates anything.'
+      ]
+    }
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// live - one real claude, and what it did to the page
+// ---------------------------------------------------------------------------
+
+/** sha256 of a file, or a marker saying it was not there. */
+function digest(file: string): string {
+  try {
+    return createHash('sha256').update(readFileSync(file)).digest('hex')
+  } catch {
+    return 'absent'
+  }
+}
+
+/**
+ * Claude Code's startup gates, answered so that the MCP server is **enabled**.
+ *
+ * `profilescheck`'s version answers the MCP gate with Escape, which dismisses
+ * it - right for a driver that does not want the user's servers and exactly
+ * wrong here, where the server under test is the one being offered. Written out
+ * rather than parameterised because the two answers mean opposite things and a
+ * flag would make it possible to get this backwards without noticing.
+ */
+function answerGatesApprovingMcp(
+  ctx: CheckContext,
+  collector: Collector,
+  id: number
+): () => void {
+  const answered = new Map<string, number>()
+  const gates: Array<[string, RegExp]> = [
+    ['trust', /doyoutrust|trustthisfolder|quicksafetycheck/g],
+    ['mcp', /mcpserver/g],
+    ['consent', /doyouwanttoproceed/g]
+  ]
+  const count = (text: string, re: RegExp): number => (text.match(re) ?? []).length
+  for (const [kind, re] of gates) answered.set(kind, count(squash(collector.output(id)), re))
+
+  const timer = setInterval(() => {
+    const text = squash(collector.output(id))
+    for (const [kind, re] of gates) {
+      const seen = count(text, re)
+      if (seen > (answered.get(kind) ?? 0)) {
+        answered.set(kind, seen)
+        // Enter every time, including the MCP gate: the caret sits on the
+        // agreeing option, and this driver wants the server it just registered.
+        ctx.sessions.input(id, '\r')
+      }
+    }
+  }, 400)
+  return () => clearInterval(timer)
+}
+
+async function liveGroup(
+  ctx: CheckContext,
+  collector: Collector,
+  origin: string,
+  options: BrowserCheckOptions
+): Promise<Check[]> {
+  const checks: Check[] = []
+  await clearViews(ctx)
+
+  const claudeJson = join(homedir(), '.claude.json')
+  const cwd = join(options.dataDir, 'browser-live-fixture')
+  mkdirSync(cwd, { recursive: true })
+  const projectMcpJson = join(cwd, '.mcp.json')
+  // A `.mcp.json` that is *there*, so "byte-identical" is a claim about a file
+  // rather than about two absences.
+  writeFileSync(projectMcpJson, `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`)
+
+  const before = { claudeJson: digest(claudeJson), projectMcpJson: digest(projectMcpJson) }
+  const configsBefore = readdirSync(mcpConfigDir).filter((name) => name.endsWith('.json'))
+
+  const session = await ctx.sessions
+    .start({ cwd, name: 'browser tools live', cols: 100, rows: 30, projectPath: cwd })
+    .catch((err: unknown) => {
+      return { error: err instanceof Error ? err.message : String(err) } as const
+    })
+
+  if ('error' in session) {
+    return [
+      {
+        id: 'BR-36',
+        criterion: 'A real session is launched with --mcp-config and drives the browser',
+        title: 'No session could be started, so nothing below could be measured',
+        ok: false,
+        detail: { problem: session.error },
+        notes: []
+      }
+    ]
+  }
+
+  const argv = session.argv
+  const at = argv.indexOf('--mcp-config')
+  const configFile = at === -1 ? null : (argv[at + 1] ?? null)
+  const configExists = configFile !== null && existsSync(configFile)
+  const configBody =
+    configFile !== null && configExists
+      ? (JSON.parse(readFileSync(configFile, 'utf8')) as {
+          mcpServers?: Record<string, { type?: string; url?: string; headers?: Record<string, string> }>
+        })
+      : null
+  const served = configBody?.mcpServers?.[MCP_SERVER_NAME] ?? null
+
+  // What the *user's* files look like now that a launch has been composed.
+  const afterCompose = { claudeJson: digest(claudeJson), projectMcpJson: digest(projectMcpJson) }
+
+  const stop = answerGatesApprovingMcp(ctx, collector, session.id)
+  const ready = await waitFor(
+    () => atPrompt(stripAnsi(collector.output(session.id))),
+    150_000
+  )
+  await sleep(2500)
+
+  let answer = { ok: false, answer: 'never reached a prompt' }
+  if (ready) {
+    const prompt =
+      `Use the ${MCP_SERVER_NAME} MCP tools and nothing else. ` +
+      `Call browser_open with the url ${origin}/planted. ` +
+      `Then call browser_snapshot, find the button whose label is ${PLANT_LABEL}, ` +
+      `and call browser_click with that button's ref. ` +
+      `Then reply with exactly DONE=<the document title after the click>, which you can read with browser_evaluate.`
+    ctx.sessions.input(session.id, prompt)
+    await sleep(700)
+    ctx.sessions.input(session.id, '\r')
+    const found = await waitFor(
+      () => squash(collector.output(session.id)).includes(squash(`DONE=${PLANT_TITLE}`)),
+      420_000
+    )
+    answer = {
+      ok: found,
+      answer: stripAnsi(collector.output(session.id)).replace(/\s+/g, ' ').trim().slice(-1200)
+    }
+  }
+  stop()
+
+  /*
+   * The driver's own confirmation, and it is what the verdict rests on.
+   *
+   * A session that says it clicked the button is a session making a claim. So
+   * the tab is found through the browser host, the page is read for the token
+   * the click writes, and the title is compared against the fixture's - none of
+   * which goes anywhere near what the session printed.
+   */
+  const sessionTab =
+    ctx.browsers.states().find((state) => state.openedBy === session.name)?.id ?? null
+  const pageResult =
+    sessionTab === null
+      ? { ok: false, value: '', error: 'no tab' }
+      : await ctx.browsers.evaluate(sessionTab, 'document.getElementById("result").textContent')
+  const pageTitle =
+    sessionTab === null
+      ? { ok: false, value: '', error: 'no tab' }
+      : await ctx.browsers.evaluate(sessionTab, 'document.title')
+  const ownFetch = await fetchTitle(`${origin}/planted`)
+
+  await screenshot(ctx.win, options.shotDir, 'browser-live.png')
+
+  checks.push({
+    id: 'BR-36',
+    criterion:
+      'A session launched through the real app opens the fixture, clicks a planted element, and reports what changed',
+    title:
+      'A real claude drives Helm’s browser through the endpoint, and the driver confirms the tab, the click and the title against its own reads',
+    ok:
+      ready &&
+      answer.ok &&
+      sessionTab !== null &&
+      pageResult.value === PLANT_CLICKED &&
+      pageTitle.value === PLANT_TITLE &&
+      ownFetch === 'Helm fixture planted',
+    detail: {
+      sessionName: session.name,
+      reachedPrompt: ready,
+      sessionSaid: answer.answer,
+      tabTheDriverFound: sessionTab,
+      openedBy: sessionTab === null ? null : ctx.browsers.states(sessionTab)[0]?.openedBy,
+      pageResultParagraph: pageResult.value,
+      pageTitle: pageTitle.value,
+      titleBeforeAnyClick: ownFetch
+    },
+    notes: [
+      'A prediction about a session is only worth what a session says about it, and',
+      'what a session says is only worth what the world says back: the answer has to',
+      'contain the title, **and** the driver has to find the tab, the clicked',
+      'paragraph and the title for itself.',
+      'The fixture’s title before any click is fetched over HTTP by this driver, which',
+      'is what stops "the title is the clicked one" being true of the page as served.',
+      'One session, on haiku. This is the only thing in browser-check that costs',
+      'anything.'
+    ]
+  })
+
+  // --- argv hygiene ----------------------------------------------------------
+  await ctx.sessions.close({ id: session.id, force: true })
+  await waitFor(() => ctx.sessions.list().every((row) => row.id !== session.id), 30_000)
+  await sleep(2000)
+
+  const afterTeardown = { claudeJson: digest(claudeJson), projectMcpJson: digest(projectMcpJson) }
+  const configGone = configFile === null || !existsSync(configFile)
+  const configsAfter = readdirSync(mcpConfigDir).filter((name) => name.endsWith('.json'))
+  const claudeJsonText = (() => {
+    try {
+      return readFileSync(claudeJson, 'utf8')
+    } catch {
+      return ''
+    }
+  })()
+
+  checks.push({
+    id: 'BR-37',
+    criterion:
+      'The argv carries --mcp-config into Helm’s data directory; the user’s config files are untouched and the ephemeral file is cleaned',
+    title:
+      'The session row’s argv points at a token file under Helm’s data directory, the file is gone after teardown, and the user’s .claude.json and .mcp.json are byte-identical across the composition',
+    ok:
+      configFile !== null &&
+      configFile.toLowerCase().startsWith(mcpConfigDir.toLowerCase()) &&
+      configExists &&
+      served?.type === 'http' &&
+      served.url?.startsWith('http://127.0.0.1:') === true &&
+      (served.headers?.['Authorization'] ?? '').startsWith('Bearer ') &&
+      // The composition wrote nothing of the user's.
+      afterCompose.claudeJson === before.claudeJson &&
+      afterCompose.projectMcpJson === before.projectMcpJson &&
+      // And nothing put a Helm server into the user's own config, which is what
+      // `claude mcp add-json -s local` would have done on every launch.
+      !claudeJsonText.includes(MCP_SERVER_NAME) &&
+      afterTeardown.projectMcpJson === before.projectMcpJson &&
+      configGone &&
+      configsAfter.length <= configsBefore.length,
+    detail: {
+      argv,
+      mcpConfigFile: configFile,
+      underHelmsDataDirectory: mcpConfigDir,
+      whatItContained: served === null ? null : { ...served, headers: { Authorization: 'Bearer <redacted>' } },
+      userFiles: {
+        claudeJson: {
+          before: before.claudeJson,
+          afterComposingTheLaunch: afterCompose.claudeJson,
+          afterTheSessionEnded: afterTeardown.claudeJson,
+          mentionsHelmsServer: claudeJsonText.includes(MCP_SERVER_NAME)
+        },
+        projectMcpJson: {
+          before: before.projectMcpJson,
+          afterComposingTheLaunch: afterCompose.projectMcpJson,
+          afterTheSessionEnded: afterTeardown.projectMcpJson
+        }
+      },
+      ephemeralFiles: { before: configsBefore.length, after: configsAfter.length, goneAfterTeardown: configGone }
+    },
+    notes: [
+      'The token is redacted in the detail. A report is a file somebody pastes into a',
+      'message, and the token is the whole of the endpoint’s authentication - even a',
+      'dead one is not a thing to write into an artefact.',
+      '`~/.claude.json` is compared **across the composition** rather than across the',
+      'whole session, and the difference is honest: Claude Code writes to its own',
+      'config while it runs - startup counts, project history - and that is Claude',
+      'Code’s business. What this asserts about the running session instead is the',
+      'thing Helm could have got wrong: that no server of Helm’s ever appears in it,',
+      'which is exactly what `claude mcp add-json -s local` would have left behind on',
+      'every single launch.',
+      'The project’s `.mcp.json` is compared across the whole thing, byte for byte,',
+      'because nothing writes to that one.',
+      'The ephemeral file existing **first** is half the claim: "it is not there" is',
+      'also what a launch that never wrote one would report.'
+    ]
+  })
+
+  return checks
 }
 
 // ---------------------------------------------------------------------------

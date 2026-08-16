@@ -1167,12 +1167,25 @@ export function App(): JSX.Element {
       // three tabs on one dev server apart while every one of them is called
       // "Vite + React". An empty page is "New tab" rather than blank: a tab
       // with no label is a tab you cannot aim at.
+      //
+      // And, where a session opened it, that session's name beside the host.
+      // A tab that appeared because Claude opened it and one the user opened
+      // are otherwise identical in the strip, and the first is the one somebody
+      // will want to know the provenance of.
+      const subtitle =
+        view.openedBy === null
+          ? view.host
+          : view.host === ''
+            ? view.openedBy
+            : `${view.host} · ${view.openedBy}`
       return [
         {
           id: tabId(ref),
           title: view.title === '' ? 'New tab' : truncate(view.title, 34),
-          ...(view.host === '' ? {} : { subtitle: view.host, subtitleMono: true }),
-          hint: view.url === '' ? 'A browser tab with no address yet' : view.url,
+          ...(subtitle === '' ? {} : { subtitle: truncate(subtitle, 40), subtitleMono: true }),
+          hint:
+            (view.url === '' ? 'A browser tab with no address yet' : view.url) +
+            (view.openedBy === null ? '' : `\nOpened by the session “${view.openedBy}”`),
           icon: <GlobeIcon width={13} height={13} />
         }
       ]
@@ -2155,6 +2168,14 @@ export function App(): JSX.Element {
               onRevealTemplates={() => launcher.reveal(templates.templatesDir)}
               browserReach={settings?.browserReach ?? DEFAULT_SETTINGS.browserReach}
               onBrowserReachChange={(browserReach) => writeSettings({ browserReach })}
+              browserMcp={settings?.browserMcp ?? DEFAULT_SETTINGS.browserMcp}
+              onBrowserMcpChange={(browserMcp) => writeSettings({ browserMcp })}
+              browserMcpLocalOnly={
+                settings?.browserMcpLocalOnly ?? DEFAULT_SETTINGS.browserMcpLocalOnly
+              }
+              onBrowserMcpLocalOnlyChange={(browserMcpLocalOnly) =>
+                writeSettings({ browserMcpLocalOnly })
+              }
               contentWrap={settings?.contentWrap ?? DEFAULT_SETTINGS.contentWrap}
               onContentWrapChange={(contentWrap) => writeSettings({ contentWrap })}
               contentWrapIndent={

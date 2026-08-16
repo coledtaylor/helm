@@ -185,6 +185,15 @@ export interface SettingsPaneProps {
    */
   browserReach: BrowserReach
   onBrowserReachChange: (reach: BrowserReach) => void
+  /**
+   * The two M17 keys: whether Helm serves its browser tools to the sessions it
+   * hosts, and whether those tools are held to this machine when the pane is
+   * not. Both are preferences rather than state, so both are here.
+   */
+  browserMcp: boolean
+  onBrowserMcpChange: (next: boolean) => void
+  browserMcpLocalOnly: boolean
+  onBrowserMcpLocalOnlyChange: (next: boolean) => void
 
   /**
    * What Helm found out about `gh`, out of the pull-request snapshot. Null
@@ -378,6 +387,10 @@ export function SettingsPane({
   onContentWrapIndentChange,
   browserReach,
   onBrowserReachChange,
+  browserMcp,
+  onBrowserMcpChange,
+  browserMcpLocalOnly,
+  onBrowserMcpLocalOnlyChange,
   gh,
   onLocateGh,
   onClearGhOverride,
@@ -663,7 +676,14 @@ export function SettingsPane({
           onIndentChange={onContentWrapIndentChange}
         />
 
-        <BrowserGroup reach={browserReach} onReachChange={onBrowserReachChange} />
+        <BrowserGroup
+          reach={browserReach}
+          onReachChange={onBrowserReachChange}
+          mcp={browserMcp}
+          onMcpChange={onBrowserMcpChange}
+          mcpLocalOnly={browserMcpLocalOnly}
+          onMcpLocalOnlyChange={onBrowserMcpLocalOnlyChange}
+        />
 
         <UpdatesGroup
           appVersion={appVersion}
@@ -1045,21 +1065,35 @@ function ContentGroup({
 }
 
 /**
- * The browser pane's posture.
+ * The browser pane's posture, and what a Claude session may do with it.
  *
- * One row, because there is one decision: where the pane may go at all.
- * Everything else about the pane - downloads denied, every permission denied,
- * self-signed certificates accepted for loopback and nowhere else, an address
- * bar that never searches - is not a setting and never will be. Those are the
- * app's postures, and a posture with a switch on it is a posture somebody turns
- * off on the afternoon it gets in their way.
+ * Three rows, because there are three decisions: where the pane may go at all,
+ * whether the sessions Helm hosts can drive it, and whether they are held to
+ * this machine when the pane is not. Everything else about the pane - downloads
+ * denied, every permission denied, self-signed certificates accepted for
+ * loopback and nowhere else, an address bar that never searches - is not a
+ * setting and never will be. Those are the app's postures, and a posture with a
+ * switch on it is a posture somebody turns off on the afternoon it gets in
+ * their way.
+ *
+ * The two reach rows are deliberately adjacent and worded as a pair, because
+ * the rule between them is an intersection and the failure to avoid is somebody
+ * setting the second and believing it widened the first.
  */
 function BrowserGroup({
   reach,
-  onReachChange
+  onReachChange,
+  mcp,
+  onMcpChange,
+  mcpLocalOnly,
+  onMcpLocalOnlyChange
 }: {
   reach: BrowserReach
   onReachChange: (reach: BrowserReach) => void
+  mcp: boolean
+  onMcpChange: (next: boolean) => void
+  mcpLocalOnly: boolean
+  onMcpLocalOnlyChange: (next: boolean) => void
 }): JSX.Element {
   return (
     <Group
@@ -1084,6 +1118,45 @@ function BrowserGroup({
           <option value="web">Anywhere I navigate to</option>
           <option value="local">This machine only</option>
         </Select>
+      </Row>
+
+      <Row
+        label="Let Claude drive the browser"
+        hint={
+          mcp
+            ? 'Sessions Helm hosts can open pages, read them, click and type. Helm serves the tools on a loopback port with a token unique to each session, and its tabs are labelled with the session that opened them.'
+            : 'Off. Helm opens no port at all and sessions are started without the tools, exactly as they were before.'
+        }
+      >
+        <span data-settings-browser-mcp={String(mcp)}>
+          <Checkbox
+            checked={mcp}
+            onChange={() => onMcpChange(!mcp)}
+            label="Let Claude drive the browser"
+          />
+        </span>
+      </Row>
+
+      <Row
+        label="…but only on this machine"
+        hint={
+          mcpLocalOnly
+            ? 'Claude’s tools are held to localhost even where the pane may go further. You can still navigate the pane anywhere yourself.'
+            : 'Claude’s tools reach as far as the pane does, and never further - the narrower of these two settings always wins.'
+        }
+      >
+        {/* Not disabled when the tools are off, deliberately. The value is a
+            standing preference: somebody who has confined the tools and then
+            turns them off for an afternoon should find them still confined when
+            they turn them back on, and a control that greys out is a control
+            whose state people stop trusting. */}
+        <span data-settings-browser-mcp-local={String(mcpLocalOnly)}>
+          <Checkbox
+            checked={mcpLocalOnly}
+            onChange={() => onMcpLocalOnlyChange(!mcpLocalOnly)}
+            label="Confine Claude’s browser tools to this machine"
+          />
+        </span>
       </Row>
     </Group>
   )

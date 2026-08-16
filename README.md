@@ -183,6 +183,17 @@ the page you navigate to.** There is no telemetry, no crash reporting, no
 fonts and no CDN, and with the tick off Helm asks nothing at all unless you
 press something.
 
+Helm does **listen** in one place, and it is worth saying out loud because it is
+the only one. A Claude session Helm hosts can drive the browser pane - open a
+page, read it, screenshot it, click and type - and it reaches those tools
+through a small server bound to `127.0.0.1`, on a port picked fresh for each run
+of the app. Nothing outside this machine can reach it, every request needs a
+token Helm mints for one session and destroys when that session ends, and
+Settings → Browser turns the whole thing off, in which case no port is opened at
+all. The same settings decide how far it may go: the tools can never reach
+further than the pane itself may, and can be held to this machine while the pane
+is not.
+
 The pull-request pane reaches GitHub too, but through **your own `gh` CLI**, on
 a schedule you set - every five minutes by default, and `0` in Settings turns it
 off entirely. Helm opens no socket of its own for it and stores no GitHub

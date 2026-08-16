@@ -153,6 +153,8 @@ describe('settings', () => {
       updateCheck: false,
       lastUpdateCheckAt: '2026-08-11T20:04:06.641Z',
       browserReach: 'local',
+      browserMcp: false,
+      browserMcpLocalOnly: true,
       browserRecentUrls: ['http://localhost:3000/', 'https://example.com/docs'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' }
     } satisfies AppSettings
@@ -501,6 +503,20 @@ describe('settings validation', () => {
       bad: ['none', 'Web', 'loopback', '', null, true, ['web']]
     },
     {
+      // `'false'` is the interesting rejection for both, and it is the same one
+      // `updateCheck` has: a row hand-edited into that string would switch the
+      // endpoint **on** while the pane read it as off, since every non-empty
+      // string is truthy.
+      key: 'browserMcp',
+      good: [true, false],
+      bad: ['false', 'true', 0, 1, null, [], {}]
+    },
+    {
+      key: 'browserMcpLocalOnly',
+      good: [true, false],
+      bad: ['false', 'true', 0, 1, null, [], {}]
+    },
+    {
       // The interesting rejections are the ones that would put a row in the
       // dropdown that does nothing when clicked: a bare word, a relative path,
       // and `file:` - which the pane refuses to navigate to, so it must not be
@@ -639,6 +655,8 @@ describe('settings validation', () => {
       updateCheck: true,
       lastUpdateCheckAt: null,
       browserReach: 'local',
+      browserMcp: false,
+      browserMcpLocalOnly: true,
       browserRecentUrls: ['http://localhost:3000/'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' }
     })
@@ -680,6 +698,8 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   updateCheck: true,
   lastUpdateCheckAt: null,
   browserReach: 'local',
+  browserMcp: false,
+  browserMcpLocalOnly: true,
   browserRecentUrls: ['http://localhost:3000/'],
   browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' }
 })
