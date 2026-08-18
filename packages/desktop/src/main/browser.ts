@@ -1,4 +1,13 @@
-import { app, session, shell, WebContentsView, type BrowserWindow, type Session } from 'electron'
+import {
+  app,
+  session,
+  shell,
+  WebContentsView,
+  type BrowserWindow,
+  type Session,
+  type WebContents,
+  type WindowOpenHandlerResponse
+} from 'electron'
 import {
   agentReach,
   BROWSER_PROJECT_URLS_MAX,
@@ -175,6 +184,24 @@ const AGENT_PEEK = 2
  * anyway, with whatever it has painted. */
 const AGENT_PRIME_MAX_MS = 15_000
 
+/**
+ * How many popup windows a browser view may have open at once.
+ *
+ * Small on purpose. A sign-in needs one, and a provider that hands off to
+ * another provider needs two; past that the number stops describing an auth
+ * flow and starts describing a page opening windows at somebody. The pane is
+ * where the refusal is said, so a flow that genuinely needed a fifth window
+ * fails with a sentence rather than silently.
+ */
+export const BROWSER_POPUPS_MAX = 4
+
+/** The size a popup gets when the page named none. A sign-in dialog's shape. */
+const POPUP_DEFAULT = { width: 520, height: 640 }
+/** And the range one is clamped into, so `window.open` cannot size a window
+ * off the screen or down to a slit. */
+const POPUP_MIN = { width: 320, height: 320 }
+const POPUP_MAX = { width: 1400, height: 1100 }
+
 /** How long a refused connection is retried before the pane gives up. */
 const RETRY_FOR_MS = 30_000
 /** The backoff between retries, in milliseconds, then every 4s. */
@@ -197,6 +224,16 @@ const ERR_ABORTED = -3
 interface View {
   id: number
   view: WebContentsView
+  /**
+   * The `webContents.id` this view was constructed with, kept rather than read.
+   *
+   * It is the key into the navigation-guard registry, and the moment it is
+   * needed most - retiring a view - is the moment it can no longer be asked
+   * for: a page that closed itself leaves `view.webContents` undefined, so a
+   * `destroy` that read the id off the object would throw on its way to
+   * removing the exemption and leave the id in the registry for ever.
+   */
+  webContentsId: number
   project: string | null
   console: BrowserConsoleEntry[]
   /** What the pane should say is wrong, or null. */
@@ -381,14 +418,38 @@ export function browserWillNavigate(webContentsId: number, url: string): boolean
 /**
  * The app-global window-open guard's one question.
  *
- * The Chromium window is denied either way - the guard still returns
- * `{ action: 'deny' }` for everything, which is what "never by loosening the
- * guard" means. What this adds is that for a browser view the URL becomes a new
- * Helm browser tab instead of nothing, capped at `BROWSER_TABS_MAX`.
+ * **Deny is still the answer for everything that is not a browser view**, and
+ * that half has not moved: the window, the spike page, an artifact frame and
+ * every future web-contents Electron makes are refused here without consulting
+ * anything.
+ *
+ * What a browser view gets is one of two answers, chosen by what the page
+ * actually asked for:
+ *
+ *   - a **tab**, for `target="_blank"` and a middle click - the dispositions
+ *     Chromium calls `foreground-tab` and `background-tab`. That is what those
+ *     mean in every browser, and a Helm tab is a better one than a bare window;
+ *   - a **window**, for `window.open` with features - disposition `new-window`
+ *     - because that is the only shape in which a popup sign-in can work.
+ *
+ * The second is a deliberate amendment to "no Chromium window is ever created",
+ * and `BR-40` is what holds it to its terms. The whole of a popup OAuth flow is
+ * two things a tab cannot have: `window.open` must return a live handle, and
+ * the opened page must reach the opener through `window.opener.postMessage` to
+ * hand back the code. Re-routed into a tab, the page gets `null` and reports a
+ * blocked popup, and the tab that opens has no opener to answer - measured, and
+ * the reason this changed. Nothing else about the posture moves: the popup is
+ * on the same partition with the same denied permissions, refused downloads and
+ * loopback-only certificate rule, it is exempted through the same registry by
+ * id, and every navigation it makes goes through `browserReachAllows` exactly
+ * as the pane's do.
  */
-export function browserWindowOpen(webContentsId: number, url: string): void {
-  if (!exempt.has(webContentsId)) return
-  hostForContents(webContentsId)?.spawnFrom(webContentsId, url)
+export function browserWindowOpen(
+  webContentsId: number,
+  details: { url: string; disposition: string; features: string }
+): WindowOpenHandlerResponse {
+  if (!exempt.has(webContentsId)) return { action: 'deny' }
+  return hostForContents(webContentsId)?.windowOpen(webContentsId, details) ?? { action: 'deny' }
 }
 
 /**
@@ -407,7 +468,10 @@ function hostForContents(id: number): InternalHost | null {
 interface InternalHost {
   owns(webContentsId: number): boolean
   allowNavigation(webContentsId: number, url: string): boolean
-  spawnFrom(webContentsId: number, url: string): void
+  windowOpen(
+    webContentsId: number,
+    details: { url: string; disposition: string; features: string }
+  ): WindowOpenHandlerResponse
   /** A download this partition refused, so every open pane can say so. */
   noteDownload(url: string): void
 }
@@ -503,6 +567,65 @@ function isLoopbackHostname(hostname: string): boolean {
   return isLoopbackUrl(`https://${hostname.includes(':') ? `[${hostname}]` : hostname}/`)
 }
 
+/** A number held inside a range. */
+function clamp(value: number, low: number, high: number): number {
+  return Math.min(high, Math.max(low, value))
+}
+
+/**
+ * The width and height out of a `window.open` feature string.
+ *
+ * Only those two, and only when they parse as positive numbers. Everything else
+ * a page can ask for in that string - `location`, `menubar`, `toolbar`,
+ * `alwaysRaised` - is either not Helm's to give or is a thing a page should not
+ * be choosing about a window on somebody's screen, so the answer is the one in
+ * `windowOpen` rather than whatever the page wrote.
+ */
+function parseWindowFeatures(features: string): { width?: number; height?: number } {
+  const asked: { width?: number; height?: number } = {}
+  for (const part of features.split(',')) {
+    const [rawName, rawValue] = part.split('=')
+    if (rawValue === undefined) continue
+    const name = rawName?.trim().toLowerCase()
+    const value = Number.parseInt(rawValue.trim(), 10)
+    if (!Number.isFinite(value) || value <= 0) continue
+    if (name === 'width' || name === 'innerwidth') asked.width = value
+    if (name === 'height' || name === 'innerheight') asked.height = value
+  }
+  return asked
+}
+
+/**
+ * A view's web contents, or null when there are none.
+ *
+ * **The one way this file is allowed to reach them**, and the reason is a fault
+ * that took the whole pane down. A page may close itself - `window.close()` is
+ * the last thing every OAuth popup does - and Chromium destroys those web
+ * contents without asking anybody. Electron then leaves
+ * `WebContentsView.webContents` **undefined**: not a destroyed object still
+ * answering `isDestroyed()`, which is what forty call sites here assumed, but
+ * nothing at all. So `entry.view.webContents.isDestroyed()` threw a
+ * `TypeError`, and it threw from wherever the next call happened to come in:
+ *
+ *   - through an invoke - `browser:state`, `navigate`, `open` - it rejected,
+ *     and every call site in `useBrowsers.ts` ends in `.catch(() => undefined)`,
+ *     so the pane went blank and said nothing;
+ *   - through the `browser:bounds` **send**, which has no reply to reject, it
+ *     was an uncaught exception in the main process - and Electron answers one
+ *     of those with its own error dialog. The pane re-reports its rectangle on
+ *     every `ResizeObserver` tick, so the dialog came back as fast as it was
+ *     dismissed.
+ *
+ * A `destroyed` listener now retires the view (see `create`), so an entry in
+ * this shape is a race rather than a resting state - but the accessor is what
+ * makes the race harmless instead of fatal, and it is cheaper than proving no
+ * path can observe the gap.
+ */
+function contentsOf(entry: View): WebContents | null {
+  const wc = entry.view.webContents as WebContents | undefined
+  return wc === undefined || wc.isDestroyed() ? null : wc
+}
+
 // ---------------------------------------------------------------------------
 // The host
 // ---------------------------------------------------------------------------
@@ -516,9 +639,24 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
 
   const viewFor = (id: number): View | null => views.get(id) ?? null
 
+  /**
+   * A view **and** the web contents behind it, or null if either is missing.
+   *
+   * Every operation that actually touches a page goes through this rather than
+   * through `viewFor`, so "there is no tab with that id" and "that tab's page
+   * closed itself" reach the same answer at the same place - see `contentsOf`
+   * for what the second one used to do instead.
+   */
+  const liveFor = (id: number): { entry: View; wc: WebContents } | null => {
+    const entry = viewFor(id)
+    if (entry === null) return null
+    const wc = contentsOf(entry)
+    return wc === null ? null : { entry, wc }
+  }
+
   const state = (entry: View): BrowserState => {
-    const wc = entry.view.webContents
-    const alive = !wc.isDestroyed()
+    const wc = contentsOf(entry)
+    const alive = wc !== null
     const url = alive ? wc.getURL() : ''
     const host = hostOf(url)
     const errors = entry.console.filter(
@@ -622,8 +760,9 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     const step = entry.retry?.step ?? 0
     const wait = RETRY_STEPS_MS[Math.min(step, RETRY_STEPS_MS.length - 1)] ?? 4000
     const timer = setTimeout(() => {
-      if (entry.view.webContents.isDestroyed()) return
-      void entry.view.webContents.loadURL(url).catch(() => undefined)
+      contentsOf(entry)
+        ?.loadURL(url)
+        .catch(() => undefined)
     }, wait)
     entry.retry = { url, until, step: step + 1, timer }
     entry.problem = `Waiting for ${url} to answer…`
@@ -647,9 +786,20 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       log(entry, { level: 'error', message: decision.problem ?? 'refused', source: url, line: 0 })
       return announce(entry)
     }
+    const wc = contentsOf(entry)
+    if (wc === null) {
+      // A tab whose page closed itself, asked to go somewhere. Nothing can be
+      // loaded into web contents that are gone, and the tab is on its way out
+      // anyway - what it may not do is fail silently, which is what the
+      // swallowed `TypeError` here used to do.
+      stopRetry(entry)
+      entry.problem = 'That page closed itself, so this tab has nothing left to load into.'
+      log(entry, { level: 'error', message: entry.problem, source: url, line: 0 })
+      return announce(entry)
+    }
     stopRetry(entry)
     entry.problem = null
-    void entry.view.webContents.loadURL(url).catch(() => undefined)
+    void wc.loadURL(url).catch(() => undefined)
     return announce(entry)
   }
 
@@ -660,10 +810,49 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     entry.attached = true
   }
 
+  /**
+   * The popup windows browser views have open, keyed by their `webContents.id`.
+   *
+   * A popup is not a tab and deliberately has no entry in `views`: it has no
+   * pane, no address bar, no console and no place in the strip. What it does
+   * have is the thing that made it necessary - a live `window.opener` back to
+   * the page that opened it - and everything Helm asks of a browser view:
+   * an entry in the `exempt` registry so the app-global guard knows it, and a
+   * `will-navigate` that goes through `browserReachAllows` with its owner's
+   * restrictions.
+   *
+   * Keyed by web-contents id because that is what both guards are asked about.
+   */
+  const popups = new Map<number, { window: BrowserWindow; ownerViewId: number }>()
+
+  /** Popups a given view is holding. The cap counts these. */
+  const popupsOf = (viewId: number): number =>
+    [...popups.values()].filter((popup) => popup.ownerViewId === viewId).length
+
+  /**
+   * The view a web-contents id belongs to: the view itself, or - for a popup
+   * that opens another popup, which chained sign-ins do - the view that owns
+   * the popup. One answer, so a popup is held to its owner's reach however
+   * deep the chain goes.
+   */
+  const openerFor = (webContentsId: number): View | null => {
+    for (const entry of views.values()) {
+      if (entry.webContentsId === webContentsId && contentsOf(entry) !== null) return entry
+    }
+    const popup = popups.get(webContentsId)
+    if (popup === undefined) return null
+    return views.get(popup.ownerViewId) ?? null
+  }
+
   const destroy = (entry: View, tellTheWindow: boolean): void => {
+    // Idempotent, because it now has three callers that can race: the pane's
+    // close button, a render process that died, and a page that closed itself.
+    // Telling the window twice would be a second `browser:closed` for a tab
+    // that is already gone.
+    if (!views.has(entry.id)) return
     stopRetry(entry)
     views.delete(entry.id)
-    exempt.delete(entry.view.webContents.id)
+    exempt.delete(entry.webContentsId)
     const win = options.window()
     if (entry.attached && win !== null && !win.isDestroyed()) {
       try {
@@ -673,8 +862,8 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       }
     }
     entry.attached = false
-    const wc = entry.view.webContents
-    if (!wc.isDestroyed()) {
+    const wc = contentsOf(entry)
+    if (wc !== null) {
       if (wc.isDevToolsOpened()) wc.closeDevTools()
       wc.close()
     }
@@ -712,6 +901,7 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     const entry: View = {
       id: nextId++,
       view,
+      webContentsId: view.webContents.id,
       project,
       console: [],
       problem: null,
@@ -845,8 +1035,112 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       destroy(entry, true)
     })
 
+    /*
+     * And a page that closed **itself**.
+     *
+     * `window.close()` is not an edge case: it is the last thing every OAuth
+     * popup does, and a page Helm turned into a tab can do it as freely as one
+     * in a window. Chromium destroys the web contents and Electron leaves
+     * `view.webContents` undefined - so without this listener the entry stayed
+     * in `views` with nothing behind it, and the next thing to touch it threw.
+     * Through `browser:bounds`, which is a send and therefore has nothing to
+     * reject, that throw was an uncaught main-process exception and Electron's
+     * own error dialog; through every invoke it was a rejection the renderer
+     * swallowed, leaving a blank pane that refused every address without ever
+     * saying why.
+     *
+     * `destroyed` rather than `closed`: `closed` is the page's *request*, and
+     * this has to be the fact. The tab goes, exactly as it does for a render
+     * process that died, and for the same reason - there is no page left.
+     */
+    wc.once('destroyed', () => {
+      destroy(entry, true)
+    })
+
+    /*
+     * A popup this page opened, once Electron has actually made it.
+     *
+     * The window-open handler decided *whether* - it is the only thing that can,
+     * since it is the one Electron asks - but it never sees the window, so
+     * everything that has to be true of a popup is arranged here: the id goes
+     * into the `exempt` registry so the app-global `will-navigate` guard can
+     * find it, the popup goes into `popups` so that guard is answered with the
+     * **owner's** reach, and both are given up the moment the window closes.
+     *
+     * Registering here rather than in the handler is safe for the one
+     * navigation that happens in between: a `window.open`'s initial URL is
+     * browser-initiated, so Chromium does not emit `will-navigate` for it, and
+     * it has already been through `browserReachAllows` in the handler. Every
+     * redirect after it - which is all of an OAuth flow - arrives here first.
+     */
+    wc.on('did-create-window', (child, details) => {
+      registerPopup(entry, child, details.url)
+    })
+
     attach(entry)
     return entry
+  }
+
+  /**
+   * Everything a popup window is held to, applied to the window Electron made.
+   *
+   * The partition carries most of it already - permissions denied, downloads
+   * refused and handed to the system browser, self-signed certificates accepted
+   * for loopback and nowhere else - because those are session handlers and a
+   * popup is on the same session. What is left is per-window.
+   */
+  const registerPopup = (owner: View, child: BrowserWindow, url: string): void => {
+    const cwc = child.webContents
+    exempt.add(cwc.id)
+    popups.set(cwc.id, { window: child, ownerViewId: owner.id })
+
+    child.setMenu(null)
+
+    /*
+     * The address, in the title bar, always.
+     *
+     * A popup has no address bar - that is what makes it a popup - and a window
+     * asking for a password with nothing on it saying where it came from is the
+     * shape of every credential phish there has ever been. Helm cannot give it
+     * an address bar without making it a tab, so it puts the host where the
+     * window does have room. `preventDefault` because the page sets this title
+     * on every navigation and would otherwise take the host straight back off.
+     */
+    const retitle = (): void => {
+      if (child.isDestroyed() || cwc.isDestroyed()) return
+      const host = hostOf(cwc.getURL())
+      const title = cwc.getTitle()
+      child.setTitle(host === '' ? title : title === '' ? host : `${host} - ${title}`)
+    }
+    cwc.on('page-title-updated', (event) => {
+      event.preventDefault()
+      retitle()
+    })
+    cwc.on('did-navigate', retitle)
+    retitle()
+
+    /*
+     * What the pane says about it.
+     *
+     * A popup is a window the user did not open by hand, so the tab it came
+     * from names it - and names it again when it goes, because "the sign-in
+     * window closed" is the event the page is waiting for and the one worth
+     * seeing in the console when it does not work.
+     */
+    // The URL from the open itself, not from the web contents: at
+    // `did-create-window` the child has not navigated yet and `getURL()` is
+    // empty, which made this line read "opened a popup window for ".
+    log(owner, {
+      level: 'info',
+      message: `opened a popup window for ${url}`,
+      source: url,
+      line: 0
+    })
+    child.on('closed', () => {
+      exempt.delete(cwc.id)
+      popups.delete(cwc.id)
+      log(owner, { level: 'info', message: 'the popup window closed', source: 'helm', line: 0 })
+    })
   }
 
   /**
@@ -894,14 +1188,15 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     const deadline = Date.now() + AGENT_PRIME_MAX_MS
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, 120))
-      if (entry.view.webContents.isDestroyed()) return
-      if (!entry.view.webContents.isLoading()) break
+      const wc = contentsOf(entry)
+      if (wc === null) return
+      if (!wc.isLoading()) break
       if (Date.now() > deadline) break
     }
     // A couple of frames past the load, so the paint the whole prime is for has
     // actually happened rather than been scheduled.
     await new Promise((resolve) => setTimeout(resolve, 120))
-    if (entry.view.webContents.isDestroyed()) return
+    if (contentsOf(entry) === null) return
     // `parked` is cleared by `bounds()`, so a user who brought this tab to the
     // front during the prime keeps it: the window's rectangle wins over this.
     if (!entry.parked) return
@@ -915,84 +1210,183 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     entry.view.setBounds({ x: 0, y: TITLEBAR_OVERLAY.dark.height, ...agentSize() })
   }
 
+  /**
+   * A page's `window.open` turned into a Helm tab.
+   *
+   * What every disposition except `new-window` gets, and what an agent's tab
+   * gets for all of them. Unchanged from when it was the only answer.
+   */
+  const spawnTab = (entry: View, url: string): void => {
+    if (views.size >= BROWSER_TABS_MAX) {
+      entry.problem = `A page tried to open another window and Helm is already holding ${String(
+        BROWSER_TABS_MAX
+      )} browser tabs. Close one, or open the address in your own browser.`
+      log(entry, {
+        level: 'warning',
+        message: `window.open(${url}) refused: ${String(BROWSER_TABS_MAX)} tabs is the cap`,
+        source: url,
+        line: 0
+      })
+      announce(entry)
+      return
+    }
+    // The new tab belongs to whoever the opening one belonged to. A page an
+    // agent opened that opens another window has produced another of the
+    // agent's tabs, and the agent is the one that can tidy it up.
+    const opened = create(entry.project, entry.openedBy)
+    if (entry.openedBy === null) {
+      load(opened, url)
+      options.onOpened(state(opened))
+    } else {
+      showAgentView(opened)
+      load(opened, url)
+      options.onOpened(state(opened))
+      void primeAgentView(opened)
+    }
+  }
+
   const host: BrowserHost & InternalHost = {
+    // A popup counts, and has to: the guard in `index.ts` asks `owns` first,
+    // and a popup this host did not claim would be answered by nothing and
+    // prevented - which is every redirect of the sign-in it was opened for.
     owns(webContentsId) {
-      for (const entry of views.values()) {
-        if (!entry.view.webContents.isDestroyed() && entry.view.webContents.id === webContentsId) {
-          return true
-        }
-      }
-      return false
+      return openerFor(webContentsId) !== null
     },
 
     allowNavigation(webContentsId, url) {
-      for (const entry of views.values()) {
-        if (entry.view.webContents.isDestroyed()) continue
-        if (entry.view.webContents.id !== webContentsId) continue
-        /*
-         * The intersection, in the second of its two places.
-         *
-         * `will-navigate` is what a *page* does - a link, a redirect, a
-         * `location.href` an agent set through `browser_evaluate`. For a tab a
-         * session opened, the agent's restriction applies to that too, or
-         * `browserMcpLocalOnly` would be a rule about the tool names rather
-         * than about where the agent's tabs may go. Both calls compose through
-         * `agentReach`, so the two cannot drift.
-         *
-         * The pane's own navigation does not come through here at all -
-         * Electron does not emit `will-navigate` for `loadURL` - which is why
-         * "the pane may still go there by hand" stays true on the same tab.
-         */
-        const restrictions =
-          entry.openedBy === null
-            ? [reach()]
-            : agentReach(reach(), settings().browserMcpLocalOnly)
-        const decision = browserReachAllows(url, ...restrictions)
-        if (decision.allowed) return true
+      const entry = openerFor(webContentsId)
+      if (entry === null) return false
+      /*
+       * The intersection, in the second of its two places.
+       *
+       * `will-navigate` is what a *page* does - a link, a redirect, a
+       * `location.href` an agent set through `browser_evaluate`. For a tab a
+       * session opened, the agent's restriction applies to that too, or
+       * `browserMcpLocalOnly` would be a rule about the tool names rather
+       * than about where the agent's tabs may go. Both calls compose through
+       * `agentReach`, so the two cannot drift.
+       *
+       * The pane's own navigation does not come through here at all -
+       * Electron does not emit `will-navigate` for `loadURL` - which is why
+       * "the pane may still go there by hand" stays true on the same tab.
+       *
+       * A popup arrives here as its **owner**, which is what `openerFor`
+       * answers, so a sign-in window is held to the reach of the tab that
+       * opened it and a refusal is said on that tab - the only surface a popup
+       * has to say anything on.
+       */
+      const restrictions =
+        entry.openedBy === null ? [reach()] : agentReach(reach(), settings().browserMcpLocalOnly)
+      const decision = browserReachAllows(url, ...restrictions)
+      if (decision.allowed) return true
+      entry.problem = decision.problem
+      log(entry, {
+        level: 'error',
+        message: decision.problem ?? 'refused',
+        source: url,
+        line: 0
+      })
+      announce(entry)
+      return false
+    },
+
+    windowOpen(webContentsId, details) {
+      const entry = openerFor(webContentsId)
+      if (entry === null) return { action: 'deny' }
+      const { url, disposition } = details
+
+      /*
+       * The reach rule, before anything is created.
+       *
+       * Same call, same composition as `load` and `allowNavigation`: a popup
+       * can never take a page somewhere the tab that opened it could not go,
+       * and an agent's tab composes `agentReach` here too.
+       */
+      const restrictions =
+        entry.openedBy === null ? [reach()] : agentReach(reach(), settings().browserMcpLocalOnly)
+      const decision = browserReachAllows(url, ...restrictions)
+      if (!decision.allowed) {
         entry.problem = decision.problem
         log(entry, {
           level: 'error',
-          message: decision.problem ?? 'refused',
+          message: `window.open(${url}) refused: ${decision.problem ?? 'out of reach'}`,
           source: url,
           line: 0
         })
         announce(entry)
-        return false
+        return { action: 'deny' }
       }
-      return false
-    },
 
-    spawnFrom(webContentsId, url) {
-      for (const entry of views.values()) {
-        if (entry.view.webContents.isDestroyed()) continue
-        if (entry.view.webContents.id !== webContentsId) continue
-        if (views.size >= BROWSER_TABS_MAX) {
-          entry.problem = `A page tried to open another window and Helm is already holding ${String(
-            BROWSER_TABS_MAX
-          )} browser tabs. Close one, or open the address in your own browser.`
-          log(entry, {
-            level: 'warning',
-            message: `window.open(${url}) refused: ${String(BROWSER_TABS_MAX)} tabs is the cap`,
-            source: url,
-            line: 0
-          })
-          announce(entry)
-          return
+      /*
+       * A window, but only for what a window means.
+       *
+       * `new-window` is the disposition Chromium reports for `window.open` with
+       * features, which is a popup and nothing else - a sign-in dialog, a
+       * picker, a payment sheet. `target="_blank"` and a middle click arrive as
+       * `foreground-tab` and `background-tab`, and those *are* tabs: turning
+       * them into windows would be worse than what Helm did before, not better.
+       *
+       * And never for a tab an agent opened. The reach rules already say an
+       * agent may not go anywhere the pane could not; this says it may not put
+       * a window on the user's screen either. An agent-opened tab that calls
+       * `window.open` gets another agent tab, exactly as it did before, which
+       * is the surface `browser_tabs` and `browser_close` already describe.
+       */
+      const wantsWindow = disposition === 'new-window' && entry.openedBy === null
+      if (!wantsWindow) {
+        spawnTab(entry, url)
+        return { action: 'deny' }
+      }
+
+      if (popupsOf(entry.id) >= BROWSER_POPUPS_MAX) {
+        entry.problem = `This page has ${String(
+          BROWSER_POPUPS_MAX
+        )} popup windows open already, which is the most Helm allows one tab. Close one, or open the address in your own browser.`
+        log(entry, {
+          level: 'warning',
+          message: `window.open(${url}) refused: ${String(BROWSER_POPUPS_MAX)} popups is the cap`,
+          source: url,
+          line: 0
+        })
+        announce(entry)
+        return { action: 'deny' }
+      }
+
+      const asked = parseWindowFeatures(details.features)
+      const win = options.window()
+      return {
+        action: 'allow',
+        // The popup goes when the page that opened it goes. A sign-in window
+        // outliving the tab it belongs to is a window nothing can close and
+        // nothing can explain.
+        outlivesOpener: false,
+        overrideBrowserWindowOptions: {
+          width: clamp(asked.width ?? POPUP_DEFAULT.width, POPUP_MIN.width, POPUP_MAX.width),
+          height: clamp(asked.height ?? POPUP_DEFAULT.height, POPUP_MIN.height, POPUP_MAX.height),
+          ...(win !== null && !win.isDestroyed() ? { parent: win } : {}),
+          autoHideMenuBar: true,
+          minimizable: false,
+          maximizable: false,
+          fullscreenable: false,
+          webPreferences: {
+            // The same list `create` states, and stated again here for the same
+            // reason it is stated there: a popup that inherited its posture
+            // from a default would be a second posture, moving when Electron
+            // moves. The session is the one thing that must match exactly - a
+            // popup on a different partition could not see the sign-in it was
+            // opened to complete.
+            session: browserSession(),
+            contextIsolation: true,
+            nodeIntegration: false,
+            nodeIntegrationInSubFrames: false,
+            sandbox: true,
+            webviewTag: false,
+            webSecurity: true,
+            allowRunningInsecureContent: false,
+            experimentalFeatures: false,
+            spellcheck: false
+          }
         }
-        // The new tab belongs to whoever the opening one belonged to. A page an
-        // agent opened that opens another window has produced another of the
-        // agent's tabs, and the agent is the one that can tidy it up.
-        const opened = create(entry.project, entry.openedBy)
-        if (entry.openedBy === null) {
-          load(opened, url)
-          options.onOpened(state(opened))
-        } else {
-          showAgentView(opened)
-          load(opened, url)
-          options.onOpened(state(opened))
-          void primeAgentView(opened)
-        }
-        return
       }
     },
 
@@ -1052,18 +1446,16 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     back(id) {
       const entry = viewFor(id)
       if (entry === null) return null
-      if (entry.view.webContents.navigationHistory.canGoBack()) {
-        entry.view.webContents.navigationHistory.goBack()
-      }
+      const wc = contentsOf(entry)
+      if (wc !== null && wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
       return announce(entry)
     },
 
     forward(id) {
       const entry = viewFor(id)
       if (entry === null) return null
-      if (entry.view.webContents.navigationHistory.canGoForward()) {
-        entry.view.webContents.navigationHistory.goForward()
-      }
+      const wc = contentsOf(entry)
+      if (wc !== null && wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward()
       return announce(entry)
     },
 
@@ -1072,8 +1464,10 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       if (entry === null) return null
       stopRetry(entry)
       entry.problem = null
-      if (hard) entry.view.webContents.reloadIgnoringCache()
-      else entry.view.webContents.reload()
+      const wc = contentsOf(entry)
+      if (wc === null) return announce(entry)
+      if (hard) wc.reloadIgnoringCache()
+      else wc.reload()
       return announce(entry)
     },
 
@@ -1089,13 +1483,13 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     },
 
     async evaluate(id, source) {
-      const entry = viewFor(id)
-      if (entry === null) return { ok: false, value: '', error: 'That browser tab is gone.' }
+      const live = liveFor(id)
+      if (live === null) return { ok: false, value: '', error: 'That browser tab is gone.' }
       try {
         // `true` for a user gesture, because an expression typed into a console
         // is one - without it a page's own `requestFullscreen`-shaped APIs
         // reject and the panel would report a browser policy as a page error.
-        const answer: unknown = await entry.view.webContents.executeJavaScript(source, true)
+        const answer: unknown = await live.wc.executeJavaScript(source, true)
         return { ok: true, value: describeValue(answer), error: null }
       } catch (err) {
         return { ok: false, value: '', error: err instanceof Error ? err.message : String(err) }
@@ -1103,9 +1497,9 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     },
 
     devtools(id) {
-      const entry = viewFor(id)
-      if (entry === null) return null
-      const wc = entry.view.webContents
+      const live = liveFor(id)
+      if (live === null) return null
+      const { entry, wc } = live
       if (wc.isDevToolsOpened()) wc.closeDevTools()
       // Detached, deliberately: a docked DevTools is a second rectangle inside
       // the window whose size Helm would then have to keep out of the
@@ -1115,10 +1509,11 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     },
 
     find(id, query, forward) {
-      const entry = viewFor(id)
-      if (entry === null) return
+      const live = liveFor(id)
+      if (live === null) return
+      const { entry, wc } = live
       if (query === '') {
-        entry.view.webContents.stopFindInPage('clearSelection')
+        wc.stopFindInPage('clearSelection')
         entry.find = null
         announce(entry)
         return
@@ -1133,23 +1528,23 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
        * showing text that plainly contains the word returns zero matches, which
        * is indistinguishable from a page that does not contain it.
        */
-      entry.view.webContents.focus()
-      entry.view.webContents.findInPage(query, { forward, findNext: entry.find.active > 0 })
+      wc.focus()
+      wc.findInPage(query, { forward, findNext: entry.find.active > 0 })
     },
 
     stopFind(id) {
-      const entry = viewFor(id)
-      if (entry === null) return
-      entry.view.webContents.stopFindInPage('clearSelection')
-      entry.find = null
-      announce(entry)
+      const live = liveFor(id)
+      if (live === null) return
+      live.wc.stopFindInPage('clearSelection')
+      live.entry.find = null
+      announce(live.entry)
     },
 
     zoom(id, level) {
-      const entry = viewFor(id)
-      if (entry === null) return null
-      entry.view.webContents.setZoomLevel(Math.max(-3, Math.min(3, level)))
-      return announce(entry)
+      const live = liveFor(id)
+      if (live === null) return null
+      live.wc.setZoomLevel(Math.max(-3, Math.min(3, level)))
+      return announce(live.entry)
     },
 
     async clearStorage(id) {
@@ -1173,7 +1568,11 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       const entry = viewFor(payload.id)
       const win = options.window()
       if (entry === null || win === null || win.isDestroyed()) return
-      if (entry.view.webContents.isDestroyed()) return
+      // The pane reports its rectangle on every ResizeObserver tick, and this
+      // is a send: a throw here has no reply to reject into and becomes an
+      // uncaught main-process exception, which is Electron's own error dialog
+      // once per tick. See `contentsOf`.
+      if (contentsOf(entry) === null) return
 
       /*
        * CSS pixels to DIPs.
@@ -1223,26 +1622,33 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     },
 
     shutdown() {
+      // Popups first. Each is a child of the app window and would be closed
+      // with it anyway, but a sign-in window still on screen while the app is
+      // going down is a window nothing owns.
+      for (const popup of [...popups.values()]) {
+        if (!popup.window.isDestroyed()) popup.window.destroy()
+      }
+      popups.clear()
       for (const entry of [...views.values()]) destroy(entry, false)
     },
 
     inspect(id) {
-      const entry = viewFor(id)
-      if (entry === null || entry.view.webContents.isDestroyed()) return null
+      const live = liveFor(id)
+      if (live === null) return null
       return {
-        bounds: entry.view.getBounds(),
-        visible: entry.visible,
-        parked: entry.parked,
+        bounds: live.entry.view.getBounds(),
+        visible: live.entry.visible,
+        parked: live.entry.parked,
         partition: BROWSER_PARTITION,
-        webContentsId: entry.view.webContents.id,
-        url: entry.view.webContents.getURL()
+        webContentsId: live.entry.webContentsId,
+        url: live.wc.getURL()
       }
     },
 
     async capture(id) {
-      const entry = viewFor(id)
-      if (entry === null || entry.view.webContents.isDestroyed()) return null
-      const image = await entry.view.webContents.capturePage()
+      const live = liveFor(id)
+      if (live === null) return null
+      const image = await live.wc.capturePage()
       const size = image.getSize()
       return { width: size.width, height: size.height, bitmap: image.toBitmap() }
     },
@@ -1296,19 +1702,19 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     },
 
     viewport(id) {
-      const entry = viewFor(id)
-      if (entry === null || entry.view.webContents.isDestroyed()) return null
-      const bounds = entry.view.getBounds()
+      const live = liveFor(id)
+      if (live === null) return null
+      const bounds = live.entry.view.getBounds()
       return {
         width: bounds.width,
         height: bounds.height,
-        zoom: entry.view.webContents.getZoomFactor()
+        zoom: live.wc.getZoomFactor()
       }
     },
 
     async capturePng(id) {
-      const entry = viewFor(id)
-      if (entry === null || entry.view.webContents.isDestroyed()) return null
+      const live = liveFor(id)
+      if (live === null) return null
       /*
        * The **view's own** `capturePage`, and that distinction is the whole of
        * why this method exists rather than a `nativeImage` built in the caller.
@@ -1321,21 +1727,21 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
        * into it. So a screenshot tool built on the window would have handed
        * back a picture of a hole, forever, and looked like it worked.
        */
-      const image = await entry.view.webContents.capturePage()
+      const image = await live.wc.capturePage()
       const size = image.getSize()
       return { width: size.width, height: size.height, png: image.toPNG() }
     },
 
     async pointer(id, x, y, opts) {
-      const entry = viewFor(id)
-      if (entry === null || entry.view.webContents.isDestroyed()) return
+      const live = liveFor(id)
+      if (live === null) return
       const at = {
         x: Math.round(x),
         y: Math.round(y),
         button: opts?.button ?? ('left' as const),
         clickCount: opts?.clickCount ?? 1
       }
-      const wc = entry.view.webContents
+      const wc = live.wc
       // The move first. A page that only reacts on hover - a menu, a control
       // that arms itself - has had no pointer over it at all otherwise, and a
       // press arriving out of nowhere is not the sequence a person produces.
@@ -1346,9 +1752,9 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     },
 
     async typeInto(id, text) {
-      const entry = viewFor(id)
-      if (entry === null || entry.view.webContents.isDestroyed()) return
-      const wc = entry.view.webContents
+      const live = liveFor(id)
+      if (live === null) return
+      const wc = live.wc
       for (const ch of text) {
         // The same three events `bridge.ts` sends, and for the same measured
         // reason: Chromium inserts text only when a `char` follows a `keyDown`,
@@ -1364,9 +1770,9 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     },
 
     async press(id, key, modifiers = []) {
-      const entry = viewFor(id)
-      if (entry === null || entry.view.webContents.isDestroyed()) return
-      const wc = entry.view.webContents
+      const live = liveFor(id)
+      if (live === null) return
+      const wc = live.wc
       const mods = [...modifiers]
       wc.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: mods })
       // Only for an unmodified printable key, or Ctrl+A would insert an "a".

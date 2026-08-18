@@ -1,4 +1,4 @@
-import { type BrowserWindow, desktopCapturer, nativeImage, session } from 'electron'
+import { BrowserWindow, desktopCapturer, nativeImage, session } from 'electron'
 import {
   createServer as createHttpServer,
   get as httpGet,
@@ -21,7 +21,7 @@ import {
   resolveBrowserAddress
 } from '@helm/core'
 import { screenshot, sendKey, sendMouse, sleep, squash, stripAnsi, typeText, waitFor } from './bridge'
-import { BROWSER_PARTITION, exemptedWebContents } from './browser'
+import { BROWSER_PARTITION, BROWSER_POPUPS_MAX, exemptedWebContents } from './browser'
 import { createBrowserMcp, MCP_SERVER_NAME } from './browser-mcp'
 import type { Check } from './fidelity'
 import { mcpConfigDir } from './paths'
@@ -101,6 +101,8 @@ const GROUPS = [
   'postures',
   'persist',
   'intact',
+  // A page that closes itself, and the popup sign-in that made it necessary.
+  'popups',
   // M17: the endpoint, the tools, and a real session driving them.
   'endpoint',
   'tools',
@@ -145,6 +147,24 @@ const EVAL_VALUE = 'FIXTURE-EVAL-VALUE-1907'
 const FIND_TOKEN = 'HELMFINDTOKEN'
 const COOKIE_NAME = 'helmbrowsercheck'
 const COOKIE_VALUE = 'persisted-4711'
+/**
+ * What the popup posts back through `window.opener`.
+ *
+ * Standing in for the authorisation code, and the whole point of the exercise:
+ * it can only arrive if the opened page has a live opener, which a Helm tab can
+ * never give it. A distinctive value rather than `true`, so the assertion is
+ * "this string made the round trip" and not "something truthy happened".
+ */
+const POPUP_CODE = 'FIXTURE-OAUTH-CODE-5501'
+/**
+ * How long the popup stays up before closing itself.
+ *
+ * Long enough for the driver to count windows while it is there, which the
+ * first run of BR-39 was not: the popup closed at 700ms and the count was taken
+ * at 900, so a flow that worked perfectly reported one window throughout and
+ * failed on the one assertion that says a window was ever made.
+ */
+const POPUP_LIVES_MS = 2500
 
 /**
  * The M17 fixture's planted element, and what clicking it does.
@@ -466,6 +486,63 @@ function respond(url: string, host: string): { status: number; headers: Record<s
       })
     }
   }
+  /*
+   * The three pages a popup sign-in is made of, and the one that broke Helm.
+   *
+   * `/selfclose` is the fault: a page that closes itself. Every OAuth popup
+   * ends this way, and a Helm tab showing one used to be left holding a
+   * `WebContentsView` whose `webContents` Electron had set to undefined - after
+   * which the next touch threw, out of a send, as an Electron error dialog.
+   *
+   * `/signin` and `/popup` are the flow itself, and both halves are needed to
+   * measure it: `window.open` has to hand back a live object, and the page it
+   * opened has to reach `window.opener` to post a code back. Neither is
+   * possible through a tab, which is why the window-open answer changed.
+   */
+  if (path === '/selfclose') {
+    return {
+      status: 200,
+      headers: html,
+      body: page({
+        title: 'Helm fixture selfclose',
+        background: BACKGROUND,
+        script: `window.__close = () => { setTimeout(() => window.close(), 50); return 'closing' }`
+      })
+    }
+  }
+  if (path === '/signin') {
+    return {
+      status: 200,
+      headers: html,
+      body: page({
+        title: 'Helm fixture signin',
+        background: BACKGROUND,
+        script: `window.__code = null
+          window.addEventListener('message', (event) => { window.__code = event.data })
+          window.__signIn = () => {
+            window.__w = window.open('http://${host}/popup', 'oauth', 'width=480,height=640')
+            return window.__w ? 'handle' : 'null'
+          }
+          window.__popupClosed = () => (window.__w ? window.__w.closed : null)`
+      })
+    }
+  }
+  if (path === '/popup') {
+    return {
+      status: 200,
+      headers: html,
+      body: page({
+        title: 'Helm fixture popup',
+        background: BACKGROUND,
+        script: `window.__posted = false
+          if (window.opener) {
+            window.opener.postMessage(${JSON.stringify(POPUP_CODE)}, '*')
+            window.__posted = true
+          }
+          setTimeout(() => window.close(), ${POPUP_LIVES_MS})`
+      })
+    }
+  }
   if (path === '/permission') {
     return {
       status: 200,
@@ -761,6 +838,7 @@ export async function runBrowserChecks(
     if (run('postures')) checks.push(...(await posturesGroup(ctx, fixture, origin)))
     if (run('persist')) checks.push(await persistPhaseOne(ctx, origin))
     if (run('intact')) checks.push(await postureIntact(ctx, origin))
+    if (run('popups')) checks.push(...(await popupsGroup(ctx, fixture, origin)))
 
     // M17. Everything below drives the tools rather than the pane.
     if (run('endpoint')) checks.push(...(await endpointGroup(ctx)))
@@ -1758,13 +1836,19 @@ async function hiddenGroup(
       const holder = document.createElement('div')
       holder.setAttribute('data-planted-toast', '')
       holder.className = 'pointer-events-none absolute inset-x-0 top-0 z-40 flex justify-center p-3'
+      // Two elements, because the real toast is two: an opaque island ground,
+      // and the tinted row inside it. A planted node that was still one would
+      // be measuring a toast this app no longer draws.
+      const ground = document.createElement('div')
+      ground.className = 'pointer-events-auto max-w-2xl overflow-hidden rounded-raised bg-surface shadow-panel'
       const island = document.createElement('div')
-      island.className = 'pointer-events-auto flex max-w-2xl items-start gap-3 rounded-raised border px-3 py-2 text-[12px] shadow-panel border-border bg-surface text-fg-muted'
+      island.className = 'flex items-start gap-3 rounded-raised border px-3 py-2 text-[12px] border-border text-fg-muted'
       island.textContent = 'A planted notice, two lines long, so the measurement is of the tallest ordinary toast rather than of the shortest.\\nSecond line.'
       island.style.whiteSpace = 'pre-line'
-      holder.appendChild(island)
+      ground.appendChild(island)
+      holder.appendChild(ground)
       row.appendChild(holder)
-      const b = island.getBoundingClientRect()
+      const b = ground.getBoundingClientRect()
       return { x: b.x, y: b.y, width: b.width, height: b.height }
     })()`
   )
@@ -2629,6 +2713,300 @@ async function postureIntact(ctx: CheckContext, origin: string): Promise<Check> 
       'says the document was never replaced.'
     ]
   }
+}
+
+// ---------------------------------------------------------------------------
+// popups - a page that closes itself, and the sign-in that needs a real window
+// ---------------------------------------------------------------------------
+
+/**
+ * The bug report this group exists for, and the feature that came out of it.
+ *
+ * Reported as "integrated browser app freeze": a Google sign-in in the pane
+ * threw, a Windows error dialog came back as fast as it could be dismissed,
+ * and afterwards no tab would load anything and nothing said why. All three
+ * are one chain, and it starts at `window.open`.
+ *
+ * Every assertion below is about a *window*, so the driver counts windows
+ * through `BrowserWindow.getAllWindows()` rather than believing the page: a
+ * page that got `null` and a page that got a handle to a window that was never
+ * made would both be describing themselves.
+ */
+async function popupsGroup(ctx: CheckContext, fixture: Fixture, origin: string): Promise<Check[]> {
+  const { win } = ctx
+  const checks: Check[] = []
+  const windows = (): number => BrowserWindow.getAllWindows().length
+
+  for (const state of ctx.browsers.states()) ctx.browsers.close(state.id)
+  await sleep(400)
+
+  // -------------------------------------------------------------------------
+  // BR-38: a page that closes itself
+  // -------------------------------------------------------------------------
+
+  const staying = ctx.browsers.open({ url: `${origin}/two` }).state?.id ?? null
+  const closing = ctx.browsers.open({ url: `${origin}/selfclose` }).state?.id ?? null
+  const bothOpened =
+    staying !== null &&
+    closing !== null &&
+    (await waitForUrl(ctx, closing, (url) => url.endsWith('/selfclose')))
+
+  // The fixture has to be the thing that closes the page, or this measures
+  // nothing: `window.__close` is required to be there before it is called.
+  const closerPresent =
+    closing === null
+      ? { ok: false, value: '' }
+      : await ctx.browsers.evaluate(closing, 'typeof window.__close')
+  const asked = closing === null ? null : await ctx.browsers.evaluate(closing, 'window.__close()')
+  await sleep(1500)
+
+  const afterSelfClose = ctx.browsers.states()
+  const closedTabIsGone = afterSelfClose.every((state) => state.id !== closing)
+  const stripDropped =
+    closing === null
+      ? false
+      : !(await js<boolean>(
+          win,
+          `document.querySelector(${q(`[data-tab="browser:${String(closing)}"]`)}) !== null`
+        ))
+
+  /*
+   * And the surface still answers.
+   *
+   * This is the half that failed. `states()` walked every view and read
+   * `webContents.isDestroyed()` off each - and the dead one's `webContents` was
+   * **undefined**, so it threw, and went on throwing for everything that came
+   * afterwards. Each of these is called for its ability to throw, including
+   * `bounds` for the id that has gone, which is the send that reached the user
+   * as an Electron error dialog once per `ResizeObserver` tick.
+   */
+  let surfaceThrew: string | null = null
+  let navigatedAfter = false
+  try {
+    ctx.browsers.bounds({
+      id: closing ?? -1,
+      x: 0,
+      y: 100,
+      width: 400,
+      height: 300,
+      visible: true
+    })
+    ctx.browsers.states()
+    if (staying !== null) {
+      ctx.browsers.navigate(staying, `${origin}/errors`)
+      navigatedAfter = await waitForUrl(ctx, staying, (url) => url.endsWith('/errors'))
+    }
+  } catch (err) {
+    surfaceThrew = err instanceof Error ? err.message : String(err)
+  }
+
+  checks.push({
+    id: 'BR-38',
+    criterion: 'A page that closes itself retires its tab and leaves the browser surface working',
+    title:
+      'window.close() takes the tab with it, the strip is told, and every other browser call still answers',
+    ok:
+      bothOpened &&
+      closerPresent.ok &&
+      closerPresent.value.includes('function') &&
+      asked?.ok === true &&
+      closedTabIsGone &&
+      stripDropped &&
+      surfaceThrew === null &&
+      navigatedAfter &&
+      afterSelfClose.some((state) => state.id === staying),
+    detail: {
+      tabs: { staying, closing },
+      fixtureExposedCloser: closerPresent.value,
+      closedTabIsGone,
+      stripDroppedTheTab: stripDropped,
+      surfaceThrew,
+      navigatedOnTheSurvivingTabAfterwards: navigatedAfter,
+      statesAfter: afterSelfClose.map((state) => ({ id: state.id, url: state.url }))
+    },
+    notes: [
+      'The reported freeze, from the bottom. Electron sets `WebContentsView.webContents`',
+      'to **undefined** when a page closes itself - not to a destroyed object still',
+      'answering `isDestroyed()` - so every call site in `browser.ts` threw a TypeError.',
+      'Through an invoke that was a rejection the renderer swallowed, leaving a blank',
+      'pane that refused every address; through the `browser:bounds` send there was no',
+      'reply to reject into and it became an uncaught main-process exception, which is',
+      'Electron’s own error dialog, once per ResizeObserver tick.',
+      'The fixture is asserted to expose `__close` before it is called: a page with no',
+      'closer would leave the tab open and every assertion here would be about a tab',
+      'that was never asked to go.',
+      '`bounds` is called for the id that has gone deliberately - it is the exact call',
+      'that reached the user as a dialog, and it is a send, so it can only be measured',
+      'by whether it throws.'
+    ]
+  })
+
+  for (const state of ctx.browsers.states()) ctx.browsers.close(state.id)
+  await sleep(400)
+
+  // -------------------------------------------------------------------------
+  // BR-39: the sign-in round trip
+  // -------------------------------------------------------------------------
+
+  const signIn = ctx.browsers.open({ url: `${origin}/signin` }).state?.id ?? null
+  const signInLoaded =
+    signIn !== null && (await waitForUrl(ctx, signIn, (url) => url.endsWith('/signin')))
+  const windowsBefore = windows()
+  const tabsBefore = ctx.browsers.states().length
+
+  const handle = signIn === null ? null : await ctx.browsers.evaluate(signIn, 'window.__signIn()')
+  // Well inside `POPUP_LIVES_MS`: this count is "a window exists right now".
+  await sleep(500)
+  const windowsWithPopup = windows()
+  const tabsWithPopup = ctx.browsers.states().length
+
+  // The code, through `window.opener`. The one thing a tab could never do.
+  const code = signIn === null ? null : await ctx.browsers.evaluate(signIn, 'window.__code ?? ""')
+
+  // Helm's own record of it, so this is not only the page describing itself.
+  const noted =
+    signIn === null
+      ? []
+      : ctx.browsers.entries(signIn).filter((line) => line.message.includes('popup window'))
+
+  // The popup closes itself after posting, exactly as a finished sign-in does.
+  await sleep(POPUP_LIVES_MS + 1200)
+  const windowsAfter = windows()
+  const openerSawItClose =
+    signIn === null ? null : await ctx.browsers.evaluate(signIn, 'String(window.__popupClosed())')
+
+  checks.push({
+    id: 'BR-39',
+    criterion: 'A popup sign-in completes: a live window.open handle, a reachable opener, and a close the page sees',
+    title:
+      'window.open makes a real window, the opened page posts a code back through window.opener, and closing it is visible to the opener',
+    ok:
+      signInLoaded &&
+      handle?.value === 'handle' &&
+      windowsWithPopup === windowsBefore + 1 &&
+      // A window, not a tab. If this ever became a tab again the sign-in would
+      // silently stop working, which is the shape of the original report.
+      tabsWithPopup === tabsBefore &&
+      code?.value === POPUP_CODE &&
+      noted.length > 0 &&
+      windowsAfter === windowsBefore &&
+      openerSawItClose?.value === 'true',
+    detail: {
+      windowOpenReturned: handle?.value ?? null,
+      windows: { before: windowsBefore, withPopup: windowsWithPopup, after: windowsAfter },
+      tabs: { before: tabsBefore, withPopup: tabsWithPopup },
+      codePostedBack: code?.value ?? null,
+      expectedCode: POPUP_CODE,
+      paneSaidSo: noted.map((line) => line.message),
+      openerSawPopupClosed: openerSawItClose?.value ?? null
+    },
+    notes: [
+      'Measured before this changed: denied, `window.open` returns `null` and every',
+      'OAuth library reports a blocked popup, and the tab Helm opened instead has no',
+      '`window.opener` for the code to come back through. Both halves are asserted -',
+      'the handle and the round-tripped code - because either one alone can be true of',
+      'a flow that still does not work.',
+      'The window count is the driver’s own, from `BrowserWindow.getAllWindows()`. The',
+      'page is not asked whether a window exists, because a page cannot tell.',
+      'The tab count must **not** move: a popup that quietly became a tab again would',
+      'pass a handle-only assertion and fail every real sign-in.'
+    ]
+  })
+
+  // -------------------------------------------------------------------------
+  // BR-40: and everything a popup is still held to
+  // -------------------------------------------------------------------------
+
+  const windowsAtStart = windows()
+
+  // The reach rule, on the popup path.
+  const restore = ctx.services.settings.browserReach
+  ctx.services.settings = { ...ctx.services.settings, browserReach: 'local' }
+  const outOfReach = `http://127.0.0.1:${String(fixture.httpNamedPort)}/`.replace(
+    '127.0.0.1',
+    '127.0.0.2'
+  )
+  const refused =
+    signIn === null
+      ? null
+      : await ctx.browsers.evaluate(
+          signIn,
+          `String(window.open(${q(outOfReach)}, 'x', 'width=400,height=400'))`
+        )
+  await sleep(600)
+  const windowsAfterRefusal = windows()
+  const refusalSentence = signIn === null ? null : (ctx.browsers.states(signIn)[0]?.problem ?? null)
+  ctx.services.settings = { ...ctx.services.settings, browserReach: restore }
+
+  // An agent's tab gets a tab, never a window on somebody's screen.
+  const agentTabsBefore = ctx.browsers.states().length
+  const agent = await ctx.browsers.openFor({ key: randomUUID(), name: 'popup-check' }, `${origin}/signin`)
+  const agentId = agent.state?.id ?? null
+  const agentAsked =
+    agentId === null ? null : await ctx.browsers.evaluate(agentId, 'window.__signIn()')
+  await sleep(900)
+  const windowsAfterAgent = windows()
+  const agentTabsAfter = ctx.browsers.states().length
+
+  // And the app's own renderer, which was never in this at all.
+  const appWindowOpen = await js<string>(
+    win,
+    `String(window.open('https://example.com/', 'x', 'width=300,height=300'))`
+  )
+  await sleep(400)
+  const windowsAfterApp = windows()
+
+  for (const state of ctx.browsers.states()) ctx.browsers.close(state.id)
+  await sleep(400)
+
+  checks.push({
+    id: 'BR-40',
+    criterion:
+      'A popup is held to the reach rule, is never an agent’s, and the app’s own renderer still opens nothing',
+    title:
+      'Out of reach makes no window and says so on the tab; an agent-opened tab gets a tab; the window itself still gets null',
+    ok:
+      refused?.value === 'null' &&
+      windowsAfterRefusal === windowsAtStart &&
+      refusalSentence !== null &&
+      refusalSentence.includes('This machine only') &&
+      agentAsked?.value === 'null' &&
+      windowsAfterAgent === windowsAtStart &&
+      agentTabsAfter === agentTabsBefore + 2 &&
+      appWindowOpen === 'null' &&
+      windowsAfterApp === windowsAtStart &&
+      BROWSER_POPUPS_MAX > 0,
+    detail: {
+      reach: {
+        askedFor: outOfReach,
+        windowOpenReturned: refused?.value ?? null,
+        windowsBefore: windowsAtStart,
+        windowsAfter: windowsAfterRefusal,
+        paneSaid: refusalSentence
+      },
+      agent: {
+        windowOpenReturned: agentAsked?.value ?? null,
+        windowsAfter: windowsAfterAgent,
+        tabsBefore: agentTabsBefore,
+        tabsAfter: agentTabsAfter
+      },
+      appRenderer: { windowOpenReturned: appWindowOpen, windowsAfter: windowsAfterApp },
+      popupCap: BROWSER_POPUPS_MAX
+    },
+    notes: [
+      'Three separate ways the widening could have been wider than it was meant to be,',
+      'and each is measured by counting windows rather than by reading a policy.',
+      'The agent case is a rule about the *screen*, not about reach: the reach rules',
+      'already say an agent may not go where the pane could not, and this says it may',
+      'not put a window in front of somebody either. Its `window.open` produces another',
+      'agent tab, which is the surface `browser_tabs` and `browser_close` describe -',
+      'hence two more tabs, the one opened for it and the one its page opened.',
+      'The last pair is the one that must never move: the app’s own window is not in',
+      'the exemption registry and gets `null`, exactly as it did before popups existed.'
+    ]
+  })
+
+  return checks
 }
 
 // ---------------------------------------------------------------------------

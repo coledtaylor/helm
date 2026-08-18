@@ -110,15 +110,43 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
 
 ## The browser pane
 
-Five rules, and each one is a thing that only shows up when it is broken.
+Seven rules, and each one is a thing that only shows up when it is broken.
 
 - **The renderer's navigation lock is never loosened.** `will-navigate` and
   `setWindowOpenHandler` are denied on **every** web-contents in
   `main/index.ts`; browser views are exempted by a registry of `webContents.id`
-  read *inside* those guards. Window-open still answers `deny` for everything -
-  what the exemption adds is that a `window.open` inside a view becomes a new
-  Helm tab, capped. A change that widens the guard instead of the registry is
-  the change this rule exists to stop.
+  read *inside* those guards. A change that widens the guard instead of the
+  registry is the change this rule exists to stop, and `BR-23` and `BR-40` are
+  what say the window itself still gets `null` from `window.open`.
+- **A browser view may open a real window, and only for `window.open` with
+  features.** This is an amendment to "no Chromium window is ever created", and
+  it was measured into existence rather than argued: denied, `window.open`
+  returns `null`, every OAuth library reports a blocked popup, and the tab Helm
+  opened instead has no `window.opener` for the sign-in to hand its code back
+  through - so no popup sign-in could ever complete. The split is by
+  disposition: `foreground-tab` and `background-tab` - `target="_blank"`, a
+  middle click - are still Helm tabs, capped at `BROWSER_TABS_MAX`; only
+  `new-window` is a window, capped at `BROWSER_POPUPS_MAX` per tab. A popup is
+  on the same partition with the same denied permissions and refused downloads,
+  is in the same exemption registry, goes through the same `browserReachAllows`
+  as everything else, carries its host in its title bar because it has no
+  address bar to put it in, and **is never an agent's**: an agent tab's
+  `window.open` still becomes another agent tab, because "may not exceed the
+  pane's reach" and "may not put a window in front of somebody" are two rules
+  and only the first was already written down. `BR-39` and `BR-40`.
+- **A view Helm is holding may have no web contents at all.** A page can close
+  itself - `window.close()` is the last thing every OAuth popup does - and
+  Electron then leaves `WebContentsView.webContents` **undefined**, not a
+  destroyed object still answering `isDestroyed()`. `contentsOf` in
+  `browser.ts` is the only way that file reaches web contents, and a
+  `destroyed` listener retires the view exactly as `render-process-gone` does.
+  This was a reported freeze and it is worth knowing which half was which: out
+  of an *invoke* the `TypeError` was a rejection the renderer swallowed, so the
+  pane went blank and refused every address in silence; out of the
+  `browser:bounds` **send** there was no reply to reject into, so it was an
+  uncaught main-process exception - Electron's own error dialog, once per
+  `ResizeObserver` tick. `registerIpc` now wraps every send handler for that
+  second reason, and `BR-38` is what says the whole chain stays fixed.
 - **Every navigation goes through `browserReachAllows`, in `@helm/core`.** One
   function, taking as many restrictions as the caller has, allowing a URL only
   where all of them do - and the agent's restrictions are composed by

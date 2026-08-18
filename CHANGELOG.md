@@ -14,6 +14,41 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 1.0.1
+
+Signing in to a site inside Helm's browser used to break the browser. It no
+longer does, and it now works.
+
+**A page that closes itself no longer takes the pane with it**
+
+- Closing itself is the last thing a sign-in window does when it finishes, and
+  Helm handled it badly enough to lose the whole browser. What you saw was a
+  Windows error dialog that came back as fast as you could dismiss it, and then
+  a pane that stayed blank and refused every address you typed without saying
+  why. Both are gone. A tab whose page closes itself simply closes.
+
+**Sign-in popups work**
+
+- Signing in with Google, GitHub or Microsoft now completes. It could not
+  before: the site was told its popup had been blocked, and there was no way to
+  get past that - which is what the sign-in that started all this was doing
+  when it froze.
+- A sign-in window shows the site it belongs to in its title bar, because it
+  has no address bar to show you. It is on the same profile with the same
+  refusals as the pane - no downloads, no permissions granted, and it can only
+  reach where **Settings → Browser** already lets the pane reach.
+- Links that open in a new tab are still tabs, not windows. Helm still opens
+  nothing on its own, and a session driving the browser for you still cannot
+  put a window in front of you.
+
+**When something goes wrong with a tab, it says so**
+
+- A browser tab that fails now tells you on the tab, rather than going quiet.
+  One refusal had been reachable and shown nowhere at all - the limit of ten
+  browser tabs - so clicking for an eleventh appeared to do nothing. It is now
+  a notice you can read, and notices are legible over the tab strip instead of
+  being drawn through it.
+
 ## 1.0.0
 
 The version number stops disclaiming. 1.0 does not mean finished - it means

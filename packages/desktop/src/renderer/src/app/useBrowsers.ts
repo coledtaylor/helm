@@ -168,7 +168,16 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
 
   const open = useCallback(
     async (request: { url?: string; project?: string | null }): Promise<BrowserState | null> => {
-      const answer = await helm.invoke('browser:open', request)
+      let answer: { state: BrowserState | null; problem: string | null }
+      try {
+        answer = await helm.invoke('browser:open', request)
+      } catch (err) {
+        // No tab was made, so there is no problem line to write on: this is the
+        // one browser failure that has to go somewhere else, and `error` is
+        // where the cap's refusal already goes.
+        setError(`Helm could not open a browser tab: ${err instanceof Error ? err.message : String(err)}`)
+        return null
+      }
       if (answer.state !== null) {
         setViews((current) => new Map(current).set(answer.state!.id, answer.state!))
         // Whatever main already has for this view - a `window.open` tab, or one
@@ -192,8 +201,40 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
     setViews((current) => new Map(current).set(state.id, state))
   }, [])
 
+  /**
+   * What a browser call that **failed** does, instead of nothing.
+   *
+   * Every one of these used to end `.catch(() => undefined)`, and that turned
+   * out to be half of a bug report: a fault in the main process left the pane
+   * blank, refusing every address, with no error anywhere and nothing in the
+   * console. The fault itself is fixed in `browser.ts`; this is the part that
+   * says a rejection may not be invisible again.
+   *
+   * It lands on the tab's own problem line - the one `BrowserPane` already
+   * paints above the page - because that is where somebody looking at the tab
+   * that failed is already looking. It is a local patch over the mirror rather
+   * than a second kind of state: the next `browser:changed` from main replaces
+   * it, which is right, since main is the side that knows when the trouble is
+   * over.
+   */
+  const failed = useCallback(
+    (id: number, doing: string) =>
+      (err: unknown): void => {
+        const detail = err instanceof Error ? err.message : String(err)
+        setViews((current) => {
+          const view = current.get(id)
+          if (view === undefined) return current
+          return new Map(current).set(id, {
+            ...view,
+            problem: `Helm could not ${doing} this tab: ${detail}`
+          })
+        })
+      },
+    []
+  )
+
   const close = useCallback((id: number) => {
-    void helm.invoke('browser:close', { id }).catch(() => undefined)
+    void helm.invoke('browser:close', { id }).catch(() => undefined) // the tab is gone from this map either way
     setViews((current) => {
       const next = new Map(current)
       next.delete(id)
@@ -209,52 +250,70 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
 
   const navigate = useCallback(
     (id: number, input: string) => {
-      void helm.invoke('browser:navigate', { id, input }).then(remember).catch(() => undefined)
+      void helm
+        .invoke('browser:navigate', { id, input })
+        .then(remember)
+        .catch(failed(id, 'navigate'))
     },
-    [remember]
+    [remember, failed]
   )
 
   const back = useCallback(
     (id: number) => {
-      void helm.invoke('browser:back', { id }).then(remember).catch(() => undefined)
+      void helm.invoke('browser:back', { id }).then(remember).catch(failed(id, 'go back in'))
     },
-    [remember]
+    [remember, failed]
   )
   const forward = useCallback(
     (id: number) => {
-      void helm.invoke('browser:forward', { id }).then(remember).catch(() => undefined)
+      void helm
+        .invoke('browser:forward', { id })
+        .then(remember)
+        .catch(failed(id, 'go forward in'))
     },
-    [remember]
+    [remember, failed]
   )
   const reload = useCallback(
     (id: number, hard: boolean) => {
-      void helm.invoke('browser:reload', { id, hard }).then(remember).catch(() => undefined)
+      void helm.invoke('browser:reload', { id, hard }).then(remember).catch(failed(id, 'reload'))
     },
-    [remember]
+    [remember, failed]
   )
   const devtools = useCallback(
     (id: number) => {
-      void helm.invoke('browser:devtools', { id }).then(remember).catch(() => undefined)
+      void helm
+        .invoke('browser:devtools', { id })
+        .then(remember)
+        .catch(failed(id, 'open DevTools for'))
     },
-    [remember]
+    [remember, failed]
   )
-  const find = useCallback((id: number, query: string, forward: boolean) => {
-    void helm.invoke('browser:find', { id, query, forward }).catch(() => undefined)
-  }, [])
-  const stopFind = useCallback((id: number) => {
-    void helm.invoke('browser:stopFind', { id }).catch(() => undefined)
-  }, [])
+  const find = useCallback(
+    (id: number, query: string, forward: boolean) => {
+      void helm.invoke('browser:find', { id, query, forward }).catch(failed(id, 'search'))
+    },
+    [failed]
+  )
+  const stopFind = useCallback(
+    (id: number) => {
+      void helm.invoke('browser:stopFind', { id }).catch(failed(id, 'stop searching'))
+    },
+    [failed]
+  )
   const zoom = useCallback(
     (id: number, level: number) => {
-      void helm.invoke('browser:zoom', { id, level }).then(remember).catch(() => undefined)
+      void helm.invoke('browser:zoom', { id, level }).then(remember).catch(failed(id, 'zoom'))
     },
-    [remember]
+    [remember, failed]
   )
   const clearStorage = useCallback(
     (id: number) => {
-      void helm.invoke('browser:clearStorage', { id }).then(remember).catch(() => undefined)
+      void helm
+        .invoke('browser:clearStorage', { id })
+        .then(remember)
+        .catch(failed(id, 'clear the browsing data of'))
     },
-    [remember]
+    [remember, failed]
   )
   const evaluate = useCallback(
     (id: number, source: string) => helm.invoke('browser:eval', { id, source }),

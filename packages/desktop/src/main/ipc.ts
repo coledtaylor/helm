@@ -676,10 +676,34 @@ export function registerIpc(ctx: IpcContext): void {
     ipcMain.handle(channel, (event, payload: unknown) => handler(payload, event))
   }
 
+  /*
+   * A send that throws must not take the process with it.
+   *
+   * The asymmetry with `handle` above is the whole reason this exists: a
+   * request that throws rejects its own promise and reaches the renderer as a
+   * failed invoke, while a send has no reply to fail into - so an exception out
+   * of one of these handlers is an **uncaught exception in the main process**,
+   * and Electron answers that with its own error dialog over the app.
+   *
+   * That is not hypothetical. `browser:bounds` is sent on every
+   * `ResizeObserver` tick of an open browser pane, and a view whose page had
+   * closed itself made it throw every time: the dialog came back as fast as it
+   * could be dismissed, which is what the bug report described. The fault
+   * itself is fixed where it was, in `browser.ts`; this is here because the
+   * next one should degrade rather than pop a dialog, and because a fire-and-
+   * forget channel is exactly where a fault is least likely to be noticed
+   * otherwise. Logged rather than swallowed, so it is still findable.
+   */
   for (const [channel, handler] of Object.entries(sends) as Array<
     [string, (payload: unknown, event: Electron.IpcMainEvent) => void]
   >) {
-    ipcMain.on(channel, (event, payload: unknown) => handler(payload, event))
+    ipcMain.on(channel, (event, payload: unknown) => {
+      try {
+        handler(payload, event)
+      } catch (err) {
+        console.error(`ipc send ${channel} threw:`, err)
+      }
+    })
   }
 
   nativeTheme.themeSource = services.settings.theme

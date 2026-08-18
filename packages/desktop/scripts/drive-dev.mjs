@@ -40,7 +40,39 @@ if (command === undefined) {
 }
 
 /**
- * The app's own page, not devtools' and not the spike harness's.
+ * Whether a CDP target is the app's own renderer.
+ *
+ * Positively identified rather than arrived at by elimination, and that is the
+ * whole point of this function existing. "The first page that is not the spike"
+ * was true right up until the browser pane shipped: a `WebContentsView` is a
+ * `page` target like any other and it carries whatever URL the user typed, so
+ * with one browser tab open the picker chose the *page* - and every command
+ * then ran against a document that has never heard of `window.helm`. `text`
+ * printed the page, `click` said nothing matched, and `eval` failed in a way
+ * that reads exactly like the app being broken.
+ *
+ * The renderer is served by Vite under `pnpm dev` and from a file otherwise;
+ * a browser view is never either, because `browserReachAllows` refuses `file:`
+ * and the dev server's port is not something a person navigates the pane to by
+ * accident.
+ */
+function isAppRenderer(url) {
+  if (url.includes('spike')) return false
+  if (url.startsWith('file:')) return url.endsWith('index.html')
+  try {
+    const parsed = new URL(url)
+    return parsed.port === DEV_SERVER_PORT && (parsed.pathname === '/' || parsed.pathname === '/index.html')
+  } catch {
+    return false
+  }
+}
+
+/** Where `electron-vite` serves the renderer under `pnpm dev`. */
+const DEV_SERVER_PORT = '5173'
+
+/**
+ * The app's own page, not devtools', not the spike harness's, and not a page
+ * the browser pane happens to be showing.
  *
  * Matched on the entry rather than "the first page": a window with devtools
  * open lists two targets, and evaluating in the wrong one reports an empty
@@ -59,9 +91,15 @@ async function pageTarget() {
     process.exit(1)
   }
   const pages = listed.filter((t) => t.type === 'page' && !t.url.startsWith('devtools://'))
-  const app = pages.find((t) => !t.url.includes('spike')) ?? pages[0]
+  const app = pages.find((t) => isAppRenderer(t.url))
   if (app === undefined) {
-    console.error(`no app page among: ${listed.map((t) => `${t.type} ${t.url}`).join(', ')}`)
+    // Deliberately not falling back to `pages[0]`. That fallback is what turned
+    // "the window is not there" into "here are some answers about a web page",
+    // and a wrong answer is worse than none.
+    console.error(
+      `no Helm window among: ${listed.map((t) => `${t.type} ${t.url}`).join(', ')}\n` +
+        'Browser tabs are page targets too; this looks for the renderer itself.'
+    )
     process.exit(1)
   }
   return app
