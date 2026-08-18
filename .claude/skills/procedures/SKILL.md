@@ -63,9 +63,25 @@ Two edits and a merge:
    body. **Without one the release fails**, deliberately: writing it is the step
    a person can skip.
 
-Then run `pnpm packaging-check` green **with Helm closed** before merging. CI
-runs only the fast tier - typecheck, lint, tests, build - so nothing else covers
-the artefact somebody actually downloads.
+Then run `pnpm packaging-check` green before merging. CI runs only the fast
+tier - typecheck, lint, tests, build - so nothing else covers the checkout
+audit, the first-run path or the portable exe.
+
+**It no longer uninstalls the Helm you are using, and that is why it is a gate
+you can actually run.** The NSIS install-launch-uninstall phase is opt-in:
+`pnpm packaging-check --only=installer`, and only that. It used to be in the
+default run, which meant the documented release gate required closing an app
+that *hosts Claude Code sessions* - so running the gate ended whatever work was
+in them, and the gate got skipped or, once, run by accident inside a sweep of
+every check. A gate with that price is not a gate.
+
+The default run still prints a `PKG-2` line saying it did not install anything,
+so "packaging-check green" cannot quietly stop meaning what it meant. Run the
+installer phase deliberately, on a machine where nobody is working, when a
+release **changes packaging** - electron-builder, `electron-builder.yml`, the
+native modules, `dist-win.mjs`, or anything about where files land. A release
+that changes none of those is not one this phase has new information about, and
+CI already runs `verify-artifact.mjs` over both exes on every publish.
 
 **The changelog is for somebody deciding whether to download an exe.** Not a
 commit log: no probe ids, no check names, no `pnpm` commands, no refactors, no

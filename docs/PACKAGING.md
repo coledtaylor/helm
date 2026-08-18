@@ -65,9 +65,9 @@ untouched one; deleting the directory is what puts the originals back.
   `deleteAppDataOnUninstall` stays false: `%APPDATA%\Helm\helm.db` holds the
   user's profiles, their session index and every config snapshot Helm has taken
   on their behalf, and uninstalling the program is not a request to destroy
-  those. `pnpm packaging-check --only=package` asserts the install directory,
-  the start-menu shortcut and the uninstall registry entry are gone and that the
-  data directory is not.
+  those. `pnpm packaging-check --only=installer` asserts the install
+  directory, the start-menu shortcut and the uninstall registry entry are gone
+  and that the data directory is not.
 - **No desktop shortcut.** A start-menu entry is enough.
 
 ## Releasing
@@ -202,19 +202,42 @@ collaborator - a private release page is not a download link.
 
 ## Install-testing it
 
+Two groups, and the split is the point: one is safe to run on the machine you
+work on, and one is not.
+
 ```bash
-pnpm packaging-check --only=package
+pnpm packaging-check --only=package     # the artefacts and the portable exe
+pnpm packaging-check --only=installer   # installs and UNINSTALLS Helm here
 ```
 
-Builds the artefacts if they are missing, then:
+`package` is in the default `pnpm packaging-check`. It builds the artefacts if
+they are missing, checks the two native modules are unpacked beside the asar,
+then copies the portable exe into a path with spaces, runs `--selftest` out of
+it as the ordinary user, and checks the data landed beside the exe and that
+`%APPDATA%\Helm` gained nothing. (That last read is dropped, and says so in the
+report, when an installed Helm is running - it writes to `%APPDATA%\Helm` too,
+so the comparison would be about two processes.)
 
-- copies the portable exe into a path with spaces, runs `--selftest` out of it
-  as the ordinary user, and checks the data landed beside the exe and that
-  `%APPDATA%\Helm` gained nothing;
-- installs the NSIS package silently, runs `--selftest` out of the installed
-  app, checks it reports `installed` mode with `%APPDATA%\Helm` as its data
-  directory and that nothing landed beside the exe, then uninstalls and checks
-  what is gone and what is kept.
+**`installer` is opt-in and is the only destructive thing in this repository.**
+It installs the NSIS package silently, runs `--selftest` out of the installed
+app, checks it reports `installed` mode with `%APPDATA%\Helm` as its data
+directory and that nothing landed beside the exe, then uninstalls and checks
+what is gone and what is kept - and **puts nothing back**. It cannot be
+isolated into its own data directory, because it is *about* where an installer
+puts things.
+
+It refuses outright if Helm is running from the install directory
+(`--replace-running` overrides that, which is what a release machine says on
+purpose). Helm hosts Claude Code sessions, so terminating it is not like
+terminating an editor with everything saved - it ends the work inside them, and
+it has done exactly that once, from a sweep of "every check".
+
+So it is not part of the release gate. Run it when a release **changes
+packaging** - electron-builder, `electron-builder.yml`, the native modules,
+`dist-win.mjs`, or anything about where files land - on a machine where nobody
+is working. The default run prints a `PKG-2` line recording that it did not,
+so a green run is never mistaken for one that covered the installer, and CI
+runs `verify-artifact.mjs` over both exes on every publish regardless.
 
 The selftest itself (SPEC 8.2) is a SQLite WAL roundtrip, an interactive pwsh
 through ConPTY, renderer-synthesized keystrokes, a resize verified inside the

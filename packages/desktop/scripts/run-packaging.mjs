@@ -46,7 +46,31 @@ const { default: electron } = await import('electron')
 const args = process.argv.slice(2)
 const onlyArg = args.find((a) => a.startsWith('--only='))
 const groups = onlyArg ? onlyArg.slice('--only='.length).split(',') : null
-const wants = (name) => groups === null || groups.includes(name)
+
+/**
+ * The groups a plain `pnpm packaging-check` does **not** run.
+ *
+ * Exactly one, and it is the only destructive thing in this repository:
+ * `installer` uninstalls the Helm that is installed on this machine and puts
+ * nothing back. Every other check gets its own data directory precisely so it
+ * cannot touch the app somebody is using; this one cannot be isolated, because
+ * it is *about* where an installer puts things.
+ *
+ * It used to be in the default run, which made the documented release gate -
+ * "run `pnpm packaging-check` green before merging" - a command nobody could
+ * safely run on the machine they work on. Helm hosts Claude Code sessions, so
+ * "close Helm first" means ending whatever is running in them, and a gate with
+ * that price is a gate that gets skipped or run by accident. It has already
+ * cost a session once, from a blanket sweep.
+ *
+ * So the default run covers everything a release needs and stops short of the
+ * one thing that would cost something to be wrong about. `--only=installer`
+ * asks for it deliberately, and the default run **records that it did not run**
+ * rather than letting "packaging-check green" quietly stop including it.
+ */
+const OPT_IN_GROUPS = ['installer']
+const wants = (name) =>
+  groups === null ? !OPT_IN_GROUPS.includes(name) : groups.includes(name)
 
 const version = JSON.parse(readFileSync(join(desktopDir, 'package.json'), 'utf8')).version
 const checks = []
@@ -231,8 +255,12 @@ if (FIRSTRUN_GROUPS.some(wants)) {
 // Phase 3: the artefacts
 // ---------------------------------------------------------------------------
 
-if (wants('package')) {
-  say('\n--- phase 3: the portable exe and the NSIS installer ---')
+if (wants('package') || wants('installer')) {
+  say(
+    wants('installer')
+      ? '\n--- phase 3: the portable exe and the NSIS installer ---'
+      : '\n--- phase 3: the portable exe ---'
+  )
   const portableExe = join(distDir, `Helm-${version}-portable.exe`)
   const setupExe = join(distDir, `Helm-${version}-setup.exe`)
 
@@ -268,9 +296,12 @@ if (wants('package')) {
     }
   }
 
-  checks.push(unpackedNativeModulesCheck())
-  checks.push(...portableChecks(portableExe))
-  checks.push(...installerChecks(setupExe))
+  if (wants('package')) {
+    checks.push(unpackedNativeModulesCheck())
+    checks.push(...portableChecks(portableExe))
+  }
+  if (wants('installer')) checks.push(...installerChecks(setupExe))
+  else if (wants('package')) checks.push(installerNotRun(setupExe))
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +404,21 @@ function portableChecks(exe) {
   const copied = join(runDir, 'Helm.exe')
   cpSync(exe, copied)
 
+  /*
+   * Whether `%APPDATA%\Helm` can be read as evidence at all.
+   *
+   * "The portable exe wrote nothing beside the installed app" is measured by
+   * listing that directory either side of the run - which is only a statement
+   * about the portable exe while nothing *else* is writing there. The installed
+   * Helm writes there whenever it is open, so with one running this read is
+   * about two processes and attributable to neither.
+   *
+   * It is asked rather than assumed because this phase is now in the default
+   * run, and the default run happens on the machine somebody works on. A silent
+   * pass would be luck and a silent failure would be a bug hunt; the answer is
+   * to record which of the two claims this run is making.
+   */
+  const installedRunning = countInstalledProcesses(installedAppDir())
   const appDataBefore = existsSync(realDataDir) ? readdirSync(realDataDir).sort() : []
   say(`running the portable exe from ${runDir}`)
   const run = spawnSync(copied, ['--selftest'], { stdio: 'inherit', timeout: 300_000 })
@@ -393,7 +439,7 @@ function portableChecks(exe) {
         report.pass === true &&
         report.mode === 'portable' &&
         existsSync(join(dataDir, 'helm.db')) &&
-        leaked.length === 0,
+        (installedRunning > 0 || leaked.length === 0),
       detail: {
         exe: copied,
         runDir,
@@ -406,15 +452,59 @@ function portableChecks(exe) {
         dataDir,
         dataFiles: existsSync(dataDir) ? readdirSync(dataDir).sort() : [],
         appDataEntriesAdded: leaked,
+        appDataReadIsEvidence: installedRunning === 0,
+        installedHelmProcessesRunning: installedRunning,
         elevated: false
       },
       notes: [
         'Run as the ordinary user this script is running as - no elevation is requested anywhere, and the exe writes only inside its own directory.',
         'The selftest is Spike B\'s: a SQLite WAL roundtrip, an interactive pwsh through ConPTY, renderer-synthesized keystrokes, a resize verified inside the shell, and the real claude TUI reaching its version banner.',
-        '"Beside the exe" is checked twice: helm.db exists in the run directory, and %APPDATA%\\Helm gained no files while it ran.'
+        '"Beside the exe" is checked twice: helm.db exists in the run directory, and %APPDATA%\\Helm gained no files while it ran.',
+        'The second of those is dropped when an installed Helm is running, because that app writes to %APPDATA%\\Helm itself and the read would then be about two processes. appDataReadIsEvidence says which run this was; the first half - helm.db beside the exe - holds either way.'
       ]
     }
   ]
+}
+
+/**
+ * PKG-2, recorded as **not run**, which is the whole reason it exists.
+ *
+ * A group that quietly disappears from the default run is how a suite stops
+ * measuring something without anybody noticing - and the claim "packaging-check
+ * is green" is exactly the kind of claim that outlives the run behind it. So
+ * the default run still emits a PKG-2 line: it is in the console output, it is
+ * in the report, and it says in its own title that nothing was installed.
+ *
+ * `ok: true`, deliberately, and it is the one entry here that is not a
+ * measurement. A red line would make the safe run fail, which would push people
+ * straight back to the destructive one; a missing line would let the release
+ * gate silently shed a criterion. A green line that says "not run" is the only
+ * one of the three that is both honest and usable.
+ */
+function installerNotRun(setupExe) {
+  return {
+    id: 'PKG-2',
+    criterion:
+      'NSIS installer installs per-user without elevation, the installed app launches and passes the same smoke checks, app data lands in %APPDATA%, and uninstall removes it cleanly',
+    title: 'Not run - the installer phase is opt-in, and nothing was installed or uninstalled',
+    ok: true,
+    detail: {
+      ranNothing: true,
+      wouldHaveUsed: setupExe,
+      builtAndReadable: existsSync(setupExe),
+      howToRun: 'pnpm packaging-check --only=installer',
+      whyItIsOptIn:
+        'It uninstalls the Helm installed on this machine and puts nothing back. Helm hosts Claude Code sessions, so that ends whatever is running in them.'
+    },
+    notes: [
+      'This is a placeholder, not a pass. The installer was neither run nor verified.',
+      'Run `pnpm packaging-check --only=installer` on a machine where nobody is working -',
+      'a fresh checkout, a spare machine, or before a release that changes packaging.',
+      'A release that does not touch electron-builder, the NSIS configuration, the native',
+      'modules or `dist-win.mjs` is not a release this phase would have new information',
+      'about; CI already runs `verify-artifact.mjs` over both exes on every publish.'
+    ]
+  }
 }
 
 /** PKG-2: the NSIS installer, installed, launched, and uninstalled. */
@@ -437,7 +527,7 @@ function installerChecks(setupExe) {
   // for no elevation. If it had asked, a silent run would fail outright rather
   // than silently succeeding.
   const localAppData = process.env.LOCALAPPDATA ?? ''
-  const installDir = join(localAppData, 'Programs', 'Helm')
+  const installDir = installedAppDir()
   const installedExe = join(installDir, 'Helm.exe')
   const uninstaller = join(installDir, 'Uninstall Helm.exe')
   const startMenu = join(
@@ -728,6 +818,18 @@ function psLiteral(value) {
  * `pnpm dev` running from elsewhere on this machine is not counted - the
  * question is only ever about the installed one.
  */
+/**
+ * Where electron-builder's one-click, per-user NSIS target installs, and the
+ * only Helm that writes to `%APPDATA%\Helm`.
+ *
+ * Named once because two phases now need it: the installer phase installs into
+ * it, and the portable phase has to know whether something is running out of it
+ * before it can read `%APPDATA%\Helm` as evidence about anything.
+ */
+function installedAppDir() {
+  return join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Helm')
+}
+
 function countInstalledProcesses(installDir) {
   const probe = spawnSync(
     'powershell.exe',

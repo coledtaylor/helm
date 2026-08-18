@@ -219,13 +219,20 @@ believed, because a grep that finds nothing is indistinguishable from a grep
 looking for nothing. `--sandbox=` puts the throwaway profile somewhere with no
 account name in the path, which is how the README's screenshots were taken.
 
-**Phase 3 is destructive to the app you are using, and it is the one check that
-cannot be isolated.** It installs the NSIS package to the real
+**The installer phase is destructive to the app you are using, it is the one
+check that cannot be isolated, and it is therefore the one group `pnpm
+packaging-check` does not run.** It installs the NSIS package to the real
 `%LOCALAPPDATA%\Programs\Helm`, runs it, and **uninstalls it, putting nothing
 back** - because it is *about* where an installer puts things, so an isolated
-data directory would erase what it measures. Never put it in a sweep of "every
-check". Run it deliberately, on a machine where nobody is working, or narrow
-with `--only=audit,cli,firstrun` which skips it entirely.
+data directory would erase what it measures. `--only=installer` is the only way
+to ask for it. Run it deliberately, on a machine where nobody is working, and
+when a release changes packaging rather than as a matter of course.
+
+The default run covers the rest of phase 3 - the artefact build, the unpacked
+native modules and the portable exe - and prints a `PKG-2` line recording that
+nothing was installed, so a green run cannot be mistaken for one that covered
+the installer. `OPT_IN_GROUPS` in `run-packaging.mjs` is the authority for which
+groups are held back.
 
 It has now cost a session. Run inside a blanket sweep, it uninstalled a Helm
 somebody was working in - and Helm **hosts Claude Code**, so that ended the work
