@@ -1141,6 +1141,31 @@ README, [PACKAGING.md](PACKAGING.md) and the `update:check` comment in
   browser views are the one exemption from that lock and they are exempted **by
   `webContents.id`**, in the guard itself, so the app's own renderers keep it.
 
+  > [!note] Amended 2026-08-17 - a browser view may open a real window
+  > "The window-open handler denies" stayed true of every web-contents in Helm
+  > except a browser view, and stopped being true of those. It was measured
+  > into changing by a bug report: a Google sign-in in the pane threw, and it
+  > threw because a popup sign-in cannot work through a tab. Denied,
+  > `window.open` returns `null` and every OAuth library reports a blocked
+  > popup; the tab Helm opened in its place has no `window.opener`, so the
+  > authorisation code has nothing to come back through. Both halves measured
+  > on the fixture, both now asserted by `BR-39`.
+  >
+  > Only `window.open` **with features** - Chromium's `new-window` disposition -
+  > makes a window. `target="_blank"` and a middle click are still Helm tabs,
+  > which is what they mean everywhere else. The popup is on the same partition
+  > under the same denied permissions and refused downloads, is in the same
+  > `webContents.id` registry, and every navigation it makes goes through
+  > `browserReachAllows` with the reach of the tab that opened it. It is never
+  > an agent's: an agent tab's `window.open` still becomes another agent tab,
+  > because an agent putting a window in front of somebody is a different thing
+  > from an agent reaching an address. `BR-40` measures all three by counting
+  > windows rather than by reading a policy.
+  >
+  > What did not change: the app's own renderers still get `null`, and nothing
+  > here alters what Helm contacts on its own initiative, which is still only
+  > the update check.
+
 ### Portability
 
 - **Harness-agnostic** - detects `harness.yaml`, falls back to plain folders. No

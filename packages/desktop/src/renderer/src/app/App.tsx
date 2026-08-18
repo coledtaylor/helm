@@ -2446,32 +2446,58 @@ export function App(): JSX.Element {
             At the top, not the bottom: the pane below is usually a hosted TUI
             whose composer and status line live along its bottom edge, and a
             toast there covers the one part of the terminal the user is about to
-            type into. */}
-        {(profileState.notice !== null || profileState.error !== null) && (
+            type into.
+
+            A browser refusal that produced no tab shares it, and that is the
+            reason it is here rather than in the pane: there is no pane. The
+            tab cap's sentence had been reachable and painted nowhere at all,
+            so "Helm holds at most ten browser tabs" was a click that did
+            nothing. Anything that *did* produce a tab says so on that tab's own
+            problem line instead - see `failed` in `useBrowsers`. */}
+        {(profileState.notice !== null ||
+          profileState.error !== null ||
+          browsers.error !== null) && (
           <div className="pointer-events-none absolute inset-x-0 top-0 z-40 flex justify-center p-3">
-            <div
-              role="status"
-              className={cn(
-                'pointer-events-auto flex max-w-2xl items-start gap-3 rounded-raised border px-3 py-2',
-                'text-[12px] shadow-panel',
-                profileState.error !== null
-                  ? 'border-danger/30 bg-danger/10 text-danger'
-                  : 'border-border bg-surface text-fg-muted'
-              )}
-            >
-              <span className="min-w-0">{profileState.error ?? profileState.notice}</span>
-              <button
-                type="button"
-                onClick={
-                  profileState.error !== null
-                    ? profileState.dismissError
-                    : profileState.dismissNotice
-                }
-                aria-label="Dismiss"
-                className="shrink-0 text-fg-subtle hover:text-fg"
+            {/*
+              Two elements for one island, and the outer one is the fix rather
+              than the frame: `bg-danger/10` is a *tint*, and a tint over a
+              transparent container is a tint over whatever is behind it. This
+              toast is drawn at the top of the workspace column, which is where
+              the tab strip is - so the error variant had the tab labels showing
+              through the sentence and was unreadable at the moment it had
+              something to say. The notice variant never showed it, because
+              `bg-surface` is opaque. So: an opaque ground here, and the tint
+              composited onto it there, which is the same two layers every other
+              danger surface in the app gets for free by sitting on a pane.
+            */}
+            <div className="pointer-events-auto max-w-2xl overflow-hidden rounded-raised bg-surface shadow-panel">
+              <div
+                role="status"
+                className={cn(
+                  'flex items-start gap-3 rounded-raised border px-3 py-2 text-[12px]',
+                  profileState.error !== null || browsers.error !== null
+                    ? 'border-danger/30 bg-danger/10 text-danger'
+                    : 'border-border text-fg-muted'
+                )}
               >
-                ×
-              </button>
+                <span className="min-w-0">
+                  {browsers.error ?? profileState.error ?? profileState.notice}
+                </span>
+                <button
+                  type="button"
+                  onClick={
+                    browsers.error !== null
+                      ? browsers.dismissError
+                      : profileState.error !== null
+                        ? profileState.dismissError
+                        : profileState.dismissNotice
+                  }
+                  aria-label="Dismiss"
+                  className="shrink-0 text-fg-subtle hover:text-fg"
+                >
+                  ×
+                </button>
+              </div>
             </div>
           </div>
         )}

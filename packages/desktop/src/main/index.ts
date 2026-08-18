@@ -238,19 +238,24 @@ protocol.registerSchemesAsPrivileged([
  * before this pane existed, and a view that has been destroyed loses the
  * exemption with it.
  *
- * The window-open side is not exempted at all: the action is `deny` for
- * everything, always. What `browserWindowOpen` adds is that a `window.open`
- * inside a browser view becomes a new Helm browser tab - a capped one - instead
- * of nothing at all. No Chromium window is ever created either way.
+ * The window-open side answers `deny` for everything that is not a browser
+ * view, and that is still the whole of the app's own posture - the window, the
+ * spike page and an artifact frame cannot open anything, ever. A browser view
+ * gets its answer from `browserWindowOpen`, which turns `target="_blank"` into
+ * a Helm tab and `window.open` with features into a real popup window on the
+ * same partition, under the same reach rule, in the same registry.
+ *
+ * The popup is the one deliberate widening in this file and it was measured
+ * into existence: denied, `window.open` returns `null` and every OAuth library
+ * reports a blocked popup, and the tab Helm opened instead has no
+ * `window.opener` for the sign-in to hand its code back through. See
+ * `browserWindowOpen` for the terms it is held to.
  *
  * Both hooks are read at *navigation* time rather than at creation time, which
  * is what lets the registry be filled in the view's own constructor path.
  */
 app.on('web-contents-created', (_e, contents) => {
-  contents.setWindowOpenHandler((details) => {
-    browserWindowOpen(contents.id, details.url)
-    return { action: 'deny' }
-  })
+  contents.setWindowOpenHandler((details) => browserWindowOpen(contents.id, details))
   contents.on('will-navigate', (event, url) => {
     if (!browserWillNavigate(contents.id, url)) event.preventDefault()
   })
