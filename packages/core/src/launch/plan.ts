@@ -40,12 +40,24 @@ export interface LaunchRequest {
    * Helm's own MCP endpoint, registered for this session alone.
    *
    * Null - the ordinary case for anything that is not the app - passes no
-   * `--mcp-config` at all, which is what `browserMcp: false` produces and what
-   * every launch looked like before M17. `dir` is where the ephemeral file goes
-   * and is the host's to supply for the same reason `shimRoot` is: core does
-   * not know where this install keeps its data.
+   * `--mcp-config` at all, which is what both tool settings off produces and
+   * what every launch looked like before the endpoint existed. `dir` is where
+   * the ephemeral file goes and is the host's to supply for the same reason
+   * `shimRoot` is: core does not know where this install keeps its data.
+   *
+   * A **list** of servers, because the one listener serves more than one family
+   * of tools and each family has its own tick. An empty list is the same
+   * outcome as null: no file, no flag.
    */
-  mcp?: { dir: string; server: SessionMcpServer } | null | undefined
+  mcp?: { dir: string; servers: readonly SessionMcpServer[] } | null | undefined
+  /**
+   * The conversation id to assign, or null to let the CLI pick its own.
+   *
+   * The host decides, because only the host knows whether the `claude` on this
+   * machine has the flag at all - and a flag an older CLI does not recognise is
+   * a launch that fails outright rather than a session missing a feature.
+   */
+  sessionId?: string | null | undefined
 }
 
 /** The launch shape of a stored profile. */
@@ -96,6 +108,11 @@ export function buildLaunchArgs(
 
   for (const dir of req.pluginDirs ?? []) argv.push('--plugin-dir', dir)
   if (req.memoryFile) argv.push('--append-system-prompt-file', req.memoryFile)
+  // One value, so it is safe anywhere after `-n` and before the positional
+  // prompt. Assigning the conversation id rather than discovering it later is
+  // what lets the session row and the CLI's live registry agree from the first
+  // instant; see `SessionRecord.claudeSessionId`.
+  if (req.sessionId) argv.push('--session-id', req.sessionId)
   // One value, so it is safe anywhere after `-n`. Here rather than at the end
   // because the opening prompt is positional and everything before it has to
   // be a flag with its argument.
@@ -199,12 +216,12 @@ export function prepareLaunch(req: LaunchRequest): LaunchPlan {
   let mcpConfigFile: string | null = null
   if (req.mcp) {
     try {
-      mcpConfigFile = writeSessionMcpConfig(req.mcp.dir, req.mcp.server)
+      mcpConfigFile = writeSessionMcpConfig(req.mcp.dir, req.mcp.servers)
     } catch (err) {
-      // A session without its browser tools is a working session. A launch that
+      // A session without Helm's tools is a working session. A launch that
       // failed because a JSON file could not be written is not.
       warnings.push(
-        `Helm's browser tools were not registered for this session: ${
+        `Helm's own tools were not registered for this session: ${
           err instanceof Error ? err.message : String(err)
         }`
       )
@@ -222,7 +239,8 @@ export function prepareLaunch(req: LaunchRequest): LaunchPlan {
     openingPrompt: req.openingPrompt,
     pluginDirs: shims.map((shim) => shim.dir),
     memoryFile,
-    mcpConfigFile
+    mcpConfigFile,
+    sessionId: req.sessionId
   })
 
   return {
@@ -232,6 +250,7 @@ export function prepareLaunch(req: LaunchRequest): LaunchPlan {
     overlays: shims,
     memoryFile,
     mcpConfigFile,
+    claudeSessionId: req.sessionId ?? null,
     warnings
   }
 }

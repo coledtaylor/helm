@@ -246,7 +246,7 @@ export const SETTING_VALIDATORS: SettingValidators = {
       }
       const { kind, path, repoPath, number } = pane as Record<string, unknown>
       if (kind === 'history' || kind === 'pulls' || kind === 'config') continue
-      if (kind === 'content' || kind === 'settings') continue
+      if (kind === 'content' || kind === 'settings' || kind === 'sessions') continue
       if (kind === 'project') {
         if (typeof path !== 'string' || path.trim() === '') {
           return `expected a project path, got ${describe(path)}`
@@ -520,6 +520,12 @@ export const SETTING_VALIDATORS: SettingValidators = {
    */
   browserMcp: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
   browserMcpLocalOnly: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
+
+  /**
+   * The session-awareness tools, checked exactly as strictly for exactly the
+   * same reason: this one also decides whether a port is bound.
+   */
+  sessionMcp: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
 
   /**
    * Addresses the browser pane has been to, newest first.

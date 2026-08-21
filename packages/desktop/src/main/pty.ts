@@ -120,7 +120,19 @@ export function pwshPath(): string {
 
 export interface SpawnOptions {
   file: string
-  args?: string[]
+  /**
+   * An argv array, or a **raw Windows command line** for the one case that
+   * cannot be expressed as one.
+   *
+   * node-pty joins an array into a command line with its own quoting, which is
+   * right for every direct spawn and wrong for `cmd.exe /c`: cmd re-parses that
+   * line under a rule of its own, and its rule strips the first and last quote
+   * on it. With more than one quoted argument - a shim path holding a space and
+   * a session name holding one - that leaves the shim's path split in half.
+   * `claudePtyArgs` builds the string that survives it; see the comment there
+   * for the measurement.
+   */
+  args?: string[] | string
   cols: number
   rows: number
   cwd: string

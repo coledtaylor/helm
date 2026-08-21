@@ -22,11 +22,11 @@ import { probeProcess } from './overlay'
  * alone.
  */
 
-/** What a session is told about the endpoint. */
+/** What a session is told about one of the endpoint's servers. */
 export interface SessionMcpServer {
   /** The name the tools appear under. One server, one name. */
   name: string
-  /** `http://127.0.0.1:<port>/mcp`. Loopback, always. */
+  /** `http://127.0.0.1:<port>/mcp…`. Loopback, always. */
   url: string
   /** The bearer header. This is the whole of the auth. */
   headers: Record<string, string>
@@ -60,17 +60,33 @@ function pidOf(name: string): number | null {
  * The shape is the CLI's `--mcp-config` document: `mcpServers`, keyed by name,
  * `type: 'http'`. Written whole rather than merged into anything - this file
  * exists for one session and is deleted with it.
+ *
+ * **A list rather than one server**, because Helm serves more than one family
+ * of tools on the one listener: the browser tools and the session-awareness
+ * tools are separate named servers on separate routes, sharing a port and a
+ * token. Which of them a session gets is decided by the settings, one tick per
+ * family, and this file is the only place a session ever learns that any of
+ * them exist - so a family that is switched off is simply not a key in this
+ * document. An empty list writes nothing at all and answers null, which is what
+ * "both off" produces and what every launch looked like before any of it.
  */
-export function writeSessionMcpConfig(dir: string, server: SessionMcpServer): string {
+export function writeSessionMcpConfig(
+  dir: string,
+  servers: readonly SessionMcpServer[]
+): string | null {
+  if (servers.length === 0) return null
   mkdirSync(dir, { recursive: true })
   const file = join(dir, fileName(process.pid))
   writeFileSync(
     file,
     `${JSON.stringify(
       {
-        mcpServers: {
-          [server.name]: { type: 'http', url: server.url, headers: server.headers }
-        }
+        mcpServers: Object.fromEntries(
+          servers.map((server) => [
+            server.name,
+            { type: 'http', url: server.url, headers: server.headers }
+          ])
+        )
       },
       null,
       2

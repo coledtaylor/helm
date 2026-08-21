@@ -43,7 +43,10 @@ import type {
   RenameConfigResult,
   RenderedMarkdown,
   SaveFolderAsTemplateResult,
+  SessionActivityState,
   SessionRecord,
+  SessionResources,
+  SessionsOverview,
   TemplateDeleteResult,
   TemplateDetail,
   TemplateImportResult,
@@ -709,11 +712,19 @@ export interface IpcRequests {
    * It replaced "the only outbound connection Helm's own process opens" when
    * the browser pane landed, because a browser makes that false.
    *
-   * M17 did **not** move it, and the reasoning is worth keeping: that sentence
-   * is about what Helm *contacts*, and an MCP endpoint bound to `127.0.0.1` for
-   * the sessions Helm hosts contacts nothing. What it does do is **listen**,
-   * which the app had never done before, so that fact is stated separately - in
-   * the same four places, and in `main/browser-mcp.ts` where the rules are.
+   * The endpoint Helm serves to its own sessions did **not** move it, and the
+   * reasoning is worth keeping: that sentence is about what Helm *contacts*,
+   * and an MCP endpoint bound to `127.0.0.1` for the sessions Helm hosts
+   * contacts nothing. What it does do is **listen**, which the app had never
+   * done before, so that fact is stated separately - in the same four places,
+   * and in `main/browser-mcp.ts` where the rules are.
+   *
+   * That separate statement has moved once since, and the outbound sentence
+   * still did not: the listener now serves **two** named servers rather than
+   * one - the browser tools and the session-awareness tools - on one port,
+   * behind one token, with a tick each. Two families of tools is not two
+   * sockets and is not an outbound connection, so what changed is the listening
+   * paragraph in those four places and nothing here.
    *
    * The app asks on its own too: once per launch, at most once a day, when
    * `updateCheck` is on - see `maybeCheckForUpdate`. Neither path downloads
@@ -750,6 +761,41 @@ export interface IpcRequests {
   'session:close': { request: CloseSessionRequest; response: CloseSessionResult }
   /** Sessions this main process is currently hosting, for a renderer reload. */
   'session:list': { request: void; response: SessionRecord[] }
+  /**
+   * What every hosted session is doing, out of Claude Code's own registry.
+   *
+   * A request as well as an event, for the reason `session:list` is one: a
+   * renderer reload adopts main's sessions back, and a strip that adopted the
+   * tabs without their dots would sit blank until the next transition - which
+   * for an idle session is however long until somebody types.
+   */
+  'session:activity': { request: void; response: SessionActivityState[] }
+  /**
+   * Every live Claude Code session on this machine, Helm's own marked.
+   *
+   * **Machine-wide on purpose**, and the reason is the one the whole surface
+   * exists for: a `claude` started in Windows Terminal collides with a working
+   * tree exactly as hard as a tab does. It is read out of the registry the CLI
+   * keeps for its own purposes and joined to Helm's rows here in main, where
+   * the pty pids live.
+   *
+   * A request as well as an event, for the reason `session:list` is one: a
+   * renderer that has just mounted needs the answer without waiting out a poll.
+   */
+  'sessions:overview': { request: void; response: SessionsOverview }
+  /**
+   * What each hosted session is holding: its process tree and its ports.
+   *
+   * Hosted only, and that is not a limitation to be fixed. Helm spawned the
+   * pty, so the tree under it is Helm's own process tree; for a session it did
+   * not spawn there is no such claim to make, and asking the machine about
+   * somebody else's process tree would be a different thing entirely.
+   *
+   * Answers with whatever the last pass produced. The pass runs only while
+   * something is watching (`sessions:watch`), so this is empty rather than
+   * stale before the first one.
+   */
+  'sessions:resources': { request: void; response: SessionResources[] }
   /**
    * Rename a session's tab. Answers with the row as main now holds it, which is
    * what the window adopts - the same shape `settings:write` uses, so a label a
@@ -1201,6 +1247,16 @@ export interface IpcSends {
    * whether an exit is worth a notification.
    */
   'session:focus': { id: number | null }
+  /**
+   * Whether anything is looking at the resource pass. Renderer to main.
+   *
+   * A process enumeration costs 400ms of a child process where the registry
+   * poll beside it costs 0.15ms, so it is **off unless somebody is watching** -
+   * this is the switch, and `false` means no timer and no child process at all.
+   * Reference-counted in `resources.ts`, so two watchers cannot switch each
+   * other off.
+   */
+  'sessions:watch': { watching: boolean }
 
   /**
    * The answer to a `session:confirm`. One-way rather than a request, because
@@ -1336,6 +1392,21 @@ export interface IpcEvents {
   'pterm:exit': { id: number; exitCode: number }
   /** The finished row, exit code and measured duration included. */
   'session:exit': SessionRecord
+  /**
+   * Every hosted session's activity, pushed when any of them moves.
+   *
+   * The whole set rather than the one that changed, and that is the cheap fix
+   * for a class of bug rather than laziness: a renderer that missed one event -
+   * mounted late, backgrounded, reloaded - corrects itself on the next push
+   * instead of carrying a wrong dot until that session happens to transition
+   * again. Four short fields per session, only sent when something actually
+   * differs.
+   */
+  'session:activity': SessionActivityState[]
+  /** Every live session on the machine, pushed when the listing changes. */
+  'sessions:overview': SessionsOverview
+  /** Each hosted session's tree and ports, pushed when one of them moves. */
+  'sessions:resources': SessionResources[]
   /** Bring a session's tab forward - sent when its exit notification is clicked. */
   'session:activate': { id: number }
 
@@ -1442,6 +1513,9 @@ export const REQUEST_CHANNELS = Object.keys({
   'session:start': true,
   'session:close': true,
   'session:list': true,
+  'session:activity': true,
+  'sessions:overview': true,
+  'sessions:resources': true,
   'session:rename': true,
   'pterm:open': true,
   'pterm:close': true,
@@ -1526,6 +1600,7 @@ export const SEND_CHANNELS = Object.keys({
   'session:input': true,
   'session:resize': true,
   'session:focus': true,
+  'sessions:watch': true,
   'pterm:input': true,
   'pterm:resize': true,
   'session:confirmed': true,
@@ -1552,6 +1627,9 @@ export const EVENT_CHANNELS = Object.keys({
   'term:resize': true,
   'session:data': true,
   'session:exit': true,
+  'session:activity': true,
+  'sessions:overview': true,
+  'sessions:resources': true,
   'session:activate': true,
   'session:confirm': true,
   'pterm:data': true,

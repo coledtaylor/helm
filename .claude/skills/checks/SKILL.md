@@ -25,7 +25,7 @@ A change to a surface named here is not done until its check is green.
 
 | check | covers | run after touching |
 |---|---|---|
-| `pnpm sessions-check` | sessions, tabs, teardown | session lifecycle, the tab strip, shutdown |
+| `pnpm sessions-check` | sessions, tabs, teardown, session state, what a session is holding, the session-awareness tools | session lifecycle, the tab strip, shutdown, `core/registry/`, `core/resources/`, `main/activity.ts`, `main/processes.ts`, `main/resources.ts`, `main/session-tools.ts`, `SessionsPane`, the project pane's launch warning |
 | `pnpm profiles-check` | profiles, overlay shims, argv | `core/launch/`, the profile UI, the argv builder |
 | `pnpm history-check` | session index, resume | history parsing, the history pane, resume |
 | `pnpm config-check` | config console, effective view, MCP | `core/config/`, anything that writes into a `.claude` tree |
@@ -40,6 +40,12 @@ A change to a surface named here is not done until its check is green.
 | `pnpm browser-check` | the browser pane and the tools a session drives it with: the view's lifetime, its bounds, hiding, the console panel, every posture, the MCP endpoint, the reach intersection and tab ownership | `main/browser.ts`, `main/browser-mcp.ts`, `core/browser/reach.ts`, `core/launch/mcp.ts`, `BrowserPane`, `ConsolePanel`, the `browser:*` channels, the navigation guard in `main/index.ts`, `browserReach`, `browserMcp`, `browserMcpLocalOnly` |
 | `pnpm affordance-check` | every clickable control looks clickable | `theme.css`, `lib/segmented.ts`, `Checkbox`, any shared control recipe, any new pane |
 | `pnpm fidelity`, `pnpm claude-check` | TUI fidelity inside xterm | `terminal.ts`, `ptyEnv` |
+
+`main/browser-mcp.ts` sits under two of them, because the listener in it serves
+both families of tools: a change there owes `browser-check` **and**
+`sessions-check --only=tools`, and the two ask different questions of it - the
+first that the browser server still works, the second that the session server is
+still a separate name behind the same token with its own tick.
 
 `affordance-check` is the one that is about *all* of the UI rather than one
 surface, so it is owed by a change to a shared recipe and by a new pane - a new
@@ -96,7 +102,49 @@ driver, a second real app start (`--sessions-restart`), then
 `scripts/verify-orphans.mjs`, which confirms nothing survived and which reads the
 report so it has to be told where that is.
 
-Two things in it are worth copying. SESS-11 counts **pty writes** while the
+Its groups are `lifecycle`, `state`, `tools` and `resources`, and only the first
+writes what phase two reads - so `run-sessions.mjs` **skips** phase two for any
+other `--only=`, rather than running it against nothing and reporting a red line
+that means "no rename happened" while reading as "the rename did not survive".
+
+`tools` runs **before** `resources` and that order is load-bearing:
+`runResourcesChecks` ends with `ctx.resources.stop()`, which is a permanent
+teardown of the service the whole app shares, and the session-detail tool takes
+a watch on that same service. SESS-29 asserts the pass moved *because of the
+call*, so a reordering fails loudly with `passRan: false` rather than measuring
+a stopped service.
+
+The `resources` group is the one that goes outside Helm. It spawns two hosted
+sessions in two different working trees and a third `claude` on a pty **this
+driver owns** - Helm has no row, no tab and no session id for that one - because
+"the listing is machine-wide" cannot be argued into existence, only shown. Then
+it drives its own `createResourcesService` with the enumeration injected, so the
+two states the pane must never confuse are told apart by what the machine
+answered: SESS-23's session with genuinely no children says so in words, and
+SESS-24 turns the same session's pass blind and requires that sentence to be
+replaced by "Unknown". Neither could be arranged on a real machine on demand.
+Whether the real enumeration works at all is asked first and separately -
+SESS-21 against a process table the driver reads with a different query, SESS-22
+against a listener it starts on a port it chose and then kills, so a matcher
+that said yes to everything cannot pass.
+
+The `tools` group is the session-awareness tools over the MCP endpoint, and it
+speaks MCP **as the sessions themselves**: it reads each one's bearer token out
+of the `--mcp-config` file that session was handed, because attribution is which
+token arrived and a driver registering an agent of its own would have no session
+to be attributed to. Both sessions are launched through `SessionHost.review` -
+not because this is about pull requests but because it is Helm's one launch path
+that puts a prompt into argv, which is the exact thing a tool must never hand
+over. Two things in it are worth copying. SESS-30 plants a marker as one
+session's first message, **proves it is in that session's argv and on its
+screen**, and only then requires it to be in no answer - the fixture before the
+absence. And SESS-33 asks a real `claude` to report on the other session and
+rests its verdict on the **Helm tab number**, which appears in no file on the
+machine: the session's name is in the registry and a model with a shell could
+have read it there, so a probe resting on the name would not have been a probe
+about the tools.
+
+Two things in the rest are worth copying. SESS-11 counts **pty writes** while the
 rename field has the caret, by wrapping `sessions.input` on the host - "the
 terminal did not get that keystroke" has no other witness, and the mutation that
 proves the counter is live puts nine of them in the pty. And SESS-14 is the
@@ -492,6 +540,17 @@ shorter, not wrong, so each line reports the tab's width and whether either of
 its two lines is being cut. It and `split` are the two groups that spawn
 sessions; `tabs` closes its own before it returns, so the two do not photograph
 each other's tabs.
+
+Because it is the only group with more than one live session in it, `tabs` also
+shoots the **sessions pane** populated, in both themes, with the detail half
+open on a row - a list of one row says nothing about how rows read against each
+other. And last, because it stops the activity poller, it shoots the **state
+dots**: the four live states cannot be arranged on real sessions at once and
+held still long enough to photograph, so they are pushed onto the strip
+directly. That is allowed there and nowhere else - `design-shot` asserts nothing
+and what has to be looked at is whether seven tones are distinguishable side by
+side. Whether the wiring behind them is real is `sessions-check --only=state`'s
+question, against a session driven into each state for real.
 
 `states` **prints numbers too**. Five named probes: each moves the pointer away,
 moves it onto the element that carries the class, and reports background, border

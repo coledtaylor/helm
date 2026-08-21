@@ -5,6 +5,7 @@ import {
   finishSession,
   historyTitle,
   launchRequestFromProfile,
+  newClaudeSessionId,
   prepareLaunch,
   readGitBranch,
   readHistorySession,
@@ -23,7 +24,11 @@ import {
   type SessionRecord
 } from '@helm/core'
 import type { BrowserMcpHost } from './browser-mcp'
-import { resolveClaudeCommand } from './claude-cli'
+import {
+  claudePtyArgs,
+  readClaudeSupportsSessionId,
+  resolveClaudeCommand
+} from './claude-cli'
 import { emit } from './ipc'
 import { shimRoot } from './paths'
 import { killAllSessionsSync, killSession, spawnSession, type SessionHandle } from './pty'
@@ -223,6 +228,30 @@ export interface SessionHost {
   grid: (id: number) => { cols: number; rows: number } | null
   /** OS process id, for asserting a session is really gone. */
   pid: (id: number) => number | null
+  /**
+   * The session a bearer token was minted for, or null.
+   *
+   * **The whole of attribution at Helm's endpoint**, and it is answered from
+   * this map rather than from bookkeeping of its own because this map is what
+   * owns a token's lifetime: the same entry that hands the token out is the one
+   * that revokes it when the session ends, so an answer here cannot outlive the
+   * session it names. A caller never says which session it is; the token that
+   * arrived does, and this is where that becomes a row.
+   *
+   * Null for an unknown token, for a session that has ended, and for a session
+   * whose tools were never registered - all three are "Helm has no session for
+   * this", which is the only honest answer to a token it does not know.
+   */
+  tokenHolder: (token: string) => SessionRecord | null
+  /**
+   * Called whenever the set of hosted sessions changes - a spawn, an exit, a
+   * close - so the activity poller re-reads at once instead of on its next tick.
+   *
+   * A callback rather than a direct call because the poller is created *after*
+   * this host (it needs the window), and because this file has no business
+   * knowing what else cares that a session started.
+   */
+  onChanged: (listener: () => void) => void
   /** Which pane the user is looking at; decides whether an exit notifies. */
   setFocus: (id: number | null) => void
   runningCount: () => number
@@ -259,6 +288,10 @@ export function createSessionHost({
   const hosted = new Map<number, Hosted>()
   const grids = new Map<number, { cols: number; rows: number }>()
   let focused: number | null = null
+  const changed = new Set<() => void>()
+  const announce = (): void => {
+    for (const listener of changed) listener()
+  }
 
   const isRunning = (h: Hosted): boolean => h.record.status === 'running'
   /** Still alive *and* still in a tab. */
@@ -300,14 +333,41 @@ export function createSessionHost({
     if (!record || !entry || entry.closed) {
       // Already recorded, or nobody is watching: there is no pane to tell.
       hosted.delete(id)
+      announce()
       return
     }
 
     entry.record = record
     emit(window(), 'session:exit', record)
+    announce()
     notifyIfUnwatched(record)
   }
 
+  /**
+   * Helm notifies on an unwatched **exit**, and deliberately not on `waiting`.
+   *
+   * The question came up with the session-state indicator, since `waitingFor`
+   * hands over a ready-made sentence. The answer is no, for now, and the
+   * reasoning is worth keeping because it will be asked again.
+   *
+   * An exit is *terminal*: it happens once, it is the end of the thing, and a
+   * notification is the only way to learn about it without watching. `waiting`
+   * is neither - a session in a permission-asking mode enters and leaves it once
+   * per tool call, and the probe that measured these states saw two `waiting`
+   * transitions inside eighteen seconds. One of them was a `/help` dialog the
+   * user had opened a moment earlier, and telling somebody about a dialog they
+   * just opened is the definition of noise. A toast per permission prompt would
+   * make the feature something people turn off.
+   *
+   * The tab's dot is continuous, costs nothing and is already the answer while
+   * the window is in front of you. What would earn a notification is the case
+   * the dot cannot reach: the window is **not focused**, the session has been
+   * waiting for more than some seconds, and `waitingFor` is not `"dialog open"`
+   * - a dialog is something the user did, a permission prompt is something the
+   * agent needs. That is three thresholds and a string comparison against an
+   * undocumented value, which is a design with its own measurements rather than
+   * a line added here.
+   */
   function notifyIfUnwatched(record: SessionRecord): void {
     const win = window()
     // "Non-focused" is two conditions, not one: a session in a background tab
@@ -336,6 +396,23 @@ export function createSessionHost({
   }
 
   /**
+   * A conversation id for a launch, or null where this CLI has no flag for one.
+   *
+   * Minted per launch and never reused: a uuid that already exists is refused
+   * outright - `Error: Session ID <uuid> is already in use.`, exit 1, measured
+   * on 2.1.238 - so there is no "reconnect by id" to be had here, and treating
+   * one as reusable would turn a launch into a failure.
+   *
+   * A CLI that does not take the flag gets no flag and launches exactly as it
+   * did before, which is the whole of "warns and launches without it": the
+   * warning is `setup.ts`'s, said once at startup about the binary, rather than
+   * a sentence repeated at every launch about something the user cannot fix
+   * from here.
+   */
+  const mintSessionId = async (): Promise<string | null> =>
+    (await readClaudeSupportsSessionId()) ? newClaudeSessionId() : null
+
+  /**
    * A token for the session about to start, or null.
    *
    * Minted before `prepareLaunch` because the argv is what carries it: the file
@@ -345,7 +422,7 @@ export function createSessionHost({
    */
   const registerBrowserTools = (
     name: string
-  ): { token: string; mcp: { dir: string; server: SessionMcpServer } } | null => {
+  ): { token: string; mcp: { dir: string; servers: SessionMcpServer[] } } | null => {
     const registration = browserMcp?.()?.register(name) ?? null
     return registration === null ? null : { token: registration.token, mcp: registration.launch }
   }
@@ -430,7 +507,10 @@ export function createSessionHost({
       branch,
       projectPath: origin.projectPath ?? null,
       profileId: origin.profileId ?? null,
-      argv
+      argv,
+      // Taken off the plan rather than re-read out of `argv`: the plan is what
+      // put the flag there, so this is the value at its source.
+      claudeSessionId: plan.claudeSessionId
     })
 
     let handle: SessionHandle
@@ -438,7 +518,11 @@ export function createSessionHost({
       handle = spawnSession({
         id: String(record.id),
         file: command.file,
-        args: argv,
+        // The row above records the logical `argv`, which is what the launch
+        // disclosure prints and what a person would type. What the pty is
+        // handed is a different question for a `.cmd` shim, where cmd.exe
+        // re-parses the line - see `claudePtyArgs`.
+        args: claudePtyArgs(command, plan.argv),
         cols: Math.max(grid.cols, 1),
         rows: Math.max(grid.rows, 1),
         cwd: plan.cwd,
@@ -465,6 +549,7 @@ export function createSessionHost({
       mcpToken,
       mcpConfigFile: plan.mcpConfigFile
     })
+    announce()
     return record
   }
 
@@ -477,7 +562,8 @@ export function createSessionHost({
         root: req.cwd,
         name,
         shimRoot,
-        mcp: tools?.mcp ?? null
+        mcp: tools?.mcp ?? null,
+        sessionId: await mintSessionId()
       })
       attachBrowserTools(tools?.token ?? null, plan.mcpConfigFile)
       return spawn(plan, req, { projectPath: req.projectPath }, tools?.token ?? null)
@@ -494,7 +580,8 @@ export function createSessionHost({
       const tools = registerBrowserTools(name)
       const plan = prepareLaunch({
         ...launchRequestFromProfile(profile, shimRoot, name),
-        mcp: tools?.mcp ?? null
+        mcp: tools?.mcp ?? null,
+        sessionId: await mintSessionId()
       })
       attachBrowserTools(tools?.token ?? null, plan.mcpConfigFile)
 
@@ -559,7 +646,7 @@ export function createSessionHost({
        */
       const tools = registerBrowserTools(label)
       const mcpConfigFile =
-        tools === null ? null : writeSessionMcpConfig(tools.mcp.dir, tools.mcp.server)
+        tools === null ? null : writeSessionMcpConfig(tools.mcp.dir, tools.mcp.servers)
       attachBrowserTools(tools?.token ?? null, mcpConfigFile)
 
       const session = await spawn(
@@ -570,6 +657,15 @@ export function createSessionHost({
           overlays: [],
           memoryFile: null,
           mcpConfigFile,
+          /*
+           * The id it already has, recorded rather than re-minted.
+           *
+           * `--resume <id>` was measured registering under that same id on
+           * 2.1.238, so this row and the registry agree without the flag - and
+           * passing `--session-id` here would be asserting an id that already
+           * exists, which the CLI refuses outright.
+           */
+          claudeSessionId: history.sessionId,
           warnings: []
         },
         req,
@@ -609,7 +705,8 @@ export function createSessionHost({
         // Helm nobody has configured launching exactly what `claude` would.
         model: plan.model,
         effort: plan.effort,
-        mcp: tools?.mcp ?? null
+        mcp: tools?.mcp ?? null,
+        sessionId: await mintSessionId()
       })
       attachBrowserTools(tools?.token ?? null, launch.mcpConfigFile)
       return spawn(launch, grid, { projectPath: plan.repoPath }, tools?.token ?? null)
@@ -663,6 +760,7 @@ export function createSessionHost({
         hosted.delete(req.id)
       }
       if (focused === req.id) focused = null
+      announce()
       return { closed: true }
     },
 
@@ -682,6 +780,23 @@ export function createSessionHost({
     grid: (id) => grids.get(id) ?? null,
 
     pid: (id) => hosted.get(id)?.handle.pid ?? null,
+
+    tokenHolder(token) {
+      // A running session only. A token is revoked when its session ends, so
+      // reaching this with a live token for an exited session would be a bug
+      // rather than a state - and answering with the row anyway would let a
+      // dead session's identity go on being asserted.
+      for (const entry of hosted.values()) {
+        if (entry.mcpToken !== null && entry.mcpToken === token && isRunning(entry)) {
+          return entry.record
+        }
+      }
+      return null
+    },
+
+    onChanged(listener) {
+      changed.add(listener)
+    },
 
     setFocus(id) {
       focused = id

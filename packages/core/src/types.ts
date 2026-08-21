@@ -352,12 +352,341 @@ export interface SessionRecord {
   profileId: number | null
   /** Argv after the executable, as spawned. */
   argv: string[]
+  /**
+   * The Claude Code conversation id this session is having, or null.
+   *
+   * **Assigned, not discovered.** Helm mints a uuid and hands it over in argv
+   * (`--session-id`), so the row and the conversation agree from the first
+   * instant rather than from whenever something managed to read one out of the
+   * other. A resumed session carries the id it resumed, because that is the
+   * conversation it is.
+   *
+   * Null for a session launched before this column existed, and for one
+   * launched against a CLI with no `--session-id` flag. Both are read as "no
+   * durable join", never as an error.
+   *
+   * Three measured facts shape what it may be used for, all against 2.1.238:
+   *
+   *   - **A `/clear` re-registers under a new id, same process.** So this is
+   *     the id the conversation *started* as, and a live join may not depend on
+   *     it staying current - see `joinSessionRegistry`, which uses it once to
+   *     learn the process and then follows the process.
+   *   - **`/compact` keeps it.** A compaction is the same conversation.
+   *   - **A uuid that already exists is refused**: `Error: Session ID <uuid> is
+   *     already in use.` and exit 1. So an id is minted per launch and never
+   *     reused, and this column is a record rather than something to launch
+   *     from.
+   */
+  claudeSessionId: string | null
   status: SessionStatus
   startedAt: string
   endedAt: string | null
   durationMs: number | null
   /** Null while running, and for a session whose exit code was never observed. */
   exitCode: number | null
+}
+
+/**
+ * What a live Claude Code session says it is doing.
+ *
+ * These four are the CLI's own vocabulary, not Helm's: they are the enum its
+ * registry validator accepts, and Helm neither adds to it nor collapses it.
+ * Confirmed against **2.1.238** by driving a real session through every one of
+ * them and keeping the records - see `packages/core/src/registry/registry.ts`
+ * for what each one was provoked with.
+ *
+ * A const array because a component maps it to a tone, which makes it a
+ * *value* in the browser bundle - so it lives in `types.ts`, the one entry
+ * point safe to import values from (CLAUDE.md "Boundaries").
+ */
+export const SESSION_ACTIVITIES = ['busy', 'shell', 'idle', 'waiting'] as const
+export type SessionActivity = (typeof SESSION_ACTIVITIES)[number]
+
+/**
+ * One record out of `~/.claude/sessions/<pid>.json`, parsed tolerantly.
+ *
+ * Every field but `pid` and `file` is optional, because every field but those
+ * two has been observed absent: a record is written the instant a session
+ * registers and gains its `status` only when the interactive loop publishes
+ * one, so the very first record of every session has no status at all.
+ *
+ * This is undocumented CLI internals. The parse is deliberately shaped so that
+ * a field going missing, changing type or gaining a sibling costs a value and
+ * never an exception.
+ */
+export interface SessionRegistryEntry {
+  /** The file this came out of, for diagnostics. `<pid>.json`. */
+  file: string
+  /**
+   * The pid Claude Code registered under - **its own**, which is not always the
+   * one Helm holds. Through a `.cmd` shim the pty is `cmd.exe` and `claude.exe`
+   * is its child, so the two differ; measured, pty 23496 against registry 4068.
+   */
+  pid: number
+  /**
+   * Windows FILETIME of the process's creation, as a decimal string, or null.
+   *
+   * The one thing that makes a pid safe to join on. Claude Code's own registry
+   * sweep does not compare it and is therefore blind to pid reuse; a reader
+   * joining on pid should not be.
+   */
+  procStart: string | null
+  /** The conversation id. Changes under a `/clear` without the pid changing. */
+  sessionId: string | null
+  cwd: string | null
+  /** The `-n` name. */
+  name: string | null
+  /** The CLI version that wrote the record. */
+  version: string | null
+  /** `cli` for an interactive run, `sdk-cli` for a `-p` one. */
+  entrypoint: string | null
+  /** Epoch ms the process registered at. */
+  startedAt: number | null
+  /**
+   * The published status, or null where the record carried none **or carried
+   * one this build does not recognise**.
+   *
+   * Those two are deliberately the same value here and are told apart by
+   * `rawStatus`: both mean "Helm has nothing to say", which is the only honest
+   * answer to a status it cannot interpret. A CLI that renames one of the four
+   * therefore degrades to painting what the tab painted before this existed,
+   * never to a guess.
+   */
+  activity: SessionActivity | null
+  /** Exactly what the `status` field held, whatever it was. Null when absent. */
+  rawStatus: string | null
+  /**
+   * Why the session is blocked, when it is - the CLI's own sentence.
+   *
+   * Two were measured on 2.1.238: `"dialog open"` for a slash command that
+   * renders a UI, and `"permission prompt"` for a tool call awaiting approval.
+   * Carried verbatim and never matched against, because it comes from whatever
+   * dialog is on top rather than from a fixed list.
+   */
+  waitingFor: string | null
+  /**
+   * When the status last changed, epoch ms, or null.
+   *
+   * **Its age says nothing about staleness.** The file is written on
+   * transition and never on a timer - a `busy` record carrying an 18-minute-old
+   * stamp is an ordinary long tool call. Liveness is the only test, and it is
+   * `probeProcess`. Present for diagnostics; nothing in Helm may infer from it.
+   */
+  statusUpdatedAt: number | null
+}
+
+/**
+ * What one of Helm's own sessions is doing, ready for the tab.
+ *
+ * Null activity is the ordinary state, not an error: a session whose registry
+ * record has not appeared yet, whose process cannot be proved alive, or that is
+ * publishing a status this build does not know. All three paint what the tab
+ * painted before any of this existed.
+ */
+export interface SessionActivityState {
+  /** Helm's own session row id. */
+  id: number
+  activity: SessionActivity | null
+  /** The CLI's sentence for a `waiting` session. Null otherwise. */
+  waitingFor: string | null
+  /**
+   * The conversation id the registry is currently reporting under.
+   *
+   * Not necessarily `SessionRecord.claudeSessionId`: a `/clear` gives the same
+   * process a new one, and this is the live value.
+   */
+  claudeSessionId: string | null
+}
+
+/**
+ * One live Claude Code session on this machine, whoever started it.
+ *
+ * **Listing is machine-wide; detail is Helm's own.** The registry Claude Code
+ * keeps is not Helm's - a `claude` in Windows Terminal writes a record beside
+ * anything Helm hosts - and a listing that only showed Helm's own would answer
+ * "is anybody working in this tree" wrongly in exactly the case somebody gets
+ * hurt by it. So every record is listed, and the fields below are the whole of
+ * what a record carries. Everything richer - branch, profile, overlays, argv,
+ * the process tree, the ports - hangs off `helmSessionId`, because Helm has
+ * none of it for a session it did not spawn. That degradation needs no special
+ * case: it is simply what is knowable.
+ *
+ * This is the same rule `browser_tabs` established, arrived at from the other
+ * side: listing is not driving.
+ */
+export interface LiveSession {
+  /**
+   * Helm's own session row id, or null for a session Helm does not host.
+   *
+   * The whole of the hosted/not distinction, and it is a join key rather than a
+   * flag: everything Helm knows beyond the record is reached through it.
+   */
+  helmSessionId: number | null
+  /**
+   * The pid the session is registered under, or the pty's pid for a hosted
+   * session that has no record yet.
+   *
+   * Not necessarily the same process in the two cases: through a `.cmd` shim
+   * the pty is `cmd.exe` and `claude.exe` registers under its own pid. Which
+   * one this is, is what `registered` says.
+   */
+  pid: number
+  /**
+   * Whether a registry record was found for it.
+   *
+   * False is an ordinary state rather than an error, and there are two measured
+   * ways into it: the second between spawn and registration, and a session
+   * sitting on the workspace-trust prompt, which registers only after the
+   * startup gates. A Helm session in that state is listed anyway - Helm knows
+   * its own processes are running - carrying what its row says and nothing the
+   * record would have added.
+   */
+  registered: boolean
+  /** The working directory. From the record, or from Helm's row. */
+  cwd: string | null
+  /** What it is called: the `-n` name, or Helm's own label for a hosted one. */
+  name: string | null
+  activity: SessionActivity | null
+  /** The CLI's own sentence for a `waiting` session, verbatim. */
+  waitingFor: string | null
+  /**
+   * When the status above was last published, epoch ms, or null.
+   *
+   * Carried so a surface can say **how long** a session has been busy, or
+   * waiting, which is the difference between "it is working" and "it has been
+   * working for forty minutes". That is a different claim from the one
+   * `SessionRegistryEntry.statusUpdatedAt` forbids, and the two are worth
+   * keeping apart: the record is written on transition and never on a timer, so
+   * its age says exactly how long this status has held, and says **nothing**
+   * about whether the session is still alive. Liveness is `probeProcess` and
+   * only `probeProcess` - by the time a value reaches this field the record has
+   * already been through that filter.
+   */
+  statusSinceMs: number | null
+  /** The CLI version that wrote the record. Null for an unregistered one. */
+  version: string | null
+  /** `cli` for an interactive run, `sdk-cli` for a `-p` one. */
+  entrypoint: string | null
+  /** Epoch ms the session registered at, or Helm's own start time. */
+  startedAtMs: number | null
+  /** The conversation id the registry is reporting under. */
+  claudeSessionId: string | null
+}
+
+/** Every live session on the machine, as one pass saw them. */
+export interface SessionsOverview {
+  /** Hosted first, then the rest; each group by start time, newest last. */
+  sessions: LiveSession[]
+  /** When the registry was read, epoch ms. */
+  readAtMs: number
+}
+
+/**
+ * One process in a session's tree.
+ *
+ * **Helm spawned the pty, so the tree under it is Helm's own process tree**,
+ * not a reading of anybody's conversation. That is the whole argument for this
+ * being in scope: nothing here parses session output or infers anything from
+ * what a model said - it asks the operating system what the children of a
+ * process Helm started are, which is a question Helm is entitled to ask about
+ * its own children and about nothing else.
+ */
+export interface SessionProcess {
+  pid: number
+  parentPid: number
+  /** The image name, e.g. `docker.exe`. Machine data, so it renders in mono. */
+  name: string
+  /**
+   * The full command line, or null where the host would not give it up.
+   *
+   * Null is routine rather than exceptional and it is **not** an error: on this
+   * machine 159 of 277 processes refused one to an unelevated query. Helm makes
+   * no elevation assumption anywhere, so a process it may not open is a process
+   * reported as unknown - never one that fails the pass.
+   */
+  commandLine: string | null
+  /** How far below the session's own process this sits. The root is 0. */
+  depth: number
+  /**
+   * The ports this process is listening on, ascending - or null where the
+   * socket query could not run at all.
+   *
+   * Nullable on its own rather than folded into the tree's own nullability,
+   * because the two queries fail independently: a tree read with no socket
+   * answer must say "not known" here and not the empty list, which would be a
+   * claim that this process is listening on nothing.
+   */
+  ports: number[] | null
+}
+
+/** A listening socket held somewhere in a session's process tree. */
+export interface SessionPort {
+  port: number
+  pid: number
+  /** The image name of the process holding it. */
+  process: string
+  /**
+   * Every local address it is bound to, sorted - `127.0.0.1`, `0.0.0.0`, `::`.
+   *
+   * A list rather than one string because a server routinely binds the same
+   * port twice, once per address family, and "which interfaces is this reachable
+   * on" is a different question from "which port". Collapsing them would lose
+   * the difference between a loopback-only dev server and one on every
+   * interface, which is the difference that matters when two machines share a
+   * network.
+   */
+  addresses: string[]
+}
+
+/**
+ * What one session Helm hosts is currently holding.
+ *
+ * Every field that can be unknown is nullable, and the rule the whole shape is
+ * built on is that **"could not look" and "nothing there" are different
+ * claims**. A pass that could not enumerate processes leaves `processes` null,
+ * and the pane says so; a pass that enumerated and found the session childless
+ * leaves it `[]`. A surface that merged them would tell somebody a session is
+ * holding nothing at the exact moment Helm had failed to ask.
+ */
+export interface SessionResources {
+  /** Helm's own session row id. */
+  id: number
+  /**
+   * The pty's pid: the root of the tree, and provably Helm's own child.
+   *
+   * Deliberately the pty's rather than the registry record's. Through a `.cmd`
+   * shim those differ - the pty is `cmd.exe` and `claude.exe` is beneath it -
+   * and the pty's is the one that roots *everything the session started*,
+   * including the shim itself. It is also the one Helm holds without asking
+   * anybody.
+   */
+  rootPid: number
+  /**
+   * The tree under `rootPid`, root first and then breadth-first, or null where
+   * the host could not be asked at all.
+   */
+  processes: SessionProcess[] | null
+  /**
+   * Whether `rootPid` was in the enumeration.
+   *
+   * Distinguishes the third state from the other two: the pass ran, and the
+   * session's own process was not in it. That is a session that exited between
+   * the pass being scheduled and it running, which is ordinary - and it is not
+   * the same claim as "it has no children".
+   */
+  rootSeen: boolean
+  /** Listening sockets anywhere in the tree, or null where none was asked for. */
+  ports: SessionPort[] | null
+  /**
+   * How many processes in the tree would not give up a command line.
+   *
+   * Reported rather than hidden: it is the size of what this pass could not
+   * see, and a pane that showed twelve rows without saying four of them are
+   * opaque would be implying a completeness it does not have.
+   */
+  opaque: number
+  /** When the pass that produced this ran, epoch ms. */
+  atMs: number
 }
 
 /**
@@ -737,6 +1066,15 @@ export interface LaunchPlan {
    * outlives the run that minted it is a file nothing collects.
    */
   mcpConfigFile: string | null
+  /**
+   * The conversation id this launch assigned with `--session-id`, or null when
+   * it assigned none.
+   *
+   * Returned so the host can put it on the session row: the flag is in `argv`
+   * either way, but a row that had to re-parse its own argv to find out what it
+   * launched would be a second parser of a string this file wrote.
+   */
+  claudeSessionId: string | null
   /** Things the user should know that did not stop the launch. */
   warnings: string[]
 }
@@ -872,6 +1210,7 @@ export interface DetectedShell {
 export type WorkspaceTab =
   | { kind: 'project'; path: string }
   | { kind: 'history' }
+  | { kind: 'sessions' }
   | { kind: 'pulls' }
   | { kind: 'pr'; repoPath: string; number: number }
   | { kind: 'config' }
@@ -909,6 +1248,32 @@ function samePath(a: string, b: string): boolean {
 /** Whether this project has been lifted into the sidebar's Pinned section. */
 export function isProjectPinned(pinned: readonly string[], path: string): boolean {
   return pinned.some((entry) => samePath(entry, path))
+}
+
+/**
+ * The live sessions whose working directory is this folder.
+ *
+ * The whole of the launch-time warning's arithmetic, and it lives here beside
+ * `samePath` for the reason that function's comment gives: one normalisation.
+ * A warning that compared paths differently from the way the sidebar groups
+ * them would be a warning that appears for one surface and not for the other,
+ * on the same two directories.
+ *
+ * Case folding and nothing else, for the same reason. Trailing separators,
+ * `resolve` and short-name expansion are all ways for two readings of one path
+ * to disagree, and this comparison is between a path Helm holds and a path
+ * Claude Code wrote into its own record - two writers, so the risk of a second
+ * normalisation is a warning that silently stops appearing.
+ *
+ * `null` cwds are excluded rather than matched: a record with no working
+ * directory is a session whose directory is unknown, and "unknown" is not
+ * "here".
+ */
+export function liveSessionsIn(
+  sessions: readonly LiveSession[],
+  path: string
+): LiveSession[] {
+  return sessions.filter((session) => session.cwd !== null && samePath(session.cwd, path))
 }
 
 /**
@@ -1296,6 +1661,44 @@ export interface AppSettings {
    * restored. This is the part worth remembering, so this is the part remembered.
    */
   browserProjectUrls: Record<string, string>
+
+  /**
+   * Whether Helm tells a session it hosts what the other sessions are doing.
+   *
+   * **A second setting rather than `browserMcp`'s, and the reasoning is the
+   * decision.** The two are served by one listener, on one port, under one
+   * token - so a single tick would have been less to hold and would read as one
+   * capability. They are not one capability. Driving a browser acts on the
+   * world; this only looks at it, and the thing it looks at is *other people's
+   * work*. Somebody may reasonably want either without the other, and the two
+   * refusals have nothing in common: "do not let an agent click things" and "do
+   * not tell an agent about my other sessions".
+   *
+   * The second reason is that it makes off assertable at the wire. With two
+   * named servers, this off means the route answers 404, the name is absent
+   * from the `--mcp-config` document, and the tools are in no list - three
+   * independent facts. Folded into `browserMcp`, "nothing in argv" could not be
+   * asserted at all, because the browser's `--mcp-config` is in the argv either
+   * way.
+   *
+   * **On by default, and the argument is not that its neighbour is.** The two
+   * differ in exactly the way that would decide this: `browserMcp` on gives an
+   * agent *reach* over a pane the user is looking at, where this only tells an
+   * agent about work in other windows. That is a smaller grant, over the user's
+   * own machine, of facts the operating system will hand any process that asks
+   * - and against it stands the failure it exists to prevent, which is two
+   * agents editing one checkout, and which happens to somebody who never went
+   * looking for a setting. A capability that has to be discovered is one that
+   * prevents nothing.
+   *
+   * What makes on defensible is what is *not* served: no conversation, no argv,
+   * no conversation id, no child command lines, and no way to send another
+   * session anything. If any of that were in it, this would default off.
+   *
+   * Off is one tick away and is a real off - `main/session-tools.ts` is then
+   * not mounted, no route exists, and the app is exactly what it was without it.
+   */
+  sessionMcp: boolean
 }
 
 /** How many addresses the dropdown offers. Ten, and no manager behind it. */
@@ -1359,7 +1762,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // beside a pane that is not would be a surprise rather than a posture.
   browserMcpLocalOnly: false,
   browserRecentUrls: [],
-  browserProjectUrls: {}
+  browserProjectUrls: {},
+  // On, because the collision this exists to prevent - two agents in one
+  // working tree - happens to somebody who never went looking for a setting,
+  // and because what it serves is a strictly smaller grant than the tick above
+  // it. See the field for what is not in it, which is what makes that true.
+  sessionMcp: true
 }
 
 /**

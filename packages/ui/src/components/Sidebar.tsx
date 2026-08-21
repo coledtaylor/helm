@@ -26,6 +26,18 @@ export interface SidebarProps {
    * knowing only about discovery.
    */
   profiles?: ReactNode | undefined
+  /** Opens the sessions pane: every live session on this machine. */
+  onOpenSessions?: (() => void) | undefined
+  /**
+   * Its second line, composed by the caller the way `pullsDetail` is: how many
+   * sessions are running here and how many are running outside Helm.
+   *
+   * The second half is the one worth the width. "Three sessions" is a fact
+   * about Helm; "one of them is not mine" is the fact that changes what
+   * somebody does next.
+   */
+  sessionsDetail?: string | undefined
+  sessionsActive?: boolean | undefined
   /** Opens the session-history pane. */
   onOpenHistory?: (() => void) | undefined
   /** Sessions the index holds, and how many of them can still be reopened. */
@@ -199,6 +211,9 @@ function matches(project: Project, query: string): boolean {
 
 export function Sidebar({
   profiles,
+  onOpenSessions,
+  sessionsDetail,
+  sessionsActive = false,
   onOpenHistory,
   historyCount,
   historyResumable,
@@ -274,12 +289,29 @@ export function Sidebar({
   return (
     <aside className="flex h-full w-[280px] shrink-0 flex-col overflow-hidden rounded-island border border-border bg-surface">
       {/* The rows that are about the whole machine rather than about anything
-          configured in Helm. "Where did I do that thing last week" starts a
-          session at least as often as picking a project does, and Config and
-          Content ask machine-wide questions too - each of those panes carries
-          its own scope switcher, so neither needs a harness to hang off and
-          neither can be hidden by a collapsed group or an empty tree. */}
+          configured in Helm. "What is running right now" and "where did I do
+          that thing last week" both start a session at least as often as
+          picking a project does, and Config and Content ask machine-wide
+          questions too - each of those panes carries its own scope switcher, so
+          neither needs a harness to hang off and neither can be hidden by a
+          collapsed group or an empty tree. */}
       <div className="shrink-0 space-y-0.5 p-2 pb-1.5">
+        {/* First, and above Session history, because the two are the same
+            question at two times: what is running now, and what ran before.
+            "Now" is the one somebody acts on. Its second line carries the fact
+            that makes it worth a row - how many of the sessions on this machine
+            are not Helm's. */}
+        {onOpenSessions && (
+          <GlobalLink
+            icon={<TerminalIcon width={13} height={13} />}
+            label="Sessions"
+            detail={sessionsDetail ?? 'Reading…'}
+            title="Every Claude Code session running on this machine"
+            active={sessionsActive}
+            onClick={onOpenSessions}
+            data-open-sessions
+          />
+        )}
         {onOpenHistory && (
           <GlobalLink
             icon={<HistoryIcon width={13} height={13} />}
@@ -564,7 +596,10 @@ function HarnessGroup({
 /**
  * One of the rows above the tree, each a way into a pane about the whole
  * machine. They share a shape so the group reads as one list; `detail` is the
- * second line, which only Session history has a fact worth filling with.
+ * second line, and three of the five have a fact worth filling it with -
+ * what is running now, how much has run before, and how many pull requests are
+ * open. Config and Content stay single-line and the group still reads as one
+ * list.
  */
 function GlobalLink({
   icon,

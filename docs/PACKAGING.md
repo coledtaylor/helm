@@ -165,15 +165,17 @@ There is no telemetry, no crash reporting, no fonts and no CDN. With
 `updateCheck` off, Helm asks nothing by itself at all; the one remaining route
 is a person pressing Check now, so nothing leaves the machine unasked for.
 
-**Inbound is one listener and it is loopback.** Since M17 a Claude session Helm
-hosts can drive the browser pane, and it reaches those tools through an MCP
-endpoint bound to `127.0.0.1` on a port chosen per app run. It is the only
-socket Helm has ever accepted a connection on. Nothing off this machine can
-reach it; every request carries a bearer token minted for one session and
-revoked when that session ends; and `browserMcp` turns it off entirely, in which
-case no port is bound. Worth knowing for a packaged build in particular: an
-installer that a firewall prompt follows is a bad first impression, and a
-loopback bind produces no prompt on Windows.
+**Inbound is one listener and it is loopback.** A Claude session Helm hosts can
+drive the browser pane, and can ask what the other Claude Code sessions on this
+machine are doing; both sets of tools arrive over one MCP endpoint bound to
+`127.0.0.1` on a port chosen per app run - two named servers on two routes, one
+socket. It is the only socket Helm has ever accepted a connection on. Nothing
+off this machine can reach it; every request carries a bearer token minted for
+one session and revoked when that session ends; and each set has its own setting
+(`browserMcp`, `sessionMcp`) that removes it from every launch, with no port
+bound at all when both are off. Worth knowing for a packaged build in
+particular: an installer that a firewall prompt follows is a bad first
+impression, and a loopback bind produces no prompt on Windows.
 
 The pull-request pane reaches GitHub as well, but through the user's own `gh`
 CLI: `gh pr list` per repository on a timer (`prPollMinutes`, five minutes by

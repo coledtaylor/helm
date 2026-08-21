@@ -186,14 +186,25 @@ export interface SettingsPaneProps {
   browserReach: BrowserReach
   onBrowserReachChange: (reach: BrowserReach) => void
   /**
-   * The two M17 keys: whether Helm serves its browser tools to the sessions it
-   * hosts, and whether those tools are held to this machine when the pane is
-   * not. Both are preferences rather than state, so both are here.
+   * The two browser-tool keys: whether Helm serves its browser tools to the
+   * sessions it hosts, and whether those tools are held to this machine when
+   * the pane is not. Both are preferences rather than state, so both are here.
    */
   browserMcp: boolean
   onBrowserMcpChange: (next: boolean) => void
   browserMcpLocalOnly: boolean
   onBrowserMcpLocalOnlyChange: (next: boolean) => void
+
+  /**
+   * Whether a session may ask Helm what the other sessions are doing.
+   *
+   * Its own row in its own group rather than a third tick under Browser: it is
+   * served by the same endpoint but it is not the same capability, and a person
+   * deciding about it is deciding about their other work rather than about a
+   * browser.
+   */
+  sessionMcp: boolean
+  onSessionMcpChange: (next: boolean) => void
 
   /**
    * What Helm found out about `gh`, out of the pull-request snapshot. Null
@@ -391,6 +402,8 @@ export function SettingsPane({
   onBrowserMcpChange,
   browserMcpLocalOnly,
   onBrowserMcpLocalOnlyChange,
+  sessionMcp,
+  onSessionMcpChange,
   gh,
   onLocateGh,
   onClearGhOverride,
@@ -684,6 +697,8 @@ export function SettingsPane({
           mcpLocalOnly={browserMcpLocalOnly}
           onMcpLocalOnlyChange={onBrowserMcpLocalOnlyChange}
         />
+
+        <SessionsGroup mcp={sessionMcp} onMcpChange={onSessionMcpChange} />
 
         <UpdatesGroup
           appVersion={appVersion}
@@ -1155,6 +1170,48 @@ function BrowserGroup({
             checked={mcpLocalOnly}
             onChange={() => onMcpLocalOnlyChange(!mcpLocalOnly)}
             label="Confine Claude’s browser tools to this machine"
+          />
+        </span>
+      </Row>
+    </Group>
+  )
+}
+
+/**
+ * What a session may learn about the other sessions.
+ *
+ * A group of its own beside Browser rather than a third tick inside it. The two
+ * are served by one endpoint on one port, which is an implementation detail; a
+ * person reading this pane is deciding two different things - whether an agent
+ * may click things in a browser, and whether an agent may be told what their
+ * other work is doing - and those have different answers for different people.
+ */
+function SessionsGroup({
+  mcp,
+  onMcpChange
+}: {
+  mcp: boolean
+  onMcpChange: (next: boolean) => void
+}): JSX.Element {
+  return (
+    <Group
+      name="sessions"
+      title="Sessions"
+      hint="Helm can tell a session it hosts what the other Claude Code sessions on this machine are doing, so an agent can stay out of a working tree somebody else is in. It is read-only: there is no way for one session to send another anything, and no tool ever returns any part of another session’s conversation."
+    >
+      <Row
+        label="Let Claude see the other sessions"
+        hint={
+          mcp
+            ? 'Sessions Helm hosts can list every Claude Code session running here - its name, its directory, whether it is busy or waiting on you - and, for the ones Helm started, what they are holding: child processes and listening ports. Not their conversations, and not the arguments they were launched with.'
+            : 'Off. Helm serves the tools to nobody and sessions are started without them, exactly as they were before.'
+        }
+      >
+        <span data-settings-session-mcp={String(mcp)}>
+          <Checkbox
+            checked={mcp}
+            onChange={() => onMcpChange(!mcp)}
+            label="Let Claude see the other sessions"
           />
         </span>
       </Row>

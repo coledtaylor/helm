@@ -41,16 +41,30 @@ const { status } = spawnSync(electron, ['.', '--sessions-check', ...process.argv
   env
 })
 
-console.log('\n--- phase 2: a fresh app start, reading the label back ---')
-spawnSync(electron, ['.', '--sessions-restart', ...process.argv.slice(2)], {
-  stdio: 'inherit',
-  env
-})
+// Phase two reads back what phase one's `lifecycle` group wrote down, so a run
+// narrowed to another group has nothing for it to find. Skipped rather than run
+// and failed: "the rename did not survive" and "no rename happened" are not the
+// same red line, and printing the second as the first is how a check stops
+// being read.
+const only = process.argv.slice(2).find((a) => a.startsWith('--only='))
+const wantsLifecycle =
+  only === undefined || only.slice('--only='.length).split(',').includes('lifecycle')
+
+if (wantsLifecycle) {
+  console.log('\n--- phase 2: a fresh app start, reading the label back ---')
+  spawnSync(electron, ['.', '--sessions-restart', ...process.argv.slice(2)], {
+    stdio: 'inherit',
+    env
+  })
+} else {
+  console.log(`\n(phase 2 skipped: ${only} does not include the lifecycle group that writes its input)`)
+}
 
 // The report is the verdict for this phase, not the exit code: node-pty's
 // teardown loses that, and a phase that died before writing has to fail rather
 // than pass on a missing file.
 const restartStatus = (() => {
+  if (!wantsLifecycle) return 0
   if (!existsSync(restartPath)) {
     console.error(`FAIL  SESS-14  the second app start wrote no report to ${restartPath}`)
     return 1
@@ -60,11 +74,28 @@ const restartStatus = (() => {
   return restart.pass ? 0 : 1
 })()
 
-const verify = spawnSync(
-  process.execPath,
-  [join('scripts', 'verify-orphans.mjs'), join(dataDir, 'sessions-report.json')],
-  { stdio: 'inherit', env }
-)
+// Phase three is the other half of SESS-9, and SESS-9 belongs to `lifecycle`.
+// Gated for exactly the reason phase two is: `verify-orphans.mjs` exits 1 when
+// the report publishes no pids, which is right in a full run - "nothing was
+// verified" reporting green is the failure CLAUDE.md rules out - and is a red
+// line about the wrong thing in a run that never asked for that group. The
+// guard inside verify-orphans stays; what this script knows and that one cannot
+// is whether the group was asked for at all.
+//
+// Left unfixed this made every `--only=state` and `--only=resources` run exit 1
+// with all its probes green, which is the same way a check stops being read.
+const verifyStatus = (() => {
+  if (!wantsLifecycle) {
+    console.log(`(phase 3 skipped: ${only} does not include the lifecycle group that leaves SESS-9 a session)`)
+    return 0
+  }
+  const verify = spawnSync(
+    process.execPath,
+    [join('scripts', 'verify-orphans.mjs'), join(dataDir, 'sessions-report.json')],
+    { stdio: 'inherit', env }
+  )
+  return verify.status ?? 1
+})()
 
 // Nothing that ran failed. Whether *everything* ran is a different question,
 // and it is the one this asks - a phase that returned early leaves a short
@@ -90,5 +121,5 @@ process.exit(
       ? restartStatus
       : !complete
         ? 1
-        : (verify.status ?? 1)
+        : verifyStatus
 )

@@ -1388,7 +1388,10 @@ export async function runSettingsChecks(
          // internalLeaked below is what says they are not here.
          browserReach: Boolean(document.querySelector('[data-settings-browser-reach]')),
          browserMcp: Boolean(document.querySelector('[data-settings-browser-mcp]')),
-         browserMcpLocal: Boolean(document.querySelector('[data-settings-browser-mcp-local]'))
+         browserMcpLocal: Boolean(document.querySelector('[data-settings-browser-mcp-local]')),
+         // The other family the one endpoint serves, and the other tick that
+         // decides whether a route exists.
+         sessionMcp: Boolean(document.querySelector('[data-settings-session-mcp]'))
        })`
     )
     // Internal state is not a preference, and the pane must not have grown a
@@ -1418,6 +1421,7 @@ export async function runSettingsChecks(
       'appearance',
       'content',
       'browser',
+      'sessions',
       'updates',
       'terminal',
       'archive',
@@ -3218,6 +3222,13 @@ export async function runSettingsChecks(
           good: true,
           bad: 'true',
           why: 'the same, pointing the other way: a truthy string would confine the agent while the pane read it as unconfined'
+        },
+        sessionMcp: {
+          good: false,
+          // The third boolean that decides whether a route exists, and the same
+          // rejection for the same reason: `'false'` is truthy.
+          bad: 'false',
+          why: 'a string that reads as a boolean would serve one session’s work to another while the pane said it was off'
         },
         browserRecentUrls: {
           good: ['http://localhost:3000/'],

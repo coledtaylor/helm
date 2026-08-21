@@ -33,6 +33,7 @@
     "config-check": "pnpm --filter @helm/desktop config-check",
     "content-check": "pnpm --filter @helm/desktop content-check",
     "packaging-check": "pnpm --filter @helm/desktop packaging-check",
+    "verify:installer": "pnpm --filter @helm/desktop verify:installer",
     "usage-check": "pnpm --filter @helm/desktop usage-check",
     "settings-check": "pnpm --filter @helm/desktop settings-check",
     "pr-check": "pnpm --filter @helm/desktop pr-check",

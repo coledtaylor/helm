@@ -4,6 +4,7 @@ import {
   DEFAULT_SETTINGS,
   isLoopbackUrl,
   isProjectPinned,
+  liveSessionsIn,
   PROJECT_SHELL_HEIGHT_PCT,
   SESSION_SPLIT_PCT,
   sessionLabel,
@@ -11,6 +12,7 @@ import {
   withRepoIgnored,
   type EditorHighlight,
   type HistorySession,
+  type LiveSession,
   type Profile,
   type ProfileDraft,
   type Project,
@@ -53,6 +55,7 @@ import {
   RepoIcon,
   SaveAsTemplateDialog,
   SessionHistory,
+  SessionsPane,
   SettingsPane,
   SetupPane,
   Sidebar,
@@ -60,6 +63,7 @@ import {
   StatusBar,
   TabBar,
   TemplateManager,
+  TerminalIcon,
   ThemeToggle,
   TitleBar,
   VersionBanner,
@@ -83,6 +87,7 @@ import { useLauncher } from './useLauncher'
 import { useProfiles } from './useProfiles'
 import { forgetPullDetail } from './usePullDetail'
 import { usePulls } from './usePulls'
+import { useLiveSessions } from './useLiveSessions'
 import { useSessions } from './useSessions'
 import { useSetup } from './useSetup'
 import { useTemplates } from './useTemplates'
@@ -147,6 +152,9 @@ const helmOpenExternal = (url: string): Promise<{ opened: boolean }> =>
  * `BrowserPane` a fresh array to re-render against on every render. */
 const EMPTY_CONSOLE: ConsoleEntry[] = []
 
+/** The same, for a project with nothing running in it - which is most of them. */
+const EMPTY_LIVE: LiveSession[] = []
+
 /**
  * The editors' tokeniser, on the far side of an IPC boundary.
  *
@@ -176,6 +184,7 @@ const MODE_LABEL: Record<AppMode, string> = {
 }
 
 const HISTORY_TAB = 'history'
+const SESSIONS_TAB = 'sessions'
 const PULLS_TAB = 'pulls'
 const CONFIG_TAB = 'config'
 const CONTENT_TAB = 'content'
@@ -184,6 +193,7 @@ const SETTINGS_TAB = 'settings'
 const tabId = (ref: PaneRef): string => {
   if (ref.kind === 'project') return `project:${ref.path}`
   if (ref.kind === 'browser') return `browser:${String(ref.id)}`
+  if (ref.kind === 'sessions') return SESSIONS_TAB
   if (ref.kind === 'pulls') return PULLS_TAB
   // Compared, never taken apart again: a Windows path can contain a `#` and a
   // `:`, so this string is an identity and not a record. Whatever needs the
@@ -278,6 +288,20 @@ export function App(): JSX.Element {
   /** Where the current drag has got to, for the one write on release. */
   const splitDragged = useRef<number | null>(null)
   const [launching, setLaunching] = useState(false)
+  /**
+   * The row the sessions pane has open, by pid.
+   *
+   * The pid rather than an index or a name: pids are unique among live
+   * processes, which is the whole set this pane draws from, and it is the one
+   * key a session Helm does not host also has. An index would move whenever
+   * anything on the machine started or stopped.
+   *
+   * Held here rather than in the pane for the reason every workspace pane's
+   * state is held here: a workspace pane can be thrown away and rebuilt at
+   * will, and a selection that unmounted with it would drop whenever somebody
+   * looked at another tab.
+   */
+  const [selectedLivePid, setSelectedLivePid] = useState<number | null>(null)
   /** The pane box, measured to open a pty at roughly the right grid. */
   const paneRef = useRef<HTMLDivElement>(null)
   /** The project page's column, measured by its shell's drag handle. */
@@ -301,7 +325,16 @@ export function App(): JSX.Element {
   }, [])
 
   const sessionState = useSessions(activateSession)
-  const { sessions } = sessionState
+  const { sessions, activity: sessionActivity } = sessionState
+  /*
+   * Every live session on the machine, and what Helm's own are holding.
+   *
+   * Held here rather than inside the pane because the *warning* needs it and
+   * the pane does not exist while somebody is looking at a project. A folder
+   * that already has a session in it has to say so on the launch row whether or
+   * not the sessions pane has ever been opened.
+   */
+  const machineSessions = useLiveSessions()
   const profileState = useProfiles()
   const historyState = useHistory()
   const pullsState = usePulls()
@@ -559,6 +592,40 @@ export function App(): JSX.Element {
       ? requestedSession
       : (sessionIds.at(-1) ?? null)
 
+  /*
+   * The process pass runs only while the sessions pane is the pane on screen.
+   *
+   * One enumeration costs 400ms of a child process where the registry poll
+   * beside it costs 0.15ms, so "off unless somebody is looking" is the whole
+   * budget rather than an optimisation. Balanced by the cleanup, and
+   * reference-counted in main, so a tab switch that unmounts one watcher while
+   * another is still there cannot switch the pass off under it.
+   */
+  const sessionsPaneOpen = activePane?.kind === 'sessions'
+  const watchResources = machineSessions.watch
+  useEffect(() => {
+    if (!sessionsPaneOpen) return undefined
+    watchResources(true)
+    return () => watchResources(false)
+  }, [sessionsPaneOpen, watchResources])
+
+  /**
+   * The sessions row's second line, and the tab's hover hint.
+   *
+   * Composed here rather than in the sidebar for the reason `pullsSummaryLine`
+   * is: it is a fact about a machine, not about the tree. The second half is
+   * the one worth the width - "one outside Helm" is what changes what somebody
+   * does next, and it is why the listing behind it is machine-wide at all.
+   */
+  const sessionsSummaryLine = ((): string => {
+    const all = machineSessions.sessions
+    if (machineSessions.readAtMs === null) return 'Reading…'
+    if (all.length === 0) return 'Nothing running'
+    const outside = all.filter((session) => session.helmSessionId === null).length
+    const running = `${String(all.length)} running`
+    return outside === 0 ? `${running} · all in Helm` : `${running} · ${String(outside)} outside Helm`
+  })()
+
   /**
    * The saved strip, written back whenever the arrangement changes.
    *
@@ -716,6 +783,7 @@ export function App(): JSX.Element {
     [openPane]
   )
 
+  const openSessions = useCallback(() => openPane({ kind: 'sessions' }), [openPane])
   const openHistory = useCallback(() => openPane({ kind: 'history' }), [openPane])
   const openPulls = useCallback(() => openPane({ kind: 'pulls' }), [openPane])
 
@@ -1082,6 +1150,17 @@ export function App(): JSX.Element {
   }, [openPanes, sessionIds, activeId, activeSessionId, showSessions])
 
   const tabs: Tab[] = openPanes.flatMap((ref): Tab[] => {
+    if (ref.kind === 'sessions') {
+      return [
+        {
+          id: SESSIONS_TAB,
+          title: 'Sessions',
+          hint: sessionsSummaryLine,
+          icon: <TerminalIcon width={13} height={13} />
+        }
+      ]
+    }
+
     if (ref.kind === 'history') {
       return [
         {
@@ -1207,8 +1286,27 @@ export function App(): JSX.Element {
   const sessionTabs: Tab[] = sessionIds.flatMap((id): Tab[] => {
     const session = sessionsById.get(id)
     if (!session) return []
+    /**
+     * The dot.
+     *
+     * How the session *ended* outranks what it last said it was doing: a row
+     * that has exited is a fact Helm established, and the registry's last word
+     * about a dead process is by definition out of date.
+     *
+     * While it runs, the session's own answer is preferred and `running` is the
+     * fallback for every way of not having one - a record that has not appeared
+     * yet, a process that cannot be proved alive, a status this build does not
+     * recognise. All three paint exactly what this tab painted before any of
+     * this existed, which is the point: a CLI that renames a status degrades to
+     * the old behaviour rather than to a guess.
+     */
+    const live = session.status === 'running' ? sessionActivity.get(session.id) : undefined
     const indicator: TabIndicator =
-      session.status === 'running' ? 'running' : session.exitCode ? 'failed' : 'ended'
+      session.status !== 'running'
+        ? session.exitCode
+          ? 'failed'
+          : 'ended'
+        : (live?.activity ?? 'running')
     const project = session.projectPath ? projectsByPath.get(session.projectPath) : undefined
     const label = sessionLabel(session)
     /**
@@ -1236,7 +1334,20 @@ export function App(): JSX.Element {
       {
         id: sessionTabId(id),
         title: label,
-        hint: `${label} · ${session.cwd}`,
+        /**
+         * The session's own sentence for why it is blocked, where it has one.
+         *
+         * Verbatim, and never matched against: it comes from whichever dialog
+         * is on top - `"permission prompt"` and `"dialog open"` were the two
+         * measured - so anything that tried to interpret it would be a second
+         * parser of a string the CLI can change freely. It goes in the hint
+         * rather than on the tab because 240px are already spoken for, and
+         * because the dot has said the load-bearing half.
+         */
+        hint:
+          live?.waitingFor === undefined || live.waitingFor === null
+            ? `${label} · ${session.cwd}`
+            : `${label} · ${session.cwd}\nWaiting: ${live.waitingFor}`,
         ...(subtitle === undefined ? {} : { subtitle }),
         // A branch is machine data and reads in mono (DESIGN.md); a project's
         // name is a name.
@@ -1253,6 +1364,20 @@ export function App(): JSX.Element {
   const activeProject =
     activePane?.kind === 'project' ? (projectsByPath.get(activePane.path) ?? null) : null
   const selectedPath = activeProject?.path ?? null
+  /**
+   * The live sessions already in the project on screen - the launch warning.
+   *
+   * Reduced with core's own `liveSessionsIn`, which is `samePath`'s comparison,
+   * so this and the sidebar's grouping cannot disagree about whether two paths
+   * are one folder. Memoised on `selectedPath` rather than done inline in the
+   * pane's props, so a project with nothing running in it hands `ProjectPane`
+   * the same empty array on every render instead of a new one.
+   */
+  const liveHere = useMemo(
+    () =>
+      selectedPath === null ? EMPTY_LIVE : liveSessionsIn(machineSessions.sessions, selectedPath),
+    [machineSessions.sessions, selectedPath]
+  )
   // Kept for `openBrowser`, which runs long after this. Written in an effect
   // rather than during render because it is a ref: assigning one while
   // rendering is a write during the render phase, which React may discard.
@@ -1671,6 +1796,9 @@ export function App(): JSX.Element {
               onReorder={(ids) => void profileState.reorder(ids)}
             />
           }
+          onOpenSessions={openSessions}
+          sessionsDetail={sessionsSummaryLine}
+          sessionsActive={activePane?.kind === 'sessions'}
           onOpenHistory={openHistory}
           {...(historyState.summary
             ? {
@@ -1832,6 +1960,25 @@ export function App(): JSX.Element {
               resuming={historyState.resuming}
               resumeError={historyState.resumeError}
               onDismissResumeError={historyState.dismissResumeError}
+              onReveal={launcher.reveal}
+              compact={showSessions}
+            />
+          </div>
+        )}
+
+        {activePane?.kind === 'sessions' && (
+          <div className="absolute inset-0">
+            <SessionsPane
+              sessions={machineSessions.sessions}
+              readAtMs={machineSessions.readAtMs}
+              records={sessionsById}
+              resources={machineSessions.resources}
+              selectedPid={selectedLivePid}
+              onSelect={(session) => setSelectedLivePid(session?.pid ?? null)}
+              // Bringing the terminal forward is the one thing this pane does
+              // *to* a session. It maximizes nothing and closes nothing: the
+              // pane is for looking, and the tab is where a session is worked.
+              onOpenSession={activateSession}
               onReveal={launcher.reveal}
               compact={showSessions}
             />
@@ -2176,6 +2323,8 @@ export function App(): JSX.Element {
               onBrowserMcpLocalOnlyChange={(browserMcpLocalOnly) =>
                 writeSettings({ browserMcpLocalOnly })
               }
+              sessionMcp={settings?.sessionMcp ?? DEFAULT_SETTINGS.sessionMcp}
+              onSessionMcpChange={(sessionMcp) => writeSettings({ sessionMcp })}
               contentWrap={settings?.contentWrap ?? DEFAULT_SETTINGS.contentWrap}
               onContentWrapChange={(contentWrap) => writeSettings({ contentWrap })}
               contentWrapIndent={
@@ -2237,6 +2386,7 @@ export function App(): JSX.Element {
                 onLaunch={(project) => void launch(project)}
                 launching={launching}
                 launchError={sessionState.launchError}
+                liveHere={liveHere}
                 onSaveAsProfile={(project) => {
                   setSaveProblems([])
                   // Seeded with what is on screen: this project as the root, and

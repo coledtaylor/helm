@@ -9,6 +9,7 @@ import {
 } from '@helm/core'
 import type { CheckContext } from './sessionscheck'
 import { drag, screenshot, sendMouse, sleep } from './bridge'
+import { emit } from './ipc'
 
 /**
  * `--design-shot`: open the real window, walk the main views, and capture a
@@ -54,6 +55,16 @@ async function pollJs(win: BrowserWindow, expression: string, timeoutMs: number)
   while (Date.now() < deadline) {
     const ok = await js<boolean>(win, `Boolean(${expression})`).catch(() => false)
     if (ok) return true
+    await sleep(250)
+  }
+  return false
+}
+
+/** `pollJs` for a condition in the main process rather than in the page. */
+async function pollUntil(ready: () => boolean, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (ready()) return true
     await sleep(250)
   }
   return false
@@ -174,6 +185,10 @@ const VIEWS: Array<{ name: string; selector: string | null; anchor: string | nul
   { name: 'project', selector: 'aside nav button[title]', anchor: '[data-project-pane]' },
   { name: 'config', selector: '[data-open-config]', anchor: '[data-config-scope]' },
   { name: 'content', selector: '[data-open-content]', anchor: '[data-content-scope]' },
+  // Whatever is running when the walk runs, which on a quiet machine is the
+  // empty state and on a busy one is the list. Both are worth a picture; the
+  // populated one with more than one session is shot by `tabs`, which has six.
+  { name: 'sessions', selector: '[data-open-sessions]', anchor: '[data-sessions-pane]' },
   { name: 'history', selector: '[data-open-history]', anchor: '[data-history-search]' },
   // Painted from the cache, so it has rows whether or not a fetch has happened
   // on this run - and it is the one list in the app whose rows are almost all
@@ -1470,25 +1485,59 @@ async function reportStrip(win: BrowserWindow, theme: string): Promise<void> {
   const strip = await js<{
     scrollWidth: number
     clientWidth: number
-    tabs: Array<{ title: string; subtitle: string; width: number; titleCut: boolean; subCut: boolean }>
+    tokens: Record<string, string>
+    tabs: Array<{
+      title: string
+      subtitle: string
+      width: number
+      titleCut: boolean
+      subCut: boolean
+      state: string | null
+      dot: { size: string; fill: string; border: string; borderColor: string } | null
+    }>
   } | null>(
     win,
     `(() => {
        const list = document.querySelector('[role="tablist"]');
        if (!list) return null;
+       const root = getComputedStyle(document.documentElement);
+       const token = (n) => root.getPropertyValue(n).trim();
        const tabs = [...document.querySelectorAll('[role="tab"][data-tab^="session:"]')].map((t) => {
          const sub = t.querySelector('[data-tab-subtitle]');
          const title = sub ? sub.previousElementSibling : t.querySelector('span span');
          const cut = (el) => el ? el.scrollWidth > el.clientWidth + 1 : false;
+         const mark = t.querySelector('span[aria-hidden]');
+         const cs = mark ? getComputedStyle(mark) : null;
+         const label = t.getAttribute('aria-label');
          return {
            title: title ? title.textContent : '',
            subtitle: sub ? sub.textContent : '',
            width: Math.round(t.getBoundingClientRect().width),
            titleCut: cut(title),
-           subCut: cut(sub)
+           subCut: cut(sub),
+           state: label ? label.slice(label.lastIndexOf(', ') + 2) : null,
+           dot: cs
+             ? {
+                 size: cs.width + 'x' + cs.height,
+                 fill: cs.backgroundColor,
+                 border: cs.borderTopWidth,
+                 borderColor: cs.borderTopColor
+               }
+             : null
          }
        });
-       return { scrollWidth: list.scrollWidth, clientWidth: list.clientWidth, tabs }
+       return {
+         scrollWidth: list.scrollWidth,
+         clientWidth: list.clientWidth,
+         tokens: {
+           accent: token('--helm-accent'),
+           warn: token('--helm-warn'),
+           success: token('--helm-success'),
+           danger: token('--helm-danger'),
+           subtle: token('--helm-fg-subtle')
+         },
+         tabs
+       }
      })()`
   ).catch(() => null)
 
@@ -1500,12 +1549,197 @@ async function reportStrip(win: BrowserWindow, theme: string): Promise<void> {
     `design-shot: session strip (${theme}) ${String(strip.tabs.length)} tabs, ` +
       `${String(strip.scrollWidth)}px of content in ${String(strip.clientWidth)}px`
   )
+  // The tokens, so the dot colours printed below can be read against something
+  // rather than squinted at. Same reason `responsive` prints its overflow: a
+  // dot painted the wrong tone looks like a dot.
+  console.log(
+    `      tokens  ${Object.entries(strip.tokens)
+      .map(([k, v]) => `${k}=${v}`)
+      .join('  ')}`
+  )
   for (const tab of strip.tabs) {
     console.log(
       `      ${String(tab.width).padStart(4)}px  ${tab.titleCut ? 'CUT ' : '    '}${tab.title}` +
         `  /  ${tab.subCut ? 'CUT ' : '    '}${tab.subtitle}`
     )
+    console.log(
+      `             dot ${tab.dot?.size ?? '-'}  fill=${tab.dot?.fill ?? '-'}` +
+        `  ring=${tab.dot?.border ?? '-'} ${tab.dot?.borderColor ?? ''}  state=${tab.state ?? '-'}`
+    )
   }
+}
+
+/**
+ * Every state of the dot in one frame, in both themes.
+ *
+ * The four live states cannot all be arranged on real sessions at once and held
+ * still long enough to photograph: `busy` lasts as long as a model turn, and
+ * `shell` needs a background task that is running *now*. So this pushes the
+ * states onto the strip directly and shoots it.
+ *
+ * That is allowed here and nowhere else. `design-shot` asserts nothing - it
+ * exists so a person can look at pixels - and what has to be looked at is
+ * whether seven tones are distinguishable side by side in both themes. Whether
+ * the wiring behind them is real is `sessions-check`'s `state` group's
+ * question, against a session driven into each state for real.
+ *
+ * The poller is stopped first, or it would put the true states back inside a
+ * second and photograph those instead.
+ */
+async function shootDotStates(
+  ctx: CheckContext,
+  outDir: string,
+  tabs: string[]
+): Promise<string[]> {
+  const files: string[] = []
+  const { win } = ctx
+  if (tabs.length === 0) return files
+
+  ctx.activity.stop()
+  await sleep(900)
+
+  const wanted = ['busy', 'waiting', 'shell', 'idle', null, 'busy'] as const
+  const states = tabs.map((tab, index) => ({
+    id: Number(tab.slice('session:'.length)),
+    activity: wanted[index] ?? null,
+    waitingFor: wanted[index] === 'waiting' ? 'permission prompt' : null,
+    claudeSessionId: null
+  }))
+  emit(win, 'session:activity', states)
+  await sleep(700)
+
+  for (const theme of ['dark', 'light'] as const) {
+    await click(win, `button[aria-label="${THEME_LABEL[theme]}"]`)
+    await sleep(500)
+    // Re-pushed after the theme change: a re-render from adopted props would
+    // otherwise be free to arrive between the two, and this is a photograph.
+    emit(win, 'session:activity', states)
+    await sleep(400)
+    const maximized = await click(win, 'button[aria-label="Maximize the session pane"]')
+    if (maximized) await sleep(600)
+    files.push((await screenshot(win, outDir, `session-tab-dots-${theme}.png`)).file)
+    await reportStrip(win, `${theme} / dot states`)
+    if (maximized) await click(win, 'button[aria-label="Restore the split"]')
+    await sleep(300)
+  }
+  return files
+}
+
+/** Whatever the sessions pane is painting right now, straight off the DOM. */
+async function sessionsPaneShape(
+  win: BrowserWindow
+): Promise<{ rows: number; hosted: number; ports: number; tree: number; paneWidth: number } | null> {
+  return js<{
+    rows: number
+    hosted: number
+    ports: number
+    tree: number
+    paneWidth: number
+  } | null>(
+    win,
+    `(() => {
+       const pane = document.querySelector('[data-sessions-pane]');
+       if (!pane) return null;
+       const rows = [...pane.querySelectorAll('[data-session-pid]')];
+       return {
+         rows: rows.length,
+         hosted: rows.filter((r) => r.getAttribute('data-session-hosted') === 'true').length,
+         ports: pane.querySelectorAll('[data-session-port]').length,
+         tree: pane.querySelectorAll('[data-tree-pid]').length,
+         paneWidth: Math.round(pane.getBoundingClientRect().width)
+       }
+     })()`
+  ).catch(() => null)
+}
+
+/**
+ * The sessions pane with something in it, in both themes and at two widths.
+ *
+ * The `views` walk shoots this pane too and gets whatever is running at the
+ * time, which on the machine a walk usually runs on is nothing. Six sessions in
+ * one project is the state worth looking at: the rows have to read against each
+ * other, the state dots have to be findable down a column, and the "shared"
+ * mark - six sessions in one working tree - is at its loudest.
+ *
+ * **Two widths, because they are two layouts.** `shootCrowdedTabs` has the
+ * window at its `minWidth` with a session split beside it, which leaves this
+ * pane about 175px - the compact case, list *or* detail. That is a real state
+ * and worth a picture, and it is the one that found the fact grid asking `sm:`
+ * about the window and painting two columns in 87px each. It is not the state
+ * somebody usually looks at this pane in, so the window is widened for a second
+ * pair and put back.
+ *
+ * **The list and the detail are photographed separately in the compact case**,
+ * because compact shows one or the other and a run that only opened a row
+ * would report zero rows and read as an empty pane.
+ */
+async function shootSessionsPane(ctx: CheckContext, outDir: string): Promise<string[]> {
+  const files: string[] = []
+  const { win } = ctx
+  const narrow = win.getBounds()
+
+  if (!(await click(win, '[data-open-sessions]'))) return files
+  if (!(await pollJs(win, `document.querySelector('[data-sessions-pane]') !== null`, 10_000))) {
+    return files
+  }
+  // Long enough for a resource pass: the pane turns the enumeration on when it
+  // mounts and one costs about half a second of a child process, so a shot
+  // taken at once is a photograph of the pane before it has anything to say.
+  await sleep(5000)
+
+  const listShape = await sessionsPaneShape(win)
+  for (const theme of ['dark', 'light'] as const) {
+    await click(win, `button[aria-label="${THEME_LABEL[theme]}"]`)
+    await sleep(600)
+    files.push((await screenshot(win, outDir, `sessions-list-narrow-${theme}.png`)).file)
+  }
+
+  await click(win, '[data-session-pid]')
+  await sleep(700)
+  const narrowShape = await sessionsPaneShape(win)
+  for (const theme of ['dark', 'light'] as const) {
+    await click(win, `button[aria-label="${THEME_LABEL[theme]}"]`)
+    await sleep(600)
+    files.push((await screenshot(win, outDir, `sessions-pane-${theme}.png`)).file)
+  }
+
+  /*
+   * And the width somebody actually reads this in, where the list and the
+   * detail are on screen together.
+   *
+   * Widening the window is not enough on its own and that is worth writing
+   * down: the split gives the workspace a *fraction* of the row, so a 1440px
+   * window still left this pane at 327px and still compact. The workspace pane
+   * has to be maximised as well - `[data-maximize="workspace"]`, the same
+   * control a person would use - and the second click on the same selector puts
+   * the split back.
+   */
+  win.setBounds({ ...narrow, width: 1440, height: 900 })
+  await sleep(600)
+  const widened = await click(win, '[data-maximize="workspace"]')
+  await sleep(900)
+  const wideShape = await sessionsPaneShape(win)
+  for (const theme of ['dark', 'light'] as const) {
+    await click(win, `button[aria-label="${THEME_LABEL[theme]}"]`)
+    await sleep(600)
+    files.push((await screenshot(win, outDir, `sessions-pane-wide-${theme}.png`)).file)
+  }
+  if (widened) await click(win, '[data-maximize="workspace"]')
+  win.setBounds(narrow)
+  await sleep(600)
+
+  for (const [label, shape] of [
+    ['narrow list', listShape],
+    ['narrow detail', narrowShape],
+    ['wide', wideShape]
+  ] as const) {
+    console.log(
+      `design-shot: sessions pane (${label}, ${String(shape?.paneWidth ?? 0)}px) ` +
+        `${String(shape?.rows ?? 0)} rows (${String(shape?.hosted ?? 0)} hosted), detail showing ` +
+        `${String(shape?.tree ?? 0)} processes and ${String(shape?.ports ?? 0)} ports`
+    )
+  }
+  return files
 }
 
 /** Every session tab ended and forgotten, without six confirmations. */
@@ -1544,10 +1778,11 @@ async function closeAllSessions(win: BrowserWindow): Promise<void> {
  * must not leave the machine six `claude` processes.
  */
 async function shootCrowdedTabs(
-  win: BrowserWindow,
+  ctx: CheckContext,
   outDir: string,
   themeBefore: 'system' | 'light' | 'dark'
 ): Promise<string[]> {
+  const { win } = ctx
   const files: string[] = []
 
   // A git repository by preference: the subtitle under each title is the branch
@@ -1592,6 +1827,42 @@ async function shootCrowdedTabs(
   if (tabs[1]) await renameTab(win, tabs[1], 'PR review')
   if (tabs[3]) await renameTab(win, tabs[3], 'flaky test hunt')
   await sleep(400)
+
+  /*
+   * Two of the six put into `waiting`, for real and for nothing - if the
+   * sessions ever got far enough to have a state at all.
+   *
+   * A slash command that renders a UI is the free half of that state - no model
+   * turn, and it stays on screen until somebody dismisses it - so the strip
+   * below can carry the tone the whole indicator exists for beside the four
+   * that are merely alive.
+   *
+   * The wait is not caution. **This walk answers no startup gates**: it has no
+   * observer to read a session's output with, so six sessions launched into a
+   * folder Claude Code has not been told to trust sit on the trust prompt and
+   * never register - which is exactly what the first run of this photographed,
+   * six terminals showing "Quick safety check" and six `running` dots. That is
+   * a real state and worth a picture; what it is not is the crowded strip. So
+   * the state is asked for and the shot goes ahead either way, saying which one
+   * it got.
+   */
+  const anyLive = await pollUntil(
+    () => ctx.activity.states().some((s) => s.activity !== null),
+    20_000
+  )
+  if (anyLive) {
+    for (const tab of [tabs[0], tabs[4]]) {
+      if (tab === undefined) continue
+      const id = Number(tab.slice('session:'.length))
+      if (Number.isFinite(id)) ctx.sessions.input(id, '/help\r')
+    }
+    await sleep(2500)
+  } else {
+    console.log(
+      'design-shot: no session published a state - they are probably sitting on a ' +
+        'startup gate this walk has no observer to answer. The strip is shot as it is.'
+    )
+  }
 
   // Long enough for the TUIs behind the strip to have painted; a pane still
   // blank makes the shot look like a bug that is not there.
@@ -1640,6 +1911,14 @@ async function shootCrowdedTabs(
       await sleep(300)
     }
   }
+
+  // The sessions pane, populated. This is the only group with more than one
+  // live session in it, and a list of one row says nothing about how the rows
+  // read against each other - which is the whole question a picture answers.
+  files.push(...(await shootSessionsPane(ctx, outDir)))
+
+  // Last, because it stops the poller: everything above needs the real states.
+  files.push(...(await shootDotStates(ctx, outDir, tabs)))
 
   await click(win, `button[aria-label="${THEME_LABEL[themeBefore]}"]`)
   win.setBounds(bounds)
@@ -1916,7 +2195,7 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
   if (want.has('tabs')) {
     await closeAllTabs(win)
     await sleep(400)
-    files.push(...(await shootCrowdedTabs(win, outDir, before)))
+    files.push(...(await shootCrowdedTabs(ctx, outDir, before)))
   }
 
   if (!want.has('split')) return files

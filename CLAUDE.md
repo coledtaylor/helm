@@ -85,6 +85,13 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   `gh` prints on its own streams. Nothing opens any of them, nor `hosts.yml`,
   the keyring or `GH_TOKEN`. The whole remedy for "not signed in" is a sentence
   naming `claude` or `gh auth login`.
+- **`~/.claude/sessions` holds a credential beside every record**, and the
+  session-state reader's file filter is what keeps Helm out of it. Alongside
+  each `<pid>.json` the CLI writes `<pid>.<sha256>.key` carrying a `peerToken`
+  for its own session-to-session messaging. `readSessionRegistry` takes `.json`
+  and nothing else; a change that widened that to the whole listing would open
+  them, which is why the filter has the reason written on it rather than looking
+  like tidiness.
 - This is why the pull-request surface shells out to `gh` rather than calling
   the API. A remote URL carrying an embedded token is a credential too, so
   `parseGitHubRemote` strips the userinfo before anything reaches the database.
@@ -96,10 +103,17 @@ them in and there is one build step, not three. `pnpm check` is what CI runs.
   it: the pull-request surface goes through your own `gh`, and the browser pane
   fetches the page you navigate to."*
 
-  That sentence is about what Helm **contacts**, and M17 did not change it. What
-  M17 did change is that Helm now **listens**, on loopback, for the sessions it
-  hosts - see "The browser tools" below. That is stated separately, in the same
-  four places, rather than folded into a sentence about outbound traffic.
+  That sentence is about what Helm **contacts**, and the endpoint it serves to
+  its own sessions did not change it. What did change is that Helm now
+  **listens**, on loopback, for the sessions it hosts - see "The agent tools"
+  below. That is stated separately, in the same four places, rather than folded
+  into a sentence about outbound traffic.
+
+  The listening paragraph has since moved once and the contacting sentence still
+  did not: the listener serves **two** named servers rather than one, each with
+  its own tick. Two families of tools is not two sockets and is not an outbound
+  connection, so the four listening paragraphs moved together and nothing else
+  did.
 - **The browser partition is not an exception to the credential rule, and it is
   the one place that has to say so out loud.** `persist:helm-browser` holds
   cookies and logins for whatever the user visits, under the app's data
@@ -173,13 +187,19 @@ Seven rules, and each one is a thing that only shows up when it is broken.
   on the partition is denied, and the address bar never hands anything to a
   search engine. None of those is a setting; `browserReach` is the only one.
 
-## The browser tools - the app's one inbound listener
+## The agent tools - the app's one inbound listener
 
 A Claude session Helm hosts can drive that pane: open, read, screenshot, click,
 type, press keys and evaluate. `main/browser-mcp.ts` serves MCP over HTTP and is
 **the only thing in Helm that has ever listened for a connection**. Six rules,
 and they are here rather than only at the code site because they are the ones a
 future change would weaken without meaning to.
+
+**One listener, two named servers.** `helm-browser` at `/mcp` is the pane;
+`helm-sessions` at `/mcp/sessions` is the session-awareness tools below. One
+port, one token per session, one process - and a tick each, which is what makes
+each family's off assertable three ways rather than promised (see "The session
+tools"). Every rule below is about the listener and holds for both.
 
 - **Loopback and a token, always.** `listen(0, '127.0.0.1')` - never
   `0.0.0.0`, never a chosen port. Every request carries `Authorization: Bearer`
@@ -191,8 +211,12 @@ future change would weaken without meaning to.
   the caller says. That is what makes "only a tab this session opened" a
   comparison. `before-quit` stops the endpoint **before** sessions shut down, so
   nothing can still be driving a browser on behalf of a process that is gone.
-- **`browserMcp` off is off.** No bind, no token, no `--mcp-config` - the app is
-  then the process it was before M17. `BR-29` asserts all three.
+- **A family's tick off is off.** With every tool setting unticked there is no
+  bind, no token and no `--mcp-config` at all - the app is then the process it
+  was before any of this, and `BR-29` asserts all three. With one of them off
+  and the other on, that family has no route (404 to a valid token), no name in
+  the `--mcp-config` document, and no tool in any list, while the other family
+  goes on answering; `SESS-32` asserts all four.
 - **Registration is `--mcp-config`, written per session under the data
   directory.** Never `claude mcp add-json`, which writes into the user's
   `~/.claude.json` on every launch and leaves the entry there. The file is
@@ -217,6 +241,64 @@ document has never painted while shown is not scriptable in the ways M17
 needs** - zero viewport, empty `capturePage`, clicks that land on nothing - and
 an agent's tab is never mounted by the window. `AGENT_PEEK` is the answer and
 the comment there has the three approaches that were measured and rejected.
+
+## The session tools - awareness, never coordination
+
+The second family on that listener: `sessions_list` and `session_detail`, in
+`main/session-tools.ts`, shaped by `core/registry/describe.ts`. A session Helm
+hosts can ask what the other Claude Code sessions on this machine are doing, so
+it can stay out of a working tree somebody else is in. Four rules, and the first
+is the one the whole surface is bounded by.
+
+- **No tool returns any part of another session's conversation.** Not its
+  transcript, not its prompts, not its output. This is the analogue of "a tool
+  drives only the tabs its own session opened", and a tool that could would be
+  "Helm renders nothing for a live session" defeated sideways. It is structural
+  rather than promised: the shaping type in core has no field for it, and
+  **argv is absent for two independent reasons** - a review session's argv
+  carries its opening prompt verbatim, and every argv names the session's own
+  `--mcp-config` file, which holds that session's **bearer token for this
+  endpoint**. The conversation id is withheld too, because it is the
+  transcript's filename under `~/.claude/projects/`. `SESS-30` plants a marker
+  in one session's first message and its argv, proves it is there, and requires
+  it to be in no answer.
+
+  **The same rule one level down: no child process command lines either.** A
+  subagent is `claude -p "<prompt>"`, so a command line can be another
+  conversation; it can carry a key as an argument or a nested session's
+  `--mcp-config` path; and it is more than the question - `docker.exe` and the
+  port already say somebody is holding this tree. `HeldProcess` has no field for
+  one and `heldBy` is the only route in. The **pane prints them and is right
+  to**: same data, different audience, different answer - a user looking at
+  their own machine is not an agent being told about somebody else's work.
+  `SESS-30` measures that half over the check driver's own process tree, because
+  a `claude` at its prompt has no children and an answer about one could not
+  contain a command line however the code was written.
+- **Listing is machine-wide; detail is Helm's own.** The same split the sessions
+  pane has, for the same reason - a `claude` in a terminal holds a working tree
+  exactly as hard as a tab does - and withholding it would buy nothing anyway,
+  since any session with a shell can read `~/.claude/sessions` itself. What is
+  withheld is what Helm has no business inventing: for a session Helm did not
+  spawn there is no branch, no profile and no process tree, and the answer says
+  so in a sentence. **A status Helm could not read is "unknown"**, never omitted
+  and never guessed - an agent told nothing concludes there is nothing there -
+  and `waitingFor` is the CLI's own sentence carried verbatim, which `SESS-35`
+  provokes with `/help` and asserts against its own read of the record.
+- **Attribution is which token arrived.** No tool takes a session id of any
+  kind, so there is nothing to spoof; a pid selects `session_detail`'s *subject*,
+  which is a fact about the machine rather than an identity claim. `SESS-31`
+  makes the same call twice with two tokens and requires two different answers
+  about who is asking.
+- **A tool call is somebody looking, for exactly one pass.** The process
+  enumeration is watch-gated (`main/resources.ts`), and `session_detail` takes a
+  watch, waits for one pass and drops it - the reference count doing its job
+  rather than a way around the budget. `SESS-29` asserts the pass moved because
+  of the call, so a tool that quietly answered "unknown" would fail.
+
+**It is awareness and it must not grow into coordination.** Nothing here sends a
+session anything, waits on one, or hands one work. Claude Code has its own
+channel for that (`messagingSocketPath`, `peerFeatures: ["notify_idle"]`), which
+Helm does not touch.
 
 ## Overlays
 
@@ -308,6 +390,52 @@ is in the **`surfaces`** skill.
   transcript archive is **not** a second exception - it reads those files and
   copies what it reads into `helm.db`, and `pnpm transcript-check`'s T-5 hashes
   the whole tree either side of a full pass to say so.
+- **A session tab's state comes from Claude Code's own live registry**, and
+  `~/.claude/sessions` is read exactly the way the rest of that tree is. The CLI
+  writes one `<pid>.json` per running session carrying `busy` / `shell` /
+  `idle` / `waiting`; Helm joins it to its own sessions and puts the answer on
+  the dot. It **never writes there and never deletes there** - a stale record is
+  filtered at read time by liveness (`probeProcess`, plus `procStart` against pid
+  reuse) and left for the CLI's own sweep. Everything it cannot interpret - no
+  status published yet, a status this build does not know, a process that cannot
+  be proved alive - degrades to what the tab painted before any of this existed.
+  The record's age says nothing: it is written on transition, never on a timer.
+  `SESS-16` to `SESS-19`, and `core/registry/`.
+- **Listing sessions is machine-wide; saying what one is holding is not.** The
+  sessions pane lists every live session on the machine, a `claude` somebody
+  started in a terminal included, because such a session collides with a working
+  tree exactly as hard as a tab does - it is the same rule `browser_tabs`
+  established, that listing is not driving. The **detail** half is Helm's own
+  and needs no special case for the rest: branch, profile, argv, process tree
+  and ports exist because Helm spawned the pty, and for a session it did not
+  spawn there is simply nothing to know. The tree is rooted at the **pty's** pid
+  and never the registry record's - through a `.cmd` shim those differ, and the
+  pty's is the one that roots what the session started. The half that cannot be
+  argued into existence, only demonstrated, is the listing: `SESS-25` runs a
+  `claude` on a pty Helm does not own and requires the pane to show it, and
+  `SESS-26` requires the launch row of *that* folder to name it before the
+  button is pressed.
+- **The process pass is budgeted, and the budget is why it is not on the
+  registry's timer.** Re-measured 2026-08-20: the registry poll is `readdir`
+  plus a 451-byte read, **0.15ms**, and runs always; a process-and-ports
+  enumeration is **400-480ms of wall time** across two runs, and 478-547ms with
+  three sessions running under a check - most of it `powershell.exe` starting,
+  which is why load moves it by tens of milliseconds and not by multiples. So it
+  runs **only while the sessions pane is on
+  screen** (`sessions:watch`), at 4s rather than 750ms, through `execFile` and
+  never `execFileSync` - which leaves **0.11-0.21ms** of main-thread work per
+  pass, the JSON parse of 58-66KB. That last number is the one that matters, because what
+  queues behind main-thread work is pty resizes and IPC replies; the archive's
+  16MB synchronous chunks are the standing precedent, and that one was not on a
+  timer. Passes never overlap. `SESS-21` to `SESS-24`, and `main/resources.ts`.
+- **"Could not look" and "nothing there" are never merged.** A tree that could
+  not be enumerated is `null` and paints "Unknown"; a session with no children
+  is `[]` and says so in words. Same for the ports, which fail independently,
+  and for a command line the host would not give up - 159 of 277 processes
+  withheld one to an unelevated query on this machine, and **no elevation is
+  ever assumed**. This is the usage figures' rule with a sharper edge: here the
+  wrong answer is not a wrong figure but a reassuring one, since "holding
+  nothing" is what somebody checks before starting a second agent.
 - **`CLAUDE_CONFIG_DIR` moves credentials too**, so a session pointed at a
   fixture home cannot log in. Measuring the user settings layer means using the
   real `~/.claude/settings.json`, snapshotted and put back.
@@ -332,6 +460,23 @@ and how to narrow a re-run. Two rules belong here rather than there:
   `PORTABLE_EXECUTABLE_DIR` - never `%APPDATA%\Helm`, which is the app somebody
   is using while the check runs. A new driver calls `isolate(name)` and threads
   its `env` into every spawn.
+- **Nothing that touches the installed app may be part of a suite.** Every check
+  gets its own data directory so it cannot reach the app somebody is using;
+  `packaging-check --only=installer` is the one that cannot, because it is
+  *about* where an installer puts things - it uninstalls the Helm on this
+  machine and puts nothing back. `run-packaging.mjs` therefore keeps it out of a
+  plain run (`OPT_IN_GROUPS`), and the default run **records that it did not
+  run** rather than letting "packaging-check green" quietly stop including it.
+  That is the shape the rule takes everywhere: a step that stops, removes or
+  replaces the installed app is a **tool somebody asks for**, never a group a
+  suite reaches on its own. The same goes for `dev:live`, which runs against the
+  real `%APPDATA%\Helm`. Everything else in `packaging-check`, `--only=audit`
+  included, is safe and expected.
+  When a change owes coverage that only the opt-in group would give, **report
+  the omission** - a standing exception to "a change to a surface a check covers
+  is not done until that check is green", and the omission is reported rather
+  than quietly closed. Say it out loud to a subagent too, which otherwise reads
+  "the checks this change owes" as the whole suite.
 
 ## Scope
 

@@ -162,6 +162,28 @@ export const sessions = sqliteTable(
     profileId: integer('profile_id'),
     /** JSON array of the argv after the executable. */
     argv: text('argv', { mode: 'json' }).$type<string[]>().notNull().default([]),
+    /**
+     * The Claude Code conversation id, **assigned by Helm at launch** through
+     * `--session-id` rather than discovered afterwards.
+     *
+     * A column rather than something derived from `argv`, which already carries
+     * the flag: parsing a string this repository wrote, to recover a value it
+     * had in hand at the moment it wrote it, is a second parser with a second
+     * way to be wrong.
+     *
+     * Nullable, and null is a real answer in three cases - a row from before
+     * this column existed, a CLI with no `--session-id` flag, and a resume of a
+     * conversation whose id the history index did not have. All three mean "no
+     * durable join to the conversation", which the reader treats as a fact
+     * rather than an error.
+     *
+     * **Not unique, deliberately.** `/clear` gives a live process a new
+     * conversation id under the same pid, so this records the id a session
+     * *started* as; two rows sharing one is not a state to refuse at the
+     * database. What is never reused is the id passed at launch - the CLI
+     * refuses a uuid that already exists outright.
+     */
+    claudeSessionId: text('claude_session_id'),
     status: text('status', { enum: ['running', 'exited', 'lost'] })
       .notNull()
       .default('running'),
