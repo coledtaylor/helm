@@ -1,10 +1,28 @@
 import type { DragEvent, JSX, KeyboardEvent, ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '../lib/cn'
+import {
+  SESSION_STATE_DOT,
+  SESSION_STATE_LABEL,
+  type SessionState
+} from '../lib/sessionstate'
 import { CloseIcon } from './icons'
 
-/** Whether a tab's session is alive, and how it ended if it is not. */
-export type TabIndicator = 'running' | 'ended' | 'failed'
+/**
+ * Whether a tab's session is alive, what it is doing, and how it ended.
+ *
+ * Seven and not three. The first three are Helm's own knowledge of the process
+ * and have not changed; the four after them are what the session says about
+ * itself in Claude Code's live registry, and `running` stays as the answer for
+ * a session that is alive and is not saying anything - which is every session
+ * for the first second of its life, and every session at all where the registry
+ * cannot be read.
+ *
+ * An alias, because a tab is no longer the only place this is painted: the
+ * sessions pane's rows carry the same seven, and the tones live in
+ * `lib/sessionstate.ts` so the two cannot drift apart.
+ */
+export type TabIndicator = SessionState
 
 export interface Tab {
   id: string
@@ -74,20 +92,6 @@ export interface TabBarProps {
    * A **toast** deliberately does not do this. See `App.tsx`.
    */
   onDragging?: ((dragging: boolean) => void) | undefined
-}
-
-const INDICATOR_CLASS: Record<TabIndicator, string> = {
-  running: 'bg-success',
-  // Not border-strong: that token became a 16% alpha hairline, and a dot
-  // filled with it disappears into whatever it sits on.
-  ended: 'bg-fg-subtle',
-  failed: 'bg-danger'
-}
-
-const INDICATOR_LABEL: Record<TabIndicator, string> = {
-  running: 'running',
-  ended: 'ended',
-  failed: 'exited with an error'
 }
 
 /**
@@ -291,7 +295,7 @@ export function TabBar({
                       aria-hidden
                       className={cn(
                         'size-1.5 shrink-0 rounded-full',
-                        INDICATOR_CLASS[tab.indicator]
+                        SESSION_STATE_DOT[tab.indicator]
                       )}
                     />
                   )}
@@ -322,7 +326,7 @@ export function TabBar({
                   aria-label={
                     tab.indicator === undefined
                       ? undefined
-                      : `${tab.title}, ${INDICATOR_LABEL[tab.indicator]}`
+                      : `${tab.title}, ${SESSION_STATE_LABEL[tab.indicator]}`
                   }
                   title={tab.hint}
                   onClick={() => onActivate(tab.id)}
@@ -363,7 +367,7 @@ export function TabBar({
                       aria-hidden
                       className={cn(
                         'size-1.5 shrink-0 rounded-full',
-                        INDICATOR_CLASS[tab.indicator]
+                        SESSION_STATE_DOT[tab.indicator]
                       )}
                     />
                   ) : (

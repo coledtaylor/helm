@@ -115,6 +115,7 @@ export {
   type HistoryGrouping,
   type SessionHistoryProps
 } from './components/SessionHistory'
+export { SessionsPane, type SessionsPaneProps } from './components/SessionsPane'
 export { Sidebar, type SidebarProps } from './components/Sidebar'
 export { StatusBar, type StatusBarProps } from './components/StatusBar'
 export { TabBar, type Tab, type TabBarProps, type TabIndicator } from './components/TabBar'

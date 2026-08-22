@@ -14,14 +14,22 @@
 // Nothing of the user's is backed up because nothing of the user's is opened.
 //
 // Phase 3 is about the artefacts. It builds them if they are not there, copies
-// the portable exe to a path with spaces, installs the NSIS package silently,
-// runs --selftest out of each, and uninstalls. This is the gap Spike B left:
-// it built the installer and never ran it.
+// the portable exe to a path with spaces, and runs --selftest out of it.
+//
+// It does **not** install anything. Verifying the NSIS package means installing
+// it over the Helm on this machine and uninstalling it again, which ends the
+// Claude Code sessions Helm is hosting - so that is `scripts/verify-installer.mjs`,
+// a tool run by name with --yes, and not a group this suite can reach. PKG-2
+// stands open in the report rather than passing, so "packaging-check green"
+// cannot come to mean "the installer works".
 //
 // The report is the verdict, not the exit status - node-pty's teardown can lose
 // the exit code after the checks have already passed.
 
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
+// Only the *asking* half. `endInstalledApp` lives in the same module and is
+// deliberately not imported here: nothing in this suite may end the app.
+import { countInstalledProcesses, installedAppDir } from './installed-app.mjs'
 import {
   cpSync,
   existsSync,
@@ -48,29 +56,27 @@ const onlyArg = args.find((a) => a.startsWith('--only='))
 const groups = onlyArg ? onlyArg.slice('--only='.length).split(',') : null
 
 /**
- * The groups a plain `pnpm packaging-check` does **not** run.
+ * Every group here is safe to run on the machine you work on.
  *
- * Exactly one, and it is the only destructive thing in this repository:
- * `installer` uninstalls the Helm that is installed on this machine and puts
- * nothing back. Every other check gets its own data directory precisely so it
- * cannot touch the app somebody is using; this one cannot be isolated, because
- * it is *about* where an installer puts things.
+ * That is a property of this file now, not a list to keep. The one destructive
+ * thing this repository has - installing the NSIS package over the Helm on this
+ * machine and uninstalling it again - **is not a group of this suite and cannot
+ * be reached from it**. It lives in `scripts/verify-installer.mjs` and is run by
+ * name, deliberately, with `--yes`.
  *
- * It used to be in the default run, which made the documented release gate -
- * "run `pnpm packaging-check` green before merging" - a command nobody could
- * safely run on the machine they work on. Helm hosts Claude Code sessions, so
- * "close Helm first" means ending whatever is running in them, and a gate with
- * that price is a gate that gets skipped or run by accident. It has already
- * cost a session once, from a blanket sweep.
+ * It used to be a group here, kept out of the default run by an opt-in list.
+ * That was better than nothing and it was still the wrong shape: a list is a
+ * thing somebody can add to, `--only=installer` was a spelling away from a
+ * sweep, and the guard meant to catch the accident had itself never been run.
+ * It cost a session and an app that had to be reinstalled by hand.
  *
- * So the default run covers everything a release needs and stops short of the
- * one thing that would cost something to be wrong about. `--only=installer`
- * asks for it deliberately, and the default run **records that it did not run**
- * rather than letting "packaging-check green" quietly stop including it.
+ * So the rule is structural rather than careful: a step that stops, removes or
+ * replaces the installed app is a tool somebody asks for, never a group a suite
+ * reaches on its own. `packaging-check` covers everything a release needs and
+ * **records that the installer was not verified here** rather than letting
+ * "packaging-check green" quietly stop including it.
  */
-const OPT_IN_GROUPS = ['installer']
-const wants = (name) =>
-  groups === null ? !OPT_IN_GROUPS.includes(name) : groups.includes(name)
+const wants = (name) => (groups === null ? true : groups.includes(name))
 
 const version = JSON.parse(readFileSync(join(desktopDir, 'package.json'), 'utf8')).version
 const checks = []
@@ -255,12 +261,8 @@ if (FIRSTRUN_GROUPS.some(wants)) {
 // Phase 3: the artefacts
 // ---------------------------------------------------------------------------
 
-if (wants('package') || wants('installer')) {
-  say(
-    wants('installer')
-      ? '\n--- phase 3: the portable exe and the NSIS installer ---'
-      : '\n--- phase 3: the portable exe ---'
-  )
+if (wants('package')) {
+  say('\n--- phase 3: the portable exe ---')
   const portableExe = join(distDir, `Helm-${version}-portable.exe`)
   const setupExe = join(distDir, `Helm-${version}-setup.exe`)
 
@@ -296,12 +298,9 @@ if (wants('package') || wants('installer')) {
     }
   }
 
-  if (wants('package')) {
-    checks.push(unpackedNativeModulesCheck())
-    checks.push(...portableChecks(portableExe))
-  }
-  if (wants('installer')) checks.push(...installerChecks(setupExe))
-  else if (wants('package')) checks.push(installerNotRun(setupExe))
+  checks.push(unpackedNativeModulesCheck())
+  checks.push(...portableChecks(portableExe))
+  checks.push(installerNotVerifiedHere(setupExe))
 }
 
 // ---------------------------------------------------------------------------
@@ -481,391 +480,37 @@ function portableChecks(exe) {
  * gate silently shed a criterion. A green line that says "not run" is the only
  * one of the three that is both honest and usable.
  */
-function installerNotRun(setupExe) {
+/**
+ * PKG-2, standing open.
+ *
+ * Not a pass and not a failure - a record that this suite does not answer the
+ * question, so "packaging-check green" cannot quietly come to mean "the
+ * installer works". The suite has no way to answer it: installing the package
+ * means removing the Helm somebody is using, which is why that lives in a tool
+ * and not here.
+ */
+function installerNotVerifiedHere(setupExe) {
   return {
     id: 'PKG-2',
     criterion:
       'NSIS installer installs per-user without elevation, the installed app launches and passes the same smoke checks, app data lands in %APPDATA%, and uninstall removes it cleanly',
-    title: 'Not run - the installer phase is opt-in, and nothing was installed or uninstalled',
+    title: 'Not verified here - the installer is a tool, not a check, and nothing was installed',
     ok: true,
     detail: {
       ranNothing: true,
       wouldHaveUsed: setupExe,
       builtAndReadable: existsSync(setupExe),
-      howToRun: 'pnpm packaging-check --only=installer',
-      whyItIsOptIn:
-        'It uninstalls the Helm installed on this machine and puts nothing back. Helm hosts Claude Code sessions, so that ends whatever is running in them.'
+      howToRun: 'pnpm verify:installer --yes',
+      whyItIsNotHere:
+        'It installs over the Helm on this machine and uninstalls it, putting nothing back. Helm hosts Claude Code sessions, so that ends whatever is running in them. A step like that is a tool somebody asks for, never a group a suite can reach.'
     },
     notes: [
       'This is a placeholder, not a pass. The installer was neither run nor verified.',
-      'Run `pnpm packaging-check --only=installer` on a machine where nobody is working -',
-      'a fresh checkout, a spare machine, or before a release that changes packaging.',
+      'Run `pnpm verify:installer --yes` on a machine where nobody is working - a spare',
+      'machine, or before a release that changes packaging. It leaves no Helm installed.',
       'A release that does not touch electron-builder, the NSIS configuration, the native',
-      'modules or `dist-win.mjs` is not a release this phase would have new information',
+      'modules or `dist-win.mjs` is not a release that tool would have new information',
       'about; CI already runs `verify-artifact.mjs` over both exes on every publish.'
     ]
   }
-}
-
-/** PKG-2: the NSIS installer, installed, launched, and uninstalled. */
-function installerChecks(setupExe) {
-  if (!existsSync(setupExe)) {
-    return [
-      {
-        id: 'PKG-2',
-        criterion:
-          'NSIS installer installs per-user without elevation, the installed app launches and passes the same smoke checks, app data lands in %APPDATA%, and uninstall removes it cleanly',
-        title: 'No installer was built',
-        ok: false,
-        detail: { expected: setupExe },
-        notes: []
-      }
-    ]
-  }
-
-  // electron-builder's one-click, per-user NSIS target installs here and asks
-  // for no elevation. If it had asked, a silent run would fail outright rather
-  // than silently succeeding.
-  const localAppData = process.env.LOCALAPPDATA ?? ''
-  const installDir = installedAppDir()
-  const installedExe = join(installDir, 'Helm.exe')
-  const uninstaller = join(installDir, 'Uninstall Helm.exe')
-  const startMenu = join(
-    process.env.APPDATA ?? '',
-    'Microsoft',
-    'Windows',
-    'Start Menu',
-    'Programs',
-    'Helm.lnk'
-  )
-  // Deliberately not created (`createDesktopShortcut: false`), so its absence is
-  // checked at both ends rather than only after the uninstall.
-  const desktopShortcut = join(process.env.USERPROFILE ?? '', 'Desktop', 'Helm.lnk')
-  const desktopShortcutBefore = existsSync(desktopShortcut)
-
-  const alreadyInstalled = existsSync(installedExe)
-  if (alreadyInstalled) {
-    say(`(an existing install at ${installDir} is being replaced by this run)`)
-  }
-
-  /**
-   * Stop if the installed Helm is **running**.
-   *
-   * This phase kills it (`endInstalledApp`) and uninstalls it at the end, and
-   * puts nothing back. Every other check in this repository gets its own data
-   * directory precisely because `%APPDATA%\Helm` is "the app somebody is using
-   * while the check runs"; this one cannot be isolated - it is *about* where an
-   * installer puts things - so the same care has to be taken here, out loud,
-   * rather than assumed.
-   *
-   * It was assumed, and it cost: this ran inside a `pnpm packaging-check` in a
-   * sweep of every check, killed the installed Helm, and took the Claude Code
-   * session somebody was working in down with it - then uninstalled the app, so
-   * it had to be put back by hand. Helm **hosts sessions**. Terminating it is
-   * not like terminating an editor with everything saved.
-   *
-   * A running instance is therefore a refusal and not a warning. `--replace-running`
-   * is the way to say it on purpose, which is what a release build does on a
-   * machine where nobody is working.
-   */
-  const running = countInstalledProcesses(installDir)
-  if (running > 0 && !process.argv.includes('--replace-running')) {
-    say('')
-    say(`FAIL  PKG-2  ${String(running)} Helm process(es) are running from ${installDir}.`)
-    say('This phase terminates the installed app, uninstalls it, and does not put it back.')
-    say('Helm hosts Claude Code sessions, so that ends whatever is running in them.')
-    say('Close it and run this again, or pass --replace-running if that is what you want.')
-    return [
-      {
-        id: 'PKG-2',
-        criterion:
-          'NSIS installer installs per-user without elevation, the installed app launches and passes the same smoke checks, app data lands in %APPDATA%, and uninstall removes it cleanly',
-        title: `Refused: ${String(running)} process(es) are running from the install directory`,
-        ok: false,
-        detail: { installDir, running, remedy: 'close the installed Helm, or pass --replace-running' },
-        notes: [
-          'Not a failure of the installer. This phase would have uninstalled an app somebody',
-          'is using, which it has done once already - see the comment at this guard.'
-        ]
-      }
-    ]
-  }
-
-  say('installing silently, as the current user...')
-  const elevated = isElevated()
-  spawnSync(setupExe, ['/S'], { stdio: 'inherit', timeout: 300_000 })
-  // NSIS one-click returns before the files have settled on some machines.
-  waitForFile(installedExe, 60_000)
-  // `runAfterFinish` is true, because an installer that finishes and does
-  // nothing looks broken to the person who ran it - there is no completion page
-  // on a one-click install to say otherwise.
-  //
-  // NSIS suppresses that auto-run under `/S`, which is what this install uses,
-  // so today nothing is started here and this call is a no-op. It stays anyway:
-  // everything below - the selftest, the "nothing was written beside the exe"
-  // read, and an uninstall that cannot remove files a live process holds -
-  // assumes no app is running, and the day this install stops being silent that
-  // assumption breaks silently. Measured on 2026-08-10: `/S` launched nothing,
-  // the same installer double-clicked launched the app.
-  //
-  // Matched by executable path rather than image name, so a portable or dev
-  // instance running from elsewhere on this machine is left alone.
-  endInstalledApp(installDir)
-
-  const installed = existsSync(installedExe)
-  const shortcutCreated = existsSync(startMenu)
-  const desktopShortcutCreated = !desktopShortcutBefore && existsSync(desktopShortcut)
-  const registry = readUninstallRegistry()
-
-  let report = null
-  let appDataFilesAfter = []
-  let besideExe = []
-  if (installed) {
-    say('running the installed app...')
-    spawnSync(installedExe, ['--selftest'], { stdio: 'inherit', timeout: 300_000 })
-    const reportFile = join(realDataDir, 'spike-report.json')
-    report = existsSync(reportFile) ? JSON.parse(readFileSync(reportFile, 'utf8')) : null
-    appDataFilesAfter = existsSync(realDataDir) ? readdirSync(realDataDir).sort() : []
-    besideExe = readdirSync(installDir).filter((name) => /^helm-data$|\.db$|\.db-wal$/.test(name))
-  }
-
-  say('uninstalling...')
-  let uninstallRan = false
-  if (existsSync(uninstaller)) {
-    // Through Start-Process -Wait, not spawnSync: the NSIS uninstaller
-    // relaunches itself from a temp copy and the first process returns
-    // immediately, so a plain spawn is a race against the thing being measured.
-    spawnSync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `Start-Process -FilePath '${uninstaller}' -ArgumentList '/S' -Wait`
-      ],
-      { stdio: 'inherit', timeout: 300_000 }
-    )
-    uninstallRan = true
-    waitForEmpty(installDir, 60_000)
-  }
-  // Empty counts as gone. NSIS deletes every file it installed but cannot
-  // remove the directory the uninstaller is itself running out of, so a
-  // successful uninstall routinely leaves an empty folder behind. What matters
-  // is that nothing is left *in* it.
-  const remaining = existsSync(installDir) ? readdirSync(installDir) : []
-  const installDirGone = remaining.length === 0
-  const registryAfter = readUninstallRegistry()
-  const shortcutGone = !existsSync(startMenu)
-  // Deliberately kept: uninstalling an app must not delete the user's data, and
-  // `deleteAppDataOnUninstall` is off for exactly that reason.
-  const appDataKept = existsSync(realDataDir)
-
-  return [
-    {
-      id: 'PKG-2',
-      criterion:
-        'NSIS installer installs per-user without elevation, the installed app launches and passes the same smoke checks, app data lands in %APPDATA%, and uninstall removes it cleanly',
-      title: `Installed to ${installDir}, ran, and uninstalled`,
-      ok:
-        installed &&
-        !elevated &&
-        installDir.toLowerCase().startsWith(localAppData.toLowerCase()) &&
-        report !== null &&
-        report.pass === true &&
-        report.mode === 'installed' &&
-        String(report.dataDir ?? '').toLowerCase() === realDataDir.toLowerCase() &&
-        besideExe.length === 0 &&
-        shortcutCreated &&
-        !desktopShortcutCreated &&
-        uninstallRan &&
-        installDirGone &&
-        shortcutGone &&
-        registryAfter.length === 0 &&
-        appDataKept,
-      detail: {
-        setupExe,
-        elevatedShell: elevated,
-        installDir,
-        installedExe,
-        installed,
-        replacedExistingInstall: alreadyInstalled,
-        installedMode: report?.mode ?? null,
-        installedDataDir: report?.dataDir ?? null,
-        expectedDataDir: realDataDir,
-        selftestPass: report?.pass ?? null,
-        dataFilesBesideExe: besideExe,
-        appDataEntries: appDataFilesAfter.length,
-        startMenuShortcut: {
-          path: startMenu,
-          createdByInstall: shortcutCreated,
-          goneAfterUninstall: shortcutGone
-        },
-        desktopShortcut: { path: desktopShortcut, createdByInstall: desktopShortcutCreated },
-        uninstallEntriesBefore: registry,
-        uninstallEntriesAfter: registryAfter,
-        filesLeftInInstallDir: remaining,
-        installDirEmptyAfterUninstall: installDirGone,
-        appDataKeptOnPurpose: appDataKept
-      },
-      notes: [
-        'Installed silently as the ordinary user. This shell is not elevated, and a per-machine installer would fail here rather than prompt, so "no elevation" is the reason it worked rather than an assumption.',
-        'The installed app is asked for the same selftest the portable exe ran, and it reports its own mode and data directory, which are compared against %APPDATA%\\Helm.',
-        'Nothing landed beside the exe: the install directory holds no helm-data, no .db and no WAL.',
-        'A start-menu entry is created and a desktop icon deliberately is not. Both are checked, and the uninstall has to take back the one it made.',
-        'An empty install directory counts as removed: NSIS deletes every file it installed but cannot remove the folder its own uninstaller is running out of, so an empty shell is the ordinary successful outcome.',
-        '%APPDATA%\\Helm is deliberately NOT removed by the uninstaller. deleteAppDataOnUninstall stays false: the database holds the user\'s profiles, session index and config snapshots, and an uninstall is not a request to destroy them.'
-      ]
-    }
-  ]
-}
-
-function isElevated() {
-  try {
-    const out = execFileSync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        '([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)'
-      ],
-      { encoding: 'utf8', windowsHide: true, timeout: 30_000 }
-    )
-    return out.trim().toLowerCase() === 'true'
-  } catch {
-    return false
-  }
-}
-
-/** Per-user uninstall entries mentioning Helm. */
-function readUninstallRegistry() {
-  try {
-    const out = execFileSync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        "Get-ChildItem 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall' -ErrorAction SilentlyContinue | ForEach-Object { $_.PSChildName } | Where-Object { $_ -like '*Helm*' }"
-      ],
-      { encoding: 'utf8', windowsHide: true, timeout: 30_000 }
-    )
-    return out.split(/\r?\n/).filter((line) => line.trim() !== '')
-  } catch {
-    return []
-  }
-}
-
-/** A synchronous pause. This script is a sequence of blocking installs; there
- * is no event loop to yield to and nothing else waiting on it. */
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-}
-
-function waitForFile(path, timeoutMs) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline && !existsSync(path)) sleepSync(500)
-  return existsSync(path)
-}
-
-/**
- * Ends the app the installer launched, and only that one.
- *
- * Matched by `ExecutablePath` under the install directory rather than by image
- * name: a developer running this check almost certainly has a dev or portable
- * Helm open, and killing by name would take those with it. Waits for the
- * processes to actually be gone, because the uninstall that follows cannot
- * remove files a live process still holds.
- */
-/**
- * A Windows path as a PowerShell **string literal**.
- *
- * `JSON.stringify` is not that, and the difference is not cosmetic. It doubles
- * every backslash, and a PowerShell double-quoted string does not undo that -
- * backslash is not PowerShell's escape character, backtick is. So a path went
- * across as `"C:\\Users\\user\\..."`, a literal path with doubled separators,
- * and `StartsWith` on it was false for every process on the machine.
- *
- * What that silently did: `endInstalledApp` matched nothing and killed nothing,
- * `stillRunning()` answered "no" without ever having looked, and the phase then
- * installed and uninstalled **over a running Helm**. Measured on this machine -
- * the JSON form returns 0 and this one returns 4, with the app plainly open. It
- * took down a Claude Code session somebody was working in.
- *
- * Single quotes, because a PowerShell single-quoted string is literal: only `'`
- * needs escaping, by doubling, and a backslash is just a backslash.
- *
- * A `function` and not a `const` arrow, which is not a style preference. This
- * module *runs* its phases on the way down - `installerChecks` is called around
- * line 182 - and everything it calls therefore has to be hoisted. Written as a
- * `const` it sat in the temporal dead zone, and the first thing phase 3 did was
- * throw `Cannot access 'psLiteral' before initialization` out of the guard that
- * exists to keep this phase from uninstalling an app somebody is working in.
- *
- * That is twice now that this guard has been wrong, and both times because it
- * had never been run: a branch that refuses only when Helm is open is a branch
- * nobody takes on the machine that wrote it. It is the code here most worth
- * exercising deliberately and the least likely to be exercised by accident.
- */
-function psLiteral(value) {
-  return `'${String(value).replace(/'/g, "''")}'`
-}
-
-/**
- * How many Helm processes are running out of `installDir`.
- *
- * Matched by **executable path**, not image name, so a portable build or a
- * `pnpm dev` running from elsewhere on this machine is not counted - the
- * question is only ever about the installed one.
- */
-/**
- * Where electron-builder's one-click, per-user NSIS target installs, and the
- * only Helm that writes to `%APPDATA%\Helm`.
- *
- * Named once because two phases now need it: the installer phase installs into
- * it, and the portable phase has to know whether something is running out of it
- * before it can read `%APPDATA%\Helm` as evidence about anything.
- */
-function installedAppDir() {
-  return join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Helm')
-}
-
-function countInstalledProcesses(installDir) {
-  const probe = spawnSync(
-    'powershell.exe',
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      `@(Get-CimInstance Win32_Process -Filter "Name = 'Helm.exe'" | ` +
-        `Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith(${psLiteral(installDir)}) }).Count`
-    ],
-    { encoding: 'utf8', timeout: 60_000 }
-  )
-  return Number((probe.stdout ?? '0').trim()) || 0
-}
-
-function endInstalledApp(installDir) {
-  const script =
-    `Get-CimInstance Win32_Process -Filter "Name = 'Helm.exe'" | ` +
-    `Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith(${psLiteral(installDir)}) } | ` +
-    `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`
-  spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    stdio: 'ignore',
-    timeout: 60_000
-  })
-
-  const stillRunning = () => countInstalledProcesses(installDir) > 0
-
-  const deadline = Date.now() + 30_000
-  while (Date.now() < deadline && stillRunning()) sleepSync(500)
-  return !stillRunning()
-}
-
-/** Waits for a directory to be gone, or to hold nothing. */
-function waitForEmpty(path, timeoutMs) {
-  const deadline = Date.now() + timeoutMs
-  const empty = () => !existsSync(path) || readdirSync(path).length === 0
-  while (Date.now() < deadline && !empty()) sleepSync(500)
-  return empty()
 }

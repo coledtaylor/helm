@@ -65,9 +65,9 @@ untouched one; deleting the directory is what puts the originals back.
   `deleteAppDataOnUninstall` stays false: `%APPDATA%\Helm\helm.db` holds the
   user's profiles, their session index and every config snapshot Helm has taken
   on their behalf, and uninstalling the program is not a request to destroy
-  those. `pnpm packaging-check --only=installer` asserts the install
-  directory, the start-menu shortcut and the uninstall registry entry are gone
-  and that the data directory is not.
+  those. `pnpm verify:installer --yes` asserts the install directory,
+  the start-menu shortcut and the uninstall registry entry are gone and that the
+  data directory is not.
 - **No desktop shortcut.** A start-menu entry is enough.
 
 ## Releasing
@@ -165,15 +165,17 @@ There is no telemetry, no crash reporting, no fonts and no CDN. With
 `updateCheck` off, Helm asks nothing by itself at all; the one remaining route
 is a person pressing Check now, so nothing leaves the machine unasked for.
 
-**Inbound is one listener and it is loopback.** Since M17 a Claude session Helm
-hosts can drive the browser pane, and it reaches those tools through an MCP
-endpoint bound to `127.0.0.1` on a port chosen per app run. It is the only
-socket Helm has ever accepted a connection on. Nothing off this machine can
-reach it; every request carries a bearer token minted for one session and
-revoked when that session ends; and `browserMcp` turns it off entirely, in which
-case no port is bound. Worth knowing for a packaged build in particular: an
-installer that a firewall prompt follows is a bad first impression, and a
-loopback bind produces no prompt on Windows.
+**Inbound is one listener and it is loopback.** A Claude session Helm hosts can
+drive the browser pane, and can ask what the other Claude Code sessions on this
+machine are doing; both sets of tools arrive over one MCP endpoint bound to
+`127.0.0.1` on a port chosen per app run - two named servers on two routes, one
+socket. It is the only socket Helm has ever accepted a connection on. Nothing
+off this machine can reach it; every request carries a bearer token minted for
+one session and revoked when that session ends; and each set has its own setting
+(`browserMcp`, `sessionMcp`) that removes it from every launch, with no port
+bound at all when both are off. Worth knowing for a packaged build in
+particular: an installer that a firewall prompt follows is a bad first
+impression, and a loopback bind produces no prompt on Windows.
 
 The pull-request pane reaches GitHub as well, but through the user's own `gh`
 CLI: `gh pr list` per repository on a timer (`prPollMinutes`, five minutes by
@@ -202,12 +204,13 @@ collaborator - a private release page is not a download link.
 
 ## Install-testing it
 
-Two groups, and the split is the point: one is safe to run on the machine you
-work on, and one is not.
+A check and a tool, and the split is the point: one is safe to run on the
+machine you work on, and one is not. The unsafe one is not a group of any suite
+and no `--only=` reaches it.
 
 ```bash
-pnpm packaging-check --only=package     # the artefacts and the portable exe
-pnpm packaging-check --only=installer   # installs and UNINSTALLS Helm here
+pnpm packaging-check --only=package   # the artefacts and the portable exe
+pnpm verify:installer --yes           # installs and UNINSTALLS Helm here
 ```
 
 `package` is in the default `pnpm packaging-check`. It builds the artefacts if

@@ -40,6 +40,8 @@ import {
 } from './profiles'
 import { cachedProjects, runScan, updateSettings, type Services } from './services'
 import type { SessionHost } from './sessions'
+import type { ActivityService } from './activity'
+import type { ResourcesService } from './resources'
 import type {
   EventChannel,
   EventPayload,
@@ -88,6 +90,10 @@ export interface IpcContext {
   window: () => BrowserWindow | null
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
   sessions: SessionHost
+  /** What each of those is doing, from Claude Code's registry. */
+  activity: ActivityService
+  /** What each of those is holding: process tree and ports. */
+  resources: ResourcesService
   /** Owns the project shells; see `pterm.ts`. */
   pterm: PtermHost
   /** Owns the browser pane's `WebContentsView`s; see `browser.ts`. */
@@ -222,9 +228,19 @@ export function registerIpc(ctx: IpcContext): void {
        * revokes them: a session that had the tools loses them mid-task, which
        * is the honest consequence of turning them off and is what the sentence
        * in the pane says.
+       *
+       * **Two ticks, one socket**, so the question is whether *anything* is
+       * still on rather than whether this one is. Unticking one family with the
+       * other still on takes that family's route away - the endpoint reads both
+       * settings per request - and leaves the listener up for the other, which
+       * is what makes them independent capabilities rather than one with two
+       * switches.
        */
-      if (patch.browserMcp !== undefined && ctx.browserMcp !== null) {
-        if (next.browserMcp) void ctx.browserMcp.start()
+      if (
+        (patch.browserMcp !== undefined || patch.sessionMcp !== undefined) &&
+        ctx.browserMcp !== null
+      ) {
+        if (next.browserMcp || next.sessionMcp) void ctx.browserMcp.start()
         else void ctx.browserMcp.stop()
       }
       if (patch.theme !== undefined) {
@@ -439,6 +455,15 @@ export function registerIpc(ctx: IpcContext): void {
     'session:start': (request) => ctx.sessions.start(request),
     'session:close': (request) => ctx.sessions.close(request),
     'session:list': () => ctx.sessions.list(),
+    // A read of what main already holds, not a fresh pass: the poller is what
+    // decides when the registry is re-read, and a channel that forced a read
+    // would let a renderer set the poll rate.
+    'session:activity': () => ctx.activity.states(),
+    'sessions:overview': () => ctx.activity.overview(),
+    // Whatever the last pass produced. Never a fresh enumeration: the pass runs
+    // only while something is watching, and a channel that forced one would let
+    // a renderer spawn a powershell.exe per invoke.
+    'sessions:resources': () => ctx.resources.snapshots(),
     'session:rename': (request) => ctx.sessions.rename(request),
 
     'pterm:open': (request) => ctx.pterm.open(request),
@@ -650,6 +675,7 @@ export function registerIpc(ctx: IpcContext): void {
     'session:input': ({ id, data }) => ctx.sessions.input(id, data),
     'session:resize': ({ id, cols, rows }) => ctx.sessions.resize(id, cols, rows),
     'session:focus': ({ id }) => ctx.sessions.setFocus(id),
+    'sessions:watch': ({ watching }) => ctx.resources.watch(watching),
 
     'pterm:input': ({ id, data }) => ctx.pterm.input(id, data),
     'pterm:resize': ({ id, cols, rows }) => ctx.pterm.resize(id, cols, rows),

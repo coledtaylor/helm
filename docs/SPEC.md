@@ -1118,17 +1118,24 @@ README, [PACKAGING.md](PACKAGING.md) and the `update:check` comment in
   never hands anything to a search engine, downloads are refused and handed to
   the system browser, and every permission the partition is asked for is denied.
   `browserReach` can confine the whole pane to `localhost`.
-- **Helm listens on loopback, for the sessions it hosts, and nowhere else**
-  (M17). A Claude session Helm starts can drive that pane - open a page, read
-  it, screenshot it, click, type and evaluate - and the way it reaches those
-  tools is an MCP endpoint bound to `127.0.0.1` on a port the kernel picks for
-  the run. It is the app's **only inbound listener**. Every request needs a
-  bearer token minted for one session and revoked when that session ends; there
-  is no unauthenticated route; the whole thing is off in one tick
-  (`browserMcp`), and off means no bind, no token and no flag. An agent
-  navigation is allowed only where `browserReach` **and** `browserMcpLocalOnly`
-  both allow it - the narrower wins, so an agent can never reach further than
-  the pane it is driving. See 4.7 and CLAUDE.md's rules.
+- **Helm listens on loopback, for the sessions it hosts, and nowhere else.**
+  A Claude session Helm starts can drive that pane - open a page, read it,
+  screenshot it, click, type and evaluate - and can ask what the other Claude
+  Code sessions on this machine are doing. Both reach it through **one** MCP
+  endpoint bound to `127.0.0.1` on a port the kernel picks for the run, serving
+  two named servers (`helm-browser`, `helm-sessions`) on two routes. It is the
+  app's **only inbound listener**. Every request needs a bearer token minted for
+  one session and revoked when that session ends; there is no unauthenticated
+  route; and each family has its own tick - `browserMcp` and `sessionMcp` - each
+  of which means no route, no name in the launch's `--mcp-config` document and
+  no tool in any list, with no bind and no token at all when both are off. An
+  agent navigation is allowed only where `browserReach` **and**
+  `browserMcpLocalOnly` both allow it - the narrower wins, so an agent can never
+  reach further than the pane it is driving. The session tools are read-only and
+  return **no part of any session's conversation**: no transcript, no prompt, no
+  output, and not the argv a session was launched with, which carries both a
+  review session's opening prompt and the path to that session's own bearer
+  token. See 4.7 and CLAUDE.md's rules.
 - **No credential of any kind is stored, read or handled**, and the browser
   partition is not an exception. It holds whatever cookies the sites you visit
   set, exactly as a browser profile does, and **Helm reads none of it**: nothing

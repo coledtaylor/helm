@@ -156,7 +156,8 @@ describe('settings', () => {
       browserMcp: false,
       browserMcpLocalOnly: true,
       browserRecentUrls: ['http://localhost:3000/', 'https://example.com/docs'],
-      browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' }
+      browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
+      sessionMcp: false
     } satisfies AppSettings
 
     writeSettings(store, written)
@@ -517,6 +518,13 @@ describe('settings validation', () => {
       bad: ['false', 'true', 0, 1, null, [], {}]
     },
     {
+      // And the same again for the session tools, which decide the same thing:
+      // whether a route exists at all.
+      key: 'sessionMcp',
+      good: [true, false],
+      bad: ['false', 'true', 0, 1, null, [], {}]
+    },
+    {
       // The interesting rejections are the ones that would put a row in the
       // dropdown that does nothing when clicked: a bare word, a relative path,
       // and `file:` - which the pane refuses to navigate to, so it must not be
@@ -674,7 +682,8 @@ describe('settings validation', () => {
       browserMcp: false,
       browserMcpLocalOnly: true,
       browserRecentUrls: ['http://localhost:3000/'],
-      browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' }
+      browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
+      sessionMcp: false
     })
 
     expect(() => writeSettings(store, readSettings(store))).not.toThrow()
@@ -717,7 +726,8 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   browserMcp: false,
   browserMcpLocalOnly: true,
   browserRecentUrls: ['http://localhost:3000/'],
-  browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' }
+  browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
+  sessionMcp: false
 })
 
 describe('pinned projects', () => {
@@ -927,6 +937,19 @@ describe('session log', () => {
 
     expect(onBranch.branch).toBe('feat/tabs')
     expect(noBranch.branch).toBeNull()
+  })
+
+  it('records the conversation id the launch assigned, and null for none', () => {
+    const uuid = '7b3d1c20-4a55-4f18-9c21-8e0c5a6d1f01'
+    const assigned = startSession(store, { name: 'alpha', cwd: dir, claudeSessionId: uuid })
+    // Null is a real answer, not a gap: a row from before this column, and a
+    // CLI with no `--session-id` flag, both land here.
+    const unassigned = startSession(store, { name: 'beta', cwd: dir })
+
+    expect(assigned.claudeSessionId).toBe(uuid)
+    expect(unassigned.claudeSessionId).toBeNull()
+    // In the row rather than only in the answer.
+    expect(readSessions(store).map((s) => s.claudeSessionId)).toContain(uuid)
   })
 
   it('starts with no label, so a session is called what the CLI was told', () => {

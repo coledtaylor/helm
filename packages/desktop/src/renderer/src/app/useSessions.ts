@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Project, SessionRecord } from '@helm/core'
+import type { Project, SessionActivityState, SessionRecord } from '@helm/core'
 import { helm } from './bridge'
 import { disposeTerminal, estimateGrid } from './terminals'
 
@@ -16,6 +16,17 @@ import { disposeTerminal, estimateGrid } from './terminals'
 export interface SessionsState {
   /** Open session tabs, in tab-strip order. */
   sessions: SessionRecord[]
+  /**
+   * What each live session is doing, keyed by session id.
+   *
+   * Held apart from `sessions` rather than folded into the row, because these
+   * are two different kinds of fact with two different lifetimes: a row is what
+   * the database holds about a session and changes when Helm changes it, and
+   * this is a reading of a file another program writes, which moves several
+   * times a minute. Merging them would put a new `SessionRecord` object on
+   * every poll, and every consumer of a session row would re-render for a dot.
+   */
+  activity: Map<number, SessionActivityState>
   /** Set when the last launch failed, until the next one is attempted. */
   launchError: string | null
   dismissLaunchError: () => void
@@ -42,6 +53,7 @@ export interface SessionsState {
 
 export function useSessions(onActivate: (id: number) => void): SessionsState {
   const [sessions, setSessions] = useState<SessionRecord[]>([])
+  const [activity, setActivity] = useState<Map<number, SessionActivityState>>(new Map())
   const [launchError, setLaunchError] = useState<string | null>(null)
 
   // The subscription below is registered once, so it reaches the caller
@@ -58,7 +70,13 @@ export function useSessions(onActivate: (id: number) => void): SessionsState {
         // scrollback until someone closes it.
         setSessions((current) => current.map((s) => (s.id === record.id ? record : s)))
       }),
-      helm.on('session:activate', ({ id }) => activateRef.current(id))
+      helm.on('session:activate', ({ id }) => activateRef.current(id)),
+      // The whole set every time, so a window that missed a push - mounted
+      // late, or reloaded - is corrected by the next one rather than carrying a
+      // stale dot until that session happens to move again.
+      helm.on('session:activity', (states) => {
+        setActivity(new Map(states.map((state) => [state.id, state])))
+      })
     ]
 
     // A renderer reload (dev HMR, or a crashed renderer) leaves main holding
@@ -66,6 +84,12 @@ export function useSessions(onActivate: (id: number) => void): SessionsState {
     // between a reload and an orphan.
     void helm.invoke('session:list').then((live) => {
       setSessions((current) => (current.length > 0 ? current : live))
+    })
+    // Adopted with them, for the same reason: an idle session publishes nothing
+    // until somebody types at it, so a strip waiting for the next push would sit
+    // without dots for as long as nobody used it.
+    void helm.invoke('session:activity').then((states) => {
+      setActivity(new Map(states.map((state) => [state.id, state])))
     })
 
     return () => {
@@ -143,6 +167,7 @@ export function useSessions(onActivate: (id: number) => void): SessionsState {
 
   return {
     sessions,
+    activity,
     launchError,
     dismissLaunchError,
     launch,

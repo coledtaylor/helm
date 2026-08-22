@@ -106,6 +106,44 @@ describe('buildLaunchArgs', () => {
   })
 })
 
+describe('the assigned conversation id', () => {
+  const uuid = '7b3d1c20-4a55-4f18-9c21-8e0c5a6d1f01'
+
+  it('goes on the argv as --session-id, after -n and before the prompt', () => {
+    const argv = buildLaunchArgs({
+      root: '/x',
+      name: 'plain',
+      sessionId: uuid,
+      openingPrompt: 'review this'
+    })
+    const at = argv.indexOf('--session-id')
+    expect(at).toBeGreaterThan(argv.indexOf('-n'))
+    expect(argv[at + 1]).toBe(uuid)
+    // The opening prompt is positional, so every flag has to be behind it.
+    expect(argv.at(-1)).toBe('review this')
+  })
+
+  it('passes no flag at all where the caller assigned none', () => {
+    // A CLI with no `--session-id` gets exactly the argv it got before this
+    // existed. An unrecognised flag is a launch that fails outright, which is
+    // worth strictly more than the join it would have bought.
+    expect(buildLaunchArgs({ root: '/x', name: 'plain' })).not.toContain('--session-id')
+    expect(buildLaunchArgs({ root: '/x', name: 'plain', sessionId: null })).not.toContain(
+      '--session-id'
+    )
+  })
+
+  it('is reported back on the plan so the row does not re-parse the argv', () => {
+    const plan = prepareLaunch({ root, name: 'assigned', shimRoot, sessionId: uuid })
+    expect(plan.claudeSessionId).toBe(uuid)
+    expect(plan.argv[plan.argv.indexOf('--session-id') + 1]).toBe(uuid)
+
+    const none = prepareLaunch({ root, name: 'unassigned', shimRoot })
+    expect(none.claudeSessionId).toBeNull()
+    expect(none.argv).not.toContain('--session-id')
+  })
+})
+
 describe('prepareLaunch', () => {
   it('composes two overlays into one launch', () => {
     const a = makeProject('acme', '# Acme\nPyQt5 desktop app.')
@@ -193,15 +231,21 @@ describe('prepareLaunch', () => {
    * that would look fine from one side.
    */
   describe('the per-session MCP registration', () => {
-    const server = {
+    const browserServer = {
       name: 'helm-browser',
       url: 'http://127.0.0.1:51234/mcp',
+      headers: { Authorization: 'Bearer 0123456789abcdef' }
+    }
+    // The second family, on the same port and the same token, at its own route.
+    const sessionsServer = {
+      name: 'helm-sessions',
+      url: 'http://127.0.0.1:51234/mcp/sessions',
       headers: { Authorization: 'Bearer 0123456789abcdef' }
     }
 
     it('writes a file under the directory it was given and points the argv at it', () => {
       const dir = join(root, 'mcp')
-      const plan = prepareLaunch({ root, name: 'with tools', shimRoot, mcp: { dir, server } })
+      const plan = prepareLaunch({ root, name: 'with tools', shimRoot, mcp: { dir, servers: [browserServer] } })
 
       expect(plan.mcpConfigFile).not.toBeNull()
       expect(resolve(plan.mcpConfigFile!)).toBe(resolve(join(dir, basename(plan.mcpConfigFile!))))
@@ -214,8 +258,8 @@ describe('prepareLaunch', () => {
       }
       expect(written.mcpServers['helm-browser']).toEqual({
         type: 'http',
-        url: server.url,
-        headers: server.headers
+        url: browserServer.url,
+        headers: browserServer.headers
       })
     })
 
@@ -225,10 +269,71 @@ describe('prepareLaunch', () => {
       expect(plan.argv).not.toContain('--mcp-config')
     })
 
+    /*
+     * Two families of tools, two names, one document - and one route each.
+     *
+     * The whole of what "two servers on one listener" costs a session: two keys
+     * under `mcpServers`, the same port and the same bearer token in both. The
+     * urls are asserted to differ because a second name pointed at the same
+     * route would be one server registered twice, which is a client that lists
+     * every tool under both names.
+     */
+    it('writes one key per server, sharing the port and the token', () => {
+      const dir = join(root, 'mcp')
+      const plan = prepareLaunch({
+        root,
+        name: 'both families',
+        shimRoot,
+        mcp: { dir, servers: [browserServer, sessionsServer] }
+      })
+
+      const written = JSON.parse(readFileSync(plan.mcpConfigFile!, 'utf8')) as {
+        mcpServers: Record<string, { type: string; url: string; headers: Record<string, string> }>
+      }
+      expect(Object.keys(written.mcpServers).sort()).toEqual(['helm-browser', 'helm-sessions'])
+      expect(written.mcpServers['helm-sessions']?.url).toBe(sessionsServer.url)
+      expect(written.mcpServers['helm-sessions']?.url).not.toBe(browserServer.url)
+      expect(written.mcpServers['helm-sessions']?.headers).toEqual(browserServer.headers)
+      // One `--mcp-config`, not one per server.
+      expect(plan.argv.filter((word) => word === '--mcp-config')).toHaveLength(1)
+    })
+
+    /*
+     * And one family alone, which is what a tick switched off produces.
+     *
+     * This is the assertion that makes "off is off" a claim about the argv
+     * rather than about the endpoint: with the browser tools off and the
+     * session tools on, the document exists and the name that is off is simply
+     * not in it.
+     */
+    it('leaves a switched-off family out of the document entirely', () => {
+      const dir = join(root, 'mcp')
+      const plan = prepareLaunch({
+        root,
+        name: 'sessions only',
+        shimRoot,
+        mcp: { dir, servers: [sessionsServer] }
+      })
+      const written = JSON.parse(readFileSync(plan.mcpConfigFile!, 'utf8')) as {
+        mcpServers: Record<string, unknown>
+      }
+      expect(Object.keys(written.mcpServers)).toEqual(['helm-sessions'])
+      expect(readFileSync(plan.mcpConfigFile!, 'utf8')).not.toContain('helm-browser')
+    })
+
+    /** Both off is the same outcome as no endpoint at all: no file, no flag. */
+    it('writes nothing at all for an empty list', () => {
+      const dir = join(root, 'mcp')
+      const plan = prepareLaunch({ root, name: 'neither', shimRoot, mcp: { dir, servers: [] } })
+      expect(plan.mcpConfigFile).toBeNull()
+      expect(plan.argv).not.toContain('--mcp-config')
+      expect(writeSessionMcpConfig(dir, [])).toBeNull()
+    })
+
     it('gives two sessions two files, so releasing one cannot disarm the other', () => {
       const dir = join(root, 'mcp')
-      const first = prepareLaunch({ root, name: 'one', shimRoot, mcp: { dir, server } })
-      const second = prepareLaunch({ root, name: 'two', shimRoot, mcp: { dir, server } })
+      const first = prepareLaunch({ root, name: 'one', shimRoot, mcp: { dir, servers: [browserServer] } })
+      const second = prepareLaunch({ root, name: 'two', shimRoot, mcp: { dir, servers: [browserServer] } })
       expect(first.mcpConfigFile).not.toBe(second.mcpConfigFile)
     })
 
@@ -244,7 +349,7 @@ describe('prepareLaunch', () => {
         shimRoot,
         access: [root],
         openingPrompt: 'go',
-        mcp: { dir, server }
+        mcp: { dir, servers: [browserServer] }
       })
       const at = plan.argv.indexOf('--mcp-config')
       expect(at).toBeGreaterThan(plan.argv.indexOf('-n'))
@@ -255,7 +360,7 @@ describe('prepareLaunch', () => {
 })
 
 describe('the ephemeral MCP config sweep', () => {
-  const server = {
+  const browserServer = {
     name: 'helm-browser',
     url: 'http://127.0.0.1:51234/mcp',
     headers: { Authorization: 'Bearer 0123456789abcdef' }
@@ -263,7 +368,7 @@ describe('the ephemeral MCP config sweep', () => {
 
   it('removes what a dead process left and keeps everything else', () => {
     const dir = join(root, 'mcp')
-    const mine = writeSessionMcpConfig(dir, server)
+    const mine = writeSessionMcpConfig(dir, [browserServer])!
     writeFileSync(join(dir, 'mcp-999999-deadbeef.json'), '{}')
     writeFileSync(join(dir, 'mcp-424242-c0ffee.json'), '{}')
     writeFileSync(join(dir, 'not-ours.json'), '{}')
@@ -290,7 +395,7 @@ describe('the ephemeral MCP config sweep', () => {
 
   it('removes one by name, and says nothing about one that is already gone', () => {
     const dir = join(root, 'mcp')
-    const file = writeSessionMcpConfig(dir, server)
+    const file = writeSessionMcpConfig(dir, [browserServer])!
     removeSessionMcpConfig(file)
     expect(existsSync(file)).toBe(false)
     expect(() => {

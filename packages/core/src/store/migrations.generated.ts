@@ -98,5 +98,11 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
     "statements": [
       "ALTER TABLE `projects` ADD `template` text;"
     ]
+  },
+  {
+    "tag": "0011_brave_senator_kelly",
+    "statements": [
+      "ALTER TABLE `sessions` ADD `claude_session_id` text;"
+    ]
   }
 ]

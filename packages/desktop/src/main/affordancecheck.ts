@@ -140,6 +140,12 @@ const VIEWS: Array<{
   // the rest.
   { name: 'welcome', open: null, anchor: 'aside nav button[title]' },
   { name: 'project', open: ['aside nav button[title]'], anchor: '[data-project-pane]' },
+  // The sessions pane, opened as it comes. Its list is machine-wide and may
+  // legitimately be empty on a machine with nothing running, so the anchor is
+  // the pane rather than a row - a count high enough to catch a pane that never
+  // opened would also fail on a quiet machine, which is the same trap
+  // `config:health`'s comment describes.
+  { name: 'sessions', open: ['[data-open-sessions]'], anchor: '[data-sessions-pane]' },
   { name: 'config', open: ['[data-open-config]'], anchor: '[data-config-scope]' },
   /**
    * A file open in the Files view, which is a *pane* rather than a view: the

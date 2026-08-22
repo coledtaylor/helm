@@ -11,6 +11,7 @@ import {
 import {
   claudeHome,
   projectsDirIn,
+  readProfile,
   writeSetting,
   writeSettings,
   type AppSettings
@@ -45,6 +46,7 @@ import {
   type BrowserHost
 } from './browser'
 import { createBrowserMcp, type BrowserMcpHost } from './browser-mcp'
+import type { SessionToolsWorld } from './session-tools'
 import { runBrowserChecks } from './browsercheck'
 import { createArchiveService } from './archive'
 import { createHistoryService } from './history'
@@ -52,6 +54,8 @@ import { createPullsService } from './pulls'
 import { createUsageService } from './usage'
 import { maybeCheckForUpdate } from './update'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
+import { createActivityService } from './activity'
+import { createResourcesService } from './resources'
 import {
   createCollector,
   runSessionsChecks,
@@ -439,6 +443,15 @@ function startApp(options: AppOptions = {}): void {
    */
   let browserMcp: BrowserMcpHost | null = null
 
+  /**
+   * And what the session-awareness tools read, reached the same way.
+   *
+   * Null until the activity poller and the resource service exist, which is
+   * after the endpoint for the reason above. A tool called in that window says
+   * "still starting up" rather than throwing - see `session-tools.ts`.
+   */
+  let sessionTools: SessionToolsWorld | null = null
+
   const sessions = createSessionHost({
     services,
     window: () => win,
@@ -558,18 +571,98 @@ function startApp(options: AppOptions = {}): void {
   browserMcp = createBrowserMcp({
     browsers,
     settings: () => services.settings,
-    dir: mcpConfigDir
+    dir: mcpConfigDir,
+    sessions: () => sessionTools
   })
   void browserMcp.start().then(({ started, problem }) => {
     if (started) {
       const bound = browserMcp?.address()
       console.log(
-        `browser tools on http://${bound?.address ?? '?'}:${String(bound?.port ?? 0)} (loopback, token-gated)`
+        `${(browserMcp?.servedNames() ?? []).join(' and ')} on http://${bound?.address ?? '?'}:${String(
+          bound?.port ?? 0
+        )} (loopback, token-gated)`
       )
-    } else if (services.settings.browserMcp) {
-      console.warn(`Helm's browser tools are not available: ${problem ?? 'unknown'}`)
+    } else if (services.settings.browserMcp || services.settings.sessionMcp) {
+      console.warn(`Helm's tools are not available: ${problem ?? 'unknown'}`)
     }
   })
+
+  /*
+   * What each hosted session is doing, out of Claude Code's own registry.
+   *
+   * After the session host because it reads from it, and pointed at the same
+   * `.claude` tree everything else that reads one is - so a check that hands
+   * over a fixture home gets a registry from that home rather than the user's.
+   */
+  const activity = createActivityService({
+    sessions,
+    window: () => win,
+    ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {})
+  })
+  sessions.onChanged(() => activity.refresh())
+
+  /*
+   * What each hosted session is *holding* - its process tree and its ports.
+   *
+   * A separate service from the one above because it is a separate budget. The
+   * registry poll costs 0.15ms and runs always; a process enumeration costs
+   * 400ms of a child process and runs only while somebody is looking at it.
+   * Wiring one off the other's timer is the change `resources.ts` exists to
+   * argue against.
+   */
+  const resources = createResourcesService({ sessions, window: () => win })
+  // A session ending is a tree that has gone with it, so the pass is re-run at
+  // once rather than leaving a dead session's children on screen for an
+  // interval. A no-op when nothing is watching.
+  sessions.onChanged(() => void resources.refresh())
+
+  /*
+   * What a session may be told about the other sessions.
+   *
+   * Assembled from the three things that already know: the activity poller's
+   * machine-wide listing, the resource service's process pass, and the session
+   * host's own rows. **Nothing here reads the registry or the process table a
+   * second time** - a second reader would be a second answer to "what is
+   * running", free to disagree with the pane about it.
+   *
+   * `factsFor` is where the boundary is enforced rather than described: it
+   * builds the answer field by field out of the row, and `argv` is not one of
+   * the fields. A review session's argv carries its opening prompt, and every
+   * argv carries the path to that session's own bearer token.
+   */
+  sessionTools = {
+    refreshOverview: () => activity.refresh(),
+    overview: () => activity.overview(),
+    callerOf: (token) => sessions.tokenHolder(token)?.id ?? null,
+    factsFor: (helmSessionId) => {
+      const record = sessions.list().find((row) => row.id === helmSessionId)
+      if (record === undefined) return null
+      const profile = record.profileId === null ? null : readProfile(services.store, record.profileId)
+      return {
+        helmSessionId: record.id,
+        branch: record.branch,
+        // The profile may have been deleted since - a session is a record of
+        // what happened and outlives the profile it came from - so this is
+        // "what it was launched from, if that still exists" rather than a join
+        // anything depends on.
+        profile: profile?.name ?? null,
+        overlays: profile?.overlays ?? [],
+        startedAtMs: Date.parse(record.startedAt) || null
+      }
+    },
+    measure: async () => {
+      // A tool call is somebody looking, for exactly one pass. `watch` is
+      // reference-counted, so this neither switches the pane's own pass off
+      // when it returns nor leaves a timer running when nobody else wants one.
+      resources.watch(true)
+      try {
+        await resources.refresh()
+      } finally {
+        resources.watch(false)
+      }
+      return resources.snapshots()
+    }
+  }
 
   // Built on the config service rather than beside it: the import picker's
   // sources are the console's own scopes, and what a skill *is* is the
@@ -579,6 +672,8 @@ function startApp(options: AppOptions = {}): void {
   registerIpc({
     services,
     sessions,
+    activity,
+    resources,
     pterm,
     browsers,
     browserMcp,
@@ -676,6 +771,8 @@ function startApp(options: AppOptions = {}): void {
           win,
           services,
           sessions,
+          activity,
+          resources,
           pterm,
           browsers,
           browserMcp,
@@ -810,6 +907,10 @@ function startApp(options: AppOptions = {}): void {
      * once the tokens are gone.
      */
     void browserMcp?.stop()
+    // The poller stops with them. Nothing is left reading a registry on behalf
+    // of sessions that are about to be gone.
+    activity.stop()
+    resources.stop()
     // Synchronously, because this is the last point the main process is
     // guaranteed a turn. Anything deferred here is a process left behind.
     sessions.shutdown()
@@ -1285,7 +1386,14 @@ app.whenReady().then(() => {
       observer: collector,
       confirm: collector.confirm,
       onReady: (ctx) => {
-        void runSessionsChecks(ctx, collector, join(dataDir, 'screenshots'), dataDir)
+        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
+        void runSessionsChecks(
+          ctx,
+          collector,
+          join(dataDir, 'screenshots'),
+          dataDir,
+          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
+        )
           .then((checks) => {
             const pass = checks.every((c) => c.ok)
             const file = writeReport('sessions-report.json', {

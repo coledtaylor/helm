@@ -22,6 +22,8 @@ export interface NewSession {
   profileId?: number | null
   /** Argv after the executable, as spawned. */
   argv?: string[]
+  /** The conversation id passed as `--session-id`, or resumed. Null for none. */
+  claudeSessionId?: string | null
 }
 
 type Row = typeof sessions.$inferSelect
@@ -36,6 +38,7 @@ function toRecord(row: Row): SessionRecord {
     projectPath: row.projectPath,
     profileId: row.profileId,
     argv: row.argv,
+    claudeSessionId: row.claudeSessionId,
     status: row.status as SessionStatus,
     startedAt: row.startedAt,
     endedAt: row.endedAt,
@@ -54,6 +57,7 @@ export function startSession(store: Store, input: NewSession): SessionRecord {
       projectPath: input.projectPath ?? null,
       profileId: input.profileId ?? null,
       argv: input.argv ?? [],
+      claudeSessionId: input.claudeSessionId ?? null,
       status: 'running'
     })
     .returning()

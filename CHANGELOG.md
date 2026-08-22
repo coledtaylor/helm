@@ -14,6 +14,71 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 1.1.0
+
+Helm can now tell you what your agents are doing, and your agents can tell each
+other. A tab says whether its session is working or waiting on you, a new
+Sessions view lists every Claude Code session on the machine and what the ones
+Helm started are holding, and Helm warns you before you put a second agent in a
+working tree that already has one.
+
+**A tab tells you whether it needs you**
+
+- The dot beside a tab's name now says what that session is doing rather than
+  only whether it is alive. Purple means the model is working. Amber means it
+  is blocked on you, and hovering tells you why - a permission prompt, an open
+  dialog - in the words the session itself used. Green means it has handed back
+  and is waiting for your next message.
+- A green ring instead of a filled dot means it has finished but left something
+  running in the background. "Done" and "done, but a build is still going" are
+  different answers to "can I close this", so they look different.
+- If Helm cannot tell, it says nothing rather than guessing: the dot falls back
+  to what it has always shown. A future Claude Code that renames a state will
+  make Helm quieter, never wrong.
+
+**A Sessions view, for the whole machine**
+
+- New in the sidebar. It lists every Claude Code session running on this
+  machine - not only the ones in Helm's tabs. A `claude` you started in Windows
+  Terminal collides with a working tree exactly as hard as a tab does, so it is
+  listed too, marked as one Helm did not start.
+- For the sessions Helm started, you can see what each one is **holding**: the
+  processes it launched and the ports they are listening on. This is the view
+  that answers "is something already using 5173" and "did that agent leave a
+  container up".
+- Where Helm cannot see, it says so. A session it did not start has no process
+  list, because Helm knows nothing about it. A tree it could not read says
+  "unknown" rather than showing you an empty list that looks like "nothing is
+  running".
+
+**A warning before two agents share a working tree**
+
+- Starting a session in a folder that already has one now says so first, and
+  names what is running there - including sessions started outside Helm. Two
+  agents editing one checkout is the mistake this exists to prevent, and it is
+  much easier to avoid before you press the button than after.
+
+**Sessions can see each other**
+
+- A session running in Helm can now ask what the other sessions are doing, so
+  it can stay out of their way - which working trees are busy, which ports are
+  taken. It is read-only awareness and nothing more: sessions cannot talk to
+  each other, hand each other work, or wait on each other.
+- **No session can ever see another session's conversation.** Not its
+  transcript, not its prompts, not its replies, and not the command lines of
+  what it is running. A session can learn that another one is busy in a folder
+  and holding a port. It cannot learn anything about what is being said.
+- Switch it off in **Settings → Sessions** if you would rather your agents did
+  not know about each other. Off means off - the tools are not offered at all.
+
+**Sessions start again where an installed `claude` has a space in its path**
+
+- If your `claude` came from npm and sits under a path with a space in it -
+  `C:\Program Files`, or a user folder with a space - sessions could fail to
+  start outright, with an error naming half the path to your CLI. Fixed. This
+  affected every session on those installs, and naming a session with a space
+  in it was enough to trigger it.
+
 ## 1.0.1
 
 Signing in to a site inside Helm's browser used to break the browser. It no

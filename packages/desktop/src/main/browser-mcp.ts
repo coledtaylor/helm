@@ -11,10 +11,17 @@ import {
   type SessionMcpServer
 } from '@helm/core'
 import type { BrowserHost, BrowserOpener } from './browser'
+import {
+  createSessionTools,
+  SESSION_TOOLS_INSTRUCTIONS,
+  SESSION_TOOLS_PATH,
+  SESSION_TOOLS_SERVER_NAME,
+  type SessionToolsWorld
+} from './session-tools'
 import type { BrowserConsoleEntry } from '../shared/ipc'
 
 /**
- * Helm's browser tools, served to the sessions it hosts.
+ * Helm's tools, served to the sessions it hosts.
  *
  * **This is the first inbound listener in the entire app**, and the rules that
  * make that acceptable are in CLAUDE.md beside the credential rules rather than
@@ -34,13 +41,28 @@ import type { BrowserConsoleEntry } from '../shared/ipc'
  *   it is which token arrived. That is what makes "only a tab this session
  *   opened" a comparison rather than an honour system, and it is why the tools
  *   need no session id parameter for anything.
- * - **Off is off.** With `browserMcp` unticked, nothing here binds, no token
- *   exists, and no `--mcp-config` reaches any argv. The app is then exactly
- *   what it was before M17: a process with no listener.
+ * - **Off is off.** With every tool setting unticked, nothing here binds, no
+ *   token exists, and no `--mcp-config` reaches any argv. The app is then
+ *   exactly what it was before any of this: a process with no listener.
  * - **Origin is checked**, because a page in a browser on this machine can
  *   reach a loopback port. Anything that arrives carrying a non-loopback
  *   `Origin` is refused - the token already stops it, and this stops it a step
  *   earlier and without a timing side channel.
+ *
+ * **Two named servers, one listener.** The browser tools are one family and the
+ * session-awareness tools (`session-tools.ts`) are another: one route each, one
+ * name each, one `instructions` block each - and one port, one token, one
+ * process. A tick per family decides whether its route exists at all, which is
+ * what makes each family's "off" three separate facts rather than a promise:
+ * the route answers 404, the name is absent from the `--mcp-config` document,
+ * and the tools are in no list. Folding them into one server would have made
+ * the second family's off unassertable in the argv, because the first family's
+ * `--mcp-config` is there either way.
+ *
+ * Nothing about the six rules moves. A second route is not a second listener,
+ * it is not unauthenticated - the token gate is in front of every route and the
+ * route table is consulted first only so that a switched-off family is a 404
+ * rather than a 401 - and both families are identified by the same token.
  *
  * **Why an HTTP listener and not a named pipe.** A stdio MCP shim over a
  * Windows named pipe would avoid the listener entirely, which sounds strictly
@@ -77,10 +99,10 @@ import type { BrowserConsoleEntry } from '../shared/ipc'
 const PROTOCOL_VERSION = '2025-06-18'
 const KNOWN_VERSIONS = new Set(['2025-06-18', '2025-03-26', '2024-11-05'])
 
-/** The name the tools appear under in a session. One server, one name. */
+/** The name the browser tools appear under in a session. One server, one name. */
 export const MCP_SERVER_NAME = 'helm-browser'
 
-/** The path. One route, and nothing answers on any other. */
+/** Its route. One per family, and nothing answers on any other. */
 const MCP_PATH = '/mcp'
 
 /** Past this a request body is refused unread. A tool call is a few hundred bytes. */
@@ -118,14 +140,19 @@ interface AgentSession {
 }
 
 export interface BrowserMcpRegistration {
-  /** Exactly what `prepareLaunch` wants for its `mcp` field. */
-  launch: { dir: string; server: SessionMcpServer }
-  /** The bearer token, which is also this session's identity in the browser host. */
+  /**
+   * Exactly what `prepareLaunch` wants for its `mcp` field.
+   *
+   * One entry per family that is switched on. A registration is never made at
+   * all when none of them is, so this list is never empty.
+   */
+  launch: { dir: string; servers: SessionMcpServer[] }
+  /** The bearer token, which is also this session's identity in both families. */
   token: string
 }
 
 export interface BrowserMcpHost {
-  /** Binds, if `browserMcp` is on. Idempotent; answers what happened. */
+  /** Binds, if any tool family is on. Idempotent; answers what happened. */
   start(): Promise<{ started: boolean; problem: string | null }>
   /** Revokes every token, removes every ephemeral file, closes the listener. */
   stop(): Promise<void>
@@ -146,6 +173,14 @@ export interface BrowserMcpHost {
    */
   register(name: string): BrowserMcpRegistration | null
   /**
+   * The families a session would be given right now, by name.
+   *
+   * For a check, and for the launch disclosure: "which tools does this session
+   * have" is otherwise only answerable by reading the ephemeral config file
+   * back, which is the file that carries the token.
+   */
+  servedNames(): string[]
+  /**
    * Tell the endpoint which file `prepareLaunch` wrote for a token.
    *
    * Two calls rather than one because the file's *name* is core's to choose -
@@ -164,6 +199,16 @@ export interface BrowserMcpOptions {
   settings: () => AppSettings
   /** Where the ephemeral per-session config files live. Under the data dir. */
   dir: string
+  /**
+   * What the session-awareness tools read, or absent for an endpoint without
+   * them.
+   *
+   * A function answering null because this endpoint is constructed before the
+   * session host, the activity poller and the resource service exist - see
+   * `session-tools.ts`. Absent entirely is how a check builds an endpoint that
+   * is only ever the browser's.
+   */
+  sessions?: (() => SessionToolsWorld | null) | undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -615,6 +660,80 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
   ]
 
   // -------------------------------------------------------------------------
+  // The route table: one entry per family of tools
+  // -------------------------------------------------------------------------
+
+  /**
+   * A named MCP server on this one listener.
+   *
+   * `enabled` is read **per request** rather than captured, so unticking a
+   * setting takes a family away from a session that is already running: the
+   * route stops existing and its client sees a server that has gone. That is
+   * the same posture `browserMcp` already had through `stop()`, one family at a
+   * time.
+   */
+  interface Route {
+    name: string
+    path: string
+    instructions: string
+    enabled: () => boolean
+    listed: () => Array<{ name: string; description: string; inputSchema: unknown }>
+    call: (session: AgentSession, name: string, args: Args) => Promise<ToolResult>
+  }
+
+  const sessionTools = createSessionTools(() => options.sessions?.() ?? null)
+
+  const ROUTES: Route[] = [
+    {
+      name: MCP_SERVER_NAME,
+      path: MCP_PATH,
+      instructions:
+        "These tools drive the browser pane inside Helm, the app hosting this session. Tabs you open appear in the user's window labelled with this session's name, and stay there when the session ends. Read a page with browser_snapshot before clicking anything.",
+      enabled: () => options.settings().browserMcp,
+      listed: () =>
+        TOOLS.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema
+        })),
+      async call(session, name, args) {
+        const tool = TOOLS.find((entry) => entry.name === name)
+        if (tool === undefined) {
+          return fail(
+            `Helm's browser server has no tool called "${name}". It has: ${TOOLS.map((t) => t.name).join(', ')}.`
+          )
+        }
+        return tool.run(session, args)
+      }
+    },
+    {
+      name: SESSION_TOOLS_SERVER_NAME,
+      path: SESSION_TOOLS_PATH,
+      instructions: SESSION_TOOLS_INSTRUCTIONS,
+      // Absent deps is a family that does not exist, which is what a check
+      // building a browser-only endpoint gets.
+      enabled: () => options.sessions !== undefined && options.settings().sessionMcp,
+      listed: () =>
+        sessionTools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema
+        })),
+      async call(session, name, args) {
+        const tool = sessionTools.find((entry) => entry.name === name)
+        if (tool === undefined) {
+          return fail(
+            `Helm's session server has no tool called "${name}". It has: ${sessionTools.map((t) => t.name).join(', ')}.`
+          )
+        }
+        // The token, and nothing else, is what the answer is attributed to.
+        const answer = await tool.run({ token: session.opener.key }, args)
+        return { content: [{ type: 'text', text: answer.text }], ...(answer.isError === true ? { isError: true } : {}) }
+      }
+    }
+  ]
+
+  // -------------------------------------------------------------------------
   // Small helpers the tools share
   // -------------------------------------------------------------------------
 
@@ -781,19 +900,32 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       return
     }
 
-    const path = (req.url ?? '/').split('?')[0]
-    if (path !== MCP_PATH) {
-      send(res, 404, { error: 'Not found.' })
-      return
-    }
-
+    /*
+     * The token before the route, and that order is deliberate.
+     *
+     * It used to be the other way round, which meant a process with no token
+     * could still learn which paths existed by telling a 404 from a 401 - the
+     * exact thing "no unauthenticated route at all" is written to prevent, one
+     * step removed. Now nothing without a token learns anything about this
+     * server but that it is there, and *that* it cannot help learning: it
+     * connected to it.
+     *
+     * It also makes a switched-off family a clean 404 to an authenticated
+     * caller, which is one of the three facts "off is off" is asserted with.
+     */
     const session = tokenFor(req)
     if (session === null) {
       res.setHeader('www-authenticate', 'Bearer')
       send(res, 401, {
-        error:
-          "Helm's browser endpoint needs the bearer token from the session's own --mcp-config file."
+        error: "Helm's endpoint needs the bearer token from the session's own --mcp-config file."
       })
+      return
+    }
+
+    const path = (req.url ?? '/').split('?')[0]
+    const route = ROUTES.find((entry) => entry.path === path && entry.enabled()) ?? null
+    if (route === null) {
+      send(res, 404, { error: 'Not found.' })
       return
     }
 
@@ -837,9 +969,9 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     }
 
     try {
-      const result = await dispatch(session, method, message.params)
+      const result = await dispatch(route, session, method, message.params)
       if (result === undefined) {
-        rpcError(res, id, -32601, `Helm's browser endpoint has no method "${method}".`)
+        rpcError(res, id, -32601, `Helm's ${route.name} server has no method "${method}".`)
         return
       }
       send(res, 200, { jsonrpc: '2.0', id, result })
@@ -849,6 +981,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
   }
 
   const dispatch = async (
+    route: Route,
     session: AgentSession,
     method: string,
     params: unknown
@@ -862,42 +995,26 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
         protocolVersion:
           typeof asked === 'string' && KNOWN_VERSIONS.has(asked) ? asked : PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: MCP_SERVER_NAME, version: '1.0.0' },
-        instructions:
-          "These tools drive the browser pane inside Helm, the app hosting this session. Tabs you open appear in the user's window labelled with this session's name, and stay there when the session ends. Read a page with browser_snapshot before clicking anything."
+        serverInfo: { name: route.name, version: '1.0.0' },
+        instructions: route.instructions
       }
     }
     if (method === 'ping') return {}
-    if (method === 'tools/list') {
-      return {
-        tools: TOOLS.map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema
-        }))
-      }
-    }
+    if (method === 'tools/list') return { tools: route.listed() }
     if (method === 'tools/call') {
       const call = (params ?? {}) as { name?: unknown; arguments?: unknown }
-      const tool = TOOLS.find((entry) => entry.name === call.name)
-      if (tool === undefined) {
-        return fail(
-          `Helm's browser server has no tool called "${String(
-            call.name
-          )}". It has: ${TOOLS.map((t) => t.name).join(', ')}.`
-        )
-      }
+      const name = typeof call.name === 'string' ? call.name : ''
       const args =
         typeof call.arguments === 'object' && call.arguments !== null && !Array.isArray(call.arguments)
           ? (call.arguments as Args)
           : {}
       try {
-        return await tool.run(session, args)
+        return await route.call(session, name, args)
       } catch (err) {
         // A thrown tool is still an answer to the model, not a transport
         // failure: it can read the sentence and try something else.
         return fail(
-          `${tool.name} failed inside Helm: ${err instanceof Error ? err.message : String(err)}`
+          `${name} failed inside Helm: ${err instanceof Error ? err.message : String(err)}`
         )
       }
     }
@@ -909,10 +1026,13 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
   return {
     async start() {
       if (server !== null) return { started: true, problem: null }
-      if (!options.settings().browserMcp) {
+      // Every family off is no listener at all, which is the state the app was
+      // in before any of this existed. One family on is one route.
+      if (!ROUTES.some((route) => route.enabled())) {
         return {
           started: false,
-          problem: 'browserMcp is off, so Helm binds no port and passes no --mcp-config.'
+          problem:
+            'browserMcp and sessionMcp are both off, so Helm binds no port and passes no --mcp-config.'
         }
       }
       // Whatever a run that ended without tidying up left behind, and only what
@@ -968,21 +1088,33 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       return { address: info.address, port: info.port, family: info.family }
     },
 
+    servedNames: () => ROUTES.filter((route) => route.enabled()).map((route) => route.name),
+
     register(name) {
       const info = server?.address()
       if (server === null || info === null || info === undefined || typeof info === 'string') {
         return null
       }
+      const on = ROUTES.filter((route) => route.enabled())
+      // No family is on: no token is minted at all. A registration that handed
+      // back a token and an empty list would be a live credential for nothing.
+      if (on.length === 0) return null
+
       const token = randomBytes(32).toString('hex')
       const opener: BrowserOpener = { key: token, name }
-      const url = `http://127.0.0.1:${String(info.port)}${MCP_PATH}`
       const session: AgentSession = { opener, lastTab: null, file: null }
       sessions.set(token, session)
       return {
         token,
         launch: {
           dir: options.dir,
-          server: { name: MCP_SERVER_NAME, url, headers: { Authorization: `Bearer ${token}` } }
+          // One entry per family, all on the same port and carrying the same
+          // token: it is one session's identity, not one server's key.
+          servers: on.map((route) => ({
+            name: route.name,
+            url: `http://127.0.0.1:${String(info.port)}${route.path}`,
+            headers: { Authorization: `Bearer ${token}` }
+          }))
         }
       }
     },

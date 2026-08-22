@@ -317,6 +317,109 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   trailing actions is **not drawn**: its 40px belong to tabs, and holding them
   open on the welcome screen pushes the pane island below the top edge of the
   sidebar island beside it.
+- **The session tab's state dot.** A session tab carries a 6px dot in place of
+  a kind icon, and it says two different kinds of thing: what Helm knows about
+  the process, and what the session says about itself. Claude Code publishes its
+  own status for every live session, and putting it on the tab is the difference
+  between a strip of six tabs and a strip that says which one is waiting on you.
+
+  | state | tone | what it is |
+  | --- | --- | --- |
+  | `busy` | `accent`, filled | the model is working |
+  | `waiting` | `warn`, filled | blocked on you - a permission prompt, a dialog |
+  | `shell` | `success`, **ring** | handed back, a background task still running |
+  | `idle` | `success`, filled | handed back, nothing running |
+  | `running` | `success`, filled | alive, and not saying anything |
+  | `ended` | `fg-subtle` | exited cleanly |
+  | `failed` | `danger` | exited with a code |
+
+  Four decisions in that table are deliberate and each would be easy to undo by
+  accident.
+
+  **`waiting` takes `warn`, and it is the reason the whole thing exists.**
+  Nothing else on a tab was using the system's attention tone, and this is the
+  one state a person needs to be pulled back to. It outranks nothing and is
+  outranked by nothing - a session either is blocked on you or is not.
+
+  **`busy` takes the accent, and a 6px dot is a mark rather than a flood.** It
+  is the same reading merged gets on a pull request's state chip: the accent is
+  the tone for the thing the app is currently about. §1's rule bounds the accent
+  to "2px marks, outlines, checkbox fills and text", and a dot the size of a
+  checkbox's tick is on the near side of that line - it is also exactly the area
+  every other state on this tab already fills solid.
+
+  **`shell` is a ring, not a fifth colour.** "Done" and "done but something is
+  still running" are two answers to one question - can I close this tab - so
+  they read as one tone in two weights rather than as two unrelated states.
+  Outline-versus-fill is already this system's way of saying "not the whole
+  thing" (§4, the unchecked checkbox). What it must never do is read as more
+  urgent than `waiting`, which is what a third colour would have done.
+
+  **`running` and `idle` paint identically, on purpose.** `running` is the state
+  for a session that is alive and is saying nothing - the first second of every
+  session, a status this build does not recognise, a registry that could not be
+  read. All three are "Helm has nothing to add", and the honest paint for that
+  is what the tab painted before any of this existed. A renamed status in a
+  future CLI therefore degrades to the old behaviour rather than to a guess -
+  the same rule as the usage figures and the config console's live state: paint
+  nothing rather than a wrong answer.
+
+  The session's own sentence for *why* it is waiting goes in the tab's hover
+  hint and never on the tab. It is the CLI's string, carried verbatim, and 240px
+  are already spoken for by a title and a branch.
+
+  **The dot is painted in two places now** - the tab, and the sessions pane's
+  rows - so the tones live in `ui/src/lib/sessionstate.ts` rather than in
+  `TabBar`. Same rule `ROW_SELECTED` and `SEGMENT_ON` follow: the two surfaces
+  legitimately differ in geometry, and what must not differ is the tone.
+- **The sessions pane.** Every live Claude Code session on the machine down the
+  left, what one of them is holding on the right - the narrow-pane shape §5's
+  "Narrow panes" already governs, collapsing to one at a time beside a session
+  split.
+
+  Three things about it are decisions rather than layout.
+
+  **The list is machine-wide and the detail is Helm's own**, and the pane says
+  so with a *heading* rather than a badge. Everything under "Elsewhere on this
+  machine" has a different set of knowable facts - no branch, no argv, no
+  process tree, no ports, because Helm did not spawn it - and a heading is how a
+  list states that once instead of on every row. The degradation needs no
+  special case: it is simply what is knowable.
+
+  **Machine data is mono and the sentences are not.** A process name, a pid, a
+  port, a path and an argv are all mono at 10.5-11.5px (§2). What a session is
+  *called* is a name and is Inter, and the sentences about what Helm could and
+  could not see are prose.
+
+  **A tree that could not be read says "Unknown", never nothing.** This is the
+  usage figures' rule at a third surface - paint nothing rather than a wrong
+  number - and here it has an edge the others do not: the wrong answer is not a
+  wrong figure but a *reassuring* one. "This session is holding nothing" and
+  "Helm failed to look" render identically as an empty list, and only one of
+  them means it is safe to start another agent. So the pane carries a separate
+  unknown for the tree and for the ports, because the two queries fail
+  independently.
+
+  It also **measures itself, not the window** - the pane-header rule below,
+  which is about the box a pane occupies rather than about headers. Measured in
+  `sessions-pane-dark.png`: docked beside a session split at the window's
+  `minWidth` this pane is 171px, where a `sm:` media query is still true, so the
+  fact grid painted "Working directory" and "Branch" side by side in 87px each
+  and the path came out as `C:\Users…`. The grid, the strip's age stamp and the
+  row's chips are all container queries now, and the row's path keeps a floor of
+  8rem so the chips wrap to a line of their own rather than starving the fact
+  the row is about.
+- **The launch warning.** A folder that already has a live session in it says so
+  on the launch row, in `warn`, naming the sessions and saying which of them are
+  not Helm's.
+
+  It is a **sentence beside the button, not a dialog in front of it**, and that
+  is the launch-disclosure rule (below) rather than a softer version of a
+  confirmation. Sharing a working tree is sometimes exactly what somebody means
+  to do; a confirmation shown every time is one people learn to dismiss without
+  reading, where a warning that is simply true on screen cannot be clicked
+  through by habit. `warn` and not `danger`, because nothing has gone wrong -
+  this is the attention tone doing what it does on the `waiting` dot.
 - **Pane headers**: a scoped console wears one island strip - mark, title,
   scope switcher, what is being looked at, and a refresh (`PaneHeader`, used by
   the config console and the content viewer). It **measures itself, not the
@@ -439,14 +542,24 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   **Pane headers** - because the divider is bounded at 20% of the row, which is
   a pane of about 195px on a 1280px screen and 119px on the narrowest window
   the app will open.
-- **Sidebar**: four global rows (session history, pull requests, Config,
-  Content), then profiles, then **Pinned**, then the harness tree. A harness is a collapsible
+- **Sidebar**: five global rows (Sessions, session history, pull requests,
+  Config, Content), then profiles, then **Pinned**, then the harness tree. A
+  harness is a collapsible
   group - caret, name in the caps label style but at `fg`, project count, and a
   running-session count at the right in `accent-text`. Groups are separated by
   an `.island-rule`, never a border. The global rows share one shape - icon,
-  name, optional second line - and two of them have a fact worth putting on
-  that second line: session history's counts, and how many pull requests are
-  open. The pull-request row's second line is also where its **degradation**
+  name, optional second line - and three of them have a fact worth putting on
+  that second line: how many sessions are running now, session history's counts,
+  and how many pull requests are open.
+
+  **Sessions sits first, above Session history**, because the two are one
+  question at two times - what is running now, and what ran before - and "now"
+  is the one somebody acts on. The load-bearing half of its second line is the
+  count of sessions **outside Helm**: "three running" is a fact about Helm, and
+  "one of them is not mine" is the fact that changes what somebody does next. It
+  is also the whole reason the listing behind it is machine-wide.
+
+  The pull-request row's second line is also where its **degradation**
   goes, in a short form ("Run gh auth login") rather than the pane's full
   sentence - a 280px rail truncates an instruction into nonsense, and a label
   that sends you to the pane to read it does not. Config and Content stay

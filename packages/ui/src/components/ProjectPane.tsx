@@ -1,5 +1,5 @@
 import type { JSX, ReactNode } from 'react'
-import type { Harness, Project } from '@helm/core'
+import type { Harness, LiveSession, Project } from '@helm/core'
 import type { IgnoredRepo, PullRepo, PullsSnapshot, PullSummary } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { GitChip } from './GitChip'
@@ -12,7 +12,8 @@ import {
   RefreshIcon,
   SlidersIcon,
   SparkIcon,
-  TerminalIcon
+  TerminalIcon,
+  WarnIcon
 } from './icons'
 
 const KIND_LABEL = {
@@ -70,6 +71,15 @@ export interface ProjectPaneProps {
   launching?: boolean | undefined
   /** Why the last launch failed, if it did. */
   launchError?: string | null | undefined
+  /**
+   * The live sessions whose working directory is this folder - Helm's own and
+   * everybody else's.
+   *
+   * Reduced by the window with `liveSessionsIn`, which is `samePath`'s
+   * comparison, so this list and the sidebar's grouping cannot disagree about
+   * whether two paths are the same folder.
+   */
+  liveHere?: readonly LiveSession[] | undefined
   /** Opens the profile editor seeded with this project as the root. */
   onSaveAsProfile?: ((project: Project) => void) | undefined
   /**
@@ -136,6 +146,7 @@ export function ProjectPane({
   onLaunch,
   launching = false,
   launchError = null,
+  liveHere,
   onSaveAsProfile,
   onSaveAsTemplate,
   onOpenConfig,
@@ -271,6 +282,8 @@ export function ProjectPane({
             </span>
           )}
         </div>
+
+        <AlreadyRunning sessions={liveHere ?? []} />
 
         {launchError !== null && (
           <p
@@ -482,6 +495,74 @@ function PullRequests({
         </div>
       )}
     </Panel>
+  )
+}
+
+/**
+ * "A session is already running here", said before the button is pressed.
+ *
+ * This is the single highest-value thing the sessions surface produces, and it
+ * is smaller than the pane it came with: one sentence, at the moment it
+ * matters, naming what is already in this working tree. It is what stops two
+ * agents editing one checkout at the same time - the failure that costs a
+ * morning and that neither of them can see happening.
+ *
+ * Three decisions in it, and each would be easy to undo by accident.
+ *
+ * **It is a sentence beside the button, not a dialog in front of it.** DESIGN.md
+ * 5's launch disclosure is explicit that such a sentence "is on screen *before*
+ * the button is pressed", and that is the right shape here for a reason beyond
+ * consistency: sharing a working tree is sometimes exactly what somebody means
+ * to do - a second session to read while the first writes - and a confirmation
+ * that has to be dismissed every time is a confirmation people learn to dismiss
+ * without reading. A warning that is simply *true* on screen costs nothing to
+ * ignore deliberately and cannot be clicked through by habit.
+ *
+ * **It names them, and it says which ones are not Helm's.** "A session is
+ * running here" is not actionable; "cart work is running here, and one session
+ * outside Helm" tells somebody whether the thing in the way is a tab they can
+ * look at or a terminal they have to go and find. The second half is the whole
+ * reason the listing behind it is machine-wide.
+ *
+ * **`warn`, never `danger`.** Nothing has gone wrong. This is the system's
+ * attention tone doing what it does on the tab's own `waiting` dot: pulling
+ * somebody back to a fact before they act on it.
+ */
+function AlreadyRunning({ sessions }: { sessions: readonly LiveSession[] }): JSX.Element | null {
+  if (sessions.length === 0) return null
+
+  const named = sessions.map((session) => session.name ?? `pid ${String(session.pid)}`)
+  const outside = sessions.filter((session) => session.helmSessionId === null).length
+
+  return (
+    <p
+      data-already-running={sessions.length}
+      className={cn(
+        'mt-3 flex items-start gap-2 rounded-raised border border-warn/30 bg-warn/10 px-3 py-2',
+        'text-[11.5px] leading-[1.6] text-warn'
+      )}
+    >
+      <WarnIcon width={13} height={13} className="mt-[2px] shrink-0" />
+      <span className="min-w-0">
+        {sessions.length === 1 ? 'A session is' : `${String(sessions.length)} sessions are`} already
+        running in this folder: <span className="text-fg">{named.join(', ')}</span>.
+        {outside > 0 && (
+          <>
+            {' '}
+            {outside === sessions.length
+              ? outside === 1
+                ? 'It was not started by Helm, so it has no tab here.'
+                : 'None of them was started by Helm, so they have no tabs here.'
+              : outside === 1
+                ? 'One of them was not started by Helm, so it has no tab here.'
+                : `${String(outside)} of them were not started by Helm, so they have no tabs here.`}
+          </>
+        )}{' '}
+        <span className="text-fg-muted">
+          Starting another one here means two agents in one working tree.
+        </span>
+      </span>
+    </p>
   )
 }
 

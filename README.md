@@ -184,15 +184,22 @@ fonts and no CDN, and with the tick off Helm asks nothing at all unless you
 press something.
 
 Helm does **listen** in one place, and it is worth saying out loud because it is
-the only one. A Claude session Helm hosts can drive the browser pane - open a
-page, read it, screenshot it, click and type - and it reaches those tools
-through a small server bound to `127.0.0.1`, on a port picked fresh for each run
-of the app. Nothing outside this machine can reach it, every request needs a
-token Helm mints for one session and destroys when that session ends, and
-Settings → Browser turns the whole thing off, in which case no port is opened at
-all. The same settings decide how far it may go: the tools can never reach
-further than the pane itself may, and can be held to this machine while the pane
-is not.
+the only one. A Claude session Helm hosts can reach two sets of tools - one that
+drives the browser pane (open a page, read it, screenshot it, click and type),
+and one that answers what the *other* Claude Code sessions on this machine are
+doing, so an agent can stay out of a working tree somebody else is in. Both
+arrive through one small server bound to `127.0.0.1`, on a port picked fresh for
+each run of the app. Nothing outside this machine can reach it, and every
+request needs a token Helm mints for one session and destroys when that session
+ends.
+
+Each set has its own tick - **Settings → Browser** and **Settings → Sessions** -
+and either one off means those tools are not registered with a session at all.
+With both off no port is opened. The browser settings also decide how far those
+tools may go: they can never reach further than the pane itself may, and can be
+held to this machine while the pane is not. The session tools are read-only:
+they say what is running and give an agent no way to affect it, and they never
+return any part of another session's conversation.
 
 The pull-request pane reaches GitHub too, but through **your own `gh` CLI**, on
 a schedule you set - every five minutes by default, and `0` in Settings turns it

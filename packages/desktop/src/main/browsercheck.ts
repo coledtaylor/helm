@@ -3130,7 +3130,12 @@ async function agentFor(ctx: CheckContext, name: string): Promise<Agent | null> 
   if (host === null) return null
   const registration = host.register(name)
   if (registration === null) return null
-  const url = registration.launch.server.url
+  // The browser family's own route, by name. A registration now carries one
+  // entry per family that is switched on, and this driver drives exactly one of
+  // them - taking `[0]` would make these probes depend on which families
+  // happened to be ticked on the machine they run on.
+  const url = registration.launch.servers.find((server) => server.name === MCP_SERVER_NAME)?.url
+  if (url === undefined) return null
   const token = registration.token
   const id = nextAgent++
 
@@ -3217,7 +3222,21 @@ async function endpointGroup(ctx: CheckContext): Promise<Check[]> {
 
   const list = { jsonrpc: '2.0', id: 1, method: 'tools/list' }
   const tokenless = await rpc(agent.url, null, list)
-  const wrongToken = await rpc(agent.url, `${agent.token.slice(0, -1)}0`, list)
+  /*
+   * One character off, and it has to *be* one character off.
+   *
+   * This was `token.slice(0, -1) + '0'`, which leaves a hex token already
+   * ending in `0` unchanged - so one run in sixteen sent the **right** token
+   * here and got a 200, failing BR-28 for no reason at all. Caught while
+   * writing the same probe for the session tools, where it fired on the second
+   * run.
+   */
+  const last = agent.token.slice(-1)
+  const wrongToken = await rpc(
+    agent.url,
+    `${agent.token.slice(0, -1)}${last === '0' ? '1' : '0'}`,
+    list
+  )
   const wrongPath = await rpc(agent.url.replace('/mcp', '/tools'), agent.token, list)
   const withToken = await rpc(agent.url, agent.token, list)
   const asGet = await rpc(agent.url, agent.token, {}, 'GET')
@@ -3283,17 +3302,27 @@ async function endpointGroup(ctx: CheckContext): Promise<Check[]> {
 }
 
 /**
- * What the app looks like with `browserMcp` unticked.
+ * What the app looks like with the browser tools unticked.
  *
  * Built as a **second** endpoint rather than by stopping the live one, because
  * the claim is about the setting rather than about `stop()`: a host constructed
  * with the tick off must never bind, never mint a token, and produce a launch
  * whose argv has no `--mcp-config` in it at all.
+ *
+ * **`sessionMcp` is unticked here too, and that is not padding.** The one
+ * listener now serves two families, so "no listener at all" is a claim about
+ * every family rather than about this one - a host built with only the browser
+ * tools off would legitimately still bind, for the other. What *this* setting
+ * alone does is asserted where the other family lives: `sessions-check
+ * --only=tools`, which turns each tick off in turn and reads the route, the
+ * config document and the argv. Leaving it out here would have made this probe
+ * red for a reason that is not a fault, which is the way a check stops being
+ * read.
  */
 async function offIsOff(ctx: CheckContext): Promise<Check> {
   const off = createBrowserMcp({
     browsers: ctx.browsers,
-    settings: () => ({ ...ctx.services.settings, browserMcp: false }),
+    settings: () => ({ ...ctx.services.settings, browserMcp: false, sessionMcp: false }),
     dir: join(mcpConfigDir, 'off-probe')
   })
   const started = await off.start()
@@ -3313,8 +3342,8 @@ async function offIsOff(ctx: CheckContext): Promise<Check> {
 
   return {
     id: 'BR-29',
-    criterion: 'browserMcp off means no listener, no token and no --mcp-config',
-    title: 'An endpoint built with the tick off binds nothing, registers nothing, and composes an argv with no --mcp-config',
+    criterion: 'the tool settings off mean no listener, no token and no --mcp-config',
+    title: 'An endpoint built with every tool tick off binds nothing, registers nothing, and composes an argv with no --mcp-config',
     ok:
       !started.started &&
       started.problem !== null &&
