@@ -462,17 +462,19 @@ and how to narrow a re-run. Two rules belong here rather than there:
   its `env` into every spawn.
 - **Nothing that touches the installed app may be part of a suite.** Every check
   gets its own data directory so it cannot reach the app somebody is using;
-  `packaging-check --only=installer` is the one that cannot, because it is
+  verifying the NSIS installer is the one thing that cannot, because it is
   *about* where an installer puts things - it uninstalls the Helm on this
-  machine and puts nothing back. `run-packaging.mjs` therefore keeps it out of a
-  plain run (`OPT_IN_GROUPS`), and the default run **records that it did not
-  run** rather than letting "packaging-check green" quietly stop including it.
+  machine and puts nothing back. So it is not a group of any suite at all: it is
+  `pnpm verify:installer --yes`, which refuses without that flag and again while
+  Helm is running. `packaging-check` **records that the installer was not
+  verified there** rather than letting "packaging-check green" quietly stop
+  including it.
   That is the shape the rule takes everywhere: a step that stops, removes or
   replaces the installed app is a **tool somebody asks for**, never a group a
   suite reaches on its own. The same goes for `dev:live`, which runs against the
   real `%APPDATA%\Helm`. Everything else in `packaging-check`, `--only=audit`
   included, is safe and expected.
-  When a change owes coverage that only the opt-in group would give, **report
+  When a change owes coverage only that tool would give, **report
   the omission** - a standing exception to "a change to a surface a check covers
   is not done until that check is green", and the omission is reported rather
   than quietly closed. Say it out loud to a subagent too, which otherwise reads

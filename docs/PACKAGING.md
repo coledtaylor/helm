@@ -65,9 +65,9 @@ untouched one; deleting the directory is what puts the originals back.
   `deleteAppDataOnUninstall` stays false: `%APPDATA%\Helm\helm.db` holds the
   user's profiles, their session index and every config snapshot Helm has taken
   on their behalf, and uninstalling the program is not a request to destroy
-  those. `pnpm packaging-check --only=installer` asserts the install
-  directory, the start-menu shortcut and the uninstall registry entry are gone
-  and that the data directory is not.
+  those. `pnpm verify:installer --yes` asserts the install directory,
+  the start-menu shortcut and the uninstall registry entry are gone and that the
+  data directory is not.
 - **No desktop shortcut.** A start-menu entry is enough.
 
 ## Releasing
@@ -204,12 +204,13 @@ collaborator - a private release page is not a download link.
 
 ## Install-testing it
 
-Two groups, and the split is the point: one is safe to run on the machine you
-work on, and one is not.
+A check and a tool, and the split is the point: one is safe to run on the
+machine you work on, and one is not. The unsafe one is not a group of any suite
+and no `--only=` reaches it.
 
 ```bash
-pnpm packaging-check --only=package     # the artefacts and the portable exe
-pnpm packaging-check --only=installer   # installs and UNINSTALLS Helm here
+pnpm packaging-check --only=package   # the artefacts and the portable exe
+pnpm verify:installer --yes           # installs and UNINSTALLS Helm here
 ```
 
 `package` is in the default `pnpm packaging-check`. It builds the artefacts if
