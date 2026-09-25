@@ -702,7 +702,7 @@ rest of the picker working.
 
 ## The rest of the folder
 
-Copied verbatim into the new harness, with four rules:
+Copied verbatim into the new harness, with five rules:
 
 - **\`.tpl\` files are filled in and the extension is dropped.**
   \`CLAUDE.md.tpl\` is written as \`CLAUDE.md\` with \`{{NAME}}\`,
