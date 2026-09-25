@@ -63,15 +63,23 @@ Two edits and a merge:
    body. **Without one the release fails**, deliberately: writing it is the step
    a person can skip.
 
-Then run `pnpm packaging-check` green before merging. CI runs only the fast
-tier - typecheck, lint, tests, build - so nothing else covers the checkout
-audit, the first-run path or the portable exe.
+Then merge and push. CI runs `pnpm check` on the merge and
+`verify-artifact.mjs` over both exes on publish, and that is the whole of the
+release gate.
 
-**It cannot uninstall the Helm you are using, and that is why it is a gate you
-can actually run.** There is no installer group in that suite and no `--only=`
-reaches one. Verifying the NSIS package means installing it over the Helm on
-this machine and uninstalling it again, which ends the Claude Code sessions Helm
-is hosting - so it is a **tool run by name**, not a check:
+**`packaging-check` is not part of cutting a release, and runs only when the
+owner asks for it** - a release that changes packaging (electron-builder,
+`electron-builder.yml`, the native modules, `dist-win.mjs`, anything about where
+files land) included. CI's fast tier does not cover the checkout audit, the
+first-run path or the portable exe, so a release like that gets one sentence
+saying `packaging-check` was not run, and proceeds. Whether the time is worth
+spending is the owner's call.
+
+When it is asked for, it is safe to run: **it cannot uninstall the Helm you are
+using.** There is no installer group in that suite and no `--only=` reaches one.
+Verifying the NSIS package means installing it over the Helm on this machine
+and uninstalling it again, which ends the Claude Code sessions Helm is hosting -
+so it is a **tool run by name**, not a check:
 
 ```
 pnpm verify:installer --yes                     # install, run, uninstall
@@ -91,12 +99,10 @@ the installed app is a tool somebody asks for, never a group a suite reaches.**
 
 `packaging-check` still prints a `PKG-2` line saying the installer was not
 verified there, so "packaging-check green" cannot quietly come to mean "the
-installer works". Run the tool deliberately, on a machine where nobody is
-working, when a release **changes packaging** - electron-builder,
-`electron-builder.yml`, the native modules, `dist-win.mjs`, or anything about
-where files land. A release that changes none of those is not one the tool has
-new information about, and CI already runs `verify-artifact.mjs` over both exes
-on every publish.
+installer works". Run the tool only when the owner asks for it, on a machine
+where nobody is working - a release that changes packaging does not ask for it
+on its own, and CI already runs `verify-artifact.mjs` over both exes on every
+publish.
 
 **The changelog is for somebody deciding whether to download an exe.** Not a
 commit log: no probe ids, no check names, no `pnpm` commands, no refactors, no

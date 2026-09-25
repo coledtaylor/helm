@@ -21,7 +21,9 @@ prefix - `sessions-check` writes `SESS-1`, `config-check` writes `CFG-1`.
 
 ## Which one to run
 
-A change to a surface named here is not done until its check is green.
+A change to a surface named here is not done until its check is green - except
+`packaging-check`, which no change and no release owes. It runs only when the
+owner asks for it.
 
 | check | covers | run after touching |
 |---|---|---|
@@ -31,7 +33,7 @@ A change to a surface named here is not done until its check is green.
 | `pnpm config-check` | config console, effective view, MCP | `core/config/`, anything that writes into a `.claude` tree |
 | `pnpm content-check` | markdown, artifacts, wikilinks, editor | `core/content/`, the content viewer |
 | `pnpm highlight-check` | the editors: the overlay, the highlighting, the editing behaviour | `CodeEditor`, `core/content/editing.ts`, `highlightLines`, `editor:highlight`, `editor.css`, the two panes' editing halves |
-| `pnpm packaging-check` | first run, packaging, personal-path audit | setup, portable mode, the installer |
+| `pnpm packaging-check` | first run, packaging, personal-path audit | nothing - only when the owner asks for it |
 | `pnpm usage-check` | the status bar's usage figures | `core/usage/`, the status bar |
 | `pnpm settings-check` | the settings pane, every app setting, terminal/shell preferences | `core/store/settings.ts`, `SettingsPane`, `terminal.ts`, `estimateGrid`, `main/pterm.ts` |
 | `pnpm transcript-check` | the transcript archive: capture, search, the ceiling, read-only | `core/archive/`, `core/store/archive.ts`, `main/archive.ts`, the session-history pane's archive states, anything that reads `projects/*.jsonl` |
@@ -283,8 +285,9 @@ pnpm verify:installer --yes --replace-running   # ... even with Helm open
 It refuses without `--yes`, refuses again while Helm is running unless
 `--replace-running`, and leaves no installed Helm behind. **No group of any
 suite reaches it and no `--only=` spells it** - that is structural, not a list
-somebody maintains. Run it deliberately, on a machine where nobody is working,
-when a release changes packaging rather than as a matter of course.
+somebody maintains. Run it only when the owner asks for it, on a machine where
+nobody is working - a release that changes packaging does not ask for it on its
+own.
 
 `pnpm packaging-check` covers the rest of phase 3 - the artefact build, the
 unpacked native modules and the portable exe - and prints a `PKG-2` line
