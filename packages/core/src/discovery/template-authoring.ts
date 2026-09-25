@@ -448,8 +448,8 @@ export interface TemplateDetail {
   problems: string[]
 }
 
-/** The three placeholders, named once so the UI cannot invent a fourth. */
-export const TEMPLATE_VARIABLES = ['{{NAME}}', '{{CREATED_AT}}', '{{TEMPLATE}}'] as const
+/** The four placeholders, named once so the UI cannot invent a fifth. */
+export const TEMPLATE_VARIABLES = ['{{NAME}}', '{{CREATED_AT}}', '{{TEMPLATE}}', '{{PATH}}'] as const
 
 /**
  * One template's contents, for the manager's file list.

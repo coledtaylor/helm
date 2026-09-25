@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createHarness } from './harness'
 import {
@@ -9,6 +9,7 @@ import {
   seedTemplates,
   substituteTemplate,
   templateIdProblems,
+  templatePathValue,
   SHIPPED_TEMPLATES
 } from './templates'
 
@@ -158,17 +159,34 @@ describe('previewTemplate', () => {
 })
 
 describe('substituteTemplate', () => {
-  const values = { NAME: 'work', CREATED_AT: '2026-08-15T00:00:00.000Z', TEMPLATE: 'demo' }
+  const values = {
+    NAME: 'work',
+    CREATED_AT: '2026-08-15T00:00:00.000Z',
+    TEMPLATE: 'demo',
+    PATH: 'C:/Users/me/.harness/work'
+  }
 
-  it('fills in the three placeholders, every occurrence', () => {
-    expect(substituteTemplate('{{NAME}} {{NAME}} {{TEMPLATE}} {{CREATED_AT}}', values)).toBe(
-      'work work demo 2026-08-15T00:00:00.000Z'
-    )
+  it('fills in the four placeholders, every occurrence', () => {
+    expect(
+      substituteTemplate('{{NAME}} {{NAME}} {{TEMPLATE}} {{CREATED_AT}} {{PATH}} {{PATH}}', values)
+    ).toBe('work work demo 2026-08-15T00:00:00.000Z C:/Users/me/.harness/work C:/Users/me/.harness/work')
   })
 
   it('leaves anything else exactly as written', () => {
     const source = '${{ github.sha }} {{ NAME }} {{name}} {{UNKNOWN}}'
     expect(substituteTemplate(source, values)).toBe(source)
+  })
+})
+
+describe('templatePathValue', () => {
+  it('spells the platform path with forward slashes, spaces intact', () => {
+    expect(templatePathValue(['C:', 'Users', 'a b', '.harness', 'work'].join(sep))).toBe(
+      'C:/Users/a b/.harness/work'
+    )
+  })
+
+  it.runIf(sep === '/')('leaves a backslash alone where it is a filename character', () => {
+    expect(templatePathValue('/home/me/odd\\name')).toBe('/home/me/odd\\name')
   })
 })
 
@@ -231,6 +249,46 @@ describe('createHarness from a template', () => {
     expect(manifest).toMatch(/^template: "demo"$/m)
     const created = /^created: "([^"]+)"$/m.exec(manifest)?.[1]
     expect(claudeMd).toContain(created as string)
+  })
+
+  it('fills {{PATH}} with the harness folder, forward-slashed, so a .json.tpl stays JSON', async () => {
+    // A parent with a space in it, because a harness under a profile folder
+    // with a space is ordinary and the value must survive it unescaped.
+    const parent = join(root, 'with space')
+    await mkdir(parent, { recursive: true })
+    await plant('wired', {
+      'PATH.txt.tpl': '{{PATH}}',
+      'dot-claude/settings.json.tpl':
+        '{"hooks":{"PostToolUse":[{"matcher":"Bash","hooks":[{"type":"command",' +
+        '"command":"node {{PATH}}/.claude/hooks/post-bash.mjs"}]}]},' +
+        '"autoMemoryDirectory":"{{PATH}}/memory"}\n'
+    })
+
+    const result = await createHarness({
+      mode: 'new',
+      dir: parent,
+      name: 'my work',
+      template: 'wired',
+      templatesDir
+    })
+    const harness = join(parent, 'my work')
+    const expected = harness.split(sep).join('/')
+
+    expect(result.problems).toEqual([])
+    expect(expected).not.toContain('\\')
+    expect(expected).toContain('with space/my work')
+    expect(await readFile(join(harness, 'PATH.txt'), 'utf8')).toBe(expected)
+
+    // The point of the forward slashes: a backslashed Windows path inside a
+    // JSON string is an invalid escape, so this parse is what fails without them.
+    const settings = JSON.parse(await readFile(join(harness, '.claude', 'settings.json'), 'utf8')) as {
+      hooks: { PostToolUse: Array<{ hooks: Array<{ command: string }> }> }
+      autoMemoryDirectory: string
+    }
+    expect(settings.autoMemoryDirectory).toBe(`${expected}/memory`)
+    expect(settings.hooks.PostToolUse[0]?.hooks[0]?.command).toBe(
+      `node ${expected}/.claude/hooks/post-bash.mjs`
+    )
   })
 
   it('does not write the .gitkeep it made the folder for', async () => {

@@ -26,6 +26,7 @@ export {
   seedTemplates,
   substituteTemplate,
   templateIdProblems,
+  templatePathValue,
   MINIMAL_CHOICE,
   MINIMAL_TEMPLATE,
   SHIPPED_TEMPLATES,

@@ -1,6 +1,6 @@
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
-import { applyTemplate, MINIMAL_TEMPLATE, templateIdProblems } from './templates'
+import { applyTemplate, MINIMAL_TEMPLATE, templateIdProblems, templatePathValue } from './templates'
 
 /**
  * Making a harness, as opposed to finding one.
@@ -230,7 +230,12 @@ export async function createHarness(
         templatesDir: request.templatesDir as string,
         template,
         target,
-        values: { NAME: name, CREATED_AT: createdAt, TEMPLATE: template }
+        values: {
+          NAME: name,
+          CREATED_AT: createdAt,
+          TEMPLATE: template,
+          PATH: templatePathValue(target)
+        }
       })
       created.push(...applied.created)
       problems.push(...applied.problems)

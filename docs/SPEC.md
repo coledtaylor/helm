@@ -364,6 +364,26 @@ that shows something that is not on this machine.
 > comparison the way TPL-1 does, on its own fixture: clean, then a flipped
 > source byte the same comparator must reject, then restored.
 
+> [!note] A fourth placeholder, `{{PATH}}` - 2026-09-25
+> Three placeholders could not build a template that wires anything up. A
+> harness worth templating carries hooks, a status line and MCP servers, and
+> every one of those names a file *inside the harness* - so a real harness's
+> `settings.json` and `.mcp.json` were full of its own absolute path, and
+> `{{NAME}}` cannot stand in for it because the parent folder is chosen in the
+> dialog. `{{PATH}}` is the new harness's absolute folder, filled in by the
+> same `.tpl`-only rule as the other three; nothing else about substitution
+> moved, and an unrecognised `{{...}}` still survives as written.
+>
+> It is written with **forward slashes** (`C:/Users/you/.harness/work`), and
+> that is the one decision in it. The value lands in JSON more than anywhere
+> else, and a raw Windows backslash there is an escape sequence - `C:\Users`
+> is invalid JSON and `C:\new` is a newline. Node, uv, bash and Claude Code
+> all accept the forward-slash spelling, so one value is safe in JSON, YAML, a
+> shell line and a script alike. Only the platform separator is rewritten, so
+> a POSIX path containing a literal backslash is left alone
+> (`templatePathValue`). The shipped README gained the line; an existing
+> install keeps its own copy, by the seeding rule above.
+
 ### 4.2 Config Console
 
 The `.claude/` directory of whatever scope you point at, as a real interface.
