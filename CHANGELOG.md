@@ -14,6 +14,24 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 1.2.0
+
+A harness template can now refer to the harness it is creating. That is what a
+hook, a status line or an MCP server in a template needs, and until now the only
+way to give it one was to write a fixed path, username and all, into the
+template.
+
+**Templates**
+
+- `{{PATH}}` is a fourth placeholder for `.tpl` files: the new harness's folder,
+  written with forward slashes (`C:/Users/you/.harness/work`) so it drops into
+  `settings.json` or `.mcp.json` as valid JSON. Use it for hook commands, a
+  status line, MCP servers, or anything else that has to name a file inside the
+  harness.
+- The template manager's help line lists it beside `{{NAME}}`, `{{CREATED_AT}}`
+  and `{{TEMPLATE}}`. The README Helm writes into a new templates folder
+  describes it too; a templates folder you already have keeps the README it has.
+
 ## 1.1.1
 
 Pasting into a terminal put your text in twice, and copying could silently hand

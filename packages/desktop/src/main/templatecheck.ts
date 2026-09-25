@@ -1680,14 +1680,15 @@ export async function runTemplateChecks(
     checks.push({
       id: 'TPL-18',
       criterion:
-        'The file list badges substitution-bearing files, names the three variables in-UI, and offers "make substitutable"',
-      title: 'The .tpl badge, the three variable names, and a rename that added one',
+        'The file list badges substitution-bearing files, names the four variables in-UI, and offers "make substitutable"',
+      title: 'The .tpl badge, the four variable names, and a rename that added one',
       ok:
         tplRows.some((row) => row.path === 'CLAUDE.md.tpl' && row.tpl === 'true' && row.badge) &&
         tplRows.some((row) => row.path === plainFile && row.tpl === 'false' && !row.badge) &&
         variablesLine.includes('{{NAME}}') &&
         variablesLine.includes('{{CREATED_AT}}') &&
         variablesLine.includes('{{TEMPLATE}}') &&
+        variablesLine.includes('{{PATH}}') &&
         substitutableOffered &&
         renamedOnDisk,
       detail: {

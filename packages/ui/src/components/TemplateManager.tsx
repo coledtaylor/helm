@@ -34,7 +34,7 @@ import { Overlay } from './Overlay'
  *
  * - **`.tpl` is a Helm invention.** Nobody looking at a folder guesses that
  *   `CLAUDE.md.tpl` is filled in and renamed on the way out, so the file list
- *   badges it, names the three variables in a help line, and offers the rename
+ *   badges it, names the four variables in a help line, and offers the rename
  *   that opts a file in.
  * - **A skill you already wrote is somewhere Helm can see.** The import picker
  *   is `config:scopes` and `config:tree` with checkboxes on it - the same
@@ -595,16 +595,18 @@ function FileList({
         </ul>
       )}
 
-      {/* The three variables, named where the badge is. There are no others, and
+      {/* The four variables, named where the badge is. There are no others, and
           no conditionals or loops - a template language is a thing that grows,
           and the moment it can branch it needs a debugger. */}
       <p data-template-variables className="mt-2.5 text-[11px] leading-[1.6] text-fg-subtle">
         A file named <code className="font-mono text-[10.5px] text-fg-muted">x.tpl</code> is written
         as <code className="font-mono text-[10.5px] text-fg-muted">x</code> with{' '}
         <code className="font-mono text-[10.5px] text-accent-text">{'{{NAME}}'}</code>,{' '}
-        <code className="font-mono text-[10.5px] text-accent-text">{'{{CREATED_AT}}'}</code> and{' '}
-        <code className="font-mono text-[10.5px] text-accent-text">{'{{TEMPLATE}}'}</code> filled
-        in. Every other file is copied byte for byte, so a workflow full of{' '}
+        <code className="font-mono text-[10.5px] text-accent-text">{'{{CREATED_AT}}'}</code>,{' '}
+        <code className="font-mono text-[10.5px] text-accent-text">{'{{TEMPLATE}}'}</code> and{' '}
+        <code className="font-mono text-[10.5px] text-accent-text">{'{{PATH}}'}</code> - the
+        new harness’s folder, with forward slashes - filled in. Every other file is copied
+        byte for byte, so a workflow full of{' '}
         <code className="font-mono text-[10.5px] text-fg-muted">{'${{ … }}'}</code> arrives as you
         wrote it.
       </p>

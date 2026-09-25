@@ -1,12 +1,12 @@
 import { copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { constants as copyFileConstants, existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 
 /**
  * Harness templates: a user-authored directory tree that becomes a new harness.
  *
- * The whole of the mechanism is "copy a directory, fill in three placeholders".
+ * The whole of the mechanism is "copy a directory, fill in four placeholders".
  * That is deliberate and it is the second design - the first carried a creation
  * manifest, per-file hashes and an update-from-template pass, and all of it is
  * gone. A template makes a harness; from that moment the harness belongs to the
@@ -438,10 +438,31 @@ export interface TemplateValues {
   NAME: string
   CREATED_AT: string
   TEMPLATE: string
+  /** The harness directory, forward-slashed. Build it with `templatePathValue`. */
+  PATH: string
 }
 
 /**
- * The three placeholders, and nothing else.
+ * What `{{PATH}}` is filled in with: the harness's absolute directory, with
+ * the platform separator turned into `/`.
+ *
+ * The placeholder exists because a template that wires up hooks, a status line
+ * or an MCP server has to name files inside the harness it is creating, and
+ * `{{NAME}}` cannot say where that is - the parent folder is chosen in the
+ * dialog. Forward slashes because the value lands in JSON more often than
+ * anywhere else - `settings.json`, `.mcp.json` - and a raw Windows backslash
+ * there is an escape sequence, so `C:\Users` is invalid JSON and `C:\new` is a
+ * newline. Node, uv, bash and Claude Code all accept `C:/Users/...`, so the one
+ * spelling is safe in JSON, YAML, a shell line and a script alike. Only the
+ * platform separator is rewritten: on POSIX a backslash is an ordinary
+ * filename character and turning it into `/` would name a different path.
+ */
+export function templatePathValue(dir: string): string {
+  return sep === '/' ? dir : dir.split(sep).join('/')
+}
+
+/**
+ * The four placeholders, and nothing else.
  *
  * No conditionals and no loops, on purpose: a template language is a thing that
  * grows, and the moment it can branch it needs a debugger. Anything a template
@@ -460,6 +481,8 @@ export function substituteTemplate(text: string, values: TemplateValues): string
     .join(values.CREATED_AT)
     .split('{{TEMPLATE}}')
     .join(values.TEMPLATE)
+    .split('{{PATH}}')
+    .join(values.PATH)
 }
 
 // ---------------------------------------------------------------------------
@@ -679,12 +702,17 @@ rest of the picker working.
 
 ## The rest of the folder
 
-Copied verbatim into the new harness, with four rules:
+Copied verbatim into the new harness, with five rules:
 
 - **\`.tpl\` files are filled in and the extension is dropped.**
   \`CLAUDE.md.tpl\` is written as \`CLAUDE.md\` with \`{{NAME}}\`,
-  \`{{CREATED_AT}}\` and \`{{TEMPLATE}}\` substituted. There are no other
-  placeholders, and no conditionals or loops.
+  \`{{CREATED_AT}}\`, \`{{TEMPLATE}}\` and \`{{PATH}}\` substituted. There
+  are no other placeholders, and no conditionals or loops.
+- **\`{{PATH}}\` is the new harness's folder, with forward slashes** -
+  \`C:/Users/you/.harness/work\`. Use it wherever a file has to name something
+  inside the harness: a hook command in \`settings.json.tpl\`, an MCP server in
+  \`.mcp.json.tpl\`. Forward slashes keep it valid JSON, and every tool that
+  reads those files accepts them.
 - **Every other file is copied byte for byte.** A workflow file full of
   \`\${{ ... }}\` arrives exactly as you wrote it. That is why substitution is
   opt-in rather than applied everywhere.
