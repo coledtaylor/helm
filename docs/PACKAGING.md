@@ -235,10 +235,11 @@ purpose). Helm hosts Claude Code sessions, so terminating it is not like
 terminating an editor with everything saved - it ends the work inside them, and
 it has done exactly that once, from a sweep of "every check".
 
-So it is not part of the release gate. Run it when a release **changes
-packaging** - electron-builder, `electron-builder.yml`, the native modules,
-`dist-win.mjs`, or anything about where files land - on a machine where nobody
-is working. The default run prints a `PKG-2` line recording that it did not,
+So it is not part of the release gate, and neither is `packaging-check`: both
+run only when the owner asks for them, a release that **changes packaging** -
+electron-builder, `electron-builder.yml`, the native modules, `dist-win.mjs`, or
+anything about where files land - included, and this one only on a machine
+where nobody is working. The default run prints a `PKG-2` line recording that it did not,
 so a green run is never mistaken for one that covered the installer, and CI
 runs `verify-artifact.mjs` over both exes on every publish regardless.
 

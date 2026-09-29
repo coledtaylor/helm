@@ -457,12 +457,13 @@ disk - in which case it owes **the one check that covers it**, narrowed with
 
 **A release is not a testing event.** "Cut a release" means bump the version,
 write the changelog section, merge, push. CI runs `pnpm check`, and
-`verify-artifact.mjs` over both exes on publish. `packaging-check` is for a
-release that **changes packaging** - electron-builder, the native modules,
-`dist-win.mjs`, where files land - and is not owed by one that does not. If a
-particular release looks like it needs more, say so in a sentence and proceed
-anyway; the decision to spend the time is the owner's, and silence costs less
-than ceremony.
+`verify-artifact.mjs` over both exes on publish, and that is the whole of the
+release gate. **`packaging-check` and `verify:installer` run only when the
+owner asks for them**, a release that changes packaging included -
+electron-builder, the native modules, `dist-win.mjs`, where files land. Such a
+release earns one sentence saying they were not run, and then proceeds; the
+decision to spend the time is the owner's, and silence costs less than
+ceremony.
 
 **Measure until the answer changes what you do, then stop.** "Measure rather
 than assume" is why the diagnoses in this repository hold up, and on its own it
@@ -511,7 +512,7 @@ and how to narrow a re-run. Two rules belong here rather than there:
   replaces the installed app is a **tool somebody asks for**, never a group a
   suite reaches on its own. The same goes for `dev:live`, which runs against the
   real `%APPDATA%\Helm`. Everything else in `packaging-check`, `--only=audit`
-  included, is safe and expected.
+  included, is safe to run when the owner asks for it - and only then.
   When a change owes coverage only that tool would give, **report
   the omission** rather than quietly closing it. Say it out loud to a subagent
   too, which otherwise reads "the checks this change owes" as the whole suite.
