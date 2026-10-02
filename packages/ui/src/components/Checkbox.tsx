@@ -46,7 +46,7 @@ export function Checkbox({
         aria-label={label}
         {...marker}
         className={cn(
-          'peer size-4 cursor-pointer appearance-none rounded-[5px] border-[1.5px] border-fg-subtle',
+          'peer size-4 cursor-pointer appearance-none rounded-raised border-[1.5px] border-fg-subtle',
           'transition-colors checked:border-accent checked:bg-accent hover:border-fg-muted'
         )}
       />

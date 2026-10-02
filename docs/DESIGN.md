@@ -1,4 +1,4 @@
-# Helm design system - "Nocturne Islands" (v1)
+# Helm design system - "Nocturne Islands" (v2)
 
 Every surface in Helm follows this system. It was chosen from three explored
 directions (direction 1a, "Nocturne Islands") and specified in the design
@@ -6,40 +6,92 @@ package the redesign was built from; this file is the in-repo authority. If a
 change cannot be expressed in these tokens and rules, the change is wrong or
 this file needs a deliberate amendment - not a one-off exception.
 
-The tokens live in `packages/ui/src/styles/theme.css` and are exposed to
-Tailwind via `@theme inline`, so components only ever use the semantic
-utilities (`bg-surface`, `text-fg-muted`, `rounded-island`, ...). No raw hex
-values in components, with one deliberate exception noted under
-"Foreign-ground islands".
+**v2** made the palette a theme and the shape a setting. What did not change
+is every rule about how the tokens are *used*: islands on a canvas, the accent
+never floods, no shadows outside modals, no text past 500, mono for machine
+data.
 
-## 1. Color
+Components only ever use the semantic utilities (`bg-surface`,
+`text-fg-muted`, `rounded-island`, `gap-gutter`, ...), exposed to Tailwind via
+`@theme inline` in `packages/ui/src/styles/theme.css`. No raw hex values in
+components, with one deliberate exception noted under "Foreign-ground islands".
+A theme's colour drawn *as data* - the Appearance pane's swatches - is not a
+raw hex: it is a value core parsed and re-spelled, set as an inline style.
 
-Same eleven roles in both modes, so every component maps 1:1. Dark is the
-design's home; light is a first-class equivalent, not an afterthought.
+## 1. Themes
 
-| Role            | Utility          | Dark                    | Light                  |
-| --------------- | ---------------- | ----------------------- | ---------------------- |
-| canvas          | `bg`             | `#12131F`               | `#ECEEF4`              |
-| island          | `surface`        | `#1A1C2B`               | `#FFFFFF`              |
-| raised          | `surface-raised` | `#202233`               | `#F4F5FA`              |
-| sunken          | `surface-sunken` | `#0D0E17`               | `#E2E5EE`              |
-| hover           | `hover`          | `#242639`               | `#E6E8F1`              |
-| active          | `active`         | `#2B2D44`               | `#DDE0EC`              |
-| border          | `border`         | `rgba(233,233,237,.08)` | `rgba(22,24,38,.10)`   |
-| border-strong   | `border-strong`  | `rgba(233,233,237,.16)` | `rgba(22,24,38,.20)`   |
-| fg              | `fg`             | `#E9E9ED`               | `#1D1F2E`              |
-| muted           | `fg-muted`       | `#9397AB`               | `#595D6C`              |
-| subtle          | `fg-subtle`      | `#75798C`               | `#75798C`              |
-| accent          | `accent`         | `#9184D9`               | `#6F61C4` (accent-600) |
-| accent-soft     | `accent-soft`    | 14% alpha accent        | 10% alpha accent       |
-| accent-text     | `accent-text`    | `#D2CEFD`               | `#5A4DA8`              |
-| ok / warn / bad | `success` etc.   | `#8FBF7F` `#D9B36C` `#D97C76` | `#2F7A43` `#9A6B12` `#C03B38` |
+A theme is nineteen colour roles and nothing else. Same roles in every theme,
+so every component maps 1:1 whichever is on screen. Themes are **data**, not
+CSS: the three built-ins are `BUILTIN_THEMES` in `core/theme/themes.ts`, a
+user's are JSON files, and the renderer paints the one on screen onto `<html>`
+as `--helm-*` custom properties before React's first frame. `theme.css`
+declares no palette at all; a second copy of the default there would be the
+copy that drifts.
+
+| Role            | Token / utility     | Nocturne (dark)        | Graphite (dark)        | Daylight (light)       |
+| --------------- | ------------------- | ---------------------- | ---------------------- | ---------------------- |
+| canvas          | `bg`                | `#12131F`              | `#25282E`              | `#E6E8EE`              |
+| island          | `surface`           | `#1A1C2B`              | `#1C1F24`              | `#FFFFFF`              |
+| raised          | `surface-raised`    | `#202233`              | `#2A2E35`              | `#F4F5F8`              |
+| sunken          | `surface-sunken`    | `#0D0E17`              | `#16181C`              | `#EEF0F4`              |
+| hover           | `hover`             | `#242639`              | `#272A30`              | `#ECEEF3`              |
+| active          | `active`            | `#2B2D44`              | `#30343C`              | `#E3E5EE`              |
+| border          | `border`            | `rgb(233 233 237/.08)` | `rgb(255 255 255/.08)` | `rgb(22 24 38/.10)`    |
+| border-strong   | `border-strong`     | `rgb(233 233 237/.16)` | `rgb(255 255 255/.15)` | `rgb(22 24 38/.18)`    |
+| fg              | `fg`                | `#E9E9ED`              | `#E3E5E9`              | `#1D1F2E`              |
+| muted           | `fg-muted`          | `#9397AB`              | `#A0A6B0`              | `#555A69`              |
+| subtle          | `fg-subtle`         | `#75798C`              | `#767C87`              | `#6F7383`              |
+| accent          | `accent`            | `#9184D9`              | `#6CA6F5`              | `#6F61C4`              |
+| accent-fg       | `accent-fg`         | `#12131F`              | `#16181C`              | `#FFFFFF`              |
+| accent-soft     | `accent-soft`       | 14% accent             | 15% accent             | 10% accent             |
+| accent-soft-hover | `accent-soft-hover` | 26% accent           | 27% accent             | 20% accent             |
+| accent-text     | `accent-text`       | `#D2CEFD`              | `#BBD7FF`              | `#5A4DA8`              |
+| ok / warn / bad | `success` etc.      | `#8FBF7F` `#D9B36C` `#D97C76` | `#85C28B` `#E3B262` `#E57A7C` | `#2F7A43` `#9A6B12` `#C03B38` |
+
+The values are the source's; this table is for reading, and
+`core/theme/theme.test.ts` is what holds every built-in to its floors - body and
+muted text at 4.5:1 on every ground they sit on, the accent at 3:1 as a mark
+and 4.5:1 as `accent-text`.
+
+- **Nocturne** is v1's dark ramp exactly, so the default look did not move.
+- **Graphite** inverts the elevation: the canvas is *lighter* than the
+  islands, so a pane reads as a recess in a frame. A component that assumes
+  "islands are lighter than the canvas" is wrong in Graphite and nowhere else,
+  which is why design-shot walks it.
+- **Daylight** has a lighter canvas and well than v1's light ramp, because 6px
+  of canvas between white islands reads as a seam where 8px read as a gutter.
 
 Accent usage is the defining rule: **the accent never floods.** It appears as
 2px marks, outlines, checkbox fills and text (`accent-text`); area fills come
-only from `accent-soft`. `accent-fg` is the color of a glyph punched out of a
-solid accent fill (the canvas color in dark, white in light) and is only for
-checkboxes.
+only from `accent-soft`. `accent-fg` is the colour of a glyph punched out of a
+solid accent fill and is only for checkboxes.
+
+**Two slots and a switch.** The setting is not one theme. `themeDark` and
+`themeLight` each name a theme, and `theme` (`system` / `dark` / `light`) says
+which slot is on screen - whichever Windows is in, or one always. That is what
+lets "Follow Windows" mean something with more than one theme of a kind, and it
+is why the title bar's three-way toggle needs no change. `.dark` on `<html>`
+says the *theme on screen* is dark; it is not a statement about Windows.
+
+**A chosen accent is a hue, not a value.** `accentColor` overrides the theme's
+accent, and `deriveAccent` fits it to the theme: the nearest value that holds
+3:1 for marks and 4.5:1 for `accent-text` against that theme's island, with the
+tints at the theme's own alphas. One swatch is therefore a different hex on
+Nocturne and on Daylight, by design.
+
+**User themes** are `*.json` in `~/.config/helm/themes` (beside the exe for a
+portable build), watched while the app runs - a save repaints the window. A
+file names its `kind` (or `extends` a built-in) and only the colours it
+changes; the rest come from the built-in it extends. Grounds and text must be
+opaque - `bg` and `fg-muted` are also the colours Windows paints the title-bar
+buttons with, which takes no alpha - and only the two borders and two accent
+tints may be translucent. A wrong value falls back by itself and is named in
+the Appearance pane; a file that cannot be read as a theme is skipped and named
+there too. A slot naming a theme that is gone shows the built-in of its kind.
+
+**Native chrome follows the theme.** The window's own background (what Chromium
+shows before the first paint) and the Window Controls Overlay are repainted
+from the same resolved theme on every change (`main/chrome.ts`).
 
 ## 2. Type
 
@@ -64,27 +116,51 @@ is Inter.
 ## 3. Island anatomy
 
 Everything floats. The window paints the sunken canvas; every pane is an
-island - a surface with a 1px hairline edge - separated by 8px gutters
-(`gap-2` / `p-2` in the shell). Nothing sits bare on the canvas except the
-status bar and the tab strip.
+island - a surface with a 1px hairline edge - separated by gutters of canvas
+(`gap-gutter` / `px-gutter` in the shell). Nothing sits bare on the canvas
+except the status bar and the tab strip.
 
 **One island per pane, and a pane with sections is still one island.** A header,
 a body and a footer that belong to the same subject are separated by
-`.island-rule`s inside a single surface, not floated as three islands with 8px
+`.island-rule`s inside a single surface, not floated as three islands with
 gutters between them: the gutters buy nothing, cost two of them out of the
 reading width, and make the header read as a summary card sitting above some
 other pane's contents. The pull request tab is the worked example - header, view,
 review row - and it was three islands before this rule was written down.
 
-Three elevations, encoded as radius tokens:
+### Shape
 
-- `rounded-island` (10px) - panes on the canvas
-- `rounded-raised` (8px) - stat cards, code wells, list boxes *inside* an island (`bg-surface-raised`)
-- `rounded-well` (7px) - inputs, filter fields, buttons, row hovers (`bg-surface-sunken` for inputs)
-- `rounded-full` - pills and tags
+Three settings, all custom properties on `<html>` that `applyShape` writes, so
+every gutter, corner and dense row in the app moves with them and nothing has
+to be told:
 
-**No stacked shadows.** Elevation is an edge plus the darker canvas behind
-it. The one exception is modals: `rounded-xl border-border-strong
+- **Gap** (`paneGap`, 2-12px, default **6**) - `--helm-gap`, the
+  `gutter` spacing token. A divider handle *is* the gutter it sits in (its row
+  is `h-gutter` / `w-gutter`) and keeps an 8px hit target through a `::before`
+  whatever the gap is.
+- **Corner radius** (`cornerRadius`, 0-8px, default **3**) - `--helm-radius`.
+  It is one knob, not five, because the relation is fixed:
+
+  - `rounded-island` = radius - panes on the canvas
+  - `rounded-raised` = radius - cards, code wells, list rows, segments and tabs
+    *inside* an island (`bg-surface-raised` for cards)
+  - `rounded-well` = radius + 1 - inputs, filter fields, buttons and popups,
+    so a control reads as a separate thing from the panel it sits in
+  - Tailwind's own `rounded`, `rounded-sm` to `rounded-xl` are folded onto
+    radius + 1, and `rounded-xs` onto radius - 1, so a `rounded-md` written
+    tomorrow follows the setting instead of escaping it
+  - `rounded-full` - pills, tags and swatches
+
+  A literal radius (`rounded-[5px]`) is a corner the setting cannot reach and
+  is not used.
+- **Density** (`comfortable` / `compact`) - `--helm-row-y` (a list row's
+  vertical padding, `py-row`: 6px / 3px) and `--helm-strip` (the tab strip,
+  `h-strip`: 40px / 34px). Text size and controls' own padding never change
+  with it; density is how tightly the repeated things pack, not a zoom.
+
+**No stacked shadows.** Elevation is an edge plus the canvas behind it - which
+in Graphite is a lighter frame rather than a darker one, and the rule holds
+either way. The one exception is modals: `rounded-xl border-border-strong
 shadow-panel` over a dimmed backdrop.
 
 **`Overlay` is the one owner of that treatment.** The scrim, the centring, the
@@ -168,13 +244,13 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   fill the platform can catch mid-change and paint the listbox with.
 - **Segmented control**: a sunken well (`rounded-well border-border
   bg-surface-sunken p-0.5`) whose chosen segment lifts to
-  `bg-surface-raised ring-1 ring-border-strong` at `rounded-[5px]`. For a
+  `bg-surface-raised ring-1 ring-border-strong` at `rounded-raised`. For a
   choice of two to four; past that it is a select.
 
   The chosen segment hovers to `bg-active`, not to `bg-hover` like everything
   else, and this is the one place the ramp is skipped deliberately: the segment
   rests on `surface-raised`, and `hover` sits six points from it across the
-  whole channel in dark mode. `active` is one clear step above where the segment
+  whole channel in Nocturne. `active` is one clear step above where the segment
   actually is. The class lives in `ui/src/lib/segmented.ts` as `SEGMENT_ON`,
   because the string was copy-pasted at nine call sites and the tone is the part
   that must not drift; the *unchosen* tone stays per-site, since icons sit at
@@ -311,10 +387,10 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   file rather than as another line of it. Lines **wrap**; a horizontal scrollbar
   per file turns reading a diff into operating one.
 - **Folder tabs**: the active tab lifts into the pane island below it - same
-  fill, hairline border on three sides, `rounded-t-[9px]`, `-mb-px` overlap,
+  fill, hairline border on three sides, `rounded-t-island`, `-mb-px` overlap,
   `z-10`. Inactive tabs are bare text (`fg-muted`). A session tab lifts into
   the terminal ground instead (see below). A strip with no tabs and no
-  trailing actions is **not drawn**: its 40px belong to tabs, and holding them
+  trailing actions is **not drawn**: its height (`h-strip`) belongs to tabs, and holding them
   open on the welcome screen pushes the pane island below the top edge of the
   sidebar island beside it.
 - **The session tab's state dot.** A session tab carries a 6px dot in place of
@@ -463,8 +539,8 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
 - **Title bar**: the native bar is hidden on Windows; Helm draws its own
   brand strip (the accent mark alone - no wordmark, since it named the app to
   someone already looking at it - the drag region, the theme toggle) and
-  the Window Controls Overlay paints the min/max/close buttons in canvas
-  colours (`main/chrome.ts`). The overlay is retinted on every theme change.
+  the Window Controls Overlay paints the min/max/close buttons in the theme's
+  `bg` and `fg-muted` (`main/chrome.ts`), retinted on every theme change.
 - **Split view**: sessions never share the workspace strip. They dock as a
   resizable split on the right with their own folder-tab row; the divider is
   a 3px `border-strong` grip that goes accent on hover, drag-bounded 20-80%.
@@ -483,7 +559,7 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   pane. What that never justified was being the only value, so the gutter
   between the two carries a **drag handle** - the split view's divider recipe
   rotated, a 3px `border-strong` grip that goes accent on hover, in a full-width
-  8px row that is the whole target. Dragging moves the shell's top edge,
+  row as tall as the gutter with an 8px target. Dragging moves the shell's top edge,
   double-clicking returns it to the default.
 
   It is bounded at both ends and the two bounds are different in kind. The
@@ -630,9 +706,9 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
 
 Two islands host content Helm does not own: the terminal and the embedded
 document/artifact viewer. The rule: **the island's chrome is themed; the
-content's ground is its own, fixed in both modes.**
+content's ground is its own, fixed in every theme.**
 
-- The terminal keeps `#11121A` (`bg-terminal`) in both modes - load-bearing
+- The terminal keeps `#11121A` (`bg-terminal`) in every theme - load-bearing
   for Spike C's color checks, and the reason a session's *tab* also keeps its
   own fixed text color (`#dde1ea`) when active.
 - The **palette** is fixed too, and that is a decision rather than an omission:
@@ -640,7 +716,8 @@ content's ground is its own, fixed in both modes.**
   the fidelity checks, so terminal colours are deliberately not a setting.
   What *is* settable is everything that is not colour - font, size,
   cursor, scrollback - and the settings pane's preview well paints those on
-  this same fixed ground, in both themes, so the preview is the pane.
+  this same fixed ground, in every theme, so the preview is the pane. A
+  theme cannot carry terminal colours for the same reason.
 - A **shell pane's header** is themed chrome on that fixed ground: the caps
   label, the running executable in mono at `#9397ab`, and a select in the
   standard shape. Foreign ground governs the content, not the furniture
@@ -674,3 +751,5 @@ Don't:
   GitHub's filled green and purple
 - No theming foreign grounds - terminal and embedded documents keep their own
 - No raw hex in components; tokens only
+- No literal radius or gutter (`rounded-[5px]`, `gap-2` between islands) -
+  the shape settings cannot reach a number written at the call site

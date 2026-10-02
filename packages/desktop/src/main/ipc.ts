@@ -22,7 +22,8 @@ import type { ArchiveService } from './archive'
 import type { HistoryService } from './history'
 import type { PullsService } from './pulls'
 import type { UsageService } from './usage'
-import { applyTitleBarOverlay } from './chrome'
+import { applyWindowTheme } from './chrome'
+import type { ThemeService } from './themes'
 import type { PtermHost } from './pterm'
 import { readClaudeVersion, setClaudeOverride } from './claude-cli'
 import { setGhOverride } from './gh-cli'
@@ -47,7 +48,6 @@ import type {
   EventPayload,
   IpcRequests,
   RequestChannel,
-  ResolvedTheme,
   SendChannel,
   SendPayload
 } from '../shared/ipc'
@@ -71,8 +71,19 @@ type SendHandlers = {
   [K in SendChannel]: (payload: SendPayload<K>, event: Electron.IpcMainEvent) => void
 }
 
-export function resolvedTheme(): ResolvedTheme {
-  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+/**
+ * Repaints everything the theme reaches that is not the renderer's CSS - the
+ * window's own background and the title-bar buttons - and tells the renderer.
+ *
+ * One function for every cause, because there are four and they must agree: a
+ * settings write, Windows changing mode, a theme file saved, and the renderer
+ * announcing it is listening. Each of them is "the answer to `state()` may
+ * have moved", and nothing about which one it was changes what to paint.
+ */
+export function pushTheme(ctx: Pick<IpcContext, 'services' | 'themes' | 'window'>): void {
+  const state = ctx.themes.state(ctx.services.settings)
+  applyWindowTheme(ctx.window(), state.applied)
+  emit(ctx.window(), 'theme:changed', state)
 }
 
 /** Typed `webContents.send`. The only way the main process pushes to a window. */
@@ -121,6 +132,8 @@ export interface IpcContext {
   content: ContentService
   /** Authors what `template:list` reads back; see `templates.ts`. */
   templates: TemplateService
+  /** Built-in and user themes, and the watch on the user's; see `themes.ts`. */
+  themes: ThemeService
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
   /**
@@ -243,13 +256,14 @@ export function registerIpc(ctx: IpcContext): void {
         if (next.browserMcp || next.sessionMcp) void ctx.browserMcp.start()
         else void ctx.browserMcp.stop()
       }
-      if (patch.theme !== undefined) {
-        nativeTheme.themeSource = patch.theme
-        applyTitleBarOverlay(ctx.window(), resolvedTheme())
-        emit(ctx.window(), 'theme:changed', {
-          preference: next.theme,
-          resolved: resolvedTheme()
-        })
+      if (patch.theme !== undefined) nativeTheme.themeSource = patch.theme
+      if (
+        patch.theme !== undefined ||
+        patch.themeDark !== undefined ||
+        patch.themeLight !== undefined ||
+        patch.accentColor !== undefined
+      ) {
+        pushTheme(ctx)
       }
       return next
     },
@@ -444,7 +458,19 @@ export function registerIpc(ctx: IpcContext): void {
 
     'update:check': () => checkForUpdate(),
 
-    'theme:resolved': () => resolvedTheme(),
+    'theme:resolved': () => ctx.themes.state(services.settings).resolved,
+    'theme:current': () => ctx.themes.state(services.settings),
+    'themes:list': () => ctx.themes.listing(),
+    'themes:openFolder': async () => {
+      ctx.themes.ensureDir()
+      // `openPath` resolves to an error *string* rather than rejecting, and a
+      // folder that would not open is worth a sentence rather than nothing.
+      const problem = await shell.openPath(ctx.themes.dir)
+      if (problem !== '') throw new Error(problem)
+    },
+    // Not revealed here: the pane asks `shell:showItem` for that, so a check
+    // can make a copy without a file manager opening on somebody's desktop.
+    'themes:duplicate': ({ id }) => ({ file: ctx.themes.duplicate(id) }),
 
     'shell:showItem': ({ path }) => {
       shell.showItemInFolder(path)
@@ -733,13 +759,13 @@ export function registerIpc(ctx: IpcContext): void {
   }
 
   nativeTheme.themeSource = services.settings.theme
-  nativeTheme.on('updated', () => {
-    // The overlay buttons are native chrome, so the theme swap has to be told
-    // to them separately - they do not follow the renderer's class.
-    applyTitleBarOverlay(ctx.window(), resolvedTheme())
-    emit(ctx.window(), 'theme:changed', {
-      preference: services.settings.theme,
-      resolved: resolvedTheme()
-    })
+  // Windows changing mode only matters to `system`, but `updated` also fires
+  // for high-contrast and inverted-colour changes, and re-resolving is cheap.
+  nativeTheme.on('updated', () => pushTheme(ctx))
+  ctx.themes.onChange(() => {
+    emit(ctx.window(), 'themes:changed', ctx.themes.listing())
+    // The edited file may be the theme on screen; if it is not, this paints
+    // the same values again, which is nothing.
+    pushTheme(ctx)
   })
 }

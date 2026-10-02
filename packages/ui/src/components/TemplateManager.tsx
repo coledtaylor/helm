@@ -329,7 +329,7 @@ function TemplateRow({
       aria-current={on}
       onClick={onClick}
       className={cn(
-        'relative block w-full rounded-[5px] px-2.5 py-1.5 text-left transition-colors',
+        'relative block w-full rounded-raised px-2.5 py-1.5 text-left transition-colors',
         on ? ROW_SELECTED : 'hover:bg-hover'
       )}
     >
@@ -547,7 +547,7 @@ function FileList({
               key={file.relPath}
               data-template-file={file.relPath}
               data-template-file-tpl={String(file.substituted)}
-              className="group flex items-center gap-2 rounded-[5px] px-1.5 py-1 transition-colors hover:bg-hover"
+              className="group flex items-center gap-2 rounded-raised px-1.5 py-1 transition-colors hover:bg-hover"
             >
               <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg" title={file.relPath}>
                 {file.relPath}
@@ -707,7 +707,7 @@ function ImportPicker({
                     // reads as escapes.
                     data-template-import-file={file.relPath}
                     data-template-import-on={String(ticked.includes(file.path))}
-                    className="flex cursor-pointer items-center gap-2 rounded-[5px] px-1.5 py-1 transition-colors hover:bg-hover"
+                    className="flex cursor-pointer items-center gap-2 rounded-raised px-1.5 py-1 transition-colors hover:bg-hover"
                     title={file.path}
                   >
                     <Checkbox

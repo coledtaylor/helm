@@ -6,9 +6,12 @@ import {
   BROWSER_RECENT_URLS_MAX,
   browserReachAllows,
   CONTENT_WRAP_INDENT,
+  CORNER_RADIUS,
   DEFAULT_SETTINGS,
+  DENSITY_MODES,
   EFFORT_LEVELS,
   isRepoSlug,
+  PANE_GAP,
   PINNED_PROJECTS_MAX,
   PR_CHECKOUT_MODES,
   PR_IGNORED_REPOS_MAX,
@@ -20,6 +23,8 @@ import {
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
+  THEME_ID_MAX_LENGTH,
+  THEME_ID_PATTERN,
   THEME_PREFERENCES,
   TRANSCRIPT_ARCHIVE_BYTES,
   USAGE_DISPLAY_MODES,
@@ -113,8 +118,36 @@ function unsafeFontFamily(value: string): boolean {
   return false
 }
 
+/**
+ * A theme's id, not its existence. The settings layer cannot know which files
+ * are in the themes directory, and should not: a slot naming a theme whose file
+ * has gone is resolved to the built-in of its kind at paint time, and the row
+ * keeps the name so the theme comes back when the file does.
+ */
+const themeId = (value: unknown): string | null =>
+  typeof value === 'string' && value.length <= THEME_ID_MAX_LENGTH && THEME_ID_PATTERN.test(value)
+    ? null
+    : `expected a theme id (lower-case letters, digits and dashes), got ${describe(value)}`
+
+/**
+ * `#rrggbb` and nothing else. This one reaches CSS through `deriveAccent`, which
+ * would also take `rgb()` - but the pane only ever writes hex, and one spelling
+ * in the row is one spelling to compare.
+ */
+const ACCENT_HEX = /^#[0-9a-f]{6}$/
+
 export const SETTING_VALIDATORS: SettingValidators = {
   theme: oneOf(THEME_PREFERENCES),
+
+  themeDark: themeId,
+  themeLight: themeId,
+  paneGap: boundedInteger(PANE_GAP),
+  cornerRadius: boundedInteger(CORNER_RADIUS),
+  density: oneOf(DENSITY_MODES),
+  accentColor: (value) =>
+    value === null || (typeof value === 'string' && ACCENT_HEX.test(value))
+      ? null
+      : `expected null or a lower-case #rrggbb, got ${describe(value)}`,
 
   usageDisplay: oneOf(USAGE_DISPLAY_MODES),
 

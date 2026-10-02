@@ -331,7 +331,7 @@ function Row({
       onClick={() => onSelect(session)}
       title={`${name} - ${SESSION_STATE_LABEL[state]}\n${session.cwd ?? 'working directory not recorded'}`}
       className={cn(
-        'relative flex w-full flex-col gap-0.5 rounded-well px-2.5 py-1.5 text-left transition-colors',
+        'relative flex w-full flex-col gap-0.5 rounded-raised px-2.5 py-row text-left transition-colors',
         selected ? ROW_SELECTED : 'hover:bg-hover'
       )}
     >

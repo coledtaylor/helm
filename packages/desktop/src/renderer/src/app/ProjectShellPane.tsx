@@ -210,7 +210,7 @@ export function ProjectShellPane({
             value={override}
             onChange={(e) => swap(e.target.value)}
             className={cn(
-              'h-[22px] appearance-none rounded-[5px] border border-border bg-[#0d0e17]',
+              'h-[22px] appearance-none rounded-raised border border-border bg-[#0d0e17]',
               'pr-5 pl-1.5 text-[11px] text-fg-subtle transition-colors',
               'hover:border-border-strong hover:text-fg focus:border-accent focus:outline-none',
               'disabled:cursor-default disabled:opacity-50'

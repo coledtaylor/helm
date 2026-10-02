@@ -158,7 +158,7 @@ export function NewHarnessDialog({
               data-harness-mode={candidate}
               onClick={() => chooseMode(candidate)}
               className={cn(
-                'flex-1 rounded-[5px] px-2.5 py-1 text-[12px] transition-colors',
+                'flex-1 rounded-raised px-2.5 py-1 text-[12px] transition-colors',
                 mode === candidate
                   ? SEGMENT_ON
                   : 'text-fg-muted hover:text-fg'
@@ -264,7 +264,7 @@ export function NewHarnessDialog({
                     data-harness-template={choice.id}
                     onClick={() => onTemplateChange?.(choice.id)}
                     className={cn(
-                      'relative flex w-full items-start gap-2 rounded-[5px] py-1.5 pr-2.5 pl-2.5 text-left transition-colors',
+                      'relative flex w-full items-start gap-2 rounded-raised py-1.5 pr-2.5 pl-2.5 text-left transition-colors',
                       on ? ROW_SELECTED : 'hover:bg-hover'
                     )}
                   >

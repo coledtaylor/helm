@@ -625,7 +625,7 @@ function Header({
               aria-pressed={shown === option.id}
               onClick={() => onShow(option.id)}
               className={cn(
-                'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
+                'rounded-raised px-2.5 py-0.5 text-[11px] transition-colors',
                 shown === option.id
                   ? SEGMENT_ON
                   : 'text-fg-muted hover:text-fg'

@@ -538,7 +538,7 @@ function HarnessGroup({
         onClick={onToggle}
         aria-expanded={expanded}
         aria-label={`${name}, ${String(count)} project${count === 1 ? '' : 's'}`}
-        className="flex w-full items-center gap-1.5 rounded-well px-2 py-1.5 text-left transition-colors hover:bg-hover"
+        className="flex w-full items-center gap-1.5 rounded-raised px-2 py-row text-left transition-colors hover:bg-hover"
       >
         <CaretIcon
           width={9}
@@ -624,7 +624,7 @@ function GlobalLink({
       aria-current={active}
       title={title}
       className={cn(
-        'flex w-full items-center gap-2 rounded-well px-2 py-1.5 text-left transition-colors',
+        'flex w-full items-center gap-2 rounded-raised px-2 py-row text-left transition-colors',
         active ? ROW_SELECTED : 'hover:bg-hover'
       )}
       {...rest}
@@ -660,7 +660,7 @@ function IconButton({
       title={label}
       aria-label={label}
       className={cn(
-        'grid size-5 shrink-0 place-items-center rounded-[5px] text-fg-subtle transition-colors',
+        'grid size-5 shrink-0 place-items-center rounded-raised text-fg-subtle transition-colors',
         'hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-50'
       )}
       {...rest}

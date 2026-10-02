@@ -1,9 +1,17 @@
 import { app, nativeTheme, type BrowserWindow } from 'electron'
 import Database from 'better-sqlite3'
 import { execFileSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readSettings, type AppSettings } from '@helm/core'
+import {
+  BUILTIN_THEMES,
+  contrastRatio,
+  DEFAULT_SETTINGS,
+  parseColor,
+  parseThemeFile,
+  readSettings,
+  type AppSettings
+} from '@helm/core'
 import {
   drag,
   readPointerTrace,
@@ -1355,6 +1363,15 @@ export async function runSettingsChecks(
          clear: Boolean(document.querySelector('[data-settings-clear-claude]')),
          addRoot: Boolean(document.querySelector('[data-settings-add-root]')),
          theme: Boolean(document.querySelector('[data-settings-theme]')),
+         themeCards: document.querySelectorAll('[data-settings-theme-card]').length >= 3,
+         themeFollow: Boolean(document.querySelector('[data-settings-theme-follow]')),
+         themesDir: Boolean(document.querySelector('[data-settings-themes-dir]')),
+         themesOpen: Boolean(document.querySelector('[data-settings-themes-open]')),
+         themeDuplicate: Boolean(document.querySelector('[data-settings-theme-duplicate]')),
+         paneGap: Boolean(document.querySelector('[data-settings-gap]')),
+         cornerRadius: Boolean(document.querySelector('[data-settings-radius]')),
+         density: Boolean(document.querySelector('[data-settings-density]')),
+         accent: document.querySelectorAll('[data-settings-accent]').length === 6,
          usage: Boolean(document.querySelector('[data-settings-usage]')),
          appVersion: Boolean(document.querySelector('[data-settings-app-version]')),
          latestVersion: Boolean(document.querySelector('[data-settings-latest-version]')),
@@ -1419,6 +1436,7 @@ export async function runSettingsChecks(
       'workspace',
       'templates',
       'appearance',
+      'statusbar',
       'content',
       'browser',
       'sessions',
@@ -2227,91 +2245,351 @@ export async function runSettingsChecks(
   }
 
   // -------------------------------------------------------------------------
-  // S-4: theme, and the repaint it has to cause
+  // S-4: named themes, and the repaint each one has to cause
   // -------------------------------------------------------------------------
   if (run('appearance')) {
     await openSettings(win)
     await sleep(300)
+    await js<void>(
+      win,
+      `document.querySelector('[data-settings-group="appearance"]')?.scrollIntoView({ block: 'start' })`
+    )
 
     const observed: Array<Record<string, unknown>> = []
     let everyThemeApplied = true
 
-    for (const theme of ['dark', 'light'] as const) {
-      overlayCalls.length = 0
-      const label = theme === 'dark' ? 'Dark theme' : 'Light theme'
-      const clicked = await click(
-        win,
-        `[data-settings-theme] button[aria-label=${q(label)}]`
-      )
-      await pollJs(
-        win,
-        `document.documentElement.classList.contains('dark') === ${String(theme === 'dark')}`,
-        10_000
-      )
-      await sleep(700)
+    // Following Windows, a card of the kind Windows is not in only records a
+    // slot. Pinned, every click is on screen - which is the claim this probe
+    // makes, so it pins first, through the box a person would untick.
+    const followBefore = rowValue(dbFile, 'theme')
+    if (followBefore === 'system') await click(win, '[data-settings-theme-follow]')
+    await pollJs(win, `document.querySelector('[data-settings-theme]')?.dataset.settingsTheme !== 'system'`, 5_000)
 
-      const painted = await js<{ dark: boolean; canvas: string; scheme: string; checked: string }>(
+    for (const theme of BUILTIN_THEMES) {
+      overlayCalls.length = 0
+      const clicked = await click(win, `[data-settings-theme-card=${q(theme.id)}]`)
+      await pollJs(win, `document.documentElement.dataset.theme === ${q(theme.id)}`, 10_000)
+      await sleep(500)
+
+      const painted = await js<{
+        id: string
+        dark: boolean
+        scheme: string
+        body: string
+        checked: string | null
+      }>(
         win,
         `(() => {
-           const style = getComputedStyle(document.documentElement);
-           const chosen = document.querySelector('[data-settings-theme] button[aria-checked="true"]');
+           const chosen = document.querySelector('[data-settings-theme-card][aria-checked="true"]');
            return {
+             id: document.documentElement.dataset.theme ?? '',
              dark: document.documentElement.classList.contains('dark'),
-             canvas: style.getPropertyValue('--helm-bg').trim(),
              scheme: document.documentElement.style.colorScheme,
-             checked: chosen ? chosen.getAttribute('aria-label') : ''
+             // What the stylesheet actually painted, not the custom property:
+             // a token set and never used would pass a read of the property.
+             body: getComputedStyle(document.body).backgroundColor,
+             checked: chosen ? chosen.dataset.settingsThemeCard : null
            } })()`
       )
-      const row = rowValue(dbFile, 'theme')
+      const slotKey = theme.kind === 'dark' ? 'themeDark' : 'themeLight'
+      const slotRow = rowValue(dbFile, slotKey)
+      const themeRow = rowValue(dbFile, 'theme')
       const overlay = overlayCalls.at(-1) ?? null
-      // The colour the platform was handed has to be the canvas the page is
-      // actually painting - two sources, compared as one value.
-      const overlayMatchesCanvas =
-        overlay !== null &&
-        painted.canvas !== '' &&
-        overlay.color.toLowerCase() === painted.canvas.toLowerCase()
 
       const ok =
         clicked &&
-        painted.dark === (theme === 'dark') &&
-        painted.scheme === theme &&
-        painted.checked === label &&
-        row === theme &&
-        nativeTheme.themeSource === theme &&
-        overlayMatchesCanvas
+        painted.id === theme.id &&
+        painted.dark === (theme.kind === 'dark') &&
+        painted.scheme === theme.kind &&
+        painted.body === hexToRgb(theme.tokens.bg) &&
+        painted.checked === theme.id &&
+        slotRow === theme.id &&
+        themeRow === theme.kind &&
+        nativeTheme.themeSource === theme.kind &&
+        overlay !== null &&
+        overlay.color === theme.tokens.bg &&
+        overlay.symbolColor === theme.tokens['fg-muted'] &&
+        win.getBackgroundColor().toLowerCase().endsWith(theme.tokens.bg.slice(1))
       if (!ok) everyThemeApplied = false
 
       observed.push({
-        theme,
+        theme: theme.id,
         clicked,
+        paintedTheme: painted.id,
         htmlHasDarkClass: painted.dark,
         colorScheme: painted.scheme,
-        canvasTokenCssResolved: painted.canvas,
-        canvasAsRgb: hexToRgb(painted.canvas),
-        overlayHandedToElectron: overlay,
-        overlayMatchesCanvas,
-        databaseRow: row,
-        nativeThemeSource: nativeTheme.themeSource,
+        bodyBackground: painted.body,
+        expectedBackground: hexToRgb(theme.tokens.bg),
         paneShowsChecked: painted.checked,
+        slotRow: { [slotKey]: slotRow },
+        themeRow,
+        nativeThemeSource: nativeTheme.themeSource,
+        overlayHandedToElectron: overlay,
+        windowBackground: win.getBackgroundColor(),
         ok
       })
-      await screenshot(win, shotDir, `settings-4-theme-${theme}.png`)
+      await screenshot(win, shotDir, `settings-4-theme-${theme.id}.png`)
     }
+
+    // Back to following Windows: the row says `system`, Electron is told, and
+    // what is painted is the slot Windows' own mode picks - Daylight or
+    // whichever dark theme the walk above left in the dark slot, which is the
+    // last dark built-in it clicked.
+    const ticked = await click(win, '[data-settings-theme-follow]')
+    await pollJs(win, `document.querySelector('[data-settings-theme]')?.dataset.settingsTheme === 'system'`, 5_000)
+    await sleep(500)
+    const systemDark = nativeTheme.shouldUseDarkColors
+    const darkSlot = rowValue(dbFile, 'themeDark')
+    const lightSlot = rowValue(dbFile, 'themeLight')
+    const following = await js<{ id: string; tags: Record<string, string> }>(
+      win,
+      `({
+         id: document.documentElement.dataset.theme ?? '',
+         tags: Object.fromEntries([...document.querySelectorAll('[data-settings-theme-slot]')]
+           .map((el) => [el.closest('[data-settings-theme-card]')?.dataset.settingsThemeCard ?? '?', el.dataset.settingsThemeSlot]))
+       })`
+    )
+    const followOk =
+      ticked &&
+      rowValue(dbFile, 'theme') === 'system' &&
+      nativeTheme.themeSource === 'system' &&
+      following.id === (systemDark ? darkSlot : lightSlot) &&
+      typeof darkSlot === 'string' &&
+      typeof lightSlot === 'string' &&
+      following.tags[darkSlot] === 'dark' &&
+      following.tags[lightSlot] === 'light' &&
+      Object.keys(following.tags).length === 2
 
     checks.push({
       id: 'S-4',
       criterion: 'Theme is settable from the pane, and the choice takes effect',
-      title: 'Both themes flip the document class, repaint the window controls, and write the row',
-      ok: everyThemeApplied,
-      detail: { observed },
+      title: 'Every built-in theme repaints the page, the window and its controls, and writes its slot; following Windows paints the slot Windows picks',
+      ok: everyThemeApplied && followOk,
+      detail: {
+        observed,
+        follow: { ticked, systemDark, darkSlot, lightSlot, painted: following.id, slotTags: following.tags, ok: followOk }
+      },
       notes: [
-        'Three independent witnesses per theme: the class Chromium has on',
-        '<html>, the colour Electron was handed for the Window Controls Overlay',
-        '- captured by wrapping `setTitleBarOverlay` on the window itself - and',
-        'the row in the database file.',
-        'The overlay colour is compared against the `--helm-bg` token as the',
-        'stylesheet resolved it, so "the buttons match the canvas" is measured',
-        'rather than assumed from a table in the source.'
+        'Independent witnesses per theme: the background Chromium computed for',
+        '<body> - what the stylesheet painted, not the custom property it was',
+        'given - the colours Electron was handed for the Window Controls Overlay',
+        '(captured by wrapping `setTitleBarOverlay` on the window), the window',
+        "background Electron reports, and the slot's row in the database file.",
+        'Expected values are the built-in palettes as core defines them: the',
+        'claim is that the definition reached every surface, not that it is a',
+        'nice palette - core/theme/theme.test.ts holds its contrast floors.'
+      ]
+    })
+  }
+
+  // -------------------------------------------------------------------------
+  // S-4b: gap, corners, density and accent reach the layout
+  // -------------------------------------------------------------------------
+  if (run('appearance')) {
+    await openSettings(win)
+    await sleep(200)
+    await js<void>(
+      win,
+      `document.querySelector('[data-settings-group="appearance"]')?.scrollIntoView({ block: 'start' })`
+    )
+    // From the settings the app holds, not from the rows: a key nobody has
+    // written yet has no row, and restoring "no row" writes nothing - which is
+    // how the first version of this probe left its own values for phase two.
+    const shapeBefore: Partial<AppSettings> = {
+      paneGap: services.settings.paneGap,
+      cornerRadius: services.settings.cornerRadius,
+      density: services.settings.density,
+      accentColor: services.settings.accentColor
+    }
+
+    // One step up on each stepper, through its own button.
+    const gapClicked = await click(win, '[data-settings-gap] button[aria-label="Increase space between panes"]')
+    const radiusClicked = await click(win, '[data-settings-radius] button[aria-label="Increase corner radius"]')
+    const compactClicked = await click(win, '[data-settings-density="compact"]')
+    await pollJs(win, `document.documentElement.dataset.density === 'compact'`, 5_000)
+    await sleep(500)
+
+    const gapWant = DEFAULT_SETTINGS.paneGap + 1
+    const radiusWant = DEFAULT_SETTINGS.cornerRadius + 1
+    // Measured off the layout, not off the custom properties: the distance
+    // between the sidebar island and the column beside it, a panel's corner,
+    // a control's corner, and a list row's padding.
+    const layout = await js<{
+      gutter: number | null
+      island: string | null
+      well: string | null
+      row: string | null
+      strip: number | null
+    }>(
+      win,
+      `(() => {
+         const aside = document.querySelector('aside');
+         const main = document.querySelector('main');
+         const gutter = aside && main ? Math.round(main.getBoundingClientRect().left - aside.getBoundingClientRect().right) : null;
+         const card = document.querySelector('[data-settings-group="appearance"]');
+         const input = document.querySelector('[data-settings-pane] input:not([type="checkbox"])');
+         const row = document.querySelector('aside nav button[title]');
+         const strip = document.querySelector('[role="tablist"]')?.parentElement;
+         return {
+           gutter,
+           island: aside ? getComputedStyle(aside).borderTopLeftRadius : null,
+           well: input ? getComputedStyle(input).borderTopLeftRadius : null,
+           row: row ? getComputedStyle(row).paddingTop : null,
+           strip: strip ? Math.round(strip.getBoundingClientRect().height) : null,
+           _card: card ? getComputedStyle(card).borderTopLeftRadius : null
+         } })()`
+    )
+    await screenshot(win, shotDir, 'settings-4b-shape.png')
+
+    // The accent: a swatch, then the theme's own again. Contrast is measured
+    // from the colours the page computed, against the island it sits on.
+    const tealClicked = await click(win, '[data-settings-accent="#4fc3b4"]')
+    await pollJs(win, `getComputedStyle(document.documentElement).getPropertyValue('--helm-accent').trim() !== ${q(BUILTIN_THEMES[0]?.tokens.accent ?? '')}`, 5_000)
+    await sleep(400)
+    const accent = await js<{ accent: string; surface: string; text: string }>(
+      win,
+      `(() => {
+         const probe = document.createElement('span');
+         document.body.appendChild(probe);
+         const read = (token) => { probe.style.color = 'var(--helm-' + token + ')'; return getComputedStyle(probe).color };
+         const out = { accent: read('accent'), surface: read('surface'), text: read('accent-text') };
+         probe.remove();
+         return out })()`
+    )
+    const contrast = (a: string, b: string): number | null => {
+      const x = parseColor(a)
+      const y = parseColor(b)
+      return x === null || y === null ? null : contrastRatio(x, y)
+    }
+    const accentMark = contrast(accent.accent, accent.surface)
+    const accentText = contrast(accent.text, accent.surface)
+    const accentRow = rowValue(dbFile, 'accentColor')
+    const ownClicked = await click(win, '[data-settings-accent="theme"]')
+    await sleep(500)
+    const accentRowAfter = rowValue(dbFile, 'accentColor')
+
+    const ok =
+      gapClicked &&
+      radiusClicked &&
+      compactClicked &&
+      rowValue(dbFile, 'paneGap') === gapWant &&
+      rowValue(dbFile, 'cornerRadius') === radiusWant &&
+      rowValue(dbFile, 'density') === 'compact' &&
+      layout.gutter === gapWant &&
+      layout.island === `${String(radiusWant)}px` &&
+      layout.well === `${String(radiusWant + 1)}px` &&
+      layout.row === '3px' &&
+      (layout.strip === null || layout.strip === 34) &&
+      tealClicked &&
+      accentRow === '#4fc3b4' &&
+      accentMark !== null &&
+      accentMark >= 3 &&
+      accentText !== null &&
+      accentText >= 4.5 &&
+      ownClicked &&
+      accentRowAfter === null
+
+    // Put the shape back before anything else measures the window.
+    await js<void>(
+      win,
+      `window.helm.invoke('settings:write', ${JSON.stringify(shapeBefore)}).then(() => undefined)`
+    )
+    await sleep(400)
+
+    checks.push({
+      id: 'S-4b',
+      criterion: 'Gap, corners, density and accent are settable and reach what is drawn',
+      title: 'Each control writes its row and moves the layout: the gutter, a panel corner, a control corner, a row, and an accent that keeps its contrast',
+      ok,
+      detail: {
+        clicked: { gapClicked, radiusClicked, compactClicked, tealClicked, ownClicked },
+        rows: {
+          paneGap: rowValue(dbFile, 'paneGap'),
+          cornerRadius: rowValue(dbFile, 'cornerRadius'),
+          density: rowValue(dbFile, 'density'),
+          accentAfterTeal: accentRow,
+          accentAfterOwn: accentRowAfter
+        },
+        want: { gutter: gapWant, island: `${String(radiusWant)}px`, well: `${String(radiusWant + 1)}px`, row: '3px', strip: 34 },
+        layout,
+        accent: { computed: accent, markContrast: accentMark, textContrast: accentText },
+        restoredTo: shapeBefore
+      },
+      notes: [
+        'The gutter is the measured distance between the sidebar island and the',
+        'column beside it, so a gap the knob did not reach fails here however',
+        'the custom property reads. The tab strip is measured only when one is',
+        'on screen. The accent floors are the ones the built-in accents hold.'
+      ]
+    })
+  }
+
+  // -------------------------------------------------------------------------
+  // S-4c: a theme file is picked up, repaints live, and degrades in words
+  // -------------------------------------------------------------------------
+  if (run('appearance')) {
+    await openSettings(win)
+    await sleep(200)
+    const listing = await js<{ dir: string }>(win, `window.helm.invoke('themes:list')`)
+    // The fixture's directory must be this check's own - a theme planted in
+    // the real ~/.config/helm/themes would be planted in somebody's app.
+    const isolated = listing.dir.toLowerCase().startsWith(dataDir.toLowerCase())
+    const file = join(listing.dir, 'check-ink.json')
+    const body = (bg: string): string => JSON.stringify({ name: 'Check Ink', kind: 'dark', colors: { bg, accent: '#e0a040' } })
+
+    const steps: Record<string, unknown> = { dir: listing.dir, isolated }
+    let ok = isolated
+    if (isolated) {
+      mkdirSync(listing.dir, { recursive: true })
+      writeFileSync(file, body('#101820'))
+      const appeared = await pollJs(win, `document.querySelector('[data-settings-theme-card="check-ink"]')`, 10_000)
+      const chosen = appeared && (await click(win, '[data-settings-theme-card="check-ink"]'))
+      const paintedFirst = await pollJs(win, `getComputedStyle(document.body).backgroundColor === ${q(hexToRgb('#101820') ?? '')}`, 10_000)
+
+      // Saved again, with nobody clicking anything: the window has to follow.
+      overlayCalls.length = 0
+      writeFileSync(file, body('#201810'))
+      const repainted = await pollJs(win, `getComputedStyle(document.body).backgroundColor === ${q(hexToRgb('#201810') ?? '')}`, 10_000)
+      await sleep(200)
+      const overlayFollowed = overlayCalls.some((call) => call.color === '#201810')
+      await screenshot(win, shotDir, 'settings-4c-user-theme.png')
+
+      // Broken mid-edit: the file is named in the pane, the card goes, and the
+      // window falls back to the built-in of the slot's kind - not to Daylight.
+      writeFileSync(file, '{ "kind": "dark", ')
+      const named = await pollJs(win, `document.querySelector('[data-settings-theme-problems]')?.textContent.includes('check-ink.json') === true`, 10_000)
+      const fellBack = await pollJs(win, `document.documentElement.dataset.theme === 'nocturne' && !document.querySelector('[data-settings-theme-card="check-ink"]')`, 10_000)
+      await screenshot(win, shotDir, 'settings-4c-broken-theme.png')
+
+      rmSync(file, { force: true })
+      const cleared = await pollJs(win, `!document.querySelector('[data-settings-theme-problems]')`, 10_000)
+
+      // Duplicate, through the channel the button uses - not the button, which
+      // would also open a file manager on whoever's desktop this runs on.
+      const copy = await js<{ file: string }>(win, `window.helm.invoke('themes:duplicate', { id: 'graphite' })`)
+      const copyOnDisk = existsSync(copy.file) && copy.file.toLowerCase().startsWith(listing.dir.toLowerCase())
+      const copyParses = copyOnDisk && parseThemeFile(baseName(copy.file), readFileSync(copy.file, 'utf8')).ok
+      const copyListed = await pollJs(win, `document.querySelector('[data-settings-theme-card="graphite-copy"]')`, 10_000)
+      rmSync(copy.file, { force: true })
+
+      await js<void>(win, `window.helm.invoke('settings:write', { themeDark: 'nocturne' }).then(() => undefined)`)
+      await sleep(300)
+
+      Object.assign(steps, { appeared, chosen, paintedFirst, repainted, overlayFollowed, named, fellBack, cleared, copy: copy.file, copyOnDisk, copyParses, copyListed })
+      ok =
+        appeared && chosen && paintedFirst && repainted && overlayFollowed && named && fellBack && cleared && copyOnDisk && copyParses && copyListed
+    }
+
+    checks.push({
+      id: 'S-4c',
+      criterion: 'Your own themes from the themes folder, applied live on save',
+      title: 'A file written into the folder becomes a card, repaints on every save, falls back by name when broken, and Duplicate writes a file that reads back',
+      ok,
+      detail: steps,
+      notes: [
+        'The file is written by this driver with fs, not through Helm, so the',
+        'watcher is what has to notice it. The repaint after the second save is',
+        'asserted with no click in between - that is the whole of "live".'
       ]
     })
   }
@@ -3039,6 +3317,12 @@ export async function runSettingsChecks(
     const cases: { [K in keyof AppSettings]: { good: AppSettings[K]; bad: unknown; why: string } } =
       {
         theme: { good: 'light', bad: 'purple', why: 'not one of the three preferences' },
+        themeDark: { good: 'graphite', bad: 'Graphite', why: 'a theme id is lower-case, like the file name it comes from' },
+        themeLight: { good: 'daylight', bad: '../daylight', why: 'a theme id is a name, never a path' },
+        paneGap: { good: 4, bad: 40, why: 'past twelve pixels the panes stop reading as one window' },
+        cornerRadius: { good: 0, bad: 3.5, why: 'a radius is a whole pixel' },
+        density: { good: 'compact', bad: 'cozy', why: 'not one of the two densities' },
+        accentColor: { good: '#4fc3b4', bad: 'teal', why: 'an accent is #rrggbb, which is what the pane writes' },
         usageDisplay: { good: 'off', bad: 'dollars', why: 'not one of the three modes' },
         scanRoots: {
           good: [fixtures.rootA],

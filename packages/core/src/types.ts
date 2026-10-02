@@ -40,6 +40,16 @@ export {
   type ReachDecision
 } from './browser/reach'
 
+/**
+ * Themes, re-exported for the same reason: the renderer paints the tokens and
+ * the Appearance pane draws every theme's swatch, both in the browser bundle.
+ * `theme/themes.ts` and `theme/color.ts` import nothing but types and each
+ * other. Reading theme files off disk is `theme/load.ts`, which only the
+ * package root reaches.
+ */
+export * from './theme/color'
+export * from './theme/themes'
+
 export {
   frontmatterField,
   parseFrontmatter,
@@ -1084,6 +1094,23 @@ export type ThemePreference = 'system' | 'light' | 'dark'
 /** The three, as a value, so a validator and a control can share one list. */
 export const THEME_PREFERENCES: readonly ThemePreference[] = ['system', 'light', 'dark']
 
+/**
+ * The canvas showing between islands, in px. Two is the least that still reads
+ * as a gap between two hairlines rather than one thick one; past twelve the
+ * panes stop reading as one window.
+ */
+export const PANE_GAP = { min: 2, max: 12, default: 6 } as const
+
+/**
+ * Panel corners, in px. Controls and popups are always one more (DESIGN.md
+ * "Shape"), so this is the one number that moves every corner in the app.
+ */
+export const CORNER_RADIUS = { min: 0, max: 8, default: 3 } as const
+
+/** How tightly lists and strips are packed. Text size never changes with it. */
+export const DENSITY_MODES = ['comfortable', 'compact'] as const
+export type Density = (typeof DENSITY_MODES)[number]
+
 /** xterm's three cursor shapes, restated here so a validator and a control can
  * share one list without either of them importing xterm. */
 export const TERMINAL_CURSOR_STYLES = ['block', 'underline', 'bar'] as const
@@ -1302,7 +1329,23 @@ export function withProjectPinned(
  * step needed to persist it.
  */
 export interface AppSettings {
+  /**
+   * Which slot is on screen: `dark` and `light` always, `system` whichever one
+   * Windows is in. The name predates named themes and is kept because the row
+   * it reads is every existing install's choice.
+   */
   theme: ThemePreference
+  /** The theme the dark slot shows - a built-in id or a user theme's. */
+  themeDark: string
+  /** The theme the light slot shows. */
+  themeLight: string
+  /** Px of canvas between islands. Bounded by `PANE_GAP`. */
+  paneGap: number
+  /** Px of panel corner. Bounded by `CORNER_RADIUS`. */
+  cornerRadius: number
+  density: Density
+  /** `#rrggbb` fitted to the theme by `deriveAccent`, or null for the theme's own. */
+  accentColor: string | null
   /** Directories the launcher scans. Empty means "not set up yet". */
   scanRoots: string[]
   /**
@@ -1715,6 +1758,12 @@ export const BROWSER_PROJECT_URLS_MAX = 200
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
+  themeDark: 'nocturne',
+  themeLight: 'daylight',
+  paneGap: PANE_GAP.default,
+  cornerRadius: CORNER_RADIUS.default,
+  density: 'comfortable',
+  accentColor: null,
   scanRoots: [],
   pinnedProjects: [],
   windowBounds: null,

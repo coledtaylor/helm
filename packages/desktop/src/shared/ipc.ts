@@ -53,7 +53,8 @@ import type {
   TemplateListing,
   TemplatePreview,
   TemplateWriteResult,
-  ThemePreference,
+  ThemeListing,
+  ThemeState,
   UsageSnapshot,
   WriteConfigRequest,
   WriteConfigResult
@@ -746,6 +747,24 @@ export interface IpcRequests {
 
   /** What `theme: 'system'` currently resolves to on this machine. */
   'theme:resolved': { request: void; response: ResolvedTheme }
+  /**
+   * The theme on screen, every token resolved. The renderer asks for it before
+   * its first paint, so a window opening in Daylight never shows a frame of
+   * Nocturne; after that, `theme:changed` carries the same shape.
+   */
+  'theme:current': { request: void; response: ThemeState }
+  /** Built-in and user themes, and the files that could not be read as one. */
+  'themes:list': { request: void; response: ThemeListing }
+  /**
+   * Opens the themes directory in the file manager, creating it (and its
+   * README) first if somebody deleted it.
+   */
+  'themes:openFolder': { request: void; response: void }
+  /**
+   * Writes a complete copy of a theme into the themes directory and shows it
+   * in the file manager. The answer is the new file's path.
+   */
+  'themes:duplicate': { request: { id: string }; response: { file: string } }
 
   /** Open a path in the OS file manager. */
   'shell:showItem': { request: { path: string }; response: void }
@@ -1217,6 +1236,7 @@ export interface IpcRequests {
   'browser:console': { request: { id: number }; response: BrowserConsoleEntry[] }
 }
 
+/** The kind of theme on screen - what `.dark` on `<html>` says. */
 export type ResolvedTheme = 'light' | 'dark'
 
 // ---------------------------------------------------------------------------
@@ -1297,7 +1317,9 @@ export interface IpcEvents {
   /** The whole list after any write, so every surface showing profiles agrees
    * without each of them refetching. */
   'profiles:changed': Profile[]
-  'theme:changed': { preference: ThemePreference; resolved: ResolvedTheme }
+  'theme:changed': ThemeState
+  /** A user theme file was added, changed or removed. The whole listing. */
+  'themes:changed': ThemeListing
   /**
    * The session index moved. Pushed rather than polled: the file is shared
    * with every `claude` on the machine, so the change that matters most is the
@@ -1509,6 +1531,10 @@ export const REQUEST_CHANNELS = Object.keys({
   'template:fromFolder': true,
   'update:check': true,
   'theme:resolved': true,
+  'theme:current': true,
+  'themes:list': true,
+  'themes:openFolder': true,
+  'themes:duplicate': true,
   'shell:showItem': true,
   'session:start': true,
   'session:close': true,
@@ -1615,6 +1641,7 @@ export const EVENT_CHANNELS = Object.keys({
   'settings:changed': true,
   'profiles:changed': true,
   'theme:changed': true,
+  'themes:changed': true,
   'history:changed': true,
   'archive:changed': true,
   'usage:changed': true,

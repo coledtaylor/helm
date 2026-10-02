@@ -25,8 +25,8 @@ export interface AppShellProps {
  * for a terminal without touching this file.
  *
  * Islands on a canvas (DESIGN.md): the frame paints the sunken canvas and
- * keeps 8px gutters between the sidebar island, the pane, and the window
- * edges. Panes draw their own island chrome - this component owns only the
+ * keeps gutters between the sidebar island, the pane, and the window edges -
+ * `gap-gutter`, which is the pane-gap setting. Panes draw their own island chrome - this component owns only the
  * water between them. The status bar sits directly on the canvas.
  *
  * `min-h-0` on the scrolling column is load-bearing: a flex child defaults to
@@ -44,7 +44,7 @@ export function AppShell({
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-bg text-fg">
       <TitleBar>{titleActions}</TitleBar>
-      <div className="flex min-h-0 flex-1 gap-2 px-2 pt-0.5">
+      <div className="flex min-h-0 flex-1 gap-gutter px-gutter pt-0.5">
         {sidebar}
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           {banner}

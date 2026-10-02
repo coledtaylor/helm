@@ -587,7 +587,7 @@ function Row({
         session.firstPrompt.trim() === '' ? '' : `\n\nFirst prompt: ${session.firstPrompt}`
       }`}
       className={cn(
-        'session-row relative flex w-full flex-col gap-0.5 rounded-well py-1.5 pr-2 pl-4 text-left',
+        'session-row relative flex w-full flex-col gap-0.5 rounded-raised py-row pr-2 pl-4 text-left',
         'transition-colors',
         selected ? ROW_SELECTED : 'hover:bg-hover'
       )}
@@ -656,7 +656,7 @@ function Highlight({ text, needle }: { text: string; needle: string }): JSX.Elem
   while (found >= 0) {
     if (found > at) parts.push(text.slice(at, found))
     parts.push(
-      <mark key={key++} className="rounded-[2px] bg-accent/25 px-px text-inherit">
+      <mark key={key++} className="rounded-xs bg-accent/25 px-px text-inherit">
         {text.slice(found, found + term.length)}
       </mark>
     )
@@ -690,7 +690,7 @@ function Segment({
       {...rest}
       aria-pressed={active}
       className={cn(
-        'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
+        'rounded-raised px-2.5 py-0.5 text-[11px] transition-colors',
         active
           ? SEGMENT_ON
           : 'text-fg-muted hover:text-fg'

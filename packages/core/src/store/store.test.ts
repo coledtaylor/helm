@@ -111,6 +111,12 @@ describe('settings', () => {
   it('round-trips every value type in AppSettings', () => {
     const written = {
       theme: 'light',
+      themeDark: 'graphite',
+      themeLight: 'my-theme',
+      paneGap: 4,
+      cornerRadius: 0,
+      density: 'compact',
+      accentColor: '#4fc3b4',
       scanRoots: [dir, join(dir, 'other')],
       pinnedProjects: [join(dir, 'alpha'), join(dir, 'beta')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
@@ -215,6 +221,36 @@ describe('settings validation', () => {
       key: 'theme',
       good: ['system', 'light', 'dark'],
       bad: ['purple', 'Dark', '', null, 1, ['dark'], { theme: 'dark' }]
+    },
+    {
+      key: 'themeDark',
+      good: ['nocturne', 'graphite', 'my-theme', 'a', 'x'.repeat(48)],
+      bad: ['Nocturne', 'my theme', '-lead', 'trail-', 'two--dashes', '', 'x'.repeat(49), null, 1]
+    },
+    {
+      key: 'themeLight',
+      good: ['daylight', 'solarized-light-2'],
+      bad: ['../daylight', 'day_light', null]
+    },
+    {
+      key: 'paneGap',
+      good: [2, 6, 12],
+      bad: [1, 13, 6.5, '6', null]
+    },
+    {
+      key: 'cornerRadius',
+      good: [0, 3, 8],
+      bad: [-1, 9, 3.5, '3px', null]
+    },
+    {
+      key: 'density',
+      good: ['comfortable', 'compact'],
+      bad: ['Compact', 'cozy', null, 0]
+    },
+    {
+      key: 'accentColor',
+      good: [null, '#6ca6f5', '#000000'],
+      bad: ['#6CA6F5', '#6ca6f', '#6ca6f5ff', 'rgb(1 2 3)', 'blue', '', 6, {}]
     },
     {
       key: 'usageDisplay',
@@ -650,6 +686,12 @@ describe('settings validation', () => {
     // whole object back would be rejected for values it never touched.
     writeSettings(store, {
       theme: 'dark',
+      themeDark: 'graphite',
+      themeLight: 'daylight',
+      paneGap: 12,
+      cornerRadius: 8,
+      density: 'comfortable',
+      accentColor: null,
       scanRoots: [dir],
       pinnedProjects: [join(dir, 'alpha')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
@@ -694,6 +736,12 @@ describe('settings validation', () => {
 /** What the round-trip test above expects, spelled out away from the writer. */
 const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   theme: 'dark',
+  themeDark: 'graphite',
+  themeLight: 'daylight',
+  paneGap: 12,
+  cornerRadius: 8,
+  density: 'comfortable',
+  accentColor: null,
   scanRoots: [dir],
   pinnedProjects: [join(dir, 'alpha')],
   windowBounds: { width: 1280, height: 820, x: 40, y: 60 },

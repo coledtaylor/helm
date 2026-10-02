@@ -40,7 +40,7 @@ export function ThemeToggle({ value, onChange }: ThemeToggleProps): JSX.Element 
           title={label}
           onClick={() => onChange(option)}
           className={cn(
-            'grid size-6 place-items-center rounded-[5px] transition-colors',
+            'grid size-6 place-items-center rounded-raised transition-colors',
             value === option
               ? SEGMENT_ON
               : 'text-fg-subtle hover:text-fg'

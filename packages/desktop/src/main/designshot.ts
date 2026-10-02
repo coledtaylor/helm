@@ -3,6 +3,7 @@ import {
   readPull,
   replaceRepoPulls,
   writePullDetail,
+  type AppSettings,
   type PullDetail,
   type PullSummary,
   type Store
@@ -205,6 +206,89 @@ const THEME_LABEL = {
   light: 'Light theme',
   dark: 'Dark theme'
 } as const
+
+/** A settings patch, written the way the panes write one. */
+async function writeAppSettings(win: BrowserWindow, patch: Partial<AppSettings>): Promise<void> {
+  await js<void>(
+    win,
+    `window.helm.invoke('settings:write', ${JSON.stringify(patch)}).then(() => undefined)`
+  ).catch(() => undefined)
+}
+
+/**
+ * Graphite, and the shape settings at their far ends.
+ *
+ * The two-theme walk above reaches Nocturne and Daylight through the title
+ * bar's toggle. Graphite is the third built-in and the one that inverts the
+ * elevation - canvas lighter than the islands - so it is the theme where a
+ * component that assumed "islands are lighter than the canvas" shows it. Three
+ * views rather than the whole walk: the welcome canvas, a project, and the
+ * Appearance group.
+ *
+ * Then one frame at the opposite corner of every shape setting - the widest
+ * gap, the roundest corners, compact density - because a gutter or a radius
+ * that escaped the knob is invisible at the defaults and obvious at the ends.
+ *
+ * Everything written is put back from what it was before, like the theme.
+ */
+async function shootThirdTheme(
+  win: BrowserWindow,
+  outDir: string,
+  settings: AppSettings,
+  files: string[]
+): Promise<void> {
+  const before: Partial<AppSettings> = {
+    theme: settings.theme,
+    themeDark: settings.themeDark,
+    paneGap: settings.paneGap,
+    cornerRadius: settings.cornerRadius,
+    density: settings.density,
+    accentColor: settings.accentColor
+  }
+  await writeAppSettings(win, { theme: 'dark', themeDark: 'graphite' })
+  const painted = await pollJs(win, `document.documentElement.dataset.theme === 'graphite'`, 5_000)
+  if (!painted) console.error('design-shot: graphite never reached <html> - no graphite shots')
+  else {
+    const stuck = await closeAllTabs(win)
+    if (stuck > 0) console.error(`design-shot: ${String(stuck)} tab(s) would not close (graphite)`)
+    await sleep(400)
+    await drawn(win)
+    files.push((await screenshot(win, outDir, 'welcome-graphite.png')).file)
+
+    for (const view of VIEWS.filter((v) => v.name === 'project' || v.name === 'settings')) {
+      if (view.selector !== null && !(await click(win, view.selector))) continue
+      if (view.anchor !== null && !(await pollJs(win, `document.querySelector('${view.anchor}')`, 10_000))) {
+        console.error(`design-shot: ${view.name} (graphite) never showed ${view.anchor}`)
+        continue
+      }
+      await sleep(400)
+      if (view.name === 'settings') {
+        await js<void>(
+          win,
+          `(() => { const el = document.querySelector('[data-settings-group="appearance"]');
+            if (el) el.scrollIntoView({ block: 'start' }) })()`
+        )
+        await sleep(400)
+      }
+      await drawn(win)
+      const name = view.name === 'settings' ? 'settings-appearance' : view.name
+      files.push((await screenshot(win, outDir, `${name}-graphite.png`)).file)
+    }
+
+    await writeAppSettings(win, { paneGap: 12, cornerRadius: 8, density: 'compact', accentColor: '#d9a066' })
+    const reshaped = await pollJs(win, `document.documentElement.dataset.density === 'compact'`, 5_000)
+    if (!reshaped) console.error('design-shot: the shape settings never reached <html>')
+    else {
+      const project = VIEWS.find((v) => v.name === 'project')
+      if (project?.selector) await click(win, project.selector)
+      await sleep(500)
+      await drawn(win)
+      files.push((await screenshot(win, outDir, 'shape-extremes-graphite.png')).file)
+    }
+  }
+  await writeAppSettings(win, before)
+  await sleep(300)
+}
 
 /** The ignore list, written the way the settings pane writes it. */
 async function writeIgnored(win: BrowserWindow, slugs: string[]): Promise<void> {
@@ -2074,6 +2158,18 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
       }
     }
 
+    // The Appearance group: the theme cards draw every theme in its own
+    // colours inside whichever theme is on screen, which is the one place in
+    // the app where two palettes share a frame and the one most likely to
+    // look wrong in only one of them.
+    await js<void>(
+      win,
+      `(() => { const el = document.querySelector('[data-settings-group="appearance"]');
+        if (el) el.scrollIntoView({ block: 'start' }) })()`
+    )
+    await sleep(400)
+    files.push((await screenshot(win, outDir, `settings-appearance-${theme}.png`)).file)
+
     // The Updates group, which is below the fold too and is the one group whose
     // content is a *sentence* rather than a row of controls. What a thumbnail
     // has to answer for it is whether that sentence sits in the same rhythm as
@@ -2142,6 +2238,8 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
     await sleep(400)
     files.push((await screenshot(win, outDir, `settings-end-${theme}.png`)).file)
   }
+
+  if (want.has('views')) await shootThirdTheme(win, outDir, ctx.services.settings, files)
 
   await click(win, `button[aria-label="${THEME_LABEL[before]}"]`)
   await sleep(200)

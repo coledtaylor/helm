@@ -472,7 +472,7 @@ export function PullsPane({
                       aria-pressed={group === mode.id}
                       onClick={() => setGroup(mode.id)}
                       className={cn(
-                        'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
+                        'rounded-raised px-2.5 py-0.5 text-[11px] transition-colors',
                         group === mode.id ? SEGMENT_ON : 'text-fg-muted hover:text-fg'
                       )}
                     >

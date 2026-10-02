@@ -336,7 +336,7 @@ export function ContentViewer({
                 onClick={() => onViewChange(option)}
                 title={VIEW_RULE[option]}
                 className={cn(
-                  'min-w-0 truncate rounded-[5px] px-1.5 py-0.5 text-[11px] transition-colors',
+                  'min-w-0 truncate rounded-raised px-1.5 py-0.5 text-[11px] transition-colors',
                   '@[560px]:px-2.5',
                   view === option ? SEGMENT_ON : 'text-fg-muted hover:text-fg'
                 )}

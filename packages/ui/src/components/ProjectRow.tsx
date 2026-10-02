@@ -82,7 +82,7 @@ export function ProjectRow({
         title={project.path}
         aria-current={selected ? 'true' : undefined}
         className={cn(
-          'relative flex w-full items-start gap-2 rounded-well py-1.5 pl-2.5 text-left transition-colors',
+          'relative flex w-full items-start gap-2 rounded-raised py-row pl-2.5 text-left transition-colors',
           // The star's gutter, held open whether or not the star is showing.
           // Reserved rather than overlaid: a control that appears on hover and
           // pushes the name it is beside is a row that moves under the pointer,
@@ -187,7 +187,7 @@ export function MissingProjectRow({
   return (
     <div
       className={cn(
-        'group relative flex w-full items-start gap-2 rounded-well py-1.5 pl-2.5',
+        'group relative flex w-full items-start gap-2 rounded-raised py-row pl-2.5',
         onTogglePin ? 'pr-7' : 'pr-2'
       )}
       title={path}
@@ -254,7 +254,7 @@ function PinButton({
       aria-label={pinned ? `Unpin ${name}` : `Pin ${name}`}
       onClick={onToggle}
       className={cn(
-        'absolute top-1/2 right-1 grid size-5 -translate-y-1/2 place-items-center rounded-[5px]',
+        'absolute top-1/2 right-1 grid size-5 -translate-y-1/2 place-items-center rounded-raised',
         'transition hover:bg-hover',
         pinned ? 'text-accent' : 'text-fg-subtle hover:text-fg',
         !always && 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'

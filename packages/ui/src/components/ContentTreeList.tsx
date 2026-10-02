@@ -209,7 +209,7 @@ function TreeRow({
       }
       style={{ paddingLeft: `${String(depth * INDENT + 8)}px` }}
       className={cn(
-        'relative flex w-full items-center gap-1.5 rounded-well py-[3px] pr-2 text-left transition-colors',
+        'relative flex w-full items-center gap-1.5 rounded-raised py-[calc(var(--helm-row-y)/2)] pr-2 text-left transition-colors',
         selected ? ROW_SELECTED : 'hover:bg-hover'
       )}
     >

@@ -527,7 +527,7 @@ function Header({
                 aria-pressed={mode === option.id}
                 onClick={() => onModeChange(option.id)}
                 className={cn(
-                  'flex items-center gap-1.5 rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
+                  'flex items-center gap-1.5 rounded-raised px-2.5 py-0.5 text-[11px] transition-colors',
                   mode === option.id
                     ? SEGMENT_ON
                     : 'text-fg-muted hover:text-fg'

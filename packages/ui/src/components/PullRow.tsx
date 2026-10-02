@@ -99,7 +99,7 @@ export function PullRow({
           : `${pull.title} - updated ${formatMoment(pull.updatedAt)}`
       }
       className={cn(
-        'flex w-full flex-col gap-0.5 rounded-well px-2 py-1.5 text-left transition-colors',
+        'flex w-full flex-col gap-0.5 rounded-raised px-2 py-row text-left transition-colors',
         onOpen === undefined ? 'cursor-default' : 'hover:bg-hover'
       )}
     >

@@ -1,8 +1,14 @@
 import type { JSX, ReactNode } from 'react'
 import { useState } from 'react'
 import {
+  ACCENT_SWATCHES,
   offerableUsageModes,
   CONTENT_WRAP_INDENT,
+  CORNER_RADIUS,
+  DEFAULT_THEME_ID,
+  DENSITY_MODES,
+  deriveAccent,
+  PANE_GAP,
   COST_MODE_UNAVAILABLE,
   DEFAULT_PR_REVIEW_PROMPT,
   EFFORT_LEVELS,
@@ -27,7 +33,12 @@ import {
   type PrCheckoutMode,
   type PullRepo,
   type TerminalCursorStyle,
-  type ThemePreference,
+  type Density,
+  type ThemeDefinition,
+  type ThemeKind,
+  type ThemeListing,
+  type ThemeState,
+  type ThemeTokens,
   type UsageDisplayMode
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
@@ -36,7 +47,6 @@ import { formatAge, formatBytes } from '../lib/time'
 import { Checkbox } from './Checkbox'
 import { CaretIcon, CheckIcon, CloseIcon, RefreshIcon, WarnIcon } from './icons'
 import type { SetupClaudeStatus } from './SetupPane'
-import { ThemeToggle } from './ThemeToggle'
 
 /**
  * Helm's own settings.
@@ -98,8 +108,17 @@ export interface SettingsPaneProps {
   pinnedProjects: string[]
   onUnpinProject: (path: string) => void
 
-  theme: ThemePreference
-  onThemeChange: (theme: ThemePreference) => void
+  /** Every setting the Appearance group writes. */
+  appearance: AppearanceSettings
+  onAppearanceChange: (patch: Partial<AppearanceSettings>) => void
+  /** Built-in and user themes. Null until the first read lands. */
+  themes: ThemeListing | null
+  /** The theme on screen, as the main process resolved it. Null until it lands. */
+  themeState: ThemeState | null
+  /** Opens the user themes folder, creating it if it was deleted. */
+  onOpenThemesFolder: () => void
+  /** Writes a complete copy of a theme into that folder and shows it. */
+  onDuplicateTheme: (id: string) => void
 
   usageDisplay: UsageDisplayMode
   updateCheck: boolean
@@ -367,8 +386,12 @@ export function SettingsPane({
   onRemoveRoot,
   pinnedProjects,
   onUnpinProject,
-  theme,
-  onThemeChange,
+  appearance,
+  onAppearanceChange,
+  themes,
+  themeState,
+  onOpenThemesFolder,
+  onDuplicateTheme,
   usageDisplay,
   updateCheck,
   onUpdateCheckChange,
@@ -629,18 +652,16 @@ export function SettingsPane({
           onReveal={onRevealTemplates}
         />
 
-        <Group name="appearance" title="Appearance">
-          <Row
-            label="Theme"
-            hint="System follows Windows. The same three-way switch sits in the title bar."
-          >
-            <span data-settings-theme={theme}>
-              <ThemeToggle value={theme} onChange={onThemeChange} />
-            </span>
-          </Row>
+        <AppearanceGroup
+          settings={appearance}
+          onChange={onAppearanceChange}
+          themes={themes}
+          state={themeState}
+          onOpenFolder={onOpenThemesFolder}
+          onDuplicate={onDuplicateTheme}
+        />
 
-          <Divider />
-
+        <Group name="statusbar" title="Status bar">
           <Row
             label="Usage in the status bar"
             hint={
@@ -667,7 +688,7 @@ export function SettingsPane({
                     title={available ? `Show ${USAGE_LABEL[mode].toLowerCase()}` : COST_MODE_UNAVAILABLE}
                     onClick={() => onUsageDisplayChange(mode)}
                     className={cn(
-                      'rounded-[5px] px-2.5 py-1 text-[11.5px] transition-colors',
+                      'rounded-raised px-2.5 py-1 text-[11.5px] transition-colors',
                       usageDisplay === mode
                         ? SEGMENT_ON
                         : 'text-fg-subtle hover:text-fg',
@@ -746,6 +767,394 @@ export function SettingsPane({
         />
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Appearance
+// ---------------------------------------------------------------------------
+
+export type AppearanceSettings = Pick<
+  AppSettings,
+  'theme' | 'themeDark' | 'themeLight' | 'paneGap' | 'cornerRadius' | 'density' | 'accentColor'
+>
+
+const DENSITY_LABEL: Record<Density, string> = { comfortable: 'Comfortable', compact: 'Compact' }
+
+/**
+ * Themes, shape and accent.
+ *
+ * Under the cards are **two slots and a switch**, not one choice: `themeDark`
+ * and `themeLight` each name a theme, and `theme` says which slot is on
+ * screen - one of them always, or whichever Windows is in. That is what lets
+ * "Follow Windows" mean something once there is more than one theme of a kind,
+ * and it is why the title bar's three-way toggle still works unchanged.
+ *
+ * So a card writes its **own kind's** slot. Following Windows, that is all it
+ * does, and a card of the kind Windows is not in today is recorded for later -
+ * which is why, while following, the two cards in the slots carry a tag saying
+ * when each one shows: a click that changed nothing on screen still visibly
+ * moved something. Not following, a card also pins the preference to its
+ * kind, so whatever was clicked is what is on screen.
+ *
+ * The selected ring is on the theme the main process says is showing, never on
+ * this pane's guess at it - a slot naming a deleted file resolves to a
+ * built-in, and the ring says so.
+ */
+function AppearanceGroup({
+  settings,
+  onChange,
+  themes,
+  state,
+  onOpenFolder,
+  onDuplicate
+}: {
+  settings: AppearanceSettings
+  onChange: (patch: Partial<AppearanceSettings>) => void
+  themes: ThemeListing | null
+  state: ThemeState | null
+  onOpenFolder: () => void
+  onDuplicate: (id: string) => void
+}): JSX.Element {
+  const all = themes?.themes ?? []
+  const follow = settings.theme === 'system'
+  const showing = state?.applied ?? null
+
+  // What each slot actually shows: its theme, or the built-in standing in for
+  // one that is not there - the same rule `resolveTheme` applies.
+  const slotTheme = (kind: ThemeKind): ThemeDefinition | undefined => {
+    const wanted = kind === 'dark' ? settings.themeDark : settings.themeLight
+    return all.find((t) => t.id === wanted) ?? all.find((t) => t.id === DEFAULT_THEME_ID[kind])
+  }
+  const dark = slotTheme('dark')
+  const light = slotTheme('light')
+
+  const pick = (theme: ThemeDefinition): void => {
+    const slot = theme.kind === 'dark' ? { themeDark: theme.id } : { themeLight: theme.id }
+    onChange(follow ? slot : { ...slot, theme: theme.kind })
+  }
+
+  const problems = [
+    ...(themes?.errors ?? []),
+    ...all.flatMap((t) => t.problems.map((message) => ({ file: t.file ?? t.id, message })))
+  ]
+
+  return (
+    <Group
+      name="appearance"
+      title="Appearance"
+      hint="Themes change Helm's chrome. Terminals keep their own colours, so Claude Code renders the way it was measured."
+    >
+      <div
+        role="radiogroup"
+        aria-label="Theme"
+        data-settings-theme={settings.theme}
+        className="grid grid-cols-[repeat(auto-fill,minmax(164px,1fr))] gap-2.5 pt-1"
+      >
+        {all.map((theme) => (
+          <ThemeCard
+            key={theme.id}
+            theme={theme}
+            showing={showing?.id === theme.id}
+            slot={
+              !follow ? null : theme.id === dark?.id ? 'dark' : theme.id === light?.id ? 'light' : null
+            }
+            onPick={() => pick(theme)}
+          />
+        ))}
+      </div>
+
+      <label className="mt-3 flex items-center gap-2.5 text-[12.5px] text-fg-muted">
+        <Checkbox
+          checked={follow}
+          // Turning it off pins whatever is showing now, so the click changes
+          // nothing on screen - it only stops the next Windows change moving it.
+          onChange={() => onChange({ theme: follow ? (state?.resolved ?? 'dark') : 'system' })}
+          label="Follow Windows"
+          mark="data-settings-theme-follow"
+        />
+        <span>
+          Follow Windows: {light?.name ?? 'the light theme'} when Windows is light,{' '}
+          {dark?.name ?? 'the dark theme'} when it is dark
+        </span>
+      </label>
+
+      {problems.length > 0 && (
+        <ul
+          data-settings-theme-problems={problems.length}
+          className="mt-3 space-y-1 rounded-raised border border-warn/30 bg-warn/10 px-3 py-2 text-[11.5px] leading-[1.5]"
+        >
+          {problems.map((problem, index) => (
+            <li key={`${problem.file}:${String(index)}`} className="flex gap-2">
+              <span className="shrink-0 font-mono text-[11px] text-warn">{problem.file}</span>
+              <span className="min-w-0 text-fg-muted">{problem.message}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-raised border border-border bg-surface px-3.5 py-3">
+        <div className="min-w-[220px] flex-1">
+          <p className="text-[12.5px] text-fg">Your own themes</p>
+          <p className="mt-0.5 text-[11px] leading-[1.5] text-fg-subtle">
+            One JSON file of colours per theme. Saving one repaints Helm.
+          </p>
+          {/* Its own line, truncated from the left of nothing: a path wrapped
+              mid-sentence breaks at whichever backslash the width lands on. */}
+          <p
+            data-settings-themes-dir
+            title={themes?.dir}
+            className="mt-1 truncate font-mono text-[10.5px] text-fg-muted select-text"
+          >
+            {themes?.dir ?? NOTHING}
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <Action
+            data-settings-theme-duplicate={showing?.id ?? ''}
+            disabled={showing === null}
+            onClick={() => {
+              if (showing !== null) onDuplicate(showing.id)
+            }}
+          >
+            Duplicate {showing?.name ?? 'theme'}
+          </Action>
+          <Action data-settings-themes-open onClick={onOpenFolder}>
+            Open folder
+          </Action>
+        </div>
+      </div>
+
+      <div className="mt-2">
+        <Row
+          label="Space between panes"
+          hint={`Pixels of canvas between islands, ${String(PANE_GAP.min)} to ${String(PANE_GAP.max)}.`}
+        >
+          <Stepper
+            value={settings.paneGap}
+            min={PANE_GAP.min}
+            max={PANE_GAP.max}
+            label="Space between panes"
+            data-settings-gap={String(settings.paneGap)}
+            onChange={(paneGap) => onChange({ paneGap })}
+          />
+        </Row>
+
+        <Divider />
+
+        <Row label="Corner radius" hint="Panels take it; buttons, fields and popups are one pixel rounder.">
+          <Stepper
+            value={settings.cornerRadius}
+            min={CORNER_RADIUS.min}
+            max={CORNER_RADIUS.max}
+            label="Corner radius"
+            data-settings-radius={String(settings.cornerRadius)}
+            onChange={(cornerRadius) => onChange({ cornerRadius })}
+          />
+        </Row>
+
+        <Divider />
+
+        <Row label="Density" hint="How tightly lists and the tab strip pack. Text keeps its size.">
+          <div
+            role="radiogroup"
+            aria-label="Density"
+            className="flex items-center gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
+          >
+            {DENSITY_MODES.map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                role="radio"
+                data-settings-density={mode}
+                aria-checked={settings.density === mode}
+                onClick={() => onChange({ density: mode })}
+                className={cn(
+                  'rounded-raised px-2.5 py-1 text-[11.5px] transition-colors',
+                  settings.density === mode ? SEGMENT_ON : 'text-fg-subtle hover:text-fg'
+                )}
+              >
+                {DENSITY_LABEL[mode]}
+              </button>
+            ))}
+          </div>
+        </Row>
+
+        <Divider />
+
+        <Row
+          label="Accent"
+          hint="The theme's own, or one of these - each fitted to the theme so it stays readable on it."
+        >
+          <div role="radiogroup" aria-label="Accent" className="flex items-center gap-2.5 px-1">
+            <AccentSwatch
+              name={`${showing?.name ?? 'The theme'}'s own`}
+              mark="theme"
+              color={state === null ? null : themeAccent(all, state)}
+              selected={settings.accentColor === null}
+              onPick={() => onChange({ accentColor: null })}
+            />
+            {ACCENT_SWATCHES.map((swatch) => (
+              <AccentSwatch
+                key={swatch.hex}
+                name={swatch.name}
+                mark={swatch.hex}
+                color={
+                  showing === null
+                    ? swatch.hex
+                    : deriveAccent(showing.tokens, showing.kind, swatch.hex).accent
+                }
+                selected={settings.accentColor === swatch.hex}
+                onPick={() => onChange({ accentColor: swatch.hex })}
+              />
+            ))}
+          </div>
+        </Row>
+      </div>
+    </Group>
+  )
+}
+
+/**
+ * The accent the theme on screen has of its own. Read from the listing rather
+ * than from `state`, because with a chosen accent `state` carries the chosen
+ * one - and this swatch is the way back to the other.
+ */
+function themeAccent(all: ThemeDefinition[], state: ThemeState): string {
+  return all.find((t) => t.id === state.applied.id)?.tokens.accent ?? state.applied.tokens.accent
+}
+
+function AccentSwatch({
+  name,
+  mark,
+  color,
+  selected,
+  onPick
+}: {
+  name: string
+  mark: string
+  color: string | null
+  selected: boolean
+  onPick: () => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      aria-label={name}
+      title={name}
+      data-settings-accent={mark}
+      onClick={onPick}
+      // A theme colour, so an inline style - the value is data the main
+      // process parsed and re-spelled, never a literal in this file.
+      style={color === null ? undefined : { backgroundColor: color }}
+      className={cn(
+        'size-5 shrink-0 rounded-full ring-offset-2 ring-offset-surface-raised transition-shadow',
+        selected ? 'ring-[1.5px] ring-fg' : 'ring-1 ring-transparent hover:ring-border-strong'
+      )}
+    />
+  )
+}
+
+/**
+ * One theme as a card: a miniature of the window in that theme's own colours,
+ * its name and kind, and - while following Windows - which slot it fills.
+ */
+function ThemeCard({
+  theme,
+  showing,
+  slot,
+  onPick
+}: {
+  theme: ThemeDefinition
+  showing: boolean
+  slot: ThemeKind | null
+  onPick: () => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={showing}
+      data-settings-theme-card={theme.id}
+      title={theme.file === null ? `${theme.name}, built in` : `${theme.name}, from ${theme.file}`}
+      onClick={onPick}
+      className={cn(
+        'min-w-0 rounded-raised border bg-surface p-1.5 text-left transition-colors',
+        showing
+          ? 'border-accent ring-1 ring-accent'
+          : 'border-border hover:border-border-strong hover:bg-hover'
+      )}
+    >
+      <ThemeSwatch tokens={theme.tokens} />
+      <span className="flex min-w-0 items-center gap-1.5 px-1 pt-2 pb-0.5">
+        <span className="truncate text-[12.5px] font-medium text-fg">{theme.name}</span>
+        <span className="shrink-0 text-[11px] text-fg-subtle">
+          {theme.kind === 'dark' ? 'Dark' : 'Light'}
+        </span>
+        <span className="flex-1" />
+        {slot !== null && (
+          <span
+            data-settings-theme-slot={slot}
+            className="shrink-0 rounded-raised border border-border px-1 text-[10px] leading-[15px] text-fg-muted"
+          >
+            when {slot}
+          </span>
+        )}
+        {showing && <CheckIcon width={12} height={12} className="shrink-0 text-accent-text" />}
+      </span>
+    </button>
+  )
+}
+
+/**
+ * The window, small: canvas, rail, sidebar island and two session panes whose
+ * bodies are the terminal's fixed ground - because that is what every theme
+ * actually looks like with sessions open. Inline colours, from the theme's own
+ * parsed tokens; the terminal is the one token the stylesheet owns.
+ */
+function ThemeSwatch({ tokens }: { tokens: ThemeTokens }): JSX.Element {
+  const island = { backgroundColor: tokens.surface, borderColor: tokens['border-strong'] }
+  const bar = (width: string, color: string): JSX.Element => (
+    <span className="h-[3px] rounded-full" style={{ width, backgroundColor: color }} />
+  )
+  return (
+    <span
+      aria-hidden
+      className="flex h-[78px] gap-[3px] overflow-hidden rounded-raised p-[5px]"
+      style={{ backgroundColor: tokens.bg }}
+    >
+      <span className="flex w-[6px] shrink-0 flex-col gap-[3px] pt-px">
+        <span className="h-[6px] rounded-xs" style={{ backgroundColor: tokens.accent }} />
+        <span className="h-[6px] rounded-xs" style={{ backgroundColor: tokens['border-strong'] }} />
+        <span className="h-[6px] rounded-xs" style={{ backgroundColor: tokens['border-strong'] }} />
+      </span>
+      <span
+        className="flex w-[36px] shrink-0 flex-col gap-[4px] rounded-xs border px-[3px] py-[5px]"
+        style={island}
+      >
+        {bar('70%', tokens['fg-subtle'])}
+        {bar('90%', tokens.accent)}
+        {bar('60%', tokens['fg-subtle'])}
+        {bar('80%', tokens['fg-subtle'])}
+      </span>
+      {[1, 0.8].map((grow) => (
+        <span
+          key={grow}
+          className="flex min-w-0 flex-col overflow-hidden rounded-xs border"
+          style={{ ...island, flexGrow: grow, flexBasis: 0 }}
+        >
+          <span
+            className="flex h-[10px] shrink-0 items-center px-[3px]"
+            style={{ borderBottom: `1px solid ${tokens.border}` }}
+          >
+            <span className="h-[4px] w-[18px] rounded-xs" style={{ backgroundColor: tokens.active }} />
+          </span>
+          <span className="flex-1 bg-terminal" />
+        </span>
+      ))}
+    </span>
   )
 }
 
@@ -1931,7 +2340,7 @@ function TerminalGroup({
               aria-checked={terminal.terminalCursorStyle === style}
               onClick={() => onChange({ terminalCursorStyle: style })}
               className={cn(
-                'rounded-[5px] px-2.5 py-1 text-[11.5px] transition-colors',
+                'rounded-raised px-2.5 py-1 text-[11.5px] transition-colors',
                 terminal.terminalCursorStyle === style
                   ? SEGMENT_ON
                   : 'text-fg-subtle hover:text-fg'
@@ -2407,7 +2816,7 @@ function StepButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'grid size-6 place-items-center rounded-[5px] text-[13px] leading-none transition-colors',
+        'grid size-6 place-items-center rounded-raised text-[13px] leading-none transition-colors',
         'text-fg-subtle hover:bg-hover hover:text-fg',
         'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent'
       )}

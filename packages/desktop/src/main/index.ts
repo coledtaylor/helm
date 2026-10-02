@@ -14,13 +14,15 @@ import {
   readProfile,
   writeSetting,
   writeSettings,
+  type AppliedTheme,
   type AppSettings
 } from '@helm/core'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { emit, registerIpc, resolvedTheme } from './ipc'
-import { appMode, dataDir, initDataDir, mcpConfigDir, shimRoot, templatesDir } from './paths'
+import { emit, pushTheme, registerIpc } from './ipc'
+import { appMode, dataDir, initDataDir, mcpConfigDir, shimRoot, templatesDir, themesDir } from './paths'
+import { createThemeService } from './themes'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
 import {
   adoptExistingProfile,
@@ -62,7 +64,7 @@ import {
   runSessionsRestartChecks,
   type CheckContext
 } from './sessionscheck'
-import { TITLEBAR_OVERLAY } from './chrome'
+import { titleBarOverlayFor } from './chrome'
 import { createPtermHost } from './pterm'
 import { runDesignShot } from './designshot'
 import { runAffordanceChecks } from './affordancecheck'
@@ -267,7 +269,8 @@ app.on('web-contents-created', (_e, contents) => {
 
 function createWindow(
   page: 'index' | 'spike',
-  bounds?: AppSettings['windowBounds']
+  bounds?: AppSettings['windowBounds'],
+  theme?: AppliedTheme
 ): BrowserWindow {
   const win = new BrowserWindow({
     width: bounds?.width ?? 1280,
@@ -278,20 +281,20 @@ function createWindow(
     minWidth: 900,
     minHeight: 560,
     // Painted before the renderer's first frame, so a cold start does not flash
-    // white on a dark desktop.
-    // The canvas tokens from theme.css - a mismatch here flashes the old
-    // colour for a frame on every cold start.
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#12131f' : '#eceef4',
+    // white on a dark desktop. The theme's own canvas, so the frame Chromium
+    // shows before any CSS has loaded is the colour the first paint lands on.
+    // The spike pages predate themes and keep what they always had.
+    backgroundColor: theme?.tokens.bg ?? (nativeTheme.shouldUseDarkColors ? '#12131f' : '#eceef4'),
     show: true,
     autoHideMenuBar: true,
     // The app window replaces the OS-accent title bar with its own brand
     // strip plus the Window Controls Overlay (see chrome.ts). The spike pages
     // keep the native frame: their drivers predate the strip and measure a
     // page, not the chrome.
-    ...(page === 'index' && process.platform === 'win32'
+    ...(page === 'index' && process.platform === 'win32' && theme !== undefined
       ? {
           titleBarStyle: 'hidden' as const,
-          titleBarOverlay: TITLEBAR_OVERLAY[nativeTheme.shouldUseDarkColors ? 'dark' : 'light']
+          titleBarOverlay: titleBarOverlayFor(theme)
         }
       : {}),
     // A packaged Electron window does NOT inherit the exe's icon: given no
@@ -429,7 +432,18 @@ function startApp(options: AppOptions = {}): void {
   }
   if (services.templates.problem !== null) console.warn(services.templates.problem)
 
-  let win: BrowserWindow | null = createWindow('index', services.settings.windowBounds ?? null)
+  // Before the window, because the window's first colour is the theme's. The
+  // preference has to reach `nativeTheme` first for the same reason: `system`
+  // is answered by asking it.
+  nativeTheme.themeSource = services.settings.theme
+  const themes = createThemeService(themesDir)
+  const windowTheme = (): AppliedTheme => themes.state(services.settings).applied
+
+  let win: BrowserWindow | null = createWindow(
+    'index',
+    services.settings.windowBounds ?? null,
+    windowTheme()
+  )
 
   /**
    * Helm's own MCP endpoint, reached through a getter.
@@ -684,16 +698,14 @@ function startApp(options: AppOptions = {}): void {
     config,
     content,
     templates,
+    themes,
     window: () => win,
     ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
     ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),
     ...(options.chooseFile !== undefined ? { chooseFile: options.chooseFile } : {}),
     rendererReady: () => {
       emit(win, 'settings:changed', services.settings)
-      emit(win, 'theme:changed', {
-        preference: services.settings.theme,
-        resolved: resolvedTheme()
-      })
+      pushTheme({ services, themes, window: () => win })
       // The first scan is kicked off by the main process rather than waited on
       // by the renderer: the launcher paints from the cache immediately and
       // this replaces it when it lands.
@@ -878,7 +890,7 @@ function startApp(options: AppOptions = {}): void {
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      win = createWindow('index', services.settings.windowBounds ?? null)
+      win = createWindow('index', services.settings.windowBounds ?? null, windowTheme())
     }
   })
 
@@ -937,6 +949,7 @@ function startApp(options: AppOptions = {}): void {
     // closing a window persists its bounds. Here every window is gone, so this
     // is the first moment nothing can still want the database. Letting go of it
     // checkpoints the WAL rather than leaving it for the next launch.
+    themes.stop()
     if (storeClosed) return
     storeClosed = true
     services.store.close()

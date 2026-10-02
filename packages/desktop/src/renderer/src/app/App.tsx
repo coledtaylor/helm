@@ -91,6 +91,7 @@ import { useLiveSessions } from './useLiveSessions'
 import { useSessions } from './useSessions'
 import { useSetup } from './useSetup'
 import { useTemplates } from './useTemplates'
+import { useThemes } from './useThemes'
 import { useBrowsers } from './useBrowsers'
 import { useShells } from './useShells'
 import { useUpdate } from './useUpdate'
@@ -342,6 +343,7 @@ export function App(): JSX.Element {
   const contentState = useContent()
   const usage = useUsage()
   const check = useUpdate()
+  const themes = useThemes()
   /**
    * Narrowed here rather than in the status bar.
    *
@@ -2268,8 +2270,20 @@ export function App(): JSX.Element {
               // The same writer the sidebar's star goes through, so the two
               // surfaces cannot hold different ideas of what is pinned.
               onUnpinProject={togglePin}
-              theme={settings?.theme ?? 'system'}
-              onThemeChange={launcher.setTheme}
+              appearance={{
+                theme: settings?.theme ?? DEFAULT_SETTINGS.theme,
+                themeDark: settings?.themeDark ?? DEFAULT_SETTINGS.themeDark,
+                themeLight: settings?.themeLight ?? DEFAULT_SETTINGS.themeLight,
+                paneGap: settings?.paneGap ?? DEFAULT_SETTINGS.paneGap,
+                cornerRadius: settings?.cornerRadius ?? DEFAULT_SETTINGS.cornerRadius,
+                density: settings?.density ?? DEFAULT_SETTINGS.density,
+                accentColor: settings?.accentColor ?? DEFAULT_SETTINGS.accentColor
+              }}
+              onAppearanceChange={writeSettings}
+              themes={themes.listing}
+              themeState={themes.state}
+              onOpenThemesFolder={themes.openFolder}
+              onDuplicateTheme={themes.duplicate}
               usageDisplay={settings?.usageDisplay ?? 'percent'}
               updateCheck={settings?.updateCheck ?? DEFAULT_SETTINGS.updateCheck}
               onUpdateCheckChange={(updateCheck) => writeSettings({ updateCheck })}
@@ -2373,9 +2387,9 @@ export function App(): JSX.Element {
         )}
 
         {activeProject && (
-          // No `gap-2`: the handle below is the gutter, exactly as the session
+          // No gap: the handle below is the gutter, exactly as the session
           // split's divider is the gutter of its row. Two children with a gap
-          // and a handle between them would be 8px of nothing either side of it.
+          // and a handle between them would be a gutter of nothing either side.
           <div ref={projectColumnRef} className="absolute inset-0 flex flex-col">
             <div className="min-h-0 flex-1">
               <ProjectPane
@@ -2480,7 +2494,13 @@ export function App(): JSX.Element {
               onPointerUp={endShellDrag}
               onPointerCancel={endShellDrag}
               onDoubleClick={resetShellHeight}
-              className="group flex h-2 shrink-0 cursor-ns-resize items-center justify-center"
+              // The row is the gutter, so it is as tall as the gap setting; the
+              // ::before keeps the target 8px whatever that is, overlapping the
+              // islands' edges by a pixel or three at the narrow end.
+              className={cn(
+                'group relative flex h-gutter shrink-0 cursor-ns-resize items-center justify-center',
+                "before:absolute before:inset-x-0 before:top-1/2 before:h-2 before:-translate-y-1/2 before:content-['']"
+              )}
             >
               {/* The session split's divider recipe, rotated: a 3px
                   `border-strong` grip that goes accent on hover (DESIGN.md
@@ -2493,7 +2513,7 @@ export function App(): JSX.Element {
                   project pane's bottom edge and 4px above the shell's top one,
                   and three hairlines in nine pixels read as a doubled border
                   rather than as something to hold. */}
-              <span className="h-[3px] w-10 rounded-full bg-border-strong transition-colors group-hover:bg-accent" />
+              <span className="h-[min(3px,var(--helm-gap))] w-10 rounded-full bg-border-strong transition-colors group-hover:bg-accent" />
             </div>
             <ProjectShellPane
               key={activeProject.path}
@@ -2531,9 +2551,12 @@ export function App(): JSX.Element {
               draggingSplit.current = true
               document.body.style.userSelect = 'none'
             }}
-            className="group flex w-2 shrink-0 cursor-col-resize items-center justify-center"
+            className={cn(
+              'group relative flex w-gutter shrink-0 cursor-col-resize items-center justify-center',
+              "before:absolute before:inset-y-0 before:left-1/2 before:w-2 before:-translate-x-1/2 before:content-['']"
+            )}
           >
-            <span className="h-10 w-[3px] rounded-full bg-border-strong transition-colors group-hover:bg-accent" />
+            <span className="h-10 w-[min(3px,var(--helm-gap))] rounded-full bg-border-strong transition-colors group-hover:bg-accent" />
           </div>
         )}
 

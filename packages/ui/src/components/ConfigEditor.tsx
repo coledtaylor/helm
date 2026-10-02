@@ -358,7 +358,7 @@ export function ConfigEditor({
                   aria-pressed={effectiveMode === option}
                   onClick={() => setMode(option)}
                   className={cn(
-                    'flex items-center gap-1.5 rounded-[5px] px-2 py-0.5 text-[11px] transition-colors',
+                    'flex items-center gap-1.5 rounded-raised px-2 py-0.5 text-[11px] transition-colors',
                     effectiveMode === option ? SEGMENT_ON : 'text-fg-muted hover:text-fg'
                   )}
                 >

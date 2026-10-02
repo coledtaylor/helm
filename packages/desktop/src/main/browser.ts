@@ -18,7 +18,7 @@ import {
   type AppSettings,
   type BrowserReach
 } from '@helm/core'
-import { TITLEBAR_OVERLAY } from './chrome'
+import { TITLEBAR_HEIGHT } from './chrome'
 import { BROWSER_TABS_MAX, type BrowserConsoleEntry, type BrowserState } from '../shared/ipc'
 
 /**
@@ -1176,7 +1176,7 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     const size = agentSize()
     entry.view.setBounds({
       x: Math.max(0, (content?.width ?? size.width) - AGENT_PEEK),
-      y: Math.max(TITLEBAR_OVERLAY.dark.height, (content?.height ?? size.height) - AGENT_PEEK),
+      y: Math.max(TITLEBAR_HEIGHT, (content?.height ?? size.height) - AGENT_PEEK),
       ...size
     })
     entry.view.setVisible(true)
@@ -1207,7 +1207,7 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     // on Electron 43.3.0, `setBounds` on a view that is not visible does not
     // reach it, so a view loaded small and enlarged afterwards keeps the small
     // viewport for ever.
-    entry.view.setBounds({ x: 0, y: TITLEBAR_OVERLAY.dark.height, ...agentSize() })
+    entry.view.setBounds({ x: 0, y: TITLEBAR_HEIGHT, ...agentSize() })
   }
 
   /**
@@ -1600,7 +1600,7 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
        * already puts the placeholder well below it; this is the guarantee, not
        * the layout.
        */
-      const top = TITLEBAR_OVERLAY.dark.height
+      const top = TITLEBAR_HEIGHT
       const y = Math.max(top, wantedY)
       const height = Math.max(0, wantedHeight - (y - wantedY))
 

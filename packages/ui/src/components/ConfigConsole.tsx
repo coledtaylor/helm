@@ -340,7 +340,7 @@ export function ConfigConsole({
                 aria-pressed={view === option.id}
                 onClick={() => onViewChange(option.id)}
                 className={cn(
-                  'min-w-0 truncate rounded-[5px] px-1.5 py-0.5 text-[11px] transition-colors',
+                  'min-w-0 truncate rounded-raised px-1.5 py-0.5 text-[11px] transition-colors',
                   '@[560px]:px-2.5',
                   view === option.id
                     ? SEGMENT_ON

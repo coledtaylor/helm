@@ -174,7 +174,7 @@ export function TabBar({
   if (tabs.length === 0 && !actions) return null
 
   return (
-    <div className="flex h-10 shrink-0 items-end px-1.5">
+    <div className="flex h-strip shrink-0 items-end px-1.5">
       <div
         role="tablist"
         aria-label="Open tabs"
@@ -258,8 +258,8 @@ export function TabBar({
                 // overlap that erases the island's top border under it. The
                 // z-index is what makes the overlap paint over the pane, which
                 // is later in the DOM.
-                'group relative flex h-[34px] min-w-0 shrink-0 items-center',
-                'rounded-t-[9px] border border-b-0 border-transparent',
+                'group relative flex h-[calc(var(--helm-strip)-6px)] min-w-0 shrink-0 items-center',
+                'rounded-t-island border border-b-0 border-transparent',
                 active
                   ? cn('z-10 -mb-px border-border', terminalGround ? 'bg-terminal' : 'bg-surface')
                   : 'hover:bg-hover/60',
@@ -517,7 +517,7 @@ function TabRename({
       }}
       onBlur={() => onDone(value.trim() === '' ? null : value.trim())}
       className={cn(
-        'w-full min-w-0 rounded-[4px] border px-1 py-0 text-[12px] leading-[15px] outline-none',
+        'w-full min-w-0 rounded-well border px-1 py-0 text-[12px] leading-[15px] outline-none',
         // A themed input on a tab whose ground stays `#11121A` in both modes
         // would drop a white field onto a dark tab in light mode. Every value
         // here is pinned for that reason and no other - DESIGN.md par. 6, the

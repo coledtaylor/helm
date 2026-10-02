@@ -78,6 +78,22 @@ export const templatesDir: string = portableDir
   : join(homedir(), '.config', 'helm', 'templates')
 
 /**
+ * Where user themes live: one `*.json` per theme, watched while the app runs.
+ *
+ * The templates directory's sibling, by the templates directory's rule and for
+ * its reasons - a theme is a file a person writes by hand and may keep in git,
+ * so an installed Helm keeps them in `~/.config/helm/themes`, and anything
+ * carrying `PORTABLE_EXECUTABLE_DIR` (a portable exe, `pnpm dev`, every check)
+ * gets its own under its data directory. Unlike templates, `pnpm dev` does not
+ * copy the real ones across: a theme is cheap to duplicate into the dev
+ * directory, and the dev app writing into somebody's theme folder is the thing
+ * the separate directory is for.
+ */
+export const themesDir: string = portableDir
+  ? join(dataDir, 'themes')
+  : join(homedir(), '.config', 'helm', 'themes')
+
+/**
  * Where synthesised overlay plugins go.
  *
  * SPEC 2 sketched these under `%TEMP%`, and they are not there. A shim's

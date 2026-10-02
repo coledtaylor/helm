@@ -183,7 +183,7 @@ export function ProfileList({
                     disabled={launching}
                     title={`${profile.name} — ${profile.root}`}
                     className={cn(
-                      'flex min-w-0 flex-1 items-center gap-2 rounded-well px-2 py-1.5 text-left',
+                      'flex min-w-0 flex-1 items-center gap-2 rounded-raised px-2 py-row text-left',
                       'transition-colors hover:bg-hover disabled:cursor-default'
                     )}
                   >
@@ -306,7 +306,7 @@ function IconButton({
       title={label}
       aria-label={label}
       className={cn(
-        'grid size-5 shrink-0 place-items-center rounded-[5px] transition-colors',
+        'grid size-5 shrink-0 place-items-center rounded-raised transition-colors',
         active ? 'text-accent' : 'text-fg-subtle',
         danger ? 'hover:bg-danger/15 hover:text-danger' : 'hover:bg-hover hover:text-fg'
       )}
