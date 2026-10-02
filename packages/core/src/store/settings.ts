@@ -12,6 +12,8 @@ import {
   EFFORT_LEVELS,
   isRepoSlug,
   PANE_GAP,
+  PANE_GROUPS_MAX,
+  PANE_SPLIT_PCT,
   PINNED_PROJECTS_MAX,
   PR_CHECKOUT_MODES,
   PR_IGNORED_REPOS_MAX,
@@ -19,7 +21,6 @@ import {
   PR_REVIEW_PROMPT_MAX_LENGTH,
   PR_STALE_DAYS,
   PROJECT_SHELL_HEIGHT_PCT,
-  SESSION_SPLIT_PCT,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
@@ -136,6 +137,39 @@ const themeId = (value: unknown): string | null =>
  */
 const ACCENT_HEX = /^#[0-9a-f]{6}$/
 
+/**
+ * Why one persisted tab is not a tab, or null when it is.
+ *
+ * Every `kind` is checked against the union and every kind's own fields with
+ * it, because this is read back and rendered as panes - a `project` with no
+ * path is a tab pointing nowhere, and it would fail at the pane rather than at
+ * the write.
+ */
+function paneProblem(pane: unknown): string | null {
+  if (typeof pane !== 'object' || pane === null || Array.isArray(pane)) {
+    return `expected a pane, got ${describe(pane)}`
+  }
+  const { kind, path, repoPath, number } = pane as Record<string, unknown>
+  if (kind === 'history' || kind === 'pulls' || kind === 'config') return null
+  if (kind === 'content' || kind === 'settings' || kind === 'sessions') return null
+  if (kind === 'project') {
+    if (typeof path !== 'string' || path.trim() === '') {
+      return `expected a project path, got ${describe(path)}`
+    }
+    return null
+  }
+  if (kind === 'pr') {
+    if (typeof repoPath !== 'string' || repoPath.trim() === '') {
+      return `expected a repository path, got ${describe(repoPath)}`
+    }
+    if (!isFiniteNumber(number) || !Number.isInteger(number) || number <= 0) {
+      return `expected a pull request number, got ${describe(number)}`
+    }
+    return null
+  }
+  return `expected a pane kind, got ${describe(kind)}`
+}
+
 export const SETTING_VALIDATORS: SettingValidators = {
   theme: oneOf(THEME_PREFERENCES),
 
@@ -248,54 +282,46 @@ export const SETTING_VALIDATORS: SettingValidators = {
   },
 
   /**
-   * The workspace strip. State like `windowBounds`, and validated like it:
-   * written by the window on every tab change, so a malformed value here is a
-   * strip that cannot be restored on the next launch.
+   * The panes. State like `windowBounds`, and validated like it: written by
+   * the window on every tab change, so a malformed value here is a layout that
+   * cannot be restored on the next launch.
    *
-   * Every `kind` is checked against the union and every kind's own fields with
-   * it, because this is read back and rendered as panes - a `project` with no
-   * path is a tab pointing nowhere, and it would fail at the pane rather than
-   * at the write. The whole value is rejected rather than the offending entry
-   * filtered out: a partly-written strip restored as if it were whole is a
-   * worse answer than the previous strip.
+   * One or two groups, a focus that names one of them, and every tab checked
+   * by `paneProblem`. The whole value is rejected rather than the offending
+   * entry filtered out: a partly-written layout restored as if it were whole is
+   * a worse answer than the previous one.
    */
-  workspaceTabs: (value) => {
+  paneLayout: (value) => {
     if (value === null) return null
     if (typeof value !== 'object' || Array.isArray(value)) {
-      return `expected a workspace strip or null, got ${describe(value)}`
+      return `expected a pane layout or null, got ${describe(value)}`
     }
-    const strip = value as Record<string, unknown>
-    const { panes, activeId } = strip
-    if (!Array.isArray(panes)) return `expected an array of panes, got ${describe(panes)}`
-    if (panes.length > WORKSPACE_TABS_MAX) {
-      return `expected at most ${String(WORKSPACE_TABS_MAX)} panes, got ${String(panes.length)}`
+    const { groups, focused } = value as Record<string, unknown>
+    if (!Array.isArray(groups)) return `expected an array of groups, got ${describe(groups)}`
+    if (groups.length < 1 || groups.length > PANE_GROUPS_MAX) {
+      return `expected 1 to ${String(PANE_GROUPS_MAX)} groups, got ${String(groups.length)}`
     }
-    if (activeId !== null && typeof activeId !== 'string') {
-      return `expected a tab id or null, got ${describe(activeId)}`
+    if (!Number.isInteger(focused) || (focused as number) < 0 || (focused as number) >= groups.length) {
+      return `expected the index of a group, got ${describe(focused)}`
     }
-    for (const pane of panes) {
-      if (typeof pane !== 'object' || pane === null || Array.isArray(pane)) {
-        return `expected a pane, got ${describe(pane)}`
+    let total = 0
+    for (const group of groups) {
+      if (typeof group !== 'object' || group === null || Array.isArray(group)) {
+        return `expected a group, got ${describe(group)}`
       }
-      const { kind, path, repoPath, number } = pane as Record<string, unknown>
-      if (kind === 'history' || kind === 'pulls' || kind === 'config') continue
-      if (kind === 'content' || kind === 'settings' || kind === 'sessions') continue
-      if (kind === 'project') {
-        if (typeof path !== 'string' || path.trim() === '') {
-          return `expected a project path, got ${describe(path)}`
-        }
-        continue
+      const { panes, activeId } = group as Record<string, unknown>
+      if (!Array.isArray(panes)) return `expected an array of panes, got ${describe(panes)}`
+      if (activeId !== null && typeof activeId !== 'string') {
+        return `expected a tab id or null, got ${describe(activeId)}`
       }
-      if (kind === 'pr') {
-        if (typeof repoPath !== 'string' || repoPath.trim() === '') {
-          return `expected a repository path, got ${describe(repoPath)}`
-        }
-        if (!isFiniteNumber(number) || !Number.isInteger(number) || number <= 0) {
-          return `expected a pull request number, got ${describe(number)}`
-        }
-        continue
+      total += panes.length
+      if (total > WORKSPACE_TABS_MAX) {
+        return `expected at most ${String(WORKSPACE_TABS_MAX)} panes in all, got more`
       }
-      return `expected a pane kind, got ${describe(kind)}`
+      for (const pane of panes) {
+        const problem = paneProblem(pane)
+        if (problem !== null) return problem
+      }
     }
     return null
   },
@@ -379,7 +405,7 @@ export const SETTING_VALIDATORS: SettingValidators = {
    * pointerup from a fraction, and a settings row wants 45 rather than
    * 0.4499999.
    */
-  sessionSplitPct: boundedInteger(SESSION_SPLIT_PCT),
+  paneSplitPct: boundedInteger(PANE_SPLIT_PCT),
 
   /**
    * Whether a source file wraps, and how far its continuation rows hang.

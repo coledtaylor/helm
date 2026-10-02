@@ -13,7 +13,7 @@ import {
   readSessionRegistry,
   readSessions,
   sessionResources,
-  SESSION_SPLIT_PCT,
+  PANE_SPLIT_PCT,
   type Project,
   type ProcessSnapshot,
   type SessionRecord
@@ -158,21 +158,45 @@ async function clickButton(win: BrowserWindow, text: string): Promise<boolean> {
   )
 }
 
-/** What a session tab reads, both lines, straight off the DOM. */
+/**
+ * What a session tab reads, and the branch its pane's crumb names.
+ *
+ * Two places, because a tab is one line now: the title is on the tab, and the
+ * branch that told two sessions on one project apart is on the crumb row under
+ * the pane's strip - which only describes the tab in front. So `branch` is the
+ * crumb of the pane holding this tab *when this tab is that pane's front*, and
+ * null otherwise; a caller asking about the branch brings the tab forward first.
+ */
 async function tabText(
   win: BrowserWindow,
   id: number
-): Promise<{ title: string; subtitle: string | null } | null> {
-  return js<{ title: string; subtitle: string | null } | null>(
+): Promise<{ title: string; branch: string | null; front: boolean } | null> {
+  return js<{ title: string; branch: string | null; front: boolean } | null>(
     win,
     `(() => {
        const tab = document.querySelector('[data-tab="session:${String(id)}"]');
        if (!tab) return null;
-       const sub = tab.querySelector('[data-tab-subtitle]');
-       const title = sub ? sub.previousElementSibling : tab.querySelector('span span');
-       return { title: title ? title.textContent : '', subtitle: sub ? sub.textContent : null }
+       const title = tab.querySelector('[data-tab-title]');
+       const front = tab.getAttribute('aria-selected') === 'true';
+       const pane = tab.closest('[data-pane-group]');
+       const branch = front && pane ? pane.querySelector('[data-pane-crumb] [data-crumb="branch"]') : null;
+       return { title: title ? title.textContent : '', branch: branch ? branch.textContent : null, front }
      })()`
   ).catch(() => null)
+}
+
+/**
+ * Start a session in a project from the tree's own `+` - the launch a person
+ * makes now, without opening the project's page first. Found by its dataset
+ * rather than a selector, because the value is a Windows path.
+ */
+async function launchFromTree(win: BrowserWindow, path: string): Promise<boolean> {
+  return js<boolean>(
+    win,
+    `(() => { const el = [...document.querySelectorAll('[data-launch-project]')]
+        .find((b) => b.getAttribute('data-launch-project') === ${JSON.stringify(path)});
+      if (!el) return false; el.click(); return true })()`
+  )
 }
 
 /** Double-click a tab's title, which is what opens the rename field. */
@@ -237,9 +261,8 @@ async function tabOrder(win: BrowserWindow): Promise<string[]> {
 }
 
 async function activeTab(win: BrowserWindow): Promise<string | null> {
-  // Scoped to session tabs: the split view keeps a workspace strip and a
-  // session strip, each with its own active tab, and the check that calls
-  // this is asking which *session* is in front.
+  // Scoped to session tabs: with two panes there are two fronts, and the check
+  // that calls this is asking which *session* is in front.
   return js<string | null>(
     win,
     `(() => { const el = document.querySelector('[role="tab"][data-tab^="session:"][aria-selected="true"]');
@@ -576,11 +599,14 @@ async function runLifecycleChecks(
   // -------------------------------------------------------------------------
   // SESS-1: three concurrent sessions, three different repos
   // -------------------------------------------------------------------------
+  // From the tree's `+`, the way a session is started now - no project page in
+  // between, so the pane ends up holding the three sessions and nothing else.
+  // The project page's own button is still driven, by SESS-13 and the state
+  // group below.
   const started: SessionRecord[] = []
+  const launchedFromTree: boolean[] = []
   for (const project of projects) {
-    await clickByTitle(win, project.path)
-    await sleep(200)
-    await clickButton(win, 'Start session here')
+    launchedFromTree.push(await launchFromTree(win, project.path))
     await waitFor(() => ctx.sessions.list().length > started.length, 20_000)
     const latest = ctx.sessions.list().at(-1)
     if (latest) started.push(latest)
@@ -607,6 +633,7 @@ async function runLifecycleChecks(
     criterion: 'Can run 3+ concurrent claude sessions in tabs against different repos',
     title: 'Three sessions launched from the launcher, each in its own repo',
     ok:
+      launchedFromTree.every(Boolean) &&
       started.length === 3 &&
       ready &&
       new Set(started.map((s) => s.cwd)).size === 3 &&
@@ -622,6 +649,7 @@ async function runLifecycleChecks(
         alive: processAlive(pids.get(s.id) ?? -1),
         bytes: collector.output(s.id).length
       })),
+      launchedFromTree,
       tabs: await tabOrder(win),
       screenshot: shot1.file
     },
@@ -632,7 +660,7 @@ async function runLifecycleChecks(
   // SESS-2: a backgrounded pane keeps its grid
   // -------------------------------------------------------------------------
   const gridsBefore = started.map((s) => ctx.sessions.grid(s.id))
-  for (const index of [0, 3, 5, 1]) {
+  for (const index of [0, 2, 1]) {
     await clickTabAt(win, index)
     await sleep(250)
   }
@@ -814,30 +842,34 @@ async function runLifecycleChecks(
   }
 
   // -------------------------------------------------------------------------
-  // SESS-10: the branch is on the tab, and it is the branch git says
+  // SESS-10: the branch is under the tab, and it is the branch git says
   // -------------------------------------------------------------------------
   //
-  // The subtitle slot was empty in exactly the case that needs it: several
-  // sessions on one project, where every tab reads the profile's name and a
-  // counter. What fills it is the branch the session started on, and this
-  // compares the second line of every session tab with this driver's own
-  // `git rev-parse` against the same directory.
+  // Several sessions on one project is the case that needs it: every tab reads
+  // the project's name and a counter. What tells them apart is the branch the
+  // session started on, which the pane's crumb row names for the tab in front -
+  // so each session is brought forward in turn, and its crumb is compared with
+  // this driver's own `git rev-parse` against the same directory.
   const branchExpected = new Map(projects.map((p) => [p.path, branchOf(p.path)]))
   const branchRows = readSessions(ctx.services.store, { limit: 50 })
   const branchTabs: Array<{
     id: number
     cwd: string
     expected: string | null
-    subtitle: string | null
+    crumb: string | null
+    front: boolean
     column: string | null
   }> = []
   for (const session of ctx.sessions.list()) {
+    await clickSessionTab(win, session.id)
+    await sleep(300)
     const text = await tabText(win, session.id)
     branchTabs.push({
       id: session.id,
       cwd: session.cwd,
       expected: branchExpected.get(session.cwd) ?? branchOf(session.cwd),
-      subtitle: text?.subtitle ?? null,
+      crumb: text?.branch ?? null,
+      front: text?.front ?? false,
       column: branchRows.find((r) => r.id === session.id)?.branch ?? null
     })
   }
@@ -848,13 +880,14 @@ async function runLifecycleChecks(
 
   checks.push({
     id: 'SESS-10',
-    criterion: 'Sessions on one project are told apart in the strip without hovering',
-    title: "A session tab's second line is the branch its cwd was on, as git reports it",
+    criterion: 'Sessions on one project are told apart without hovering',
+    title: "The crumb under a session's tab names the branch its cwd was on, as git reports it",
     ok:
       branchTabs.length > 0 &&
       discriminating &&
+      branchTabs.every((t) => t.front) &&
       branchTabs.every((t) => t.column === t.expected) &&
-      branchTabs.every((t) => t.expected === null || t.subtitle === t.expected),
+      branchTabs.every((t) => t.expected === null || t.crumb === t.expected),
     detail: { tabs: branchTabs, discriminating },
     notes: discriminating
       ? [
@@ -1019,11 +1052,8 @@ async function runLifecycleChecks(
 
       const stripLabels = await js<string[]>(
         win,
-        `[...document.querySelectorAll('[role="tab"][data-tab^="session:"]')].map((t) => {
-           const sub = t.querySelector('[data-tab-subtitle]');
-           const title = sub ? sub.previousElementSibling : t.querySelector('span span');
-           return title ? title.textContent : ''
-         })`
+        `[...document.querySelectorAll('[role="tab"][data-tab^="session:"]')].map((t) =>
+           t.querySelector('[data-tab-title]')?.textContent ?? '')`
       )
 
       checks.push({
@@ -1053,11 +1083,12 @@ async function runLifecycleChecks(
   }
 
   // -------------------------------------------------------------------------
-  // SESS-15: the workspace divider is dragged, for the first time ever
+  // SESS-15: the divider between the panes is dragged
   // -------------------------------------------------------------------------
   //
-  // This divider is older than every other draggable thing in Helm and until
-  // now nothing had ever exercised it. The one driver that touched it -
+  // This divider is older than every other draggable thing in Helm - it was
+  // the one between the workspace and the session column before the window
+  // had panes - and for most of its life nothing had ever exercised it. The one driver that touched it -
   // `design-shot`'s `dragSplit` - sent its moves with no button held, which
   // Chromium delivers as `buttons: 0`, a hover; the divider's handler read
   // `clientX` off whatever arrived and never asked, so it moved, and the whole
@@ -1082,16 +1113,26 @@ async function runLifecycleChecks(
       return col ? col.getBoundingClientRect().width : null
     })()`
 
-    // The session history in the workspace half, which is the state the stutter
-    // was reported in and the only one that discriminates: 900-odd rows is
-    // enough that reconciling them per frame is felt, where a project pane is
+    // The session history in a pane beside the sessions, which is the state the
+    // stutter was reported in and the only one that discriminates: 900-odd rows
+    // is enough that reconciling them per frame is felt, where a project page is
     // not. Its own list is what the observer below watches.
+    //
+    // It opens in front of the pane the sessions are in, and the pane's own
+    // split button then gives it a pane of its own - which is also the one way
+    // there comes to be a divider at all.
     await js<boolean>(
       win,
       `(() => { const el = document.querySelector('[data-open-history]')
         if (!el) return false; el.click(); return true })()`
     )
     await pollJs(win, `document.querySelector('[data-history-search]')`, 15_000)
+    await js<boolean>(
+      win,
+      `(() => { const el = document.querySelector('[data-pane-split="new"]')
+        if (!el) return false; el.click(); return true })()`
+    )
+    await pollJs(win, `document.querySelector(${JSON.stringify(DIVIDER)}) !== null`, 10_000)
     await sleep(1200)
     const historyRows = await js<number>(
       win,
@@ -1100,17 +1141,17 @@ async function runLifecycleChecks(
 
     // The split is put back to its default before the divider is measured.
     //
-    // The seeded database carries the developer's own `sessionSplitPct`, and
+    // The seeded database carries the developer's own `paneSplitPct`, and
     // the drag below is a fixed 15% of the row - so on a machine where somebody
     // has parked the split at 75 the pane has 5 points of headroom, hits
-    // `SESSION_SPLIT_PCT.max` a third of the way through, and the probe reports
+    // `PANE_SPLIT_PCT.max` a third of the way through, and the probe reports
     // a divider that stopped following the pointer. Measured here at exactly
     // that: 726px to 774.4px against 146px of travel, with the app behaving
     // perfectly. The starting position is not what this probe is about, so it
     // is chosen rather than inherited.
     await js<unknown>(
       win,
-      `window.helm.invoke('settings:write', { sessionSplitPct: ${String(SESSION_SPLIT_PCT.default)} })`
+      `window.helm.invoke('settings:write', { paneSplitPct: ${String(PANE_SPLIT_PCT.default)} })`
     ).catch(() => null)
     await sleep(400)
 
@@ -1136,8 +1177,8 @@ async function runLifecycleChecks(
 
     if (grip !== null) {
       const before = await js<number | null>(win, sessionsColumnWidth)
-      // Left, which makes the sessions column - the one on the right of the
-      // divider - wider. Far enough to be past any rounding and short of the
+      // Left, which makes the second pane - the one on the right of the
+      // divider, holding the history - wider. Far enough to be past any rounding and short of the
       // 20% bound so the pane is free to follow the whole way.
       const to = { x: grip.x - Math.round(grip.width * 0.15), y: grip.y }
       const during: Array<{ width: number | null; pointerX: number }> = []
@@ -1272,14 +1313,14 @@ async function runLifecycleChecks(
 
     checks.push({
       id: 'SESS-15',
-      criterion: 'The split between the workspace and the sessions is draggable',
-      title: `A real drag on the workspace divider moves the pane, keeps up with the pointer, and rebuilds none of the ${String(historyRows)} rows beside it`,
+      criterion: 'The split between two panes is draggable',
+      title: `A real drag on the divider moves the pane, keeps up with the pointer, and rebuilds none of the ${String(historyRows)} rows in it`,
       ok: arrived && landed && tracked && wroteToNeitherColumn && listDiscriminates,
       detail: {
         grip,
         travelledPx: travelled,
-        historyRowsInTheWorkspaceHalf: historyRows,
-        ...(r ?? { note: 'no divider on screen - a workspace pane and a session must both be open' })
+        historyRowsInTheSecondPane: historyRows,
+        ...(r ?? { note: 'no divider on screen - the split button did not give the history a pane' })
       },
       notes: [
         'Driven with `drag()`, which holds the button for the moves in the middle.',

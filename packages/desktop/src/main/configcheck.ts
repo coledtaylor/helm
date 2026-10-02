@@ -2159,19 +2159,18 @@ async function shootBothThemes(
   outDir: string,
   name: string
 ): Promise<{ files: string[]; applied: boolean }> {
+  // Through the setting, the way the Appearance pane writes it. The title bar
+  // had a toggle this clicked until the layout that had room for one went.
   const before = await js<string>(
     win,
-    `(() => {
-      const on = document.querySelector('[role="radiogroup"][aria-label="Theme"] [aria-checked="true"]');
-      return on?.getAttribute('aria-label') ?? 'Match the system theme' })()`
+    `window.helm.invoke('settings:read').then((s) => s.theme)`
   )
+  const writeTheme = (theme: string): Promise<unknown> =>
+    js<unknown>(win, `window.helm.invoke('settings:write', { theme: ${JSON.stringify(theme)} })`)
   const files: string[] = []
   let applied = true
-  for (const [theme, label] of [
-    ['dark', 'Dark theme'],
-    ['light', 'Light theme']
-  ] as const) {
-    await click(win, `button[aria-label="${label}"]`)
+  for (const theme of ['dark', 'light'] as const) {
+    await writeTheme(theme)
     /**
      * Waited for rather than slept through, and reported when it does not
      * happen.
@@ -2209,7 +2208,7 @@ async function shootBothThemes(
     applied = false
   }
 
-  await click(win, `button[aria-label="${before}"]`)
+  await writeTheme(before)
   await sleep(350)
   return { files, applied }
 }

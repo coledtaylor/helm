@@ -83,15 +83,18 @@
   --helm-gap: 6px;
   --helm-radius: 3px;
 
-  /* Density: how tightly the repeated things pack - list rows and the tab
-   * strip. Text size and every control's own padding are untouched by it. */
+  /* Density: how tightly the repeated things pack - list rows, the sidebar
+   * tree's lines and each pane's tab strip. Text size and every control's own
+   * padding are untouched by it. */
   --helm-row-y: 6px;
-  --helm-strip: 40px;
+  --helm-line: 26px;
+  --helm-strip: 36px;
 }
 
 :root[data-density='compact'] {
   --helm-row-y: 3px;
-  --helm-strip: 34px;
+  --helm-line: 22px;
+  --helm-strip: 32px;
 }
 
 /* `inline` resolves the var at utility-generation time, so `bg-surface`
@@ -145,9 +148,11 @@
   --radius-xl: calc(var(--helm-radius) + 1px);
 
   /* `gap-gutter`, `px-gutter`, `w-gutter`: the canvas between islands.
-   * `py-row`: a list row's vertical padding. `h-strip`: the tab strip. */
+   * `py-row`: a list row's vertical padding. `h-line`: one line of the
+   * sidebar tree. `h-strip`: a pane's tab strip. */
   --spacing-gutter: var(--helm-gap);
   --spacing-row: var(--helm-row-y);
+  --spacing-line: var(--helm-line);
   --spacing-strip: var(--helm-strip);
 
   --font-sans:
@@ -307,9 +312,9 @@ select:focus-visible {
 /**
  * The tab strip keeps its scrollbar.
  *
- * It was hidden once, on the argument that a 40px strip has no room for one and
- * that the bar drew a rule through the seam where the active tab meets its pane.
- * Half of that was wrong and the other half was the wrong trade. The bar carries
+ * It was hidden once, on the argument that a strip this short has no room for
+ * one and that the bar drew a rule through the seam where the active tab met
+ * its pane. Half of that was wrong and the other half was the wrong trade. The bar carries
  * no arrow buttons - nothing in this app does, `scrollbar-width: thin` above
  * sees to that - and it is the only thing on screen that says there are more
  * tabs than fit. Hiding it did not make the strip cleaner, it made two open
@@ -321,7 +326,7 @@ select:focus-visible {
  *
  * The rule is kept rather than deleted because the class is what the wheel
  * handler in `TabBar.tsx` is named for, and because the next person to find a
- * bar in a 40px strip inconvenient should find this note before they hide it
+ * bar in a 36px strip inconvenient should find this note before they hide it
  * again. `::-webkit-scrollbar` is not the lever: Chromium ignores those
  * pseudo-elements once `scrollbar-width` is set, which the `*` rule above does
  * for every element in the app, so the block of webkit rules there is doing
@@ -376,7 +381,7 @@ select:focus-visible {
 }
 
 /* ---------------------------------------------------------------------------
- * The workspace/sessions split, driven by a custom property.
+ * The split between the two panes, driven by a custom property.
  *
  * The boundary lives in `--split` on the row, and **React never writes it**.
  * That is the whole design, and it is the third attempt at this.
@@ -387,7 +392,7 @@ select:focus-visible {
  * directly during the drag and committed to React on release. That measured
  * thirty moves at 47.4ms → 0.1ms and was *worse in the hand* - because a direct
  * style write means the DOM and React disagree for the length of the gesture,
- * and React wins whenever anything re-renders. With a live session in the split
+ * and React wins whenever anything re-renders. With a live session in a pane
  * something re-renders constantly, since the terminal's own output updates
  * state; the pane was pulled by the pointer and yanked back by every unrelated
  * render, so it lagged, shrank from the wrong edge, and snapped on release.
@@ -406,19 +411,20 @@ select:focus-visible {
   --split: 0.45;
 }
 
-/* The sessions column - the one on the right of the divider. */
-.split-sessions {
+/* The second pane - the one on the right of the divider. `--split` is its
+ * share of the row, which is what `paneSplitPct` stores. */
+.split-end {
   flex: var(--split, 0.45) 1 0%;
 }
 
-/* The workspace column, taking whatever is left. */
-.split-workspace {
+/* The first pane, taking whatever is left. */
+.split-start {
   flex: calc(1 - var(--split, 0.45)) 1 0%;
 }
 
-/* Either column with the other maximized away. A class rather than a cleared
- * custom property: which panes are on screen is discrete state that belongs to
- * React, and only the *fraction* is the drag's. */
+/* A pane alone, or with the other maximized away. A class rather than a
+ * cleared custom property: which panes are on screen is discrete state that
+ * belongs to React, and only the *fraction* is the drag's. */
 .split-whole {
   flex: 1 1 0%;
 }

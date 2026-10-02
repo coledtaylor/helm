@@ -68,6 +68,25 @@ async function js<T>(win: BrowserWindow, expression: string): Promise<T> {
   return win.webContents.executeJavaScript(expression, true) as Promise<T>
 }
 
+/**
+ * The sidebar's Profiles view, brought up if it is not the one showing. The
+ * list is a view the rail swaps in, and it is not in the document otherwise -
+ * so "New profile" and every `[data-profile]` row exist only once this ran.
+ */
+async function showProfiles(win: BrowserWindow): Promise<void> {
+  const shown = await js<boolean>(
+    win,
+    `Boolean(document.querySelector('[aria-label="New profile"]'))`
+  )
+  if (shown) return
+  await js<boolean>(
+    win,
+    `(() => { const el = document.querySelector('[data-open-profiles]');
+      if (!el) return false; el.click(); return true })()`
+  )
+  await sleep(300)
+}
+
 async function clickByLabel(win: BrowserWindow, label: string): Promise<boolean> {
   return js<boolean>(
     win,
@@ -703,6 +722,7 @@ async function runComposeChecks(
   // -------------------------------------------------------------------------
   // PROF-1: build a profile through the real form
   // -------------------------------------------------------------------------
+  await showProfiles(win)
   const opened = await clickByLabel(win, 'New profile')
   await sleep(600)
 
@@ -1129,6 +1149,7 @@ async function runFormChecks(
   // -------------------------------------------------------------------------
   // PROF-11: what the two pickers offer, and what saving one writes
   // -------------------------------------------------------------------------
+  await showProfiles(win)
   const opened = await clickByLabel(win, 'New profile')
   await sleep(500)
   await fill(win, 'Profile name', FORM_PROFILE)
@@ -1266,6 +1287,7 @@ async function runFormChecks(
     `window.helm.invoke('profile:save', { draft: ${JSON.stringify(legacy)}, id: null })
        .then((r) => (r.profile ? r.profile.id : null))`
   )
+  await showProfiles(win)
   const listed =
     legacyId !== null &&
     (await pollJs(win, `document.querySelector('[data-profile="${String(legacyId)}"]')`, 10_000))

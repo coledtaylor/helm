@@ -3399,7 +3399,7 @@ async function toolsGroup(ctx: CheckContext, origin: string): Promise<Check[]> {
     ctx.win,
     `(() => { const el = document.querySelector('[data-tab="browser:${String(
       tabId ?? -1
-    )}"] [data-tab-subtitle]');
+    )}"] [data-tab-badge]');
       return el ? el.textContent : '' })()`
   )
 
@@ -3423,7 +3423,7 @@ async function toolsGroup(ctx: CheckContext, origin: string): Promise<Check[]> {
       opened: opened.text,
       tabIdAccordingToTheBrowserHost: tabId,
       openerName: tabId === null ? null : ctx.browsers.openerOf(tabId)?.name,
-      tabSubtitleInTheStrip: subtitle,
+      tabBadgeInTheStrip: subtitle,
       tabs: tabs.text
     },
     notes: [

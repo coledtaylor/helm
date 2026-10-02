@@ -429,6 +429,24 @@ export function ArtifactIcon(props: IconProps): JSX.Element {
   )
 }
 
+/** A pane taking the whole window: four corners pointing out. */
+export function MaximizeIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9" />
+    </Icon>
+  )
+}
+
+/** The same corners pointing in: the window gives the panes back. */
+export function UnmaximizeIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M13.5 6.5h-4v-4M2.5 9.5h4v4M9.5 6.5 14 2M6.5 9.5 2 14" />
+    </Icon>
+  )
+}
+
 /** The split editor/preview toggle. */
 export function SplitIcon(props: IconProps): JSX.Element {
   return (

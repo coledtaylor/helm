@@ -252,8 +252,12 @@ export interface SessionHost {
    * knowing what else cares that a session started.
    */
   onChanged: (listener: () => void) => void
-  /** Which pane the user is looking at; decides whether an exit notifies. */
-  setFocus: (id: number | null) => void
+  /**
+   * The sessions on screen - the front tab of each pane showing one. Decides
+   * whether an exit notifies: an exit in a pane somebody is looking at needs
+   * no toast to be seen.
+   */
+  setFocus: (ids: readonly number[]) => void
   runningCount: () => number
   /** Asks about every still-running session at once. True means go ahead. */
   confirmCloseAll: () => Promise<boolean>
@@ -287,7 +291,7 @@ export function createSessionHost({
 }: SessionHostDeps): SessionHost {
   const hosted = new Map<number, Hosted>()
   const grids = new Map<number, { cols: number; rows: number }>()
-  let focused: number | null = null
+  let focused: ReadonlySet<number> = new Set()
   const changed = new Set<() => void>()
   const announce = (): void => {
     for (const listener of changed) listener()
@@ -372,7 +376,7 @@ export function createSessionHost({
     const win = window()
     // "Non-focused" is two conditions, not one: a session in a background tab
     // of a focused window is just as unwatched as one in a minimised window.
-    const watched = win !== null && !win.isDestroyed() && win.isFocused() && focused === record.id
+    const watched = win !== null && !win.isDestroyed() && win.isFocused() && focused.has(record.id)
     if (watched || !Notification.isSupported()) return
 
     const outcome =
@@ -759,7 +763,7 @@ export function createSessionHost({
         releaseBrowserTools(entry)
         hosted.delete(req.id)
       }
-      if (focused === req.id) focused = null
+      if (focused.has(req.id)) focused = new Set([...focused].filter((id) => id !== req.id))
       announce()
       return { closed: true }
     },
@@ -798,8 +802,8 @@ export function createSessionHost({
       changed.add(listener)
     },
 
-    setFocus(id) {
-      focused = id
+    setFocus(ids) {
+      focused = new Set(ids)
     },
 
     runningCount: () => running().length,

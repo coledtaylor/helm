@@ -1293,7 +1293,7 @@ export async function runSettingsChecks(
   //
   // Ungated by `--only=`, because every group below is standing on it.
   //
-  // The seed strips `workspaceTabs` and `windowBounds` from a check's copy of
+  // The seed strips `paneLayout` and `windowBounds` from a check's copy of
   // the database (scripts/isolate.mjs). Before it did, this driver started with
   // whatever the developer had left open and however big they had left the
   // window - eight panes and 1757x946 on the machine where that was found -
@@ -1313,15 +1313,15 @@ export async function runSettingsChecks(
     checks.push({
       id: 'S-0',
       criterion: 'A check starts from the app’s defaults, not from where the developer left it',
-      title: 'No workspace tabs and no saved window bounds came through in the seeded database',
+      title: 'No saved panes and no saved window bounds came through in the seeded database',
       ok:
-        asFound.workspaceTabs === null &&
+        asFound.paneLayout === null &&
         asFound.windowBounds === null &&
         stripAtStart.length === 0 &&
         bounds.width === 1280 &&
         bounds.height === 820,
       detail: {
-        workspaceTabsRow: asFound.workspaceTabs,
+        paneLayoutRow: asFound.paneLayout,
         windowBoundsRow: asFound.windowBounds,
         tabsOnScreenAtStart: stripAtStart,
         window: { width: bounds.width, height: bounds.height },
@@ -1415,7 +1415,7 @@ export async function runSettingsChecks(
     // row for any of them while nobody was looking.
     const internalLeaked = await js<boolean>(
       win,
-      `/windowBounds|firstRunCompletedAt|workspaceTabs|browserRecentUrls|browserProjectUrls/.test(document.querySelector('[data-settings-pane]')?.textContent ?? '')`
+      `/windowBounds|firstRunCompletedAt|paneLayout|browserRecentUrls|browserProjectUrls/.test(document.querySelector('[data-settings-pane]')?.textContent ?? '')`
     )
 
     /**
@@ -1458,7 +1458,7 @@ export async function runSettingsChecks(
     // is a claim about cycling.
     //
     // The driver builds the ring rather than inheriting one. Until the seed
-    // learned to strip `workspaceTabs` (scripts/isolate.mjs) this phase started
+    // learned to strip the saved panes (scripts/isolate.mjs) this phase started
     // with whatever panes the developer had left open - eight of them on the
     // machine where that was found - and the assertion below was one press of
     // Ctrl+Tab expecting to arrive back at Settings. That only ever held for a
@@ -1531,7 +1531,7 @@ export async function runSettingsChecks(
 
     checks.push({
       id: 'S-1',
-      criterion: 'Gear in the title bar opens the Settings tab; every group renders',
+      criterion: 'The gear on the rail opens the Settings tab; every group renders',
       title:
         'The gear opens a Settings pane with every group, and Ctrl+Tab walks the whole tab ring back to it',
       ok:
@@ -1592,7 +1592,7 @@ export async function runSettingsChecks(
         'One full lap of a three-tab ring, asserted tab by tab. A two-tab ring',
         'cannot distinguish forward, backward and toggle - all three would pass.',
         'The strip is built by this phase and starts empty, because the seed',
-        'strips `workspaceTabs` from a check’s copy of the database. A driver',
+        'strips `paneLayout` from a check’s copy of the database. A driver',
         'that inherits the developer’s panes measures a different ring on every',
         'machine - see scripts/isolate.mjs.',
         '`windowBounds` and `firstRunCompletedAt` are state rather than',
@@ -2669,21 +2669,9 @@ export async function runSettingsChecks(
     await openSettings(win)
     await sleep(300)
 
-    // The title bar's toggle - the one outside the pane.
-    const before = await attr(win, '[data-settings-theme]', 'data-settings-theme')
-    const target = before === 'dark' ? 'Light theme' : 'Dark theme'
-    const targetTheme = target === 'Dark theme' ? 'dark' : 'light'
-    const clickedToggle = await click(
-      win,
-      `.app-drag [role="radiogroup"][aria-label="Theme"] button[aria-label=${q(target)}]`
-    )
-    const paneFollowedTheme = await pollJs(
-      win,
-      `document.querySelector('[data-settings-theme]')?.dataset.settingsTheme === ${q(targetTheme)}`,
-      10_000
-    )
-    await sleep(400)
-    const themeRow = rowValue(dbFile, 'theme')
+    // There was a theme toggle in the title bar too. It went with the layout
+    // that had room for it: Appearance lives in the pane, and S-4 drives every
+    // theme through the pane's own cards.
 
     // The status bar's segment - a click cycles it, and the pane has to agree
     // with wherever it landed.
@@ -2713,11 +2701,8 @@ export async function runSettingsChecks(
     checks.push({
       id: 'S-6',
       criterion: 'The existing quick accessors keep working and stay in sync with the pane',
-      title: 'The title bar toggle and the status bar segment write through, and the pane follows both',
+      title: 'The status bar segment writes through, and the pane follows it',
       ok:
-        clickedToggle &&
-        paneFollowedTheme &&
-        themeRow === targetTheme &&
         clickedSegment &&
         usageAfter !== null &&
         usageAfter !== usageBefore &&
@@ -2725,7 +2710,6 @@ export async function runSettingsChecks(
         usageRow === usageAfter &&
         updateTogglesBothWays,
       detail: {
-        theme: { before, clicked: target, paneFollowed: paneFollowedTheme, databaseRow: themeRow },
         usage: {
           segmentBefore: usageBefore,
           segmentAfter: usageAfter,
@@ -2740,9 +2724,9 @@ export async function runSettingsChecks(
         }
       },
       notes: [
-        'Both accessors are clicked where they live - the title bar strip and the',
-        'status bar - with the settings pane open behind them, so "stays in sync"',
-        'is observed rather than inferred from both writing the same channel.',
+        'The accessor is clicked where it lives - the status bar - with the',
+        'settings pane open behind it, so "stays in sync" is observed rather than',
+        'inferred from both writing the same channel.',
         'The segment is cycled rather than set, which is also what proves the',
         'cycle still exists now that the setting has a home.',
         'The release-check tick is driven off *and back on*, because a single',
@@ -3347,9 +3331,15 @@ export async function runSettingsChecks(
           bad: { width: 'wide', height: 820 },
           why: 'a width that is not a number reaches BrowserWindow'
         },
-        workspaceTabs: {
-          good: { panes: [{ kind: 'project', path: fixtures.rootA }], activeId: 'history' },
-          bad: { panes: [{ kind: 'project' }], activeId: null },
+        paneLayout: {
+          // The layout the window is showing, the way `windowBounds` above
+          // takes the window's own size. The window writes its panes back on a
+          // 500ms debounce whenever the row differs from what it shows, so a
+          // control value it is not showing is replaced before this reads it
+          // back - which is how this case used to fail while the validator was
+          // right: the row read 250ms later was the window's, not the driver's.
+          good: now.paneLayout ?? { groups: [{ panes: [], activeId: null }], focused: 0 },
+          bad: { groups: [{ panes: [{ kind: 'project' }], activeId: null }], focused: 0 },
           why: 'a project pane with no path is a tab that restores pointing nowhere'
         },
         firstRunCompletedAt: {
@@ -3395,7 +3385,7 @@ export async function runSettingsChecks(
           bad: 51,
           why: 'the project pane may not be given less than half of its own page'
         },
-        sessionSplitPct: {
+        paneSplitPct: {
           good: 60,
           // Either bound would do here - neither side of this divider is the
           // subordinate one - so the floor, which is the one a drag reaches by
@@ -3731,21 +3721,21 @@ export async function runSettingsChecks(
       // ---------------------------------------------------------------------
 
       /**
-       * Take the project shell out of the document, leaving the session in it.
+       * The project shell out of the document, the session in it.
        *
        * The claim needs one terminal of each kind on opposite sides of the
-       * question at the same moment, and this is now the only thing that
-       * arranges that. It used to arrange itself: opening a session dropped the
-       * project shell, so by this line the shell was already gone. That was a
-       * bug - the session has its own column and takes nothing from the
-       * project's - and fixing it means the split shows both. Maximising the
-       * session is the honest replacement: the workspace column unmounts, its
-       * shell goes with it, and the session pane stays exactly where it was.
-       *
-       * `session` singular is the button's own `data-maximize` value, and the
-       * same button restores the split further down.
+       * question at the same moment. A session launched from a project's page
+       * lands in front of the pane that page is in, so the page - and the shell
+       * under it - goes behind it and unmounts, while the session is on screen.
+       * The session's tab is clicked anyway, so the arrangement is one this
+       * driver made rather than one it assumed; bringing the project's tab back
+       * further down is what shows the shell again.
        */
-      const shellHidden0 = await click(win, '[data-maximize="session"]')
+      const shellHidden0 = await js<boolean>(
+        win,
+        `(() => { const el = document.querySelector('[data-tab="session:${String(sessionId)}"]');
+          if (!el) return false; el.click(); return true })()`
+      )
       const shellWentAway = await pollJs(
         win,
         `window.__helmTerminals().shells.every((t) => !t.attached)
@@ -3823,12 +3813,18 @@ export async function runSettingsChecks(
       const cosmeticResizes = sessionResizes.length + shellResizes.length
       const cosmeticIsFree = cosmeticLanded && cosmeticResizes === 0
 
-      // The hidden pane comes back - the same button, which now restores the
-      // split. Its terminal was reconfigured while it was out of the document,
+      // The hidden shell comes back - its project's tab, in front of the pane
+      // again. Its terminal was reconfigured while it was out of the document,
       // measured 0x0, and refused to act on that; showing it is the moment the
-      // pty is allowed to hear about the new cell size.
+      // pty is allowed to hear about the new cell size. Found by its dataset
+      // rather than a selector, because the id carries a Windows path.
       shellResizes.length = 0
-      await click(win, '[data-maximize="session"]')
+      await js<boolean>(
+        win,
+        `(() => { const el = [...document.querySelectorAll('[role="tab"][data-tab]')]
+            .find((t) => t.dataset.tab === ${JSON.stringify(`project:${projectOne}`)});
+          if (!el) return false; el.click(); return true })()`
+      )
       const shellVisible = await pollJs(
         win,
         `window.__helmTerminals().shells.every((t) => t.attached)`,
@@ -3992,7 +3988,7 @@ export async function runSettingsChecks(
           everyTerminalTookTheSize: everyTerminalResized,
           sizeLandedInTheDatabase: sizeLanded,
           hiddenPaneCameBack: shellVisible,
-          hidTheShellByMaximizingTheSession: { clicked: shellHidden0, detached: shellWentAway },
+          hidTheShellBehindTheSession: { clicked: shellHidden0, detached: shellWentAway },
           sizeChangedFrom: DEFAULT_TERMINAL.fontSize,
           sizeChangedTo: bigger,
           reportedBefore: [...before.sessions, ...before.shells],
@@ -4734,7 +4730,7 @@ export async function runSettingsChecks(
       })
 
       // -----------------------------------------------------------------
-      // S-21: the session split is remembered, and remembered as a layout
+      // S-21: the pane split is remembered, and remembered as a layout
       // -----------------------------------------------------------------
       //
       // The half of this that S-9 cannot make. S-9 reads the parked number back
@@ -4743,12 +4739,24 @@ export async function runSettingsChecks(
       // perfectly and moves no boundary is the bug this setting exists to fix,
       // wearing the shape of a passing check.
       //
-      // So the claim here is about **the measured column**: write a percentage,
-      // and the sessions pane is that percentage of the row. Then drag, and the
+      // So the claim here is about **the measured pane**: write a percentage,
+      // and the second pane is that percentage of the row. Then drag, and the
       // row holds what the pane ended at - one write for the gesture, which is
       // the other thing a percentage per `mousemove` would pass.
       {
         const DIVIDER = '[role="separator"][aria-orientation="vertical"]'
+        // Two panes first: the session, in front of its pane, is split into a
+        // pane of its own with the pane's own button, which leaves the project
+        // page in the first. There is no divider until there are two.
+        await js<boolean>(
+          win,
+          `(() => { const el = document.querySelector('[data-tab="session:${String(sessionId)}"]');
+            if (!el) return false; el.click(); return true })()`
+        )
+        await sleep(300)
+        await click(win, '[data-pane-split="new"]')
+        await pollJs(win, `document.querySelector(${JSON.stringify(DIVIDER)}) !== null`, 10_000)
+        await sleep(500)
         const splitGeometry = `(() => {
           const sep = document.querySelector(${JSON.stringify(DIVIDER)})
           const row = sep?.parentElement
@@ -4779,7 +4787,7 @@ export async function runSettingsChecks(
         // Two, and neither is the default: one value could be the number the
         // app already had.
         for (const pct of [SPLIT_BOUNDS.min, 70]) {
-          await sendWrite(win, { sessionSplitPct: pct })
+          await sendWrite(win, { paneSplitPct: pct })
           await sleep(700)
           const at = await js<SplitGeometry | null>(win, splitGeometry).catch(() => null)
           laidOut.push({ wrote: pct, measured: at === null ? null : at.pct })
@@ -4792,7 +4800,7 @@ export async function runSettingsChecks(
         if (beforeDrag !== null) {
           await armSettingsCounter(win)
           await tracePointer(win, DIVIDER)
-          // Toward the left, which widens the sessions column. Six moves, so
+          // Toward the left, which widens the second pane. Six moves, so
           // "one write" is a claim about a gesture that had frames to write on.
           await drag(
             win,
@@ -4806,7 +4814,7 @@ export async function runSettingsChecks(
           dragPointer = await readPointerTrace(win)
         }
 
-        const rowAfterDrag = rowValue(dbFile, 'sessionSplitPct')
+        const rowAfterDrag = rowValue(dbFile, 'paneSplitPct')
         // The row names the pane's own measured share, to the percentage point
         // the setting is stored in.
         const rowMatchesPane =
@@ -4825,9 +4833,9 @@ export async function runSettingsChecks(
 
         checks.push({
           id: 'S-21',
-          criterion: 'The session split is remembered, and the pane is laid out from it',
+          criterion: 'The pane split is remembered, and the panes are laid out from it',
           title:
-            'A written percentage becomes the sessions pane’s measured share, and a drag writes the row exactly once',
+            'A written percentage becomes the second pane’s measured share, and a drag writes the row exactly once',
           ok:
             followedTheSetting &&
             gestureArrivedHere &&
@@ -4862,9 +4870,10 @@ export async function runSettingsChecks(
         })
       }
 
-      // Put the pane back the way a person left it, so the run does not end
-      // with a maximised workspace and two fixture shells running.
-      await click(win, '[data-maximize="workspace"]')
+      // Put the panes back the way a person left them, so the run does not end
+      // with a split nobody asked for and two fixture shells running. Closing
+      // the second pane hands its tab to the first; it closes nothing.
+      await click(win, '[data-pane-close]')
       await sleep(300)
       for (const entry of ctx.pterm.list()) {
         if (entry.path.toLowerCase().startsWith(fixtures.dir.toLowerCase())) {
@@ -5464,7 +5473,7 @@ export async function runSettingsChecks(
     projectShellHeightPct: SHELL_HEIGHT_BOUNDS.max,
     // The other pane proportion, parked at its ceiling for the same reason and
     // deliberately not at a round number a default could plausibly become.
-    sessionSplitPct: SPLIT_BOUNDS.max,
+    paneSplitPct: SPLIT_BOUNDS.max,
     // The real gh rather than the fixture, for the reason `claudePath` uses the
     // real claude: a restore that somehow does not happen must leave the app
     // pointed at a working program, not at a stub that refuses to sign in.

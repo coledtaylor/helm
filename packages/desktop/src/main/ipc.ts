@@ -700,7 +700,7 @@ export function registerIpc(ctx: IpcContext): void {
 
     'session:input': ({ id, data }) => ctx.sessions.input(id, data),
     'session:resize': ({ id, cols, rows }) => ctx.sessions.resize(id, cols, rows),
-    'session:focus': ({ id }) => ctx.sessions.setFocus(id),
+    'session:focus': ({ ids }) => ctx.sessions.setFocus(ids),
     'sessions:watch': ({ watching }) => ctx.resources.watch(watching),
 
     'pterm:input': ({ id, data }) => ctx.pterm.input(id, data),

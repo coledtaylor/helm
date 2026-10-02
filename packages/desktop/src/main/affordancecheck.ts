@@ -215,6 +215,19 @@ const VIEWS: Array<{
    */
   { name: 'browser', open: ['[data-open-browser]'], anchor: '[data-browser-bar]' },
   { name: 'history', open: ['[data-open-history]'], anchor: '[data-history-search]' },
+  /**
+   * The sidebar's Profiles view, which the rail swaps in for the sessions
+   * tree. Anchored on its New button rather than on a row, because a machine
+   * with no profiles has no rows and the view is still on screen. Put back to
+   * the tree afterwards: every view after this one, and AFF-7, reach the tree's
+   * first project row through `aside nav`.
+   */
+  {
+    name: 'profiles',
+    open: ['[data-open-profiles]'],
+    anchor: '[aria-label="New profile"]',
+    close: ['[data-rail="sessions"]']
+  },
   { name: 'pulls', open: ['[data-open-pulls]'], anchor: '[data-pulls-refresh]' },
   { name: 'settings', open: ['[data-open-settings]'], anchor: '[data-settings-pane]' },
   /**

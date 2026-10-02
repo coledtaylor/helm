@@ -59,8 +59,9 @@ export function realDataDir() {
  *
  * It is not hypothetical, and the shape of the damage is worth keeping:
  *
- * - **`workspaceTabs`** carried eight panes into every check on the machine
- *   this was found on, six of them project shells that each spawn a terminal.
+ * - **`paneLayout`** - `workspaceTabs`, when the window had a single strip -
+ *   carried eight panes into every check on the machine this was found on,
+ *   six of them project shells that each spawn a terminal.
  *   `S-1` cycles Ctrl+Tab expecting to land back where it started and found a
  *   ten-tab ring; `S-10` asserted "every terminal is attached" while counting
  *   terminals it never started. Both are right about the app and were failing
@@ -70,7 +71,7 @@ export function realDataDir() {
  *   is worth at that width; the window it was actually photographing was 1757
  *   wide, because that is where the developer left it.
  *
- * Both now start from the app's own defaults - an empty strip, 1280x820 - on
+ * Both now start from the app's own defaults - an empty window, 1280x820 - on
  * every machine, which is what those comments already claimed.
  *
  * **`firstRunCompletedAt` is deliberately not here.** It is the same *kind* of
@@ -78,7 +79,7 @@ export function realDataDir() {
  * instead of the app. "Internal state" is not the rule; "where the developer
  * left the app" is, and completing first-run is not somewhere anybody left it.
  */
-export const UI_STATE_KEYS = ['workspaceTabs', 'windowBounds']
+export const UI_STATE_KEYS = ['paneLayout', 'windowBounds']
 
 /**
  * Where `name`'s run keeps its data.

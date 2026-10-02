@@ -201,11 +201,27 @@ const VIEWS: Array<{ name: string; selector: string | null; anchor: string | nul
   { name: 'settings', selector: '[data-open-settings]', anchor: '[data-settings-pane]' }
 ]
 
-const THEME_LABEL = {
-  system: 'Match the system theme',
-  light: 'Light theme',
-  dark: 'Dark theme'
-} as const
+/**
+ * Put a theme on screen the way the Appearance pane does - a settings write -
+ * and wait until the window has painted it.
+ *
+ * The title bar had a three-way toggle this walk clicked, so every shot also
+ * proved that control. It went with the layout that had room for it; the
+ * Appearance cards are what set a theme now, and `settings-check` S-4 drives
+ * those. What this walk needs is only the theme on screen.
+ */
+async function setTheme(win: BrowserWindow, theme: 'system' | 'light' | 'dark'): Promise<void> {
+  await js<unknown>(
+    win,
+    `window.helm.invoke('settings:write', { theme: ${JSON.stringify(theme)} })`
+  ).catch(() => null)
+  if (theme === 'system') return
+  await pollJs(
+    win,
+    `document.documentElement.classList.contains('dark') === ${String(theme === 'dark')}`,
+    5000
+  )
+}
 
 /** A settings patch, written the way the panes write one. */
 async function writeAppSettings(win: BrowserWindow, patch: Partial<AppSettings>): Promise<void> {
@@ -1559,11 +1575,10 @@ async function renameTab(win: BrowserWindow, tabId: string, label: string): Prom
  * What the crowded strip actually measured, printed beside the shot.
  *
  * For the reason the `responsive` group prints its header numbers: a tab whose
- * subtitle has been ellipsised does not look wrong in a thumbnail, it looks
- * slightly shorter - and "the distinguishing part of a label survives
- * truncation" is a claim about `scrollWidth` against `clientWidth`, not
- * something an eye can settle at 10px. Each line is one tab: how wide it is,
- * and whether its title and its subtitle are being cut.
+ * title has been ellipsised does not look wrong in a thumbnail, it looks
+ * slightly shorter - and "the label survives truncation" is a claim about
+ * `scrollWidth` against `clientWidth`, not something an eye can settle at
+ * 10px. Each line is one tab: how wide it is, and whether its title is cut.
  */
 async function reportStrip(win: BrowserWindow, theme: string): Promise<void> {
   const strip = await js<{
@@ -1572,10 +1587,8 @@ async function reportStrip(win: BrowserWindow, theme: string): Promise<void> {
     tokens: Record<string, string>
     tabs: Array<{
       title: string
-      subtitle: string
       width: number
       titleCut: boolean
-      subCut: boolean
       state: string | null
       dot: { size: string; fill: string; border: string; borderColor: string } | null
     }>
@@ -1587,18 +1600,15 @@ async function reportStrip(win: BrowserWindow, theme: string): Promise<void> {
        const root = getComputedStyle(document.documentElement);
        const token = (n) => root.getPropertyValue(n).trim();
        const tabs = [...document.querySelectorAll('[role="tab"][data-tab^="session:"]')].map((t) => {
-         const sub = t.querySelector('[data-tab-subtitle]');
-         const title = sub ? sub.previousElementSibling : t.querySelector('span span');
+         const title = t.querySelector('[data-tab-title]');
          const cut = (el) => el ? el.scrollWidth > el.clientWidth + 1 : false;
          const mark = t.querySelector('span[aria-hidden]');
          const cs = mark ? getComputedStyle(mark) : null;
          const label = t.getAttribute('aria-label');
          return {
            title: title ? title.textContent : '',
-           subtitle: sub ? sub.textContent : '',
            width: Math.round(t.getBoundingClientRect().width),
            titleCut: cut(title),
-           subCut: cut(sub),
            state: label ? label.slice(label.lastIndexOf(', ') + 2) : null,
            dot: cs
              ? {
@@ -1643,8 +1653,7 @@ async function reportStrip(win: BrowserWindow, theme: string): Promise<void> {
   )
   for (const tab of strip.tabs) {
     console.log(
-      `      ${String(tab.width).padStart(4)}px  ${tab.titleCut ? 'CUT ' : '    '}${tab.title}` +
-        `  /  ${tab.subCut ? 'CUT ' : '    '}${tab.subtitle}`
+      `      ${String(tab.width).padStart(4)}px  ${tab.titleCut ? 'CUT ' : '    '}${tab.title}`
     )
     console.log(
       `             dot ${tab.dot?.size ?? '-'}  fill=${tab.dot?.fill ?? '-'}` +
@@ -1693,17 +1702,17 @@ async function shootDotStates(
   await sleep(700)
 
   for (const theme of ['dark', 'light'] as const) {
-    await click(win, `button[aria-label="${THEME_LABEL[theme]}"]`)
+    await setTheme(win, theme)
     await sleep(500)
     // Re-pushed after the theme change: a re-render from adopted props would
     // otherwise be free to arrive between the two, and this is a photograph.
     emit(win, 'session:activity', states)
     await sleep(400)
-    const maximized = await click(win, 'button[aria-label="Maximize the session pane"]')
+    const maximized = await click(win, '[data-pane-group="0"] [data-maximize]')
     if (maximized) await sleep(600)
     files.push((await screenshot(win, outDir, `session-tab-dots-${theme}.png`)).file)
     await reportStrip(win, `${theme} / dot states`)
-    if (maximized) await click(win, 'button[aria-label="Restore the split"]')
+    if (maximized) await click(win, '[data-pane-group="0"] [data-maximize]')
     await sleep(300)
   }
   return files
@@ -1773,7 +1782,7 @@ async function shootSessionsPane(ctx: CheckContext, outDir: string): Promise<str
 
   const listShape = await sessionsPaneShape(win)
   for (const theme of ['dark', 'light'] as const) {
-    await click(win, `button[aria-label="${THEME_LABEL[theme]}"]`)
+    await setTheme(win, theme)
     await sleep(600)
     files.push((await screenshot(win, outDir, `sessions-list-narrow-${theme}.png`)).file)
   }
@@ -1782,7 +1791,7 @@ async function shootSessionsPane(ctx: CheckContext, outDir: string): Promise<str
   await sleep(700)
   const narrowShape = await sessionsPaneShape(win)
   for (const theme of ['dark', 'light'] as const) {
-    await click(win, `button[aria-label="${THEME_LABEL[theme]}"]`)
+    await setTheme(win, theme)
     await sleep(600)
     files.push((await screenshot(win, outDir, `sessions-pane-${theme}.png`)).file)
   }
@@ -1792,23 +1801,26 @@ async function shootSessionsPane(ctx: CheckContext, outDir: string): Promise<str
    * detail are on screen together.
    *
    * Widening the window is not enough on its own and that is worth writing
-   * down: the split gives the workspace a *fraction* of the row, so a 1440px
-   * window still left this pane at 327px and still compact. The workspace pane
-   * has to be maximised as well - `[data-maximize="workspace"]`, the same
-   * control a person would use - and the second click on the same selector puts
-   * the split back.
+   * down: with two panes this one gets a *fraction* of the row, so a 1440px
+   * window still left it at 327px and still compact. The pane it is in has to
+   * be given the whole window as well - its own maximize button, the control a
+   * person would use - and the same button, pressed again, gives it back.
    */
+  const maximizeItsPane = `(() => {
+    const pane = document.querySelector('[data-sessions-pane]')?.closest('[data-pane-group]');
+    const el = pane?.querySelector('[data-maximize]');
+    if (!el) return false; el.click(); return true })()`
   win.setBounds({ ...narrow, width: 1440, height: 900 })
   await sleep(600)
-  const widened = await click(win, '[data-maximize="workspace"]')
+  const widened = await js<boolean>(win, maximizeItsPane).catch(() => false)
   await sleep(900)
   const wideShape = await sessionsPaneShape(win)
   for (const theme of ['dark', 'light'] as const) {
-    await click(win, `button[aria-label="${THEME_LABEL[theme]}"]`)
+    await setTheme(win, theme)
     await sleep(600)
     files.push((await screenshot(win, outDir, `sessions-pane-wide-${theme}.png`)).file)
   }
-  if (widened) await click(win, '[data-maximize="workspace"]')
+  if (widened) await js<boolean>(win, maximizeItsPane).catch(() => false)
   win.setBounds(narrow)
   await sleep(600)
 
@@ -1883,11 +1895,19 @@ async function shootCrowdedTabs(
   }
   await sleep(500)
 
+  // The project's own row is where each is started - its `+` in the tree. The
+  // page's "Start session here" works once: the session lands in front of the
+  // pane the page is in, and the button goes behind it.
+  const launchPath = await js<string | null>(
+    win,
+    `(() => { const el = document.querySelector('aside nav button[aria-current="true"]');
+      return el ? el.title : null })()`
+  )
   for (let n = 0; n < CROWDED_TABS; n++) {
     const started = await js<boolean>(
       win,
-      `(() => { const el = [...document.querySelectorAll('button')]
-          .find((b) => (b.textContent ?? '').includes('Start session here'));
+      `(() => { const el = [...document.querySelectorAll('[data-launch-project]')]
+          .find((b) => b.getAttribute('data-launch-project') === ${JSON.stringify(launchPath)});
         if (!el) return false; el.click(); return true })()`
     )
     if (!started) break
@@ -1948,6 +1968,17 @@ async function shootCrowdedTabs(
     )
   }
 
+  // Two panes, the way the working layout draws them: the last session is
+  // given a pane of its own with its pane's split button, and the project page
+  // and the other five stay in the first.
+  await js<boolean>(
+    win,
+    `(() => { const tab = [...document.querySelectorAll('[data-tab^="session:"]')].at(-1);
+      if (!tab) return false; tab.click(); return true })()`
+  )
+  await sleep(300)
+  await click(win, '[data-pane-split="new"]')
+
   // Long enough for the TUIs behind the strip to have painted; a pane still
   // blank makes the shot look like a bug that is not there.
   await sleep(8000)
@@ -1958,20 +1989,20 @@ async function shootCrowdedTabs(
   await sleep(600)
 
   for (const theme of ['dark', 'light'] as const) {
-    await click(win, `button[aria-label="${THEME_LABEL[theme]}"]`)
+    await setTheme(win, theme)
     await sleep(500)
 
-    // Launching from a project row leaves the split up, which gives the strip
-    // about 250px and answers a different question. Both are worth having: the
-    // split is what someone is actually looking at while they work, and the
-    // maximised one is the only place six tabs can be judged against each other.
+    // Two panes give the first strip about half the row and answer a different
+    // question from one pane. Both are worth having: the split is what someone
+    // is looking at while they work, and the first pane maximised is the only
+    // place its tabs can be judged against each other.
     files.push((await screenshot(win, outDir, `session-tabs-split-w900-${theme}.png`)).file)
 
-    const maximized = await click(win, 'button[aria-label="Maximize the session pane"]')
+    const maximized = await click(win, '[data-pane-group="0"] [data-maximize]')
     if (maximized) await sleep(600)
     files.push((await screenshot(win, outDir, `session-tabs-crowded-w900-${theme}.png`)).file)
     await reportStrip(win, theme)
-    if (maximized) await click(win, 'button[aria-label="Restore the split"]')
+    if (maximized) await click(win, '[data-pane-group="0"] [data-maximize]')
     await sleep(400)
 
     // And the same strip with a rename open on the active tab.
@@ -2004,10 +2035,16 @@ async function shootCrowdedTabs(
   // Last, because it stops the poller: everything above needs the real states.
   files.push(...(await shootDotStates(ctx, outDir, tabs)))
 
-  await click(win, `button[aria-label="${THEME_LABEL[themeBefore]}"]`)
+  await setTheme(win, themeBefore)
   win.setBounds(bounds)
   await sleep(400)
   await closeAllSessions(win)
+  // And their tabs. Ending a session leaves its tab, as it should, and the
+  // split below starts from one pane and a project: inheriting this group's six
+  // ended tabs and its second pane, it found no split button to press and
+  // closed an ended tab where it meant to close a live one.
+  await closeAllTabs(win)
+  await sleep(400)
   return files
 }
 
@@ -2038,8 +2075,8 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
   // Let the first scan land so the tree has rows to click.
   await pollJs(win, `document.querySelector('aside nav button[title]')`, 20_000)
 
-  // Driving the real toggle persists the preference, so remember what it was
-  // and put it back - a screenshot run must not repaint the user's app. The
+  // Setting a theme persists the preference, so remember what it was and put
+  // it back - a screenshot run must not repaint the user's app. The
   // ignore list is remembered for the same reason and restored beside it.
   const before = ctx.services.settings.theme
   const ignoredBefore = [...ctx.services.settings.prIgnoredRepos]
@@ -2051,8 +2088,7 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
   const staleBefore = ctx.services.settings.prStaleDays
 
   for (const theme of ['dark', 'light'] as const) {
-    // Through the real toggle, so the shot proves the control too.
-    await click(win, `button[aria-label="${THEME_LABEL[theme]}"]`)
+    await setTheme(win, theme)
     await sleep(400)
     // Said out loud: `welcome` is the empty workspace, so a tab left open here
     // is not a cosmetic difference between the two passes - it is a different
@@ -2061,7 +2097,14 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
     if (stuck > 0) console.error(`design-shot: ${String(stuck)} tab(s) would not close (${theme})`)
     await sleep(400)
 
-    if (want.has('responsive')) await sweepWidths(win, outDir, theme, files)
+    if (want.has('responsive')) {
+      await sweepWidths(win, outDir, theme, files)
+      // The sweep leaves the panes it measured open, and `welcome` below is the
+      // empty window - so a full run found its anchor missing and wrote no
+      // shot, while a `--only=views` run, which skips the sweep, never noticed.
+      await closeAllTabs(win)
+      await sleep(400)
+    }
     if (!want.has('views')) continue
 
     for (const view of VIEWS) {
@@ -2101,6 +2144,16 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
       if (view.name === 'welcome') {
         const pinned = await shootPinned(win, outDir, theme, pinnedBefore)
         if (pinned !== null) files.push(pinned)
+
+        // The sidebar's other view, which the rail swaps in. Put back to the
+        // tree afterwards: every view after this reaches a project through it.
+        if (await click(win, '[data-open-profiles]')) {
+          await pollJs(win, `document.querySelector('[aria-label="New profile"]')`, 5000)
+          await drawn(win)
+          files.push((await screenshot(win, outDir, `profiles-${theme}.png`)).file)
+          await click(win, '[data-rail="sessions"]')
+          await sleep(300)
+        }
       }
 
       // The project pane again, for a project that is a github.com repository -
@@ -2241,7 +2294,7 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
 
   if (want.has('views')) await shootThirdTheme(win, outDir, ctx.services.settings, files)
 
-  await click(win, `button[aria-label="${THEME_LABEL[before]}"]`)
+  await setTheme(win, before)
   await sleep(200)
   await writeIgnored(win, ignoredBefore)
 
@@ -2313,6 +2366,12 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
     )
     if (started) {
       await pollJs(win, `document.querySelector('[data-tab^="session:"]')`, 20_000)
+      // The session lands in front of the project's pane; its split button
+      // gives it a pane of its own, and the project's tab is clicked so the
+      // first pane is the one every page below opens into.
+      await click(win, '[data-pane-split]')
+      await sleep(600)
+      await click(win, '[data-pane-group="0"] [role="tab"]')
       await sleep(8000)
       const shot = await screenshot(win, outDir, 'session-split.png')
       files.push(shot.file)
@@ -2327,7 +2386,7 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
       // a layout question, which a second theme answers identically, but the
       // two-row header is a shape no other shot in this walk carries and a
       // shape is worth seeing on both grounds.
-      await click(win, `button[aria-label="${THEME_LABEL.dark}"]`)
+      await setTheme(win, 'dark')
       await sleep(400)
       for (const target of DOCKED_TARGETS) {
         if (!(await dragSplit(win, target))) {
@@ -2355,7 +2414,7 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
       }
 
       const narrowest = DOCKED_TARGETS[0] ?? 300
-      await click(win, `button[aria-label="${THEME_LABEL.light}"]`)
+      await setTheme(win, 'light')
       await sleep(400)
       if (await dragSplit(win, narrowest)) {
         for (const pane of NARROWED) {
@@ -2365,7 +2424,7 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
           files.push(shot.file)
         }
       }
-      await click(win, `button[aria-label="${THEME_LABEL[before]}"]`)
+      await setTheme(win, before)
       await sleep(300)
 
       // The "still running" confirmation, reached the way a user reaches it -
@@ -2374,8 +2433,17 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
       // `Confirm`, so the real renderer round trip runs in the app and nowhere
       // else. Nothing is asserted; the console lines and the shot are the
       // evidence, same as every other view in this walk.
+      // The session this group started - the one in the second pane - and not
+      // whichever session tab comes first: an earlier group's sessions end
+      // through `session:close` and keep their tabs, as an ended session does,
+      // so "no session tab left" was never the claim this could make.
+      const target = await js<string | null>(
+        win,
+        `(() => { const el = document.querySelector('[data-pane-group="1"] [data-tab^="session:"]');
+          return el ? el.dataset.tab : null })()`
+      ).catch(() => null)
       const closeSessionTab = `(() => {
-        const tab = document.querySelector('[data-tab^="session:"]');
+        const tab = document.querySelector('[data-tab=${JSON.stringify(target ?? '')}]');
         const close = tab?.parentElement?.querySelector('button[aria-label^="Close "]');
         if (!close) return false; close.click(); return true })()`
 
@@ -2393,7 +2461,7 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
           await sleep(600)
           const survived = await js<boolean>(
             win,
-            `Boolean(document.querySelector('[data-tab^="session:"]'))
+            `Boolean(document.querySelector('[data-tab=${JSON.stringify(target ?? '')}]'))
              && !document.querySelector('[data-confirm-session]')`
           )
           console.log(`design-shot: confirm cancelled, session survived: ${String(survived)}`)
@@ -2403,7 +2471,7 @@ export async function runDesignShot(ctx: CheckContext, outDir: string): Promise<
           await click(win, '[data-confirm-accept]')
           const ended = await pollJs(
             win,
-            `!document.querySelector('[data-tab^="session:"]')`,
+            `!document.querySelector('[data-tab=${JSON.stringify(target ?? '')}]')`,
             10_000
           )
           console.log(`design-shot: confirm accepted, session ended: ${String(ended)}`)

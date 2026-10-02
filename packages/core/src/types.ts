@@ -21,6 +21,7 @@ import { PR_POLL_MINUTES, PR_STALE_DAYS, type PrCheckoutMode } from './github/ty
 import { DEFAULT_PR_REVIEW_PROMPT } from './github/prompt'
 // The same again: `AppSettings.browserReach` names it.
 import type { BrowserReach } from './browser/reach'
+import type { SavedPaneLayout } from './layout/panes'
 
 /**
  * The browser pane's URL rules, re-exported here rather than from the package
@@ -49,6 +50,13 @@ export {
  */
 export * from './theme/color'
 export * from './theme/themes'
+
+/**
+ * The pane layout, re-exported for the same reason: the renderer arranges tabs
+ * into groups with it on every render. `layout/panes.ts` imports nothing but a
+ * type from this file.
+ */
+export * from './layout/panes'
 
 export {
   frontmatterField,
@@ -1167,18 +1175,17 @@ export const PROJECT_SHELL_HEIGHT_PCT = { min: 10, max: 50, default: 30 } as con
 export const CONTENT_WRAP_INDENT = { min: 0, max: 16, default: 4 } as const
 
 /**
- * How much of the window's width the sessions column takes, as a percentage.
+ * How much of the row the second pane takes when there are two, as a
+ * percentage.
  *
- * The other axis of the same idea as `PROJECT_SHELL_HEIGHT_PCT`, and the same
- * bounds the divider has always enforced in its handler - 20% to 80% - now said
- * once here rather than as two literals inside a `mousemove`.
+ * The other axis of the same idea as `PROJECT_SHELL_HEIGHT_PCT`. The bounds are
+ * the ones the divider has always enforced - 20% to 80% - so neither pane can
+ * be dragged out of usefulness.
  *
- * The default is 45 because that is the number the split has silently opened at
- * since it was written, and this key is only being introduced to stop it
- * forgetting: somebody who never touches the divider must not have the app move
- * on them the first time they upgrade.
+ * The default is 45 because that is where the split has opened since the one
+ * it replaced, the session column beside the workspace, was written.
  */
-export const SESSION_SPLIT_PCT = { min: 20, max: 80, default: 45 } as const
+export const PANE_SPLIT_PCT = { min: 20, max: 80, default: 45 } as const
 
 /**
  * How much of `helm.db` the transcript archive may take, in bytes.
@@ -1371,24 +1378,28 @@ export interface AppSettings {
   /** Window geometry, restored on next launch. */
   windowBounds: { width: number; height: number; x?: number; y?: number } | null
   /**
-   * The workspace tab strip, restored on next launch: which panes are open, in
-   * the order they were arranged, and which one was in front.
+   * The panes, restored on next launch: which tabs are open in which group, in
+   * the order they were arranged, which one was in front of each, and which
+   * group had the focus (`layout/panes.ts`).
    *
    * State rather than a preference, so it sits beside `windowBounds` and not in
    * the settings pane - it is something Helm remembers, not something anyone
    * chose. Null means nothing has been written yet, which is not the same as an
-   * empty strip: a user who closed every tab gets an empty strip back.
+   * empty layout: a user who closed every tab gets an empty window back.
    *
-   * The **session** strip is deliberately not here. `before-quit` calls
-   * `sessions.shutdown()`, so no session survives a restart, and a strip of
-   * tabs pointing at processes that no longer exist is not a workspace
-   * restored - it is a strip of dead tabs to close.
+   * **Sessions and browser tabs are not written down.** `before-quit` ends
+   * every session and destroys every view, so a restored tab pointing at either
+   * would be a tab pointing at nothing - see `PaneRef`. A group that held only
+   * those is restored as no group at all.
+   *
+   * It replaced `workspaceTabs`, the single strip the window had before it had
+   * groups. That row is now an unknown key, ignored on read, so the first
+   * launch after the change opens with an empty window once.
    *
    * `activeId` is a tab id, which is only ever compared: a saved id that no
-   * longer matches an open pane falls back to the last tab, the same rule that
-   * governs `requestedId` while the app is running.
+   * longer matches an open tab falls back to that group's last tab.
    */
-  workspaceTabs: { panes: WorkspaceTab[]; activeId: string | null } | null
+  paneLayout: SavedPaneLayout | null
   /**
    * When the first-run flow was finished. Null means it has not been, which is
    * what puts the setup pane on screen instead of the launcher.
@@ -1454,23 +1465,26 @@ export interface AppSettings {
    */
   projectShellHeightPct: number
   /**
-   * How wide the sessions column is, as a percentage of the window, when a
-   * workspace pane and a session are both on screen. Bounded by
-   * `SESSION_SPLIT_PCT` and dragged by the divider between them.
+   * How wide the second pane is, as a percentage of the row, when there are
+   * two side by side. Bounded by `PANE_SPLIT_PCT` and dragged by the divider
+   * between them.
    *
    * **One value for every project**, the same answer `projectShellHeightPct`
-   * gives and for the same reason: this is "how much terminal do I want beside
-   * my work", which is a fact about the person and the monitor rather than
-   * about a repository. It is also the stronger case of the two - this divider
-   * does not move when you switch tabs, so a per-project value would make the
-   * boundary jump every time somebody changed pane.
+   * gives and for the same reason: this is "how much room do I want beside my
+   * work", which is a fact about the person and the monitor rather than about a
+   * repository. It is also the stronger case of the two - this divider does not
+   * move when you switch tabs, so a per-project value would make the boundary
+   * jump every time somebody changed pane.
+   *
+   * It replaced `sessionSplitPct`, which measured the same divider when the
+   * right-hand column could only hold sessions; the old row is ignored.
    *
    * A percentage, not the fraction the renderer holds. The pane's other
    * remembered size is a percentage, the settings row wants a number a person
    * can retype, and `0.45` in a database column that its neighbour writes `30`
    * into is the kind of difference nobody remembers on the day it matters.
    */
-  sessionSplitPct: number
+  paneSplitPct: number
 
   /**
    * Whether the content viewer wraps long lines when it shows a file as source.
@@ -1683,7 +1697,7 @@ export interface AppSettings {
    *
    * The address bar's dropdown and nothing more elaborate - no history page, no
    * manager, no search over it (see the milestone's "explicitly out"). State
-   * rather than a preference, so it sits beside `workspaceTabs` and is
+   * rather than a preference, so it sits beside `paneLayout` and is
    * deliberately absent from the settings pane. Bounded by
    * `BROWSER_RECENT_URLS_MAX`.
    */
@@ -1767,7 +1781,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   scanRoots: [],
   pinnedProjects: [],
   windowBounds: null,
-  workspaceTabs: null,
+  paneLayout: null,
   firstRunCompletedAt: null,
   claudePath: null,
   usageDisplay: 'percent',
@@ -1782,7 +1796,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalScrollback: TERMINAL_SCROLLBACK.default,
   terminalShell: null,
   projectShellHeightPct: PROJECT_SHELL_HEIGHT_PCT.default,
-  sessionSplitPct: SESSION_SPLIT_PCT.default,
+  paneSplitPct: PANE_SPLIT_PCT.default,
   // Off, following the config editor rather than the prose one - see the field.
   contentWrap: false,
   contentWrapIndent: CONTENT_WRAP_INDENT.default,

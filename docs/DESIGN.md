@@ -11,6 +11,10 @@ is every rule about how the tokens are *used*: islands on a canvas, the accent
 never floods, no shadows outside modals, no text past 500, mono for machine
 data.
 
+The shell around them was rebuilt in the same overhaul: a rail of
+destinations, a sidebar that is projects with their sessions nested, and one
+or two panes, each an island with its own strip of one-line tabs (§5b).
+
 Components only ever use the semantic utilities (`bg-surface`,
 `text-fg-muted`, `rounded-island`, `gap-gutter`, ...), exposed to Tailwind via
 `@theme inline` in `packages/ui/src/styles/theme.css`. No raw hex values in
@@ -115,10 +119,11 @@ is Inter.
 
 ## 3. Island anatomy
 
-Everything floats. The window paints the sunken canvas; every pane is an
-island - a surface with a 1px hairline edge - separated by gutters of canvas
-(`gap-gutter` / `px-gutter` in the shell). Nothing sits bare on the canvas
-except the status bar and the tab strip.
+Everything floats. The window paints the sunken canvas; the sidebar and every
+pane are islands - a surface with a 1px hairline edge - separated by gutters of
+canvas (`gap-gutter` / `pr-gutter` in the shell). Nothing sits bare on the
+canvas except the rail down the left edge and the status bar along the bottom,
+and both are deliberately chrome rather than content: icons and a caption line.
 
 **One island per pane, and a pane with sections is still one island.** A header,
 a body and a footer that belong to the same subject are separated by
@@ -154,8 +159,9 @@ to be told:
   A literal radius (`rounded-[5px]`) is a corner the setting cannot reach and
   is not used.
 - **Density** (`comfortable` / `compact`) - `--helm-row-y` (a list row's
-  vertical padding, `py-row`: 6px / 3px) and `--helm-strip` (the tab strip,
-  `h-strip`: 40px / 34px). Text size and controls' own padding never change
+  vertical padding, `py-row`: 6px / 3px), `--helm-line` (one line of the
+  sidebar tree, `h-line`: 26px / 22px) and `--helm-strip` (a pane's tab strip,
+  `h-strip`: 36px / 32px). Text size and controls' own padding never change
   with it; density is how tightly the repeated things pack, not a zoom.
 
 **No stacked shadows.** Elevation is an edge plus the canvas behind it - which
@@ -361,13 +367,21 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
     `affordance-check` cannot enumerate - its walk skips `display:none` and
     `visibility:hidden`, so such a control would be measured by nothing and
     reported by nothing, which is the coverage gap AFF-2 exists to name.
-  - **Its space is reserved, not borrowed.** The row holds the gutter open
-    whether or not the control is showing, so nothing on the row moves when it
-    appears and it never floats over the second line's machine data - the half
-    somebody is reading at exactly the moment they point at it.
+  - **Nothing on the row moves when it appears.** In a two-line list the row
+    holds a gutter open for it. In the sidebar tree, where a project is one
+    line, the controls take the place of the branch at the right end while the
+    pointer is on the row - a swap in one slot rather than a push - and the
+    name never shifts.
   - It carries **no `title`**. `aside nav button[title]` is how every driver
     and `design-shot` finds "a project row", and a second titled button inside
     the row makes that selector a coin flip. `aria-label` says what it does.
+
+  **The tree's project rows carry one more: `+`, start a session here**, under
+  the same three rules and beside the star. It is the exception the overhaul
+  was for rather than a crack in the rule: the tree is sessions first, starting
+  one is the commonest thing anybody does in it, and making it a page and a
+  button away - the project's page, then "Start session here" - put the common
+  action behind the rare one. The row's own click still opens the page.
 - **Source pills**: a list that draws rows from more than one place carries the
   place on the row, as a hairline `border-strong` pill at the head of the second
   line - the repository on a pull request row is the one so far. This is the one
@@ -386,13 +400,32 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   starting at the line column, which is what makes them read as a break in the
   file rather than as another line of it. Lines **wrap**; a horizontal scrollbar
   per file turns reading a diff into operating one.
-- **Folder tabs**: the active tab lifts into the pane island below it - same
-  fill, hairline border on three sides, `rounded-t-island`, `-mb-px` overlap,
-  `z-10`. Inactive tabs are bare text (`fg-muted`). A session tab lifts into
-  the terminal ground instead (see below). A strip with no tabs and no
-  trailing actions is **not drawn**: its height (`h-strip`) belongs to tabs, and holding them
-  open on the welcome screen pushes the pane island below the top edge of the
-  sidebar island beside it.
+- **Pane tabs**: one-line pills in a strip *inside* the pane's island, above a
+  hairline. A pill is `rounded-raised`, `h-strip` less 10px, 12.5px text, a
+  state dot or a kind icon, the title, and a close button that shows on the
+  front tab (at 60%) and on hover. The front tab of the **focused** pane is
+  filled `active`; the front tab of the other pane is filled `hover`; the rest
+  are bare `fg-muted` text that takes `hover` under the pointer. So with two
+  panes on screen, which one the keyboard means is visible without reading.
+
+  They were folder tabs once - the active one lifting into the pane below it,
+  borders on three sides and a 1px overlap - and that only works while the
+  strip sits *on the canvas* above one pane. With two panes, each an island,
+  the strip is a row of its pane, and a tab that joined it would join nothing.
+  It is also what made every tab one line: a folder tab carried what its pane
+  did not show on a second line, and the **crumb row** below now says it with
+  the pane's whole width.
+
+  One word may follow the title, muted (`badge`): the session that opened a
+  browser tab, because a tab Claude opened and one you opened are otherwise
+  identical in the strip. A strip with no tabs and no actions is **not drawn**.
+- **The crumb row**: under a session's tab, 26px of mono `fg-subtle` naming
+  where it is - project `›` branch `·` profile - and, at the right in Inter,
+  what it is doing and for how long, in its state's tone ("Working · 4m" in
+  `accent-text`, "Needs you · 2m" in `warn`). It is the branch's home now that
+  tabs are one line: two sessions on one project are told apart here, with the
+  room to say the branch in full. A page's tab has no crumb - the page's own
+  header names what it is about.
 - **The session tab's state dot.** A session tab carries a 6px dot in place of
   a kind icon, and it says two different kinds of thing: what Helm knows about
   the process, and what the session says about itself. Claude Code publishes its
@@ -441,17 +474,26 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   nothing rather than a wrong answer.
 
   The session's own sentence for *why* it is waiting goes in the tab's hover
-  hint and never on the tab. It is the CLI's string, carried verbatim, and 240px
-  are already spoken for by a title and a branch.
+  hint and never on the tab. It is the CLI's string, carried verbatim, and a
+  pill is already spoken for by a title.
 
-  **The dot is painted in two places now** - the tab, and the sessions pane's
-  rows - so the tones live in `ui/src/lib/sessionstate.ts` rather than in
-  `TabBar`. Same rule `ROW_SELECTED` and `SEGMENT_ON` follow: the two surfaces
-  legitimately differ in geometry, and what must not differ is the tone.
+  **The dot is painted in three places** - the tab, the sidebar tree's session
+  rows and the sessions pane's rows - so the tones live in
+  `ui/src/lib/sessionstate.ts` rather than in any one of them. Same rule
+  `ROW_SELECTED` and `SEGMENT_ON` follow: the surfaces legitimately differ in
+  geometry, and what must not differ is the tone.
+
+  **`waiting` is said at the scale of the window too.** A pane holding a session
+  that is waiting on you takes a `warn/45` edge instead of its hairline, the
+  rail's Sessions icon wears a 7px `warn` badge, and the status bar's "needs
+  you" is a button that brings the next one forward. Each answers the question
+  one level further out than the dot: which pane, whether anything at all, and
+  how many.
 - **The sessions pane.** Every live Claude Code session on the machine down the
   left, what one of them is holding on the right - the narrow-pane shape §5's
-  "Narrow panes" already governs, collapsing to one at a time beside a session
-  split.
+  "Narrow panes" already governs, collapsing to one at a time beside another
+  pane. It is reached from the line at the foot of the sidebar's tree, which
+  says how many sessions are on the machine and how many are not Helm's.
 
   Three things about it are decisions rather than layout.
 
@@ -478,7 +520,7 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
 
   It also **measures itself, not the window** - the pane-header rule below,
   which is about the box a pane occupies rather than about headers. Measured in
-  `sessions-pane-dark.png`: docked beside a session split at the window's
+  `sessions-pane-dark.png`: docked beside another pane at the window's
   `minWidth` this pane is 171px, where a `sm:` media query is still true, so the
   fact grid painted "Working directory" and "Branch" side by side in 87px each
   and the path came out as `C:\Users…`. The grid, the strip's age stamp and the
@@ -499,8 +541,8 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
 - **Pane headers**: a scoped console wears one island strip - mark, title,
   scope switcher, what is being looked at, and a refresh (`PaneHeader`, used by
   the config console and the content viewer). It **measures itself, not the
-  window**: these panes are the workspace half of a split, so a `lg:` media
-  query is a question about the wrong box, and asking it is how the config
+  window**: any of these may be one of two panes, so a `lg:` media query is a
+  question about the wrong box, and asking it is how the config
   header came to paint its view switcher 100px past the island's right edge on
   a 1280px screen. Every threshold is a container query on the header's own
   content box.
@@ -519,8 +561,15 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   spells out. Nothing that is *only* here is ever dropped.
 - **Stat groups**: raised cards, 21px/500 tabular figure over a 10px subtle
   label.
-- **Status bar**: plain 10.5px subtle text directly on the canvas, segments
-  separated by 1px x 10px `border-strong` slivers. No border, no fill.
+- **Status bar**: plain 11px subtle text directly on the canvas, 26px tall. No
+  border, no fill, no dividers - the gaps separate. Your sessions on the left,
+  each count with its dot ("2 working", "1 needs you" in `warn`, "2 idle" with
+  the idle ring), or "No sessions running"; on the right, the plan's usage, and
+  before it only what is an exception - a build that is not an ordinary install
+  (a hairline chip: `dev`, `dev · live`, `portable`), a newer release (an offer
+  in `accent` text), a `claude` that cannot be found (in `warn`). The app's own
+  version and the scan time were on it once; they are facts about Helm, and a
+  strip that is always on screen is for facts about your work.
 - **Section labels**: the 10px/600 caps label style, everywhere a section
   needs a name.
 - **Launch disclosure**: a control that starts a process gets a sentence
@@ -536,21 +585,53 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
 
 ## 5b. Shell chrome
 
-- **Title bar**: the native bar is hidden on Windows; Helm draws its own
-  brand strip (the accent mark alone - no wordmark, since it named the app to
-  someone already looking at it - the drag region, the theme toggle) and
-  the Window Controls Overlay paints the min/max/close buttons in the theme's
-  `bg` and `fg-muted` (`main/chrome.ts`), retinted on every theme change.
-- **Split view**: sessions never share the workspace strip. They dock as a
-  resizable split on the right with their own folder-tab row; the divider is
-  a 3px `border-strong` grip that goes accent on hover, drag-bounded 20-80%.
-  Each strip ends in a ⤢/⇱ maximize toggle.
-- **Project shell**: a project pane carries a plain shell (PowerShell, cwd at
+- **The frame**, left to right: the **rail** on the canvas, 2px, the
+  **sidebar** island (256px), a gutter, then one or two **panes**, and a gutter
+  to the window's edge. The title strip above it all, the status bar below.
+- **Title bar**: the native bar is hidden on Windows; Helm draws its own 36px
+  strip - the accent mark alone, centred over the rail so the two read as one
+  column, and the drag region - and the Window Controls Overlay paints the
+  min/max/close buttons in the theme's `bg` and `fg-muted` (`main/chrome.ts`),
+  retinted on every theme change. Nothing else lives in it: the theme toggle
+  went to Appearance, and Settings to the rail.
+- **The rail**: 44px of 34px icon buttons on the canvas, `rounded-well`,
+  ordered by how often each is reached for rather than by feature - Sessions,
+  then session history, Content and the browser, a hairline, then the rare
+  ones (Profiles, pull requests, Config), and Settings pinned to the foot. The
+  order is a fact about how Helm is used, so it is fixed rather than learned: a
+  rail that reordered itself would move under muscle memory.
+
+  An item is one of two kinds and says "here" differently. A **view** swaps
+  what the sidebar shows - Sessions, Profiles - and is current with `hover`
+  fill and the 2px accent edge a selected sidebar row wears, in the rail's own
+  margin; pressed again, it puts the sidebar away. A **page** opens a tab in the
+  focused pane and is current, with the fill alone, while that tab is in front.
+  The rail sits outside the sidebar's `aside` on purpose: it is a column of
+  titled buttons, and inside the `aside` every "first project row" selector
+  would land on it.
+- **Panes**: one or two islands side by side, each a tab strip, a crumb row
+  for a session's tab, and its body. Any tab may sit in either - a session
+  beside a session, a session beside the project page it came from, history
+  beside both - which is what a pane is for. A new tab opens in the **focused**
+  pane, the one last pressed anywhere inside (taken in capture, so a terminal,
+  a list or the strip all count). A session's terminal fills the body edge to
+  edge on its own ground; a page draws its own islands inside the body, a
+  gutter in from the edge, until the overhaul's last step moves each onto the
+  pane it is in.
+
+  The divider between two is the gutter, with a 3px `border-strong` grip that
+  goes accent on hover, drag-bounded 20-80% and remembered (`paneSplitPct`).
+  Each strip ends in the pane's own controls: **split** (send the front tab to
+  a pane of its own, or to the other pane; Ctrl+\\), **maximize** (this pane
+  takes the window, sidebar and all; again to give it back), and on the second
+  pane **close**, which hands its tabs to the first rather than closing them -
+  a layout button that ended sessions would be a destructive control in
+  disguise. A tab is moved between panes by dragging it onto the other strip.
+  Two is the limit in this phase; free tiling is the next one's.
+- **Project shell**: a project page carries a plain shell (PowerShell, cwd at
   the project) as a terminal island below it. It is furniture, not a session:
-  no row, no history, no notification. It stays on screen while the session
-  split is open - the session has its own column and takes nothing from the
-  project's, and dropping the shell took a second terminal away at the moment
-  one is most useful.
+  no row, no history, no notification. Each page owns its shell and its
+  handle, so two projects' pages in two panes are two shells.
 
   **A third of the page is where its height starts, not what it is.** The
   proportion is the default and the argument for it is a row count: about a
@@ -588,10 +669,9 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
 
   | surface | how it tracks | requires the button |
   |---|---|---|
-  | session split divider | `mousemove` on `window` | yes - `buttons === 0` ends the drag |
+  | pane divider | `mousemove` on `window` | yes - `buttons === 0` ends the drag |
   | project shell handle | `setPointerCapture` | yes - capture, and `hasPointerCapture` gates each move |
-  | workspace tab reorder | HTML5 `dragstart`/`drop` | n/a - the platform owns the gesture |
-  | session tab reorder | HTML5 `dragstart`/`drop` | n/a |
+  | tab reorder, and a tab onto the other pane | HTML5 `dragstart`/`drop` | n/a - the platform owns the gesture |
   | profile list reorder | HTML5 `dragstart`/`drop` | n/a |
   | terminal text selection | xterm's own handlers | n/a - not Helm's code |
 
@@ -608,8 +688,8 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   and `S-21` both assert `buttons: 1` for exactly that reason.
 - **Narrow panes**: the config console, the content viewer and the session
   history are all a bounded list beside a detail, and that needs roughly 700px
-  before both are readable. Docked next to the session split none of them get
-  it, so each collapses to **one at a time**: the list until something is
+  before both are readable. In one of two panes none of them get it, so each
+  collapses to **one at a time**: the list until something is
   picked, then the detail alone with a `‹ Back` row above it (`PaneBack`).
   Clearing the selection is what puts the list back, so the back row and the
   pane's own empty state stay the same thing. At full width both show and
@@ -618,89 +698,75 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
   **Pane headers** - because the divider is bounded at 20% of the row, which is
   a pane of about 195px on a 1280px screen and 119px on the narrowest window
   the app will open.
-- **Sidebar**: five global rows (Sessions, session history, pull requests,
-  Config, Content), then profiles, then **Pinned**, then the harness tree. A
-  harness is a collapsible
-  group - caret, name in the caps label style but at `fg`, project count, and a
-  running-session count at the right in `accent-text`. Groups are separated by
-  an `.island-rule`, never a border. The global rows share one shape - icon,
-  name, optional second line - and three of them have a fact worth putting on
-  that second line: how many sessions are running now, session history's counts,
-  and how many pull requests are open.
+- **Sidebar**: one island, 256px, showing the view the rail chose. A 38px
+  header names it in 12.5px/500 and carries its few actions as 26px icon
+  buttons; the view fills the rest. Two views so far:
 
-  **Sessions sits first, above Session history**, because the two are one
-  question at two times - what is running now, and what ran before - and "now"
-  is the one somebody acts on. The load-bearing half of its second line is the
-  count of sessions **outside Helm**: "three running" is a fact about Helm, and
-  "one of them is not mine" is the fact that changes what somebody does next. It
-  is also the whole reason the listing behind it is machine-wide.
+  **Sessions** is the tree, and the window is sessions first because the day
+  is. A filter field ("Filter projects and sessions") over **Pinned**, then the
+  harness groups, then **Elsewhere**. Every project is one line; a project with
+  sessions in it opens out to show them beneath it, and folds to one line with
+  the most pressing session's dot beside its name. A filter matches a project
+  by its name, its path or the name of anything running in it, and opens every
+  group it matched. The header's actions are rescan, new harness and add a
+  folder; the foot of the island is one line naming how many sessions are on
+  this machine and how many are not Helm's, which opens the sessions pane.
 
-  The pull-request row's second line is also where its **degradation**
-  goes, in a short form ("Run gh auth login") rather than the pane's full
-  sentence - a 280px rail truncates an instruction into nonsense, and a label
-  that sends you to the pane to read it does not. Config and Content stay
-  single-line and the group still reads as one list. **Config and Content are
-  global, not scoped**: each
-  pane owns a scope switcher, so its entry point does not need to carry one.
-  They were per-harness links, which made a pane reachable only through a
-  harness that happened to be expanded and forced a second unscoped copy to
-  stand under an empty tree; a destination that can be hidden by a collapsed
-  group is a destination that can be lost.
+  **Profiles** is the profile list, with Import and New in the header. It is
+  only mounted while it is the view.
 
-  A **project pane may still link to both, scoped to itself**, and that is not
-  a reversal of the paragraph above. What was wrong with the per-harness links
-  was that they were the *only* way in; the sidebar rows are, and stay, the way
-  in. What a link from a project adds is the scope - arriving at the pane
-  already pointed at the project that was on screen instead of picking it out
-  of a switcher. Such a link is a **secondary button** at the far end of the
-  pane's action row, carrying the sidebar's own icon for its destination so the
-  two read as one object.
+  A harness group's header is a caret, the name in the caps label style but at
+  `fg`, the project count, the template it was built from in mono where the
+  manifest names one, and a running-session count at the right in
+  `accent-text`. Groups are separated by an `.island-rule`, never a border.
 
-  It was a ghost first, on the reasoning that four outlined controls in a row
-  read as a toolbar. That was the wrong trade, and the correction is worth
-  writing down because the same reasoning will come back: dropped at the end of
-  a row of prose, a ghost is two words that happen to react if you find them. A
-  ghost works in the title bar, where it sits in a strip of nothing but
-  controls. What separates a navigation control from an action here is the
-  **gap** - `ml-auto` puts them at the far end - and the accent outline the
-  primary button still has to itself. Weight was being asked to carry a
-  distinction position already carried.
+  **Pinned** sits above the first group and holds the projects somebody lifted
+  out of their harnesses. It is deliberately *not* shaped like a group: no
+  caret, and its label sits at `fg-subtle` where a group header sits at `fg`.
+  **Only projects are pinnable** - a pinned harness would be very nearly the
+  collapse state the group already has. Pins are flat and cross-harness, so a
+  pinned project appears **once**, in the section and never also in its group,
+  and the section sorts by name, since path order is harness order and that is
+  the arrangement being escaped.
 
-  The original argument for the outline was that *nothing in this app had a
-  pointer cursor*, so a control's shape was its whole claim to being one. That
-  premise is gone - every control now takes the pointer (§4, "Affordance") -
-  and the conclusion survives it anyway, on the sentence above rather than on
-  the cursor. Worth recording, because the cursor was doing more of the
-  argument's work than it should have been.
-  The **Pinned** section sits inside the same scroller, above the first group,
-  and holds the projects somebody lifted out of their harnesses. It is
-  deliberately *not* shaped like a harness group: no caret, and its label sits
-  at `fg-subtle` where a group header sits at `fg`. **Only projects are
-  pinnable.** A pinned harness would be very nearly the collapse state the group
-  header already has, and one pin kind means there is no rule to invent for a
-  pinned project inside a pinned harness - so nothing in this rail may offer to
-  pin one. A harness *root* is a project and does have a star, like any other
-  directory a session can start in.
+  **Elsewhere** holds Helm's sessions whose folder is no project the scan
+  found, so every session Helm hosts has a row somewhere.
 
-  Pins are flat and cross-harness, which is the whole point of them, so a
-  pinned project appears **once** - in the section, never also in its group -
-  and the section sorts by name rather than by path, since path order is
-  harness order and that is the arrangement being escaped. The filter reaches it
-  like every other row.
-- **Project rows in the tree**: kind icon, name, `GitChip`, and a pinning star
-  in a reserved right gutter under the rules in §5. The icon stays
-  because harness / repo / plain folder is the one thing a row's name and branch
-  cannot say. Inventory counts do not - what a project contributes to a session
-  is answered in full by the project pane, and three numbers in a 280px rail
-  only hint at it.
+  **Config, Content and the rest are destinations on the rail, not rows here.**
+  Each of those panes owns a scope switcher, so its way in carries none. They
+  were per-harness links once, which made a pane reachable only through a
+  harness that happened to be expanded; a destination a collapsed group can
+  hide is a destination that can be lost. A **project page may still link to
+  both, scoped to itself**: what a link from a project adds is the scope, and it
+  is a **secondary button** at the far end of the page's action row carrying
+  the rail's icon for its destination, so the two read as one object.
+- **Project rows in the tree**: one line - caret (only where there are sessions
+  to show), kind icon, name, and the branch in mono `fg-subtle` at the right,
+  where it gives way first. Under the pointer the branch's slot shows `+`
+  (start a session here, no page in between) and the star, by the rules in §5.
+  The row's own click opens the project's page. The icon stays because harness
+  / repo / plain folder is the one thing a name and a branch cannot say; the
+  rest of what git knows is on the page.
 
   A pinned row whose folder is no longer there keeps its place and says so, in
-  `SessionHistory`'s own words - the **`folder gone`** badge, the same hairline
+  `SessionHistory`'s own words - the **`folder gone`** badge, the hairline
   outline pill. It is **not a button**: a pin is a deliberate act and an
   unplugged drive is not a decision to un-pin, but a row that offered a launch
   which would fail is worse than a row that says why it cannot. Its star is the
-  one thing left to do to it, so that one is shown outright rather than on
-  hover - there is nothing else for hover to reveal.
+  one thing left to do to it, so that one is shown outright.
+- **Session rows in the tree**: indented under their project to start beneath
+  its name - the state dot, the session's name, and one short word at the right
+  in 11px: "needs you" in `warn`, how long it has been working ("4m"), "idle",
+  "ended". The session in front of the focused pane wears the selected-row
+  recipe with its accent edge, the one in front of the other pane the `hover`
+  fill - the same split the two panes' tab strips make - so the tree and the
+  panes agree about what you are looking at. Pressing one brings its tab
+  forward wherever it is.
+
+  A session somebody started outside Helm is listed under its folder too, its
+  dot dimmed and its word "outside Helm", because it holds a working tree
+  exactly as hard as one of Helm's does - the reason the listing is
+  machine-wide. It has no tab, so it opens the sessions pane on itself.
 
 ## 6. Foreign-ground islands
 
@@ -709,8 +775,9 @@ document/artifact viewer. The rule: **the island's chrome is themed; the
 content's ground is its own, fixed in every theme.**
 
 - The terminal keeps `#11121A` (`bg-terminal`) in every theme - load-bearing
-  for Spike C's color checks, and the reason a session's *tab* also keeps its
-  own fixed text color (`#dde1ea`) when active.
+  for Spike C's color checks. It fills a pane's body edge to edge under the
+  themed strip and crumb, so the seam between the two is the pane's own
+  hairline rather than a tab lifting into the terminal.
 - The **palette** is fixed too, and that is a decision rather than an omission:
   the 24-bit `THEME` in `renderer/terminal.ts` is asserted pixel-for-pixel by
   the fidelity checks, so terminal colours are deliberately not a setting.
@@ -731,10 +798,13 @@ content's ground is its own, fixed in every theme.**
 
 Do:
 
-- One island per pane; nothing bare on the canvas
+- One island per pane; nothing bare on the canvas but the rail and the status bar
 - Accent as 2px marks, outlines and text - selection tint is accent-soft
 - Mono for machine data: paths, branches, hashes, costs, sizes
-- Two-line rows: name above, chips below, counts pinned right
+- Two-line rows in a pane's list: name above, chips below, counts pinned right
+- One line per project and per session in the sidebar tree, so a session sits
+  right under the project it runs in
+- One line per tab; what told tabs apart on a second line is on the crumb row
 - Fade long dividers to transparent at their ends (`.island-rule`)
 - Tabular numerals everywhere a number can change
 

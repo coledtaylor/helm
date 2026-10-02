@@ -58,9 +58,10 @@ export function TerminalPane({
   }, [ended, session.id])
 
   return (
-    // A terminal island (DESIGN.md "foreign-ground islands"): Helm's radius
-    // and hairline edge, the terminal's own fixed ground.
-    <div className="flex h-full w-full flex-col overflow-hidden rounded-island border border-border bg-terminal">
+    // The terminal's own fixed ground, edge to edge in its pane's body
+    // (DESIGN.md "foreign-ground islands"). The pane is the island - its edge,
+    // corners and tab strip - so this draws no chrome of its own.
+    <div className="flex h-full w-full flex-col overflow-hidden bg-terminal">
       {ended && (
         <SessionEndedBar
           exitCode={session.exitCode}

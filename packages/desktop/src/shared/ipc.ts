@@ -1262,11 +1262,12 @@ export interface IpcSends {
   'pterm:input': { id: number; data: string }
   'pterm:resize': { id: number; cols: number; rows: number }
   /**
-   * Which session the user is actually looking at, or null for a non-terminal
-   * tab. Only the renderer knows this, and the main process needs it to decide
-   * whether an exit is worth a notification.
+   * Which sessions the user can actually see - the front tab of each pane that
+   * is showing a session, so none, one or two. Only the renderer knows this,
+   * and the main process needs it to decide whether an exit is worth a
+   * notification.
    */
-  'session:focus': { id: number | null }
+  'session:focus': { ids: number[] }
   /**
    * Whether anything is looking at the resource pass. Renderer to main.
    *

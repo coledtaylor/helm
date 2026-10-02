@@ -122,17 +122,20 @@ describe('settings', () => {
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
       // Every pane kind, because the validator checks each one's own fields and
       // a strip of only the field-less kinds would not exercise them.
-      workspaceTabs: {
-        panes: [
-          { kind: 'project', path: dir },
-          { kind: 'history' },
-          { kind: 'pulls' },
-          { kind: 'pr', repoPath: dir, number: 42 },
-          { kind: 'config' },
-          { kind: 'content' },
-          { kind: 'settings' }
+      paneLayout: {
+        groups: [
+          {
+            panes: [
+              { kind: 'project', path: dir },
+              { kind: 'history' },
+              { kind: 'pulls' },
+              { kind: 'pr', repoPath: dir, number: 42 }
+            ],
+            activeId: `project:${dir}`
+          },
+          { panes: [{ kind: 'config' }, { kind: 'content' }, { kind: 'settings' }], activeId: null }
         ],
-        activeId: `project:${dir}`
+        focused: 1
       },
       firstRunCompletedAt: '2026-08-09T12:00:00.000Z',
       claudePath: join(dir, 'claude.exe'),
@@ -144,7 +147,7 @@ describe('settings', () => {
       terminalScrollback: 2500,
       terminalShell: join(dir, 'pwsh.exe'),
       projectShellHeightPct: 42,
-      sessionSplitPct: 62,
+      paneSplitPct: 62,
       contentWrap: true,
       contentWrapIndent: 6,
       transcriptArchiveMaxBytes: 256 * 1024 * 1024,
@@ -310,46 +313,84 @@ describe('settings validation', () => {
       ]
     },
     {
-      key: 'workspaceTabs',
+      key: 'paneLayout',
       good: [
         null,
-        { panes: [], activeId: null },
-        { panes: [{ kind: 'history' }], activeId: 'history' },
+        { groups: [{ panes: [], activeId: null }], focused: 0 },
+        { groups: [{ panes: [{ kind: 'history' }], activeId: 'history' }], focused: 0 },
         {
-          panes: [
-            { kind: 'project', path: 'C:\\work\\helm' },
-            { kind: 'pr', repoPath: 'C:\\work\\helm', number: 7 },
-            { kind: 'pulls' },
-            { kind: 'config' },
-            { kind: 'content' },
-            { kind: 'settings' }
+          groups: [
+            {
+              panes: [
+                { kind: 'project', path: 'C:\\work\\helm' },
+                { kind: 'pr', repoPath: 'C:\\work\\helm', number: 7 },
+                { kind: 'pulls' }
+              ],
+              activeId: 'pr:C:\\work\\helm#7'
+            },
+            {
+              panes: [{ kind: 'config' }, { kind: 'content' }, { kind: 'settings' }],
+              activeId: null
+            }
           ],
-          activeId: 'pr:C:\\work\\helm#7'
+          focused: 1
         }
       ],
       bad: [
-        // Not a strip at all.
+        // Not a layout at all.
         [],
         'history',
         42,
-        { activeId: null },
-        { panes: {}, activeId: null },
+        { focused: 0 },
+        { groups: {}, focused: 0 },
+        // The single strip this replaced, which is the shape an old row is in.
+        { panes: [{ kind: 'history' }], activeId: 'history' },
+        // No group, and more groups than there are places for.
+        { groups: [], focused: 0 },
+        {
+          groups: [
+            { panes: [], activeId: null },
+            { panes: [], activeId: null },
+            { panes: [], activeId: null }
+          ],
+          focused: 0
+        },
+        // A focus that names no group.
+        { groups: [{ panes: [], activeId: null }], focused: 1 },
+        { groups: [{ panes: [], activeId: null }], focused: -1 },
+        { groups: [{ panes: [], activeId: null }], focused: 0.5 },
+        { groups: [{ panes: [], activeId: null }] },
+        { groups: [null], focused: 0 },
+        { groups: [{ activeId: null }], focused: 0 },
         // A kind this build does not have, which is the shape a renamed pane
         // would arrive in.
-        { panes: [{ kind: 'terminal' }], activeId: null },
-        { panes: [{ kind: 'project' }], activeId: null },
-        { panes: [{ kind: 'project', path: '' }], activeId: null },
-        { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm' }], activeId: null },
-        { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm', number: 0 }], activeId: null },
-        { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm', number: 1.5 }], activeId: null },
-        { panes: [{ kind: 'pr', repoPath: '', number: 7 }], activeId: null },
-        { panes: ['history'], activeId: null },
-        { panes: [null], activeId: null },
+        { groups: [{ panes: [{ kind: 'terminal' }], activeId: null }], focused: 0 },
+        // Sessions and browser tabs are never written down; see `PaneRef`.
+        { groups: [{ panes: [{ kind: 'session', id: 1 }], activeId: null }], focused: 0 },
+        { groups: [{ panes: [{ kind: 'browser', id: 1 }], activeId: null }], focused: 0 },
+        { groups: [{ panes: [{ kind: 'project' }], activeId: null }], focused: 0 },
+        { groups: [{ panes: [{ kind: 'project', path: '' }], activeId: null }], focused: 0 },
+        {
+          groups: [{ panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm' }], activeId: null }],
+          focused: 0
+        },
+        {
+          groups: [{ panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm', number: 0 }], activeId: null }],
+          focused: 0
+        },
+        { groups: [{ panes: ['history'], activeId: null }], focused: 0 },
         // An id is compared against tabs, never parsed, so anything that is not
         // a string cannot match one.
-        { panes: [], activeId: 7 },
-        // Longer than any workspace: a runaway list is a bug, not an arrangement.
-        { panes: Array.from({ length: 101 }, () => ({ kind: 'history' })), activeId: null }
+        { groups: [{ panes: [], activeId: 7 }], focused: 0 },
+        // Longer than any workspace, counted across both groups: a runaway list
+        // is a bug, not an arrangement.
+        {
+          groups: [
+            { panes: Array.from({ length: 60 }, () => ({ kind: 'history' })), activeId: null },
+            { panes: Array.from({ length: 41 }, () => ({ kind: 'history' })), activeId: null }
+          ],
+          focused: 0
+        }
       ]
     },
     {
@@ -418,7 +459,7 @@ describe('settings validation', () => {
       // The non-finite cases matter here for the same reason: the fraction
       // becomes a `flex-grow`, and `flex: NaN 1 0%` is dropped by the parser,
       // which would collapse the column rather than fail.
-      key: 'sessionSplitPct',
+      key: 'paneSplitPct',
       good: [20, 45, 80],
       bad: [19, 81, 0, -45, 100, 45.5, '45', null, Number.NaN, Number.POSITIVE_INFINITY]
     },
@@ -695,7 +736,10 @@ describe('settings validation', () => {
       scanRoots: [dir],
       pinnedProjects: [join(dir, 'alpha')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
-      workspaceTabs: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
+      paneLayout: {
+        groups: [{ panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' }],
+        focused: 0
+      },
       firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
       claudePath: join(dir, 'claude.exe'),
       usageDisplay: 'off',
@@ -706,7 +750,7 @@ describe('settings validation', () => {
       terminalScrollback: 50_000,
       terminalShell: join(dir, 'cmd.exe'),
       projectShellHeightPct: 45,
-      sessionSplitPct: 70,
+      paneSplitPct: 70,
       contentWrap: true,
       contentWrapIndent: 2,
       transcriptArchiveMaxBytes: 512 * 1024 * 1024,
@@ -745,7 +789,10 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   scanRoots: [dir],
   pinnedProjects: [join(dir, 'alpha')],
   windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
-  workspaceTabs: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
+  paneLayout: {
+        groups: [{ panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' }],
+        focused: 0
+      },
   firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
   claudePath: join(dir, 'claude.exe'),
   usageDisplay: 'off',
@@ -756,7 +803,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   terminalScrollback: 50_000,
   terminalShell: join(dir, 'cmd.exe'),
   projectShellHeightPct: 45,
-  sessionSplitPct: 70,
+  paneSplitPct: 70,
   contentWrap: true,
   contentWrapIndent: 2,
   transcriptArchiveMaxBytes: 512 * 1024 * 1024,

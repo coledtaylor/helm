@@ -4,11 +4,9 @@ import type { Profile } from '@helm/core'
 import { cn } from '../lib/cn'
 import {
   ExportIcon,
-  ImportIcon,
   LayersIcon,
   PencilIcon,
   PinIcon,
-  PlusIcon,
   TrashIcon
 } from './icons'
 
@@ -22,11 +20,9 @@ export interface ProfileListProps {
   /** Profiles with a session starting right now. */
   launchingIds?: readonly number[] | undefined
   onLaunch: (profile: Profile) => void
-  onCreate: () => void
   onEdit: (profile: Profile) => void
   onDelete: (profile: Profile) => void
   onExport: (profile: Profile) => void
-  onImport: () => void
   onTogglePin: (profile: Profile) => void
   /** New pinned order, as ids. Only pinned profiles are reorderable. */
   onReorder: (ids: number[]) => void
@@ -46,11 +42,9 @@ export function ProfileList({
   harnesses = [],
   launchingIds = [],
   onLaunch,
-  onCreate,
   onEdit,
   onDelete,
   onExport,
-  onImport,
   onTogglePin,
   onReorder
 }: ProfileListProps): JSX.Element {
@@ -88,29 +82,18 @@ export function ProfileList({
   }
 
   return (
-    <section className="flex shrink-0 flex-col">
-      <header className="flex h-9 shrink-0 items-center gap-2 px-3.5">
-        <span className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
-          Profiles
-        </span>
-        <span className="text-[10px] tabular-nums text-fg-subtle">{profiles.length}</span>
-        <span className="flex-1" />
-        <IconButton label="Import a profile" onClick={onImport}>
-          <ImportIcon width={12} height={12} />
-        </IconButton>
-        <IconButton label="New profile" onClick={onCreate}>
-          <PlusIcon width={12} height={12} />
-        </IconButton>
-      </header>
+    // No header of its own: it is the sidebar's Profiles view, and the island's
+    // header names it and carries New and Import.
+    <section className="flex min-h-0 flex-1 flex-col">
 
       {profiles.length === 0 ? (
-        <p className="px-3 pb-3 text-[11px] leading-relaxed text-fg-subtle">
+        <p className="px-3.5 pt-1 pb-3 text-[12px] leading-relaxed text-fg-subtle">
           A profile launches one working directory with other repos&rsquo; skills and agents
           composed in.
         </p>
       ) : (
         <ul
-          className="max-h-[40vh] overflow-y-auto overscroll-contain px-2 pb-2"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pb-1.5"
           aria-label="Saved profiles"
         >
           {profiles.map((profile, index) => {

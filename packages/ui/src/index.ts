@@ -91,7 +91,22 @@ export {
 export { ProfileList, type ProfileListProps } from './components/ProfileList'
 export { ProjectPane, projectPulls, type ProjectPaneProps } from './components/ProjectPane'
 export { PullRow, useNow, type PullRowProps } from './components/PullRow'
-export { ProjectRow, type ProjectRowProps } from './components/ProjectRow'
+export {
+  ProjectRow,
+  SessionRow,
+  type ProjectRowProps,
+  type SessionRowProps
+} from './components/ProjectRow'
+export {
+  PaneActions,
+  PaneCrumb,
+  PaneGroup,
+  type CrumbTone,
+  type PaneCrumbProps,
+  type PaneGroupProps
+} from './components/PaneGroup'
+export { Rail, type RailItem, type RailProps } from './components/Rail'
+export { SessionTree, type SessionTreeProps, type TreeSession } from './components/SessionTree'
 export {
   PullsPane,
   fetchedCaption,
@@ -116,12 +131,11 @@ export {
   type SessionHistoryProps
 } from './components/SessionHistory'
 export { SessionsPane, type SessionsPaneProps } from './components/SessionsPane'
-export { Sidebar, type SidebarProps } from './components/Sidebar'
+export { Sidebar, SidebarAction, type SidebarProps } from './components/Sidebar'
 export { StatusBar, type StatusBarProps } from './components/StatusBar'
 export { TabBar, type Tab, type TabBarProps, type TabIndicator } from './components/TabBar'
 export { UsageStatus, type UsageStatusProps } from './components/UsageStatus'
-export { ThemeToggle, type ThemeToggleProps } from './components/ThemeToggle'
-export { TitleBar, type TitleBarProps } from './components/TitleBar'
+export { TitleBar } from './components/TitleBar'
 export { WelcomePane, type WelcomePaneProps } from './components/WelcomePane'
 export * from './components/icons'
 export { cn } from './lib/cn'
