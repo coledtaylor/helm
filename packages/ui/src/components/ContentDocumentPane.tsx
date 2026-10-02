@@ -794,8 +794,8 @@ function ArtifactFrame({
           filter or copy out of. It is the panel's toggle now, and the panel is
           the same component the browser pane uses.
 
-          `data-artifact-console` stays exactly where it was, because
-          `content-check` locates the count by it.
+          `data-artifact-console` stays exactly where it was, because a
+          driver locates the count by it.
         */}
         <button
           type="button"

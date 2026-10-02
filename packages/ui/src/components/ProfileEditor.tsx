@@ -728,7 +728,5 @@ function Select({
  * The one control the system allows a solid accent fill (DESIGN.md §4).
  *
  * A real `<input type="checkbox">` under an overlaid tick rather than a styled
- * button: it keeps the label association, the space key, and `el.checked` -
- * which is what profiles-check reads to prove composing a repo also granted it
- * access.
+ * button: it keeps the label association, the space key, and `el.checked`.
  */

@@ -21,9 +21,8 @@
  * - **A narrowed run is not audited.** `--only=` legitimately produces a short
  *   report, and mapping groups to ids would need exactly the second list this
  *   avoids. The selection is printed instead, so a reader knows why it is
- *   short. Verifying a narrowed run needs a terminal sentinel in the driver -
- *   `configcheck.ts`'s `CFG-Z` is the one that exists - and that is a driver
- *   change rather than a runner one.
+ *   short. Verifying a narrowed run needs a terminal sentinel in the driver,
+ *   and that is a driver change rather than a runner one.
  * - **It never turns a red run green.** It can only add a failure.
  */
 import { readFileSync, existsSync } from 'node:fs'
@@ -47,11 +46,8 @@ const OPTIONAL = /\/\/\s*audit:\s*optional/
 /**
  * Every check id the driver can push, and which of them are optional.
  *
- * Single-quoted literals only. The computed ids in `prcheck.ts` and
- * `configcheck.ts` are written with backticks - GraphQL node ids on a fixture
- * in one case, a `<GROUP>-THREW` id in the other - and neither is an id a
- * healthy run produces, so excluding template literals is right rather than
- * merely convenient. A prose mention inside a `notes` array is not `id: '...'`
+ * Single-quoted literals only. An id written with backticks is a computed one,
+ * such as a `<GROUP>-THREW` id, which no healthy run produces. A prose mention inside a `notes` array is not `id: '...'`
  * either, so it is excluded by construction rather than by an exception list.
  */
 export function driverIds(driverFile) {

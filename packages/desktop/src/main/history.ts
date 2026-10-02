@@ -78,7 +78,7 @@ export interface HistoryServiceDeps {
    * not the usage index's.
    */
   onTranscripts?: ((transcripts: Map<string, TranscriptFile>) => void) | undefined
-  /** Overridden by `--history-check` to index a fixture instead of the real tree. */
+  /** Overridden to index a fixture instead of the real tree. */
   home?: string | undefined
 }
 

@@ -25,7 +25,7 @@ import { BROWSER_PARTITION, BROWSER_POPUPS_MAX, exemptedWebContents } from './br
 import { createBrowserMcp, MCP_SERVER_NAME } from './browser-mcp'
 import type { Check } from './fidelity'
 import { mcpConfigDir } from './paths'
-import { atPrompt, type CheckContext, type Collector } from './sessionscheck'
+import { atPrompt, type CheckContext, type Collector } from './checkkit'
 import { BROWSER_TABS_MAX } from '../shared/ipc'
 
 /**
@@ -1588,7 +1588,8 @@ async function hiddenGroup(
    * one of them. So before any of that is believed, the same function is run
    * over a frame where the page **is** showing and required to find it, and
    * over a frame where the view has been taken off screen and required not to -
-   * which is TPL-1's rule applied to a comparator that is a pixel count.
+   * which is "a comparator is worth nothing until it has been made to fail"
+   * applied to one that is a pixel count.
    */
   const rect = ctx.browsers.inspect(id)?.bounds ?? { x: 0, y: 0, width: 0, height: 0 }
   const visibleCount = await fixturePixelsUntil(ctx, options.shotDir, 'browser-hidden-control-shown.png', 'painting')
@@ -2024,11 +2025,10 @@ async function consoleGroup(
   /*
    * And the artifact console: the same panel, on a real artifact, read-only.
    *
-   * The artifact is **planted** and reached through a profile, the way
-   * `content-check` and `highlight-check` reach a fixture outside every scanned
-   * root - a folder nobody scans becomes a content scope because a profile
-   * points at it. It logs on load, so the panel has something to show and
-   * "there are entries" is not the same statement as "there is a panel".
+   * The artifact is **planted** and reached through a profile: a folder nobody
+   * scans becomes a content scope because a profile points at it. It logs on
+   * load, so the panel has something to show and "there are entries" is not
+   * the same statement as "there is a panel".
    */
   const artifact = plantArtifact(ctx, options.dataDir)
   await clickSelector(win, '[data-open-content]')
@@ -2146,8 +2146,8 @@ async function consoleGroup(
  * It lands in the **check's own data directory**, which is isolated through
  * `PORTABLE_EXECUTABLE_DIR`, so nothing of the user's is written to.
  *
- * A folder outside every scanned root becomes a content scope the way
- * `content-check` and `highlight-check` make theirs one: a profile points at it.
+ * A folder outside every scanned root becomes a content scope because a
+ * profile points at it.
  */
 function plantArtifact(ctx: CheckContext, dataDir: string): { root: string; token: string } {
   const root = join(dataDir, 'browser-fixture-harness')
@@ -3312,12 +3312,9 @@ async function endpointGroup(ctx: CheckContext): Promise<Check[]> {
  * **`sessionMcp` is unticked here too, and that is not padding.** The one
  * listener now serves two families, so "no listener at all" is a claim about
  * every family rather than about this one - a host built with only the browser
- * tools off would legitimately still bind, for the other. What *this* setting
- * alone does is asserted where the other family lives: `sessions-check
- * --only=tools`, which turns each tick off in turn and reads the route, the
- * config document and the argv. Leaving it out here would have made this probe
- * red for a reason that is not a fault, which is the way a check stops being
- * read.
+ * tools off would legitimately still bind, for the other. Leaving it out here
+ * would have made this probe red for a reason that is not a fault, which is the
+ * way a check stops being read.
  */
 async function offIsOff(ctx: CheckContext): Promise<Check> {
   const off = createBrowserMcp({
@@ -4046,11 +4043,11 @@ function digest(file: string): string {
 /**
  * Claude Code's startup gates, answered so that the MCP server is **enabled**.
  *
- * `profilescheck`'s version answers the MCP gate with Escape, which dismisses
- * it - right for a driver that does not want the user's servers and exactly
- * wrong here, where the server under test is the one being offered. Written out
- * rather than parameterised because the two answers mean opposite things and a
- * flag would make it possible to get this backwards without noticing.
+ * Escape would dismiss the MCP gate - right for a driver that does not want the
+ * user's servers and exactly wrong here, where the server under test is the one
+ * being offered. Written out rather than parameterised because the two answers
+ * mean opposite things and a flag would make it possible to get this backwards
+ * without noticing.
  */
 function answerGatesApprovingMcp(
   ctx: CheckContext,

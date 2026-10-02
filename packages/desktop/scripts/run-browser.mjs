@@ -1,8 +1,7 @@
 // Runs the browser-pane driver in two phases and decides the verdict from the
 // reports.
 //
-// Two phases, for the reason run-transcript.mjs and run-settings.mjs have two:
-// "a cookie the fixture set is still there after a restart" is not a claim the
+// Two phases, because "a cookie the fixture set is still there after a restart" is not a claim the
 // process that stored it can make. Phase one drives the pane and stores the
 // cookie; this script starts the app again with `--browser-restart`, against
 // the same isolated data directory - and therefore the same

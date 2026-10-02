@@ -20,16 +20,13 @@ import {
  * here parses session output, answers a prompt, or puts anything between the
  * user and the TUI. It reads a file Claude Code writes for its own purposes -
  * the same posture the usage figures and the history index already have. The
- * alternative was parsing the TUI, and the standing proof of how brittle that
- * is lives in `sessionscheck.ts`: its readiness probe matches the composer's
- * hint line, and had to be rewritten when the CLI changed its welcome layout
- * on 2.1.227.
+ * alternative was parsing the TUI, and that is brittle: a readiness probe that
+ * matched the composer's hint line had to be rewritten when the CLI changed its
+ * welcome layout on 2.1.227.
  *
  * **`~/.claude` is Claude Code's and this only reads it.** Nothing in this file
  * writes, and nothing in it deletes - a stale record is filtered here, at read
- * time, and left on disk for the CLI's own sweep to collect. `SESS-19` hashes
- * the directory either side of a full pass to say so, the way
- * `transcript-check`'s `T-5` does for the transcript tree.
+ * time, and left on disk for the CLI's own sweep to collect.
  *
  * ## What was measured, and against what
  *
@@ -57,7 +54,7 @@ import {
  *     stale. Liveness is the only test.
  *   - **A clean exit removes the file; a hard kill leaves it**, still claiming
  *     whatever it last said. That is the case this reader's liveness filter
- *     exists for, and it is the one `SESS-18` provokes.
+ *     exists for.
  *   - **The registry is machine-wide.** A `claude` started in a terminal
  *     registers alongside anything Helm hosts. This module hands back
  *     everything it can read; joining to Helm's own sessions is

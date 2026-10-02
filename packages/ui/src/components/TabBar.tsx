@@ -314,9 +314,8 @@ export function TabBar({
                   // The front tab keeps its fill under the pointer: that fill
                   // says "front of this pane" and a tone that moved would say
                   // something else. What answers is the close button beside it,
-                  // `opacity-60` at rest and full on `group-hover` -
-                  // `affordance-check` grants that exemption to tabs by tag
-                  // (AFF-4) and to nothing else.
+                  // `opacity-60` at rest and full on `group-hover`. That
+                  // exemption is for tabs and nothing else.
                   className={cn(
                     'flex h-full min-w-0 max-w-[200px] items-center gap-[7px] pl-2.5 text-[12.5px]',
                     closable ? 'pr-1' : 'pr-2.5',

@@ -33,7 +33,7 @@ import {
  *   junction answers yes to both and the order is what decides whether a delete
  *   removes a template or the repository the template was pointing at. This is
  *   the overlay-shim rule (CLAUDE.md, "Overlays") in the second place it is
- *   load-bearing, and `pnpm template-check` proves it a second time.
+ *   load-bearing.
  * - **`.git` and `node_modules` are never copied, at any depth.** Not a default
  *   the user can override: a `.git` copied into a template puts one workspace's
  *   history into every harness made from it afterwards, and `node_modules` is
@@ -774,8 +774,7 @@ export interface TemplateDeleteResult {
  * `fs.rm(..., { recursive: true })`: a template can perfectly well contain a
  * junction - somebody experimenting, or a template imported from a folder that
  * had one - and a delete that walked into it would remove the contents of a
- * real repository. `pnpm template-check` plants one and hashes what it points
- * at either side.
+ * real repository.
  *
  * There is no undo. Deliberately: the snapshot table holds text, a template
  * holds whatever its author put there, and a "delete" that silently kept half a

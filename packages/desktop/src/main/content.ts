@@ -348,7 +348,7 @@ export function registerContentProtocol(): void {
     // `helm-content://artifact/<token>/lesson.html` - so `rel` is that name and
     // is never empty for the document itself. Written the other way round this
     // injected into nothing at all, which is a bootstrap that silently does not
-    // run: CONT-15 read `[[beta]]` still sitting there as literal text.
+    // run and leaves `[[beta]]` sitting there as literal text.
     if (target.toLowerCase() === entry.file.toLowerCase() && /\.html?$/i.test(target)) {
       bytes = Buffer.from(withWikilinks(bytes.toString('utf8'), entry.links), 'utf8')
     }
@@ -760,9 +760,8 @@ export function attachArtifactConsole(
     //
     // The shape is checked rather than assumed. If a future version stops
     // populating `sourceId`, this listener would silently stop recognising
-    // artifact output and criterion 3 would pass because it saw nothing - the
-    // exact failure PROF-4 taught. So an unrecognised event is *recorded*, not
-    // dropped.
+    // artifact output and criterion 3 would pass because it saw nothing. So an
+    // unrecognised event is *recorded*, not dropped.
     if (typeof event.sourceId !== 'string' || typeof event.level !== 'string') {
       const broken: ArtifactConsoleEntry = {
         level: 'error',

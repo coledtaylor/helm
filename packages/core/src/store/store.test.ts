@@ -647,13 +647,13 @@ describe('settings validation', () => {
    * A key with no row above generates no test, and generates it silently.
    *
    * The table is an array, so nothing makes a missing key an error - it simply
-   * produces one `it` fewer, in a file that already prints seventy of them. The
-   * same table one level up, in `settingscheck.ts`, went stale exactly this way
-   * when the content viewer's two wrapping keys landed: both were validated,
-   * neither was probed, and the only thing that noticed was a boolean buried in
-   * a check that takes minutes to reach. That one is a
-   * `Record<keyof AppSettings, ...>` now and fails to compile. This one cannot
-   * be, so it is asserted instead - and here, where it costs a second.
+   * produces one `it` fewer, in a file that already prints seventy of them. A
+   * table like this went stale exactly that way when the content viewer's two
+   * wrapping keys landed: both were validated, neither was probed, and the only
+   * thing that noticed was a boolean buried in a check that takes minutes to
+   * reach. This one cannot be a `Record<keyof AppSettings, ...>`, which would
+   * fail to compile, so it is asserted instead - and here, where it costs a
+   * second.
    */
   it('has a case for every key of AppSettings', () => {
     expect(cases.map((entry) => entry.key).sort()).toEqual(Object.keys(DEFAULT_SETTINGS).sort())

@@ -380,9 +380,7 @@ export function SessionHistory({
               >
                 {/* Named, like the scope segments above them. Two segmented
                     groups now sit in this pane, and `aria-pressed` alone cannot
-                    say which group a button belongs to - `pnpm history-check`
-                    was clicking the first unpressed button it found, which
-                    became the wrong one the moment the second group arrived. */}
+                    say which group a button belongs to. */}
                 <Segment
                   active={grouping === 'recent'}
                   onClick={() => onGroupingChange('recent')}
@@ -849,8 +847,7 @@ function Detail({
           {/* A written-out control beside the double-click, not instead of it.
               The gesture is how a tab is renamed and belongs here too, but a
               gesture with nothing on screen to suggest it is a feature only its
-              author knows about - and `affordance-check` walks buttons, not
-              double-clicks. */}
+              author knows about. */}
           <button
             type="button"
             data-history-rename={session.sessionId}
@@ -1154,11 +1151,6 @@ function Unavailable({
  * already knows how to scan. The well is sunken and the bubbles are raised, so
  * the elevation says the same thing the alignment does - the messages sit *in*
  * a record rather than beside one.
- *
- * A `<ul>` rather than an `<ol>`, and that is not cosmetic: the prompts list
- * below is an `<ol>`, and `pnpm history-check`'s HIST-6 counts `ol li` to check
- * a reaped session still shows every prompt it had. A second ordered list in
- * the same pane would silently inflate that count.
  */
 function Conversation({
   conversation,

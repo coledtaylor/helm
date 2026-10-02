@@ -12,7 +12,7 @@ import {
 import { homedir, userInfo } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { screenshot, sleep, stripAnsi, waitFor } from './bridge'
-import { answerStartupGates, atPrompt, type Collector, type CheckContext } from './sessionscheck'
+import { answerStartupGates, atPrompt, type Collector, type CheckContext } from './checkkit'
 import type { Check } from './fidelity'
 import { CLAUDE_TESTED_RANGE } from './setup'
 
@@ -458,7 +458,7 @@ const AUDIT_EXT = /\.(ts|tsx|js|mjs|cjs|json|ya?ml|md|css|html)$/i
  */
 function isHarnessFile(rel: string): boolean {
   return (
-    /(^|\/)(sessionscheck|profilescheck|historycheck|configcheck|contentcheck|packagingcheck|usagecheck|claudecheck|fidelity|selftest)\.ts$/.test(rel) ||
+    /(^|\/)(packagingcheck|claudecheck|fidelity|selftest)\.ts$/.test(rel) ||
     /\.test\.tsx?$/.test(rel) ||
     rel.startsWith('packages/desktop/scripts/') ||
     rel.startsWith('docs/') ||

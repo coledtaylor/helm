@@ -11,8 +11,8 @@
  * It hovers to `bg-active` rather than `bg-hover`, which is the token every
  * other row and button uses, and that is deliberate. A chosen segment rests on
  * `surface-raised`, not on the surface; in dark mode `hover` and
- * `surface-raised` are six points apart across the whole channel, which
- * `affordance-check` would score as a change and nobody would see. `active` is
+ * `surface-raised` are six points apart across the whole channel, which a
+ * pixel comparison would score as a change and nobody would see. `active` is
  * one clear step above where the segment actually sits, in both themes.
  *
  * There is no matching `SEGMENT_OFF`. An unchosen segment's resting tone is the

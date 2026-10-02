@@ -2,7 +2,7 @@
 // user is sitting in front of.
 //
 // The drivers used to point the app they launch at `%APPDATA%\Helm` - the real
-// one - and settings-check went further and said so on purpose: it parked
+// one - and one of them went further and said so on purpose: it parked
 // settings on fixture values and put them back at the end. That is defensible
 // for a claim about persistence and indefensible in practice, because Helm is a
 // desktop app somebody is using while its checks run. Observed: a check run
@@ -61,18 +61,17 @@ export function realDataDir() {
  *
  * - **`paneLayout`** - `workspaceTabs`, when the window had a single strip -
  *   carried eight panes into every check on the machine this was found on,
- *   six of them project shells that each spawn a terminal.
- *   `S-1` cycles Ctrl+Tab expecting to land back where it started and found a
- *   ten-tab ring; `S-10` asserted "every terminal is attached" while counting
- *   terminals it never started. Both are right about the app and were failing
- *   about the strip.
+ *   six of them project shells that each spawn a terminal. A probe cycling
+ *   Ctrl+Tab to land back where it started found a ten-tab ring; one asserting
+ *   "every terminal is attached" counted terminals it never started. Both were
+ *   right about the app and failing about the strip.
  * - **`windowBounds`** is the same bug one layer out and had not been noticed
- *   at all. `designshot.ts` says "1280 is the default" and computes what a pane
- *   is worth at that width; the window it was actually photographing was 1757
- *   wide, because that is where the developer left it.
+ *   at all. A screenshot driver took "1280 is the default" and computed what a
+ *   pane is worth at that width; the window it was actually photographing was
+ *   1757 wide, because that is where the developer left it.
  *
  * Both now start from the app's own defaults - an empty window, 1280x820 - on
- * every machine, which is what those comments already claimed.
+ * every machine, which is what those drivers already assumed.
  *
  * **`firstRunCompletedAt` is deliberately not here.** It is the same *kind* of
  * row, and clearing it would put every check into the first-run setup pane

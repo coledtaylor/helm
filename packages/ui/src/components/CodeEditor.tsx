@@ -100,10 +100,9 @@ export interface CodeEditorProps {
   onChange: (value: string) => void
   /**
    * Which surface this is, which decides the data attribute the textarea
-   * carries. Ten check sites across `configcheck.ts` and `contentcheck.ts`
-   * query `textarea[data-config-editor]` and `textarea[data-content-editor]`
-   * and drive them through the value setter; both names survive here verbatim,
-   * which is the second of SPEC's reasons for a textarea.
+   * carries: `data-config-editor` or `data-content-editor`. A driver can query
+   * either and drive it through the value setter, which is the second of SPEC's
+   * reasons for a textarea.
    */
   surface: 'config' | 'content'
   /** The file. Its extension decides the language, the indent and the pairs. */

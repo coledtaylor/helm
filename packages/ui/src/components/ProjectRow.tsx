@@ -354,11 +354,9 @@ export function SessionRow({
  *
  * DESIGN.md states the rule this is the exception to: a row's own action stays
  * the row, and a control that changes *which list the row is in* is not the
- * row's action. Three things depend on the element being there the whole
- * time: keyboard focus can reach it (`focus-within` shows it), nothing has to
- * guess its width, and `pnpm affordance-check` can enumerate it - that walk
- * skips `display:none` and `visibility:hidden`, so a star that only existed
- * under the pointer would be a control nothing measures.
+ * row's action. Two things depend on the element being there the whole time:
+ * keyboard focus can reach it (`focus-within` shows it), and nothing has to
+ * guess its width.
  */
 function PinButton({
   pinned,

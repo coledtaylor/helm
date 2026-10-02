@@ -61,7 +61,7 @@ and 4.5:1 as `accent-text`.
 - **Graphite** inverts the elevation: the canvas is *lighter* than the
   islands, so a pane reads as a recess in a frame. A component that assumes
   "islands are lighter than the canvas" is wrong in Graphite and nowhere else,
-  which is why design-shot walks it.
+  which is why a UI change is looked at in Graphite too.
 - **Daylight** has a lighter canvas and well than v1's light ramp, because 6px
   of canvas between white islands reads as a seam where 8px read as a gutter.
 
@@ -223,12 +223,10 @@ call site's to remember:
   of `surface-raised` is a measurable change nobody can see, which is why the
   chosen segment below hovers to `active` instead.
 
-Both are asserted for every control the walk can reach by `pnpm
-affordance-check`, which puts a real pointer on each one in turn. The failure
-that check exists for is not a control someone forgot: Tailwind v4 gates
-`hover:` behind `@media (hover: hover)`, and on a machine reporting no fine
-pointer that killed **every** hover state in the app at once, silently, with the
-tokens resolving and the classes present. `theme.css` overrides the gate.
+Tailwind v4 gates `hover:` behind `@media (hover: hover)`, and on a machine
+reporting no fine pointer that killed **every** hover state in the app at once,
+silently, with the tokens resolving and the classes present. `theme.css`
+overrides the gate; keep it.
 
 - **Primary button**: outlined in the accent, never solid-filled.
   `rounded-well border border-accent text-accent-text hover:bg-accent-soft`.
@@ -363,18 +361,14 @@ tokens resolving and the classes present. `theme.css` overrides the gate.
     `focus-visible`, so it is reachable from the keyboard). A tree of a dozen
     rows still reads as a column of names.
   - **Revealed by opacity, never by mounting.** A control that only exists in
-    the DOM under the pointer is one no keyboard reaches and one
-    `affordance-check` cannot enumerate - its walk skips `display:none` and
-    `visibility:hidden`, so such a control would be measured by nothing and
-    reported by nothing, which is the coverage gap AFF-2 exists to name.
+    the DOM under the pointer is one no keyboard reaches.
   - **Nothing on the row moves when it appears.** In a two-line list the row
     holds a gutter open for it. In the sidebar tree, where a project is one
     line, the controls take the place of the branch at the right end while the
     pointer is on the row - a swap in one slot rather than a push - and the
     name never shifts.
-  - It carries **no `title`**. `aside nav button[title]` is how every driver
-    and `design-shot` finds "a project row", and a second titled button inside
-    the row makes that selector a coin flip. `aria-label` says what it does.
+  - It carries **no `title`**; the row's own tooltip is the only one.
+    `aria-label` says what it does.
 
   **The tree's project rows carry one more: `+`, start a session here**, under
   the same three rules and beside the star. It is the exception the overhaul

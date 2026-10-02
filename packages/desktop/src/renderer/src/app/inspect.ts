@@ -20,10 +20,9 @@ import { terminalPrefs } from './termprefs'
  * in the app reads it, it exposes no capability the renderer did not already
  * have, and it cannot write.
  *
- * `settings-check --only=terminal` still does not take its word for the things
- * it can measure another way: cell geometry is compared against a canvas
- * measurement the driver makes itself, and the grid each pty is at is read in
- * the main process.
+ * A driver should still not take its word for the things it can measure
+ * another way: cell geometry against a canvas measurement the driver makes
+ * itself, and the grid each pty is at from the main process.
  */
 export function installTerminalInspector(): void {
   Object.defineProperty(window, '__helmTerminals', {

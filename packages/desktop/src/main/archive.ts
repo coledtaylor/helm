@@ -54,9 +54,7 @@ import {
  * ## Everything here is read-only with respect to `~/.claude`
  *
  * Nothing in this file or anything it calls opens a path under that tree for
- * writing. `pnpm transcript-check`'s T-5 hashes the whole fixture tree before
- * and after a full pass and requires the two to be identical, because a rule
- * nothing measures is a rule that lasts until the next refactor.
+ * writing.
  */
 
 /**
@@ -66,10 +64,9 @@ import {
  * was measured rather than guessed. The first index here reads 311 MB, and the
  * archive parses *every* line where the usage reader gates on `"assistant"` -
  * so a 16 MB chunk is 60-80 ms of synchronous main-thread work per tick, and
- * twenty of them back to back at start-up were enough to make
- * `pnpm settings-check`'s terminal group fail: pty resizes and IPC replies
- * queue behind a chunk, and that group measures exactly those. Four megabytes
- * is under 20 ms a tick, which the event loop absorbs.
+ * twenty of them back to back at start-up were enough to make pty resizes and
+ * IPC replies late, because both queue behind a chunk. Four megabytes is under
+ * 20 ms a tick, which the event loop absorbs.
  */
 const CHUNK_BYTES = 4 * 1024 * 1024
 
@@ -90,8 +87,8 @@ const CATCH_UP_AFTER_MS = 3000
  * Back to back was wrong, and the checks said so twice before this number
  * existed. A chunk is only ~20 ms of work, but seventy-odd of them in
  * consecutive ticks still owns the main thread for a second and a half, and the
- * app is doing real things during it - `pnpm settings-check` lost a rescan
- * (S-3) and a pty resize (S-10) to exactly that.
+ * app is doing real things during it - a rescan and a pty resize were both
+ * lost to exactly that.
  *
  * There is no reason for the drain to be fast. It is reading a backlog that has
  * been sitting on disk since before Helm was opened, against a criterion of
@@ -205,11 +202,10 @@ export function createArchiveService({
    * *session index's* refresh - `readHistoryTail`, `scanTranscripts`,
    * `applyTranscripts` over 229 rows and a `statSync` per distinct project -
    * which is right for an ordinary pass and absurd twenty times in a row for a
-   * backlog nothing else is waiting on. Doing it that way made
-   * `pnpm settings-check`'s terminal group fail on timing. The steady-state
-   * "one walk, two consumers" property is untouched: this is the transient, it
-   * happens once per install, and transcripts do not appear fast enough for a
-   * three-second-old walk to matter to it.
+   * backlog nothing else is waiting on. Doing it that way made pty resizes
+   * late. The steady-state "one walk, two consumers" property is untouched:
+   * this is the transient, it happens once per install, and transcripts do not
+   * appear fast enough for a three-second-old walk to matter to it.
    *
    * `MIN_PASS_MS` is deliberately ignored here. That floor exists to stop a
    * live session's writes driving passes; a backlog is not a live session.

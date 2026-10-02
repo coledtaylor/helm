@@ -267,45 +267,22 @@ cannot host a session. `pnpm dev:live` is the old behaviour, kept because it is
 the only way to see the real database in a dev build - it says so on the console
 at startup, and the status bar names the mode.
 
-Beyond the unit tests there are two families of driver. Both are real: they open
-windows, click things, and most of them spawn actual `claude` processes, so they
-take minutes and cost tokens.
+`pnpm check` runs the tests. [docs/TESTING.md](docs/TESTING.md) describes the
+tiers and the rules every test follows.
 
-The terminal harnesses render their own page (`spike.html`) and open no
-database. They guard the pty and xterm configuration, every line of which
-prevents a specific measured failure:
+A few drivers open the real window to diagnose what a test cannot reach. They
+are tools, not tests, and nothing has to pass them before a change is done:
 
 ```bash
 pnpm shell             # interactive pane hosting pwsh
 pnpm --filter @helm/desktop claude   # ...hosting the real claude TUI
-pnpm fidelity          # terminal fidelity            (C1-C9)
-pnpm claude-check      # the real TUI in the pane      (D0-D7)
+pnpm fidelity          # terminal fidelity inside xterm
+pnpm claude-check      # the real claude TUI in the pane
+pnpm browser-check     # the browser pane and its agent tools
 pnpm selftest          # native modules in a packaged build
 ```
 
-The app drivers go through the real window - clicking sidebar rows, typing into
-search boxes - rather than calling the main process directly, so what they prove
-is that the thing on screen is wired to the thing underneath:
-
-```bash
-pnpm sessions-check          # sessions, tabs, teardown
-pnpm profiles-check          # overlay composition, asked of a live session
-pnpm history-check          # the session index, checked against ~/.claude itself
-pnpm config-check          # the config console, and a live session's own answer
-pnpm content-check          # markdown, wikilinks, and the artifact sandbox
-pnpm usage-check       # the status bar's figures, against /usage
-pnpm affordance-check          # every clickable control, under a real pointer
-pnpm packaging-check          # first run, the repos: key, and the built artefacts
-```
-
-All of them accept `--only=` to re-run part of a run (`--only=C5,C6`,
-`--only=list,search`) and write a JSON report and screenshots to the app data
-directory. **The report is the verdict, not the exit status** - node-pty's
-teardown can lose the exit code after the checks have already passed.
-
-`packaging-check` is the one that runs a whole second copy of the app: first run is
-driven against an empty profile in a temporary directory, using the app's own
-portable-mode mechanism as the isolation, so nothing of yours is touched.
+Each runs in a data directory of its own and writes a JSON report there.
 
 Schema changes go through Drizzle:
 

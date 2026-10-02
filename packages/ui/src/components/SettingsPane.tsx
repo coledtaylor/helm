@@ -1359,10 +1359,9 @@ export interface UpdateOutcome {
  *
  * Separate from the component because the five states are the interesting part
  * and a component cannot be asked what it would say. Exported so a driver could
- * reach it - though `settings-check` deliberately writes its own expected
- * sentences rather than importing these, because a check that asked this
- * function what this function says would be asserting that the code agrees with
- * itself.
+ * reach it - though a check should write its own expected sentences rather than
+ * import these, because one that asked this function what this function says
+ * would be asserting that the code agrees with itself.
  *
  * `unreachable` is `todo` and not `warn`, which is the one judgement in here.
  * Offline is an expected answer, not a fault: nothing is broken, nothing is out

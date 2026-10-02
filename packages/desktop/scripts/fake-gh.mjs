@@ -1,12 +1,12 @@
 // A `gh` that answers from a directory of fixtures and writes down every
 // question it was asked.
 //
-// `pnpm pr-check` needs a GitHub whose answers it wrote itself. Not because
-// the real one is unavailable - the live phase uses it - but because the
-// things this milestone has to prove are things a real repository cannot be
-// made to do on demand: a pull request whose title changes between two passes,
-// an authentication that fails, a payload that is not JSON, and a `pr checkout`
-// whose invocation can be read back argument by argument.
+// The pull-request surface needs a GitHub whose answers are written in advance.
+// Not because the real one is unavailable, but because the states worth
+// reaching are things a real repository cannot be made to do on demand: a pull
+// request whose title changes between two passes, an authentication that
+// fails, a payload that is not JSON, and a `pr checkout` whose invocation can
+// be read back argument by argument.
 //
 // It is reached the way a real one would be: through a `.cmd` shim, because
 // scoop and npm both install gh as a batch file on Windows and
@@ -721,7 +721,7 @@ function threadsFor(slug, pull) {
  *
  * A big-diff pull request goes past `MAX_DIFF_BYTES` (2MB) on the strength of
  * its own line counts, so "cut at a line boundary and said so" is a state
- * somebody can look at in dev rather than only in `pr-check`.
+ * somebody can look at in dev.
  */
 function diffFor(pull) {
   const parts = []

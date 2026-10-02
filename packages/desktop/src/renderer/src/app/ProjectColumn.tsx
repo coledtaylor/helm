@@ -128,9 +128,8 @@ export function ProjectColumn({
       {/* The handle, living in the gutter it replaces. Dragging up grows the
           shell, down shrinks it, double-click puts it back to the default.
 
-          `cursor: ns-resize`, and a `separator` rather than a button.
-          `affordance-check` asserts `cursor: pointer` on every *control*, and a
-          separator is not one; AFF-6 makes the converse claim, that a separator
+          `cursor: ns-resize`, and a `separator` rather than a button. Every
+          *control* computes `cursor: pointer`, and a separator is not one: it
           computes the resize cursor its own orientation calls for. */}
       <div
         role="separator"

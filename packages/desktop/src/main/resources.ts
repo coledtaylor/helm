@@ -14,8 +14,8 @@ import type { SessionHost } from './sessions'
  * to be cheap: one `readdir` and a handful of 450-byte reads, **0.15ms**
  * measured on this machine. A process enumeration is not in that class. One
  * pass, measured here on 2026-08-20 over two runs of five and six consecutive
- * passes: **400-480ms of wall time**, and **478-547ms** under `sessions-check`
- * with three sessions running - of which 160-240ms is the two CIM queries and
+ * passes: **400-480ms of wall time**, and **478-547ms** with three sessions
+ * running - of which 160-240ms is the two CIM queries and
  * the rest is `powershell.exe` starting.
  *
  * Hanging that off the 750ms timer would keep a child process alive more than
@@ -39,8 +39,8 @@ import type { SessionHost } from './sessions'
  *     is the number this file is actually spending on a repeating timer, and it
  *     is the number that matters, because what queues behind main-thread work
  *     is pty resizes and IPC replies. The archive is the standing precedent:
- *     16MB chunks of synchronous work at start-up were enough to make
- *     `settings-check`'s terminal group fail, and that one was not on a timer.
+ *     16MB chunks of synchronous work at start-up were enough to make both
+ *     late, and that one was not on a timer.
  *
  * A fourth limit is structural rather than numeric: **passes never overlap.**
  * A machine slow enough that a pass outlasts the interval gets fewer passes,

@@ -10,9 +10,7 @@
  * The metrics live in **one** class, `.helm-editor-layer`, which every layer
  * carries including the textarea. Two lists of font rules that happen to agree
  * is the version of this that breaks the first time somebody changes one of
- * them, and `pnpm highlight-check --only=parity` asserts the computed values
- * against each other rather than trusting that they were written down twice
- * correctly.
+ * them.
  * ======================================================================== */
 
 .helm-editor {
@@ -188,9 +186,8 @@
  * this one does not, which is what lets that window be positioned exactly in
  * both wrap modes.
  *
- * Its `textContent` is the textarea's value, character for character, and
- * `pnpm highlight-check --only=edit` asserts that after driving the value
- * setter the ten existing check sites use.
+ * Its `textContent` is the textarea's value, character for character -
+ * including after the value setter is driven directly.
  */
 .helm-editor-mirror {
   color: transparent;

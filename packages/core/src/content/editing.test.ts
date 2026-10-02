@@ -15,11 +15,10 @@ import {
 
 /**
  * These are the rules the editors are made of, and every one of them is here
- * rather than in the real-window check because the interesting cases are about
- * offsets in a string. `pnpm highlight-check --only=behaviour` still drives
- * each of them through a real textarea - what a patch says and what Chromium
- * does with it are two claims - but "the selection ended exactly on a line
- * break" is a case a driver would never think to type.
+ * because the interesting cases are about offsets in a string: "the selection
+ * ended exactly on a line break" is a case a driver would never think to type.
+ * What a patch says and what Chromium does with it are two claims, and this
+ * file makes only the first.
  */
 
 /** Applies a patch the way the component does, so a test states before/after. */

@@ -12,7 +12,7 @@ import { CheckIcon } from './icons'
  * with `accent-color`. Those two were the platform's control wearing the app's
  * colour: no outline of ours, a size of the platform's choosing, and - the way
  * this surfaced - no hover state available at all, since a native checkbox
- * exposes nothing to style. `affordance-check` found one of them dead.
+ * exposes nothing to style.
  *
  * The check mark is a sibling rather than a background image so it inherits a
  * real token colour, and it is `pointer-events-none` so the click always lands

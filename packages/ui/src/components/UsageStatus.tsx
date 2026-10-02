@@ -255,10 +255,9 @@ export function UsageStatus({ snapshot, mode, onModeChange }: UsageStatusProps):
   return (
     <button
       type="button"
-      // The one hook `usage-check` locates this by. It reads the rendered text
-      // from here and parses it with a regex of its own rather than reading a
-      // number Helm put in an attribute, which would only prove Helm agrees
-      // with itself.
+      // The hook a driver locates this by. It carries the mode, not a figure:
+      // a driver reads the rendered text, because a number Helm put in an
+      // attribute would only prove Helm agrees with itself.
       data-usage-segment={mode}
       onClick={() => onModeChange(nextUsageMode(mode, offerable))}
       title={title}

@@ -25,9 +25,8 @@ export type HarnessDialogMode = 'new' | 'convert'
  * `MINIMAL_TEMPLATE` is a *value* in `@helm/core`, and a value import of the
  * package root from the renderer reaches `launch/` and `store/` and fails at
  * rollup rather than at typecheck (CLAUDE.md, "Boundaries"). It is one word and
- * it is also the string the main process would answer with, so the two cannot
- * drift without `template:list` disagreeing with the picker's default in a way
- * `pnpm template-check` sees.
+ * it is also the string the main process would answer with; if the two drift,
+ * `template:list` disagrees with the picker's default.
  */
 const MINIMAL = 'minimal'
 

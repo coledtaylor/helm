@@ -100,7 +100,7 @@ function SourceLink({
     <button
       type="button"
       // `data-open-layer`, not `data-open-settings`: that one is the title
-      // bar's gear, and `design-shot` reaches the settings pane by it. Panes
+      // bar's gear, and the drivers reach the settings pane by it. Panes
       // are hidden rather than unmounted, so a second element carrying that
       // attribute is a `querySelector` that can return either - which is how
       // this was found, by a probe reading the gear's empty label.

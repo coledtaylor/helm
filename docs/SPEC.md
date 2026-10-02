@@ -4,6 +4,11 @@ date: 2026-08-08
 tags: [claude-gui, electron, spec, launch-scope, plugin-dir, v1]
 ---
 
+> Probe ids in this document (SESS-n, PROF-n, HIST-n, CFG-n, S-n and the
+> like) name real-window check drivers that were removed on 2026-10-02 in
+> favour of ordinary tests (see TESTING.md). Git history has them; BR-n,
+> PKG-n, C-n and D-n still exist as diagnostic drivers.
+
 # Helm - v1 Spec
 
 A portable, configurable desktop shell **on top of** Claude Code. Not a client,

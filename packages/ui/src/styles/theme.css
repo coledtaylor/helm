@@ -47,8 +47,7 @@
  * is on the element, `el.matches(':hover')` is true, and the rule that would
  * fill it is behind a media query that never matches. It is one line of CSS and
  * a dead app, which is why this override is worth more than the phone case it
- * gives up. `design-shot --only=states` reports the three hover probes that
- * caught it.
+ * gives up.
  */
 @custom-variant hover (&:hover);
 
@@ -197,10 +196,9 @@ body {
  *
  * Keyed on what a thing *is*, so a control written tomorrow is affordant the
  * day it is written; there are ~130 of them on the seven main views and the one
- * that forgets is the one nobody notices. `pnpm affordance-check` asserts it
- * for every control it can reach (AFF-3), and asserts the converse in AFF-5 -
- * that a text field still says `text` and a disabled control still says
- * `default` - because `* { cursor: pointer }` would pass the first claim and is
+ * that forgets is the one nobody notices. The converse holds too - a text
+ * field still says `text` and a disabled control still says `default` -
+ * because `* { cursor: pointer }` would make every control affordant and is
  * the same lie pointing the other way.
  *
  * Both selectors sit inside `:where()`, which contributes no specificity. That

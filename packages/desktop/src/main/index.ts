@@ -13,15 +13,14 @@ import {
   projectsDirIn,
   readProfile,
   writeSetting,
-  writeSettings,
   type AppliedTheme,
   type AppSettings
 } from '@helm/core'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { emit, pushTheme, registerIpc } from './ipc'
-import { appMode, dataDir, initDataDir, mcpConfigDir, shimRoot, templatesDir, themesDir } from './paths'
+import { appMode, dataDir, initDataDir, mcpConfigDir, templatesDir, themesDir } from './paths'
 import { createThemeService } from './themes'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
 import {
@@ -58,27 +57,9 @@ import { maybeCheckForUpdate } from './update'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
 import { createActivityService } from './activity'
 import { createResourcesService } from './resources'
-import {
-  createCollector,
-  runSessionsChecks,
-  runSessionsRestartChecks,
-  type CheckContext
-} from './sessionscheck'
+import { createCollector, type CheckContext } from './checkkit'
 import { titleBarOverlayFor } from './chrome'
 import { createPtermHost } from './pterm'
-import { runDesignShot } from './designshot'
-import { runAffordanceChecks } from './affordancecheck'
-import { runHighlightChecks } from './highlightcheck'
-import { runProfilesChecks } from './profilescheck'
-import { HOLD_REPORT, runShimHold } from './shimhold'
-import { runHistoryChecks } from './historycheck'
-import { runConfigChecks } from './configcheck'
-import { runContentChecks } from './contentcheck'
-import { runUsageChecks } from './usagecheck'
-import { runSettingsChecks } from './settingscheck'
-import { runPrChecks } from './prcheck'
-import { runTranscriptChecks, runTranscriptRestartChecks } from './transcriptcheck'
-import { hashTemplatesDir, runTemplateChecks } from './templatecheck'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -105,59 +86,19 @@ type Mode =
   | 'fidelity'
   | 'claude-check'
   | 'claude'
-  | 'sessions-check'
-  | 'sessions-restart'
-  | 'profiles-check'
-  | 'history-check'
-  | 'config-check'
-  | 'content-check'
   | 'packaging-check'
   | 'packaging-firstrun'
-  | 'usage-check'
-  | 'usage-settings'
-  | 'settings-check'
-  | 'settings-restart'
-  | 'pr-check'
-  | 'transcript-check'
-  | 'transcript-restart'
-  | 'template-check'
   | 'browser-check'
   | 'browser-restart'
-  | 'template-seed'
-  | 'shim-sweep'
-  | 'shim-hold'
-  | 'design-shot'
-  | 'affordance-check'
-  | 'highlight-check'
 
 function modeFromArgv(): Mode {
-  if (process.argv.includes('--design-shot')) return 'design-shot'
-  if (process.argv.includes('--affordance-check')) return 'affordance-check'
-  if (process.argv.includes('--highlight-check')) return 'highlight-check'
   if (process.argv.includes('--selftest')) return 'selftest'
   if (process.argv.includes('--fidelity')) return 'fidelity'
   if (process.argv.includes('--claude-check')) return 'claude-check'
-  if (process.argv.includes('--sessions-check')) return 'sessions-check'
-  if (process.argv.includes('--sessions-restart')) return 'sessions-restart'
-  if (process.argv.includes('--profiles-check')) return 'profiles-check'
-  if (process.argv.includes('--history-check')) return 'history-check'
-  if (process.argv.includes('--config-check')) return 'config-check'
-  if (process.argv.includes('--content-check')) return 'content-check'
   if (process.argv.includes('--packaging-check')) return 'packaging-check'
   if (process.argv.includes('--packaging-firstrun')) return 'packaging-firstrun'
-  if (process.argv.includes('--usage-check')) return 'usage-check'
-  if (process.argv.includes('--usage-settings')) return 'usage-settings'
-  if (process.argv.includes('--settings-check')) return 'settings-check'
-  if (process.argv.includes('--settings-restart')) return 'settings-restart'
-  if (process.argv.includes('--pr-check')) return 'pr-check'
-  if (process.argv.includes('--transcript-check')) return 'transcript-check'
-  if (process.argv.includes('--transcript-restart')) return 'transcript-restart'
   if (process.argv.includes('--browser-check')) return 'browser-check'
   if (process.argv.includes('--browser-restart')) return 'browser-restart'
-  if (process.argv.includes('--template-check')) return 'template-check'
-  if (process.argv.includes('--template-seed')) return 'template-seed'
-  if (process.argv.includes('--shim-sweep')) return 'shim-sweep'
-  if (process.argv.includes('--shim-hold')) return 'shim-hold'
   if (process.argv.includes('--claude')) return 'claude'
   if (process.argv.includes('--shell')) return 'shell'
   return 'app'
@@ -168,26 +109,10 @@ const mode = modeFromArgv()
 // real startup path, the database included.
 const isSpikeMode =
   mode !== 'app' &&
-  mode !== 'sessions-check' &&
-  mode !== 'sessions-restart' &&
-  mode !== 'profiles-check' &&
-  mode !== 'history-check' &&
-  mode !== 'config-check' &&
-  mode !== 'content-check' &&
   mode !== 'packaging-check' &&
   mode !== 'packaging-firstrun' &&
-  mode !== 'usage-check' &&
-  mode !== 'settings-check' &&
-  mode !== 'pr-check' &&
-  mode !== 'transcript-check' &&
-  mode !== 'transcript-restart' &&
-  mode !== 'template-check' &&
   mode !== 'browser-check' &&
-  mode !== 'browser-restart' &&
-  mode !== 'shim-hold' &&
-  mode !== 'design-shot' &&
-  mode !== 'affordance-check' &&
-  mode !== 'highlight-check'
+  mode !== 'browser-restart'
 
 /**
  * A check's window keeps rendering when something else is in front of it.
@@ -199,7 +124,7 @@ const isSpikeMode =
  * pane's width - so a throttled renderer answers "nothing changed" to all of
  * it, which is indistinguishable from the app being broken.
  *
- * Measured on a machine running six Helm windows at once: `affordance-check`
+ * Measured on a machine running six Helm windows at once: a hover probe
  * measured 162 controls with its window in front and 7 with somebody else's on
  * top, reporting most of the app as having no hover state at all. The
  * alternative - raising or focusing our own window - is worse than the
@@ -343,16 +268,15 @@ function writeReport(name: string, report: unknown): string {
 // ---------------------------------------------------------------------------
 
 export interface AppOptions {
-  /** Taps for `--sessions-check`; the app itself passes none. */
+  /** Taps for the check drivers; the app itself passes none. */
   observer?: SessionObserver | undefined
   /** Answers the "this session is still running" question. Defaults to a dialog. */
   confirm?: Confirm | undefined
   /** Called once the renderer has mounted and the first scan is under way. */
   onReady?: ((ctx: CheckContext) => void) | undefined
   /**
-   * Index a different `.claude` tree. Only `--history-check` passes one, so that
-   * the watch can be proved against a fixture it is allowed to append to as
-   * well as against the real file.
+   * Index a different `.claude` tree, so a check can run against a fixture
+   * rather than the user's own.
    */
   claudeHome?: string | undefined
   /**
@@ -364,7 +288,7 @@ export interface AppOptions {
    * - so dev's fake binary would end up pointed at by the real app, on a path
    * that no longer exists. And which binary the pull requests come from is not
    * the window's to choose, which is why there is no IPC channel for it either;
-   * `pointGh` on the service is the same hook `pr-check` uses.
+   * it reaches the service through `pointGh`.
    */
   gh?: string | undefined
   /**
@@ -779,22 +703,7 @@ function startApp(options: AppOptions = {}): void {
       })
 
       if (win) {
-        options.onReady?.({
-          win,
-          services,
-          sessions,
-          activity,
-          resources,
-          pterm,
-          browsers,
-          browserMcp,
-          history,
-          archive,
-          usage,
-          pulls,
-          config,
-          content
-        })
+        options.onReady?.({ win, services, sessions, browsers, browserMcp })
       }
     }
   })
@@ -1127,522 +1036,8 @@ app.whenReady().then(() => {
   // handler fails a load rather than falling through to something worse.
   registerContentProtocol()
 
-  /**
-   * A real app start, and nothing else.
-   *
-   * The "stale shims are swept at startup" criterion is about what
-   * `createServices` does on the way in, which the process that already started
-   * cannot assert about itself. So `--profiles-check` plants what a crash would have
-   * left and this runs afterwards: same startup path, no window, and a report
-   * of what it removed.
-   */
-  if (mode === 'shim-sweep') {
-    const services = createServices()
-    // `--report=` because this mode runs twice in one `profiles-check`: once
-    // after PROF-9 plants a crashed run's shim, and once *while* `--shim-hold`
-    // is holding a live one. One filename would leave the second overwriting
-    // the first's evidence.
-    const reportArg = process.argv.find((a) => a.startsWith('--report='))
-    const file = writeReport(reportArg?.slice('--report='.length) ?? 'shim-sweep.json', {
-      startedAt: new Date().toISOString(),
-      shimRoot,
-      removed: services.staleShims
-    })
-    console.log(`shim sweep: removed ${String(services.staleShims)} shim(s); report: ${file}`)
-    services.store.close()
-    app.exit(0)
-    return
-  }
-
-  /**
-   * One real app start, so `pnpm template-check` can ask what a start does to
-   * the templates directory.
-   *
-   * Three claims need this and none of them can be made by a process that has
-   * already started: a first start seeds, a second overwrites nothing, and a
-   * start with the directory deleted seeds again. So `run-template.mjs` runs
-   * this three times, arranging the directory between them, and each run writes
-   * down what `createServices` found and the sha256 of every file in there.
-   * The verdicts are `templatecheck.ts`'s - TPL-7/8/9 - because the report is
-   * where a multi-phase check keeps its verdict. Same shape as `--shim-sweep`.
-   *
-   * No window: the claim is about startup, and a window would only add a scan.
-   */
-  if (mode === 'template-seed') {
-    const services = createServices()
-    const reportArg = process.argv.find((a) => a.startsWith('--report='))
-    const file = writeReport(reportArg?.slice('--report='.length) ?? 'template-seed.json', {
-      startedAt: new Date().toISOString(),
-      dir: templatesDir,
-      seeded: services.templates.seeded,
-      created: services.templates.created,
-      problem: services.templates.problem,
-      files: hashTemplatesDir(templatesDir)
-    })
-    console.log(
-      `template seed: ${services.templates.seeded ? `wrote ${String(services.templates.created.length)} file(s)` : 'already there, nothing written'}; report: ${file}`
-    )
-    services.store.close()
-    app.exit(0)
-    return
-  }
-
-  /**
-   * The second phase of `usage-check`, and the whole of it.
-   *
-   * "The mode survives a restart" is a claim about a process that has not
-   * started yet, so the process that set the mode cannot make it. The driver
-   * leaves the setting on something other than its default and this reads it
-   * back through the ordinary startup path - same store, same `readSettings` -
-   * and writes down what it found. Same shape as `--shim-sweep`.
-   */
-  if (mode === 'usage-settings') {
-    const services = createServices()
-    const found = services.settings.usageDisplay
-    const file = writeReport('usage-settings.json', {
-      startedAt: new Date().toISOString(),
-      usageDisplay: found,
-      dbFile: services.store.file
-    })
-    console.log(`usage settings after restart: ${found}; report: ${file}`)
-
-    // `--set=` puts the user's own setting back afterwards, because the driver
-    // parked it on a non-default value in the real database to have something
-    // to read.
-    const setArg = process.argv.find((a) => a.startsWith('--set='))
-    if (setArg) {
-      const value = setArg.slice('--set='.length)
-      if (value === 'percent' || value === 'cost' || value === 'off') {
-        writeSetting(services.store, 'usageDisplay', value)
-        console.log(`usage display restored to ${value}`)
-      }
-    }
-
-    services.store.close()
-    app.exit(0)
-    return
-  }
-
-  /**
-   * The second phase of `settings-check`, and the whole of it.
-   *
-   * Same shape as `--usage-settings` and for the same reason: the process that
-   * wrote a setting cannot prove a restart finds it. This one starts through
-   * the ordinary path, reports every setting it read, and - given
-   * `--restore=<file>` - puts back the settings the driver wrote down before it
-   * borrowed the real database.
-   */
-  if (mode === 'settings-restart') {
-    const services = createServices()
-    const found = services.settings
-    const file = writeReport('settings-restart.json', {
-      startedAt: new Date().toISOString(),
-      settings: found,
-      dbFile: services.store.file
-    })
-    console.log(`settings after restart: ${JSON.stringify(found)}\nreport: ${file}`)
-
-    const restoreArg = process.argv.find((a) => a.startsWith('--restore='))
-    if (restoreArg) {
-      const from = restoreArg.slice('--restore='.length)
-      try {
-        const saved = JSON.parse(readFileSync(from, 'utf8')) as Partial<AppSettings>
-        // Through the ordinary write path, validators included: whatever is put
-        // back has to be something the app would have accepted anyway.
-        writeSettings(services.store, saved)
-        console.log(`settings restored from ${from}`)
-      } catch (err) {
-        console.error(`could not restore settings from ${from}: ${String(err)}`)
-      }
-    }
-
-    services.store.close()
-    app.exit(0)
-    return
-  }
-
   if (isSpikeMode) {
     startSpike()
-    return
-  }
-
-  if (mode === 'design-shot') {
-    startApp({
-      onReady: (ctx) => {
-        void runDesignShot(ctx, join(dataDir, 'screenshots', 'design'))
-          .then((files) => {
-            for (const file of files) console.log(`design-shot: ${file}`)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`design-shot crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  if (mode === 'highlight-check') {
-    startApp({
-      onReady: (ctx) => {
-        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runHighlightChecks(
-          ctx,
-          join(dataDir, 'screenshots'),
-          dataDir,
-          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
-        )
-          .then((checks) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport('highlight-report.json', {
-              startedAt: new Date().toISOString(),
-              mode: appMode,
-              dataDir,
-              versions: process.versions,
-              pass,
-              checks
-            })
-            console.log(`highlight-check report: ${file}`)
-            for (const c of checks) {
-              console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-              for (const n of c.notes) console.log(`      ${n}`)
-            }
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`highlight-check crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  if (mode === 'affordance-check') {
-    startApp({
-      onReady: (ctx) => {
-        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runAffordanceChecks(
-          ctx,
-          join(dataDir, 'screenshots'),
-          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
-        )
-          .then((checks) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport('affordance-report.json', {
-              startedAt: new Date().toISOString(),
-              mode: appMode,
-              dataDir,
-              versions: process.versions,
-              pass,
-              checks
-            })
-            console.log(`affordance-check report: ${file}`)
-            for (const c of checks) {
-              console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-              for (const n of c.notes) console.log(`      ${n}`)
-            }
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`affordance-check crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  /**
-   * The second half of sessions-check: a real second app start, reading back
-   * the label phase one gave a tab. "It survived a restart" is not a claim the
-   * process that set it can make - see `runSessionsRestartChecks`.
-   */
-  if (mode === 'sessions-restart') {
-    startApp({
-      onReady: (ctx) => {
-        void runSessionsRestartChecks(ctx, dataDir)
-          .then((checks) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport('sessions-restart-report.json', {
-              startedAt: new Date().toISOString(),
-              mode: appMode,
-              dataDir,
-              versions: process.versions,
-              pass,
-              checks
-            })
-            console.log(`sessions-restart report: ${file}`)
-            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            setTimeout(() => app.exit(pass ? 0 : 1), 30_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`sessions-restart crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  if (mode === 'sessions-check') {
-    const collector = createCollector()
-    startApp({
-      observer: collector,
-      confirm: collector.confirm,
-      onReady: (ctx) => {
-        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runSessionsChecks(
-          ctx,
-          collector,
-          join(dataDir, 'screenshots'),
-          dataDir,
-          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
-        )
-          .then((checks) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport('sessions-report.json', {
-              startedAt: new Date().toISOString(),
-              mode: appMode,
-              dataDir,
-              versions: process.versions,
-              pass,
-              checks
-            })
-            console.log(`sessions-check report: ${file}`)
-            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-
-            // `quit`, not `exit`: SESS-9 left a session running on purpose, and
-            // the whole point is to make the app's own teardown deal with it.
-            // `exit` would skip `before-quit` and prove nothing.
-            // Quitting is itself under test - SESS-9 left a session running for
-            // the app's own teardown to reap - so the run ends with `quit`,
-            // not `exit`, and forces the status once the teardown is done.
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            // Armed before the quit, not after: if `app.quit()` throws or a
-            // handler blocks, a watchdog scheduled behind it never exists.
-            setTimeout(() => app.exit(pass ? 0 : 1), 30_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`sessions-check crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  if (mode === 'profiles-check') {
-    const collector = createCollector()
-    startApp({
-      observer: collector,
-      confirm: collector.confirm,
-      onReady: (ctx) => {
-        // The driver closes the sessions it opened, so every confirmation it
-        // provokes is one it asked for on purpose.
-        collector.answerWith(true)
-        void runProfilesChecks(ctx, collector, join(dataDir, 'screenshots'), dataDir)
-          .then((checks) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport('profiles-report.json', {
-              startedAt: new Date().toISOString(),
-              mode: appMode,
-              dataDir,
-              versions: process.versions,
-              pass,
-              checks
-            })
-            console.log(`profiles-check report: ${file}`)
-            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-
-            // PROF-9 planted a stale shim for the `--shim-sweep` start that
-            // follows, so this run must end the same way a real one does -
-            // through `quit`, not `exit`, which would skip the teardown.
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`profiles-check crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  /**
-   * PROF-10's first process: a real app with a real session, held open while a
-   * second one starts and sweeps.
-   *
-   * Its own mode rather than a phase of `--profiles-check` because the claim is
-   * about two Helms overlapping, and the driver that plants PROF-9's shim has to
-   * *end* before the sweep that collects it. One process cannot do both.
-   * `run-profiles.mjs` orchestrates the handshake; see `shimhold.ts`.
-   */
-  if (mode === 'shim-hold') {
-    const collector = createCollector()
-    startApp({
-      observer: collector,
-      confirm: collector.confirm,
-      onReady: (ctx) => {
-        collector.answerWith(true)
-        void runShimHold(ctx, dataDir)
-          .then((check) => {
-            const file = writeReport(HOLD_REPORT, {
-              startedAt: new Date().toISOString(),
-              mode: appMode,
-              dataDir,
-              pass: check.ok,
-              checks: [check]
-            })
-            console.log(`shim-hold report: ${file}`)
-            console.log(`${check.ok ? 'PASS' : 'FAIL'}  ${check.id}  ${check.title}`)
-
-            app.once('quit', () => process.exit(check.ok ? 0 : 1))
-            setTimeout(() => app.exit(check.ok ? 0 : 1), 60_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`shim-hold crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  if (mode === 'history-check') {
-    const collector = createCollector()
-    startApp({
-      observer: collector,
-      confirm: collector.confirm,
-      onReady: (ctx) => {
-        // The driver closes the session it resumed, so every confirmation is
-        // one it asked for on purpose.
-        collector.answerWith(true)
-        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runHistoryChecks(
-          ctx,
-          collector,
-          join(dataDir, 'screenshots'),
-          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
-        )
-          .then((checks) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport('history-report.json', {
-              startedAt: new Date().toISOString(),
-              mode: appMode,
-              dataDir,
-              versions: process.versions,
-              pass,
-              checks
-            })
-            console.log(`history-check report: ${file}`)
-            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`history-check crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  if (mode === 'config-check') {
-    const collector = createCollector()
-    startApp({
-      observer: collector,
-      confirm: collector.confirm,
-      onReady: (ctx) => {
-        // The driver closes the session it launched, so every confirmation is
-        // one it asked for on purpose.
-        collector.answerWith(true)
-        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runConfigChecks(
-          ctx,
-          collector,
-          join(dataDir, 'screenshots'),
-          dataDir,
-          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
-        )
-          .then((checks) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport('config-report.json', {
-              startedAt: new Date().toISOString(),
-              mode: appMode,
-              dataDir,
-              versions: process.versions,
-              pass,
-              checks
-            })
-            console.log(`config-check report: ${file}`)
-            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`config-check crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  if (mode === 'content-check') {
-    const collector = createCollector()
-    startApp({
-      observer: collector,
-      confirm: collector.confirm,
-      onReady: (ctx) => {
-        collector.answerWith(true)
-        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runContentChecks(
-          ctx,
-          join(dataDir, 'screenshots'),
-          dataDir,
-          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
-        )
-          .then((checks) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport('content-report.json', {
-              startedAt: new Date().toISOString(),
-              mode: appMode,
-              dataDir,
-              versions: process.versions,
-              pass,
-              checks
-            })
-            console.log(`content-check report: ${file}`)
-            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`content-check crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
     return
   }
 
@@ -1712,250 +1107,6 @@ app.whenReady().then(() => {
           })
           .catch((err: unknown) => {
             console.error(`${mode} crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  if (mode === 'usage-check') {
-    const collector = createCollector()
-    startApp({
-      observer: collector,
-      confirm: collector.confirm,
-      onReady: (ctx) => {
-        // The driver closes the session it started, so every confirmation is
-        // one it asked for on purpose.
-        collector.answerWith(true)
-        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runUsageChecks(
-          ctx,
-          collector,
-          join(dataDir, 'screenshots'),
-          dataDir,
-          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
-        )
-          .then((checks) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport('usage-report.json', {
-              startedAt: new Date().toISOString(),
-              mode: appMode,
-              dataDir,
-              versions: process.versions,
-              pass,
-              checks
-            })
-            console.log(`usage-check report: ${file}`)
-            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`usage-check crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  /**
-   * The settings pane, driven through the real window.
-   *
-   * The pickers are answered by the driver for the same reason `--packaging-firstrun`
-   * answers them: "add a folder" and "locate the CLI" both open a native dialog
-   * that has no automation surface, and everything either one does afterwards -
-   * the handler, the settings write, the rescan - is the real thing.
-   *
-   * It borrows the user's own database, because the claim is about the real
-   * one. `scripts/run-settings.mjs` restarts the app to read what this left and
-   * then puts the originals back.
-   */
-  if (mode === 'settings-check') {
-    startApp({
-      chooseDirectory: (title: string) => pickerAnswer('directory', title),
-      chooseFile: (title: string) => pickerAnswer('file', title),
-      onReady: (ctx) => {
-        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runSettingsChecks(
-          ctx,
-          join(dataDir, 'screenshots'),
-          dataDir,
-          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
-        )
-          .then(({ checks, parked }) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport('settings-report.json', {
-              startedAt: new Date().toISOString(),
-              mode: appMode,
-              dataDir,
-              versions: process.versions,
-              pass,
-              parked,
-              checks
-            })
-            console.log(`settings-check report: ${file}`)
-            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`settings-check crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  /**
-   * The pull-request surface, driven through the real window.
-   *
-   * Borrows the user's database and settings the way `--settings-check` does,
-   * and for the same reason - the claim is about the real ones. It adds a scan
-   * root of fixture repositories, aims the pulls service at a `gh` of its own
-   * making, spawns real `claude` sessions for the review phase and closes them,
-   * and puts everything back; `scripts/run-prcheck.mjs` restores the settings
-   * as well, for the run that dies before its own restore.
-   */
-  if (mode === 'pr-check') {
-    const collector = createCollector()
-    startApp({
-      observer: collector,
-      confirm: collector.confirm,
-      onReady: (ctx) => {
-        // Every session this driver started is one it closes on purpose.
-        collector.answerWith(true)
-        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runPrChecks(
-          ctx,
-          collector,
-          join(dataDir, 'screenshots'),
-          dataDir,
-          onlyArg ? onlyArg.slice('--only='.length).split(',') : undefined
-        )
-          .then((checks) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport('pr-report.json', {
-              startedAt: new Date().toISOString(),
-              mode: appMode,
-              dataDir,
-              versions: process.versions,
-              pass,
-              checks
-            })
-            console.log(`pr-check report: ${file}`)
-            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`pr-check crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  /**
-   * The transcript archive, driven through the real window in two phases.
-   *
-   * Both phases run against a `.claude` tree of the runner's own, pointed at
-   * with the real `CLAUDE_CONFIG_DIR` rather than a flag - which is what makes
-   * T-0 an assertion about the criterion instead of a statement about a hook.
-   * The second phase exists because "the archive survives the transcript being
-   * deleted and the app restarting" is not a claim the process that wrote the
-   * rows can make: `scripts/run-transcript.mjs` deletes the transcript between
-   * them.
-   */
-  if (mode === 'transcript-check' || mode === 'transcript-restart') {
-    const restart = mode === 'transcript-restart'
-    startApp({
-      onReady: (ctx) => {
-        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        const options = {
-          dataDir,
-          shotDir: join(dataDir, 'screenshots'),
-          ...(onlyArg ? { only: onlyArg.slice('--only='.length).split(',') } : {})
-        }
-        void (restart ? runTranscriptRestartChecks(ctx, options) : runTranscriptChecks(ctx, options))
-          .then((checks) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport(
-              restart ? 'transcript-restart-report.json' : 'transcript-report.json',
-              {
-                startedAt: new Date().toISOString(),
-                mode: appMode,
-                dataDir,
-                claudeConfigDir: process.env['CLAUDE_CONFIG_DIR'] ?? null,
-                versions: process.versions,
-                pass,
-                checks
-              }
-            )
-            console.log(`${mode} report: ${file}`)
-            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`${mode} crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  /**
-   * Harness templates, driven through the real window.
-   *
-   * The directory picker is answered by the driver for the reason
-   * `--settings-check` answers it: "Choose…" opens a native dialog with no
-   * automation surface, and everything after it - the handler, the write, the
-   * rescan - is the real thing. The seed phases that precede this one are
-   * `--template-seed` above.
-   */
-  if (mode === 'template-check') {
-    startApp({
-      chooseDirectory: (title: string) => pickerAnswer('directory', title),
-      onReady: (ctx) => {
-        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runTemplateChecks(ctx, {
-          dataDir,
-          shotDir: join(dataDir, 'screenshots'),
-          ...(onlyArg ? { only: onlyArg.slice('--only='.length).split(',') } : {})
-        })
-          .then((checks) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport('template-report.json', {
-              startedAt: new Date().toISOString(),
-              mode: appMode,
-              dataDir,
-              templatesDir,
-              versions: process.versions,
-              pass,
-              checks
-            })
-            console.log(`template-check report: ${file}`)
-            for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`template-check crashed: ${String(err)}`)
             setTimeout(() => app.exit(1), 200)
           })
       }

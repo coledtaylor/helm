@@ -846,10 +846,9 @@ function SmallButton({
  * The sunken-well field, matching `ProfileEditor`'s `inputClass`.
  *
  * `transition-colors hover:border-border-strong` is not decoration: the scope
- * picker below is a `<select>`, which is a *control*, and `affordance-check`
- * AFF-4 requires every control to change appearance under the pointer. Without
- * it this was the one dead hover in the app - flagged the first time the
- * manager was walked, which is what the two `VIEWS` rows are for.
+ * picker below is a `<select>`, which is a *control*, and every control
+ * changes appearance under the pointer. Without it this was the one dead hover
+ * in the app.
  */
 const INPUT = cn(
   'h-[28px] w-full rounded-well border border-border bg-surface-sunken px-2.5 text-[12px]',

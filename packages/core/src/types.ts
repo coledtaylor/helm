@@ -1199,10 +1199,10 @@ export const PANE_SPLIT_PCT = { min: 20, max: 80, default: 45 } as const
  * any ordinary machine the ceiling is a guard rail rather than a budget.
  *
  * The floor is a kilobyte rather than something respectable, because a bound
- * that no check can drive past is a bound nothing has ever tested: the eviction
- * rule is the interesting part of this feature, and `pnpm transcript-check`
- * makes it fire by setting a ceiling smaller than what it just archived. The
- * settings pane offers sensible sizes; the validator only enforces the shape.
+ * that nothing can drive past is a bound nothing has ever tested: the eviction
+ * rule is the interesting part of this feature, and a ceiling smaller than what
+ * was just archived is what makes it fire. The settings pane offers sensible
+ * sizes; the validator only enforces the shape.
  */
 export const TRANSCRIPT_ARCHIVE_BYTES = {
   min: 1024,
