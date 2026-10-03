@@ -170,6 +170,12 @@ to be told:
 
   A literal radius (`rounded-[5px]`) is a corner the setting cannot reach and
   is not used.
+
+  The window's own corner is Windows 11's to draw, and DWM offers square, 4px
+  and 8px and nothing between. Helm asks for 4px (`main/corners.ts`), which is
+  the default `rounded-well`, and it does not follow the setting. The window's
+  1px edge is the theme's `border` composited over `bg` (`main/chrome.ts`), so
+  it is a hairline like every other rather than the OS accent colour.
 - **Density** (`comfortable` / `compact`) - `--helm-row-y` (a list row's
   vertical padding, `py-row`: 6px / 3px), `--helm-line` (one line of the
   sidebar tree, `h-line`: 26px / 22px) and `--helm-strip` (a pane's tab strip,

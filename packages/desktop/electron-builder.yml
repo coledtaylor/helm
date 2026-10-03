@@ -45,6 +45,10 @@ extraResources:
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'
   - '**/node_modules/node-pty/**'
+  # koffi (src/main/corners.ts) keeps its native binary in a platform package,
+  # @koromix/koffi-win32-x64, rather than in koffi itself.
+  - '**/node_modules/koffi/**'
+  - '**/node_modules/@koromix/**'
 
 # No update feed is generated, because there is no auto-updater. The decision
 # and the three reasons behind it are in docs/PACKAGING.md; the short version is

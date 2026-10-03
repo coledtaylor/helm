@@ -58,7 +58,8 @@ import { createActivityService } from './activity'
 import { createRestoreService } from './restore'
 import { createResourcesService } from './resources'
 import { createCollector, type CheckContext } from './checkkit'
-import { titleBarOverlayFor } from './chrome'
+import { titleBarOverlayFor, windowBorderFor } from './chrome'
+import { requestSmallCorners } from './corners'
 import { createPtermHost } from './pterm'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
@@ -191,6 +192,7 @@ function createWindow(
   bounds?: AppSettings['windowBounds'],
   theme?: AppliedTheme
 ): BrowserWindow {
+  const edge = theme === undefined ? null : windowBorderFor(theme)
   const win = new BrowserWindow({
     width: bounds?.width ?? 1280,
     height: bounds?.height ?? 820,
@@ -213,7 +215,9 @@ function createWindow(
     ...(page === 'index' && process.platform === 'win32' && theme !== undefined
       ? {
           titleBarStyle: 'hidden' as const,
-          titleBarOverlay: titleBarOverlayFor(theme)
+          titleBarOverlay: titleBarOverlayFor(theme),
+          // The window's edge in the theme's hairline, not the OS accent.
+          ...(edge === null ? {} : { accentColor: edge })
         }
       : {}),
     // A packaged Electron window does NOT inherit the exe's icon: given no
@@ -240,6 +244,8 @@ function createWindow(
       webviewTag: false
     }
   })
+
+  if (page === 'index') void requestSmallCorners(win)
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (devUrl) {

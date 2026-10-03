@@ -1,5 +1,5 @@
 import type { BrowserWindow } from 'electron'
-import type { AppliedTheme } from '@helm/core'
+import { formatColor, mix, parseColor, type AppliedTheme } from '@helm/core'
 
 /**
  * The native title bar, recolored to the theme on screen.
@@ -27,14 +27,32 @@ export function titleBarOverlayFor(theme: AppliedTheme): {
 }
 
 /**
+ * The window's 1px edge. Windows 11 draws it in the user's accent colour when
+ * "Show accent colour on title bars and window borders" is on - a line in a
+ * colour from no theme, all the way round the app. It is the theme's hairline
+ * instead, as the hairline lands on the canvas: `border` is translucent and
+ * Windows takes no alpha, so it is composited over `bg` here. Null, which
+ * hands the edge back to the system, only for a colour that does not parse -
+ * and a loaded theme's always do.
+ */
+export function windowBorderFor(theme: AppliedTheme): string | null {
+  const bg = parseColor(theme.tokens.bg)
+  const border = parseColor(theme.tokens.border)
+  if (bg === null || border === null) return null
+  return formatColor(mix(bg, border, border.a))
+}
+
+/**
  * Repaints the native parts of the window for a theme: the overlay buttons,
- * and the background Chromium shows before the renderer's first frame and
- * behind anything it has not painted yet. Neither follows the renderer's CSS.
+ * the window's edge, and the background Chromium shows before the renderer's
+ * first frame and behind anything it has not painted yet. None of them
+ * follows the renderer's CSS.
  */
 export function applyWindowTheme(win: BrowserWindow | null, theme: AppliedTheme): void {
   if (win === null || win.isDestroyed()) return
   win.setBackgroundColor(theme.tokens.bg)
   if (process.platform !== 'win32') return
+  win.setAccentColor(windowBorderFor(theme))
   try {
     win.setTitleBarOverlay(titleBarOverlayFor(theme))
   } catch {

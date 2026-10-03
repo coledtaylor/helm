@@ -79,6 +79,7 @@ describe('settings over IPC', () => {
     isDestroyed: () => false,
     setBackgroundColor: vi.fn(),
     setTitleBarOverlay: vi.fn(),
+    setAccentColor: vi.fn(),
     webContents: { send: (channel: EventChannel, payload: unknown) => events.push({ channel, payload }) }
   }
 
@@ -180,6 +181,8 @@ describe('settings over IPC', () => {
       expect(win.setBackgroundColor).toHaveBeenLastCalledWith('#e6e8ee')
       if (process.platform === 'win32') {
         expect(win.setTitleBarOverlay).toHaveBeenLastCalledWith({ color: '#e6e8ee', symbolColor: '#555a69', height: 36 })
+        // The window's edge: Daylight's hairline as it lands on its canvas, opaque.
+        expect(win.setAccentColor).toHaveBeenLastCalledWith('#d1d3da')
       }
 
       await invoke('settings:write', { theme: 'dark', themeDark: 'graphite' })

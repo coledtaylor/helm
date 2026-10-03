@@ -10,6 +10,13 @@ onlyBuiltDependencies:
   - esbuild
   - node-pty
 
+# koffi loads its prebuilt binary from its platform package
+# (@koromix/koffi-win32-x64) without its own install script having run -
+# measured 2026-10-03 - so that script, which can fall back to compiling from
+# source, stays off, and pnpm stops asking about it.
+ignoredBuiltDependencies:
+  - koffi
+
 # electron-vite 5 peers vite ^5|^6|^7, while @vitejs/plugin-react and
 # @tailwindcss/vite have both moved on to vite 8. Without this, the transitive
 # resolution lands on 8 and electron-vite's bundler API breaks. Pinned in one
