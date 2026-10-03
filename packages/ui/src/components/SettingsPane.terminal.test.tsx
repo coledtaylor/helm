@@ -36,6 +36,7 @@ const TERMINAL: TerminalSettings = {
 
 function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProps {
   return {
+    section: 'terminal',
     status: null,
     checking: false,
     onRecheck: vi.fn(),
@@ -85,10 +86,8 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
     templatesDir: 'C:\\Users\\someone\\.config\\helm\\templates',
     onManageTemplates: vi.fn(),
     onRevealTemplates: vi.fn(),
-    contentWrap: DEFAULT_SETTINGS.contentWrap,
-    onContentWrapChange: vi.fn(),
-    contentWrapIndent: DEFAULT_SETTINGS.contentWrapIndent,
-    onContentWrapIndentChange: vi.fn(),
+    filesWrap: DEFAULT_SETTINGS.filesWrap,
+    onFilesWrapChange: vi.fn(),
     browserReach: DEFAULT_SETTINGS.browserReach,
     onBrowserReachChange: vi.fn(),
     browserMcp: DEFAULT_SETTINGS.browserMcp,
@@ -128,9 +127,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}): SettingsPanePro
 
 /** A group is a card titled by its heading. */
 function group(title: string): HTMLElement {
-  const card = screen.getByRole('heading', { name: title }).closest('section')
-  if (card === null) throw new Error(`no ${title} group`)
-  return card
+  return screen.getByRole('region', { name: title })
 }
 
 /**
@@ -261,7 +258,7 @@ describe('the Terminal group', () => {
 describe('the usage display control', () => {
   it('sets each offered mode, and marks the one in force', async () => {
     const user = userEvent.setup()
-    const props = renderPane({ usageDisplay: 'cost', hasCostEstimate: true })
+    const props = renderPane({ section: 'general', usageDisplay: 'cost', hasCostEstimate: true })
     const control = screen.getByRole('radiogroup', { name: 'Usage display' })
 
     expect(within(control).getByRole('radio', { name: 'Cost' }).getAttribute('aria-checked')).toBe('true')
@@ -273,7 +270,7 @@ describe('the usage display control', () => {
   })
 
   it('offers cost only once the index has an estimate, and says why not before', () => {
-    renderPane({ hasCostEstimate: false })
+    renderPane({ section: 'general', hasCostEstimate: false })
     const cost = within(screen.getByRole('radiogroup', { name: 'Usage display' })).getByRole('radio', {
       name: 'Cost'
     })
@@ -321,7 +318,7 @@ describe('the usage display control', () => {
       }
       return (
         <>
-          <SettingsPane {...paneProps({ usageDisplay, onUsageDisplayChange: write, hasCostEstimate: true })} />
+          <SettingsPane {...paneProps({ section: 'general', usageDisplay, onUsageDisplayChange: write, hasCostEstimate: true })} />
           <StatusBar
             sessions={{ working: 0, waiting: 0, idle: 0 }}
             onShowWaiting={vi.fn()}

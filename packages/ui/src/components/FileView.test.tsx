@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { FileView as FileViewData } from '@helm/core'
 import { installLayoutStandIns } from './CodeEditor.testkit'
-import { FileActions, FileCrumb, FileView, type FileViewProps } from './FileView'
+import { FileActions, FileCrumb, FileView, revealRange, type FileViewProps } from './FileView'
 
 installLayoutStandIns()
 
@@ -127,5 +127,30 @@ describe('FileActions', () => {
     const button = screen.getByRole('button', { name: 'Open in VS Code' }) as HTMLButtonElement
     expect(button.disabled).toBe(true)
     expect(button.title).toBe('VS Code is not installed on this machine')
+  })
+})
+
+describe('FileView: opened on a text match', () => {
+  it('works out where a match lands: the words on their line, or the line itself', () => {
+    const text = 'one\r\nTwo words\r\nthree\r\n'
+    expect(revealRange(text, 2, 'words')).toEqual({ start: 9, end: 14 })
+    expect(text.slice(9, 14)).toBe('words')
+    // Matched without regard to case, as the search did.
+    expect(revealRange(text, 2, 'two')).toEqual({ start: 5, end: 8 })
+    // A line the term is not on, or no term at all, is the line's start.
+    expect(revealRange(text, 3, 'words')).toEqual({ start: 16, end: 16 })
+    expect(revealRange(text, 99, null)).toEqual({ start: 23, end: 23 })
+  })
+
+  it('selects the matched words once, when the file is there to select them in', () => {
+    const reveal = { line: 3, term: 'thr' }
+    const { rerender, props } = renderView({ view: null, reveal })
+    rerender(<FileView {...props} view={VIEW} reveal={reveal} />)
+    const box = screen.getByRole('textbox', { name: 'Contents of src/a.ts' }) as HTMLTextAreaElement
+    expect([box.selectionStart, box.selectionEnd]).toEqual([8, 11])
+    // The same jump is not made again when the file is re-read under it.
+    box.setSelectionRange(0, 0)
+    rerender(<FileView {...props} view={{ ...VIEW }} reveal={reveal} />)
+    expect([box.selectionStart, box.selectionEnd]).toEqual([0, 0])
   })
 })

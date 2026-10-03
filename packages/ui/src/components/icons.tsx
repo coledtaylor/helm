@@ -258,33 +258,17 @@ export function SlidersIcon(props: IconProps): JSX.Element {
  * at the same optical weight as its neighbours in the title bar.
  */
 export function GearIcon(props: IconProps): JSX.Element {
-  const teeth = Array.from({ length: 6 }, (_, i) => {
-    const a = (i * 2 * Math.PI) / 6 + Math.PI / 6
-    return {
-      x1: 8 + 5.1 * Math.cos(a),
-      y1: 8 + 5.1 * Math.sin(a),
-      x2: 8 + 6.9 * Math.cos(a),
-      y2: 8 + 6.9 * Math.sin(a)
-    }
-  })
   return (
     <Icon {...props}>
-      {/* Six teeth rather than eight, a wide ring, and a filled hub rather than
-          a stroked one. At 14px on a 1x display the 1.5 stroke is a fixed
-          budget, so the only way to keep air inside the glyph is to spend it
-          further out: a small stroked circle closes to a blob, and eight teeth
-          on a tight ring read as the sun two buttons along. */}
-      <circle cx="8" cy="8" r="1.25" fill="currentColor" stroke="none" />
-      <circle cx="8" cy="8" r="5.1" />
-      {teeth.map((t, i) => (
-        <line
-          key={i}
-          x1={t.x1.toFixed(2)}
-          y1={t.y1.toFixed(2)}
-          x2={t.x2.toFixed(2)}
-          y2={t.y2.toFixed(2)}
-        />
-      ))}
+      {/* A cog with its teeth cut into the rim, drawn on a 24-unit grid and
+          scaled onto this one - the stroke is 2.25 there so it lands on the
+          same 1.5 as every other glyph here. The ring-and-spokes it replaces
+          read as a blob at rail size: spokes off a circle are a sun, not a
+          gear. */}
+      <g transform="scale(0.6667)" strokeWidth="2.25">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+        <circle cx="12" cy="12" r="3" />
+      </g>
     </Icon>
   )
 }

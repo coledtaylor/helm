@@ -1,31 +1,14 @@
-import type { CSSProperties, JSX } from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type {
-  ConfigSnapshotMeta,
-  ContentDocument,
-  ContentFile,
-  ContentSource,
-  EditorHighlight,
-  RenderedMarkdown
-} from '@helm/core'
+import type { JSX } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { ConfigSnapshotMeta, ContentDocument, ContentFile, EditorHighlight, RenderedMarkdown } from '@helm/core'
 import { cn } from '../lib/cn'
 import { CodeEditor, type EditorStatus } from './CodeEditor'
 import { ConsolePanel } from './ConsolePanel'
-import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes, formatMoment } from '../lib/time'
 // The rendered body and the frontmatter chips are shared with the config
 // console, which opens the same markdown out of a `.claude` tree.
 import { FrontmatterChips, MarkdownBody } from './MarkdownBody'
-import {
-  ArtifactIcon,
-  EyeIcon,
-  LinkIcon,
-  PencilIcon,
-  RestoreIcon,
-  SaveIcon,
-  WarnIcon,
-  WrapIcon
-} from './icons'
+import { ArtifactIcon, LinkIcon, RestoreIcon, SaveIcon, WarnIcon, WrapIcon } from './icons'
 
 export type ContentMode = 'read' | 'edit'
 
@@ -45,8 +28,8 @@ export interface ContentDocumentPaneProps {
   preview: RenderedMarkdown | null
   previewPending: boolean
 
+  /** Read renders; edit is the editor beside a live preview, for a note only. */
   mode: ContentMode
-  onModeChange: (mode: ContentMode) => void
 
   /** The URL a sandboxed frame may load, for an HTML artifact. */
   artifactUrl: string | null
@@ -66,17 +49,10 @@ export interface ContentDocumentPaneProps {
   highlight: string | null
 
   /**
-   * Whether a source file starts wrapped, and how far a continuation hangs.
-   *
-   * `wrapDefault` is the *setting*; what the pane shows is local state seeded
-   * from it. The pane is keyed on the file's path at its call site, so opening
-   * another file remounts it and the toggle returns to the default - which is
-   * the intent, not an accident of the key: whether a file reads better wrapped
-   * is a question about that file, and a minified payload's answer should not
-   * follow you into the next one.
+   * The draft to start the editor on instead of the file - what this tab held
+   * when it last went behind another. Read once, on the first load.
    */
-  wrapDefault: boolean
-  wrapIndent: number
+  initialDraft?: string | null | undefined
 
   /**
    * Tokenises the draft for the editor's underlay, over IPC. Must be stable
@@ -87,7 +63,6 @@ export interface ContentDocumentPaneProps {
   onSave: (content: string) => void
   onReload: () => void
   onRestore: (snapshot: ConfigSnapshotMeta) => void
-  onReveal: (path: string) => void
   onDirtyChange: (dirty: boolean) => void
   onDraftChange: (draft: string) => void
   /** A `[[wikilink]]` that resolved. */
@@ -103,13 +78,13 @@ export interface ContentDocumentPaneProps {
 }
 
 /**
- * One document, read or edited.
+ * A note or an HTML artifact, opened from the Files view: a note rendered, or
+ * edited beside a live preview; an artifact in a frame that can reach nothing.
  *
- * Three surfaces behind one header, chosen by what the file is rather than by a
- * setting: markdown renders, HTML goes to a sandboxed frame, and everything
- * else is source. The header is the same in all three cases - name, path,
- * frontmatter - because that is the part a reader uses to know what they are
- * looking at, and it should not move when the body changes shape.
+ * Its file tab says the rest. The path is on the crumb above it, and the
+ * crumb's Preview / Source / Edit switch is what decides between this pane and
+ * the plain file view - so there is no title block here, only what belongs to
+ * the document itself: its frontmatter, its unwritten links, and the save.
  */
 export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Element {
   const {
@@ -118,7 +93,6 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
     preview,
     previewPending,
     mode,
-    onModeChange,
     artifactUrl,
     artifactConsole,
     snapshots,
@@ -126,13 +100,11 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
     error,
     external,
     highlight,
-    wrapDefault,
-    wrapIndent,
+    initialDraft = null,
     onHighlight = null,
     onSave,
     onReload,
     onRestore,
-    onReveal,
     onDirtyChange,
     onDraftChange,
     onOpenPath,
@@ -140,18 +112,15 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
     onOpenExternal
   } = props
 
-  const [draft, setDraft] = useState('')
+  // Seeded at once when the file is already here, so the first render reports
+  // the draft it will keep rather than an empty one a frame before it.
+  const [draft, setDraft] = useState(() => (loaded === null ? '' : (initialDraft ?? loaded.content.content)))
   const [showHistory, setShowHistory] = useState(false)
   const [status, setStatus] = useState<EditorStatus | null>(null)
-  // Seeded from the setting, then owned by the toggle for as long as this file
-  // is open. See `wrapDefault`.
-  //
-  // Markdown overrides the setting rather than following it, and one state
-  // covers both the reading view and the editor. A note is prose - a paragraph
-  // is one very long line - so there is no reading of `contentWrap` under which
-  // the answer for a note is "off"; and a reader who turns wrapping on and then
-  // presses Edit should find it still on, which two states would not give.
-  const [wrap, setWrap] = useState(file.kind === 'markdown' ? true : wrapDefault)
+  // On, because a note is prose and a paragraph is one very long line - a
+  // horizontal scrollbar under one is unusable. The toggle is there for the
+  // table that reads better unwrapped.
+  const [wrap, setWrap] = useState(true)
 
   // Re-seeded whenever a different file, or a different version of it, arrives.
   // Keyed on the hash rather than the path so a reload after an external change
@@ -165,43 +134,35 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
   // \u0000 rather than \0, which is an octal escape the moment a digit
   // follows it.
   const basis = `${file.path}\u0000${loaded?.content.hash ?? ''}`
-  const seeded = useRef<string | null>(null)
+  const seeded = useRef<string | null>(loaded === null ? null : basis)
   useEffect(() => {
     if (loaded === null) return
     if (seeded.current === basis) return
+    // A draft left behind is the first thing seeded and only that: a reload
+    // after it is somebody choosing the file over the draft.
+    const first = seeded.current === null
     seeded.current = basis
-    setDraft(loaded.content.content)
+    setDraft(first && initialDraft !== null ? initialDraft : loaded.content.content)
     setShowHistory(false)
-  }, [basis, loaded])
+  }, [basis, loaded, initialDraft])
 
   const dirty = loaded !== null && draft !== loaded.content.content
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange])
   useEffect(() => onDraftChange(draft), [draft, onDraftChange])
 
   const isMarkdown = file.kind === 'markdown'
-  const isHtml = file.kind === 'html'
-  // Exactly the condition under which `SourceBody` is the body below, written
-  // once so the toggle cannot appear over a document that has no lines to wrap.
-  const showsSource = mode === 'read' && !isMarkdown && !isHtml && file.kind !== 'binary'
-  const rendered = mode === 'edit' && preview !== null ? preview : (loaded?.rendered ?? null)
+  const editing = mode === 'edit' && isMarkdown && loaded !== null && !loaded.content.binary
+  const rendered = editing && preview !== null ? preview : (loaded?.rendered ?? null)
   const canSave = loaded !== null && dirty && !saving && external === null && !loaded.content.binary
-  const editing = mode === 'edit' && loaded !== null && !loaded.content.binary
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <Header
-        file={file}
         // While editing, the chips follow the *draft*: changing `type:` in the
         // frontmatter and watching the header keep the old value would be the
         // preview lying about the half of the document it is responsible for.
         rendered={rendered}
-        mode={mode}
-        onModeChange={onModeChange}
-        onReveal={onReveal}
-        editable={!loaded?.content.binary}
-        // Over the editor as well as over the reading view, because both are
-        // made of lines and both had the same horizontal scrollbar.
-        showWrap={showsSource || editing}
+        editing={editing}
         wrap={wrap}
         onWrapChange={setWrap}
       />
@@ -229,7 +190,7 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
               type="button"
               data-content-reload
               onClick={onReload}
-              className="rounded-well bg-warn px-2.5 py-1 text-[11px] font-medium text-bg transition hover:brightness-110"
+              className="rounded-well border border-warn/60 px-2.5 py-1 text-[11px] font-medium text-warn transition-colors hover:bg-warn/10"
             >
               Reload from disk
             </button>
@@ -258,83 +219,53 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
       )}
 
       <div className="flex min-h-0 flex-1">
-        {mode === 'edit' && (
-          <div
-            className={cn(
-              // `pl-5` so the editor's left edge lines up with the title above
-              // it rather than sitting eight pixels inside it.
-              'flex min-w-0 flex-col py-3 pl-5',
-              isMarkdown ? 'w-1/2 shrink-0 border-r border-border pr-3' : 'flex-1 pr-5'
-            )}
-          >
-            {loaded === null ? (
-              <p className="text-[12px] text-fg-subtle">Reading&hellip;</p>
-            ) : loaded.content.binary ? (
-              <p className="rounded-raised border border-border bg-surface-sunken px-3 py-2 text-[12px] text-fg-muted">
-                {formatBytes(loaded.content.size)} of binary content. Helm will not rewrite a file it
-                cannot read as text.
-              </p>
-            ) : (
-              <CodeEditor
-                surface="content"
-                path={file.path}
-                value={draft}
-                onChange={setDraft}
-                onHighlight={onHighlight}
-                // Whatever the header's toggle says. It starts on for a note,
-                // because a paragraph is one very long line and a horizontal
-                // scrollbar under it is unusable; a `.json` in the vault starts
-                // off, where the line breaks are the structure.
-                wrap={wrap}
-                onStatusChange={setStatus}
-                ariaLabel={`Edit ${file.relPath}`}
-              />
-            )}
+        {editing && (
+          // `pl-5` so the editor's left edge lines up with the rendered text
+          // beside it rather than sitting eight pixels inside it.
+          <div className="flex w-1/2 min-w-0 shrink-0 flex-col border-r border-border py-3 pr-3 pl-5">
+            <CodeEditor
+              surface="content"
+              path={file.path}
+              value={draft}
+              onChange={setDraft}
+              onHighlight={onHighlight}
+              wrap={wrap}
+              onStatusChange={setStatus}
+              ariaLabel={`Edit ${file.relPath}`}
+            />
           </div>
         )}
 
-        {(mode === 'read' || isMarkdown) &&
-          (isHtml && mode === 'read' ? (
-            // Keyed on the URL so a different artifact gets a fresh frame and a
-            // fresh "has it painted yet" - the alternative is resetting that
-            // state from an effect, which is a cascading render for a value a
-            // remount already gives correctly.
-            <ArtifactFrame
-              key={artifactUrl}
-              url={artifactUrl}
-              file={file}
-              entries={artifactConsole}
-              onOpenWikilink={onOpenWikilink}
-            />
-          ) : file.kind === 'binary' && mode === 'read' ? (
-            <BinaryBody file={file} bytes={loaded?.content.size ?? file.size} onReveal={onReveal} />
-          ) : isMarkdown ? (
-            <MarkdownBody
-              path={file.path}
-              rendered={rendered}
-              stale={mode === 'edit' && previewPending}
-              // No contents column beside a split editor. The preview already
-              // has half the pane; taking another 13rem out of it leaves a
-              // measure narrow enough that every second line wraps.
-              compact={mode === 'edit'}
-              highlight={mode === 'read' ? highlight : null}
-              onOpenPath={onOpenPath}
-              onOpenExternal={onOpenExternal}
-            />
-          ) : (
-            <SourceBody
-              content={loaded?.content.content ?? ''}
-              loading={loaded === null}
-              binary={loaded?.content.binary ?? false}
-              source={loaded?.source ?? null}
-              wrap={wrap}
-              wrapIndent={wrapIndent}
-            />
-          ))}
+        {file.kind === 'html' ? (
+          // Keyed on the URL so a different artifact gets a fresh frame and a
+          // fresh "has it painted yet" - the alternative is resetting that
+          // state from an effect, which is a cascading render for a value a
+          // remount already gives correctly.
+          <ArtifactFrame
+            key={artifactUrl}
+            url={artifactUrl}
+            file={file}
+            entries={artifactConsole}
+            onOpenWikilink={onOpenWikilink}
+          />
+        ) : (
+          <MarkdownBody
+            path={file.path}
+            rendered={rendered}
+            stale={editing && previewPending}
+            // No contents column beside a split editor. The preview already
+            // has half the pane; taking another 13rem out of it leaves a
+            // measure narrow enough that every second line wraps.
+            compact={editing}
+            highlight={editing ? null : highlight}
+            onOpenPath={onOpenPath}
+            onOpenExternal={onOpenExternal}
+          />
+        )}
       </div>
 
       <footer className="shrink-0 border-t border-border">
-        <div className="flex items-center gap-3 px-5 py-2.5">
+        <div className="flex h-6 items-center gap-3 px-3">
           <span className="flex items-center gap-1.5 text-[11px] tabular-nums text-fg-subtle">
             <span>{formatBytes(loaded?.content.size ?? file.size)}</span>
             {loaded?.rendered && (
@@ -380,7 +311,7 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
 
           <span className="flex-1" />
 
-          {mode === 'edit' && (
+          {editing && (
             <>
               <span
                 data-content-dirty={dirty}
@@ -392,7 +323,7 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
                 <button
                   type="button"
                   onClick={() => loaded && setDraft(loaded.content.content)}
-                  className="rounded-well border border-border-strong px-2.5 py-1 text-[11px] text-fg transition-colors hover:bg-hover"
+                  className="flex h-5 items-center rounded-xs px-1.5 text-[11px] text-fg-muted transition-colors hover:bg-hover hover:text-fg"
                 >
                   Revert
                 </button>
@@ -402,17 +333,13 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
                 data-content-save
                 onClick={() => onSave(draft)}
                 disabled={!canSave}
-                title={
-                  external !== null ? 'The file changed on disk; decide above first' : 'Write this file'
-                }
+                title={external !== null ? 'The file changed on disk; decide above first' : 'Write this file'}
                 className={cn(
-                  'flex items-center gap-1.5 rounded-well border px-2.5 py-1 text-[11px] font-medium transition-colors',
-                  canSave
-                    ? 'border-accent text-accent-text hover:bg-accent-soft'
-                    : 'cursor-default border-border text-fg-subtle opacity-60'
+                  'flex h-5 items-center gap-1 rounded-xs px-1.5 text-[11px] transition-colors',
+                  canSave ? 'text-accent-text hover:bg-accent-soft' : 'cursor-default text-fg-subtle opacity-60'
                 )}
               >
-                <SaveIcon width={12} height={12} />
+                <SaveIcon width={11} height={11} />
                 Save
               </button>
             </>
@@ -426,283 +353,80 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
 }
 
 // ---------------------------------------------------------------------------
-// Header: identity and the frontmatter chip row
+// Header: the frontmatter chip row
 // ---------------------------------------------------------------------------
 
+/**
+ * What the document says about itself - its frontmatter as chips, and the
+ * wikilinks with no note behind them - and the wrap toggle while it is being
+ * edited. Nothing at all when there is none of that: a README with no
+ * frontmatter starts on its first heading.
+ */
 function Header({
-  file,
   rendered,
-  mode,
-  onModeChange,
-  onReveal,
-  editable,
-  showWrap,
+  editing,
   wrap,
   onWrapChange
 }: {
-  file: ContentFile
   rendered: RenderedMarkdown | null
-  mode: ContentMode
-  onModeChange: (mode: ContentMode) => void
-  onReveal: (path: string) => void
-  editable: boolean
-  /** Only over a body made of lines - see `showsSource` at the call site. */
-  showWrap: boolean
+  editing: boolean
   wrap: boolean
   onWrapChange: (wrap: boolean) => void
-}): JSX.Element {
+}): JSX.Element | null {
   const chips = rendered?.frontmatter.fields ?? []
   const broken = rendered?.counts.brokenWikilinks ?? 0
+  const yamlError = rendered?.frontmatter.error ?? null
+  if (chips.length === 0 && broken === 0 && yamlError === null && !editing) return null
 
   return (
-    <header className="shrink-0 border-b border-border px-5 pt-4 pb-3">
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-[15px] leading-tight font-medium tracking-tight text-fg">
-            {file.title}
-          </h2>
-          <button
-            type="button"
-            onClick={() => onReveal(file.path)}
-            title="Show in Explorer"
-            className="mt-0.5 block max-w-full truncate text-left font-mono text-[11px] text-fg-subtle transition-colors hover:text-accent-text"
-          >
-            {file.relPath}
-          </button>
-        </div>
-
-        {broken > 0 && (
-          <span
-            data-broken-links={broken}
-            title="Wikilinks with no note behind them yet. In this vault that marks a note worth writing, not a mistake."
-            className="flex shrink-0 items-center gap-1 rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-[10px] text-warn"
-          >
-            <LinkIcon width={10} height={10} />
-            {broken} unwritten
-          </span>
-        )}
-
-        {showWrap && (
-          // A lone toggle rather than an On/Off pair: wrapping is one thing
-          // that is either happening or not, and a two-segment control for a
-          // boolean claims there is a choice to read.
-          <button
-            type="button"
-            data-content-wrap
-            aria-pressed={wrap}
-            onClick={() => onWrapChange(!wrap)}
-            title={
-              wrap
-                ? 'Long lines wrap. Click to let them run off to the right.'
-                : 'Long lines run off to the right. Click to wrap them.'
-            }
-            className={cn(
-              'flex shrink-0 items-center gap-1.5 rounded-well border px-2.5 py-1 text-[11px] transition-colors',
-              wrap
-                ? 'border-accent/50 bg-accent-soft text-accent-text'
-                : 'border-border text-fg-muted hover:bg-hover hover:text-fg'
-            )}
-          >
-            <WrapIcon width={11} height={11} />
-            Wrap
-          </button>
-        )}
-
-        {editable && (
-          <div
-            role="group"
-            aria-label="Mode"
-            className="flex shrink-0 gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
-          >
-            {(
-              [
-                { id: 'read' as const, label: 'Read', Icon: EyeIcon },
-                { id: 'edit' as const, label: 'Edit', Icon: PencilIcon }
-              ]
-            ).map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                data-content-mode={option.id}
-                aria-pressed={mode === option.id}
-                onClick={() => onModeChange(option.id)}
-                className={cn(
-                  'flex items-center gap-1.5 rounded-raised px-2.5 py-0.5 text-[11px] transition-colors',
-                  mode === option.id
-                    ? SEGMENT_ON
-                    : 'text-fg-muted hover:text-fg'
-                )}
-              >
-                <option.Icon width={11} height={11} />
-                {option.label}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
+    <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border px-5 py-2">
       {/* `type`, `date` and `tags` are this vault's own convention and are what
           a note is filed under; showing them as YAML would be showing the
           storage format of the one thing the reader wanted rendered. */}
       {chips.length > 0 && (
-        <div className="mt-3">
+        <div className="min-w-0">
           <FrontmatterChips fields={chips} />
         </div>
       )}
-
-      {rendered?.frontmatter.error != null && (
-        <p className="mt-2 text-[11px] text-danger">
-          The frontmatter block is not valid YAML: {rendered.frontmatter.error}
-        </p>
+      {yamlError !== null && (
+        <p className="text-[11px] text-danger">The frontmatter block is not valid YAML: {yamlError}</p>
       )}
-    </header>
-  )
-}
-
-/**
- * A file as source: data, text, and the scripts an agent writes into `tools/`.
- *
- * Highlighted where main could - the same shiki pass a fenced code block gets,
- * carrying both themes as custom properties so a theme toggle recolours it
- * without a re-highlight. `source-view` rather than `markdown` on the wrapper,
- * with the code rules shared between them in `markdown.css`: it is the same
- * `<pre class="shiki">` and it should look identical, but it is not a document
- * and the rest of the markdown rules have no business applying to it.
- *
- * Plain text is the fallback and it is a real one, not an error state - a file
- * past the highlighting ceiling, or in a language nobody packaged a grammar
- * for, is still a file somebody wanted to read.
- *
- * **This wrapper does not scroll - the block inside it does.** Both branches
- * below are pinned to the wrapper's height and own both of their scrollbars, so
- * a long file is read inside a bounded well rather than by scrolling the well
- * itself past the bottom of the window. See the `.source-view` rules in
- * `markdown.css` for the measurements that argument came from; the plain-text
- * branch carries the same thing as utilities because it is a `pre` this file
- * writes rather than one shiki hands over.
- */
-function SourceBody({
-  content,
-  loading,
-  binary,
-  source,
-  wrap,
-  wrapIndent
-}: {
-  content: string
-  loading: boolean
-  binary: boolean
-  source: ContentSource | null
-  wrap: boolean
-  wrapIndent: number
-}): JSX.Element {
-  // The indent travels as a custom property rather than a class, because it is
-  // a number a person types rather than one of a set - a utility per column
-  // would be sixteen classes that only exist to carry an integer.
-  const wrapVars = { '--source-wrap-indent': `${String(wrapIndent)}ch` } as CSSProperties
-
-  // The per-line `--line-indent` the hang is measured from arrives *in* the
-  // HTML, written by `highlightCode`, rather than from an effect walking `.line`
-  // nodes - see the note there.
-  //
-  // **Memoised on the string, and it is load-bearing.** React re-applies
-  // `dangerouslySetInnerHTML` when the *object* it is handed differs, not when
-  // the markup does, so a fresh `{ __html }` per render rebuilt this subtree on
-  // every render of the pane. Measured in the real window: three writes of a
-  // byte-identical 50,108-character string in twelve idle seconds, each one
-  // discarding the `<pre>` and building a new one.
-  //
-  // That was survivable while the *wrapper* owned the scrollbar, because React
-  // never touches it. It stopped being survivable the moment the block itself
-  // became the scroll container: a new element starts at `scrollTop = 0`, so
-  // reading down a file was interrupted every few seconds by a jump back to the
-  // top. Holding the object stable means React writes only when the markup
-  // really changed, which is when a rebuild is correct anyway.
-  const injected = useMemo(() => ({ __html: source?.html ?? '' }), [source?.html])
-
-  return (
-    <div data-content-source className="min-w-0 flex-1 overflow-hidden p-3">
-      {loading ? (
-        <p className="text-[12px] text-fg-subtle">Reading&hellip;</p>
-      ) : binary ? (
-        <p className="rounded-raised border border-border bg-surface-sunken px-3 py-2 text-[12px] text-fg-muted">
-          Helm could not read this file as text.
-        </p>
-      ) : source !== null && source.html !== '' ? (
-        <div
-          className="source-view"
-          data-wrap={wrap ? 'on' : 'off'}
-          style={wrapVars}
-          data-content-language={source.language}
-          data-content-highlighted={source.highlighted}
-          // The same argument as the markdown body's: this string was produced
-          // by shiki in the main process from bytes on disk, and the renderer
-          // injects it rather than evaluating anything in it.
-          dangerouslySetInnerHTML={injected}
-        />
-      ) : (
-        <pre
-          data-content-language="plaintext"
-          data-wrap={wrap ? 'on' : 'off'}
-          style={wrapVars}
-          className={cn(
-            'h-full overflow-auto overscroll-contain rounded-raised border border-border bg-surface-sunken p-3',
-            'font-mono text-[12px] leading-[1.55] text-fg select-text',
-            // No `.line` spans to hang off here - this branch is one text node -
-            // so the indent lands on the block itself, which gives every wrapped
-            // row the same hang the highlighted branch gives each line.
-            wrap
-              ? 'wrap-anywhere whitespace-pre-wrap [padding-left:calc(0.75rem+var(--source-wrap-indent))] [text-indent:calc(-1*var(--source-wrap-indent))]'
-              : 'whitespace-pre'
-          )}
+      <span className="flex-1" />
+      {broken > 0 && (
+        <span
+          data-broken-links={broken}
+          title="Wikilinks with no note behind them yet. In this vault that marks a note worth writing, not a mistake."
+          className="flex shrink-0 items-center gap-1 rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-[10px] text-warn"
         >
-          {content}
-        </pre>
+          <LinkIcon width={10} height={10} />
+          {broken} unwritten
+        </span>
       )}
-    </div>
-  )
-}
-
-/**
- * A file Helm will not open, which is still a file worth being told about.
- *
- * The list stopped hiding these, so this is where that decision has to land:
- * a row that led nowhere would move the silent omission from the list into the
- * document pane rather than ending it. Explorer is the honest next step.
- */
-function BinaryBody({
-  file,
-  bytes,
-  onReveal
-}: {
-  file: ContentFile
-  bytes: number
-  onReveal: (path: string) => void
-}): JSX.Element {
-  return (
-    <div className="grid min-w-0 flex-1 place-items-center p-8">
-      <div className="max-w-sm text-center">
-        <ArtifactIcon width={20} height={20} className="mx-auto text-fg-subtle" />
-        <p className="mt-3 text-[13px] text-fg-muted">
-          <span className="font-mono text-[12px]">{file.ext === '' ? file.slug : `.${file.ext}`}</span>{' '}
-          is not a kind Helm reads.
-        </p>
-        <p className="mt-1 text-[12px] text-fg-subtle">
-          {formatBytes(bytes)} on disk. It is listed because it is there.
-        </p>
+      {editing && (
+        // A lone toggle rather than an On/Off pair: wrapping is one thing
+        // that is either happening or not.
         <button
           type="button"
-          data-content-reveal
-          onClick={() => onReveal(file.path)}
+          data-content-wrap
+          aria-pressed={wrap}
+          onClick={() => onWrapChange(!wrap)}
+          title={
+            wrap
+              ? 'Long lines wrap. Click to let them run off to the right.'
+              : 'Long lines run off to the right. Click to wrap them.'
+          }
           className={cn(
-            'mt-4 rounded-well border border-border-strong px-2.5 py-1 text-[11px] text-fg',
-            'transition-colors hover:bg-hover'
+            'flex h-6 shrink-0 items-center gap-1.5 rounded-well border px-2 text-[11px] transition-colors',
+            wrap
+              ? 'border-accent/50 text-accent-text hover:bg-accent-soft'
+              : 'border-border-strong text-fg-muted hover:bg-hover hover:text-fg'
           )}
         >
-          Show in Explorer
+          <WrapIcon width={11} height={11} />
+          Wrap
         </button>
-      </div>
-    </div>
+      )}
+    </header>
   )
 }
 

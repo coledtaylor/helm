@@ -459,13 +459,23 @@ export function toSaved(layout: PaneLayout): SavedPaneLayout {
   }
 }
 
+/**
+ * Tab kinds an older build wrote down that open nothing now. The content
+ * viewer's tab went when it merged into Files: a layout naming it still loads,
+ * without it.
+ */
+export const RETIRED_TAB_KINDS: ReadonlySet<string> = new Set(['content'])
+
 /** The saved layout as a live one. A saved `activeId` that names a tab no
  * longer there falls to that group's last tab, as a stale one always has, and
  * a saved session is left for `reconcile` to drop when nothing hosts it. */
 export function fromSaved(saved: SavedPaneLayout | null): PaneLayout {
   if (saved === null) return EMPTY_LAYOUT
   return normalize(
-    saved.groups.map((group) => ({ tabs: group.panes, activeId: group.activeId })),
+    saved.groups.map((group) => ({
+      tabs: group.panes.filter((pane) => !RETIRED_TAB_KINDS.has((pane as { kind: string }).kind)),
+      activeId: group.activeId
+    })),
     saved.focused
   )
 }

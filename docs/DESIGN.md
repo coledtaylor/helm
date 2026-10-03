@@ -280,17 +280,28 @@ overrides the gate; keep it.
   that reads as a control borrowed from another program, which is most obvious
   on a foreign-ground island where nothing else is system-drawn.
 
-  **A select always carries a real fill - never `bg-transparent`.** Its
-  dropped-open list is an OS window rather than part of the page, and the only
-  things CSS reaches into it are the control's own `background-color` and
-  `color`. A transparent control therefore drops the platform's white listbox
-  into a dark app, with the page's text colour still applied to the rows - the
-  shell picker shipped that way and its options were `#75798c` on white.
-  Measured on Electron 43: `color-scheme` on the element and `option` /
-  `option:checked` rules change nothing, so the fill is the whole lever. What
-  stays platform-drawn is the **highlighted row**, which keeps the Windows
-  selection colour; that is the accepted price of a native select, and the
-  alternative - a listbox of our own - is refused above for a better reason.
+  **Its open list is the menu recipe, drawn by CSS.** Every select is
+  `appearance: base-select` (`theme.css`, unlayered so it outranks
+  `appearance-none`), which hands the dropped-open list to the page while
+  keeping the keyboard, type-ahead and the form value native. Before it, the
+  list was an OS window that only the control's own fill reached: Chromium
+  painted it white with the page's light text on the rows, and the highlighted
+  row in the Windows selection colour. Now it is `surface-raised` behind a
+  `border-strong` edge, rows `hover` under the pointer and `accent-soft` for the
+  chosen one, no tick. The list is DOM in the top layer, so it no longer paints
+  over a browser tab's native view - which is fine for a select inside a pane,
+  whose list opens in that pane, and is why the Files view's project picker,
+  whose list crosses the sidebar's edge, is a `Menu` instead (below).
+- **Menu** (`Menu.tsx`): a list that drops from a control or opens at the
+  pointer - the Files view's project picker, the rail's right-click. The popup
+  recipe: `surface-raised`, a `border-strong` edge, `rounded-well`, no shadow,
+  4px of padding; rows 28px, 12px text, `hover` under the pointer or the keys,
+  a tick column only where something is ticked. Arrows, Home and End,
+  type-ahead, Enter, Escape; focus moves in once it is placed and goes back to
+  the control that opened it. **It is an overlay while open** (`lib/overlay.ts`),
+  so a browser tab's native view stands down for it as it does for a dialog,
+  and it is portalled to the body and kept 8px inside the window, so neither
+  the sidebar's clip nor the window's edge cuts it off.
 - **Stepper**: a segmented-control shell holding − and + buttons either side of
   a tabular mono readout. For a small bounded integer someone nudges while
   watching the result - a terminal's point size, not a scrollback of 25,000.
@@ -548,7 +559,7 @@ overrides the gate; keep it.
 - **Page bars**: a page's own controls sit in one row directly under the tab
   strip, as tall as the strip, with a hairline below - scope switcher, what is
   being looked at, counts, the page's controls and a refresh (`PaneHeader` for
-  the config console and the content viewer, `PAGE_BAR` for history, pull
+  the config console, `PAGE_BAR` for history, pull
   requests and the sessions pane). **No mark and no title**: the tab directly
   above already says "Config", and a second one a row down is what made the
   header read as a card on top of somebody else's pane. It **measures itself,
@@ -656,14 +667,32 @@ overrides the gate; keep it.
   differ are marked the way a selected row is: a 2px accent edge where the
   gutter meets the code, `accent-soft` behind the line, the number in
   `accent-text`; a removal is a short accent tick across the line boundary. A
-  24px status line at the foot: caret position, language, line endings, Wrap,
-  and "Read only". A file that is gone, binary or past the size ceiling is a
-  centred notice with VS Code and Explorer as the way on, never an empty pane.
+  24px status line at the foot: caret position, language, line endings, Wrap
+  (`filesWrap`, so it holds for the next file), and "Read only". A file that is
+  gone, binary or past the size ceiling is a centred notice with VS Code and
+  Explorer as the way on, never an empty pane.
+
+  **A note or an HTML artifact opens rendered.** The crumb ends in a small
+  segmented switch - **Preview**, **Source**, and for markdown **Edit** - held
+  per file. Preview is the note as a page (frontmatter as chips in a row above
+  it, only when there is some) or the artifact in its sandboxed frame; Source
+  is the plain file view above, git marks and all; Edit is the editor beside a
+  live preview, with Save and Revert in the status line - the one place the
+  Files view writes, through the snapshotted `content:write`. Entering Edit
+  keeps a preview tab. A tab with a draft not on disk shows a dot where its
+  close button sits, and the draft outlives the tab going behind another - or
+  closing: opening the file again brings it back, marked unsaved. HTML has no
+  Edit: an artifact is generated, and its editor is whatever generated it.
 - **Ctrl+P** is the launcher's palette shape: field across the top, rows of
   34px - page icon, the file name, its folder in mono `fg-subtle` - with the
   letters that matched in `accent-text`, the files opened lately before
   anything is typed, and a key strip at the foot saying how many files were
-  searched and where the list came from.
+  searched and where the list came from. A **Names / Text** switch sits at the
+  field's right; **Ctrl+Shift+F** opens it on Text, which searches what the
+  files say: each file's name once, then its matching lines as 28px rows - the
+  line number in mono, the line with the match in `accent-text` at 500. A row
+  opens the file on that line, the words selected in source and marked in a
+  rendered note. The last answer stays on screen while the next is asked.
 
 ## 5b. Shell chrome
 
@@ -678,16 +707,31 @@ overrides the gate; keep it.
   went to Appearance, and Settings to the rail.
 - **The rail**: 44px of 34px icon buttons on the canvas, `rounded-well`,
   ordered by how often each is reached for rather than by feature - Sessions,
-  then Files, session history, Content and the browser, a hairline, then the
-  rare ones (Profiles, pull requests, Config), and Settings pinned to the foot. The
-  order is a fact about how Helm is used, so it is fixed rather than learned: a
-  rail that reordered itself would move under muscle memory.
+  Profiles, Files and session history, a hairline, then the browser, pull
+  requests and Config, and Settings pinned to the foot. The order is a fact
+  about how Helm is used, so it is fixed rather than learned: a rail that
+  reordered itself would move under muscle memory.
+
+  **A right-click lists every destination with a tick** (a `Menu`), as VS
+  Code's activity bar does; unticking one takes it off the rail
+  (`railHidden`), and a group left empty takes its hairline with it. Settings
+  is listed ticked and disabled: it is where the rest come back from, and the
+  setting's validator refuses it outright. Hiding is not disabling - Ctrl+P,
+  Ctrl+N and every other way in still work.
 
   An item is one of two kinds and says "here" differently. A **view** swaps
-  what the sidebar shows - Sessions, Files, Profiles - and is current with `hover`
-  fill and the 2px accent edge a selected sidebar row wears, in the rail's own
-  margin; pressed again, it puts the sidebar away. A **page** opens a tab in the
-  focused pane and is current, with the fill alone, while that tab is in front.
+  what the sidebar shows - Sessions, Profiles, Files, Settings - and is current
+  with `hover` fill and the 2px accent edge a selected sidebar row wears, in the
+  rail's own margin; pressed again, it puts the sidebar away. A **page** opens
+  a tab in the focused pane and is current, with the fill alone, while that tab
+  is in front.
+
+  **Settings is a view with a page.** The sidebar lists its sections (General,
+  Appearance, Terminal, Sessions, Workspace, Files, Browser, GitHub, Archive,
+  Updates) as sidebar rows, and the pane shows the one picked - a 17px title,
+  then its groups. A section that is one group is that group: the title is
+  the page's and its hint is the line under it, with no caps heading of its
+  own. Opening Settings from anywhere opens both.
   The rail sits outside the sidebar's `aside` on purpose: it is a column of
   titled buttons, and inside the `aside` every "first project row" selector
   would land on it.
@@ -772,8 +816,8 @@ overrides the gate; keep it.
   button, and counts what was delivered with `tracePointer` - so "the app
   ignored it" and "it never arrived" stop being the same red line. `SESS-15`
   and `S-21` both assert `buttons: 1` for exactly that reason.
-- **Narrow panes**: the config console, the content viewer and the session
-  history are all a bounded list beside a detail, and that needs roughly 700px
+- **Narrow panes**: the config console and the session
+  history are both a bounded list beside a detail, and that needs roughly 700px
   before both are readable. In one of two panes none of them get it, so each
   collapses to **one at a time**: the list until something is
   picked, then the detail alone with a `‹ Back` row above it (`PaneBack`).

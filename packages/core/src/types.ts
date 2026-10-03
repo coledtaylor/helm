@@ -1204,19 +1204,15 @@ export const TERMINAL_SCROLLBACK = { min: 500, max: 200_000, default: 10_000 } a
 export const PROJECT_SHELL_HEIGHT_PCT = { min: 10, max: 50, default: 30 } as const
 
 /**
- * The hanging indent a wrapped source line's continuation carries, in columns.
+ * The rail's destinations that can be hidden, in the order the rail draws them.
  *
- * Its job is to say "this row is the last row continued" rather than "this row
- * is the next line", and that is a distinction the eye makes by *size*: at the
- * `tab-size: 2` this viewer sets, a two-column hang is the same distance as one
- * nesting step, so a continuation would read as a child of the line above it.
- * Four is the smallest value that cannot be mistaken for a level of nesting.
- *
- * Zero is allowed and is a real choice - it is what a plain editor does. The
- * ceiling is where the hang starts eating the measure it was meant to make
- * readable.
+ * Settings is not one, and leaving it out of this list is the whole mechanism:
+ * `railHidden` is validated against it, so no write can hide the one way back
+ * to un-hiding everything else. The ids are the rail's own (`data-rail`).
  */
-export const CONTENT_WRAP_INDENT = { min: 0, max: 16, default: 4 } as const
+export const RAIL_DESTINATIONS = ['sessions', 'profiles', 'files', 'history', 'browser', 'pulls', 'config'] as const
+
+export type RailDestination = (typeof RAIL_DESTINATIONS)[number]
 
 /**
  * How much of the row the second pane takes when there are two, as a
@@ -1292,7 +1288,6 @@ export type WorkspaceTab =
   | { kind: 'pulls' }
   | { kind: 'pr'; repoPath: string; number: number }
   | { kind: 'config' }
-  | { kind: 'content' }
   | { kind: 'settings' }
   /**
    * A file, read beside the session changing it. `root` is the project it was
@@ -1548,29 +1543,26 @@ export interface AppSettings {
   paneSplitPct: number
 
   /**
-   * Whether the content viewer wraps long lines when it shows a file as source.
+   * Whether long lines wrap in a file read from the Files view.
    *
-   * **Default off, and that is a position this repository already took.** The
-   * content editor's textarea soft-wraps and says why in a comment beside it:
-   * it edits prose, where a paragraph is one very long line. The config editor
-   * next to it deliberately does not, because it edits JSON, "where a wrapped
-   * line hides the structure". A source file is structure, so the default
-   * follows the config editor rather than the prose one.
+   * **Default off**, following the config editor rather than the prose one: a
+   * source file is structure, and a wrapped line hides it. A note is the
+   * exception and is not governed by this - markdown in the editor always
+   * wraps, because a paragraph is one very long line.
    *
-   * This is the *default*, not the state. The document header carries a toggle
-   * that overrides it for the file on screen, because whether a given file
-   * reads better wrapped is a question about that file - a minified payload and
-   * a hand-written YAML want opposite answers, and neither is a preference
-   * about Helm.
+   * The toggle in a file's status line writes this, so the choice holds for
+   * the next file and the next start rather than resetting per tab.
    */
-  contentWrap: boolean
+  filesWrap: boolean
+
   /**
-   * The hanging indent on a wrapped line's continuation rows, in columns.
-   * Bounded by `CONTENT_WRAP_INDENT`; zero is a real choice. Has no effect
-   * while nothing is wrapped, which is why it is one setting rather than a
-   * pair that have to be kept consistent.
+   * Destinations taken off the rail, by a right-click on it.
+   *
+   * Only ids from `RAIL_DESTINATIONS`, which is what keeps Settings on the
+   * rail whatever this says. Hiding is not disabling: Ctrl+P, Ctrl+N and every
+   * other way into a destination still work.
    */
-  contentWrapIndent: number
+  railHidden: RailDestination[]
 
   /**
    * How many bytes of `helm.db` the transcript archive may occupy.
@@ -1868,8 +1860,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   projectShellHeightPct: PROJECT_SHELL_HEIGHT_PCT.default,
   paneSplitPct: PANE_SPLIT_PCT.default,
   // Off, following the config editor rather than the prose one - see the field.
-  contentWrap: false,
-  contentWrapIndent: CONTENT_WRAP_INDENT.default,
+  filesWrap: false,
+  railHidden: [],
   transcriptArchiveMaxBytes: TRANSCRIPT_ARCHIVE_BYTES.default,
   ghPath: null,
   prPollMinutes: PR_POLL_MINUTES.default,
@@ -2464,21 +2456,6 @@ export interface ContentTree {
   tookMs: number
 }
 
-/**
- * How the content pane is listing a scope.
- *
- * `curated` is the vault reading: the named roots, the discovered ones, newest
- * first inside each. `tree` is an ordinary file tree - every file, read one
- * directory at a time, with the repository's own ignore rules drawn rather than
- * applied silently.
- *
- * A scope's *kind* picks which one a scope opens on and nothing more. Both work
- * from either kind, because "a harness with a big `tools/` directory should
- * still be walkable" and "a project's `docs/` is still a vault" are both true,
- * and a mode locked to a kind cannot say so.
- */
-export type ContentViewMode = 'curated' | 'tree'
-
 /** Why a tree entry is greyed. `null` for one that is not. */
 export type ContentIgnoreReason = 'gitignore' | 'default'
 
@@ -2601,26 +2578,6 @@ export interface RenderedMarkdown {
 }
 
 /**
- * A file shown as source, highlighted.
- *
- * The source view is what every kind that is not markdown or HTML opens in, and
- * once source files are listed at all - which is the point of the split - that
- * view is where an agent's `tools/` scripts are read. A `<pre>` of undifferen-
- * tiated grey is a worse answer than the one the markdown renderer already
- * gives a fenced block, and it is the same machinery: one `highlightCode` call,
- * both themes in the output as custom properties.
- */
-export interface ContentSource {
-  /** Shiki's HTML, or `''` when there is none and the plain text should show. */
-  html: string
-  /** The grammar used. `plaintext` when nothing matched the extension. */
-  language: string
-  highlighted: boolean
-  /** True when the file was past the ceiling; `html` is empty and that is why. */
-  tooLarge: boolean
-}
-
-/**
  * A draft, tokenised, for the editor's underlay.
  *
  * Per line rather than as one block of HTML, because the underlay builds DOM
@@ -2731,8 +2688,6 @@ export interface ContentDocument {
   file: ContentFile
   content: ConfigFileContent
   rendered: RenderedMarkdown | null
-  /** Set for anything shown as source: data, text, and an agent's own scripts. */
-  source: ContentSource | null
   /** Set when the file could not be rendered at all; the source still shows. */
   error: string | null
 }

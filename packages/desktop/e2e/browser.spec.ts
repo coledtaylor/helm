@@ -168,6 +168,7 @@ test('refusals: a file address, a certificate off loopback, and an address beyon
 
   // This machine only.
   await ui.getByRole('button', { name: 'Settings' }).click()
+  await ui.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Browser', exact: true }).click()
   await ui.getByRole('combobox', { name: 'Where the browser pane may go' }).selectOption('local')
   await showBrowser(ui)
   await go(ui, `${fixture.httpNamed}/two`)

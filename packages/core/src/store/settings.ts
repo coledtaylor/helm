@@ -1,11 +1,11 @@
 import { isAbsolute } from 'node:path'
 import { sql } from 'drizzle-orm'
+import { RETIRED_TAB_KINDS } from '../layout/panes'
 import {
   BROWSER_PROJECT_URLS_MAX,
   BROWSER_REACH_MODES,
   BROWSER_RECENT_URLS_MAX,
   browserReachAllows,
-  CONTENT_WRAP_INDENT,
   CORNER_RADIUS,
   DEFAULT_SETTINGS,
   DENSITY_MODES,
@@ -21,6 +21,7 @@ import {
   PR_REVIEW_PROMPT_MAX_LENGTH,
   PR_STALE_DAYS,
   PROJECT_SHELL_HEIGHT_PCT,
+  RAIL_DESTINATIONS,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
@@ -159,7 +160,10 @@ function paneProblem(pane: unknown): string | null {
     }
     return null
   }
-  if (kind === 'content' || kind === 'settings' || kind === 'sessions') return null
+  if (kind === 'settings' || kind === 'sessions') return null
+  // A kind an older build wrote and this one opens nothing for. Accepted so the
+  // rest of the layout it sits in still loads; `fromSaved` drops the tab.
+  if (typeof kind === 'string' && RETIRED_TAB_KINDS.has(kind)) return null
   if (kind === 'project') {
     if (typeof path !== 'string' || path.trim() === '') {
       return `expected a project path, got ${describe(path)}`
@@ -425,18 +429,26 @@ export const SETTING_VALIDATORS: SettingValidators = {
    */
   paneSplitPct: boundedInteger(PANE_SPLIT_PCT),
 
-  /**
-   * Whether a source file wraps, and how far its continuation rows hang.
-   *
-   * Two keys rather than one nullable number, because they answer different
-   * questions and one of them survives the other being switched off: the indent
-   * a person settled on should still be there when they turn wrapping back on.
-   * Folding "off" into `indent: null` would lose it every time.
-   */
-  contentWrap: (value) =>
+  /** Whether a file in the Files view wraps. A boolean and nothing truthy. */
+  filesWrap: (value) =>
     typeof value === 'boolean' ? null : `expected true or false, got ${describe(value)}`,
 
-  contentWrapIndent: boundedInteger(CONTENT_WRAP_INDENT),
+  /**
+   * Known destinations, each once. `settings` is refused because it is not in
+   * `RAIL_DESTINATIONS` - the rail always keeps a way back to this setting.
+   */
+  railHidden: (value) => {
+    if (!Array.isArray(value)) return `expected an array of rail destinations, got ${describe(value)}`
+    const seen = new Set<string>()
+    for (const entry of value) {
+      if (typeof entry !== 'string' || !(RAIL_DESTINATIONS as readonly string[]).includes(entry)) {
+        return `expected one of ${RAIL_DESTINATIONS.join(', ')}, got ${describe(entry)}`
+      }
+      if (seen.has(entry)) return `${entry} is listed twice`
+      seen.add(entry)
+    }
+    return null
+  },
 
   /**
    * The transcript archive's ceiling, in bytes.

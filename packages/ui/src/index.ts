@@ -35,15 +35,14 @@ export {
   type ConfigNewDialogProps,
   type ConfigRenameDialogProps
 } from './components/ConfigFileDialogs'
-export {
-  ContentViewer,
-  ContentNothingSelected,
-  type ContentViewerProps
-} from './components/ContentViewer'
-export { ContentTreeList, type ContentTreeListProps } from './components/ContentTreeList'
 export { FilesRootPicker, FilesStatusNote, FilesTree, type FilesTreeProps } from './components/FilesTree'
 export { FileActions, FileCrumb, FileView, type FileViewProps } from './components/FileView'
-export { QuickOpenDialog, type QuickOpenDialogProps } from './components/QuickOpenDialog'
+export {
+  QuickOpenDialog,
+  type QuickOpenAt,
+  type QuickOpenDialogProps,
+  type QuickOpenMode
+} from './components/QuickOpenDialog'
 export {
   ContentDocumentPane,
   type ArtifactConsoleEntry,
@@ -68,6 +67,7 @@ export {
 } from './components/SaveAsTemplateDialog'
 export { TemplateManager, type TemplateManagerProps } from './components/TemplateManager'
 export { Overlay, type OverlayProps } from './components/Overlay'
+export { Menu, type MenuAnchor, type MenuEntry, type MenuProps } from './components/Menu'
 export {
   ConfirmSessionDialog,
   type ConfirmSessionDialogProps
@@ -88,6 +88,13 @@ export {
   type UpdateOutcome,
   type UpdateOutcomeState
 } from './components/SettingsPane'
+export {
+  SETTINGS_SECTIONS,
+  SettingsSections,
+  type SettingsSection,
+  type SettingsSectionId,
+  type SettingsSectionsProps
+} from './components/SettingsSections'
 export { VersionBanner, type VersionBannerProps } from './components/VersionBanner'
 export { GitChip, type GitChipProps } from './components/GitChip'
 export { InventoryChips, type InventoryChipsProps } from './components/InventoryChips'

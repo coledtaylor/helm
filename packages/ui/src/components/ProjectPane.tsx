@@ -6,7 +6,7 @@ import { GitChip } from './GitChip'
 import { fetchedCaption } from './PullsPane'
 import { PullRow, useNow } from './PullRow'
 import {
-  BookIcon,
+  DocIcon,
   CloseIcon,
   LayersIcon,
   RefreshIcon,
@@ -95,8 +95,8 @@ export interface ProjectPaneProps {
   onSaveAsTemplate?: ((project: Project) => void) | undefined
   /** Opens the config console with this project as its scope. */
   onOpenConfig?: ((project: Project) => void) | undefined
-  /** Opens the content viewer with this project as its scope. */
-  onOpenContent?: ((project: Project) => void) | undefined
+  /** Shows this project in the Files view. */
+  onOpenFiles?: ((project: Project) => void) | undefined
   /**
    * Takes this folder out of the scan roots. Passed **only for a project whose
    * own path is a root**, which is the whole of what can be removed: a repo
@@ -150,7 +150,7 @@ export function ProjectPane({
   onSaveAsProfile,
   onSaveAsTemplate,
   onOpenConfig,
-  onOpenContent,
+  onOpenFiles,
   onRemoveRoot,
   pulls = null,
   onOpenPull,
@@ -257,7 +257,7 @@ export function ProjectPane({
               the launch button in it - the same call the title bar's settings
               button makes beside the theme toggle. They carry the sidebar's own
               icons, so a link and its destination are the same object. */}
-          {(onOpenConfig ?? onOpenContent) && (
+          {(onOpenConfig ?? onOpenFiles) && (
             <span className="ml-auto flex shrink-0 items-center gap-1">
               {onOpenConfig && (
                 <PaneLink
@@ -269,14 +269,14 @@ export function ProjectPane({
                   Config
                 </PaneLink>
               )}
-              {onOpenContent && (
+              {onOpenFiles && (
                 <PaneLink
-                  mark="content"
-                  onClick={() => onOpenContent(project)}
-                  title={`Open the content viewer on ${project.name}`}
-                  icon={<BookIcon width={13} height={13} />}
+                  mark="files"
+                  onClick={() => onOpenFiles(project)}
+                  title={`Show ${project.name} in the Files view`}
+                  icon={<DocIcon width={13} height={13} />}
                 >
-                  Content
+                  Files
                 </PaneLink>
               )}
             </span>

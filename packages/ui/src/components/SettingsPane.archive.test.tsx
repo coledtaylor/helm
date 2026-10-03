@@ -30,6 +30,7 @@ function stats(overrides: Partial<ArchiveStats> = {}): ArchiveStats {
 function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
   const s = DEFAULT_SETTINGS
   const props: SettingsPaneProps = {
+    section: 'archive',
     status: null,
     checking: false,
     onRecheck: vi.fn(),
@@ -88,10 +89,8 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     templatesDir: 'C:\\templates',
     onManageTemplates: vi.fn(),
     onRevealTemplates: vi.fn(),
-    contentWrap: s.contentWrap,
-    onContentWrapChange: vi.fn(),
-    contentWrapIndent: s.contentWrapIndent,
-    onContentWrapIndentChange: vi.fn(),
+    filesWrap: s.filesWrap,
+    onFilesWrapChange: vi.fn(),
     browserReach: s.browserReach,
     onBrowserReachChange: vi.fn(),
     browserMcp: s.browserMcp,
@@ -126,9 +125,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
 }
 
 function archiveGroup(): HTMLElement {
-  const group = screen.getByRole('heading', { name: 'Transcript archive' }).closest('section')
-  if (group === null) throw new Error('no archive group')
-  return group
+  return screen.getByRole('region', { name: 'Transcript archive' })
 }
 
 /** The value a caps label in the group states. */

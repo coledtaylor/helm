@@ -132,10 +132,53 @@ describe('FilesRootPicker', () => {
         onChange={onChange}
       />
     )
-    const picker = screen.getByRole('combobox', { name: 'Project' }) as HTMLSelectElement
-    expect([...picker.options].map((option) => option.textContent)).toEqual(['elsewhere', 'a'])
-    expect(picker.value).toBe('C:\\work\\elsewhere')
-    fireEvent.change(picker, { target: { value: 'C:\\a' } })
+    const picker = screen.getByRole('button', { name: 'Project' })
+    expect(picker.textContent).toBe('elsewhere')
+    fireEvent.click(picker)
+    const options = within(screen.getByRole('listbox', { name: 'Projects' })).getAllByRole('option')
+    expect(options.map((option) => option.textContent)).toEqual(['elsewhere', 'a'])
+    expect(options[0]?.getAttribute('aria-selected')).toBe('true')
+    fireEvent.click(options[1]!)
     expect(onChange).toHaveBeenCalledWith('C:\\a')
+    // A pick closes the list.
+    expect(screen.queryByRole('listbox', { name: 'Projects' })).toBeNull()
+  })
+
+  it('is driven from the keyboard: down opens it on the current project, letters jump, Enter picks, Escape closes', () => {
+    const onChange = vi.fn()
+    render(
+      <FilesRootPicker
+        roots={[
+          { kind: 'harness', path: 'C:\\dev', label: 'dev' },
+          { kind: 'project', path: 'C:\\dev\\repos\\helm', label: 'helm' },
+          { kind: 'project', path: 'C:\\dev\\repos\\hub', label: 'hub' }
+        ]}
+        value={'C:\\dev\\repos\\helm'}
+        onChange={onChange}
+      />
+    )
+    const picker = screen.getByRole('button', { name: 'Project' })
+    picker.focus()
+    fireEvent.keyDown(picker, { key: 'ArrowDown' })
+    const list = screen.getByRole('listbox', { name: 'Projects' })
+    // The keys go to the list, not the button that opened it.
+    expect(document.activeElement).toBe(list)
+    const active = (): string | null =>
+      document.getElementById(list.getAttribute('aria-activedescendant') ?? '')?.textContent ?? null
+    expect(active()).toBe('helm')
+    fireEvent.keyDown(list, { key: 'ArrowDown' })
+    expect(active()).toBe('hub')
+    fireEvent.keyDown(list, { key: 'd' })
+    expect(active()).toBe('dev')
+    fireEvent.keyDown(list, { key: 'Escape' })
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(onChange).not.toHaveBeenCalled()
+    // And back to the button once it closes.
+    expect(document.activeElement).toBe(picker)
+
+    fireEvent.keyDown(picker, { key: 'ArrowDown' })
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'ArrowUp' })
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Enter' })
+    expect(onChange).toHaveBeenCalledWith('C:\\dev')
   })
 })

@@ -172,7 +172,7 @@ describe('content service', () => {
     }
   })
 
-  it('stops highlighting past the ceiling and says so, for the editor and the source view', async () => {
+  it('stops highlighting past the ceiling and says so, for the editor', async () => {
     const { highlightForEditor } = await import('./content')
     const big = `${'const value = "x"\n'.repeat(Math.ceil((512 * 1024 + 1024) / 18))}`
 
@@ -184,9 +184,6 @@ describe('content service', () => {
     expect(small.highlighted).toBe(true)
     expect(small.lines.length).toBeGreaterThan(0)
 
-    writeFileSync(join(notes, 'big.ts'), big)
-    const document = await content.document(world.projects.alpha, join(notes, 'big.ts'))
-    expect(document.source).toEqual({ html: '', language: 'plaintext', highlighted: false, tooLarge: true })
   })
 
   it('hands http, https and mailto links to the system, and refuses every other scheme', async () => {

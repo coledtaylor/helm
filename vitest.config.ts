@@ -38,9 +38,9 @@ export default defineConfig({
       // rounded down to a whole percent, and a run below it fails.
       thresholds: {
         autoUpdate: (value: number) => Math.floor(value),
-        lines: 77,
-        functions: 69,
-        branches: 66,
+        lines: 78,
+        functions: 70,
+        branches: 67,
         statements: 75
       }
     },

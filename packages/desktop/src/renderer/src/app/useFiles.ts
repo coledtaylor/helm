@@ -43,8 +43,6 @@ export interface FilesState {
   noteOpened: (root: string, relPath: string) => void
   /** VS Code's name on this machine, or null where it is not installed. */
   editor: string | null
-  wrap: boolean
-  setWrap: (wrap: boolean) => void
 }
 
 export interface FilesOptions {
@@ -94,7 +92,6 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
   const [listingRoot, setListingRoot] = useState<string | null>(null)
   const [recent, setRecent] = useState<ReadonlyMap<string, readonly string[]>>(new Map())
   const [editor, setEditor] = useState<string | null>(null)
-  const [wrap, setWrap] = useState(false)
 
   /**
    * The root an answer has to be about to be kept. Read inside promise
@@ -147,14 +144,16 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
 
   // The picker's list, whenever the sidebar is opened onto it - and the first
   // project in it, for a sidebar nothing has pointed anywhere yet.
+  //
+  // Read whether or not the sidebar is showing it: a note opened from Ctrl+P
+  // is saved as part of the deepest of these that holds it.
   useEffect(() => {
-    if (!active) return
     void helm
       .invoke('content:scopes')
       .then((list) => {
         setRoots(list)
         const first = list[0]
-        if (rootRef.current === null && first !== undefined) setRoot(first.path)
+        if (active && rootRef.current === null && first !== undefined) setRoot(first.path)
       })
       .catch(() => undefined)
   }, [active, setRoot, revision])
@@ -294,12 +293,12 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
         const changedKey = keyOf(changed)
         const named = paths === null ? null : new Set(paths.map((path) => path.toLowerCase()))
 
-        setListings((current) => {
-          if (!current.has(changedKey)) return current
-          const next = new Map(current)
-          next.delete(changedKey)
-          return next
-        })
+        // Ctrl+P's list is left alone. It used to be dropped here, and nothing
+        // asked for it again until the dialog was opened afresh - so in a
+        // folder that changes every second or two, which a session working in
+        // it is, the dialog sat on "Listing" for as long as it was open. Main
+        // drops its own cache on the same change, so the next opening lists
+        // again; until then the list on screen is the one it opened with.
 
         // The sidebar: the status, and each open folder something changed in.
         const at = rootRef.current
@@ -333,6 +332,7 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
   // Ctrl+P
   // -------------------------------------------------------------------------
 
+  /** Asks main every opening, showing the last list for `at` until it answers. */
   const loadListing = useCallback((at: string) => {
     setListingRoot(at)
     void helm
@@ -369,8 +369,6 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
     loadListing,
     recentIn,
     noteOpened,
-    editor,
-    wrap,
-    setWrap
+    editor
   }
 }

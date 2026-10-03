@@ -18,6 +18,7 @@ import {
   type UpdateCheckResult
 } from './SettingsPane'
 import type { SetupClaudeStatus } from './SetupPane'
+import { SETTINGS_SECTIONS, type SettingsSectionId } from './SettingsSections'
 
 const builtin = (id: string): ThemeDefinition => {
   const theme = BUILTIN_THEMES.find((t) => t.id === id)
@@ -60,6 +61,7 @@ const DISCOVERED: SetupClaudeStatus = {
 
 function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
   const props: SettingsPaneProps = {
+    section: 'general',
     status: DISCOVERED,
     checking: false,
     onRecheck: vi.fn(),
@@ -110,10 +112,8 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     templatesDir: 'C:\\helm data\\templates',
     onManageTemplates: vi.fn(),
     onRevealTemplates: vi.fn(),
-    contentWrap: false,
-    onContentWrapChange: vi.fn(),
-    contentWrapIndent: 4,
-    onContentWrapIndentChange: vi.fn(),
+    filesWrap: false,
+    onFilesWrapChange: vi.fn(),
     browserReach: 'web',
     onBrowserReachChange: vi.fn(),
     browserMcp: true,
@@ -156,23 +156,21 @@ function fact(container: HTMLElement, label: string): string {
 }
 
 describe('SettingsPane', () => {
-  it('draws all twelve groups in a fixed order, each with its controls', () => {
-    renderPane()
-
-    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
-      'Claude CLI',
-      'Workspace',
-      'Harness templates',
-      'Appearance',
-      'Status bar',
-      'Content viewer',
-      'Browser',
-      'Sessions',
-      'Updates',
-      'Terminal',
-      'Transcript archive',
-      'GitHub'
-    ])
+  it('draws each section on its own: its title, its groups in order, and their controls', () => {
+    const { rerender } = renderPane()
+    const sections: Array<[SettingsSectionId, string, string[]]> = [
+      ['general', 'General', ['Claude CLI', 'Status bar']],
+      ['appearance', 'Appearance', ['Appearance']],
+      ['terminal', 'Terminal', ['Terminal']],
+      ['sessions', 'Sessions', ['Sessions']],
+      ['workspace', 'Workspace', ['Workspace', 'Harness templates']],
+      ['files', 'Files', ['Files']],
+      ['browser', 'Browser', ['Browser']],
+      ['github', 'GitHub', ['GitHub']],
+      ['archive', 'Archive', ['Transcript archive']],
+      ['updates', 'Updates', ['Updates']]
+    ]
+    expect(sections.map(([id]) => id)).toEqual(SETTINGS_SECTIONS.map((entry) => entry.id))
 
     const controls: Record<string, Array<[string, string]>> = {
       'Claude CLI': [
@@ -199,10 +197,7 @@ describe('SettingsPane', () => {
         ['radiogroup', 'Accent']
       ],
       'Status bar': [['radiogroup', 'Usage display']],
-      'Content viewer': [
-        ['checkbox', 'Wrap long lines in the source view'],
-        ['textbox', 'Wrap indent in columns']
-      ],
+      Files: [['checkbox', 'Wrap long lines in files']],
       Browser: [
         ['combobox', 'Where the browser pane may go'],
         ['checkbox', 'Let Claude drive the browser'],
@@ -227,23 +222,40 @@ describe('SettingsPane', () => {
         ['combobox', 'When the Pulls pane calls a pull request stale']
       ]
     }
-    for (const [title, wanted] of Object.entries(controls)) {
-      for (const [role, name] of wanted) {
-        expect(within(group(title)).getByRole(role, { name }), `${title}: ${role} ${name}`).toBeTruthy()
+    for (const [section, title, groups] of sections) {
+      rerender({ section })
+      expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(title)
+      const named = (region: HTMLElement): string | null =>
+        region.getAttribute('aria-label') ??
+        document.getElementById(region.getAttribute('aria-labelledby') ?? '')?.textContent ??
+        null
+      expect(screen.getAllByRole('region').map(named)).toEqual(groups)
+      // A section of one group is that group: its title is the page's, so it
+      // draws no heading of its own.
+      expect(screen.queryAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(
+        groups.length === 1 ? [] : groups
+      )
+      for (const name of groups) {
+        for (const [role, label] of controls[name] ?? []) {
+          expect(within(group(name)).getByRole(role, { name: label }), `${name}: ${role} ${label}`).toBeTruthy()
+        }
       }
     }
   })
 
-  it('never shows the state Helm keeps for itself', () => {
-    renderPane()
-    const text = document.body.textContent ?? ''
-    for (const key of ['windowBounds', 'firstRunCompletedAt', 'paneLayout', 'browserRecentUrls', 'browserProjectUrls']) {
-      expect(text).not.toContain(key)
+  it('never shows the state Helm keeps for itself, in any section', () => {
+    const { rerender } = renderPane()
+    for (const { id } of SETTINGS_SECTIONS) {
+      rerender({ section: id })
+      const text = document.body.textContent ?? ''
+      for (const key of ['windowBounds', 'firstRunCompletedAt', 'paneLayout', 'browserRecentUrls', 'browserProjectUrls', 'railHidden']) {
+        expect(text).not.toContain(key)
+      }
     }
   })
 
   it('opens the template manager', async () => {
-    const { props } = renderPane()
+    const { props } = renderPane({ section: 'workspace' })
     await userEvent.click(within(group('Harness templates')).getByRole('button', { name: 'Manage templates' }))
     expect(props.onManageTemplates).toHaveBeenCalledTimes(1)
   })
@@ -281,7 +293,7 @@ describe('SettingsPane', () => {
 
   describe('Workspace', () => {
     it('adds a folder, and stops scanning one from its own row', async () => {
-      const { props } = renderPane({ roots: ['C:\\work\\my repos', 'D:\\other'], projectCount: 3 })
+      const { props } = renderPane({ section: 'workspace', roots: ['C:\\work\\my repos', 'D:\\other'], projectCount: 3 })
       const workspace = group('Workspace')
 
       expect(within(workspace).getByText('2 folders · 3 projects')).toBeTruthy()
@@ -294,7 +306,7 @@ describe('SettingsPane', () => {
 
     it('lists every pin, a vanished folder included, and unpins from there', async () => {
       const pins = ['C:\\work\\api', 'E:\\unplugged\\tools']
-      const { props } = renderPane({ pinnedProjects: pins })
+      const { props } = renderPane({ section: 'workspace', pinnedProjects: pins })
       const workspace = group('Workspace')
 
       expect(within(workspace).queryByText('Nothing is pinned.')).toBeNull()
@@ -305,7 +317,7 @@ describe('SettingsPane', () => {
     })
 
     it('says so when nothing is pinned', () => {
-      renderPane({ pinnedProjects: [] })
+      renderPane({ section: 'workspace', pinnedProjects: [] })
       expect(within(group('Workspace')).getByText('Nothing is pinned.')).toBeTruthy()
     })
   })
@@ -315,7 +327,7 @@ describe('SettingsPane', () => {
       within(screen.getByRole('radiogroup', { name: 'Theme' })).getByRole('radio', { name })
 
     it('writes the picked theme into its kind’s slot and shows that kind', async () => {
-      const { props } = renderPane()
+      const { props } = renderPane({ section: 'appearance' })
 
       await userEvent.click(theme(/^Daylight/))
       expect(props.onAppearanceChange).toHaveBeenLastCalledWith({ themeLight: 'daylight', theme: 'light' })
@@ -328,6 +340,7 @@ describe('SettingsPane', () => {
       // The dark slot names a theme file that has gone, so main resolved the
       // built-in standing in for it.
       renderPane({
+        section: 'appearance',
         appearance: { ...APPEARANCE, themeDark: 'ink' },
         themeState: showing(builtin('nocturne'))
       })
@@ -337,7 +350,7 @@ describe('SettingsPane', () => {
     })
 
     it('follows Windows: writes system, records a card in its slot only, and tags each slot’s card', async () => {
-      const { props, rerender } = renderPane()
+      const { props, rerender } = renderPane({ section: 'appearance' })
       const follow = screen.getByRole('checkbox', { name: 'Follow Windows' })
       expect(follow).toHaveProperty('checked', false)
       expect(screen.queryByText('when dark')).toBeNull()
@@ -364,6 +377,7 @@ describe('SettingsPane', () => {
 
     it('names a theme file that could not be read, and draws no card for it', () => {
       renderPane({
+        section: 'appearance',
         themes: { ...LISTING, errors: [{ file: 'midnight.json', message: 'Unexpected end of JSON input' }] }
       })
       const appearance = group('Appearance')
@@ -374,7 +388,7 @@ describe('SettingsPane', () => {
     })
 
     it('duplicates the theme on screen and opens the themes folder', async () => {
-      const { props } = renderPane({ themeState: showing(builtin('graphite')) })
+      const { props } = renderPane({ section: 'appearance', themeState: showing(builtin('graphite')) })
 
       await userEvent.click(screen.getByRole('button', { name: 'Duplicate Graphite' }))
       expect(props.onDuplicateTheme).toHaveBeenCalledWith('graphite')
@@ -384,6 +398,7 @@ describe('SettingsPane', () => {
 
     it('steps the gap and the corner radius one pixel at a time, within their range', async () => {
       const { props } = renderPane({
+        section: 'appearance',
         appearance: { ...APPEARANCE, paneGap: 6, cornerRadius: CORNER_RADIUS.max }
       })
 
@@ -398,7 +413,7 @@ describe('SettingsPane', () => {
     })
 
     it('writes density and accent, and the theme’s own accent clears the choice', async () => {
-      const { props, rerender } = renderPane()
+      const { props, rerender } = renderPane({ section: 'appearance' })
 
       await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Density' })).getByRole('radio', { name: 'Compact' }))
       expect(props.onAppearanceChange).toHaveBeenLastCalledWith({ density: 'compact' })
@@ -417,20 +432,12 @@ describe('SettingsPane', () => {
     })
   })
 
-  describe('Content viewer', () => {
-    it('writes wrapping from its checkbox, and the indent only when Enter commits it', async () => {
+  describe('Files', () => {
+    it('writes wrapping from its checkbox', async () => {
       const user = userEvent.setup()
-      const { props } = renderPane({ contentWrap: false, contentWrapIndent: 4 })
-
-      await user.click(screen.getByRole('checkbox', { name: 'Wrap long lines in the source view' }))
-      expect(props.onContentWrapChange).toHaveBeenCalledWith(true)
-
-      const indent = screen.getByRole('textbox', { name: 'Wrap indent in columns' })
-      await user.clear(indent)
-      await user.type(indent, '8')
-      expect(props.onContentWrapIndentChange).not.toHaveBeenCalled()
-      await user.keyboard('{Enter}')
-      expect(props.onContentWrapIndentChange).toHaveBeenCalledWith(8)
+      const { props } = renderPane({ section: 'files', filesWrap: false })
+      await user.click(screen.getByRole('checkbox', { name: 'Wrap long lines in files' }))
+      expect(props.onFilesWrapChange).toHaveBeenCalledWith(true)
     })
   })
 
@@ -445,7 +452,7 @@ describe('SettingsPane', () => {
     })
 
     it('says what the last check found, in a sentence of its own for each answer', () => {
-      const { rerender } = renderPane({ update: null })
+      const { rerender } = renderPane({ section: 'updates', update: null })
       const updates = group('Updates')
       expect(within(updates).getByText('Helm has not asked GitHub since it started.')).toBeTruthy()
 
@@ -462,7 +469,7 @@ describe('SettingsPane', () => {
     })
 
     it('shows this build’s version, and the latest only while the last answer carried one', () => {
-      const { rerender } = renderPane({ appVersion: '1.2.0', update: answer({ latest: '1.3.0', newer: true }) })
+      const { rerender } = renderPane({ section: 'updates', appVersion: '1.2.0', update: answer({ latest: '1.3.0', newer: true }) })
       const updates = group('Updates')
       expect(fact(updates, 'Version')).toBe('1.2.0')
       expect(fact(updates, 'Latest')).toBe('1.3.0')
@@ -472,7 +479,7 @@ describe('SettingsPane', () => {
     })
 
     it('asks whatever the launch setting says, and is busy only while a check is in flight', async () => {
-      const { props, rerender } = renderPane({ updateCheck: false })
+      const { props, rerender } = renderPane({ section: 'updates', updateCheck: false })
       const updates = group('Updates')
       const checkNow = (): HTMLElement => within(updates).getByRole('button', { name: 'Check now' })
 
@@ -492,7 +499,7 @@ describe('SettingsPane', () => {
 
     it('keeps Release notes open, to the same page, whatever the last check said', async () => {
       const url = 'https://github.com/example/helm/releases/latest'
-      const { props, rerender } = renderPane({ releasesUrl: url, updateChecking: true })
+      const { props, rerender } = renderPane({ section: 'updates', releasesUrl: url, updateChecking: true })
       const notes = (): HTMLElement => within(group('Updates')).getByRole('button', { name: 'Release notes' })
 
       for (const state of [
@@ -509,7 +516,7 @@ describe('SettingsPane', () => {
     })
 
     it('turns the launch check off, and on again', async () => {
-      const { props, rerender } = renderPane({ updateCheck: true })
+      const { props, rerender } = renderPane({ section: 'updates', updateCheck: true })
       const tick = (): HTMLElement => screen.getByRole('checkbox', { name: 'Check for new releases on launch' })
 
       await userEvent.click(tick())
@@ -521,14 +528,14 @@ describe('SettingsPane', () => {
   })
 
   it('turns resuming after a crash without asking on, and says what each answer does', async () => {
-    const { props, rerender } = renderPane({ restoreWithoutAsking: false })
+    const { props, rerender } = renderPane({ section: 'sessions', restoreWithoutAsking: false })
     const sessions = group('Sessions')
     const tick = within(sessions).getByRole('checkbox', { name: 'Resume after a crash without asking' })
     expect(sessions.textContent).toContain('lists the sessions it was running and asks which to reopen')
 
     await userEvent.click(tick)
     expect(props.onRestoreWithoutAskingChange).toHaveBeenLastCalledWith(true)
-    rerender({ restoreWithoutAsking: true })
+    rerender({ section: 'sessions', restoreWithoutAsking: true })
     expect(group('Sessions').textContent).toContain('reopens every session it was running, in the tab it had')
   })
 })

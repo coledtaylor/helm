@@ -27,6 +27,7 @@ import {
   toSaved,
   withProjectPinned,
   withRepoIgnored,
+  RAIL_DESTINATIONS,
   type EditorHighlight,
   type FileRef,
   type HistorySession,
@@ -36,13 +37,13 @@ import {
   type Profile,
   type ProfileDraft,
   type Project,
+  type RailDestination,
   type RestoreOffer,
   type SavedPaneLayout,
   type SessionRecord
 } from '@helm/core/types'
 import {
   AppShell,
-  BookIcon,
   BrowserPane,
   cn,
   CodeIcon,
@@ -54,10 +55,7 @@ import {
   ConfigNothingSelected,
   ConfigRenameDialog,
   ConfirmSessionDialog,
-  ContentDocumentPane,
   type ConsoleEntry,
-  ContentNothingSelected,
-  ContentViewer,
   DocIcon,
   EffectiveViewPane,
   FileActions,
@@ -100,6 +98,7 @@ import {
   SessionsPane,
   SessionTree,
   SettingsPane,
+  SettingsSections,
   SetupPane,
   Sidebar,
   SidebarAction,
@@ -113,7 +112,10 @@ import {
   WelcomePane,
   type LaunchChoice,
   type ProfilePrediction,
+  type QuickOpenAt,
+  type QuickOpenMode,
   type RailItem,
+  type SettingsSectionId,
   type Tab,
   type TabIndicator,
   type TreeSession
@@ -129,7 +131,7 @@ import { TerminalPane } from './TerminalPane'
 import { terminalFontStack } from '../terminal'
 import { crumbStatus, indicatorOf, sessionNote, useNow } from './sessionView'
 import { useConfig } from './useConfig'
-import { useContent } from './useContent'
+import { DocumentModeSwitch, DocumentTab, documentKind, type DocumentMode } from './DocumentTab'
 import { fileKey, joinRoot, relativeTo, useFiles } from './useFiles'
 import { sessionHistoryProps, useHistory } from './useHistory'
 import { useLauncher } from './useLauncher'
@@ -158,7 +160,7 @@ const KIND_ICON = {
  * What the rail's sidebar views are. Pages - history, settings and the rest -
  * open as tabs instead; see `RailItem`.
  */
-type SidebarView = 'sessions' | 'files' | 'profiles'
+type SidebarView = 'sessions' | 'files' | 'profiles' | 'settings'
 
 /**
  * A link in a rendered note, handed to the OS browser.
@@ -250,6 +252,19 @@ export function App(): JSX.Element {
   const [preview, setPreview] = useState<string | null>(null)
   /** Ctrl+P, open on this project, or null. */
   const [quickOpenRoot, setQuickOpenRoot] = useState<string | null>(null)
+  /** Which half of it: names (Ctrl+P) or text (Ctrl+Shift+F). */
+  const [quickOpenMode, setQuickOpenMode] = useState<QuickOpenMode>('files')
+  /**
+   * A note's Preview / Source / Edit, by file key. Absent is Preview. Kept per
+   * file rather than per tab, so a note closed in Source opens in Source.
+   */
+  const [docModes, setDocModes] = useState<ReadonlyMap<string, DocumentMode>>(new Map())
+  /** Notes with a draft that is not on disk - the tab strip's dot. */
+  const [docDirty, setDocDirty] = useState<ReadonlySet<string>>(new Set())
+  /** Where a file opened from a text search lands, by file key: the line and the words. */
+  const [fileReveals, setFileReveals] = useState<ReadonlyMap<string, QuickOpenAt>>(new Map())
+  /** The section of Settings in the pane; the sidebar lists the rest. */
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>('general')
   /** Where each file tab's caret is, so VS Code opens at the same line. */
   const fileCarets = useRef(new Map<string, number>())
   const [sidebarView, setSidebarView] = useState<SidebarView>('sessions')
@@ -279,7 +294,6 @@ export function App(): JSX.Element {
   const historyState = useHistory()
   const pullsState = usePulls()
   const configState = useConfig()
-  const contentState = useContent()
   const usage = useUsage()
   const check = useUpdate()
   const themes = useThemes()
@@ -625,13 +639,21 @@ export function App(): JSX.Element {
   const openHistory = useCallback(() => openPane({ kind: 'history' }), [openPane])
   const openPulls = useCallback(() => openPane({ kind: 'pulls' }), [openPane])
   const openConfig = useCallback(() => openPane({ kind: 'config' }), [openPane])
-  const openContent = useCallback(() => openPane({ kind: 'content' }), [openPane])
   /**
    * Settings is a tab like any other rather than a modal: it is a place, worth
    * leaving open beside a session, and a dialog over the window would be one
-   * more thing to dismiss before looking at what a setting changed.
+   * more thing to dismiss before looking at what a setting changed. Its
+   * sections are a sidebar view, which opens with it.
    */
-  const openSettings = useCallback(() => openPane({ kind: 'settings' }), [openPane])
+  const openSettings = useCallback(
+    (section?: SettingsSectionId) => {
+      if (section !== undefined) setSettingsSection(section)
+      setSidebarView('settings')
+      setSidebarHidden(false)
+      openPane({ kind: 'settings' })
+    },
+    [openPane]
+  )
 
   /** A row in the Pulls pane opens the pull request in a tab of its own. */
   const openPull = useCallback(
@@ -641,11 +663,11 @@ export function App(): JSX.Element {
   )
 
   /**
-   * Config and Content opened **on** a project - the project page's links. The
-   * pane arrives pointed at the project that was on screen instead of at
-   * whatever it last held; re-pointing goes through the hook's own setter,
-   * because that is what clears the open file. Skipped when the scope is
-   * already the one asked for, so returning to a pane keeps what is open in it.
+   * Config opened **on** a project - the project page's link. The pane arrives
+   * pointed at the project that was on screen instead of at whatever it last
+   * held; re-pointing goes through the hook's own setter, because that is what
+   * clears the open file. Skipped when the scope is already the one asked for,
+   * so returning to a pane keeps what is open in it.
    */
   const { scopePath: configScopePath, setScopePath: setConfigScope } = configState
   const openConfigAt = useCallback(
@@ -657,17 +679,6 @@ export function App(): JSX.Element {
     },
     [configScopePath, setConfigScope, openPane]
   )
-  const { scopePath: contentScopePath, setScopePath: setContentScope } = contentState
-  const openContentAt = useCallback(
-    (project: Project) => {
-      if (contentScopePath.toLowerCase() !== project.path.toLowerCase()) {
-        setContentScope(project.path)
-      }
-      openPane({ kind: 'content' })
-    },
-    [contentScopePath, setContentScope, openPane]
-  )
-
   /**
    * A new browser tab, on whichever project the focused pane is about, so it
    * arrives on that project's last address rather than empty. Main decides
@@ -1045,7 +1056,58 @@ export function App(): JSX.Element {
     shown: shownFiles,
     revision: discovery
   })
-  const { noteOpened, loadListing } = files
+  const { noteOpened, loadListing, setRoot: setFilesRoot } = files
+
+  /** Whether long lines wrap in a file - a setting, so it holds for the next file and the next start. */
+  const filesWrap = settings?.filesWrap ?? DEFAULT_SETTINGS.filesWrap
+  const setFilesWrap = useCallback((wrap: boolean) => writeSettings({ filesWrap: wrap }), [writeSettings])
+
+  /** The project page's Files link: the sidebar's Files view, on that project. */
+  const openFilesAt = useCallback(
+    (project: Project) => {
+      setFilesRoot(project.path)
+      setSidebarView('files')
+      setSidebarHidden(false)
+    },
+    [setFilesRoot]
+  )
+
+  /**
+   * The folder a note is saved, snapshotted and wikilinked as part of: the
+   * deepest one Helm knows that holds it. A README under a harness's
+   * `repos/helm` belongs to `helm` - the harness's own write guard refuses
+   * `repos/` outright, for exactly that reason.
+   */
+  const scopeOf = useCallback(
+    (ref: FileRef): string => {
+      const lower = ref.path.toLowerCase()
+      let best = ref.root
+      for (const scope of files.roots) {
+        const root = scope.path.replace(/[\\/]+$/, '')
+        if (root.length > best.length && (lower.startsWith(`${root.toLowerCase()}\\`) || lower.startsWith(`${root.toLowerCase()}/`))) {
+          best = scope.path
+        }
+      }
+      return best
+    },
+    [files.roots]
+  )
+
+  const setDocMode = (ref: FileRef, mode: DocumentMode): void => {
+    setDocModes((current) => new Map(current).set(fileKey(ref.path), mode))
+    // Editing a preview tab keeps it, as every editor does: the next single
+    // click must not replace a tab with a draft in it.
+    if (mode === 'edit') keepTab(paneId(ref))
+  }
+  const markDocDirty = useCallback((key: string, dirty: boolean) => {
+    setDocDirty((current) => {
+      if (current.has(key) === dirty) return current
+      const next = new Set(current)
+      if (dirty) next.add(key)
+      else next.delete(key)
+      return next
+    })
+  }, [])
 
   /**
    * A file, opened to be read beside the session changing it (`openFile`): a
@@ -1056,8 +1118,17 @@ export function App(): JSX.Element {
    * it twice in development to check.
    */
   const openFileAt = useCallback(
-    (root: string, path: string, keep: boolean) => {
+    (root: string, path: string, keep: boolean, at?: QuickOpenAt) => {
       const ref: FileRef = { kind: 'file', root, path }
+      // A text match opens on its line; anything else opens where the file starts.
+      setFileReveals((current) => {
+        const key = fileKey(path)
+        if (at === undefined && !current.has(key)) return current
+        const next = new Map(current)
+        if (at === undefined) next.delete(key)
+        else next.set(key, { ...at })
+        return next
+      })
       const id = paneId(ref)
       const still = preview !== null && findTab(open, preview) !== null ? preview : null
       const placed = openFile(open, ref, still, keep)
@@ -1089,15 +1160,27 @@ export function App(): JSX.Element {
    * and picks a project.
    */
   const filesRoot = files.root
-  const openQuickOpen = useCallback(() => {
-    if (filesRoot === null) {
-      setSidebarView('files')
-      setSidebarHidden(false)
-      return
-    }
-    loadListing(filesRoot)
-    setQuickOpenRoot(filesRoot)
-  }, [filesRoot, loadListing])
+  const openQuickOpen = useCallback(
+    (mode: QuickOpenMode = 'files') => {
+      if (filesRoot === null) {
+        setSidebarView('files')
+        setSidebarHidden(false)
+        return
+      }
+      loadListing(filesRoot)
+      setQuickOpenMode(mode)
+      setQuickOpenRoot(filesRoot)
+    },
+    [filesRoot, loadListing]
+  )
+  /** Ctrl+Shift+F's half: the text of the project Ctrl+P is on. */
+  const searchText = useCallback(
+    (query: string) =>
+      quickOpenRoot === null
+        ? Promise.resolve(null)
+        : helm.invoke('content:search', { scopePath: quickOpenRoot, query }).catch(() => null),
+    [quickOpenRoot]
+  )
 
   /**
    * Ctrl+N opens the launcher from anywhere in the window, a focused terminal
@@ -1127,15 +1210,19 @@ export function App(): JSX.Element {
    * capture, as Ctrl+N is. Claude Code binds it to the same things it binds
    * Ctrl+N to - the previous line, the previous choice - and the arrow keys
    * do each of those, which is the argument Ctrl+N's handler makes too.
+   * Ctrl+Shift+F opens the same dialog on its text half; nothing in Claude
+   * Code or a shell binds it.
    */
   useEffect(() => {
     if (setupNeeded) return undefined
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!event.ctrlKey || event.altKey || event.shiftKey || event.metaKey) return
-      if (event.key.toLowerCase() !== 'p') return
+      if (!event.ctrlKey || event.altKey || event.metaKey) return
+      const key = event.key.toLowerCase()
+      const mode = !event.shiftKey && key === 'p' ? 'files' : event.shiftKey && key === 'f' ? 'text' : null
+      if (mode === null) return
       event.preventDefault()
       event.stopPropagation()
-      if (!overlayOpen()) openQuickOpen()
+      if (!overlayOpen()) openQuickOpen(mode)
     }
     window.addEventListener('keydown', onKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
@@ -1394,18 +1481,6 @@ export function App(): JSX.Element {
             icon: <SlidersIcon width={13} height={13} />
           }
         ]
-      case 'content':
-        return [
-          {
-            id: paneId(ref),
-            title: 'Content',
-            hint:
-              contentState.selected?.path ??
-              contentState.scope?.path ??
-              'Notes, docs, skills and artifacts',
-            icon: <BookIcon width={13} height={13} />
-          }
-        ]
       case 'settings':
         return [
           {
@@ -1467,7 +1542,8 @@ export function App(): JSX.Element {
             hint: paneId(ref) === preview ? `${ref.path}\nPreview - double-click to keep it open` : ref.path,
             icon: <DocIcon width={13} height={13} />,
             mono: true,
-            preview: paneId(ref) === preview
+            preview: paneId(ref) === preview,
+            dirty: docDirty.has(fileKey(ref.path))
           }
         ]
     }
@@ -1477,7 +1553,22 @@ export function App(): JSX.Element {
   const crumbFor = (ref: PaneRef | null): ReactNode => {
     if (ref?.kind === 'file') {
       const view = files.tabs.get(fileKey(ref.path))?.view ?? null
-      return <FileCrumb relPath={view?.relPath ?? relativeTo(ref.root, ref.path)} changes={view?.changes ?? null} />
+      const kind = documentKind(ref.path)
+      return (
+        <FileCrumb
+          relPath={view?.relPath ?? relativeTo(ref.root, ref.path)}
+          changes={view?.changes ?? null}
+          trailing={
+            kind === null ? undefined : (
+              <DocumentModeSwitch
+                kind={kind}
+                mode={docModes.get(fileKey(ref.path)) ?? 'preview'}
+                onChange={(mode) => setDocMode(ref, mode)}
+              />
+            )
+          }
+        />
+      )
     }
     if (ref?.kind !== 'session') return null
     const session = sessionsById.get(ref.id)
@@ -1722,7 +1813,7 @@ export function App(): JSX.Element {
             setEditing({ ...blankProfile(p.path, p.name), overlays: [p.path], access: [p.path] })
           }}
           onOpenConfig={openConfigAt}
-          onOpenContent={openContentAt}
+          onOpenFiles={openFilesAt}
           // A harness only: it is the one kind of project with a layout to
           // freeze. Decided here because whether a project is a harness root is
           // discovery's answer, not the page's.
@@ -1756,6 +1847,7 @@ export function App(): JSX.Element {
 
   const renderSettings = (): JSX.Element => (
     <SettingsPane
+      section={settingsSection}
       status={setup.status}
       checking={setup.checking}
       onRecheck={setup.recheck}
@@ -1832,10 +1924,8 @@ export function App(): JSX.Element {
       onSessionMcpChange={(sessionMcp) => writeSettings({ sessionMcp })}
       restoreWithoutAsking={settings?.restoreWithoutAsking ?? DEFAULT_SETTINGS.restoreWithoutAsking}
       onRestoreWithoutAskingChange={(restoreWithoutAsking) => writeSettings({ restoreWithoutAsking })}
-      contentWrap={settings?.contentWrap ?? DEFAULT_SETTINGS.contentWrap}
-      onContentWrapChange={(contentWrap) => writeSettings({ contentWrap })}
-      contentWrapIndent={settings?.contentWrapIndent ?? DEFAULT_SETTINGS.contentWrapIndent}
-      onContentWrapIndentChange={(contentWrapIndent) => writeSettings({ contentWrapIndent })}
+      filesWrap={filesWrap}
+      onFilesWrapChange={setFilesWrap}
       onTranscriptArchiveMaxBytesChange={(transcriptArchiveMaxBytes) =>
         writeSettings({ transcriptArchiveMaxBytes })
       }
@@ -2044,76 +2134,6 @@ export function App(): JSX.Element {
             )}
           </ConfigConsole>
         )
-      case 'content':
-        return (
-          <ContentViewer
-            scopes={contentState.scopes}
-            scopePath={contentState.scopePath}
-            onScopeChange={contentState.setScopePath}
-            tree={contentState.tree}
-            treeLoading={contentState.treeLoading}
-            view={contentState.view}
-            onViewChange={contentState.setView}
-            viewIsDefault={contentState.viewIsDefault}
-            dirs={contentState.dirs}
-            expanded={contentState.expanded}
-            onToggleDir={contentState.toggleDir}
-            loadingDirs={contentState.loadingDirs}
-            query={contentState.query}
-            onQueryChange={contentState.setQuery}
-            search={contentState.search}
-            searching={contentState.searching}
-            selected={contentState.selected}
-            selectedPath={contentState.selectedPath}
-            onSelect={contentState.select}
-            onOpenPath={contentState.openPath}
-            onReveal={launcher.reveal}
-            dirty={contentState.dirty}
-            onRefresh={contentState.refresh}
-            refreshing={contentState.refreshing}
-            compact={compact}
-            onBack={() => contentState.select(null)}
-          >
-            {contentState.selected === null ? (
-              <ContentNothingSelected
-                scope={contentState.scope}
-                view={contentState.view}
-                fileCount={contentState.tree?.files.length ?? 0}
-              />
-            ) : (
-              <ContentDocumentPane
-                // Keyed on the path so opening another note rebuilds the pane
-                // rather than leaving one document's draft in another's editor.
-                key={contentState.selected.path}
-                file={contentState.selected}
-                document={contentState.document}
-                preview={contentState.preview}
-                previewPending={contentState.previewPending}
-                mode={contentState.mode}
-                onModeChange={contentState.setMode}
-                artifactUrl={contentState.artifactUrl}
-                artifactConsole={contentState.artifactConsole}
-                snapshots={contentState.snapshots}
-                saving={contentState.saving}
-                error={contentState.error}
-                external={contentState.external}
-                highlight={contentState.highlight}
-                wrapDefault={settings?.contentWrap ?? DEFAULT_SETTINGS.contentWrap}
-                wrapIndent={settings?.contentWrapIndent ?? DEFAULT_SETTINGS.contentWrapIndent}
-                onHighlight={helmHighlight}
-                onSave={contentState.save}
-                onReload={contentState.reload}
-                onRestore={contentState.restore}
-                onReveal={launcher.reveal}
-                onDirtyChange={contentState.setDirty}
-                onDraftChange={contentState.setDraft}
-                onOpenPath={contentState.openPath}
-                onOpenWikilink={contentState.openWikilink}
-                onOpenExternal={openLink}
-              />
-            )}
-          </ContentViewer>
-        )
       case 'browser': {
         const view = browserViews.get(ref.id)
         if (!view) return null
@@ -2166,23 +2186,47 @@ export function App(): JSX.Element {
     }
   }
 
-  /** A file tab's view: the code on the pane itself, no page gutter around it. */
+  /**
+   * A file tab's view: the code on the pane itself, no page gutter around it -
+   * or, for a note or an artifact, the document, with the code as its Source.
+   */
   const renderFile = (ref: FileRef): JSX.Element => {
     const key = fileKey(ref.path)
     const state = files.tabs.get(key)
-    return (
+    const reveal = fileReveals.get(key) ?? null
+    const code = (
       <FileView
         key={paneId(ref)}
         view={state?.view ?? null}
         error={state?.error ?? null}
-        wrap={files.wrap}
-        onWrapChange={files.setWrap}
+        wrap={filesWrap}
+        onWrapChange={setFilesWrap}
+        reveal={reveal}
         onHighlight={helmHighlight}
         onCaretChange={(caret) => fileCarets.current.set(key, caret.line)}
         onReveal={launcher.reveal}
         onOpenInEditor={
           files.editor === null ? null : () => openInEditor(ref.path, fileCarets.current.get(key) ?? null)
         }
+      />
+    )
+    const kind = documentKind(ref.path)
+    if (kind === null) return code
+    return (
+      <DocumentTab
+        key={paneId(ref)}
+        scopePath={scopeOf(ref)}
+        path={ref.path}
+        kind={kind}
+        mode={docModes.get(key) ?? 'preview'}
+        source={code}
+        highlight={reveal?.term ?? null}
+        draftKey={key}
+        onDirtyChange={(dirty) => markDocDirty(key, dirty)}
+        onHighlight={helmHighlight}
+        // A wikilink opens beside it as a kept tab, in the same project.
+        onOpenPath={(path) => openFileAt(ref.root, path, true)}
+        onOpenExternal={openLink}
       />
     )
   }
@@ -2341,10 +2385,26 @@ export function App(): JSX.Element {
     hooks: { [hook]: true } as Record<`data-${string}`, boolean>
   })
 
+  const railHidden = settings?.railHidden ?? DEFAULT_SETTINGS.railHidden
+  /** A tick in the rail's right-click menu: hidden, or back where it was. */
+  const toggleRailItem = (id: string): void => {
+    const known = RAIL_DESTINATIONS.find((destination) => destination === id)
+    if (known === undefined) return
+    const hiding = !railHidden.includes(known)
+    const next: RailDestination[] = RAIL_DESTINATIONS.filter((destination) =>
+      destination === known ? hiding : railHidden.includes(destination)
+    )
+    writeSettings({ railHidden: next })
+    // Hiding the view the sidebar is showing puts the sidebar away with it.
+    if (hiding && sidebarShown && sidebarView === known) setSidebarHidden(true)
+  }
+
   // Ordered by how often each is reached for (DESIGN.md "The rail"): the
-  // sessions tree, then the occasional pages, then the rare ones under a rule.
+  // daily views and history, then the occasional pages under a rule.
   const rail = (
     <Rail
+      hidden={new Set<string>(railHidden)}
+      onToggleHidden={toggleRailItem}
       groups={[
         [
           {
@@ -2355,6 +2415,15 @@ export function App(): JSX.Element {
             current: sidebarShown && sidebarView === 'sessions',
             attention: statusCounts.waiting > 0,
             onSelect: () => toggleView('sessions')
+          },
+          {
+            id: 'profiles',
+            label: 'Profiles',
+            icon: <LayersIcon width={17} height={17} />,
+            kind: 'view',
+            current: sidebarShown && sidebarView === 'profiles',
+            onSelect: () => toggleView('profiles'),
+            hooks: { 'data-open-profiles': true }
           },
           {
             id: 'files',
@@ -2372,15 +2441,9 @@ export function App(): JSX.Element {
             openHistory,
             inFront('history'),
             'data-open-history'
-          ),
-          page(
-            'content',
-            'Content',
-            <BookIcon width={17} height={17} />,
-            openContent,
-            inFront('content'),
-            'data-open-content'
-          ),
+          )
+        ],
+        [
           page(
             'browser',
             'Browser',
@@ -2388,18 +2451,7 @@ export function App(): JSX.Element {
             showBrowser,
             inFront('browser'),
             'data-open-browser'
-          )
-        ],
-        [
-          {
-            id: 'profiles',
-            label: 'Profiles',
-            icon: <LayersIcon width={17} height={17} />,
-            kind: 'view',
-            current: sidebarShown && sidebarView === 'profiles',
-            onSelect: () => toggleView('profiles'),
-            hooks: { 'data-open-profiles': true }
-          },
+          ),
           page(
             'pulls',
             'Pull requests',
@@ -2419,14 +2471,19 @@ export function App(): JSX.Element {
         ]
       ]}
       footer={[
-        page(
-          'settings',
-          'Settings',
-          <GearIcon width={17} height={17} />,
-          openSettings,
-          inFront('settings'),
-          'data-open-settings'
-        )
+        {
+          id: 'settings',
+          label: 'Settings',
+          icon: <GearIcon width={17} height={17} />,
+          kind: 'view',
+          // A view, because its sections are: the sidebar lists them and the
+          // pane shows the one picked. Pressed again it puts the sidebar away
+          // and leaves the page open, as every view does.
+          current: sidebarShown && sidebarView === 'settings',
+          hideable: false,
+          onSelect: () => (sidebarShown && sidebarView === 'settings' ? setSidebarHidden(true) : openSettings()),
+          hooks: { 'data-open-settings': true }
+        }
       ]}
     />
   )
@@ -2559,6 +2616,17 @@ export function App(): JSX.Element {
               onGoToFile={openQuickOpen}
             />
           )}
+        </Sidebar>
+      )}
+      {sidebarView === 'settings' && (
+        <Sidebar title="Settings">
+          <SettingsSections
+            current={settingsSection}
+            onSelect={(section) => {
+              setSettingsSection(section)
+              openPane({ kind: 'settings' })
+            }}
+          />
         </Sidebar>
       )}
       {sidebarView === 'profiles' && (
@@ -2709,9 +2777,11 @@ export function App(): JSX.Element {
             }
             listing={files.listing}
             recent={files.recentIn(quickOpenRoot)}
-            onOpen={(relPath) => {
+            initialMode={quickOpenMode}
+            onSearchText={searchText}
+            onOpen={(relPath, at) => {
               setQuickOpenRoot(null)
-              openFileAt(quickOpenRoot, joinRoot(quickOpenRoot, relPath), true)
+              openFileAt(quickOpenRoot, joinRoot(quickOpenRoot, relPath), true, at)
             }}
             onDismiss={() => setQuickOpenRoot(null)}
           />

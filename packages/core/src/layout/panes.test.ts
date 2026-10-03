@@ -267,6 +267,16 @@ describe('toSaved and fromSaved', () => {
     expect(shape(reconcile(fromSaved(saved), hosted, []))).toEqual([' *project:C:\\a', '>*history'])
   })
 
+  it('drops a tab kind an older build wrote and keeps the rest of its group', () => {
+    // The content viewer's tab, from before it merged into Files.
+    const saved = {
+      groups: [{ panes: [HISTORY, { kind: 'content' }, project('C:\\a')], activeId: 'content' }],
+      focused: 0
+    } as unknown as SavedPaneLayout
+    // Its front named the retired tab, so the group's last tab is in front.
+    expect(shape(reconcile(fromSaved(saved), () => true, []))).toEqual(['>history *project:C:\\a'])
+  })
+
   it('restores a group of only sessions as no group at all', () => {
     const saved = toSaved(layoutOf([HISTORY], [session(1)]))
     const hosted = (ref: PaneRef): boolean => ref.kind !== 'session'

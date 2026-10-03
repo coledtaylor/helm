@@ -49,6 +49,11 @@ export interface Tab {
   preview?: boolean | undefined
   /** The title is machine data - a file name - and is set in mono. */
   mono?: boolean | undefined
+  /**
+   * Unsaved changes: a dot where the close button sits, as every editor marks
+   * it, turning back into the close button under the pointer.
+   */
+  dirty?: boolean | undefined
 }
 
 export interface TabBarProps {
@@ -366,16 +371,24 @@ export function TabBar({
                 <button
                   type="button"
                   onClick={() => onClose(tab.id)}
-                  aria-label={`Close ${tab.title}`}
-                  title={`Close ${tab.title}`}
+                  aria-label={tab.dirty === true ? `Close ${tab.title}, unsaved changes` : `Close ${tab.title}`}
+                  title={tab.dirty === true ? `Close ${tab.title} - its unsaved changes are kept for when it opens again` : `Close ${tab.title}`}
+                  data-tab-dirty={tab.dirty === true ? 'true' : undefined}
                   className={cn(
                     'mr-1 grid size-[18px] shrink-0 place-items-center rounded-xs',
-                    'text-fg-subtle opacity-0 transition hover:bg-border-strong hover:text-fg',
+                    'text-fg-subtle transition hover:bg-border-strong hover:text-fg',
                     'group-hover:opacity-100 focus-visible:opacity-100',
-                    active && 'opacity-60'
+                    tab.dirty === true ? 'opacity-100' : active ? 'opacity-60' : 'opacity-0'
                   )}
                 >
-                  <CloseIcon width={11} height={11} />
+                  {tab.dirty === true ? (
+                    <>
+                      <span aria-hidden className="size-[7px] rounded-full bg-fg-muted group-hover:hidden" />
+                      <CloseIcon width={11} height={11} className="hidden group-hover:block" />
+                    </>
+                  ) : (
+                    <CloseIcon width={11} height={11} />
+                  )}
                 </button>
               )}
             </div>

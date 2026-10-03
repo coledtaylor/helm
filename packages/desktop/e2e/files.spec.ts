@@ -37,7 +37,7 @@ test('a file opens beside its session with the changed lines marked, and follows
 
   await window.getByRole('button', { name: 'Files', exact: true }).click()
   // The view is on the project of the session in front.
-  await expect(window.getByRole('combobox', { name: 'Project' }).locator('option:checked')).toHaveText('alpha')
+  await expect(window.getByRole('button', { name: 'Project', exact: true })).toHaveText('alpha')
   const tree = window.getByRole('group', { name: 'Project files' })
 
   // What the session does: rewrite two lines.
@@ -101,7 +101,8 @@ test('Ctrl+P opens a file by a few letters, and a file goes to VS Code, Explorer
   await window.reload()
 
   await window.getByRole('button', { name: 'Files', exact: true }).click()
-  await window.getByRole('combobox', { name: 'Project' }).selectOption({ label: 'alpha' })
+  await window.getByRole('button', { name: 'Project', exact: true }).click()
+  await window.getByRole('listbox', { name: 'Projects' }).getByRole('option', { name: 'alpha', exact: true }).click()
   await expect(window.getByRole('group', { name: 'Project files' }).getByRole('button', { name: /^src\b/ })).toBeVisible()
 
   await window.keyboard.press('Control+p')

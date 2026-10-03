@@ -35,7 +35,7 @@ function renderPane(overrides: Partial<ProjectPaneProps> = {}) {
     onReveal: vi.fn(),
     onLaunch: vi.fn(),
     onOpenConfig: vi.fn(),
-    onOpenContent: vi.fn(),
+    onOpenFiles: vi.fn(),
     pulls: snapshot(),
     onOpenPull: vi.fn(),
     onRefreshPulls: vi.fn(),
@@ -82,15 +82,15 @@ describe('ProjectPane pull requests', () => {
     expect(props.onRefreshPulls).toHaveBeenCalledWith('C:\\work space\\alpha')
   })
 
-  it('opens the config console and the content viewer scoped to this project', async () => {
+  it('opens the config console and the Files view on this project', async () => {
     const user = userEvent.setup()
     const { props } = renderPane()
 
     await user.click(screen.getByRole('button', { name: 'Config' }))
-    await user.click(screen.getByRole('button', { name: 'Content' }))
+    await user.click(screen.getByRole('button', { name: 'Files' }))
 
     expect(props.onOpenConfig).toHaveBeenCalledWith(alpha)
-    expect(props.onOpenContent).toHaveBeenCalledWith(alpha)
+    expect(props.onOpenFiles).toHaveBeenCalledWith(alpha)
   })
 
   it('names the slug of an ignored repository with a way back, and paints its cached rows once it is back', async () => {

@@ -1,16 +1,18 @@
 import type { JSX, ReactNode } from 'react'
+import { useState } from 'react'
 import { cn } from '../lib/cn'
+import { Menu, type MenuEntry } from './Menu'
 
 /**
  * One way in, on the rail.
  *
  * Two kinds, because the rail does two jobs and they answer "where am I"
  * differently. A **view** swaps what the sidebar shows - the sessions tree, the
- * profile list - and is marked current with the accent edge the sidebar's own
- * selected row wears, because the sidebar beside it *is* that view. A **page**
- * opens a tab in the focused pane; it is marked only with the hover tone while
- * that tab is the one in front, since the pane is where the page is and the
- * rail is just how it was reached.
+ * profile list, the settings sections - and is marked current with the accent
+ * edge the sidebar's own selected row wears, because the sidebar beside it *is*
+ * that view. A **page** opens a tab in the focused pane; it is marked only with
+ * the hover tone while that tab is the one in front, since the pane is where
+ * the page is and the rail is just how it was reached.
  */
 export interface RailItem {
   id: string
@@ -21,6 +23,11 @@ export interface RailItem {
   current: boolean
   /** Something in this destination is waiting on you. */
   attention?: boolean | undefined
+  /**
+   * False for the one item that must stay: Settings is where hiding is undone
+   * from, so it is listed in the menu ticked and cannot be unticked.
+   */
+  hideable?: boolean | undefined
   onSelect: () => void
   /** The hooks the drivers reach a destination by - `data-open-history` and kin. */
   hooks?: Record<`data-${string}`, string | boolean> | undefined
@@ -31,6 +38,10 @@ export interface RailProps {
   groups: readonly (readonly RailItem[])[]
   /** Pinned to the bottom of the rail - Settings. */
   footer?: readonly RailItem[] | undefined
+  /** Ids taken off the rail. Listed in the right-click menu, unticked. */
+  hidden?: ReadonlySet<string> | undefined
+  /** A tick in the right-click menu changed. Absent, the rail has no menu. */
+  onToggleHidden?: ((id: string) => void) | undefined
 }
 
 /**
@@ -42,14 +53,51 @@ export interface RailProps {
  * because how often each is used is a fact about the person and not about the
  * component.
  *
+ * A right-click lists every destination with a tick, as VS Code's activity bar
+ * does; unticking one takes it off the rail. A group left with nothing in it
+ * takes its rule with it, so hiding never leaves two rules touching.
+ *
  * Outside the sidebar's `aside`, deliberately: the drivers reach the first
  * project row with `aside nav button[title]`, and a rail of titled buttons
  * inside that would make every such selector land here instead.
  */
-export function Rail({ groups, footer }: RailProps): JSX.Element {
+export function Rail({ groups, footer, hidden, onToggleHidden }: RailProps): JSX.Element {
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null)
+  const shown = groups
+    .map((items) => items.filter((item) => hidden?.has(item.id) !== true))
+    .filter((items) => items.length > 0)
+  const shownFooter = footer?.filter((item) => hidden?.has(item.id) !== true)
+
+  const entries: MenuEntry[] = []
+  for (const [index, items] of [...groups, ...(footer === undefined ? [] : [footer])].entries()) {
+    if (index > 0) entries.push({ kind: 'separator', id: `rule-${String(index)}` })
+    for (const item of items) {
+      const fixed = item.hideable === false
+      entries.push({
+        kind: 'item',
+        id: item.id,
+        label: item.label,
+        checked: hidden?.has(item.id) !== true,
+        disabled: fixed,
+        title: fixed ? `${item.label} stays on the rail - it is where hidden items come back from` : undefined
+      })
+    }
+  }
+
   return (
-    <nav aria-label="Destinations" className="flex w-11 shrink-0 flex-col items-center gap-0.5 pb-1.5">
-      {groups.map((items, index) => (
+    <nav
+      aria-label="Destinations"
+      onContextMenu={
+        onToggleHidden === undefined
+          ? undefined
+          : (event) => {
+              event.preventDefault()
+              setMenuAt({ x: event.clientX, y: event.clientY })
+            }
+      }
+      className="flex w-11 shrink-0 flex-col items-center gap-0.5 pb-1.5"
+    >
+      {shown.map((items, index) => (
         <div key={items[0]?.id ?? index} className="contents">
           {index > 0 && <span aria-hidden className="my-1.5 h-px w-[18px] shrink-0 bg-border" />}
           {items.map((item) => (
@@ -58,7 +106,17 @@ export function Rail({ groups, footer }: RailProps): JSX.Element {
         </div>
       ))}
       <span className="flex-1" />
-      {footer?.map((item) => <RailButton key={item.id} item={item} />)}
+      {shownFooter?.map((item) => <RailButton key={item.id} item={item} />)}
+      {menuAt !== null && onToggleHidden !== undefined && (
+        <Menu
+          label="Show on the rail"
+          at={menuAt}
+          entries={entries}
+          stayOpen
+          onSelect={onToggleHidden}
+          onDismiss={() => setMenuAt(null)}
+        />
+      )}
     </nav>
   )
 }

@@ -178,6 +178,34 @@ describe('useFiles: Ctrl+P', () => {
     expect(result.current.recentIn(A)).toEqual(['A.ts', 'b.ts'])
     expect(result.current.recentIn(B)).toEqual([])
   })
+
+  it('keeps the list through a change under the project, and lists again at the next opening', async () => {
+    const lists = [['a.ts'], ['a.ts', 'new.ts']]
+    let asked = 0
+    bridge.answer('files:list', ({ root }) => ({
+      root,
+      files: lists[Math.min(asked++, lists.length - 1)]!,
+      source: 'walk',
+      truncated: false,
+      error: null
+    }))
+    const { result } = renderHook(() => useFiles({ active: false, follow: A, shown: NONE }))
+    act(() => result.current.loadListing(A))
+    await waitFor(() => expect(result.current.listing?.files).toEqual(['a.ts']))
+
+    // A busy folder changes every second or two. The list on screen is still
+    // the answer it was - a change must not put the dialog back to "Listing"
+    // with nothing asking main again.
+    act(() => bridge.emit('files:changed', { root: A, paths: ['new.ts'] }))
+    act(() => bridge.emit('files:changed', { root: A, paths: null }))
+    expect(result.current.listing?.files).toEqual(['a.ts'])
+
+    // The next opening shows the last list at once and replaces it when main answers.
+    act(() => result.current.loadListing(A))
+    expect(result.current.listing?.files).toEqual(['a.ts'])
+    await waitFor(() => expect(result.current.listing?.files).toEqual(['a.ts', 'new.ts']))
+    expect(bridge.invoked('files:list')).toHaveLength(2)
+  })
 })
 
 describe('joinRoot and relativeTo', () => {

@@ -135,7 +135,7 @@ describe('settings', () => {
             ],
             activeId: `project:${dir}`
           },
-          { panes: [{ kind: 'config' }, { kind: 'content' }, { kind: 'settings' }], activeId: null }
+          { panes: [{ kind: 'config' }, { kind: 'settings' }], activeId: null }
         ],
         focused: 1
       },
@@ -150,8 +150,8 @@ describe('settings', () => {
       terminalShell: join(dir, 'pwsh.exe'),
       projectShellHeightPct: 42,
       paneSplitPct: 62,
-      contentWrap: true,
-      contentWrapIndent: 6,
+      filesWrap: true,
+      railHidden: ['pulls', 'config'],
       transcriptArchiveMaxBytes: 256 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 15,
@@ -482,22 +482,19 @@ describe('settings validation', () => {
       bad: [19, 81, 0, -45, 100, 45.5, '45', null, Number.NaN, Number.POSITIVE_INFINITY]
     },
     {
-      // Whether a source file wraps. `'true'` and `1` are in the bad column
-      // because this value is read straight into a class decision, where any
-      // truthy string would switch wrapping on and `'false'` would too.
-      key: 'contentWrap',
+      // Whether a file wraps. `'true'` and `1` are in the bad column because
+      // this value is read straight into a class decision, where any truthy
+      // string would switch wrapping on and `'false'` would too.
+      key: 'filesWrap',
       good: [true, false],
       bad: ['true', 'false', 1, 0, null, {}, []]
     },
     {
-      // The hanging indent, in columns. Zero is *good* - it is what a plain
-      // editor does, and the setting has to be able to say so. Negative is bad
-      // even though the CSS would accept it: a negative hang pulls a
-      // continuation left of the code it belongs to, which reads as a new
-      // statement rather than the same one.
-      key: 'contentWrapIndent',
-      good: [0, 4, 16],
-      bad: [-1, 17, 4.5, '4', null, Number.NaN, Number.POSITIVE_INFINITY]
+      // `settings` is the one destination that may never be hidden, so it is
+      // refused here rather than trusted to the rail's menu.
+      key: 'railHidden',
+      good: [[], ['history'], ['sessions', 'profiles', 'files', 'history', 'browser', 'pulls', 'config']],
+      bad: [null, 'history', ['settings'], ['content'], ['history', 'history'], [1], [''], {}]
     },
     {
       // A byte count, and null is in the *bad* column deliberately: there is no
@@ -775,8 +772,8 @@ describe('settings validation', () => {
       terminalShell: join(dir, 'cmd.exe'),
       projectShellHeightPct: 45,
       paneSplitPct: 70,
-      contentWrap: true,
-      contentWrapIndent: 2,
+      filesWrap: true,
+      railHidden: ['browser'],
       transcriptArchiveMaxBytes: 512 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 0,
@@ -829,8 +826,8 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   terminalShell: join(dir, 'cmd.exe'),
   projectShellHeightPct: 45,
   paneSplitPct: 70,
-  contentWrap: true,
-  contentWrapIndent: 2,
+  filesWrap: true,
+  railHidden: ['browser'],
   transcriptArchiveMaxBytes: 512 * 1024 * 1024,
   ghPath: join(dir, 'gh.exe'),
   prPollMinutes: 0,

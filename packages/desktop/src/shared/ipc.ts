@@ -12,7 +12,6 @@ import type {
   ContentDocument,
   ContentScope,
   ContentSearchResult,
-  ContentTree,
   FileListing,
   FilesStatus,
   FileView,
@@ -1150,26 +1149,13 @@ export interface IpcRequests {
   'pr:review': { request: ReviewPullRequest; response: LaunchedReview }
 
   /**
-   * The content viewer. Rendering happens here rather than in the window:
+   * Notes and artifacts opened from the Files view, and Ctrl+P's text search.
+   * Rendering happens here rather than in the window:
    * shiki's grammars are megabytes the browser bundle must not carry, and a
    * live preview that re-parsed a 21 KB note on the UI thread per keystroke
    * would be the one place in the app that stutters.
    */
   'content:scopes': { request: void; response: ContentScope[] }
-  'content:tree': { request: { scopePath: string; refresh?: boolean }; response: ContentTree }
-  /**
-   * One directory of the tree view.
-   *
-   * A channel per directory rather than one walk, because the tree is lazy on
-   * purpose: `content:tree` walks a whole scope to decide what to *curate*, and
-   * a project has no ceiling that walk could be given which is not either a
-   * silent truncation or a several-second pause. This one costs a `readdir` and
-   * a `git check-ignore` against a directory somebody just clicked open.
-   */
-  'content:dir': {
-    request: { scopePath: string; relPath: string }
-    response: ContentDirListing
-  }
   /** A file, its bytes, and - for markdown - the HTML it renders to. */
   'content:document': {
     request: { scopePath: string; path: string }
@@ -1712,8 +1698,6 @@ export const REQUEST_CHANNELS = Object.keys({
   'pr:detail': true,
   'pr:review': true,
   'content:scopes': true,
-  'content:tree': true,
-  'content:dir': true,
   'content:document': true,
   'content:render': true,
   'content:search': true,

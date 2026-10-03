@@ -147,8 +147,10 @@ in a harness is yours to decide.
 - **A config console** over every `.claude` tree in reach: browse, edit, and an
   *effective view* that answers "what would a session launched here actually
   see". Every write is snapshotted first, so every edit has an undo.
-- **A content viewer** for the markdown, notes and HTML artifacts Claude writes,
-  with wikilinks and a sandboxed frame for artifacts.
+- **Files**: a project's tree with git status, Ctrl+P for a file by name and
+  Ctrl+Shift+F by what it says, and the markdown and HTML artifacts Claude
+  writes opened rendered - with wikilinks, an editor beside a live preview for
+  notes, and a sandboxed frame for artifacts.
 - **Usage in the status bar** - session and weekly percentages read from Claude
   Code's own cached figures, or an estimate in dollars. A reading Helm cannot
   stand behind shows nothing at all rather than a stale number.

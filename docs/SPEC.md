@@ -435,6 +435,13 @@ The `.claude/` directory of whatever scope you point at, as a real interface.
 
 ### 4.3 Content Viewer
 
+> **Superseded (2026-10-03): merged into the Files view.** The viewer was a
+> second tree beside Files and its Curated mode went unused. A note or an HTML
+> artifact now opens rendered in a file tab, with Preview / Source / Edit on its
+> crumb; full-text search moved into Ctrl+P (its Text half, Ctrl+Shift+F) and
+> still runs over the corpus described below. What follows is the record of
+> the viewer as it was built.
+
 Read what Claude writes without a detour through Explorer and a text editor.
 
 - Rendered **markdown** with GFM: tables, task lists, callouts, code highlighting

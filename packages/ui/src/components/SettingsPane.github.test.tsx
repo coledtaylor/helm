@@ -10,6 +10,7 @@ import { pullRepo, SIGNED_IN } from './pullFixtures.testkit'
 function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
   const s = DEFAULT_SETTINGS
   const props: SettingsPaneProps = {
+    section: 'github',
     status: null,
     checking: false,
     onRecheck: vi.fn(),
@@ -68,10 +69,8 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     templatesDir: 'C:\\templates',
     onManageTemplates: vi.fn(),
     onRevealTemplates: vi.fn(),
-    contentWrap: s.contentWrap,
-    onContentWrapChange: vi.fn(),
-    contentWrapIndent: s.contentWrapIndent,
-    onContentWrapIndentChange: vi.fn(),
+    filesWrap: s.filesWrap,
+    onFilesWrapChange: vi.fn(),
     browserReach: s.browserReach,
     onBrowserReachChange: vi.fn(),
     browserMcp: false,
@@ -107,9 +106,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
 
 /** The GitHub group, found by its heading. */
 function group(): HTMLElement {
-  const found = screen.getByRole('heading', { name: 'GitHub' }).closest('section')
-  if (found === null) throw new Error('no GitHub group')
-  return found
+  return screen.getByRole('region', { name: 'GitHub' })
 }
 
 const select = (name: string): HTMLSelectElement => within(group()).getByRole('combobox', { name }) as HTMLSelectElement

@@ -2,8 +2,8 @@
 
 Helm is a Windows desktop shell for the Claude Code CLI. It hosts `claude` in
 terminal tabs and adds what the CLI does not have around it: project discovery,
-profiles, session history, a config console, a content viewer, pull requests and
-a browser pane. Electron and React. It shells out to the `claude` CLI and never
+profiles, session history, a config console, a Files view that renders notes
+and artifacts, pull requests and a browser pane. Electron and React. It shells out to the `claude` CLI and never
 reimplements it.
 
 - [docs/DESIGN.md](docs/DESIGN.md) - the design system. All UI work follows it.
@@ -197,9 +197,12 @@ Templates are `helm-data/templates` when `PORTABLE_EXECUTABLE_DIR` is set, and
   4s, through `execFile`. Passes never overlap.
 - "Could not look" (`null`, painted "Unknown") and "nothing there" (`[]`) are
   never merged.
-- The Files view is read-only, and every `files:*` call names a root main
-  checks it knows (a scanned project, a profile's folder, a hosted session's
-  working directory). Changed lines are the working tree against `HEAD`, said
+- The Files view writes one thing: a markdown note in its Edit mode, through
+  `content:write` - snapshotted first, refused on a hash conflict, scoped to
+  the deepest folder Helm knows that holds the note (`assertContentWritable`
+  refuses `repos/` under a harness). Everything else in it is read-only, and
+  every `files:*` call names a root main checks it knows (a scanned project, a
+  profile's folder, a hosted session's working directory). Changed lines are the working tree against `HEAD`, said
   as that and never attributed to a session: git does not know who made a
   change. Only what is on screen is watched, and main is told the whole set.
 - `claude --resume` must run in the directory history recorded. Transcripts are

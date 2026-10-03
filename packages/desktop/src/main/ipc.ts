@@ -638,8 +638,6 @@ export function registerIpc(ctx: IpcContext): void {
     },
 
     'content:scopes': () => ctx.content.scopes(),
-    'content:tree': ({ scopePath, refresh }) => ctx.content.tree(scopePath, refresh ?? false),
-    'content:dir': ({ scopePath, relPath }) => ctx.content.dir(scopePath, relPath),
     'content:document': ({ scopePath, path }) => ctx.content.document(scopePath, path),
     'content:render': ({ scopePath, path, source }) => ctx.content.render(scopePath, path, source),
     'content:search': ({ scopePath, query }) => ctx.content.search(scopePath, query),

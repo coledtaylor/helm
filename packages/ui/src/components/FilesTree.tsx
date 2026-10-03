@@ -1,10 +1,11 @@
 import type { JSX } from 'react'
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { ContentDirEntry, ContentDirListing, ContentScope, FilesStatus, GitFileState } from '@helm/core'
 import { changedDirectories, GIT_STATE_LABEL, GIT_STATE_LETTER } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { ROW_SELECTED_GROUP } from '../lib/rows'
-import { CaretIcon, CheckIcon, CodeIcon, CopyIcon, DocIcon, FolderIcon, LinkIcon, SearchIcon } from './icons'
+import { CaretIcon, CheckIcon, CodeIcon, CopyIcon, DocIcon, FolderIcon, HarnessIcon, LinkIcon, SearchIcon } from './icons'
+import { Menu } from './Menu'
 
 /**
  * A project's files, in the sidebar, with git's letters on them.
@@ -95,14 +96,14 @@ export function FilesTree(props: FilesTreeProps): JSX.Element {
 }
 
 /**
- * Which project the tree shows, beside the view's title.
+ * Which project the tree shows, beside the view's title: a control as wide as
+ * the project's name, and a list Helm draws itself (`Menu`). The native
+ * `<select>` it replaces opened a white list with the theme's light text on
+ * it, in every theme.
  *
- * A native `<select>` laid transparently over a label, so the control is as
- * wide as the project's name rather than as wide as the longest name in the
- * list, and the list itself is the platform's - long, scrollable and typeable
- * into, for free. A folder that is not in the list (a session's working
- * directory no scan reached) is added to it, so the picker never claims to
- * show something other than what the tree does.
+ * A folder that is not in the list (a session's working directory no scan
+ * reached) is added to it, so the picker never claims to show something other
+ * than what the tree does.
  */
 export function FilesRootPicker({
   roots,
@@ -113,6 +114,8 @@ export function FilesRootPicker({
   value: string | null
   onChange: (root: string) => void
 }): JSX.Element {
+  const [open, setOpen] = useState<DOMRect | null>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
   const key = value?.toLowerCase() ?? ''
   const listed = roots.some((scope) => scope.path.toLowerCase() === key)
   const options =
@@ -120,24 +123,61 @@ export function FilesRootPicker({
       ? roots
       : [{ kind: 'project' as const, path: value, label: value.split(/[\\/]/).filter(Boolean).at(-1) ?? value }, ...roots]
   const current = options.find((scope) => scope.path.toLowerCase() === key)
+  const show = (): void => {
+    const rect = buttonRef.current?.getBoundingClientRect()
+    if (rect !== undefined) setOpen(rect)
+  }
   return (
-    <span className="relative flex h-[22px] max-w-full min-w-0 items-center gap-[5px] rounded-raised border border-border-strong px-[7px] text-[12px] text-fg transition-colors hover:bg-hover">
-      <span className="min-w-0 truncate">{current?.label ?? 'Choose a project'}</span>
-      <CaretIcon width={8} height={8} className="shrink-0 rotate-90 text-fg-subtle" />
-      <select
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
         aria-label="Project"
-        value={current?.path ?? ''}
-        onChange={(event) => onChange(event.target.value)}
-        className="absolute inset-0 cursor-pointer opacity-0"
+        aria-haspopup="listbox"
+        aria-expanded={open !== null}
+        title={current?.path}
+        data-files-root-picker
+        onClick={() => (open === null ? show() : setOpen(null))}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' && open === null) {
+            event.preventDefault()
+            show()
+          }
+        }}
+        className={cn(
+          'flex h-[22px] max-w-full min-w-0 items-center gap-[5px] rounded-well border border-border-strong px-[7px]',
+          'text-[12px] text-fg transition-colors hover:bg-hover',
+          open !== null && 'bg-hover'
+        )}
       >
-        {current === undefined && <option value="">Choose a project</option>}
-        {options.map((scope) => (
-          <option key={scope.path} value={scope.path}>
-            {scope.label}
-          </option>
-        ))}
-      </select>
-    </span>
+        <span className="min-w-0 truncate">{current?.label ?? 'Choose a project'}</span>
+        <CaretIcon width={8} height={8} className="shrink-0 rotate-90 text-fg-subtle" />
+      </button>
+      {open !== null && (
+        <Menu
+          label="Projects"
+          role="listbox"
+          at={{ below: open }}
+          anchorRef={buttonRef}
+          minWidth={Math.max(220, open.width)}
+          entries={options.map((scope) => ({
+            kind: 'item' as const,
+            id: scope.path,
+            label: scope.label,
+            checked: scope.path.toLowerCase() === key,
+            title: scope.path,
+            icon:
+              scope.kind === 'harness' ? (
+                <HarnessIcon width={13} height={13} />
+              ) : (
+                <FolderIcon width={13} height={13} />
+              )
+          }))}
+          onSelect={onChange}
+          onDismiss={() => setOpen(null)}
+        />
+      )}
+    </>
   )
 }
 

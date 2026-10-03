@@ -7,7 +7,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   buildWikiIndex,
   contentScope,
-  highlightCode,
   readConfigFileContent,
   readContentTree,
   renderMarkdown,
@@ -78,17 +77,9 @@ async function documentOf(rel: string): Promise<ContentDocument> {
   const content = readConfigFileContent(file.path)
   if (file.kind === 'markdown') {
     const rendered = await renderMarkdown(content.content, { index: buildWikiIndex(tree.files), path: file.path })
-    return { file, content, rendered, source: null, error: null }
+    return { file, content, rendered, error: null }
   }
-  if (file.kind === 'html') return { file, content, rendered: null, source: null, error: null }
-  const out = await highlightCode(content.content, file.ext)
-  return {
-    file,
-    content,
-    rendered: null,
-    source: { html: out.html, language: out.language, highlighted: out.highlighted, tooLarge: false },
-    error: null
-  }
+  return { file, content, rendered: null, error: null }
 }
 
 function paneProps(document: ContentDocument, overrides: Partial<ContentDocumentPaneProps> = {}): ContentDocumentPaneProps {
@@ -98,7 +89,6 @@ function paneProps(document: ContentDocument, overrides: Partial<ContentDocument
     preview: null,
     previewPending: false,
     mode: 'read',
-    onModeChange: vi.fn(),
     artifactUrl: null,
     artifactConsole: [],
     snapshots: [],
@@ -106,13 +96,10 @@ function paneProps(document: ContentDocument, overrides: Partial<ContentDocument
     error: null,
     external: null,
     highlight: null,
-    wrapDefault: false,
-    wrapIndent: 4,
     onHighlight: null,
     onSave: vi.fn(),
     onReload: vi.fn(),
     onRestore: vi.fn(),
-    onReveal: vi.fn(),
     onDirtyChange: vi.fn(),
     onDraftChange: vi.fn(),
     onOpenPath: vi.fn(),
@@ -126,10 +113,21 @@ describe('ContentDocumentPane: a note', () => {
   it('shows the frontmatter as chips and never as body text', async () => {
     render(<ContentDocumentPane {...paneProps(await documentOf('notes/alpha.md'))} />)
 
-    expect(screen.getByRole('heading', { level: 2, name: 'Alpha note' })).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 1, name: 'Alpha note' })).toBeTruthy()
     for (const chip of ['journal', '2026-08-10', '#helm', '#notes']) expect(screen.getByText(chip)).toBeTruthy()
     expect(document.body.textContent).not.toContain('type: journal')
     expect(document.body.textContent).not.toContain('tags: [helm')
+  })
+
+  it('marks the words a search opened it on, and keeps them through a re-render', async () => {
+    const props = paneProps(await documentOf('notes/alpha.md'), { highlight: 'alpha' })
+    const { container, rerender } = render(<ContentDocumentPane {...props} />)
+    const marks = (): number => container.querySelectorAll('mark.md-hit').length
+    expect(marks()).toBeGreaterThan(0)
+    // Anything above it re-rendering - a busy folder's watch, the clock in the
+    // status bar - must not repaint the body and take the marks with it.
+    rerender(<ContentDocumentPane {...props} snapshots={[]} />)
+    expect(marks()).toBeGreaterThan(0)
   })
 
   it('opens the note a live wikilink names, and does nothing for a broken one', async () => {
@@ -203,60 +201,31 @@ describe('ContentDocumentPane: a note', () => {
   })
 })
 
-describe('ContentDocumentPane: a source file', () => {
-  it('starts wrapped or not from the setting, and keeps its own choice once open', async () => {
-    const props = paneProps(await documentOf('notes/data.json'), { wrapDefault: true })
-    const { rerender, unmount } = render(<ContentDocumentPane {...props} />)
-    const wrap = screen.getByRole('button', { name: 'Wrap' })
-    expect(wrap.getAttribute('aria-pressed')).toBe('true')
+describe('ContentDocumentPane: a draft left behind', () => {
+  it('starts the editor on the draft a tab left, and a reload is the file again', async () => {
+    const document = await documentOf('notes/alpha.md')
+    const props = paneProps(document, { mode: 'edit', initialDraft: `${NOTE}Kept while away` })
+    const { rerender } = render(<ContentDocumentPane {...props} />)
 
-    await userEvent.click(wrap)
-    expect(wrap.getAttribute('aria-pressed')).toBe('false')
-    // The setting changing under an open pane does not overrule the pane.
-    rerender(<ContentDocumentPane {...props} wrapDefault={false} />)
-    rerender(<ContentDocumentPane {...props} wrapDefault={true} />)
-    expect(wrap.getAttribute('aria-pressed')).toBe('false')
-    unmount()
+    const box = screen.getByRole('textbox', { name: 'Edit notes/alpha.md' }) as HTMLTextAreaElement
+    expect(box.value).toBe(`${NOTE}Kept while away`)
+    expect(screen.getByText('Unsaved changes')).toBeTruthy()
 
-    // The next file opened starts from the setting again.
-    render(<ContentDocumentPane {...paneProps(await documentOf('notes/data.json'), { wrapDefault: false })} />)
-    expect(screen.getByRole('button', { name: 'Wrap' }).getAttribute('aria-pressed')).toBe('false')
+    // The file moved on disk and somebody chose Reload: the draft is not
+    // seeded a second time over the version they asked for.
+    const moved = { ...document, content: { ...document.content, content: `${NOTE}On disk`, hash: 'moved' } }
+    rerender(<ContentDocumentPane {...props} document={moved} />)
+    expect(box.value).toBe(`${NOTE}On disk`)
+    expect(screen.getByText('Saved')).toBeTruthy()
   })
 
-  it('hangs a continuation by the setting’s indent from each line’s own indentation', async () => {
-    const { container } = render(
-      <ContentDocumentPane {...paneProps(await documentOf('notes/data.json'), { wrapDefault: true, wrapIndent: 6 })} />
-    )
-    const view = container.querySelector('.source-view') as HTMLElement
-    expect(view.getAttribute('data-wrap')).toBe('on')
-    expect(view.style.getPropertyValue('--source-wrap-indent')).toBe('6ch')
-
-    // Each line carries its own leading whitespace, which the stylesheet adds
-    // the setting's indent to: the fixture's lines are indented 0, 2, 4, 2, 0.
-    const indents = [...view.querySelectorAll<HTMLElement>('.line')].map((line) =>
-      line.style.getPropertyValue('--line-indent')
-    )
-    expect(indents.slice(0, 5)).toEqual(['', '2ch', '4ch', '2ch', ''])
-  })
-
-  it('keeps the highlighted block, and where it was scrolled to, across re-renders and the wrap toggle', async () => {
-    const document = await documentOf('notes/data.json')
-    const props = paneProps(document)
-    const { container, rerender } = render(<ContentDocumentPane {...props} />)
-
-    const block = container.querySelector('pre.shiki') as HTMLElement
-    block.scrollTop = 240
-    block.scrollLeft = 60
-
-    // A fresh answer for the same bytes, as a refresh produces.
-    rerender(<ContentDocumentPane {...props} document={{ ...document, source: { ...document.source! } }} />)
-    await userEvent.click(screen.getByRole('button', { name: 'Wrap' }))
-    rerender(<ContentDocumentPane {...props} document={{ ...document }} />)
-    await userEvent.click(screen.getByRole('button', { name: 'Wrap' }))
-
-    expect(container.querySelector('pre.shiki')).toBe(block)
-    expect(block.scrollTop).toBe(240)
-    expect(block.scrollLeft).toBe(60)
+  it('draws no header over a note with no frontmatter while it is read, and the wrap toggle while it is edited', async () => {
+    const document = await documentOf('notes/second.md')
+    const { rerender } = render(<ContentDocumentPane {...paneProps(document)} />)
+    expect(screen.queryByRole('button', { name: 'Wrap' })).toBeNull()
+    expect(screen.queryByRole('banner')).toBeNull()
+    rerender(<ContentDocumentPane {...paneProps(document, { mode: 'edit' })} />)
+    expect(screen.getByRole('button', { name: 'Wrap' }).getAttribute('aria-pressed')).toBe('true')
   })
 })
 

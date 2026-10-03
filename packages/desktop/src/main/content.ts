@@ -10,12 +10,10 @@ import {
   contentScope,
   corpusIsCurrent,
   editorExtension,
-  highlightCode,
   highlightLines,
   parseWikilink,
   readConfigFileContent,
   readConfigSnapshots,
-  readContentDir,
   readContentTree,
   renderMarkdown,
   resolveWikilink,
@@ -27,11 +25,9 @@ import {
   type ConfigFileContent,
   type ConfigSnapshotMeta,
   type ContentCorpus,
-  type ContentDirListing,
   type ContentDocument,
   type ContentFile,
   type ContentScope,
-  type ContentSource,
   type ContentSearchResult,
   type EditorHighlight,
   type ContentTree,
@@ -82,9 +78,6 @@ import type { Services } from './services'
 
 export interface ContentService {
   scopes: () => ContentScope[]
-  tree: (scopePath: string, refresh?: boolean) => ContentTree
-  /** One directory of the tree view, read on demand. */
-  dir: (scopePath: string, relPath: string) => Promise<ContentDirListing>
   document: (scopePath: string, path: string) => Promise<ContentDocument>
   /** Renders a draft that is not on disk - the split preview while typing. */
   render: (scopePath: string, path: string, source: string) => Promise<RenderedMarkdown>
@@ -461,30 +454,6 @@ export async function highlightForEditor(
   }
 }
 
-/**
- * The source view's half of a document.
- *
- * Built in the main process for the same reasons the markdown render is: the
- * grammars are megabytes the browser bundle should never carry, and the
- * renderer should inject a finished string rather than run a tokeniser on the
- * thread that has to keep scrolling.
- */
-async function sourceOf(
-  file: ContentFile,
-  content: ConfigFileContent
-): Promise<ContentSource | null> {
-  if (file.kind === 'markdown' || file.kind === 'html') return null
-  if (file.kind === 'binary' || content.binary || !content.exists) return null
-  if (content.size > HIGHLIGHT_MAX_BYTES) {
-    return { html: '', language: 'plaintext', highlighted: false, tooLarge: true }
-  }
-  // The extension is the language. `normaliseLanguage` already knows `py` is
-  // python and `yml` is yaml, because a fence's info string uses the same
-  // spellings a filename does.
-  const out = await highlightCode(content.content, file.ext)
-  return { html: out.html, language: out.language, highlighted: out.highlighted, tooLarge: false }
-}
-
 export function createContentService({ services }: ContentServiceDeps): ContentService {
   const cache = new Map<string, ScopeCache>()
 
@@ -612,7 +581,7 @@ export function createContentService({ services }: ContentServiceDeps): ContentS
     const missing = content.exists ? null : 'That file is not there any more.'
 
     if (file.kind !== 'markdown' || content.binary || !content.exists) {
-      return { file, content, rendered: null, source: await sourceOf(file, content), error: missing }
+      return { file, content, rendered: null, error: missing }
     }
 
     try {
@@ -620,7 +589,7 @@ export function createContentService({ services }: ContentServiceDeps): ContentS
         index: entry.index,
         path: file.path
       })
-      return { file, content, rendered, source: null, error: null }
+      return { file, content, rendered, error: null }
     } catch (err) {
       // The source still shows. A document that will not render is a bug worth
       // seeing, not a reason to show nothing.
@@ -628,7 +597,6 @@ export function createContentService({ services }: ContentServiceDeps): ContentS
         file,
         content,
         rendered: null,
-        source: await sourceOf(file, content),
         error: err instanceof Error ? err.message : String(err)
       }
     }
@@ -654,13 +622,6 @@ export function createContentService({ services }: ContentServiceDeps): ContentS
 
   return {
     scopes,
-    tree: (scopePath, refresh) => cached(scopePath, refresh ?? false).tree,
-    // Not cached. A directory listing is one `readdir` and one `check-ignore`
-    // against a directory somebody just clicked open, and a cache here would be
-    // a tree that goes on showing a file after it has been deleted - which is
-    // the failure the curated view's 30-second TTL is already the compromise
-    // for, and the tree has no reason to make it.
-    dir: (scopePath, relPath) => readContentDir(scopeFor(scopePath), relPath),
     document,
     render,
     search,

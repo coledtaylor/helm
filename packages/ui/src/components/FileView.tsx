@@ -1,11 +1,11 @@
 import type { JSX, ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { EditorHighlight, FileChangeState, FileView as FileViewData } from '@helm/core'
 import { changedLineSet, describeFileChanges } from '@helm/core/types'
 import { cn } from '../lib/cn'
 import { languageName } from '../lib/languages'
 import { formatBytes } from '../lib/time'
-import { CodeEditor, type EditorLineMarks, type EditorStatus } from './CodeEditor'
+import { CodeEditor, type CodeEditorHandle, type EditorLineMarks, type EditorStatus } from './CodeEditor'
 import { CheckIcon, CodeIcon, CopyIcon, DocIcon, FolderIcon, WarnIcon, WrapIcon } from './icons'
 
 /**
@@ -35,6 +35,23 @@ export interface FileViewProps {
   onReveal: (path: string) => void
   /** Null where VS Code is not installed. */
   onOpenInEditor: (() => void) | null
+  /**
+   * A place to open on - a line Ctrl+P's text search matched, with the words
+   * it matched selected. Applied once per object, when the file is there to
+   * apply it to; a new object is a new jump.
+   */
+  reveal?: { line: number; term: string | null } | null | undefined
+}
+
+/** Where `reveal` lands in `content`: the term on its line, or the line's start. */
+export function revealRange(content: string, line: number, term: string | null): { start: number; end: number } {
+  const lines = content.split('\n')
+  const index = Math.min(Math.max(line, 1), lines.length) - 1
+  let start = 0
+  for (let i = 0; i < index; i += 1) start += (lines[i]?.length ?? 0) + 1
+  const text = lines[index] ?? ''
+  const at = term === null || term === '' ? -1 : text.toLowerCase().indexOf(term.toLowerCase())
+  return at < 0 ? { start, end: start } : { start: start + at, end: start + at + (term?.length ?? 0) }
 }
 
 /** Marks from how the file stands against the last commit; none for a file wholly new. */
@@ -52,9 +69,12 @@ export function FileView({
   onHighlight,
   onCaretChange,
   onReveal,
-  onOpenInEditor
+  onOpenInEditor,
+  reveal = null
 }: FileViewProps): JSX.Element {
   const [caret, setCaret] = useState({ line: 1, column: 1 })
+  const editorRef = useRef<CodeEditorHandle | null>(null)
+  const revealed = useRef<object | null>(null)
   const [status, setStatus] = useState<EditorStatus | null>(null)
   // Recomputed only when the changes do, so the editor's gutter is not handed a
   // fresh object on every caret move.
@@ -64,6 +84,14 @@ export function FileView({
   useEffect(() => {
     onCaretChange?.(caret)
   }, [caret, onCaretChange])
+
+  const readable = view !== null && view.error === null && view.exists && !view.binary && !view.tooLarge
+  useEffect(() => {
+    if (reveal === null || !readable || revealed.current === reveal) return
+    revealed.current = reveal
+    const { start, end } = revealRange(view.content, reveal.line, reveal.term)
+    editorRef.current?.select(start, end)
+  }, [reveal, readable, view])
 
   if (error !== null) {
     return (
@@ -139,6 +167,7 @@ export function FileView({
           onCaretChange={setCaret}
           onStatusChange={setStatus}
           ariaLabel={`Contents of ${view.relPath}`}
+          ref={editorRef}
         />
       </div>
       <footer className="flex h-6 shrink-0 items-center gap-3.5 border-t border-border px-3 text-[11px] text-fg-subtle tabular-nums">
@@ -205,10 +234,13 @@ function HandOff({ onClick, children }: { onClick: () => void; children: ReactNo
  */
 export function FileCrumb({
   relPath,
-  changes
+  changes,
+  trailing
 }: {
   relPath: string
   changes: FileChangeState | null
+  /** At the crumb's right end - a note's Preview / Source / Edit switch. */
+  trailing?: ReactNode | undefined
 }): JSX.Element {
   const parts = relPath.split('/')
   const said = changes === null ? null : describeFileChanges(changes)
@@ -245,6 +277,7 @@ export function FileCrumb({
             <span className="@[520px]:hidden">{said.short}</span>
           </span>
         )}
+        {trailing !== undefined && <div className="flex shrink-0 items-center">{trailing}</div>}
       </div>
     </div>
   )

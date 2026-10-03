@@ -105,3 +105,16 @@ describe('TabBar: a preview tab', () => {
     expect(onKeep).toHaveBeenCalledWith('file:a')
   })
 })
+
+describe('TabBar: unsaved changes', () => {
+  it('marks a tab with a draft not on disk where its close button sits, and still closes it', () => {
+    const props = renderBar({
+      tabs: [{ id: 'file:a.md', title: 'a.md', dirty: true }, ...TABS],
+      activeId: 'session:1'
+    })
+    const close = screen.getByRole('button', { name: 'Close a.md, unsaved changes' })
+    expect(close.getAttribute('data-tab-dirty')).toBe('true')
+    fireEvent.click(close)
+    expect(props.onClose).toHaveBeenCalledWith('file:a.md')
+  })
+})
