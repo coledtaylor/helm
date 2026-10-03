@@ -20,6 +20,7 @@ import {
   openTab,
   paneId,
   placeBeside,
+  placeIn,
   placeRestored,
   reconcile,
   sendToOtherGroup,
@@ -76,6 +77,7 @@ import {
   McpPanel,
   NewHarnessDialog,
   NewSessionDialog,
+  NewTabMenu,
   overlayOpen,
   PaneActions,
   PaneCrumb,
@@ -214,6 +216,19 @@ const MODE_LABEL: Record<AppMode, string | null> = {
 const truncate = (text: string, max: number): string =>
   text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`
 
+/**
+ * The folder a tab is about, for a launcher to open on: a project tab's, a
+ * file's root, or a session's project - or its folder, for a session no project
+ * was recorded against, such as a profile's at a harness root.
+ */
+function folderOf(ref: PaneRef | null, sessionsById: ReadonlyMap<number, SessionRecord>): string | null {
+  if (ref?.kind === 'project') return ref.path
+  if (ref?.kind === 'file') return ref.root
+  if (ref?.kind !== 'session') return null
+  const session = sessionsById.get(ref.id)
+  return session === undefined ? null : (session.projectPath ?? session.cwd)
+}
+
 /** The session id inside a `session:12` tab id. */
 const sessionIdOf = (id: string): number => Number(id.slice('session:'.length))
 
@@ -240,6 +255,14 @@ export function App(): JSX.Element {
   const [layout, setLayout] = useState<PaneLayout | null>(null)
   /** The pane given the whole window, or null for the panes side by side. */
   const [maximized, setMaximized] = useState<number | null>(null)
+  /**
+   * A pane's `+` was pressed and what it opened is on screen: which pane, the
+   * button it hangs from, and the folder that pane is about, read once when it
+   * opened.
+   */
+  const [newTab, setNewTab] = useState<{ group: number; anchor: HTMLElement; folder: string | null } | null>(
+    null
+  )
   /**
    * The file tab standing as a preview - opened by a single click, replaced by
    * the next one (`openFile`). Not written down: a restart reopens it as an
@@ -681,18 +704,38 @@ export function App(): JSX.Element {
     [configScopePath, setConfigScope, openPane]
   )
   /**
+   * Ctrl+L focuses the address bar. A counter rather than a boolean, because
+   * "focus it" is an event: pressing it twice has to re-select.
+   */
+  const [focusAddressAt, setFocusAddressAt] = useState(0)
+
+  /**
    * A new browser tab, on whichever project the focused pane is about, so it
    * arrives on that project's last address rather than empty. Main decides
    * that from `browserProjectUrls`; nothing here reads it.
+   *
+   * A `project` of null asks for an empty tab on purpose - the `+`'s - and
+   * `into` puts it in that pane rather than the focused one. `focusAddress`
+   * gives the address bar the caret once the tab is up, which is what a new
+   * empty tab is for.
    */
   const openBrowser = useCallback(
-    (request: { url?: string; project?: string | null } = {}) => {
+    (
+      request: {
+        url?: string
+        project?: string | null
+        into?: number
+        focusAddress?: boolean
+      } = {}
+    ) => {
+      const { url, project, into, focusAddress } = request
       void browsers
-        .open({ ...request, project: request.project ?? frontProject })
+        .open({ ...(url === undefined ? {} : { url }), project: project === undefined ? frontProject : project })
         .then((state) => {
-          if (state !== null) {
-            commit((current) => openTab(current, { kind: 'browser', id: state.id }))
-          }
+          if (state === null) return
+          const ref = { kind: 'browser', id: state.id } as const
+          commit((current) => (into === undefined ? openTab(current, ref) : placeIn(current, ref, into)))
+          if (focusAddress === true) setFocusAddressAt((at) => at + 1)
         })
     },
     [browsers, commit, frontProject]
@@ -714,12 +757,6 @@ export function App(): JSX.Element {
   }, [focusedGroup, open, openBrowser, focusTab])
 
   /**
-   * Ctrl+L focuses the address bar. A counter rather than a boolean, because
-   * "focus it" is an event: pressing it twice has to re-select.
-   */
-  const [focusAddressAt, setFocusAddressAt] = useState(0)
-
-  /**
    * A link in rendered content. A loopback URL is by definition a thing running
    * on this machine, which is what the browser pane exists to look at; anything
    * else goes to the browser the user actually uses. `isLoopbackUrl` is the
@@ -737,14 +774,21 @@ export function App(): JSX.Element {
   /**
    * A launched session lands in the focused pane and takes its front - or, from
    * the launcher's "Start beside", in the other pane, opening it if there is
-   * only one.
+   * only one - or, from a pane's `+`, in that pane (`into`).
    */
   const placeSession = useCallback(
-    (id: number, beside = false) => {
+    (id: number, beside = false, into?: number) => {
       const ref = { kind: 'session', id } as const
-      commit((current) => (beside ? placeBeside(current, ref) : openTab(current, ref)))
+      commit((current) =>
+        into !== undefined
+          ? placeIn(current, ref, into)
+          : beside
+            ? placeBeside(current, ref)
+            : openTab(current, ref)
+      )
+      const landing = into ?? open.focused
       setMaximized((current) =>
-        beside || (current !== null && current !== open.focused) ? null : current
+        (into === undefined && beside) || (current !== null && current !== landing) ? null : current
       )
     },
     [commit, open.focused]
@@ -763,13 +807,13 @@ export function App(): JSX.Element {
     [sessionState, placeSession, open.focused]
   )
 
-  /** A profile launch lands exactly the way a project launch does. */
+  /** A profile launch lands exactly the way a project launch does - or in the pane `into`. */
   const launchProfile = useCallback(
-    async (profile: Profile) => {
-      const session = await profileState.launch(profile, bodyRefs.current[open.focused] ?? null)
+    async (profile: Profile, into?: number) => {
+      const session = await profileState.launch(profile, bodyRefs.current[into ?? open.focused] ?? null)
       if (!session) return
       sessionState.adopt(session)
-      placeSession(session.id)
+      placeSession(session.id, false, into)
     },
     [profileState, sessionState, placeSession, open.focused]
   )
@@ -789,14 +833,16 @@ export function App(): JSX.Element {
   )
 
   /**
-   * What the launcher was showing when Enter was pressed. The grid is measured
-   * off the pane the session is going to, where that pane exists; a new one
-   * beside is measured off the focused pane and refits when it lands.
+   * What a launcher was showing when Start was pressed: Ctrl+N's, or - with
+   * `into` - the popover from a pane's `+`, whose session lands in that pane.
+   * The grid is measured off the pane the session is going to, where that pane
+   * exists; a new one beside is measured off the focused pane and refits when
+   * it lands.
    */
   const startChosen = useCallback(
-    async (choice: LaunchChoice) => {
+    async (choice: LaunchChoice, into?: number) => {
       const other = open.focused === 0 ? 1 : 0
-      const target = choice.beside && open.groups.length > 1 ? other : open.focused
+      const target = into ?? (choice.beside && open.groups.length > 1 ? other : open.focused)
       const launched = await newSession.launch(
         {
           cwd: choice.project.path,
@@ -810,8 +856,9 @@ export function App(): JSX.Element {
       )
       if (launched === null) return
       sessionState.adopt(launched.session)
-      placeSession(launched.session.id, choice.beside)
-      newSession.hide()
+      placeSession(launched.session.id, choice.beside, into)
+      if (into === undefined) newSession.hide()
+      else setNewTab(null)
     },
     [newSession, sessionState, placeSession, open.focused, open.groups.length]
   )
@@ -1025,22 +1072,36 @@ export function App(): JSX.Element {
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
   }, [browserInFront, openBrowser])
 
-  /**
-   * The folder the focused pane is about, for the launcher to open on: a
-   * project tab's, or a session's project - or its folder, for a session no
-   * project was recorded against, such as a profile's at a harness root.
-   */
+  /** The folder the focused pane is about, for the launcher to open on. */
   const frontFolder = useMemo(() => {
     const group = open.groups[open.focused]
-    const ref = group === undefined ? null : activeRef(group)
-    if (ref?.kind === 'project') return ref.path
-    if (ref?.kind === 'file') return ref.root
-    if (ref?.kind !== 'session') return null
-    const session = sessionsById.get(ref.id)
-    return session === undefined ? null : (session.projectPath ?? session.cwd)
+    return folderOf(group === undefined ? null : activeRef(group), sessionsById)
   }, [open, sessionsById])
   const { show: showLauncher } = newSession
   const openLauncher = useCallback(() => showLauncher(frontFolder), [showLauncher, frontFolder])
+
+  /**
+   * A pane's `+`: opens what it offers, hanging from it, or closes it when it
+   * is already open. What it opens reads the session index afresh, as Ctrl+N
+   * does.
+   */
+  const { prepare: prepareLauncher, dismissError: dismissLaunchError } = newSession
+  const toggleNewTab = useCallback(
+    (group: number, anchor: HTMLElement) => {
+      if (newTab?.group === group) {
+        setNewTab(null)
+        return
+      }
+      const pane = open.groups[group]
+      prepareLauncher()
+      setNewTab({ group, anchor, folder: folderOf(pane === undefined ? null : activeRef(pane), sessionsById) })
+    },
+    [newTab, open, sessionsById, prepareLauncher]
+  )
+  const closeNewTab = useCallback(() => {
+    setNewTab(null)
+    dismissLaunchError()
+  }, [dismissLaunchError])
 
   // ---------------------------------------------------------------------------
   // Files
@@ -2307,6 +2368,8 @@ export function App(): JSX.Element {
             // A native view paints over the drop mark and the dragged tab's
             // ghost, so it stands down for the length of the gesture.
             onDragging={browsers.setSuppressed}
+            onNewTab={(button) => toggleNewTab(index, button)}
+            newTabOpen={newTab?.group === index}
             actions={
               <>
                 {groupFront?.kind === 'file' && (
@@ -2717,7 +2780,7 @@ export function App(): JSX.Element {
   const toast: { text: string; failed: boolean; dismiss: () => void } | null =
     browsers.error !== null
       ? { text: browsers.error, failed: true, dismiss: browsers.dismissError }
-      : !newSession.open && newSession.error !== null
+      : !newSession.open && newTab === null && newSession.error !== null
         ? { text: newSession.error, failed: true, dismiss: newSession.dismissError }
         : restoreState.report !== null
           ? { ...restoreState.report, dismiss: restoreState.dismissReport }
@@ -2749,7 +2812,11 @@ export function App(): JSX.Element {
           sessions={statusCounts}
           onShowWaiting={showWaiting}
           mode={info === null ? null : MODE_LABEL[info.mode]}
-          version={info?.version ?? '…'}
+          version={info?.version ?? null}
+          // From the setup status before `app:info`, which is read once at
+          // startup: after the CLI is relocated the strip would go on naming the
+          // old version while Settings names the new one.
+          claudeVersion={setup.status?.semver ?? setup.status?.version ?? info?.claudeVersion ?? null}
           // From the setup status, not from `app:info`, which is read once at
           // startup: after the CLI is relocated the strip would go on saying it
           // is missing while the banner above it says it was found.
@@ -2836,6 +2903,28 @@ export function App(): JSX.Element {
             now={now}
             onStart={(choice) => void startChosen(choice)}
             onDismiss={newSession.hide}
+          />
+        )}
+        {newTab !== null && newTab.group < open.groups.length && (
+          <NewTabMenu
+            // A new `+` is a new menu, from its first step.
+            key={newTab.group}
+            anchor={newTab.anchor}
+            projects={discovery?.projects ?? EMPTY_PROJECTS}
+            recency={newSession.recency}
+            live={machineSessions.sessions}
+            profiles={profileState.profiles}
+            home={info?.home ?? null}
+            initialPath={newTab.folder}
+            resumable={newSession.resumable}
+            onShowing={newSession.loadResumable}
+            busy={newSession.busy}
+            error={newSession.error}
+            now={now}
+            onStart={(choice) => void startChosen(choice, newTab.group)}
+            onProfile={(profile) => void launchProfile(profile, newTab.group)}
+            onBrowser={() => openBrowser({ project: null, into: newTab.group, focusAddress: true })}
+            onDismiss={closeNewTab}
           />
         )}
 

@@ -1,15 +1,10 @@
 import type { JSX } from 'react'
 import type { Project } from '@helm/core'
 import { cn } from '../lib/cn'
+import { PROJECT_KIND_ICON } from '../lib/projectIcons'
 import { ROW_SELECTED, ROW_SELECTED_GROUP } from '../lib/rows'
 import { SESSION_STATE_DOT, SESSION_STATE_LABEL, type SessionState } from '../lib/sessionstate'
-import { CaretIcon, FolderIcon, HarnessIcon, PinIcon, RepoIcon, TerminalIcon } from './icons'
-
-const KIND_ICON = {
-  harness: HarnessIcon,
-  repo: RepoIcon,
-  folder: FolderIcon
-} as const
+import { CaretIcon, FolderIcon, PinIcon, TerminalIcon } from './icons'
 
 /** The caret's column: 16px, so a row with nothing to expand keeps its icon in line. */
 const CARET_PX = 16
@@ -73,7 +68,7 @@ export function ProjectRow({
   onLaunch,
   launching = false
 }: ProjectRowProps): JSX.Element {
-  const KindIcon = KIND_ICON[project.kind]
+  const KindIcon = PROJECT_KIND_ICON[project.kind]
   const branch = project.git?.branch ?? null
   const hasActions = onLaunch !== undefined || onTogglePin !== undefined
 

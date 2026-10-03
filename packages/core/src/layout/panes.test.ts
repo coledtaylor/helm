@@ -14,6 +14,7 @@ import {
   openTab,
   paneId,
   placeBeside,
+  placeIn,
   placeRestored,
   reconcile,
   sendToOtherGroup,
@@ -180,6 +181,36 @@ describe('placeBeside', () => {
 
   it('leaves a tab alone in an otherwise empty window', () => {
     expect(shape(placeBeside(EMPTY_LAYOUT, session(1)))).toEqual(['>*session:1'])
+  })
+})
+
+describe('placeIn', () => {
+  it('lands in the pane asked for, not the focused one, and focuses it', () => {
+    const layout = focusGroup(layoutOf([session(1)], [HISTORY]), 0)
+    expect(shape(placeIn(layout, session(2), 1))).toEqual([' *session:1', '>history *session:2'])
+  })
+
+  it('lands in the focused pane when that is the one asked for', () => {
+    const layout = layoutOf([session(1)], [HISTORY])
+    expect(shape(placeIn(layout, session(2), 1))).toEqual([' *session:1', '>history *session:2'])
+  })
+
+  it('moves a tab reconcile already put in the focused pane', () => {
+    const layout = reconcile(focusGroup(layoutOf([session(1)], [HISTORY]), 0), () => true, [
+      session(1),
+      session(2)
+    ])
+    expect(shape(layout)).toEqual(['>*session:1 session:2', ' *history'])
+    expect(shape(placeIn(layout, session(2), 1))).toEqual([' *session:1', '>history *session:2'])
+  })
+
+  it('opens into a lone empty pane', () => {
+    expect(shape(placeIn(EMPTY_LAYOUT, session(1), 0))).toEqual(['>*session:1'])
+  })
+
+  it('falls back to the focused pane when the one asked for has gone', () => {
+    const layout = layoutOf([session(1)])
+    expect(shape(placeIn(layout, session(2), 1))).toEqual(['>session:1 *session:2'])
   })
 })
 

@@ -20,6 +20,11 @@ export interface NewSessionState {
   /** The folder highlighted when it opened. */
   initialPath: string | null
   show: (initialPath: string | null) => void
+  /**
+   * Reads what a launcher shows afresh without opening this one: the new-tab
+   * popover is a launcher too, and reads the same index the same way.
+   */
+  prepare: () => void
   hide: () => void
   /** When each folder was last worked in, by lower-cased path. */
   recency: ReadonlyMap<string, number>
@@ -63,14 +68,12 @@ export function useNewSession(): NewSessionState {
   const asked = useRef(new Set<string>())
   const opening = useRef(0)
 
-  const show = useCallback((path: string | null) => {
+  const prepare = useCallback(() => {
     opening.current += 1
     const current = opening.current
     asked.current = new Set()
     setResumable(new Map())
-    setInitialPath(path)
     setError(null)
-    setOpen(true)
     void helm
       .invoke('history:projects')
       .then((projects) => {
@@ -81,6 +84,15 @@ export function useNewSession(): NewSessionState {
       // which is a worse launcher and still a working one.
       .catch(() => undefined)
   }, [])
+
+  const show = useCallback(
+    (path: string | null) => {
+      prepare()
+      setInitialPath(path)
+      setOpen(true)
+    },
+    [prepare]
+  )
 
   const hide = useCallback(() => {
     setOpen(false)
@@ -134,6 +146,7 @@ export function useNewSession(): NewSessionState {
     open,
     initialPath,
     show,
+    prepare,
     hide,
     recency,
     resumable,

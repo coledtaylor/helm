@@ -118,3 +118,46 @@ describe('TabBar: unsaved changes', () => {
     expect(props.onClose).toHaveBeenCalledWith('file:a.md')
   })
 })
+
+describe('TabBar: the new-tab button', () => {
+  it('follows the last tab, outside the tab list, and hands its press the button', async () => {
+    const onNewTab = vi.fn()
+    renderBar({ onNewTab })
+    const plus = screen.getByRole('button', { name: 'New tab' })
+    expect(screen.getByRole('tablist').contains(plus)).toBe(false)
+    expect(screen.getByRole('tablist').nextElementSibling).toBe(plus)
+    expect(plus.getAttribute('aria-expanded')).toBe('false')
+    await userEvent.click(plus)
+    expect(onNewTab).toHaveBeenCalledWith(plus)
+  })
+
+  it('stays lit while what it opened is on screen', () => {
+    renderBar({ onNewTab: vi.fn(), newTabOpen: true })
+    expect(screen.getByRole('button', { name: 'New tab' }).getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('is drawn in a pane with no tabs, and not at all without a handler', () => {
+    const { unmount } = render(
+      <TabBar tabs={[]} activeId={null} focused onActivate={vi.fn()} onClose={vi.fn()} onNewTab={vi.fn()} />
+    )
+    expect(screen.getByRole('button', { name: 'New tab' })).toBeTruthy()
+    unmount()
+    renderBar()
+    expect(screen.queryByRole('button', { name: 'New tab' })).toBeNull()
+  })
+
+  it('takes a tab dropped on it as a drop at the end of the strip', () => {
+    const onMove = vi.fn()
+    renderBar({ onMove, onNewTab: vi.fn() })
+    const data = new Map<string, string>([['application/x-helm-tab', 'session:1']])
+    const dataTransfer = {
+      types: [...data.keys()],
+      getData: (type: string) => data.get(type) ?? '',
+      dropEffect: 'none'
+    }
+    const plus = screen.getByRole('button', { name: 'New tab' })
+    fireEvent.dragOver(plus, { dataTransfer })
+    fireEvent.drop(plus, { dataTransfer })
+    expect(onMove).toHaveBeenCalledWith('session:1', TABS.length - 1)
+  })
+})

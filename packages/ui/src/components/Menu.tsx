@@ -1,8 +1,8 @@
 import type { JSX, KeyboardEvent, ReactNode, RefObject } from 'react'
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '../lib/cn'
-import { overlayMounted } from '../lib/overlay'
+import { usePopup, type PopupAnchor } from '../lib/popup'
 import { CheckIcon } from './icons'
 
 /**
@@ -44,7 +44,7 @@ export type MenuEntry =
   | { kind: 'heading'; id: string; label: string }
 
 /** Where the menu opens: at a point (a right-click), or under a control. */
-export type MenuAnchor = { x: number; y: number } | { below: DOMRect }
+export type MenuAnchor = PopupAnchor
 
 export interface MenuProps {
   /** The menu's accessible name. */
@@ -70,8 +70,6 @@ export interface MenuProps {
   onDismiss: () => void
 }
 
-/** Kept clear of the window's edge, so the border is never the edge. */
-const MARGIN = 8
 /** Letters typed within this of each other are one prefix. */
 const TYPEAHEAD_MS = 600
 
@@ -100,31 +98,9 @@ export function Menu({
     const current = role === 'listbox' ? items.findIndex((item) => item.checked === true && !item.disabled) : -1
     return current >= 0 ? current : items.findIndex((item) => !item.disabled)
   })
-  const [place, setPlace] = useState<{ left: number; top: number } | null>(null)
   const typed = useRef({ text: '', at: 0 })
 
-  useEffect(() => overlayMounted(), [])
-
-  // Placed once its size is known: flipped above a control with no room under
-  // it, and pulled back inside the window wherever it would cross the edge.
-  useLayoutEffect(() => {
-    const menu = menuRef.current
-    if (menu === null) return
-    const { width, height } = menu.getBoundingClientRect()
-    const maxLeft = window.innerWidth - width - MARGIN
-    const maxTop = window.innerHeight - height - MARGIN
-    let left: number
-    let top: number
-    if ('below' in at) {
-      left = at.below.left
-      top = at.below.bottom + 4
-      if (top > maxTop && at.below.top - height - 4 >= MARGIN) top = at.below.top - height - 4
-    } else {
-      left = at.x
-      top = at.y
-    }
-    setPlace({ left: Math.max(MARGIN, Math.min(left, maxLeft)), top: Math.max(MARGIN, Math.min(top, maxTop)) })
-  }, [at])
+  const place = usePopup({ ref: menuRef, at, anchorRef, onDismiss })
 
   // Focus goes back to whatever had it when the menu closes...
   useEffect(() => {
@@ -140,28 +116,6 @@ export function Menu({
   useEffect(() => {
     if (placed) menuRef.current?.focus({ preventScroll: true })
   }, [placed])
-
-  // A press anywhere else closes it, as does the window losing focus or
-  // changing size - a list left floating over a layout that moved is pointing
-  // at nothing.
-  useEffect(() => {
-    const outside = (event: PointerEvent): void => {
-      if (event.target instanceof Node) {
-        if (menuRef.current?.contains(event.target)) return
-        if (anchorRef?.current?.contains(event.target)) return
-      }
-      onDismiss()
-    }
-    const away = (): void => onDismiss()
-    document.addEventListener('pointerdown', outside, true)
-    window.addEventListener('blur', away)
-    window.addEventListener('resize', away)
-    return () => {
-      document.removeEventListener('pointerdown', outside, true)
-      window.removeEventListener('blur', away)
-      window.removeEventListener('resize', away)
-    }
-  }, [onDismiss, anchorRef])
 
   // The row the keyboard is on stays in view in a list long enough to scroll.
   useEffect(() => {

@@ -15,22 +15,17 @@ import {
   launchSentence,
   PERMISSION_CHOICES,
   profileFor,
+  profilesInOrder,
   rankProjects,
   type ProjectMatch
 } from '../lib/launcher'
+import { PROJECT_KIND_ICON } from '../lib/projectIcons'
 import { ROW_SELECTED } from '../lib/rows'
 import { formatAge, formatMoment } from '../lib/time'
-import {
-  CaretIcon,
-  FolderIcon,
-  HarnessIcon,
-  HistoryIcon,
-  LayersIcon,
-  RepoIcon,
-  TerminalIcon,
-  WarnIcon
-} from './icons'
+import { HistoryIcon, LayersIcon, TerminalIcon } from './icons'
+import { LaunchSentence, RunningHere } from './LaunchNotes'
 import { Overlay } from './Overlay'
+import { Picker } from './Picker'
 
 /** What was on screen when the session was asked for. */
 export interface LaunchChoice {
@@ -75,8 +70,6 @@ export interface NewSessionDialogProps {
 const SHOWN = 6
 /** Conversations offered under the highlighted folder. */
 const RESUMES = 3
-
-const KIND_ICON = { harness: HarnessIcon, repo: RepoIcon, folder: FolderIcon } as const
 
 const key = (path: string): string => path.toLowerCase()
 
@@ -202,15 +195,7 @@ export function NewSessionDialog({
     document.getElementById(highlightedId)?.scrollIntoView?.({ block: 'nearest' })
   }, [highlightedId])
 
-  const sortedProfiles = useMemo(
-    () =>
-      [...profiles].sort(
-        (a, b) =>
-          (a.pinnedOrder ?? Number.MAX_SAFE_INTEGER) - (b.pinnedOrder ?? Number.MAX_SAFE_INTEGER) ||
-          a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-      ),
-    [profiles]
-  )
+  const sortedProfiles = useMemo(() => profilesInOrder(profiles), [profiles])
   const profile =
     chosenProfile === null
       ? selected === null
@@ -389,32 +374,9 @@ export function NewSessionDialog({
           </Picker>
         </div>
 
-        {sentence !== null && (
-          <p data-launch-sentence className="text-[11.5px] leading-[1.55] text-fg-subtle">
-            {sentence.map((part, index) =>
-              part.mono ? (
-                <span key={index} className="font-mono text-fg-muted">
-                  {part.text}
-                </span>
-              ) : (
-                <span key={index}>{part.text}</span>
-              )
-            )}
-          </p>
-        )}
+        {sentence !== null && <LaunchSentence parts={sentence} />}
 
-        {here.length > 0 && (
-          <p role="note" className="flex items-start gap-1.5 text-[11.5px] leading-[1.55] text-warn">
-            <WarnIcon width={12} height={12} className="mt-[3px] shrink-0" />
-            <span className="min-w-0">
-              Already running here:{' '}
-              <span className="text-fg">
-                {here.map((session) => session.name ?? `pid ${String(session.pid)}`).join(', ')}
-              </span>
-              . <span className="text-fg-muted">Another one means two agents in one working tree.</span>
-            </span>
-          </p>
-        )}
+        <RunningHere sessions={here} />
 
         {error !== null && (
           <p role="alert" className="text-[11.5px] leading-[1.55] text-danger">
@@ -469,7 +431,7 @@ function ProjectOption({
   onStart: () => void
 }): JSX.Element {
   const { project, hit } = match
-  const Icon = KIND_ICON[project.kind]
+  const Icon = PROJECT_KIND_ICON[project.kind]
   return (
     <div
       id={id}
@@ -552,48 +514,6 @@ function ResumeOption({
         {formatAge(session.lastAt, now)}
       </span>
     </div>
-  )
-}
-
-/** A native select in the sunken well (DESIGN.md 4, "Select"), with a mark beside its value. */
-function Picker({
-  id,
-  icon,
-  value,
-  onChange,
-  className,
-  children
-}: {
-  id: string
-  icon?: ReactNode
-  value: string
-  onChange: (value: string) => void
-  className?: string
-  children: ReactNode
-}): JSX.Element {
-  return (
-    <span className={cn('relative block', className)}>
-      {icon !== undefined && (
-        <span className="pointer-events-none absolute top-1/2 left-[9px] -translate-y-1/2">{icon}</span>
-      )}
-      <select
-        id={id}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className={cn(
-          'h-[28px] w-full appearance-none rounded-well border border-border bg-surface-sunken pr-7 text-[12.5px] text-fg',
-          'transition-colors hover:border-border-strong focus:border-accent focus:outline-none',
-          icon === undefined ? 'pl-[9px]' : 'pl-[29px]'
-        )}
-      >
-        {children}
-      </select>
-      <CaretIcon
-        width={9}
-        height={9}
-        className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 rotate-90 text-fg-subtle"
-      />
-    </span>
   )
 }
 

@@ -61,6 +61,7 @@ export {
   type LaunchChoice,
   type NewSessionDialogProps
 } from './components/NewSessionDialog'
+export { NewTabMenu, type NewTabMenuProps } from './components/NewTabMenu'
 export {
   SaveAsTemplateDialog,
   type SaveAsTemplateDialogProps

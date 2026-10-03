@@ -115,6 +115,18 @@ export function profileFor(path: string, profiles: readonly Profile[]): Profile 
 }
 
 /**
+ * Profiles in the order a picker offers them: pinned ones first in their pinned
+ * order, then the rest by name. A new array; the one passed in is left alone.
+ */
+export function profilesInOrder(profiles: readonly Profile[]): Profile[] {
+  return [...profiles].sort(
+    (a, b) =>
+      (a.pinnedOrder ?? Number.MAX_SAFE_INTEGER) - (b.pinnedOrder ?? Number.MAX_SAFE_INTEGER) ||
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  )
+}
+
+/**
  * A path from `~` where it is under the home directory, for a row with no room
  * for the rest. Shown only - every path Helm acts on stays absolute.
  */

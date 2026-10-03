@@ -20,8 +20,10 @@ export interface StatusBarProps {
    * installed build is the case that needs none.
    */
   mode: string | null
-  /** The app's own version, for the mode chip's hover text. */
-  version: string
+  /** The app's own version, first on the bar. Null until the app has said. */
+  version: string | null
+  /** The `claude` CLI's version, `x.y.z`, or null while it is not known. */
+  claudeVersion: string | null
   /** The `claude` CLI was not found. Said here as well as in the banner,
    * because the banner can be dismissed and the fact cannot. */
   claudeMissing: boolean
@@ -39,20 +41,21 @@ export interface StatusBarProps {
 }
 
 /**
- * The bottom strip: what your sessions are doing on the left, what you have
- * left of the plan on the right.
+ * The bottom strip. On the left, which Helm this is and which `claude` it
+ * runs - the version, the build when it is not an ordinary install, a newer
+ * release when there is one - and then what your sessions are doing. On the
+ * right, what you have left of the plan.
  *
- * That is the whole of it now, and the cut was deliberate. The app's version,
- * the CLI's version and how long the last scan took are facts about Helm, and
- * a strip that is always on screen is for facts about your work. They live in
- * Settings, and two of them come back here only as exceptions: a build that is
- * not an ordinary install, and a `claude` that cannot be found.
+ * The two versions lead because they are what somebody reads the bar for when
+ * something is off, and they are fixed-width facts that do not move. How long
+ * the last scan took is in Settings; it is a fact about Helm nobody acts on.
  */
 export function StatusBar({
   sessions,
   onShowWaiting,
   mode,
   version,
+  claudeVersion,
   claudeMissing,
   usage,
   usageDisplay,
@@ -66,6 +69,62 @@ export function StatusBar({
     // directly on the canvas (DESIGN.md), a caption under the islands rather
     // than a panel of its own.
     <footer className="flex h-[26px] shrink-0 items-center gap-3 px-3.5 text-[11px] text-fg-subtle tabular-nums">
+      {version !== null && (
+        <span data-status-version className="shrink-0">
+          Helm {version}
+        </span>
+      )}
+
+      {mode !== null && (
+        <span
+          data-status-mode={mode}
+          className="shrink-0 rounded-sm border border-border-strong px-1.5 leading-[16px] text-fg-muted"
+        >
+          {mode}
+        </span>
+      )}
+
+      {/* Beside the version, because that is the thing it is about. The
+          accent as *text*, never as a fill: a newer release is worth noticing
+          and is not a warning - colouring it `warn` would put it in the same
+          language as a missing CLI, which is a thing you have to fix. This is
+          an offer. */}
+      {update !== null && update.newer && (
+        <button
+          type="button"
+          data-update-available={update.latest}
+          title={`Helm ${update.latest} was released. Opens the releases page - Helm downloads and installs nothing.`}
+          onClick={() => onOpenUpdate(update.url)}
+          className={cn(
+            '-mx-1 shrink-0 rounded px-1 text-accent underline decoration-dotted',
+            'underline-offset-[3px] transition-colors hover:bg-hover'
+          )}
+        >
+          {update.latest} available
+        </button>
+      )}
+
+      {(claudeMissing || claudeVersion !== null) && (
+        <>
+          {version !== null && <Divider />}
+          {claudeMissing ? (
+            <span
+              data-status-claude="missing"
+              className="shrink-0 text-warn"
+              title="The claude CLI was not found. Config browsing works; launching a session will not."
+            >
+              claude CLI not found
+            </span>
+          ) : (
+            <span data-status-claude={claudeVersion} className="shrink-0">
+              claude {claudeVersion}
+            </span>
+          )}
+        </>
+      )}
+
+      {(version !== null || claudeMissing || claudeVersion !== null) && <Divider />}
+
       {total === 0 ? (
         <span data-status-sessions="none">No sessions running</span>
       ) : (
@@ -102,45 +161,12 @@ export function StatusBar({
 
       <span className="flex-1" />
 
-      {claudeMissing && (
-        <span
-          className="shrink-0 text-warn"
-          title="The claude CLI was not found. Config browsing works; launching a session will not."
-        >
-          claude CLI not found
-        </span>
-      )}
-
-      {mode !== null && (
-        <span
-          data-status-mode={mode}
-          title={`Helm ${version}`}
-          className="shrink-0 rounded-sm border border-border-strong px-1.5 leading-[16px] text-fg-muted"
-        >
-          {mode}
-        </span>
-      )}
-
-      {/* The accent as *text*, never as a fill. A newer release is worth
-          noticing and is not a warning - colouring it `warn` would put it in
-          the same language as a missing CLI, which is a thing you have to fix.
-          This is an offer. */}
-      {update !== null && update.newer && (
-        <button
-          type="button"
-          data-update-available={update.latest}
-          title={`Helm ${update.latest} was released. Opens the releases page - Helm downloads and installs nothing.`}
-          onClick={() => onOpenUpdate(update.url)}
-          className={cn(
-            '-mx-1 shrink-0 rounded px-1 text-accent underline decoration-dotted',
-            'underline-offset-[3px] transition-colors hover:bg-hover'
-          )}
-        >
-          {update.latest} available
-        </button>
-      )}
-
       <UsageStatus snapshot={usage} mode={usageDisplay} onModeChange={onUsageDisplayChange} />
     </footer>
   )
+}
+
+/** A hairline between the groups on the left, the one the usage figures use between their windows. */
+function Divider(): JSX.Element {
+  return <span aria-hidden className="h-2.5 w-px shrink-0 bg-border-strong" />
 }

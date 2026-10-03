@@ -313,6 +313,24 @@ export function placeBeside(layout: PaneLayout, ref: PaneRef): PaneLayout {
   return moveTab(opened, id, other, opened.groups[other]!.tabs.length)
 }
 
+/**
+ * Puts a tab in group `group` and in front of it - the pane whose `+` asked
+ * for it, whichever pane is focused by the time it arrives.
+ *
+ * Opened and then moved, for the reason `placeBeside` is: `reconcile` may have
+ * given a new session a tab in the focused group first. A group that is gone
+ * by then - its pane closed while a launch was in flight - means the focused
+ * one, because a tab with nowhere it was asked to go still has to go somewhere.
+ */
+export function placeIn(layout: PaneLayout, ref: PaneRef, group: number): PaneLayout {
+  if (group < 0 || group >= layout.groups.length) return openTab(layout, ref)
+  const id = paneId(ref)
+  const opened = openTab(layout, ref, group)
+  const at = findTab(opened, id)
+  if (at === null || at.group === group) return opened
+  return moveTab(opened, id, group, opened.groups[group]!.tabs.length)
+}
+
 /** A file tab, as `openFile` takes it. */
 export type FileRef = Extract<PaneRef, { kind: 'file' }>
 

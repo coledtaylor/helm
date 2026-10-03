@@ -324,6 +324,7 @@ describe('the usage display control', () => {
             onShowWaiting={vi.fn()}
             mode={null}
             version="1.2.0"
+            claudeVersion="2.1.288"
             claudeMissing={false}
             usage={usage}
             usageDisplay={usageDisplay}

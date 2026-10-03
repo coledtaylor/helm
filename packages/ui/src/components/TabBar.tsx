@@ -6,7 +6,7 @@ import {
   SESSION_STATE_LABEL,
   type SessionState
 } from '../lib/sessionstate'
-import { CloseIcon } from './icons'
+import { CloseIcon, PlusIcon } from './icons'
 
 /**
  * Whether a tab's session is alive, what it is doing, and how it ended. An
@@ -84,6 +84,13 @@ export interface TabBarProps {
    * strip's scroll so they stay reachable when tabs overflow. */
   actions?: ReactNode | undefined
   /**
+   * The `+` after the last tab was pressed, with the button itself for what it
+   * opens to hang from. Omit for no `+`.
+   */
+  onNewTab?: ((button: HTMLButtonElement) => void) | undefined
+  /** What the `+` opened is on screen: the button stays lit while it is. */
+  newTabOpen?: boolean | undefined
+  /**
    * Whether a tab is being dragged right now.
    *
    * Reported because something outside the DOM needs to know. The browser
@@ -119,8 +126,12 @@ const TAB_MIME = 'application/x-helm-tab'
  * ways into this app cannot reach. A drag can also carry a tab across to the
  * other pane's strip, which is how a tab changes pane by pointer.
  *
- * With nothing to hang off it - no tabs and no actions - the strip is not drawn
- * at all rather than drawn empty.
+ * A `+` follows the last tab, as it does in a browser, and stays in view when
+ * the strip scrolls: the tabs scroll in a box that grows to its contents and no
+ * further, and the `+` sits after that box rather than inside it.
+ *
+ * With nothing to hang off it - no tabs, no `+` and no actions - the strip is
+ * not drawn at all rather than drawn empty.
  */
 export function TabBar({
   tabs,
@@ -132,6 +143,8 @@ export function TabBar({
   onRename,
   onKeep,
   actions,
+  onNewTab,
+  newTabOpen = false,
   onDragging
 }: TabBarProps): JSX.Element | null {
   /** The tab this strip is dragging, if the drag started here. */
@@ -188,16 +201,14 @@ export function TabBar({
     onMove?.(tabs[index]!.id, target)
   }
 
-  if (tabs.length === 0 && !actions) return null
+  if (tabs.length === 0 && !actions && onNewTab === undefined) return null
 
   return (
     <div className="flex h-strip shrink-0 items-center gap-1 border-b border-border px-1.5">
       <div
-        role="tablist"
-        aria-label="Open tabs"
-        ref={stripRef}
-        // The empty stretch past the last tab is a drop target too: "put it at
-        // the end" is the commonest place to drop a tab from the other pane.
+        // The empty stretch past the last tab - and the `+` - is a drop target
+        // too: "put it at the end" is the commonest place to drop a tab from
+        // the other pane.
         onDragOver={(event) => {
           if (!carriesTab(event)) return
           event.preventDefault()
@@ -221,179 +232,206 @@ export function TabBar({
         // gesture a person would try. `deltaX` is left alone: a trackpad's
         // sideways swipe already arrives on the right axis.
         onWheel={(event) => {
-          if (event.deltaY === 0) return
-          const strip = event.currentTarget
+          const strip = stripRef.current
+          if (event.deltaY === 0 || strip === null) return
           if (strip.scrollWidth <= strip.clientWidth) return
           strip.scrollLeft += event.deltaY
         }}
-        className="tab-scroll flex h-full min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overflow-y-hidden"
+        className="flex h-full min-w-0 flex-1 items-center gap-0.5"
       >
-        {tabs.map((tab, index) => {
-          const active = tab.id === activeId
-          const renaming = editing === tab.id
-          // Not while the caret is in the title: a drag that starts on a
-          // focused input takes the focus with it and commits the edit halfway.
-          const movable = canMove && tab.draggable !== false && !renaming
-          const canRename = onRename !== undefined && tab.renamable === true
-          const closable = tab.closable !== false
-          return (
-            <div
-              key={tab.id}
-              draggable={movable}
-              onDragStart={(event) => {
-                setDragging(tab.id)
-                onDragging?.(true)
-                event.dataTransfer.effectAllowed = 'move'
-                event.dataTransfer.setData(TAB_MIME, tab.id)
-                // Chromium refuses to start a drag with no plain payload.
-                event.dataTransfer.setData('text/plain', tab.id)
-              }}
-              onDragEnd={finishDrag}
-              onDragOver={(event) => {
-                if (!carriesTab(event)) return
-                event.preventDefault()
-                event.stopPropagation()
-                event.dataTransfer.dropEffect = 'move'
-                // Past the midpoint means "after this tab", which is the same
-                // insertion point as "before the next one".
-                const box = event.currentTarget.getBoundingClientRect()
-                setDropIndex(event.clientX < box.left + box.width / 2 ? index : index + 1)
-              }}
-              onDrop={(event) => dropAt(dropIndex ?? index, event)}
-              // Middle-click closes, as it does on every tab strip people
-              // already use. `mousedown` is swallowed so the button does not
-              // also start Chromium's autoscroll.
-              onMouseDown={(event) => {
-                if (event.button === 1) event.preventDefault()
-              }}
-              onAuxClick={(event) => {
-                if (event.button === 1 && closable) onClose(tab.id)
-              }}
-              className={cn(
-                'group relative flex h-[calc(var(--helm-strip)-10px)] min-w-0 shrink-0 items-center rounded-raised transition-colors',
-                active ? (focused ? 'bg-active' : 'bg-hover') : 'hover:bg-hover',
-                dragging === tab.id && 'opacity-40'
-              )}
-            >
-              {/* One caret per insertion point, and only one: an interior seam
-                  is describable twice - after tab k-1, before tab k - and
-                  drawing both put two marks 4px apart where the tab would land.
-                  The left edge is the general case; the right edge of the last
-                  tab carries the one insertion point with no tab to its right. */}
-              {dropIndex === index && (
-                <span aria-hidden className="absolute inset-y-1 -left-[2px] w-[2px] rounded bg-accent" />
-              )}
-              {dropIndex === tabs.length && index === tabs.length - 1 && (
-                <span aria-hidden className="absolute inset-y-1 -right-[2px] w-[2px] rounded bg-accent" />
-              )}
+        <div
+          role="tablist"
+          aria-label="Open tabs"
+          ref={stripRef}
+          // Grows to its tabs and no further, so the `+` after it follows the
+          // last tab, and shrinks to scroll when they overflow.
+          className="tab-scroll flex h-full min-w-0 items-center gap-0.5 overflow-x-auto overflow-y-hidden"
+        >
+          {tabs.map((tab, index) => {
+            const active = tab.id === activeId
+            const renaming = editing === tab.id
+            // Not while the caret is in the title: a drag that starts on a
+            // focused input takes the focus with it and commits the edit halfway.
+            const movable = canMove && tab.draggable !== false && !renaming
+            const canRename = onRename !== undefined && tab.renamable === true
+            const closable = tab.closable !== false
+            return (
+              <div
+                key={tab.id}
+                draggable={movable}
+                onDragStart={(event) => {
+                  setDragging(tab.id)
+                  onDragging?.(true)
+                  event.dataTransfer.effectAllowed = 'move'
+                  event.dataTransfer.setData(TAB_MIME, tab.id)
+                  // Chromium refuses to start a drag with no plain payload.
+                  event.dataTransfer.setData('text/plain', tab.id)
+                }}
+                onDragEnd={finishDrag}
+                onDragOver={(event) => {
+                  if (!carriesTab(event)) return
+                  event.preventDefault()
+                  event.stopPropagation()
+                  event.dataTransfer.dropEffect = 'move'
+                  // Past the midpoint means "after this tab", which is the same
+                  // insertion point as "before the next one".
+                  const box = event.currentTarget.getBoundingClientRect()
+                  setDropIndex(event.clientX < box.left + box.width / 2 ? index : index + 1)
+                }}
+                onDrop={(event) => dropAt(dropIndex ?? index, event)}
+                // Middle-click closes, as it does on every tab strip people
+                // already use. `mousedown` is swallowed so the button does not
+                // also start Chromium's autoscroll.
+                onMouseDown={(event) => {
+                  if (event.button === 1) event.preventDefault()
+                }}
+                onAuxClick={(event) => {
+                  if (event.button === 1 && closable) onClose(tab.id)
+                }}
+                className={cn(
+                  'group relative flex h-[calc(var(--helm-strip)-10px)] min-w-0 shrink-0 items-center rounded-raised transition-colors',
+                  active ? (focused ? 'bg-active' : 'bg-hover') : 'hover:bg-hover',
+                  dragging === tab.id && 'opacity-40'
+                )}
+              >
+                {/* One caret per insertion point, and only one: an interior seam
+                    is describable twice - after tab k-1, before tab k - and
+                    drawing both put two marks 4px apart where the tab would land.
+                    The left edge is the general case; the right edge of the last
+                    tab carries the one insertion point with no tab to its right. */}
+                {dropIndex === index && (
+                  <span aria-hidden className="absolute inset-y-1 -left-[2px] w-[2px] rounded bg-accent" />
+                )}
+                {dropIndex === tabs.length && index === tabs.length - 1 && (
+                  <span aria-hidden className="absolute inset-y-1 -right-[2px] w-[2px] rounded bg-accent" />
+                )}
 
-              {renaming ? (
-                // Not a `<button role="tab">` for the length of the edit: a text
-                // field inside a button is invalid, and every click meant for
-                // the caret would activate the tab underneath it.
-                <div
-                  className={cn(
-                    'flex h-full min-w-0 max-w-[200px] items-center gap-[7px] pl-2.5 text-[12.5px]',
-                    closable ? 'pr-1' : 'pr-2.5'
-                  )}
-                >
-                  <Mark tab={tab} active={active} />
-                  <TabRename
-                    tabId={tab.id}
-                    initial={tab.title}
-                    onDone={(label) => {
-                      setEditing(null)
-                      if (label !== undefined) onRename?.(tab.id, label)
-                    }}
-                  />
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  role="tab"
-                  data-tab={tab.id}
-                  aria-selected={active}
-                  // The state dot is drawn, not written, so the name it would
-                  // otherwise be missing is spelled out here rather than in a
-                  // visually-hidden span that would glue itself to the title.
-                  aria-label={
-                    tab.indicator === undefined
-                      ? undefined
-                      : `${tab.title}, ${SESSION_STATE_LABEL[tab.indicator]}`
-                  }
-                  title={tab.hint}
-                  onClick={() => onActivate(tab.id)}
-                  // Double-click, not a menu and not a pencil on hover: the tab
-                  // is the thing being named, and it costs the strip no pixels.
-                  onDoubleClick={
-                    canRename
-                      ? () => setEditing(tab.id)
-                      : tab.preview === true && onKeep !== undefined
-                        ? () => onKeep(tab.id)
-                        : undefined
-                  }
-                  onKeyDown={(event) => moveWithKeyboard(event, index)}
-                  // The front tab keeps its fill under the pointer: that fill
-                  // says "front of this pane" and a tone that moved would say
-                  // something else. What answers is the close button beside it,
-                  // `opacity-60` at rest and full on `group-hover`. That
-                  // exemption is for tabs and nothing else.
-                  className={cn(
-                    'flex h-full min-w-0 max-w-[200px] items-center gap-[7px] pl-2.5 text-[12.5px]',
-                    closable ? 'pr-1' : 'pr-2.5',
-                    active ? 'text-fg' : 'text-fg-muted group-hover:text-fg'
-                  )}
-                >
-                  <Mark tab={tab} active={active} />
-                  <span
-                    data-tab-title
-                    data-tab-preview={tab.preview === true ? 'true' : undefined}
+                {renaming ? (
+                  // Not a `<button role="tab">` for the length of the edit: a text
+                  // field inside a button is invalid, and every click meant for
+                  // the caret would activate the tab underneath it.
+                  <div
                     className={cn(
-                      'min-w-0 truncate leading-[16px]',
-                      tab.mono === true && 'font-mono text-[11.5px]',
-                      tab.preview === true && 'italic'
+                      'flex h-full min-w-0 max-w-[200px] items-center gap-[7px] pl-2.5 text-[12.5px]',
+                      closable ? 'pr-1' : 'pr-2.5'
                     )}
                   >
-                    {tab.title}
-                  </span>
-                  {tab.badge !== undefined && (
+                    <Mark tab={tab} active={active} />
+                    <TabRename
+                      tabId={tab.id}
+                      initial={tab.title}
+                      onDone={(label) => {
+                        setEditing(null)
+                        if (label !== undefined) onRename?.(tab.id, label)
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    role="tab"
+                    data-tab={tab.id}
+                    aria-selected={active}
+                    // The state dot is drawn, not written, so the name it would
+                    // otherwise be missing is spelled out here rather than in a
+                    // visually-hidden span that would glue itself to the title.
+                    aria-label={
+                      tab.indicator === undefined
+                        ? undefined
+                        : `${tab.title}, ${SESSION_STATE_LABEL[tab.indicator]}`
+                    }
+                    title={tab.hint}
+                    onClick={() => onActivate(tab.id)}
+                    // Double-click, not a menu and not a pencil on hover: the tab
+                    // is the thing being named, and it costs the strip no pixels.
+                    onDoubleClick={
+                      canRename
+                        ? () => setEditing(tab.id)
+                        : tab.preview === true && onKeep !== undefined
+                          ? () => onKeep(tab.id)
+                          : undefined
+                    }
+                    onKeyDown={(event) => moveWithKeyboard(event, index)}
+                    // The front tab keeps its fill under the pointer: that fill
+                    // says "front of this pane" and a tone that moved would say
+                    // something else. What answers is the close button beside it,
+                    // `opacity-60` at rest and full on `group-hover`. That
+                    // exemption is for tabs and nothing else.
+                    className={cn(
+                      'flex h-full min-w-0 max-w-[200px] items-center gap-[7px] pl-2.5 text-[12.5px]',
+                      closable ? 'pr-1' : 'pr-2.5',
+                      active ? 'text-fg' : 'text-fg-muted group-hover:text-fg'
+                    )}
+                  >
+                    <Mark tab={tab} active={active} />
                     <span
-                      data-tab-badge
-                      className="max-w-[96px] min-w-0 shrink-0 truncate text-[11px] leading-[16px] text-fg-subtle"
+                      data-tab-title
+                      data-tab-preview={tab.preview === true ? 'true' : undefined}
+                      className={cn(
+                        'min-w-0 truncate leading-[16px]',
+                        tab.mono === true && 'font-mono text-[11.5px]',
+                        tab.preview === true && 'italic'
+                      )}
                     >
-                      {tab.badge}
+                      {tab.title}
                     </span>
-                  )}
-                </button>
-              )}
+                    {tab.badge !== undefined && (
+                      <span
+                        data-tab-badge
+                        className="max-w-[96px] min-w-0 shrink-0 truncate text-[11px] leading-[16px] text-fg-subtle"
+                      >
+                        {tab.badge}
+                      </span>
+                    )}
+                  </button>
+                )}
 
-              {closable && (
-                <button
-                  type="button"
-                  onClick={() => onClose(tab.id)}
-                  aria-label={tab.dirty === true ? `Close ${tab.title}, unsaved changes` : `Close ${tab.title}`}
-                  title={tab.dirty === true ? `Close ${tab.title} - its unsaved changes are kept for when it opens again` : `Close ${tab.title}`}
-                  data-tab-dirty={tab.dirty === true ? 'true' : undefined}
-                  className={cn(
-                    'mr-1 grid size-[18px] shrink-0 place-items-center rounded-xs',
-                    'text-fg-subtle transition hover:bg-border-strong hover:text-fg',
-                    'group-hover:opacity-100 focus-visible:opacity-100',
-                    tab.dirty === true ? 'opacity-100' : active ? 'opacity-60' : 'opacity-0'
-                  )}
-                >
-                  {tab.dirty === true ? (
-                    <>
-                      <span aria-hidden className="size-[7px] rounded-full bg-fg-muted group-hover:hidden" />
-                      <CloseIcon width={11} height={11} className="hidden group-hover:block" />
-                    </>
-                  ) : (
-                    <CloseIcon width={11} height={11} />
-                  )}
-                </button>
-              )}
-            </div>
-          )
-        })}
+                {closable && (
+                  <button
+                    type="button"
+                    onClick={() => onClose(tab.id)}
+                    aria-label={tab.dirty === true ? `Close ${tab.title}, unsaved changes` : `Close ${tab.title}`}
+                    title={tab.dirty === true ? `Close ${tab.title} - its unsaved changes are kept for when it opens again` : `Close ${tab.title}`}
+                    data-tab-dirty={tab.dirty === true ? 'true' : undefined}
+                    className={cn(
+                      'mr-1 grid size-[18px] shrink-0 place-items-center rounded-xs',
+                      'text-fg-subtle transition hover:bg-border-strong hover:text-fg',
+                      'group-hover:opacity-100 focus-visible:opacity-100',
+                      tab.dirty === true ? 'opacity-100' : active ? 'opacity-60' : 'opacity-0'
+                    )}
+                  >
+                    {tab.dirty === true ? (
+                      <>
+                        <span aria-hidden className="size-[7px] rounded-full bg-fg-muted group-hover:hidden" />
+                        <CloseIcon width={11} height={11} className="hidden group-hover:block" />
+                      </>
+                    ) : (
+                      <CloseIcon width={11} height={11} />
+                    )}
+                  </button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {onNewTab !== undefined && (
+          <button
+            type="button"
+            data-new-tab
+            aria-label="New tab"
+            title="New tab"
+            aria-haspopup="menu"
+            aria-expanded={newTabOpen}
+            onClick={(event) => onNewTab(event.currentTarget)}
+            className={cn(
+              'grid size-[26px] shrink-0 place-items-center rounded-raised transition-colors hover:bg-hover hover:text-fg',
+              newTabOpen ? 'bg-hover text-fg' : 'text-fg-subtle'
+            )}
+          >
+            <PlusIcon width={14} height={14} />
+          </button>
+        )}
       </div>
 
       {actions && <div className="flex shrink-0 items-center gap-0.5">{actions}</div>}

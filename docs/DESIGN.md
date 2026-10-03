@@ -299,8 +299,9 @@ overrides the gate; keep it.
   whose list opens in that pane, and is why the Files view's project picker,
   whose list crosses the sidebar's edge, is a `Menu` instead (below).
 - **Menu** (`Menu.tsx`): a list that drops from a control or opens at the
-  pointer - the Files view's project picker, the rail's right-click. The popup
-  recipe: `surface-raised`, a `border-strong` edge, `rounded-well`, no shadow,
+  pointer - the Files view's project picker, the rail's right-click, a pane's
+  `+`. The popup recipe: `surface-raised`, a `border-strong` edge,
+  `rounded-well`, no shadow,
   4px of padding; rows 28px, 12px text, `hover` under the pointer or the keys,
   a tick column only where something is ticked. Arrows, Home and End,
   type-ahead, Enter, Escape; focus moves in once it is placed and goes back to
@@ -595,14 +596,16 @@ overrides the gate; keep it.
 - **Stat groups**: raised cards, 21px/500 tabular figure over a 10px subtle
   label.
 - **Status bar**: plain 11px subtle text directly on the canvas, 26px tall. No
-  border, no fill, no dividers - the gaps separate. Your sessions on the left,
-  each count with its dot ("2 working", "1 needs you" in `warn`, "2 idle" with
-  the idle ring), or "No sessions running"; on the right, the plan's usage, and
-  before it only what is an exception - a build that is not an ordinary install
-  (a hairline chip: `dev`, `dev · live`, `portable`), a newer release (an offer
-  in `accent` text), a `claude` that cannot be found (in `warn`). The app's own
-  version and the scan time were on it once; they are facts about Helm, and a
-  strip that is always on screen is for facts about your work.
+  border and no fill; gaps separate within a group, and a 10px `border-strong`
+  hairline separates the groups. On the left, which Helm this is and which
+  `claude` it runs: "Helm 1.2.0", then a build that is not an ordinary install
+  (a hairline chip: `dev`, `dev · live`, `portable`) and a newer release (an
+  offer in `accent` text), a hairline, "claude 2.1.288" - or "claude CLI not
+  found" in `warn`. The two versions lead because they are what the bar is read
+  for when something is off. After another hairline come your sessions, each
+  count with its dot ("2 working", "1 needs you" in `warn`, "2 idle" with the
+  idle ring), or "No sessions running". On the right, the plan's usage. The scan
+  time is in Settings: it is a fact about Helm nobody acts on.
 - **Section labels**: the 10px/600 caps label style, everywhere a section
   needs a name.
 - **Launch disclosure**: a control that starts a process gets a sentence
@@ -644,6 +647,32 @@ overrides the gate; keep it.
   Its key strip is buttons that look like hints - the key in mono, the word
   beside it - because the strip is the only place a pointer could start a
   session from.
+- **A pane's `+`** (after the last tab of every strip): a new tab in that pane,
+  the way a browser's new-tab button works. It is a `Menu` first - Session,
+  Profile session, Browser tab - and each choice replaces it in the same place
+  under the `+` rather than opening beside it, so there is one popup at a time
+  and Escape always means "none of this". Whatever it opens lands in the pane
+  whose `+` was pressed, focused or not (`placeIn`), and takes its front.
+
+  - **Session** is the launcher as a popover (`NewSessionPopover`): 340px, the
+    popup recipe (`surface-raised`, `border-strong`, `rounded-well`, no shadow),
+    hanging from the `+`. It is built for the pointer as Ctrl+N's palette is
+    for the keys. Folder and Profile are selects, the folder opening on the one
+    the pane is about, or else the one worked in last. Under them are the
+    launch sentence and the already-running warning, then **Resume…** (the
+    folder's conversations, as a menu) and **Start session**. After a faded
+    rule comes **Recent**: the three folders worked in last, each with the
+    profile it would start with. The permission mode is the profile's;
+    choosing one is what Ctrl+N is for.
+
+    Recent's rows and Resume's are the exception to "a click never starts", and
+    they earn it by saying what they run before they run it. A Recent row names
+    its folder and its profile, and its hover text is the whole launch sentence.
+    A conversation in Resume is reopened in the folder, with the profile, that
+    the sentence above it already describes.
+  - **Profile session** is the profiles as a menu, pinned first, each with the
+    folder it runs in. One click starts it there.
+  - **Browser tab** opens an empty page with the caret in its address bar.
 - **The restore offer** (after Helm stops without shutting down): a page in a
   tab, not a dialog, opened in front of the focused pane. It is the first thing
   a start after a crash has to say, and somebody may want to look at the rest
@@ -768,6 +797,9 @@ overrides the gate; keep it.
 
   The divider between two is the gutter, with a 3px `border-strong` grip that
   goes accent on hover, drag-bounded 20-80% and remembered (`paneSplitPct`).
+  A **`+`** follows the last tab (§5, "A pane's `+`"). The tabs scroll in a box
+  that grows to fit them and no wider, and the `+` sits after that box rather
+  than inside it, so it stays in view when the strip scrolls.
   Each strip ends in the pane's own controls: **split** (send the front tab to
   a pane of its own, or to the other pane; Ctrl+\\), **maximize** (this pane
   takes the window, sidebar and all; again to give it back), and on the second
