@@ -318,21 +318,38 @@ select:focus-visible {
  * tabs than fit. Hiding it did not make the strip cleaner, it made two open
  * tabs invisible and unreachable.
  *
- * So it stays, at the same `thin` every other scroll container in Helm uses -
- * 10px, measured, against 15px for `auto`. It only appears when the tabs
- * actually overflow, which is the only time it has anything to say.
+ * So it stays - but not at the `thin` every other scroll container uses. On
+ * Windows `thin` still paints arrow buttons and takes 10px of a 36px strip,
+ * which lifted every tab off the strip's centre and ran the arrows into the
+ * first and last tab (seen in the overhaul's last visual pass). Here the
+ * standard properties are put back to `auto`, which is what hands the bar to
+ * the `::-webkit-scrollbar` rules below - Chromium ignores those
+ * pseudo-elements on any element whose `scrollbar-width` or `scrollbar-color`
+ * is set, which the `*` rule above does for everything else. The result is a
+ * 4px thumb with no buttons along the strip's foot: still the thing that says
+ * there are more tabs than fit, and the wheel handler in `TabBar.tsx` does the
+ * scrolling. It only appears when the tabs actually overflow.
  *
- * The rule is kept rather than deleted because the class is what the wheel
- * handler in `TabBar.tsx` is named for, and because the next person to find a
- * bar in a 36px strip inconvenient should find this note before they hide it
- * again. `::-webkit-scrollbar` is not the lever: Chromium ignores those
- * pseudo-elements once `scrollbar-width` is set, which the `*` rule above does
- * for every element in the app, so the block of webkit rules there is doing
- * nothing on a current Chromium and the only real controls are
- * `scrollbar-width` and `scrollbar-color`.
+ * The next person to find a bar in a 36px strip inconvenient should find this
+ * note before they hide it again.
  */
 .tab-scroll {
-  scrollbar-width: thin;
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+
+.tab-scroll::-webkit-scrollbar {
+  height: 4px;
+}
+
+.tab-scroll::-webkit-scrollbar-button {
+  display: none;
+}
+
+.tab-scroll::-webkit-scrollbar-thumb {
+  border: 0;
+  border-radius: 2px;
+  background-color: var(--helm-border-strong);
 }
 
 /**

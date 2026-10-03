@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { GhProblem, PullsSnapshot } from '@helm/core/types'
 import { PullsPane, pullsSummaryLine, type PullsPaneProps } from './PullsPane'
 import { DAY, HOUR, pullRepo, pullsSnapshot, pullSummary } from './pullFixtures.testkit'
+import { expectOnThePane } from './page.testkit'
 
 /**
  * Five open pull requests over three repositories, with a two-day cutoff:
@@ -315,5 +316,12 @@ describe('PullsPane', () => {
   it('counts open pull requests and repositories for the sidebar', () => {
     expect(pullsSummaryLine(null)).toBe('Reading…')
     expect(pullsSummaryLine(planted())).toBe('5 open · 3 repos')
+  })
+})
+
+describe('PullsPane on its pane', () => {
+  it('draws no island of its own, and its bar repeats no title the tab already says', () => {
+    renderPane()
+    expectOnThePane(document.body, 'pulls')
   })
 })

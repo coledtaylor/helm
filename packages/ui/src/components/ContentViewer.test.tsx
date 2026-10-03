@@ -16,6 +16,7 @@ import {
   type ContentTree
 } from '@helm/core'
 import { ContentViewer, type ContentViewerProps } from './ContentViewer'
+import { expectOnThePane } from './page.testkit'
 
 /**
  * The content viewer's list column, painted from what core actually reads off
@@ -267,5 +268,12 @@ describe('ContentViewer: search', () => {
     expect(result.truncated).toBe(true)
     renderViewer({ query: 'quokka', search: result })
     expect(screen.getByText('More files matched than are listed. Narrow the search.')).toBeTruthy()
+  })
+})
+
+describe('ContentViewer on its pane', () => {
+  it('draws no island of its own, and its bar repeats no title the tab already says', () => {
+    renderViewer()
+    expectOnThePane(document.body, 'content')
   })
 })

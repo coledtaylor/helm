@@ -16,8 +16,10 @@ import { ROW_SELECTED } from '../lib/rows'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes } from '../lib/time'
 import { ContentTreeList } from './ContentTreeList'
+import { EmptyState } from './EmptyState'
 import { PaneBack } from './PaneBack'
 import { PaneHeader } from './PaneHeader'
+import { ICON_BUTTON, PAGE_LIST_BESIDE } from '../lib/page'
 import {
   BookIcon,
   CaretIcon,
@@ -203,12 +205,10 @@ export function ContentViewer({
   }
 
   return (
-    // Islands with canvas gutters, like the config console (DESIGN.md).
-    <div className="flex h-full min-h-0 flex-col gap-2">
+    // On the pane, like the config console (DESIGN.md 3).
+    <div className="flex h-full min-h-0 flex-col">
       <PaneHeader
         name="content"
-        icon={<BookIcon width={15} height={15} />}
-        title="Content"
         scope={
           <label className="flex min-w-0 flex-1 items-center gap-2">
             <span className="sr-only">Scope</span>
@@ -354,22 +354,19 @@ export function ContentViewer({
             disabled={refreshing}
             title="Re-read this scope from disk"
             aria-label="Re-read this scope from disk"
-            className={cn(
-              'grid size-6 shrink-0 place-items-center rounded text-fg-subtle transition-colors',
-              'hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-50'
-            )}
+            className={ICON_BUTTON}
           >
             <RefreshIcon className={cn(refreshing && 'animate-spin')} />
           </button>
         }
       />
 
-      <div className="flex min-h-0 flex-1 gap-2">
+      <div className="flex min-h-0 flex-1">
         {showList && (
         <div
           className={cn(
-            'flex flex-col overflow-hidden rounded-island border border-border bg-surface',
-            compact ? 'min-w-0 flex-1' : 'w-[32%] max-w-[440px] min-w-[290px] shrink-0'
+            'flex flex-col overflow-hidden',
+            compact ? 'min-w-0 flex-1' : cn('w-[32%] max-w-[440px] min-w-[290px] shrink-0', PAGE_LIST_BESIDE)
           )}
         >
           <div className="shrink-0 p-2">
@@ -581,7 +578,7 @@ export function ContentViewer({
         )}
 
         {showDetail && (
-          <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-island border border-border bg-surface">
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
             {compact && selected !== null && onBack && (
               <PaneBack label="All files" onBack={onBack} />
             )}
@@ -824,14 +821,9 @@ function Hit({
 
 function Empty({ scope }: { scope: ContentScope | null }): JSX.Element {
   return (
-    <div className="px-3 py-8 text-center">
-      <FolderIcon width={20} height={20} className="mx-auto text-fg-subtle" />
-      <p className="mt-2 text-[12px] text-fg-muted">
-        {scope === null
-          ? 'Pick a scope.'
-          : `${scope.label} has no notes, docs, context or skills to read.`}
-      </p>
-    </div>
+    <EmptyState size="list" name="content-list" icon={<FolderIcon width={18} height={18} />} title="Nothing to read here">
+      {scope === null ? 'Pick a scope above.' : `${scope.label} has no notes, docs, context or skills.`}
+    </EmptyState>
   )
 }
 
@@ -852,32 +844,22 @@ export function ContentNothingSelected({
   fileCount: number
 }): JSX.Element {
   return (
-    <div className="grid h-full place-items-center p-8">
-      <div className="max-w-md text-center">
-        <BookIcon width={22} height={22} className="mx-auto text-fg-subtle" />
-        <p className="mt-3 text-[13px] text-fg-muted">
-          {scope === null
-            ? 'Pick a scope to read what is in it.'
-            : view === 'tree'
-              ? `Every file in ${scope.label}.`
-              : `${fileCount} ${fileCount === 1 ? 'file' : 'files'} in ${scope.label}.`}
-        </p>
-        <p className="mt-2 text-[12px] leading-relaxed text-fg-subtle">
-          {view === 'tree' ? (
-            <>
-              Directories are read as you open them, and what the repository ignores is listed
-              rather than hidden. Markdown, HTML and data open the way they do anywhere else;
-              everything else opens as source.
-            </>
-          ) : (
-            <>
-              Markdown renders with its frontmatter as a header and its{' '}
-              <strong className="font-medium text-fg-muted">[[wikilinks]]</strong> live. HTML opens
-              in a sandboxed frame with no network behind it.
-            </>
-          )}
-        </p>
-      </div>
-    </div>
+    <EmptyState
+      name="content-detail"
+      icon={<BookIcon width={18} height={18} />}
+      title={
+        scope === null
+          ? 'No scope picked'
+          : view === 'tree'
+            ? `Every file in ${scope.label}`
+            : `${String(fileCount)} ${fileCount === 1 ? 'file' : 'files'} in ${scope.label}`
+      }
+    >
+      {scope === null
+        ? 'Pick one above to read what is in it.'
+        : view === 'tree'
+          ? 'Folders load as you open them, and ignored files are listed rather than hidden.'
+          : 'Markdown renders with its [[wikilinks]] live; HTML opens sandboxed, offline.'}
+    </EmptyState>
   )
 }

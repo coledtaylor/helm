@@ -206,7 +206,7 @@ export function PullRequestPane({
   const now = useNow()
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-island border border-border bg-surface">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden">
       <Header
         view={view}
         now={now}

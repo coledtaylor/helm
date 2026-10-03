@@ -133,6 +133,18 @@ reading width, and make the header read as a summary card sitting above some
 other pane's contents. The pull request tab is the worked example - header, view,
 review row - and it was three islands before this rule was written down.
 
+**A page draws no island at all.** The pane it sits in is already one - its
+hairline, its surface, its tab strip - so every page (history, pull requests,
+config, content, settings, a project, the browser) is drawn on the pane's own
+surface, edge to edge. Its bar is a row under the tab strip with a hairline
+below it; a list beside its detail is split by a hairline on the list's right
+edge; a long page such as Settings or a project is sections under
+`.island-rule`s, each with its caps label, not a card per section. Cards stay
+for what is a thing in itself - a comment in a pull request, a theme to pick,
+a stat - never as the way a page groups its own parts. `lib/page.ts` holds the
+bar and the list edge. The one page that is still an island is the welcome
+page, because it stands in for a pane when there is none.
+
 ### Shape
 
 Three settings, all custom properties on `<html>` that `applyShape` writes, so
@@ -533,27 +545,36 @@ overrides the gate; keep it.
   reading, where a warning that is simply true on screen cannot be clicked
   through by habit. `warn` and not `danger`, because nothing has gone wrong -
   this is the attention tone doing what it does on the `waiting` dot.
-- **Pane headers**: a scoped console wears one island strip - mark, title,
-  scope switcher, what is being looked at, and a refresh (`PaneHeader`, used by
-  the config console and the content viewer). It **measures itself, not the
-  window**: any of these may be one of two panes, so a `lg:` media query is a
-  question about the wrong box, and asking it is how the config
-  header came to paint its view switcher 100px past the island's right edge on
-  a 1280px screen. Every threshold is a container query on the header's own
-  content box.
+- **Page bars**: a page's own controls sit in one row directly under the tab
+  strip, as tall as the strip, with a hairline below - scope switcher, what is
+  being looked at, counts, the page's controls and a refresh (`PaneHeader` for
+  the config console and the content viewer, `PAGE_BAR` for history, pull
+  requests and the sessions pane). **No mark and no title**: the tab directly
+  above already says "Config", and a second one a row down is what made the
+  header read as a card on top of somebody else's pane. It **measures itself,
+  not the window**: any of these may be one of two panes, so a `lg:` media
+  query is a question about the wrong box, and asking it is how the config
+  header came to paint its view switcher 100px past its right edge on a 1280px
+  screen. Every threshold is a container query on the bar's own content box.
 
   As it narrows it drops, in this order: the counts (896), the path (672), then
-  the pane's own controls move to a **second row** rather than going (560),
-  then the title (384), then the mark (240). The scope switcher and the refresh
-  survive every step - a pane you cannot re-point or re-read has nothing left
-  to do - and the switcher gives up its width last, stretching to fill the row
-  only once the title has gone. The height follows the rows (`min-h-11`), and
-  the wrap point is a decision rather than whatever happened to fit: the
-  controls take a full line, everything else is hidden before it can wrap.
+  the page's own controls move to a **second row** rather than going (560),
+  and below 384 the scope switcher stretches to take the row. The switcher and
+  the refresh survive every step - a page you cannot re-point or re-read has
+  nothing left to do. The wrap point is a decision rather than whatever
+  happened to fit: the controls take a full line, everything else is hidden
+  before it can wrap.
 
-  What is dropped is what something else on screen already says: the tab above
-  the header carries the title, and the scope switcher names the scope the path
-  spells out. Nothing that is *only* here is ever dropped.
+  What is dropped is what something else on screen already says: the scope
+  switcher names the scope the path spells out. Nothing that is *only* here is
+  ever dropped.
+- **Empty states** (`EmptyState`): the destination's icon in a 36px well, a
+  title saying what is empty in 13px/500, one sentence in `fg-subtle`, and the
+  way on as a button where there is one. In a detail region it centres; at the
+  top of a list it sits where the eye already is. One sentence, not two
+  paragraphs: an empty pane is read once and skipped every time after, so it
+  says what would fill it and stops. A filter that matched nothing is not an
+  empty state - "No match." on its own line is the whole of it.
 - **Stat groups**: raised cards, 21px/500 tabular figure over a 10px subtle
   label.
 - **Status bar**: plain 11px subtle text directly on the canvas, 26px tall. No
@@ -676,9 +697,13 @@ overrides the gate; keep it.
   beside both - which is what a pane is for. A new tab opens in the **focused**
   pane, the one last pressed anywhere inside (taken in capture, so a terminal,
   a list or the strip all count). A session's terminal fills the body edge to
-  edge on its own ground; a page draws its own islands inside the body, a
-  gutter in from the edge, until the overhaul's last step moves each onto the
-  pane it is in.
+  edge on its own ground, and a page is drawn on the pane's own surface (§3,
+  "A page draws no island at all").
+
+  A strip with more tabs than fit scrolls sideways under the wheel, and its
+  only sign of that is a 4px thumb along its foot with no arrow buttons -
+  Windows' `thin` scrollbar took 10px of a 36px strip and painted arrows into
+  the first and last tab.
 
   The divider between two is the gutter, with a 3px `border-strong` grip that
   goes accent on hover, drag-bounded 20-80% and remembered (`paneSplitPct`).
@@ -756,7 +781,7 @@ overrides the gate; keep it.
   pane's own empty state stay the same thing. At full width both show and
   nothing swaps - a click saved is not worth a layout that moves. The strip
   above them degrades on its own schedule and by its own measurements - see
-  **Pane headers** - because the divider is bounded at 20% of the row, which is
+  **Page bars** - because the divider is bounded at 20% of the row, which is
   a pane of about 195px on a 1280px screen and 119px on the narrowest window
   the app will open.
 - **Sidebar**: one island, 256px, showing the view the rail chose. A 38px

@@ -579,7 +579,7 @@ export function ProfileEditor({
           <button
             type="button"
             onClick={onDelete}
-            className="rounded-well border border-border-strong px-3 py-1.5 text-[12px] text-warn transition-colors hover:bg-hover"
+            className="rounded-well border border-danger/45 px-3 py-1.5 text-[12px] text-danger transition-colors hover:bg-danger/10"
           >
             Delete profile
           </button>

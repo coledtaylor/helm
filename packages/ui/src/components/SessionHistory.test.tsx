@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ArchiveMessage, ArchivedConversation, HistoryPrompt, HistorySession } from '@helm/core'
 import { SessionHistory, type SessionHistoryProps } from './SessionHistory'
+import { expectOnThePane } from './page.testkit'
 
 const NOW = Date.UTC(2026, 9, 2, 12, 0, 0)
 const MINUTE = 60_000
@@ -330,3 +331,12 @@ function conversation(sessionId: string, messages: ArchiveMessage[]): ArchivedCo
     messages
   }
 }
+
+describe('SessionHistory on its pane', () => {
+  it('draws no island of its own, and its bar repeats no title the tab already says', () => {
+    renderHistory()
+    expectOnThePane(document.body, 'history')
+    // Nothing picked is a real empty state, not a paragraph.
+    expect(document.querySelector('[data-empty-state="history-detail"]')).not.toBeNull()
+  })
+})

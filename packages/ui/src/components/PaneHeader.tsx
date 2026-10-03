@@ -1,12 +1,10 @@
 import type { JSX, ReactNode } from 'react'
 import { cn } from '../lib/cn'
+import { PAGE_BAR } from '../lib/page'
 
 export interface PaneHeaderProps {
   /** Names the header for a driver, e.g. `config`. */
   name: string
-  /** The pane's mark, in the accent. */
-  icon: ReactNode
-  title: string
   /** The scope switcher. Never dropped and never allowed to reach zero. */
   scope?: ReactNode | undefined
   /**
@@ -24,78 +22,46 @@ export interface PaneHeaderProps {
 }
 
 /**
- * The header strip every scoped console wears: a `h-11` island holding a mark,
- * a title, a scope switcher, what is being looked at, and a refresh.
+ * The bar a scoped page wears under its pane's tab strip: a scope switcher,
+ * what is being looked at, the page's own controls and a refresh.
  *
- * **It measures itself, not the window.** The panes below it are as wide as the
- * workspace half of the split, which is a fraction of the row and not a
- * fraction of the screen - so a media query here is a query about the wrong
- * box. Docked at the divider's 20% bound on a 1280 window the pane is ~195px
- * while the viewport is still 1280, and that is exactly how the config header
- * came to paint its view switcher 100px past the island's right edge with the
- * scope select crushed to nothing: `lg:` and `xl:` were both satisfied. Every
- * threshold below is a container query against this header's own inline size.
+ * It is a row of the pane's island, not an island of its own (DESIGN.md 3), and
+ * it carries no title: the tab directly above it already says "Config", and a
+ * second "Config" one row down was the header reading as a card sitting on top
+ * of somebody else's pane.
  *
- * What goes as it narrows, in order, and why that order. The numbers are the
- * header's **content box** - a container query's box - so each is 32px inside
- * the pane's own width:
+ * **It measures itself, not the window.** A pane is as wide as its half of the
+ * split, which is a fraction of the row and not a fraction of the screen - so a
+ * media query here is a query about the wrong box. Docked at the divider's 20%
+ * bound on a 1280 window the pane is ~195px while the viewport is still 1280,
+ * and that is exactly how the config header once painted its view switcher
+ * 100px past its right edge with the scope select crushed to nothing. Every
+ * threshold below is a container query against this bar's own content box.
  *
  * | below | dropped |
  * |---|---|
  * | 896px | `meta` - counts are the one thing the pane repeats below itself |
  * | 672px | `caption` - the path, which the scope switcher already names |
  * | 560px | `controls` move to a second row rather than being dropped |
- * | 384px | the title, which the tab above the header already says, and the
- *           switcher stops holding its own width and stretches instead |
- * | 240px | the mark |
+ * | 384px | the switcher stops holding its own width and takes the row |
  *
  * The scope switcher and the action survive every step, because a pane you
- * cannot re-point or re-read is a pane with nothing left to do. Down to 384 the
- * switcher keeps the width it has at every larger size - a header that changes
- * character twice on the way down is harder to read than one that changes once
- * - and below it, with the title and the spacer gone, it takes the row.
+ * cannot re-point or re-read is a pane with nothing left to do.
  *
  * Two rows and not a scroll: the row wraps only where it is told to, by
  * `controls` taking a full line below the threshold, so the wrap point is a
- * decision rather than whatever happened to fit. The height follows
- * (`min-h-11`), which is why the island is not a fixed `h-11` any more.
+ * decision rather than whatever happened to fit.
  */
-export function PaneHeader({
-  name,
-  icon,
-  title,
-  scope,
-  caption,
-  meta,
-  controls,
-  action
-}: PaneHeaderProps): JSX.Element {
+export function PaneHeader({ name, scope, caption, meta, controls, action }: PaneHeaderProps): JSX.Element {
   return (
     <header
       data-pane-header={name}
-      className={cn(
-        '@container flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5',
-        'rounded-island border border-border bg-surface px-4 py-1.5',
-        '@[560px]:flex-nowrap @[560px]:py-0'
-      )}
+      className={cn(PAGE_BAR, '@container flex-wrap gap-x-3 gap-y-1.5 py-1.5', '@[560px]:flex-nowrap @[560px]:py-0')}
     >
-      <span data-head="icon" className="order-1 hidden shrink-0 text-accent @[240px]:block">
-        {icon}
-      </span>
-      <h1
-        data-head="title"
-        className="order-2 hidden shrink-0 text-[13px] font-medium tracking-tight text-fg @[384px]:block"
-      >
-        {title}
-      </h1>
-
       {scope !== undefined && (
-        // Takes the row once the title and the spacer have gone; its own width
-        // at every size above that.
-        <div
-          data-head="scope"
-          className="order-3 flex min-w-0 flex-1 items-center @[384px]:flex-none"
-        >
+        // Takes the row once the spacer has gone; its own width at every size
+        // above that.
+        <div data-head="scope" className="order-3 flex min-w-0 flex-1 items-center @[384px]:flex-none">
           {scope}
         </div>
       )}
@@ -121,8 +87,7 @@ export function PaneHeader({
         // `order-9` puts it after the action, which is what makes a full-width
         // item wrap onto a line of its own rather than dragging the refresh
         // button down with it. Focus order stays the DOM's - switcher, then
-        // controls, then refresh - which reads the same way in both layouts
-        // even though the second row is painted below the refresh.
+        // controls, then refresh - which reads the same way in both layouts.
         <div
           data-head="controls"
           className="order-9 flex w-full min-w-0 justify-start @[560px]:order-7 @[560px]:w-auto"

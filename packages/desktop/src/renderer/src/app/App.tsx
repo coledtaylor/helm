@@ -2297,11 +2297,9 @@ export function App(): JSX.Element {
         })}
         {groupFront?.kind === 'file' && <div className="absolute inset-0">{renderFile(groupFront)}</div>}
         {groupFront !== null && groupFront.kind !== 'session' && groupFront.kind !== 'file' && (
-          // A page draws its own islands until it is moved onto the pane's
-          // (the overhaul's last step); the gutter keeps them off its edges.
-          <div className="absolute inset-0 p-2">
-            <div className="relative h-full w-full">{renderPage(groupFront)}</div>
-          </div>
+          // On the pane itself: the pane is the island, and a page says what it
+          // has in sections with hairlines rather than islands of its own.
+          <div className="absolute inset-0">{renderPage(groupFront)}</div>
         )}
       </PaneGroup>
     )

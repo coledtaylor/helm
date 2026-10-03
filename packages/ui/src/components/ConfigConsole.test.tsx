@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { ConfigFile } from '@helm/core'
 import { bundledWith, ConfigConsole, skillHolding, type ConfigConsoleProps } from './ConfigConsole'
 import { makeConfigFixture, type ConfigFixture } from './ConfigFixture.testkit'
+import { expectOnThePane } from './page.testkit'
 
 /**
  * The config console's file list, painted from a `.claude` tree core read off
@@ -140,5 +141,12 @@ describe('ConfigConsole: the file list', () => {
     const { props } = renderConsole()
     await userEvent.click(rows().get('.claude/agents/reviewer.md')!)
     expect(props.onSelect).toHaveBeenCalledWith(fixture.file('.claude/agents/reviewer.md'))
+  })
+})
+
+describe('ConfigConsole on its pane', () => {
+  it('draws no island of its own, and its bar repeats no title the tab already says', () => {
+    renderConsole()
+    expectOnThePane(document.body, 'config')
   })
 })

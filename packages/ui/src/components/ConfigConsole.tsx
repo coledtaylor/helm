@@ -17,8 +17,10 @@ import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes } from '../lib/time'
 import { isLiveWarning, LiveDot } from './ConfigLive'
 import { PaneBack } from './PaneBack'
+import { EmptyState } from './EmptyState'
 import { PaneHeader } from './PaneHeader'
 import { CaretIcon, FolderIcon, PlusIcon, RefreshIcon, SearchIcon, SlidersIcon } from './icons'
+import { ICON_BUTTON, PAGE_LIST_BESIDE } from '../lib/page'
 
 export type ConfigViewKind = 'files' | 'effective' | 'mcp' | 'health'
 
@@ -262,14 +264,11 @@ export function ConfigConsole({
   }
 
   return (
-    // A column of islands with 8px of canvas between them: the header strip,
-    // then the file list beside the editor. The header is the island the
-    // active folder tab lifts into.
-    <div className="flex h-full min-h-0 flex-col gap-2">
+    // On the pane (DESIGN.md 3): the bar under the tab strip, then the file
+    // list beside the editor, with hairlines between them rather than gutters.
+    <div className="flex h-full min-h-0 flex-col">
       <PaneHeader
         name="config"
-        icon={<SlidersIcon width={15} height={15} />}
-        title="Config"
         scope={
           <label className="flex min-w-0 flex-1 items-center gap-2">
             <span className="sr-only">Scope</span>
@@ -360,10 +359,7 @@ export function ConfigConsole({
             disabled={refreshing}
             title="Re-read this scope from disk"
             aria-label="Re-read this scope from disk"
-            className={cn(
-              'grid size-6 shrink-0 place-items-center rounded text-fg-subtle transition-colors',
-              'hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-50'
-            )}
+            className={ICON_BUTTON}
           >
             <RefreshIcon className={cn(refreshing && 'animate-spin')} />
           </button>
@@ -373,11 +369,9 @@ export function ConfigConsole({
       {notice}
 
       {view !== 'files' ? (
-        <div className="min-h-0 flex-1 overflow-hidden rounded-island border border-border bg-surface">
-          {children}
-        </div>
+        <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
       ) : (
-        <div className="flex min-h-0 flex-1 gap-2">
+        <div className="flex min-h-0 flex-1">
           {/* Proportional and bounded, the same way the history list is: the
               rows carry a skill's description, which is what makes one worth
               opening, and a fixed width either truncates it or wastes half a
@@ -385,8 +379,8 @@ export function ConfigConsole({
           {showList && (
           <div
             className={cn(
-              'flex flex-col overflow-hidden rounded-island border border-border bg-surface',
-              compact ? 'min-w-0 flex-1' : 'w-[34%] max-w-[480px] min-w-[300px] shrink-0'
+              'flex flex-col overflow-hidden',
+              compact ? 'min-w-0 flex-1' : cn('w-[34%] max-w-[480px] min-w-[300px] shrink-0', PAGE_LIST_BESIDE)
             )}
           >
             <div className="shrink-0 p-2">
@@ -525,7 +519,7 @@ export function ConfigConsole({
           )}
 
           {showDetail && (
-            <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-island border border-border bg-surface">
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
               {compact && selected !== null && onBack && (
                 <PaneBack label="All files" onBack={onBack} />
               )}
@@ -651,14 +645,9 @@ function Empty({
     return <p className="px-2 py-6 text-center text-[12px] text-fg-subtle">No match.</p>
   }
   return (
-    <div className="px-3 py-8 text-center">
-      <FolderIcon width={20} height={20} className="mx-auto text-fg-subtle" />
-      <p className="mt-2 text-[12px] text-fg-muted">
-        {scope === null
-          ? 'Pick a scope.'
-          : `${scope.label} has no .claude directory, no CLAUDE.md and no .mcp.json.`}
-      </p>
-    </div>
+    <EmptyState size="list" name="config-list" icon={<FolderIcon width={18} height={18} />} title="No configuration here">
+      {scope === null ? 'Pick a scope above.' : `${scope.label} has no .claude folder, CLAUDE.md or .mcp.json.`}
+    </EmptyState>
   )
 }
 
@@ -671,19 +660,23 @@ export function ConfigNothingSelected({
   fileCount: number
 }): JSX.Element {
   return (
-    <div className="grid h-full place-items-center p-8">
-      <div className="max-w-md text-center">
-        <SlidersIcon width={22} height={22} className="mx-auto text-fg-subtle" />
-        <p className="mt-3 text-[13px] text-fg-muted">
-          {scope === null
-            ? 'Pick a scope to see its configuration.'
-            : `${fileCount} ${fileCount === 1 ? 'file' : 'files'} in ${scope.label}.`}
-        </p>
-        <p className="mt-2 text-[12px] leading-relaxed text-fg-subtle">
-          Pick one to edit it, or switch to <strong className="font-medium text-fg-muted">Effective</strong> to
-          see which of them a session would actually resolve, and under what name.
-        </p>
-      </div>
-    </div>
+    <EmptyState
+      name="config-detail"
+      icon={<SlidersIcon width={18} height={18} />}
+      title={
+        scope === null
+          ? 'No scope picked'
+          : `${String(fileCount)} ${fileCount === 1 ? 'file' : 'files'} in ${scope.label}`
+      }
+    >
+      {scope === null ? (
+        'Pick one above to see its configuration.'
+      ) : (
+        <>
+          Pick one to edit it. <strong className="font-medium text-fg-muted">Effective</strong> shows
+          what a session would resolve.
+        </>
+      )}
+    </EmptyState>
   )
 }

@@ -671,7 +671,8 @@ export function ConfigDeletedNotice({
       data-config-deleted-notice
       role="status"
       className={cn(
-        'flex shrink-0 items-center gap-3 rounded-island border border-border bg-surface px-3 py-2'
+        // A row of the pane under its bar, not an island of its own.
+        'flex shrink-0 items-center gap-3 border-b border-border px-3 py-2'
       )}
     >
       <TrashIcon width={13} height={13} className="shrink-0 text-fg-subtle" />

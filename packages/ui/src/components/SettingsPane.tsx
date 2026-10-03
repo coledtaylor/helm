@@ -457,19 +457,15 @@ export function SettingsPane({
   return (
     <div
       data-settings-pane
-      className="h-full overflow-y-auto rounded-island border border-border bg-surface"
+      className="h-full overflow-y-auto"
     >
       <div className="mx-auto w-full max-w-[720px] px-7 py-7">
-        <h1 className="text-[17px] font-medium tracking-tight text-fg">Settings</h1>
-        <p className="mt-1 text-[12.5px] leading-[1.55] text-fg-muted">
-          Helm&rsquo;s own settings. Claude&rsquo;s <code className="font-mono text-[11px]">.claude</code>{' '}
-          trees are the config console&rsquo;s, one tab over.
-        </p>
+        <h1 className="mb-1 text-[17px] font-medium tracking-tight text-fg">Settings</h1>
 
         <Group
           name="claude"
           title="Claude CLI"
-          hint="The executable Helm hands a pty to. Found on PATH unless you point it somewhere else."
+          hint="The claude executable Helm runs. Found on PATH unless you set one."
         >
           <div className="pb-1">
             <Verdict
@@ -581,10 +577,9 @@ export function SettingsPane({
           )}
 
           <p className="mt-2.5 text-[11px] leading-[1.55] text-fg-subtle">
-            A folder of repositories works on its own. A <em>harness</em> is any folder with a{' '}
-            <code className="font-mono">harness.yaml</code> in it - that is the whole definition,
-            and it is what lets one session compose several repos&rsquo; skills at once. Removing a
-            folder here only stops Helm scanning it; nothing on disk is touched.
+            A <em>harness</em> is a folder with a <code className="font-mono">harness.yaml</code>,
+            and lets one session compose several repos&rsquo; skills. Removing a folder only stops
+            Helm scanning it.
           </p>
 
           <Actions>
@@ -603,9 +598,7 @@ export function SettingsPane({
               path, in a form that can be compared with what is on disk. */}
           <p className="text-[12.5px] text-fg">Pinned projects</p>
           <p className="mt-0.5 mb-2 text-[11px] leading-[1.55] text-fg-subtle">
-            Lifted to the top of the sidebar, above the harnesses. Pinned by the star on a
-            project&rsquo;s row; a pin remembers the folder&rsquo;s path, so a project moved or
-            cloned somewhere else comes back unpinned.
+            Shown first in the sidebar. Pin one with the star on its row.
           </p>
 
           {pinnedProjects.length === 0 ? (
@@ -853,7 +846,7 @@ function AppearanceGroup({
     <Group
       name="appearance"
       title="Appearance"
-      hint="Themes change Helm's chrome. Terminals keep their own colours, so Claude Code renders the way it was measured."
+      hint="Themes change Helm's chrome. Terminals keep their own colours."
     >
       <div
         role="radiogroup"
@@ -994,7 +987,7 @@ function AppearanceGroup({
 
         <Row
           label="Accent"
-          hint="The theme's own, or one of these - each fitted to the theme so it stays readable on it."
+          hint="The theme's own, or one of these, fitted to stay readable on it."
         >
           <div role="radiogroup" aria-label="Accent" className="flex items-center gap-2.5 px-1">
             <AccentSwatch
@@ -1294,7 +1287,7 @@ function ArchiveGroup({
     <Group
       name="archive"
       title="Transcript archive"
-      hint="Claude Code deletes conversation transcripts on its own schedule and keeps the prompts for ever. Helm reads each one before that happens and stores the messages here, compressed. It never writes to Claude's files."
+      hint="Claude Code deletes transcripts on its own schedule. Helm keeps a compressed copy of each one first, and never writes to Claude's files."
     >
       <div className="pb-1">
         <Verdict
@@ -1331,7 +1324,7 @@ function ArchiveGroup({
 
       <Row
         label="Keep at most"
-        hint="Reached, Helm drops the oldest archived conversation whole and marks it dropped - never half of one. Lowering this can evict immediately."
+        hint="At the limit the oldest conversation is dropped whole. Lowering it can drop some at once."
       >
         <Select
           value={String(maxBytes)}
@@ -1466,7 +1459,7 @@ function ContentGroup({
     <Group name="content" title="Content viewer">
       <Row
         label="Wrap long lines"
-        hint="The default for a file opened as source. Every document keeps its own toggle in the header, so a minified payload can wrap without the next file wrapping too."
+        hint="The default for a file opened as source. Each file keeps its own toggle."
       >
         <span data-settings-content-wrap={String(wrap)}>
           <Checkbox
@@ -1481,7 +1474,7 @@ function ContentGroup({
 
       <Row
         label="Wrap indent"
-        hint="Columns a wrapped line's continuation hangs by, so a row that is the rest of the line above cannot be mistaken for the next one. Zero lines them up, which is what a plain editor does."
+        hint="Columns a wrapped line's continuation is indented by. Zero lines them up."
       >
         <NumberField
           value={indent}
@@ -1531,7 +1524,7 @@ function BrowserGroup({
     <Group
       name="browser"
       title="Browser"
-      hint="A dev-server viewport, not a browser. Nothing is downloaded, every permission is refused, and the address bar never hands anything to a search engine - a page loads because you typed its address."
+      hint="A viewport for dev servers, not a browser: no downloads, no permissions, no search."
     >
       <Row
         label="Where the pane may go"
@@ -1618,7 +1611,7 @@ function SessionsGroup({
     <Group
       name="sessions"
       title="Sessions"
-      hint="Helm can tell a session it hosts what the other Claude Code sessions on this machine are doing, so an agent can stay out of a working tree somebody else is in. It is read-only: there is no way for one session to send another anything, and no tool ever returns any part of another session’s conversation."
+      hint="What a session Helm hosts may know about the others on this machine, so it can stay out of a working tree somebody else is in. Read-only, and never another session’s conversation."
     >
       <Row
         label="Let Claude see the other sessions"
@@ -1685,7 +1678,7 @@ function UpdatesGroup({
     <Group
       name="updates"
       title="Updates"
-      hint="The only request Helm's own process makes. It reads a version number and hands you a link - nothing is downloaded, replaced or restarted."
+      hint="The only request Helm makes on its own: it reads a version number. Nothing is downloaded."
     >
       <div className="pb-1">
         <Verdict
@@ -1723,7 +1716,7 @@ function UpdatesGroup({
 
       <Row
         label="Tell me about new releases"
-        hint="Asks on launch, at most once a day, and puts a line in the status bar if a newer Helm exists. Off stops only that - Check now still asks."
+        hint="Asks at launch, at most once a day, and says so in the status bar. Check now works either way."
       >
         <span data-settings-update-check={String(updateCheck)}>
           <Checkbox
@@ -1873,7 +1866,7 @@ function GitHubGroup({
     <Group
       name="github"
       title="GitHub"
-      hint="Pull requests are fetched by running your own gh CLI. Helm stores no GitHub credential and never sees your token."
+      hint="Pull requests come from your own gh CLI. Helm never sees your token."
     >
       <div className="pb-1">
         <Verdict
@@ -2223,7 +2216,7 @@ function ReviewPromptRow({
   return (
     <Row
       label="Review prompt"
-      hint="The first message a “Review with Claude” session is started with. The pull request pane shows exactly what it will run before you press the button."
+      hint="The first message of a “Review with Claude” session. The pull request shows exactly what will run."
     >
       <div className="flex flex-col items-end gap-1.5">
         <div className="flex items-center gap-2">
@@ -2334,7 +2327,7 @@ function TerminalGroup({
     <Group
       name="terminal"
       title="Terminal"
-      hint="Applies to every open terminal as you change it - session panes and project shells alike."
+      hint="Applies to every open terminal as you change it."
     >
       <FontRow terminal={terminal} onChange={onChange} />
 
@@ -2412,7 +2405,7 @@ function TerminalGroup({
 
       <Row
         label="Shell for project panes"
-        hint="Claude sessions are unaffected - Helm hands the CLI its own terminal. A project pane can override this for itself."
+        hint="Claude sessions are unaffected. A project page can override it."
       >
         <div className="flex items-center gap-2">
           <Select
@@ -2443,7 +2436,7 @@ function TerminalGroup({
           moves is on a different tab. */}
       <Row
         label="Shell height"
-        hint="Percent of a project page the shell takes. Drag the handle above it to change it there; a project page never gives the shell more than half."
+        hint="Share of a project page the shell takes, up to half. Dragging its handle changes it too."
       >
         <NumberField
           value={terminal.projectShellHeightPct}
@@ -2652,9 +2645,10 @@ const count = (n: number, noun: string): string =>
 /**
  * One group of settings.
  *
- * A raised card inside the pane's island, titled with the caps label every
- * other section in the app uses. Future groups append; nothing here knows how
- * many there are.
+ * A section of the page, titled with the caps label every other section in the
+ * app uses and set off from the one above by a faded rule - not a card. The pane
+ * is the island (DESIGN.md 3), and a card per group was a box inside it, eleven
+ * times over. Future groups append; nothing here knows how many there are.
  */
 function Group({
   name,
@@ -2674,9 +2668,10 @@ function Group({
     <section
       data-settings-group={name}
       aria-labelledby={headingId}
-      className="mt-5 overflow-hidden rounded-raised border border-border bg-surface-raised"
+      className="mt-6"
     >
-      <header className="px-4 pt-3 pb-2.5">
+      <div aria-hidden className="island-rule mb-5" />
+      <header className="pb-2.5">
         <h2
           id={headingId}
           className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase"
@@ -2687,7 +2682,7 @@ function Group({
           <p className="mt-1 text-[11.5px] leading-[1.5] text-fg-muted">{hint}</p>
         )}
       </header>
-      <div className="border-t border-border px-4 py-3">{children}</div>
+      <div>{children}</div>
     </section>
   )
 }

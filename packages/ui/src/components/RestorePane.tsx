@@ -82,7 +82,7 @@ export function RestorePane({
       data-restore-pane
       aria-labelledby={headingId}
       role="region"
-      className="h-full overflow-auto rounded-island border border-border bg-surface px-6"
+      className="h-full overflow-auto px-6"
     >
       <div className="mx-auto w-full max-w-[560px] pt-24 pb-10">
         <div className="mb-1.5 flex items-center gap-2.5">

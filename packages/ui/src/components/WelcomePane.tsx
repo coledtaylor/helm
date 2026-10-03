@@ -24,6 +24,8 @@ export function WelcomePane({
   return (
     <div
       data-welcome-pane
+      // An island of its own, unlike every other page: it stands in for the
+      // pane itself when there is none, rather than sitting inside one.
       className="grid h-full place-items-center rounded-island border border-border bg-surface px-8"
     >
       <div className="max-w-md text-center">

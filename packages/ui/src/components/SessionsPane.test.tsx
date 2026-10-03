@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { LiveSession, SessionProcess, SessionRecord, SessionResources } from '@helm/core'
 import { SessionsPane, type SessionsPaneProps } from './SessionsPane'
+import { expectOnThePane } from './page.testkit'
 
 function live(over: Partial<LiveSession> & Pick<LiveSession, 'pid'>): LiveSession {
   return {
@@ -198,5 +199,14 @@ describe('SessionsPane', () => {
     expect(screen.queryByRole('region', { name: 'Process tree' })).toBeNull()
     expect(screen.queryByRole('region', { name: 'Listening ports' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Show the terminal' })).toBeNull()
+  })
+})
+
+describe('SessionsPane on its pane', () => {
+  it('draws no island of its own, and its bar repeats no title the tab already says', () => {
+    renderPane()
+    expectOnThePane(document.body, 'sessions')
+    // Nothing picked is a real empty state, not a paragraph.
+    expect(document.querySelector('[data-empty-state="sessions-detail"]')).not.toBeNull()
   })
 })

@@ -13,7 +13,9 @@ import {
 } from '../lib/pullTriage'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatMoment } from '../lib/time'
-import { PullRequestIcon, RefreshIcon, WarnIcon } from './icons'
+import { EmptyState } from './EmptyState'
+import { CaretIcon, PullRequestIcon, RefreshIcon, WarnIcon } from './icons'
+import { ICON_BUTTON, PAGE_BAR } from '../lib/page'
 import { PullChecksTally, PullRow, PullStateDot, useNow } from './PullRow'
 
 /**
@@ -226,10 +228,9 @@ export function PullsPane({
   const filtering = query.trim() !== ''
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2">
-      <header className="flex h-11 shrink-0 items-center gap-3 rounded-island border border-border bg-surface px-4">
-        <PullRequestIcon width={15} height={15} className="shrink-0 text-accent" />
-        <h1 className="text-[13px] font-medium tracking-tight text-fg">Pull requests</h1>
+    // On the pane (DESIGN.md 3): the bar, then the list.
+    <div className="flex h-full min-h-0 flex-col">
+      <header data-pane-header="pulls" className={PAGE_BAR}>
         {snapshot !== null && (
           <p data-pulls-caption className="min-w-0 truncate text-[11px] text-fg-subtle">
             <Count n={snapshot.open} one="open" many="open" /> ·{' '}
@@ -250,16 +251,13 @@ export function PullsPane({
               : `Run ${snapshot.gh.path} against every repository`
           }
           aria-label="Check for open pull requests"
-          className={cn(
-            'grid size-6 shrink-0 place-items-center rounded text-fg-subtle transition-colors',
-            'hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-50'
-          )}
+          className={ICON_BUTTON}
         >
           <RefreshIcon className={cn(refreshing && 'animate-spin')} />
         </button>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-island border border-border bg-surface">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {problem !== null && (
           <p
             data-pulls-problem={problem.kind}
@@ -467,8 +465,13 @@ export function PullsPane({
                               ? 'Collapse the stale pull requests'
                               : 'Show the stale pull requests again'
                           }
-                          className="rounded-well px-1.5 py-0.5 text-[10.5px] text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+                          className="inline-flex items-center gap-1 rounded-well px-1.5 py-0.5 text-[10.5px] text-fg-muted transition-colors hover:bg-hover hover:text-fg"
                         >
+                          <CaretIcon
+                            width={8}
+                            height={8}
+                            className={cn('transition-transform', staleShown && 'rotate-90')}
+                          />
                           {staleShown ? 'Hide' : 'Show'}
                         </button>
                       }
@@ -890,18 +893,16 @@ function Empty({
     )
   }
   return (
-    <div className="px-6 py-8 text-center">
-      <PullRequestIcon width={22} height={22} className="mx-auto text-fg-subtle" />
-      <p className="mt-3 text-[12.5px] text-fg-muted">
-        {snapshot.checked === 0
-          ? 'Helm is not scanning any folders yet.'
-          : `None of the ${String(snapshot.checked)} folders Helm scans has a github.com origin.`}
-      </p>
-      <p className="mt-2 text-[11.5px] leading-relaxed text-fg-subtle">
-        A repository appears here once its <code className="font-mono">origin</code> remote points
-        at github.com. Other forges are not fetched.
-      </p>
-    </div>
+    <EmptyState
+      size="list"
+      name="pulls"
+      icon={<PullRequestIcon width={18} height={18} />}
+      title={snapshot.checked === 0 ? 'No folders scanned yet' : 'No GitHub repositories'}
+    >
+      {snapshot.checked === 0
+        ? 'A repository is listed once Helm scans a folder whose origin is on github.com.'
+        : `None of the ${String(snapshot.checked)} folders Helm scans has a github.com origin.`}
+    </EmptyState>
   )
 }
 

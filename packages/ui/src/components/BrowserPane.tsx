@@ -9,7 +9,8 @@ import {
   DevToolsIcon,
   ForwardIcon,
   RefreshIcon,
-  SearchIcon
+  SearchIcon,
+  TrashIcon
 } from './icons'
 
 /** Everything the pane knows about the view behind it. Mirrors `BrowserState`. */
@@ -205,11 +206,11 @@ export function BrowserPane({
   const retrying = state.retryingUntil !== null
 
   return (
-    <div data-pane="browser" className="flex h-full min-h-0 flex-col gap-2 p-2">
+    <div data-pane="browser" className="flex h-full min-h-0 flex-col">
       <div
         data-browser-bar
         data-browser-recent-count={recent.length}
-        className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 rounded-island border border-border bg-surface px-2 py-1.5"
+        className="flex min-h-strip shrink-0 flex-wrap items-center gap-2 border-b border-border px-2 py-1"
       >
         <div className="flex shrink-0 items-center gap-0.5">
           <BarButton label="Back" disabled={!state.canGoBack} onClick={onBack} data-browser="back">
@@ -344,7 +345,13 @@ export function BrowserPane({
           </BarButton>
         </div>
 
-        <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="Viewport width">
+        {/* A segmented control (DESIGN.md 4): the sunken well is what says the
+            three words are one choice and each of them a button. */}
+        <div
+          className="flex shrink-0 items-center gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
+          role="group"
+          aria-label="Viewport width"
+        >
           {BROWSER_WIDTHS.map(([label, px]) => (
             <button
               key={label}
@@ -353,8 +360,8 @@ export function BrowserPane({
               aria-pressed={width === px}
               onClick={() => setWidth(px)}
               className={cn(
-                'rounded-well px-1.5 py-0.5 text-[11px] transition-colors',
-                width === px ? SEGMENT_ON : 'text-fg-muted hover:bg-hover hover:text-fg'
+                'rounded-raised px-2 py-0.5 text-[11px] transition-colors',
+                width === px ? SEGMENT_ON : 'text-fg-muted hover:text-fg'
               )}
             >
               {label}
@@ -386,8 +393,9 @@ export function BrowserPane({
           data-browser="clear-storage"
           onClick={onClearStorage}
           title="Clear cookies and storage for Helm's browser profile"
-          className="shrink-0 rounded-well px-1.5 py-0.5 text-[11px] text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-well border border-border-strong px-2 py-1 text-[11px] text-fg-muted transition-colors hover:bg-hover hover:text-fg"
         >
+          <TrashIcon width={11} height={11} />
           Clear storage
         </button>
       </div>
@@ -395,7 +403,7 @@ export function BrowserPane({
       {finding && (
         <div
           data-browser-find
-          className="flex shrink-0 items-center gap-2 rounded-island border border-border bg-surface px-2 py-1.5"
+          className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1.5"
         >
           <input
             data-browser-find-input
@@ -439,9 +447,9 @@ export function BrowserPane({
           data-browser-problem
           role="status"
           className={cn(
-            'shrink-0 rounded-island border px-3 py-2 text-[12px]',
+            'shrink-0 border-b px-3 py-2 text-[12px]',
             retrying
-              ? 'border-border bg-surface text-fg-muted'
+              ? 'border-border text-fg-muted'
               : 'border-danger/30 bg-danger/10 text-danger'
           )}
         >
