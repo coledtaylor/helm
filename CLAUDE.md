@@ -29,12 +29,14 @@ export TypeScript source, so there is one build step.
 | command | does |
 |---|---|
 | `pnpm dev` | the app with its own data directory (see "Where the data lives") |
-| `pnpm check` | typecheck, lint and tests - the gate, and what CI runs |
+| `pnpm check` | typecheck, lint and unit and integration tests - the gate |
 | `pnpm build` | production build |
 
 ## Testing
 
-- `pnpm check` is the gate. Every change passes it.
+- `pnpm check` is the gate. Every change passes it, and `pnpm test:e2e`
+  when it touches a user workflow.
+- Tests run locally, never in CI. CI builds and releases the app.
 - Every change ships with its tests: a bug gets a failing test before the fix,
   a feature gets tests that cover it. [docs/TESTING.md](docs/TESTING.md) says
   which kind.

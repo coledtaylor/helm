@@ -36,8 +36,9 @@ column its migrations never create.
    one. Write it for someone deciding whether to download the exe: what changed
    for them, grouped by surface. No commit log, no test or tool names.
 
-Then merge and push. CI runs `pnpm check`, and `verify-artifact.mjs` over both
-exes on publish. `packaging-check` and `verify:installer` are not part of a
+Run `pnpm check` and `pnpm test:e2e` locally first; CI runs no tests. Then
+merge and push. CI typechecks, lints and builds, and runs `verify-artifact.mjs`
+over both exes on publish. `packaging-check` and `verify:installer` are not part of a
 release and run only when the owner asks. `verify:installer --yes` installs over
 and then uninstalls the Helm on this machine, leaving none behind.
 

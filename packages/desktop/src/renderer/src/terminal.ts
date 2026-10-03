@@ -137,6 +137,11 @@ export interface TerminalReport {
   screen: { width: number; height: number } | null
   /** False for a pane React has taken out of the document; it keeps its state. */
   attached: boolean
+  /**
+   * The rows on screen, as text. xterm paints to a canvas, so this is the only
+   * way to read what a terminal shows without a screenshot.
+   */
+  lines: string[]
 }
 
 export function describeTerminal(key: string, host: TerminalHost): TerminalReport {
@@ -153,8 +158,18 @@ export function describeTerminal(key: string, host: TerminalHost): TerminalRepor
     cols: host.term.cols,
     rows: host.term.rows,
     screen: box ? { width: box.width, height: box.height } : null,
-    attached: host.element.isConnected
+    attached: host.element.isConnected,
+    lines: visibleLines(host.term)
   }
+}
+
+function visibleLines(term: Terminal): string[] {
+  const buffer = term.buffer.active
+  const lines: string[] = []
+  for (let y = buffer.viewportY; y < buffer.viewportY + term.rows; y++) {
+    lines.push(buffer.getLine(y)?.translateToString(true) ?? '')
+  }
+  return lines
 }
 
 export interface WheelRecord {

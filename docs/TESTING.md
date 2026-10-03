@@ -9,34 +9,76 @@ that are not tests.
 | unit and integration | vitest | all app behaviour, as close to the code as it can be tested | `pnpm test` (part of `pnpm check`) |
 | end to end | Playwright for Electron | the high-level user workflows, through the built app | `pnpm test:e2e` |
 
-**Status.** Today only `packages/core` has tests. The `ui` and `desktop` unit
-tiers and the end-to-end tier are being built; [TEST-BACKLOG.md](TEST-BACKLOG.md)
-lists what they will cover, collected from the check drivers they replace.
+Both tiers run locally, before a change is merged. CI runs neither: it builds
+and releases the app. Coverage is still being filled in:
+[TEST-BACKLOG.md](TEST-BACKLOG.md) lists what the old check drivers asserted,
+and each line moves into one of these tiers or is dropped.
+
+## Running them
+
+```bash
+pnpm test                          # every vitest project
+pnpm test --project ui             # one of core, ui, desktop
+pnpm test:e2e                      # builds, then runs every workflow
+pnpm --filter @helm/desktop exec playwright test -c e2e panes   # one spec, after a build
+```
 
 ## Unit and integration tests
 
-- Live beside the code as `*.test.ts` or `*.test.tsx`.
-- `packages/core`: pure logic, run in Node.
-- `packages/ui`: components rendered in jsdom with Testing Library, found by
-  role and accessible name.
-- `packages/desktop`: main-process services, with Electron, the pty and the
-  filesystem behind fakes the service is handed.
-- Logic tangled with Electron or React moves into a module that can be tested
-  on its own, as `core/layout/panes.ts` was for the pane layout.
-- The whole tier runs in seconds. Tests use temporary directories and touch no
-  network, no real `~/.claude`, and no real `claude` or `gh`.
+vitest runs three projects (`vitest.config.ts`):
+
+- **core** - pure logic in `packages/core`, in Node.
+- **ui** - components in `packages/ui` and modules in the renderer, in jsdom
+  with Testing Library. Find elements by role and accessible name. jsdom does
+  no layout, so anything about where something lands belongs in the tier
+  below.
+- **desktop** - main-process services, in Node. `vi.mock('electron')` with
+  `test/electron.ts` stands in for Electron; ptys are real and run the fake
+  `claude`. `sessions.test.ts` is the example.
+
+Tests live beside the code as `*.test.ts` or `*.test.tsx`. Logic tangled with
+Electron or React moves into a module that can be tested on its own, as
+`core/layout/panes.ts` was for the pane layout. The tier runs in seconds and
+touches no network, no real `~/.claude` and no real `claude` or `gh`.
 
 ## End-to-end tests
 
-- One test per user workflow: starting a session, splitting panes, a setting
-  surviving a restart. Detail belongs in the tier above; keep this tier small.
-- Each run is hermetic: the app's own data directory (`PORTABLE_EXECUTABLE_DIR`),
-  a temporary Claude home (`--claude-home=`), a fake `claude` CLI, the fake `gh`
-  (`--gh=`), and fixture projects in a temporary directory. No tokens, no
-  network, nothing of the user's touched.
-- Find elements by role and accessible name, the way a user sees them. Avoid
-  test-only attributes.
-- Wait on conditions, never on sleeps.
+`packages/desktop/e2e/`. One test per user workflow: starting a session,
+splitting panes, a setting surviving a restart. Detail belongs in the tier
+above; keep this one small.
+
+- **Each test gets a world** (`test/world.ts`): a temporary root with a space in
+  its path, holding a home directory with its own `.claude`, the fake `claude`
+  and the fake `gh` as `.cmd` shims, two git projects, and the app's data
+  directory (`PORTABLE_EXECUTABLE_DIR`). Settings are seeded through the app's
+  own store before it starts: the projects folder scanned, the fake `claude`
+  chosen, first run done, the update check off. Nothing reaches the network, a
+  real `~/.claude` or the installed app.
+- **`e2e/helm.ts`** has the `test` fixture (`world`, `helm`, `relaunch`) and
+  the helpers: `startSession`, `typeLine`, `terminalText`, `claudeRunIn`,
+  `processAlive`.
+- **Find elements by role and accessible name**, as a user sees them. Two
+  exceptions, both read-only: terminal text comes from
+  `window.__helmTerminals()`, because xterm paints to a canvas; and a pane's
+  "needs you" state is `data-pane-attention`, which has no ARIA equivalent.
+- **The browser pane's page** is a native view, not part of the window's DOM.
+  Once it has loaded a page, it appears in `app.windows()` as a page of its
+  own.
+- Wait on conditions (`expect`, `expect.poll`), never on sleeps.
+
+## The fake `claude`
+
+`packages/desktop/test/fake-claude.mjs` does what Helm can observe of the real
+CLI and nothing more. It answers `--version` and `--help`, draws a prompt,
+echoes what is typed, and writes the session registry record, `history.jsonl`
+and a transcript. `--resume` works only in the directory the conversation was
+recorded in. Everything it was given and received is logged to
+`<claude dir>/fake-claude/<pid>.json`.
+
+At its prompt: `/exit` and `/crash` end it with 0 and 3, `/wait` reports
+"waiting" until `y` or `n`, `/busy <ms>` reports "busy", `/child` starts a
+long-running child process, and anything else is a prompt it records and
+answers.
 
 ## Rules for every test
 

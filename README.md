@@ -252,7 +252,7 @@ pnpm dev               # the app, with hot reload, isolated
 pnpm dev --fresh       # ...against no database at all, which is first run
 pnpm dev --drive       # ...with the port scripts/drive-dev.mjs clicks through
 pnpm dev:live          # ...against %APPDATA%\Helm, the installed app's own
-pnpm check             # typecheck + lint + unit tests (what CI runs)
+pnpm check             # typecheck + lint + unit and integration tests
 pnpm dist:win          # portable exe + NSIS installer
 ```
 
@@ -267,7 +267,8 @@ cannot host a session. `pnpm dev:live` is the old behaviour, kept because it is
 the only way to see the real database in a dev build - it says so on the console
 at startup, and the status bar names the mode.
 
-`pnpm check` runs the tests. [docs/TESTING.md](docs/TESTING.md) describes the
+`pnpm check` and `pnpm test:e2e` run the tests, locally; CI builds and releases
+the app and runs none of them. [docs/TESTING.md](docs/TESTING.md) describes the
 tiers and the rules every test follows.
 
 A few drivers open the real window to diagnose what a test cannot reach. They
