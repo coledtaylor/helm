@@ -12,8 +12,9 @@ never floods, no shadows outside modals, no text past 500, mono for machine
 data.
 
 The shell around them was rebuilt in the same overhaul: a rail of
-destinations, a sidebar that is projects with their sessions nested, and one
-or two panes, each an island with its own strip of one-line tabs (§5b).
+destinations, a sidebar that is projects with their sessions nested, and
+panes split any way across the rest, each an island with its own strip of
+one-line tabs (§5b).
 
 Components only ever use the semantic utilities (`bg-surface`,
 `text-fg-muted`, `rounded-island`, `gap-gutter`, ...), exposed to Tailwind via
@@ -429,14 +430,16 @@ overrides the gate; keep it.
   hairline. A pill is `rounded-raised`, `h-strip` less 10px, 12.5px text, a
   state dot or a kind icon, the title, and a close button that shows on the
   front tab (at 60%) and on hover. The front tab of the **focused** pane is
-  filled `active`; the front tab of the other pane is filled `hover`; the rest
-  are bare `fg-muted` text that takes `hover` under the pointer. So with two
-  panes on screen, which one the keyboard means is visible without reading.
+  filled `active`; the front tab of every other pane is filled `hover`; the
+  rest are bare `fg-muted` text that takes `hover` under the pointer. So with
+  several panes on screen, which one the keyboard means is visible without
+  reading.
 
   They were folder tabs once - the active one lifting into the pane below it,
   borders on three sides and a 1px overlap - and that only works while the
-  strip sits *on the canvas* above one pane. With two panes, each an island,
-  the strip is a row of its pane, and a tab that joined it would join nothing.
+  strip sits *on the canvas* above one pane. With panes side by side, each an
+  island, the strip is a row of its pane, and a tab that joined it would join
+  nothing.
   It is also what made every tab one line: a folder tab carried what its pane
   did not show on a second line, and the **crumb row** below now says it with
   the pane's whole width.
@@ -732,7 +735,7 @@ overrides the gate; keep it.
 ## 5b. Shell chrome
 
 - **The frame**, left to right: the **rail** on the canvas, 2px, the
-  **sidebar** island (256px), a gutter, then one or two **panes**, and a gutter
+  **sidebar** island (256px), a gutter, then the **panes**, and a gutter
   to the window's edge. The title strip above it all, the status bar below.
 - **Title bar**: the native bar is hidden on Windows; Helm draws its own 36px
   strip - the accent mark alone, centred over the rail so the two read as one
@@ -781,10 +784,14 @@ overrides the gate; keep it.
   The rail sits outside the sidebar's `aside` on purpose: it is a column of
   titled buttons, and inside the `aside` every "first project row" selector
   would land on it.
-- **Panes**: one or two islands side by side, each a tab strip, a crumb row
-  for a session's or a file's tab, and its body. Any tab may sit in either - a session
-  beside a session, a session beside the project page it came from, history
-  beside both - which is what a pane is for. A new tab opens in the **focused**
+- **Panes**: islands split any way across the window, as VS Code splits its
+  editors - side by side, one above the other, and either inside the other -
+  each a tab strip, a crumb row for a session's or a file's tab, and its body.
+  Any tab may sit in any pane - a session beside a session, a session beside
+  the project page it came from, history under both - which is what a pane is
+  for. There is no count of them; a pane is not split below 200 by 140px, and
+  that is what stops it. A pane is named by its place in reading order, left to
+  right and top to bottom: "First pane", "Second pane". A new tab opens in the **focused**
   pane, the one last pressed anywhere inside (taken in capture, so a terminal,
   a list or the strip all count). A session's terminal fills the body edge to
   edge on its own ground, and a page is drawn on the pane's own surface (§3,
@@ -795,18 +802,34 @@ overrides the gate; keep it.
   Windows' `thin` scrollbar took 10px of a 36px strip and painted arrows into
   the first and last tab.
 
-  The divider between two is the gutter, with a 3px `border-strong` grip that
-  goes accent on hover, drag-bounded 20-80% and remembered (`paneSplitPct`).
+  **A tab is split off by dragging it onto a pane.** Over a pane, below its
+  strip, the pane is read in VS Code's thirds: within a third of a side is that
+  side, the nearest at a corner, and the middle is the rest. A side opens a new
+  pane there taking half of this one; the middle moves the tab in, as dropping
+  it on the strip does. The **preview** is the part of the pane the tab would
+  take - drawn over the whole pane, strip included, `accent-soft` inside a 1px
+  accent edge at the island's corner, sliding between zones in 100ms - and it
+  is drawn only where the drop would do something: not the middle of the
+  tab's own pane, not a side of a pane whose only tab it is, and not a side of
+  a pane too small to halve, where the pointer means the middle instead. A
+  browser page is a native view over all of this, so it is off the screen for
+  the length of the drag.
+
+  Every divider is the gutter it sits in, with a 3px `border-strong` grip that
+  goes accent on hover - upright between panes side by side, on its side
+  between panes stacked. Dragging one moves only the two panes either side of
+  it, neither below its minimum; double-clicking shares its split evenly. The
+  shares are part of the saved layout, written once when the drag ends.
   A **`+`** follows the last tab (§5, "A pane's `+`"). The tabs scroll in a box
   that grows to fit them and no wider, and the `+` sits after that box rather
   than inside it, so it stays in view when the strip scrolls.
   Each strip ends in the pane's own controls: **split** (send the front tab to
-  a pane of its own, or to the other pane; Ctrl+\\), **maximize** (this pane
-  takes the window, sidebar and all; again to give it back), and on the second
-  pane **close**, which hands its tabs to the first rather than closing them -
-  a layout button that ended sessions would be a destructive control in
-  disguise. A tab is moved between panes by dragging it onto the other strip.
-  Two is the limit in this phase; free tiling is the next one's.
+  a pane of its own on the right, or to the pane beside this one; Ctrl+\\),
+  **maximize** (this pane takes the window, sidebar and all; again to give it
+  back; a tab dropped at its side gives the window back too, so the new pane
+  can be seen), and, while there is more than one pane, **close**, which hands
+  its tabs to the pane that takes its room rather than closing them - a layout
+  button that ended sessions would be a destructive control in disguise.
 - **Project shell**: a project page carries a plain shell (PowerShell, cwd at
   the project) as a terminal island below it. It is furniture, not a session:
   no row, no history, no notification. Each page owns its shell and its
@@ -848,9 +871,9 @@ overrides the gate; keep it.
 
   | surface | how it tracks | requires the button |
   |---|---|---|
-  | pane divider | `mousemove` on `window` | yes - `buttons === 0` ends the drag |
+  | pane dividers | `mousemove` on `window` | yes - `buttons === 0` ends the drag, and writes where it ended |
   | project shell handle | `setPointerCapture` | yes - capture, and `hasPointerCapture` gates each move |
-  | tab reorder, and a tab onto the other pane | HTML5 `dragstart`/`drop` | n/a - the platform owns the gesture |
+  | tab reorder, and a tab onto another pane or a pane's side | HTML5 `dragstart`/`drop` | n/a - the platform owns the gesture; the drag ends at the window's `drop`, because the tab's own `dragend` is lost when its strip goes with it |
   | profile list reorder | HTML5 `dragstart`/`drop` | n/a |
   | terminal text selection | xterm's own handlers | n/a - not Helm's code |
 
@@ -955,8 +978,8 @@ overrides the gate; keep it.
   its name - the state dot, the session's name, and one short word at the right
   in 11px: "needs you" in `warn`, how long it has been working ("4m"), "idle",
   "ended". The session in front of the focused pane wears the selected-row
-  recipe with its accent edge, the one in front of the other pane the `hover`
-  fill - the same split the two panes' tab strips make - so the tree and the
+  recipe with its accent edge, the ones in front of the other panes the
+  `hover` fill - the same split the panes' tab strips make - so the tree and the
   panes agree about what you are looking at. Pressing one brings its tab
   forward wherever it is.
 

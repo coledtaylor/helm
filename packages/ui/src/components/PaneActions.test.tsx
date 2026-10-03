@@ -6,7 +6,7 @@ import { PaneActions } from './PaneGroup'
 /**
  * The split button at the end of a pane's strip: what it offers to do with
  * the front tab, and that it does it. Where the tab goes is
- * `sendToOtherGroup`'s (`core/layout/panes.test.ts`).
+ * `sendBeside`'s (`core/layout/panes.test.ts`).
  */
 
 function renderActions(split: 'new' | 'other' | null): { onSplit: ReturnType<typeof vi.fn> } {
@@ -34,10 +34,10 @@ describe('PaneActions split', () => {
     expect(onSplit).toHaveBeenCalledTimes(1)
   })
 
-  it('offers to move the front tab across when there are two panes', async () => {
+  it('offers to move the front tab to the pane beside it when there is one', async () => {
     const { onSplit } = renderActions('other')
 
-    await userEvent.click(screen.getByRole('button', { name: 'Move this tab to the other pane (Ctrl+\\)' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Move this tab to the pane beside it (Ctrl+\\)' }))
 
     expect(onSplit).toHaveBeenCalledTimes(1)
   })

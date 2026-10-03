@@ -1,5 +1,6 @@
 import {
   readHistorySession,
+  savedGroups,
   readProfile,
   sessionLabel,
   type HistorySession,
@@ -67,10 +68,10 @@ function blockedReason(lost: LostSession, history: HistorySession | null): strin
   return null
 }
 
-/** Each saved session's place across the panes, left to right. */
+/** Each saved session's place across the panes, in reading order. */
 function tabOrder(layout: SavedPaneLayout | null): Map<number, number> {
   const order = new Map<number, number>()
-  for (const group of layout?.groups ?? []) {
+  for (const group of savedGroups(layout)) {
     for (const pane of group.panes) if (pane.kind === 'session') order.set(pane.id, order.size)
   }
   return order

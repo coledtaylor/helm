@@ -75,8 +75,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
       terminalCursorBlink: s.terminalCursorBlink,
       terminalScrollback: s.terminalScrollback,
       terminalShell: s.terminalShell,
-      projectShellHeightPct: s.projectShellHeightPct,
-      paneSplitPct: s.paneSplitPct
+      projectShellHeightPct: s.projectShellHeightPct
     },
     onTerminalChange: vi.fn(),
     terminalFontStack: 'monospace',

@@ -95,18 +95,32 @@ describe('useBrowsers - whether the native view paints', () => {
     })
     bridge.clearRecords()
 
-    act(() => result.current.setSuppressed(true))
+    act(() => result.current.setSuppressed('tab-drag', true))
     expect(bounds().map((sent) => sent['visible'])).toEqual([false, false])
     // A resize mid-drag still reports the view hidden.
     act(() => result.current.sendBounds(3, { ...RECT, width: 800 }, true))
     expect(bounds().at(-1)).toEqual({ id: 3, ...RECT, width: 800, visible: false })
 
     bridge.clearRecords()
-    act(() => result.current.setSuppressed(false))
+    act(() => result.current.setSuppressed('tab-drag', false))
     expect(bounds()).toEqual([
       { id: 3, ...RECT, width: 800, visible: true },
       { id: 4, ...RECT, visible: true }
     ])
+  })
+
+  it('holds each reason on its own, so the dropdown closing does not end a drag', () => {
+    const { result } = renderHook(() => useBrowsers([]))
+    act(() => result.current.sendBounds(3, RECT, true))
+    act(() => result.current.setSuppressed('tab-drag', true))
+    act(() => result.current.setSuppressed('address-list', true))
+    bridge.clearRecords()
+
+    // A browser pane mounting says its list is not open.
+    act(() => result.current.setSuppressed('address-list', false))
+    expect(bounds().map((sent) => sent['visible'])).toEqual([false])
+    act(() => result.current.setSuppressed('tab-drag', false))
+    expect(bounds().map((sent) => sent['visible'])).toEqual([false, true])
   })
 })
 

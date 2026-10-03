@@ -7,7 +7,7 @@ import { TabBar } from './TabBar'
  * so the strip says when a drag starts and ends and the view stands down for it.
  */
 describe('TabBar drag', () => {
-  it('says a tab drag started, and that it ended', () => {
+  it('says which tab a drag started on, and that it ended', () => {
     const onDragging = vi.fn()
     render(
       <TabBar
@@ -28,8 +28,8 @@ describe('TabBar drag', () => {
     const dataTransfer = { setData: vi.fn(), getData: () => '', types: [] as string[], effectAllowed: '', dropEffect: '' }
 
     fireEvent.dragStart(tab, { dataTransfer })
-    expect(onDragging.mock.calls).toEqual([[true]])
+    expect(onDragging.mock.calls).toEqual([['browser:1']])
     fireEvent.dragEnd(tab, { dataTransfer })
-    expect(onDragging.mock.calls).toEqual([[true], [false]])
+    expect(onDragging.mock.calls).toEqual([['browser:1'], [null]])
   })
 })

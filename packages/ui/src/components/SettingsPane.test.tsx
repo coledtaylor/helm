@@ -98,8 +98,7 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
       terminalCursorBlink: DEFAULT_SETTINGS.terminalCursorBlink,
       terminalScrollback: DEFAULT_SETTINGS.terminalScrollback,
       terminalShell: null,
-      projectShellHeightPct: DEFAULT_SETTINGS.projectShellHeightPct,
-      paneSplitPct: DEFAULT_SETTINGS.paneSplitPct
+      projectShellHeightPct: DEFAULT_SETTINGS.projectShellHeightPct
     },
     onTerminalChange: vi.fn(),
     terminalFontStack: 'Cascadia Mono, monospace',

@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path'
 import { sql } from 'drizzle-orm'
-import { RETIRED_TAB_KINDS } from '../layout/panes'
+import { RETIRED_TAB_KINDS, upgradeSavedLayout } from '../layout/panes'
 import {
   BROWSER_PROJECT_URLS_MAX,
   BROWSER_REACH_MODES,
@@ -12,8 +12,6 @@ import {
   EFFORT_LEVELS,
   isRepoSlug,
   PANE_GAP,
-  PANE_GROUPS_MAX,
-  PANE_SPLIT_PCT,
   PINNED_PROJECTS_MAX,
   PR_CHECKOUT_MODES,
   PR_IGNORED_REPOS_MAX,
@@ -192,6 +190,60 @@ function paneProblem(pane: unknown): string | null {
   return `expected a pane kind, got ${describe(kind)}`
 }
 
+/** Deeper than this is not a tree a person arranged; see `paneTreeProblem`. */
+const PANE_TREE_DEPTH_MAX = 32
+
+/**
+ * Why a saved pane tree is not one, or null when it is, counting its groups
+ * and tabs into `count` as it goes.
+ *
+ * A node is a group - `panes` and `activeId` - or a split: an axis, two or more
+ * children and a positive share for each. The depth is bounded before the walk
+ * goes deeper, so a hand-edited value nested a thousand levels is refused
+ * rather than walked.
+ */
+function paneTreeProblem(node: unknown, depth: number, count: { groups: number; panes: number }): string | null {
+  if (depth > PANE_TREE_DEPTH_MAX) return `expected panes nested at most ${String(PANE_TREE_DEPTH_MAX)} deep`
+  if (typeof node !== 'object' || node === null || Array.isArray(node)) {
+    return `expected a group or a split, got ${describe(node)}`
+  }
+  const record = node as Record<string, unknown>
+  if ('axis' in record) {
+    const { axis, children, sizes } = record
+    if (axis !== 'row' && axis !== 'column') return `expected a split axis, got ${describe(axis)}`
+    if (!Array.isArray(children) || children.length < 2) {
+      return `expected a split of two or more, got ${describe(children)}`
+    }
+    if (
+      !Array.isArray(sizes) ||
+      sizes.length !== children.length ||
+      !sizes.every((size) => isFiniteNumber(size) && size > 0)
+    ) {
+      return `expected a positive share for each of ${String(children.length)} children, got ${describe(sizes)}`
+    }
+    for (const child of children) {
+      const problem = paneTreeProblem(child, depth + 1, count)
+      if (problem !== null) return problem
+    }
+    return null
+  }
+  const { panes, activeId } = record
+  if (!Array.isArray(panes)) return `expected an array of panes, got ${describe(panes)}`
+  if (activeId !== null && typeof activeId !== 'string') {
+    return `expected a tab id or null, got ${describe(activeId)}`
+  }
+  count.groups += 1
+  count.panes += panes.length
+  if (count.panes > WORKSPACE_TABS_MAX) {
+    return `expected at most ${String(WORKSPACE_TABS_MAX)} panes in all, got more`
+  }
+  for (const pane of panes) {
+    const problem = paneProblem(pane)
+    if (problem !== null) return problem
+  }
+  return null
+}
+
 export const SETTING_VALIDATORS: SettingValidators = {
   theme: oneOf(THEME_PREFERENCES),
 
@@ -308,42 +360,27 @@ export const SETTING_VALIDATORS: SettingValidators = {
    * the window on every tab change, so a malformed value here is a layout that
    * cannot be restored on the next launch.
    *
-   * One or two groups, a focus that names one of them, and every tab checked
-   * by `paneProblem`. The whole value is rejected rather than the offending
-   * entry filtered out: a partly-written layout restored as if it were whole is
-   * a worse answer than the previous one.
+   * A tree of splits and groups (`paneTreeProblem`), and a focus that is the
+   * place of one of its groups in reading order. The whole value is rejected
+   * rather than the offending entry filtered out: a partly-written layout
+   * restored as if it were whole is a worse answer than the previous one.
    */
   paneLayout: (value) => {
     if (value === null) return null
     if (typeof value !== 'object' || Array.isArray(value)) {
       return `expected a pane layout or null, got ${describe(value)}`
     }
-    const { groups, focused } = value as Record<string, unknown>
-    if (!Array.isArray(groups)) return `expected an array of groups, got ${describe(groups)}`
-    if (groups.length < 1 || groups.length > PANE_GROUPS_MAX) {
-      return `expected 1 to ${String(PANE_GROUPS_MAX)} groups, got ${String(groups.length)}`
+    const { root, focused } = value as Record<string, unknown>
+    const count = { groups: 0, panes: 0 }
+    const problem = paneTreeProblem(root, 0, count)
+    if (problem !== null) return problem
+    if (!Number.isInteger(focused) || (focused as number) < 0 || (focused as number) >= count.groups) {
+      return `expected the place of a group, got ${describe(focused)}`
     }
-    if (!Number.isInteger(focused) || (focused as number) < 0 || (focused as number) >= groups.length) {
-      return `expected the index of a group, got ${describe(focused)}`
-    }
-    let total = 0
-    for (const group of groups) {
-      if (typeof group !== 'object' || group === null || Array.isArray(group)) {
-        return `expected a group, got ${describe(group)}`
-      }
-      const { panes, activeId } = group as Record<string, unknown>
-      if (!Array.isArray(panes)) return `expected an array of panes, got ${describe(panes)}`
-      if (activeId !== null && typeof activeId !== 'string') {
-        return `expected a tab id or null, got ${describe(activeId)}`
-      }
-      total += panes.length
-      if (total > WORKSPACE_TABS_MAX) {
-        return `expected at most ${String(WORKSPACE_TABS_MAX)} panes in all, got more`
-      }
-      for (const pane of panes) {
-        const problem = paneProblem(pane)
-        if (problem !== null) return problem
-      }
+    // Every group holds a tab except the window's one empty group: `toSaved`
+    // writes no other. So the tab bound is also the bound on the tree's size.
+    if (count.groups > Math.max(1, count.panes)) {
+      return `expected every group to hold a tab, got ${String(count.groups)} groups for ${String(count.panes)} tabs`
     }
     return null
   },
@@ -414,20 +451,6 @@ export const SETTING_VALIDATORS: SettingValidators = {
    * can retype rather than 31.4159.
    */
   projectShellHeightPct: boundedInteger(PROJECT_SHELL_HEIGHT_PCT),
-
-  /**
-   * The sessions column's width, bounded the way the divider already bounded
-   * it. One value for everybody rather than one per project - the argument is
-   * in the field's comment in `types.ts`, and it is the same one
-   * `projectShellHeightPct` makes with one addition: this divider stays put
-   * when you change tabs, so a per-project value would move the boundary every
-   * time somebody did.
-   *
-   * An integer for the same reason its neighbour is one: it is written on
-   * pointerup from a fraction, and a settings row wants 45 rather than
-   * 0.4499999.
-   */
-  paneSplitPct: boundedInteger(PANE_SPLIT_PCT),
 
   /** Whether a file in the Files view wraps. A boolean and nothing truthy. */
   filesWrap: (value) =>
@@ -695,7 +718,23 @@ export function readSettings(store: Store): AppSettings {
       continue
     }
   }
+
+  // A layout written before panes were a tree, read as the row it was with the
+  // divider where its own setting left it. That setting is no key of this
+  // build's, so it is read here and nowhere else.
+  const split = rows.find((row) => row.key === 'paneSplitPct')
+  result.paneLayout = upgradeSavedLayout(result.paneLayout as unknown, parsedOrNull(split?.value))
   return result
+}
+
+/** A stored value read back, or null when there is none or it is not JSON. */
+function parsedOrNull(value: string | undefined): unknown {
+  if (value === undefined) return null
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    return null
+  }
 }
 
 export function writeSetting<K extends keyof AppSettings>(

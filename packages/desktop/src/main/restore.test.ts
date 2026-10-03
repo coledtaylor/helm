@@ -93,17 +93,21 @@ describe('restoring what a crash took', () => {
       Object.assign(ids, { cleared: cleared.id, plain: plain.id, quiet: quiet.id, elsewhere: elsewhere.id })
 
       layout = {
-        groups: [
-          { panes: [{ kind: 'session', id: cleared.id }, { kind: 'history' }], activeId: 'history' },
-          {
-            panes: [
-              { kind: 'session', id: quiet.id },
-              { kind: 'session', id: plain.id },
-              { kind: 'session', id: elsewhere.id }
-            ],
-            activeId: `session:${String(plain.id)}`
-          }
-        ],
+        root: {
+          axis: 'row',
+          children: [
+            { panes: [{ kind: 'session', id: cleared.id }, { kind: 'history' }], activeId: 'history' },
+            {
+              panes: [
+                { kind: 'session', id: quiet.id },
+                { kind: 'session', id: plain.id },
+                { kind: 'session', id: elsewhere.id }
+              ],
+              activeId: `session:${String(plain.id)}`
+            }
+          ],
+          sizes: [0.5, 0.5]
+        },
         focused: 1
       }
       writeSettings(store, {

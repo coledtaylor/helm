@@ -64,6 +64,14 @@ test('a pane’s + opens a session, a profile session or a browser tab in that p
   await expect(first.getByRole('tab', { name: /^beta/ })).toHaveCount(0)
   await claudeRunIn(world, world.projects.beta)
 
+  // The first pane's + opens its launcher on the folder that pane is about -
+  // alpha's, whose session is in front of it.
+  await first.getByRole('button', { name: 'New tab' }).click()
+  await window.getByRole('menu', { name: 'New tab' }).getByRole('menuitem', { name: /^Session/ }).click()
+  await expect(popover.getByRole('combobox', { name: 'Folder' })).toHaveValue(world.projects.alpha)
+  await window.keyboard.press('Escape')
+  await expect(popover).toBeHidden()
+
   // A profile, one click, in the first pane: it runs in its own folder.
   await first.getByRole('button', { name: 'New tab' }).click()
   await window.getByRole('menu', { name: 'New tab' }).getByRole('menuitem', { name: 'Profile session' }).click()

@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
-import type { AppSettings, RestoreOffer, SessionActivityState } from '@helm/core'
+import type { AppSettings, RestoreOffer, SavedPaneNode, SessionActivityState } from '@helm/core'
 import { removeShims } from '../test/overlay-world'
 import { fakeClaudeLogs, seedProfile, type FakeClaudeLog, type World } from '../test/world'
 import {
@@ -59,9 +59,11 @@ async function layoutNames(window: Page, ids: number[]): Promise<void> {
   await expect
     .poll(async () => {
       const { paneLayout } = await invoke<AppSettings>(window, 'settings:read')
-      const saved = (paneLayout?.groups ?? []).flatMap((group) =>
-        group.panes.flatMap((pane) => (pane.kind === 'session' ? [pane.id] : []))
-      )
+      const sessionsIn = (node: SavedPaneNode): number[] =>
+        'axis' in node
+          ? node.children.flatMap(sessionsIn)
+          : node.panes.flatMap((pane) => (pane.kind === 'session' ? [pane.id] : []))
+      const saved = paneLayout === null ? [] : sessionsIn(paneLayout.root)
       return ids.every((id) => saved.includes(id))
     })
     .toBe(true)

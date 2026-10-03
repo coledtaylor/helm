@@ -117,10 +117,19 @@ export {
   PaneActions,
   PaneCrumb,
   PaneGroup,
+  paneName,
   type CrumbTone,
   type PaneCrumbProps,
   type PaneGroupProps
 } from './components/PaneGroup'
+export { PaneDrop, type PaneDropProps } from './components/PaneDrop'
+export { PaneGrid, type PaneGridProps } from './components/PaneGrid'
+export {
+  PANE_MIN_HEIGHT,
+  PANE_MIN_WIDTH,
+  PANES_MOVED_EVENT,
+  type PaneDropZone
+} from './lib/paneGeometry'
 export { Rail, type RailItem, type RailProps } from './components/Rail'
 export { SessionTree, type SessionTreeProps, type TreeReveal, type TreeSession } from './components/SessionTree'
 export {

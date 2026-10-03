@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   activateTab,
   activeRef,
+  besideOf,
   closeGroup,
   closeTab,
   cycleTab,
@@ -9,7 +10,9 @@ import {
   findTab,
   focusGroup,
   fromSaved,
+  isSplit,
   moveTab,
+  neighbourAt,
   openFile,
   openTab,
   paneId,
@@ -17,34 +20,65 @@ import {
   placeIn,
   placeRestored,
   reconcile,
-  sendToOtherGroup,
+  resizeSplit,
+  savedGroups,
+  sendBeside,
+  splitWith,
   toSaved,
+  upgradeSavedLayout,
   visibleTabs,
   type FileRef,
   type PaneLayout,
+  type PaneNode,
   type PaneRef,
-  type SavedPaneLayout
+  type SavedPane,
+  type SavedPaneGroup,
+  type SavedPaneLayout,
+  type SavedPaneNode
 } from './panes'
 
 const session = (id: number): PaneRef => ({ kind: 'session', id })
 const project = (path: string): PaneRef => ({ kind: 'project', path })
+const browser = (id: number): PaneRef => ({ kind: 'browser', id })
 const HISTORY: PaneRef = { kind: 'history' }
 const SETTINGS: PaneRef = { kind: 'settings' }
+const CONFIG: PaneRef = { kind: 'config' }
+const PULLS: PaneRef = { kind: 'pulls' }
 
-/** The ids in each group, front tab marked with `*`, focused group with `>`. */
+/** A group of tabs, as a saved tree spells one. Browser tabs are let in for building live layouts. */
+const g = (...tabs: PaneRef[]): SavedPaneGroup => ({ panes: tabs as SavedPane[], activeId: null })
+const row = (children: SavedPaneNode[], sizes = children.map(() => 1 / children.length)): SavedPaneNode => ({
+  axis: 'row',
+  children,
+  sizes
+})
+const column = (children: SavedPaneNode[], sizes = children.map(() => 1 / children.length)): SavedPaneNode => ({
+  axis: 'column',
+  children,
+  sizes
+})
+
+/** A live layout, its groups numbered 1, 2, ... in reading order, focused on the one at `focused`. */
+const layoutOf = (root: SavedPaneNode, focused = 0): PaneLayout => fromSaved({ root, focused })
+
+/** The ids in each group in reading order, front tab marked with `*`, focused group with `>`. */
 function shape(layout: PaneLayout): string[] {
-  return layout.groups.map((group, index) => {
+  return layout.groups.map((group) => {
     const front = activeRef(group)
     const ids = group.tabs.map((ref) => (ref === front ? `*${paneId(ref)}` : paneId(ref)))
-    return `${index === layout.focused ? '>' : ' '}${ids.join(' ')}`
+    return `${group.id === layout.focused ? '>' : ' '}${ids.join(' ')}`
   })
 }
 
-function layoutOf(...groups: PaneRef[][]): PaneLayout {
-  return groups.reduce<PaneLayout>(
-    (layout, tabs, group) => tabs.reduce((acc, ref) => openTab(acc, ref, group), layout),
-    EMPTY_LAYOUT
-  )
+/** The tree by group id: `row(1, column(2, 3))`. */
+function tree(node: PaneNode): string {
+  return isSplit(node) ? `${node.axis}(${node.children.map(tree).join(', ')})` : String(node.group)
+}
+
+/** Every split's shares, depth first, to three places. */
+function sizes(node: PaneNode): number[][] {
+  if (!isSplit(node)) return []
+  return [node.sizes.map((size) => Math.round(size * 1000) / 1000), ...node.children.flatMap(sizes)]
 }
 
 describe('paneId', () => {
@@ -52,7 +86,7 @@ describe('paneId', () => {
     expect(paneId(session(12))).toBe('session:12')
     expect(paneId(project('C:\\work\\a#b:c'))).toBe('project:C:\\work\\a#b:c')
     expect(paneId({ kind: 'pr', repoPath: 'C:\\r', number: 7 })).toBe('pr:C:\\r#7')
-    expect(paneId({ kind: 'browser', id: 3 })).toBe('browser:3')
+    expect(paneId(browser(3))).toBe('browser:3')
     expect(paneId(HISTORY)).toBe('history')
   })
 })
@@ -64,119 +98,214 @@ describe('openTab', () => {
   })
 
   it('activates a tab that is already open instead of opening it twice', () => {
-    const layout = layoutOf([HISTORY, session(1)], [SETTINGS])
-    const reopened = openTab(layout, HISTORY)
-    expect(shape(reopened)).toEqual(['>*history session:1', ' *settings'])
+    const layout = layoutOf(row([g(HISTORY, session(1)), g(SETTINGS)]), 1)
+    expect(shape(openTab(layout, HISTORY))).toEqual(['>*history session:1', ' *settings'])
   })
 
-  it('opens a second group beside the first, and no third', () => {
-    const two = openTab(openTab(EMPTY_LAYOUT, HISTORY), session(1), 1)
-    expect(shape(two)).toEqual([' *history', '>*session:1'])
-    const three = openTab(two, session(2), 2)
-    expect(three.groups).toHaveLength(2)
-    expect(shape(three)).toEqual([' *history', '>session:1 *session:2'])
-  })
-
-  it('does not open a new group beside an empty window', () => {
-    expect(shape(openTab(EMPTY_LAYOUT, HISTORY, 1))).toEqual(['>*history'])
+  it('opens into the group asked for by id, and the focused one when that group is gone', () => {
+    const layout = layoutOf(row([g(HISTORY), g(SETTINGS)]), 0)
+    expect(shape(openTab(layout, CONFIG, 2))).toEqual([' *history', '>settings *config'])
+    expect(shape(openTab(layout, CONFIG, 9))).toEqual(['>history *config', ' *settings'])
   })
 })
 
 describe('closeTab', () => {
   it('hands the front to the neighbour that slides into its place', () => {
-    const layout = activateTab(layoutOf([session(1), session(2), session(3)]), 'session:2')
-    expect(shape(closeTab(layout, 'session:2'))).toEqual(['>session:1 *session:3'])
+    const layout = activateTab(layoutOf(g(HISTORY, SETTINGS, CONFIG)), 'settings')
+    expect(shape(closeTab(layout, 'settings'))).toEqual(['>history *config'])
   })
 
   it('takes the left neighbour when the last tab closes', () => {
-    const layout = layoutOf([session(1), session(2)])
-    expect(shape(closeTab(layout, 'session:2'))).toEqual(['>*session:1'])
+    const layout = layoutOf(g(HISTORY, SETTINGS))
+    expect(shape(closeTab(layout, 'settings'))).toEqual(['>*history'])
   })
 
   it('leaves the front alone when a background tab closes', () => {
-    const layout = activateTab(layoutOf([session(1), session(2), session(3)]), 'session:1')
-    expect(shape(closeTab(layout, 'session:3'))).toEqual(['>*session:1 session:2'])
+    const layout = layoutOf(g(HISTORY, SETTINGS, CONFIG))
+    expect(shape(closeTab(layout, 'history'))).toEqual(['>settings *config'])
   })
 
-  it('drops a group that empties, and the other takes its place and the focus', () => {
-    const layout = layoutOf([HISTORY], [session(1)])
-    const closed = closeTab(focusGroup(layout, 0), 'history')
-    expect(shape(closed)).toEqual(['>*session:1'])
+  it('drops a group that empties, giving its room and the focus to the pane before it', () => {
+    const layout = layoutOf(row([g(HISTORY), g(SETTINGS), g(CONFIG)], [0.2, 0.3, 0.5]), 1)
+    const closed = closeTab(layout, 'settings')
+    expect(shape(closed)).toEqual(['>*history', ' *config'])
+    expect(tree(closed.root)).toBe('row(1, 3)')
+    expect(sizes(closed.root)).toEqual([[0.5, 0.5]])
   })
 
-  it('leaves one empty group when the last tab in the window closes', () => {
-    expect(closeTab(layoutOf([HISTORY]), 'history')).toEqual(EMPTY_LAYOUT)
+  it('gives a first pane’s room to the one after it', () => {
+    const layout = layoutOf(row([g(HISTORY), g(SETTINGS), g(CONFIG)], [0.2, 0.3, 0.5]), 0)
+    const closed = closeTab(layout, 'history')
+    expect(shape(closed)).toEqual(['>*settings', ' *config'])
+    expect(sizes(closed.root)).toEqual([[0.5, 0.5]])
+  })
+
+  it('collapses a split left holding one pane into that pane', () => {
+    const layout = layoutOf(row([g(HISTORY), column([g(SETTINGS), g(CONFIG)])]))
+    const closed = closeTab(layout, 'config')
+    expect(tree(closed.root)).toBe('row(1, 2)')
+    expect(shape(closed)).toEqual(['>*history', ' *settings'])
+  })
+
+  it('leaves one empty group, keeping its id, when the last tab in the window closes', () => {
+    const layout = layoutOf(row([g(HISTORY), g(SETTINGS)]), 1)
+    const closed = closeTab(closeTab(layout, 'history'), 'settings')
+    expect(closed.groups).toEqual([{ id: 2, tabs: [], activeId: null }])
+    expect(closed.root).toEqual({ group: 2 })
+    expect(closed.focused).toBe(2)
   })
 })
 
 describe('moveTab', () => {
   it('reorders within a group, counting the target after the tab has left', () => {
-    const layout = layoutOf([session(1), session(2), session(3)])
-    expect(shape(moveTab(layout, 'session:1', 0, 2))).toEqual(['>session:2 session:3 *session:1'])
-    expect(shape(moveTab(layout, 'session:3', 0, 0))).toEqual(['>*session:3 session:1 session:2'])
+    const layout = layoutOf(g(HISTORY, SETTINGS, CONFIG))
+    expect(shape(moveTab(layout, 'history', 1, 2))).toEqual(['>settings config *history'])
+    expect(shape(moveTab(layout, 'config', 1, 0))).toEqual(['>*config history settings'])
   })
 
-  it('moves a tab to the other group, in front there, and focuses it', () => {
-    const layout = focusGroup(layoutOf([session(1), session(2)], [HISTORY]), 0)
-    const moved = moveTab(layout, 'session:1', 1, 0)
-    expect(shape(moved)).toEqual([' *session:2', '>*session:1 history'])
+  it('moves a tab to another group, in front there, and focuses it', () => {
+    const layout = layoutOf(row([g(HISTORY, SETTINGS), g(CONFIG)]), 0)
+    expect(shape(moveTab(layout, 'history', 2, 0))).toEqual([' *settings', '>*history config'])
   })
 
-  it('opens the second group when moved past the last one', () => {
-    const layout = layoutOf([session(1), session(2)])
-    expect(shape(moveTab(layout, 'session:2', 1, 0))).toEqual([' *session:1', '>*session:2'])
+  it('collapses when the tab leaves a group empty', () => {
+    const layout = layoutOf(row([g(HISTORY), g(CONFIG)]), 0)
+    const moved = moveTab(layout, 'history', 2, 1)
+    expect(shape(moved)).toEqual(['>config *history'])
+    expect(moved.root).toEqual({ group: 2 })
   })
 
-  it('will not split a group away from itself', () => {
-    const layout = layoutOf([session(1)])
-    expect(moveTab(layout, 'session:1', 1, 0)).toBe(layout)
-  })
-
-  it('collapses to one group when the first group gives away its last tab', () => {
-    const layout = layoutOf([session(1)], [session(2)])
-    expect(shape(moveTab(layout, 'session:1', 1, 1))).toEqual(['>session:2 *session:1'])
-  })
-
-  it('ignores a tab nobody holds and a group past the end', () => {
-    const layout = layoutOf([session(1), session(2)])
-    expect(moveTab(layout, 'session:9', 0, 0)).toBe(layout)
-    expect(moveTab(layout, 'session:1', 5, 0)).toBe(layout)
+  it('ignores a tab nobody holds and a group that does not exist', () => {
+    const layout = layoutOf(g(HISTORY))
+    expect(moveTab(layout, 'settings', 1, 0)).toBe(layout)
+    expect(moveTab(layout, 'history', 5, 0)).toBe(layout)
   })
 })
 
-describe('sendToOtherGroup', () => {
-  it('splits the focused front tab into a new group', () => {
-    const layout = layoutOf([session(1), session(2)])
-    expect(shape(sendToOtherGroup(layout))).toEqual([' *session:1', '>*session:2'])
+describe('splitWith', () => {
+  const lone = layoutOf(g(HISTORY, SETTINGS))
+
+  it('opens a new pane on the side the tab was dropped, holding it, focused', () => {
+    const right = splitWith(lone, 'settings', 1, 'right')
+    expect(tree(right.root)).toBe('row(1, 2)')
+    expect(shape(right)).toEqual([' *history', '>*settings'])
+    expect(sizes(right.root)).toEqual([[0.5, 0.5]])
+
+    expect(tree(splitWith(lone, 'settings', 1, 'left').root)).toBe('row(2, 1)')
+    expect(tree(splitWith(lone, 'settings', 1, 'bottom').root)).toBe('column(1, 2)')
+    expect(tree(splitWith(lone, 'settings', 1, 'top').root)).toBe('column(2, 1)')
   })
 
-  it('appends to the other group when there already are two', () => {
-    const layout = focusGroup(layoutOf([session(1), session(2)], [HISTORY]), 0)
-    expect(shape(sendToOtherGroup(layout))).toEqual([' *session:1', '>history *session:2'])
+  it('takes half of the room the pane it was dropped on had, in the same split', () => {
+    const layout = layoutOf(row([g(HISTORY, SETTINGS), g(CONFIG)], [0.6, 0.4]))
+    const split = splitWith(layout, 'settings', 2, 'right')
+    expect(tree(split.root)).toBe('row(1, 2, 3)')
+    expect(sizes(split.root)).toEqual([[0.6, 0.2, 0.2]])
   })
 
-  it('does nothing to a lone tab', () => {
-    const layout = layoutOf([session(1)])
-    expect(sendToOtherGroup(layout)).toBe(layout)
+  it('nests a split across the other axis', () => {
+    const layout = layoutOf(row([g(HISTORY, SETTINGS), g(CONFIG)]))
+    const split = splitWith(layout, 'settings', 2, 'bottom')
+    expect(tree(split.root)).toBe('row(1, column(2, 3))')
+    expect(shape(split)).toEqual([' *history', ' *config', '>*settings'])
+  })
+
+  it('will not split a pane’s only tab off from that pane', () => {
+    const layout = layoutOf(row([g(HISTORY), g(CONFIG)]))
+    expect(splitWith(layout, 'config', 2, 'left')).toBe(layout)
+  })
+
+  it('moves another pane’s only tab, and that pane’s room goes beside it', () => {
+    const layout = layoutOf(row([g(HISTORY), g(CONFIG)]))
+    const split = splitWith(layout, 'config', 1, 'left')
+    expect(tree(split.root)).toBe('row(3, 1)')
+    expect(sizes(split.root)).toEqual([[0.25, 0.75]])
+    expect(shape(split)).toEqual(['>*config', ' *history'])
+  })
+
+  it('never reuses an id, so a pane held across an await cannot become another', () => {
+    const layout = layoutOf(row([g(HISTORY), g(CONFIG, SETTINGS)]))
+    const closed = closeGroup(layout, 1)
+    const split = splitWith(closed, 'settings', 2, 'right')
+    expect(split.groups.map((group) => group.id)).toEqual([2, 3])
+  })
+
+  it('ignores a tab nobody holds and a pane that does not exist', () => {
+    expect(splitWith(lone, 'config', 1, 'right')).toBe(lone)
+    expect(splitWith(lone, 'settings', 7, 'right')).toBe(lone)
+  })
+})
+
+describe('neighbourAt and besideOf', () => {
+  // 1 | 2
+  //   |---
+  //   | 3
+  const grid = layoutOf(row([g(HISTORY), column([g(SETTINGS), g(CONFIG)], [0.3, 0.7])]))
+
+  it('finds the pane across each side, preferring the one sharing most of it', () => {
+    expect(neighbourAt(grid, 1, 'right')).toBe(3)
+    expect(neighbourAt(grid, 2, 'left')).toBe(1)
+    expect(neighbourAt(grid, 3, 'left')).toBe(1)
+    expect(neighbourAt(grid, 2, 'bottom')).toBe(3)
+    expect(neighbourAt(grid, 3, 'top')).toBe(2)
+    expect(neighbourAt(grid, 2, 'top')).toBeNull()
+    expect(neighbourAt(grid, 1, 'left')).toBeNull()
+  })
+
+  it('takes the first in reading order on a tie', () => {
+    const even = layoutOf(row([g(HISTORY), column([g(SETTINGS), g(CONFIG)])]))
+    expect(neighbourAt(even, 1, 'right')).toBe(2)
+  })
+
+  it('means right, then left, then below, then above, and nothing for a pane alone', () => {
+    expect(besideOf(grid, 1)).toBe(3)
+    expect(besideOf(grid, 2)).toBe(1)
+    const stacked = layoutOf(column([g(HISTORY), g(SETTINGS)]))
+    expect(besideOf(stacked, 1)).toBe(2)
+    expect(besideOf(stacked, 2)).toBe(1)
+    expect(besideOf(layoutOf(g(HISTORY)), 1)).toBeNull()
+  })
+})
+
+describe('sendBeside', () => {
+  it('splits the focused front tab into a new pane on the right', () => {
+    const layout = layoutOf(g(HISTORY, SETTINGS))
+    const sent = sendBeside(layout)
+    expect(shape(sent)).toEqual([' *history', '>*settings'])
+    expect(tree(sent.root)).toBe('row(1, 2)')
+  })
+
+  it('appends to the other pane when there are two, from either side', () => {
+    const layout = layoutOf(row([g(HISTORY), g(SETTINGS, CONFIG)]), 1)
+    expect(shape(sendBeside(layout))).toEqual(['>history *config', ' *settings'])
+    expect(shape(sendBeside(focusGroup(layout, 1)))).toEqual(['>settings config *history'])
+  })
+
+  it('goes to the pane on the right of the middle one of three', () => {
+    const layout = layoutOf(row([g(HISTORY), g(SETTINGS, PULLS), g(CONFIG)]), 1)
+    expect(shape(sendBeside(layout))).toEqual([' *history', ' *settings', '>config *pulls'])
+  })
+
+  it('does nothing to a lone tab in a lone pane', () => {
+    const layout = layoutOf(g(HISTORY))
+    expect(sendBeside(layout)).toBe(layout)
   })
 })
 
 describe('placeBeside', () => {
-  it('opens the second pane for the tab when there is one', () => {
-    const layout = layoutOf([session(1)])
-    expect(shape(placeBeside(layout, session(2)))).toEqual([' *session:1', '>*session:2'])
+  it('opens a pane on the right for the tab when there is one', () => {
+    const layout = layoutOf(g(HISTORY))
+    expect(shape(placeBeside(layout, session(1)))).toEqual([' *history', '>*session:1'])
   })
 
-  it('appends to the pane that is not focused when there are two', () => {
-    const layout = focusGroup(layoutOf([session(1)], [HISTORY]), 0)
-    expect(shape(placeBeside(layout, session(2)))).toEqual([' *session:1', '>history *session:2'])
-    const fromRight = layoutOf([session(1)], [HISTORY])
-    expect(shape(placeBeside(fromRight, session(2)))).toEqual(['>session:1 *session:2', ' *history'])
+  it('appends to the pane beside the focused one when there are two', () => {
+    const layout = layoutOf(row([g(HISTORY), g(SETTINGS)]), 1)
+    expect(shape(placeBeside(layout, session(1)))).toEqual(['>history *session:1', ' *settings'])
   })
 
   it('moves a tab reconcile already put in the focused pane', () => {
-    const layout = reconcile(layoutOf([session(1)]), () => true, [session(1), session(2)])
-    expect(shape(placeBeside(layout, session(2)))).toEqual([' *session:1', '>*session:2'])
+    const layout = reconcile(layoutOf(g(HISTORY)), () => true, [session(1)])
+    expect(shape(placeBeside(layout, session(1)))).toEqual([' *history', '>*session:1'])
   })
 
   it('leaves a tab alone in an otherwise empty window', () => {
@@ -185,256 +314,417 @@ describe('placeBeside', () => {
 })
 
 describe('placeIn', () => {
+  const layout = layoutOf(row([g(HISTORY), g(SETTINGS)]), 0)
+
   it('lands in the pane asked for, not the focused one, and focuses it', () => {
-    const layout = focusGroup(layoutOf([session(1)], [HISTORY]), 0)
-    expect(shape(placeIn(layout, session(2), 1))).toEqual([' *session:1', '>history *session:2'])
+    expect(shape(placeIn(layout, session(1), 2))).toEqual([' *history', '>settings *session:1'])
   })
 
   it('lands in the focused pane when that is the one asked for', () => {
-    const layout = layoutOf([session(1)], [HISTORY])
-    expect(shape(placeIn(layout, session(2), 1))).toEqual([' *session:1', '>history *session:2'])
+    expect(shape(placeIn(layout, session(1), 1))).toEqual(['>history *session:1', ' *settings'])
   })
 
   it('moves a tab reconcile already put in the focused pane', () => {
-    const layout = reconcile(focusGroup(layoutOf([session(1)], [HISTORY]), 0), () => true, [
-      session(1),
-      session(2)
-    ])
-    expect(shape(layout)).toEqual(['>*session:1 session:2', ' *history'])
-    expect(shape(placeIn(layout, session(2), 1))).toEqual([' *session:1', '>history *session:2'])
+    const reconciled = reconcile(layout, () => true, [session(1)])
+    expect(shape(placeIn(reconciled, session(1), 2))).toEqual([' *history', '>settings *session:1'])
   })
 
   it('opens into a lone empty pane', () => {
-    expect(shape(placeIn(EMPTY_LAYOUT, session(1), 0))).toEqual(['>*session:1'])
+    expect(shape(placeIn(EMPTY_LAYOUT, session(1), 1))).toEqual(['>*session:1'])
   })
 
   it('falls back to the focused pane when the one asked for has gone', () => {
-    const layout = layoutOf([session(1)])
-    expect(shape(placeIn(layout, session(2), 1))).toEqual(['>session:1 *session:2'])
+    expect(shape(placeIn(layout, session(1), 9))).toEqual(['>history *session:1', ' *settings'])
   })
 })
 
 describe('closeGroup', () => {
-  it('merges the closed group into the other rather than closing its tabs', () => {
-    const layout = layoutOf([session(1)], [session(2), HISTORY])
-    expect(shape(closeGroup(layout, 1))).toEqual(['>*session:1 session:2 history'])
-    expect(shape(closeGroup(layout, 0))).toEqual(['>session:2 *history session:1'])
+  it('merges the closed pane into the other rather than closing its tabs', () => {
+    const layout = layoutOf(row([g(HISTORY), g(SETTINGS, CONFIG)]), 0)
+    const closed = closeGroup(layout, 2)
+    expect(shape(closed)).toEqual(['>*history settings config'])
+    expect(closed.root).toEqual({ group: 1 })
   })
 
-  it('does nothing with one group', () => {
-    const layout = layoutOf([session(1)])
-    expect(closeGroup(layout, 0)).toBe(layout)
+  it('hands a pane’s tabs to the same side its room goes to', () => {
+    const layout = layoutOf(row([g(HISTORY), g(SETTINGS), g(CONFIG)], [0.2, 0.3, 0.5]), 2)
+    const closed = closeGroup(layout, 2)
+    expect(shape(closed)).toEqual(['>*history settings', ' *config'])
+    expect(sizes(closed.root)).toEqual([[0.5, 0.5]])
+  })
+
+  it('hands a first pane to the one after it, across a split by the most shared edge', () => {
+    const layout = layoutOf(row([g(HISTORY), column([g(SETTINGS), g(CONFIG)], [0.3, 0.7])]))
+    const closed = closeGroup(layout, 1)
+    expect(tree(closed.root)).toBe('column(2, 3)')
+    expect(shape(closed)).toEqual([' *settings', '>*config history'])
+  })
+
+  it('does nothing with one pane, or a pane that does not exist', () => {
+    const layout = layoutOf(g(HISTORY))
+    expect(closeGroup(layout, 1)).toBe(layout)
+    const two = layoutOf(row([g(HISTORY), g(SETTINGS)]))
+    expect(closeGroup(two, 9)).toBe(two)
+  })
+})
+
+describe('resizeSplit', () => {
+  const layout = layoutOf(row([g(HISTORY), column([g(SETTINGS), g(CONFIG)])]))
+
+  it('sets the shares of the split a path names', () => {
+    expect(sizes(resizeSplit(layout, [], [0.3, 0.7]).root)).toEqual([[0.3, 0.7], [0.5, 0.5]])
+    expect(sizes(resizeSplit(layout, [1], [0.25, 0.75]).root)).toEqual([[0.5, 0.5], [0.25, 0.75]])
+  })
+
+  it('leaves the layout alone when the path no longer names a split of that many', () => {
+    expect(resizeSplit(layout, [0], [0.5, 0.5])).toBe(layout)
+    expect(resizeSplit(layout, [], [0.2, 0.3, 0.5])).toBe(layout)
+    expect(resizeSplit(layout, [4], [0.5, 0.5])).toBe(layout)
   })
 })
 
 describe('reconcile', () => {
   it('drops tabs whose thing is gone and appends what has no tab to the focused group', () => {
-    const layout = focusGroup(layoutOf([session(1), session(2)], [HISTORY]), 0)
-    const live = new Set(['session:2', 'history'])
-    const drawn = reconcile(layout, (ref) => live.has(paneId(ref)) || ref.kind === 'browser', [
-      session(2),
-      { kind: 'browser', id: 4 }
-    ])
-    expect(shape(drawn)).toEqual(['>*session:2 browser:4', ' *history'])
+    const layout = layoutOf(row([g(HISTORY, session(1)), g(session(2))]), 0)
+    const reconciled = reconcile(
+      layout,
+      (ref) => ref.kind !== 'session' || ref.id !== 1,
+      [session(2), session(3), browser(4)]
+    )
+    expect(shape(reconciled)).toEqual(['>history session:3 *browser:4', ' *session:2'])
   })
 
   it('appends each extra once, however often it is offered', () => {
-    const drawn = reconcile(EMPTY_LAYOUT, () => true, [session(1), session(1)])
-    expect(shape(drawn)).toEqual(['>*session:1'])
+    const reconciled = reconcile(EMPTY_LAYOUT, () => true, [session(1), session(1)])
+    expect(shape(reconciled)).toEqual(['>*session:1'])
   })
 
-  it('closes a group whose every tab is gone', () => {
-    const layout = layoutOf([HISTORY], [session(1)])
-    const drawn = reconcile(layout, (ref) => ref.kind !== 'session', [])
-    expect(shape(drawn)).toEqual(['>*history'])
+  it('closes a group whose every tab is gone, and its room goes beside it', () => {
+    const layout = layoutOf(row([g(HISTORY), g(session(2)), g(SETTINGS)], [0.2, 0.3, 0.5]), 0)
+    const reconciled = reconcile(layout, (ref) => ref.kind !== 'session', [])
+    expect(shape(reconciled)).toEqual(['>*history', ' *settings'])
+    expect(sizes(reconciled.root)).toEqual([[0.5, 0.5]])
   })
 })
 
 describe('cycleTab', () => {
-  it('walks every group as one ring and takes the focus with it', () => {
-    const layout = focusGroup(
-      activateTab(layoutOf([session(1), session(2)], [HISTORY]), 'session:2'),
-      0
-    )
-    const next = cycleTab(layout, 1)
-    expect(shape(next)).toEqual([' session:1 *session:2', '>*history'])
-    const wrapped = cycleTab(next, 1)
-    expect(shape(wrapped)).toEqual(['>*session:1 session:2', ' *history'])
-    expect(shape(cycleTab(wrapped, -1))).toEqual([' *session:1 session:2', '>*history'])
+  it('walks every group in reading order as one ring and takes the focus with it', () => {
+    const layout = layoutOf(row([g(HISTORY, SETTINGS), column([g(CONFIG), g(PULLS)])]), 0)
+    const steps = [1, 1, 1, 1] as const
+    const seen = steps.reduce<PaneLayout[]>((acc, step) => [...acc, cycleTab(acc.at(-1)!, step)], [
+      activateTab(layout, 'history')
+    ])
+    expect(seen.map((step) => paneId(activeRef(step.groups.find((group) => group.id === step.focused)!)!))).toEqual([
+      'history',
+      'settings',
+      'config',
+      'pulls',
+      'history'
+    ])
+    expect(paneId(activeRef(cycleTab(seen[0]!, -1).groups[2]!)!)).toBe('pulls')
   })
 
   it('does nothing with fewer than two tabs', () => {
-    const layout = layoutOf([HISTORY])
+    const layout = layoutOf(g(HISTORY))
     expect(cycleTab(layout, 1)).toBe(layout)
   })
 })
 
 describe('visibleTabs and findTab', () => {
-  it('reports the front tab of each group and where any tab is', () => {
-    const layout = layoutOf([session(1), session(2)], [HISTORY])
-    expect(visibleTabs(layout).map(paneId)).toEqual(['session:2', 'history'])
+  it('reports the front tab of each group and where any tab is, by group id', () => {
+    const layout = layoutOf(row([g(HISTORY, SETTINGS), column([g(CONFIG), g(PULLS)])]))
+    expect(visibleTabs(layout).map(paneId)).toEqual(['settings', 'config', 'pulls'])
+    expect(findTab(layout, 'pulls')).toEqual({ group: 3, index: 0 })
     expect(findTab(layout, 'history')).toEqual({ group: 1, index: 0 })
-    expect(findTab(layout, 'settings')).toBeNull()
+    expect(findTab(layout, 'nothing')).toBeNull()
   })
 })
 
 describe('toSaved and fromSaved', () => {
-  it('writes down pages and sessions in their groups, and never a browser tab or the restore offer', () => {
+  it('writes down the tree, its shares, and pages and sessions in their groups', () => {
+    const layout = activateTab(
+      layoutOf(
+        row([g(project('C:\\a'), session(4), browser(9)), column([g(HISTORY, { kind: 'restore' }), g(SETTINGS)], [0.4, 0.6])], [0.7, 0.3]),
+        0
+      ),
+      'browser:9'
+    )
+    expect(toSaved(layout)).toEqual({
+      root: {
+        axis: 'row',
+        children: [
+          { panes: [project('C:\\a'), session(4)], activeId: null },
+          {
+            axis: 'column',
+            children: [
+              { panes: [HISTORY], activeId: null },
+              { panes: [SETTINGS], activeId: 'settings' }
+            ],
+            sizes: [0.4, 0.6]
+          }
+        ],
+        sizes: [0.7, 0.3]
+      },
+      focused: 0
+    })
+  })
+
+  it('writes down no group with nothing in it worth keeping, its room and focus going beside it', () => {
+    const layout = layoutOf(row([g(HISTORY), g(browser(1)), g(SETTINGS)], [0.2, 0.3, 0.5]), 1)
+    expect(toSaved(layout)).toEqual({
+      root: {
+        axis: 'row',
+        children: [
+          { panes: [HISTORY], activeId: 'history' },
+          { panes: [SETTINGS], activeId: 'settings' }
+        ],
+        sizes: [0.5, 0.5]
+      },
+      focused: 0
+    })
+  })
+
+  it('writes the empty window as one empty group', () => {
+    expect(toSaved(EMPTY_LAYOUT)).toEqual({ root: { panes: [], activeId: null }, focused: 0 })
+    expect(toSaved(layoutOf(g(browser(1))))).toEqual({ root: { panes: [], activeId: null }, focused: 0 })
+  })
+
+  it('reads back what it wrote, and writes that again unchanged', () => {
     const layout = layoutOf(
-      [project('C:\\a'), session(1)],
-      [HISTORY, { kind: 'restore' }, { kind: 'browser', id: 2 }]
+      row([g(HISTORY, PULLS), column([g(SETTINGS), row([g(CONFIG), g(project('C:\\b'))], [0.3, 0.7])], [0.45, 0.55])], [0.37, 0.63]),
+      3
     )
     const saved = toSaved(layout)
-    expect(saved).toEqual({
-      groups: [
-        { panes: [project('C:\\a'), session(1)], activeId: 'session:1' },
-        { panes: [HISTORY], activeId: null }
-      ],
-      focused: 1
+    const again = toSaved(fromSaved(JSON.parse(JSON.stringify(saved)) as SavedPaneLayout))
+    expect(JSON.stringify(again)).toBe(JSON.stringify(saved))
+    expect(saved.focused).toBe(3)
+  })
+
+  it('tidies a hand-edited tree: a split of one, a split inside its own axis, shares not summing to one', () => {
+    const layout = fromSaved({
+      root: {
+        axis: 'row',
+        children: [
+          { axis: 'column', children: [g(HISTORY)], sizes: [1] },
+          { axis: 'row', children: [g(SETTINGS), g(CONFIG)], sizes: [1, 3] }
+        ],
+        sizes: [2, 2]
+      },
+      focused: 0
+    } as SavedPaneLayout)
+    expect(tree(layout.root)).toBe('row(1, 2, 3)')
+    expect(sizes(layout.root)).toEqual([[0.5, 0.125, 0.375]])
+  })
+
+  it('shares a split evenly when its shares are missing or unusable', () => {
+    const layout = fromSaved({
+      root: { axis: 'row', children: [g(HISTORY), g(SETTINGS)], sizes: [0.5] },
+      focused: 0
     })
-    // A session nothing hosts is dropped before it is drawn; the other front
-    // was not written down, so that group restores with its last tab in front.
-    const hosted = (ref: PaneRef): boolean => ref.kind !== 'session'
-    expect(shape(reconcile(fromSaved(saved), hosted, []))).toEqual([' *project:C:\\a', '>*history'])
+    expect(sizes(layout.root)).toEqual([[0.5, 0.5]])
   })
 
   it('drops a tab kind an older build wrote and keeps the rest of its group', () => {
-    // The content viewer's tab, from before it merged into Files.
-    const saved = {
-      groups: [{ panes: [HISTORY, { kind: 'content' }, project('C:\\a')], activeId: 'content' }],
+    const layout = fromSaved({
+      root: { panes: [HISTORY, { kind: 'content' } as unknown as SavedPane, SETTINGS], activeId: 'content' },
       focused: 0
-    } as unknown as SavedPaneLayout
-    // Its front named the retired tab, so the group's last tab is in front.
-    expect(shape(reconcile(fromSaved(saved), () => true, []))).toEqual(['>history *project:C:\\a'])
-  })
-
-  it('restores a group of only sessions as no group at all', () => {
-    const saved = toSaved(layoutOf([HISTORY], [session(1)]))
-    const hosted = (ref: PaneRef): boolean => ref.kind !== 'session'
-    expect(shape(reconcile(fromSaved(saved), hosted, []))).toEqual(['>*history'])
-  })
-
-  it('folds groups past the limit into the last and drops duplicate tabs', () => {
-    const restored = fromSaved({
-      groups: [
-        { panes: [{ kind: 'history' }], activeId: 'history' },
-        { panes: [{ kind: 'settings' }, { kind: 'history' }], activeId: null },
-        { panes: [{ kind: 'config' }], activeId: 'config' }
-      ],
-      focused: 7
     })
-    expect(shape(restored)).toEqual([' *history', '>settings *config'])
+    expect(shape(layout)).toEqual(['>history *settings'])
+  })
+
+  it('restores a group of only sessions as no group at all, once nothing hosts them', () => {
+    const layout = fromSaved({ root: row([g(HISTORY), g(session(4))]), focused: 1 })
+    const reconciled = reconcile(layout, (ref) => ref.kind !== 'session', [])
+    expect(shape(reconciled)).toEqual(['>*history'])
   })
 
   it('reads null as the empty window', () => {
     expect(fromSaved(null)).toEqual(EMPTY_LAYOUT)
   })
+
+  it('lists a saved layout’s groups in reading order', () => {
+    const saved = { root: row([g(HISTORY), column([g(SETTINGS), g(CONFIG)])]), focused: 0 }
+    expect(savedGroups(saved).map((group) => group.panes.map((pane) => paneId(pane)))).toEqual([
+      ['history'],
+      ['settings'],
+      ['config']
+    ])
+    expect(savedGroups(null)).toEqual([])
+  })
+})
+
+describe('upgradeSavedLayout', () => {
+  const A = g(HISTORY)
+  const B = g(SETTINGS)
+
+  it('leaves a tree alone', () => {
+    const saved: SavedPaneLayout = { root: row([A, B]), focused: 1 }
+    expect(upgradeSavedLayout(saved, 70)).toBe(saved)
+  })
+
+  it('reads one or two groups side by side as the row they were', () => {
+    expect(upgradeSavedLayout({ groups: [A], focused: 0 }, 70)).toEqual({ root: A, focused: 0 })
+    expect(upgradeSavedLayout({ groups: [A, B], focused: 1 }, 70)).toEqual({
+      root: { axis: 'row', children: [A, B], sizes: [0.30000000000000004, 0.7] },
+      focused: 1
+    })
+  })
+
+  it('reads an unusable divider as the old default', () => {
+    for (const split of [null, '62', 0, 100, Number.NaN]) {
+      expect(upgradeSavedLayout({ groups: [A, B], focused: 0 }, split)).toEqual({
+        root: { axis: 'row', children: [A, B], sizes: [0.55, 0.45] },
+        focused: 0
+      })
+    }
+  })
+
+  it('reads anything else as no layout', () => {
+    for (const value of [null, 'history', [], {}, { groups: [] }, { panes: [] }]) {
+      expect(upgradeSavedLayout(value, 45)).toBeNull()
+    }
+  })
 })
 
 describe('placeRestored', () => {
-  /** What the next start draws before anything is reopened: saved, then reconciled with no sessions hosted. */
-  const startedFrom = (saved: SavedPaneLayout, reopened: number[] = []): PaneLayout => {
-    const drawn = reconcile(fromSaved(saved), (ref) => ref.kind !== 'session', [])
+  // The saved layout of the crashed run: project a with session 1 behind it and
+  // session 2 after it in the first pane, history and session 3 in the second.
+  const saved: SavedPaneLayout = {
+    root: row([
+      { panes: [project('C:\\a') as SavedPane, session(1) as SavedPane, session(2) as SavedPane], activeId: 'session:1' },
+      { panes: [HISTORY as SavedPane, session(3) as SavedPane], activeId: 'history' }
+    ]),
+    focused: 0
+  }
+
+  /**
+   * The start after the crash: the saved layout drawn with none of its sessions
+   * hosted, then the reopened ones given tabs where `reconcile` puts them.
+   */
+  const restart = (reopened: number[], from: SavedPaneLayout = saved): PaneLayout => {
+    const drawn = reconcile(fromSaved(from), (ref) => ref.kind !== 'session', [])
     return reconcile(drawn, (ref) => ref.kind !== 'session' || reopened.includes(ref.id), reopened.map(session))
   }
 
   it('puts each session back between the tabs it sat between, in the pane it was in', () => {
-    const saved = toSaved(
-      activateTab(layoutOf([project('C:\\a'), session(1), HISTORY], [session(2), SETTINGS]), 'session:1')
-    )
-    const now = startedFrom(saved, [11, 12])
-    // `reconcile` gave the reopened sessions tabs in the focused pane.
-    expect(shape(now)).toEqual(['>project:C:\\a *history session:11 session:12', ' *settings'])
-
     const pairs = new Map([
       [1, 11],
-      [2, 12]
+      [2, 12],
+      [3, 13]
     ])
-    expect(shape(placeRestored(now, saved, pairs))).toEqual([
-      '>project:C:\\a *session:11 history',
-      ' session:12 *settings'
-    ])
+    const restored = placeRestored(restart([11, 12, 13]), saved, pairs)
+    expect(shape(restored)).toEqual(['>project:C:\\a *session:11 session:12', ' *history session:13'])
   })
 
   it('opens a pane of only sessions again, on the side it was on', () => {
-    const saved = toSaved(activateTab(layoutOf([session(1), session(2)], [HISTORY]), 'session:2'))
-    const now = startedFrom(saved, [21, 22])
-    expect(shape(now)).toEqual(['>*history session:21 session:22'])
+    const left: SavedPaneLayout = { root: row([g(session(1)), g(HISTORY)]), focused: 0 }
+    const restoredLeft = placeRestored(restart([11], left), left, new Map([[1, 11]]))
+    expect(tree(restoredLeft.root)).toBe('row(3, 2)')
+    // It had the focus when the run crashed, and gets it back.
+    expect(shape(restoredLeft)).toEqual(['>*session:11', ' *history'])
 
-    const placed = placeRestored(now, saved, new Map([[1, 21], [2, 22]]))
-    expect(shape(placed)).toEqual(['>session:21 *session:22', ' *history'])
+    // Restored without asking, nothing is drawn first: the reopened session is
+    // hosted before the saved layout's own session pane has been dropped.
+    const unasked = reconcile(fromSaved(left), (ref) => ref.kind !== 'session' || ref.id === 11, [session(11)])
+    expect(shape(placeRestored(unasked, left, new Map([[1, 11]])))).toEqual(shape(restoredLeft))
+
+    const right: SavedPaneLayout = { root: row([g(HISTORY), g(session(1))]), focused: 0 }
+    const restoredRight = placeRestored(restart([11], right), right, new Map([[1, 11]]))
+    expect(shape(restoredRight)).toEqual(['>*history', ' *session:11'])
+  })
+
+  it('opens it beside the nearest pane in the saved tree that is open now, on the side it was on', () => {
+    // 1 | 2
+    //   |---
+    //   | sessions
+    const grid: SavedPaneLayout = {
+      root: row([g(project('C:\\a')), column([g(HISTORY), g(session(1), session(2))])]),
+      focused: 0
+    }
+    const restored = placeRestored(
+      restart([11, 12], grid),
+      grid,
+      new Map([
+        [1, 11],
+        [2, 12]
+      ])
+    )
+    expect(tree(restored.root)).toBe('row(1, column(2, 4))')
+    expect(shape(restored)).toEqual(['>*project:C:\\a', ' *history', ' session:11 *session:12'])
   })
 
   it('keeps the order of what came back when a neighbour did not', () => {
-    const saved = toSaved(layoutOf([session(1), project('C:\\a'), session(2), session(3), HISTORY]))
-    const now = startedFrom(saved, [33])
-    expect(shape(placeRestored(now, saved, new Map([[3, 33]])))).toEqual([
-      '>project:C:\\a session:33 *history'
-    ])
+    const restored = placeRestored(restart([12]), saved, new Map([[2, 12]]))
+    // Its saved front was session 1, which did not come back, so the front stays put.
+    expect(shape(restored)).toEqual(['>*project:C:\\a session:12', ' *history'])
   })
 
-  it('reopens into an empty window', () => {
-    const saved = toSaved(layoutOf([session(1)], [session(2)]))
-    const now = startedFrom(saved, [5, 6])
-    expect(shape(placeRestored(now, saved, new Map([[1, 5], [2, 6]])))).toEqual([' *session:5', '>*session:6'])
+  it('reopens into an empty window, a second pane of only sessions beside the first', () => {
+    const both: SavedPaneLayout = { root: row([g(session(1)), g(session(2))]), focused: 0 }
+    const restored = placeRestored(
+      restart([11, 12], both),
+      both,
+      new Map([
+        [1, 11],
+        [2, 12]
+      ])
+    )
+    expect(tree(restored.root)).toBe('row(1, 3)')
+    expect(shape(restored)).toEqual(['>*session:11', ' *session:12'])
   })
 
   it('leaves a session the saved layout does not name where it is, and does nothing without a layout', () => {
-    const saved = toSaved(layoutOf([HISTORY, session(1)]))
-    const now = startedFrom(saved, [8, 9])
-    const placed = placeRestored(now, saved, new Map([[1, 8], [4, 9]]))
-    expect(shape(placed)).toEqual(['>history *session:8 session:9'])
-    expect(placeRestored(now, null, new Map([[1, 8]]))).toBe(now)
-    expect(placeRestored(now, saved, new Map())).toBe(now)
+    const layout = restart([11, 99])
+    const restored = placeRestored(layout, saved, new Map([[1, 11]]))
+    expect(shape(restored)).toEqual(['>project:C:\\a *session:11 session:99', ' *history'])
+    expect(placeRestored(layout, null, new Map([[1, 11]]))).toBe(layout)
   })
 })
 
 describe('openFile', () => {
-  const file = (name: string): FileRef => ({ kind: 'file', root: '/p', path: `/p/${name}` })
+  const file = (name: string): FileRef => ({ kind: 'file', root: 'C:\\r', path: `C:\\r\\${name}` })
 
   it('opens beside a session in front, in a pane of its own when there is only one', () => {
-    const { layout, preview } = openFile(layoutOf([session(1)]), file('a.ts'), null, false)
-    expect(shape(layout)).toEqual([' *session:1', '>*file:/p/a.ts'])
-    expect(preview).toBe('file:/p/a.ts')
+    const layout = layoutOf(g(session(1)))
+    const { layout: opened, preview } = openFile(layout, file('a.ts'), null, false)
+    expect(shape(opened)).toEqual([' *session:1', '>*file:C:\\r\\a.ts'])
+    expect(preview).toBe('file:C:\\r\\a.ts')
   })
 
-  it('opens in the other pane when two are open and a session is in front of the focused one', () => {
-    const start = focusGroup(layoutOf([session(1)], [HISTORY]), 0)
-    const { layout } = openFile(start, file('a.ts'), null, true)
-    expect(shape(layout)).toEqual([' *session:1', '>history *file:/p/a.ts'])
+  it('opens in the pane beside when a session is in front of the focused one', () => {
+    const layout = layoutOf(column([g(session(1)), g(HISTORY)]), 0)
+    const { layout: opened } = openFile(layout, file('a.ts'), null, true)
+    expect(shape(opened)).toEqual([' *session:1', '>history *file:C:\\r\\a.ts'])
   })
 
   it('opens in the focused pane when what is in front is not a session', () => {
-    const { layout } = openFile(layoutOf([session(1)], [HISTORY]), file('a.ts'), null, true)
-    expect(shape(layout)).toEqual([' *session:1', '>history *file:/p/a.ts'])
-    const alone = openFile(layoutOf([HISTORY]), file('a.ts'), null, true).layout
-    expect(shape(alone)).toEqual(['>history *file:/p/a.ts'])
+    const layout = layoutOf(row([g(HISTORY), g(session(1))]), 0)
+    const { layout: opened } = openFile(layout, file('a.ts'), null, true)
+    expect(shape(opened)).toEqual(['>history *file:C:\\r\\a.ts', ' *session:1'])
   })
 
   it('replaces the preview in place on the next single click, and keeps a tab opened to stay', () => {
-    let state = openFile(layoutOf([session(1)]), file('a.ts'), null, false)
-    state = openFile(focusGroup(state.layout, 1), file('b.ts'), state.preview, false)
-    expect(shape(state.layout)).toEqual([' *session:1', '>*file:/p/b.ts'])
-    expect(state.preview).toBe('file:/p/b.ts')
-
-    state = openFile(state.layout, file('c.ts'), state.preview, true)
-    expect(shape(state.layout)).toEqual([' *session:1', '>file:/p/b.ts *file:/p/c.ts'])
-    expect(state.preview).toBe('file:/p/b.ts')
+    const first = openFile(layoutOf(g(HISTORY)), file('a.ts'), null, false)
+    const second = openFile(first.layout, file('b.ts'), first.preview, false)
+    expect(shape(second.layout)).toEqual(['>history *file:C:\\r\\b.ts'])
+    expect(second.preview).toBe('file:C:\\r\\b.ts')
+    const kept = openFile(second.layout, file('c.ts'), second.preview, true)
+    expect(shape(kept.layout)).toEqual(['>history file:C:\\r\\b.ts *file:C:\\r\\c.ts'])
+    expect(kept.preview).toBe('file:C:\\r\\b.ts')
   })
 
   it('brings an open file forward, and keeping the preview ends it being one', () => {
-    let state = openFile(layoutOf([session(1)]), file('a.ts'), null, false)
-    const back = focusGroup(state.layout, 0)
-    state = openFile(back, file('a.ts'), state.preview, false)
-    expect(shape(state.layout)).toEqual([' *session:1', '>*file:/p/a.ts'])
-    expect(state.preview).toBe('file:/p/a.ts')
-    expect(openFile(state.layout, file('a.ts'), state.preview, true).preview).toBeNull()
+    const first = openFile(layoutOf(g(HISTORY)), file('a.ts'), null, false)
+    const away = activateTab(first.layout, 'history')
+    const back = openFile(away, file('a.ts'), first.preview, true)
+    expect(shape(back.layout)).toEqual(['>history *file:C:\\r\\a.ts'])
+    expect(back.preview).toBeNull()
   })
 
   it('forgets a preview whose tab has been closed', () => {
-    const state = openFile(layoutOf([HISTORY]), file('a.ts'), null, false)
-    const closed = closeTab(state.layout, 'file:/p/a.ts')
-    const next = openFile(closed, file('b.ts'), state.preview, true)
+    const first = openFile(layoutOf(g(HISTORY)), file('a.ts'), null, false)
+    const closed = closeTab(first.layout, 'file:C:\\r\\a.ts')
+    const next = openFile(closed, file('b.ts'), first.preview, true)
     expect(next.preview).toBeNull()
   })
 })

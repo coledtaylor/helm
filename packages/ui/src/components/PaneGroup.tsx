@@ -2,9 +2,19 @@ import type { JSX, ReactNode, Ref } from 'react'
 import { cn } from '../lib/cn'
 import { CloseIcon, MaximizeIcon, SplitIcon, UnmaximizeIcon } from './icons'
 
+/** "First pane", "Second pane", ... and past the words, "Pane 9". */
+const ORDINALS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth']
+
+export function paneName(index: number): string {
+  const word = ORDINALS[index]
+  return word === undefined ? `Pane ${String(index + 1)}` : `${word} pane`
+}
+
 export interface PaneGroupProps {
-  /** Its place in the row, for the drivers: `data-pane-group="0"`. */
+  /** Its place in reading order, which names it: `data-pane-group="0"`, "First pane". */
   index: number
+  /** Its group's id, which stays its own while panes move around it: `data-pane-id`. */
+  id: number
   /** The pane a new tab opens into and the keyboard means. */
   focused: boolean
   /**
@@ -16,8 +26,8 @@ export interface PaneGroupProps {
   strip?: ReactNode | undefined
   /** The crumb row under the strip, for a tab that has one. */
   crumb?: ReactNode | undefined
-  /** Layout classes from the row: which side of the split this is. */
-  className?: string | undefined
+  /** The drop zones for a dragged tab (`PaneDrop`), drawn over the pane. */
+  drop?: ReactNode | undefined
   /** The body, measured by the caller to open a pty at the right size. */
   bodyRef?: Ref<HTMLDivElement> | undefined
   /** Any press inside the pane gives it the focus. */
@@ -36,11 +46,12 @@ export interface PaneGroupProps {
  */
 export function PaneGroup({
   index,
+  id,
   focused,
   attention,
   strip,
   crumb,
-  className,
+  drop,
   bodyRef,
   onFocus,
   children
@@ -48,14 +59,14 @@ export function PaneGroup({
   return (
     <section
       data-pane-group={index}
+      data-pane-id={id}
       data-pane-focused={focused ? 'true' : undefined}
       data-pane-attention={attention ? 'true' : undefined}
-      aria-label={index === 0 ? 'First pane' : 'Second pane'}
+      aria-label={paneName(index)}
       onPointerDownCapture={focused ? undefined : onFocus}
       className={cn(
-        'flex min-h-0 min-w-0 flex-col overflow-hidden rounded-island border bg-surface transition-colors',
-        attention ? 'border-warn/45' : 'border-border',
-        className
+        'relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-island border bg-surface transition-colors',
+        attention ? 'border-warn/45' : 'border-border'
       )}
     >
       {strip}
@@ -63,6 +74,7 @@ export function PaneGroup({
       <div ref={bodyRef} className="relative min-h-0 flex-1 overflow-hidden">
         {children}
       </div>
+      {drop}
     </section>
   )
 }
@@ -138,12 +150,12 @@ export function PaneCrumb({ place, branch, profile, status, hint }: PaneCrumbPro
 }
 
 /**
- * A pane's own controls at the end of its strip: split, maximize and, on the
- * second pane, close.
+ * A pane's own controls at the end of its strip: split, maximize and, while
+ * there is more than one pane, close.
  *
- * Close hands the pane's tabs to the other one rather than closing them - a
- * control on the pane that ended the sessions in it would be a destructive
- * button dressed as a layout one.
+ * Close hands the pane's tabs to the pane that takes its room rather than
+ * closing them - a control on the pane that ended the sessions in it would be
+ * a destructive button dressed as a layout one.
  */
 export function PaneActions({
   split,
@@ -156,8 +168,8 @@ export function PaneActions({
 }: {
   /**
    * What the split button would do with the front tab: open a pane of its own
-   * for it, move it to the pane already beside this one, or - for a lone tab
-   * in a lone pane - nothing, in which case there is no button.
+   * for it, move it to the pane beside this one (`besideOf`), or - for a lone
+   * tab in a lone pane - nothing, in which case there is no button.
    */
   split: 'new' | 'other' | null
   maximized: boolean
@@ -174,7 +186,7 @@ export function PaneActions({
           label={
             split === 'new'
               ? 'Split: move this tab to a pane of its own (Ctrl+\\)'
-              : 'Move this tab to the other pane (Ctrl+\\)'
+              : 'Move this tab to the pane beside it (Ctrl+\\)'
           }
           onClick={onSplit}
           data-pane-split={split}

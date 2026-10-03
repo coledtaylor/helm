@@ -1215,19 +1215,6 @@ export const RAIL_DESTINATIONS = ['sessions', 'profiles', 'history', 'files', 'b
 export type RailDestination = (typeof RAIL_DESTINATIONS)[number]
 
 /**
- * How much of the row the second pane takes when there are two, as a
- * percentage.
- *
- * The other axis of the same idea as `PROJECT_SHELL_HEIGHT_PCT`. The bounds are
- * the ones the divider has always enforced - 20% to 80% - so neither pane can
- * be dragged out of usefulness.
- *
- * The default is 45 because that is where the split has opened since the one
- * it replaced, the session column beside the workspace, was written.
- */
-export const PANE_SPLIT_PCT = { min: 20, max: 80, default: 45 } as const
-
-/**
  * How much of `helm.db` the transcript archive may take, in bytes.
  *
  * A gigabyte by default, and both halves of that are deliberate. Unbounded is
@@ -1432,9 +1419,10 @@ export interface AppSettings {
   /** Window geometry, restored on next launch. */
   windowBounds: { width: number; height: number; x?: number; y?: number } | null
   /**
-   * The panes, restored on next launch: which tabs are open in which group, in
-   * the order they were arranged, which one was in front of each, and which
-   * group had the focus (`layout/panes.ts`).
+   * The panes, restored on next launch: how they were split and how big each
+   * was, which tabs are open in which group, in the order they were arranged,
+   * which one was in front of each, and which group had the focus
+   * (`layout/panes.ts`).
    *
    * State rather than a preference, so it sits beside `windowBounds` and not in
    * the settings pane - it is something Helm remembers, not something anyone
@@ -1451,6 +1439,11 @@ export interface AppSettings {
    * It replaced `workspaceTabs`, the single strip the window had before it had
    * groups. That row is now an unknown key, ignored on read, so the first
    * launch after the change opens with an empty window once.
+   *
+   * It has been a tree since the panes could be split any way; before that it
+   * was one or two groups side by side, sized by a `paneSplitPct` setting of
+   * its own. `readSettings` reads that shape as the row it was
+   * (`upgradeSavedLayout`), and the old row is otherwise ignored.
    *
    * `activeId` is a tab id, which is only ever compared: a saved id that no
    * longer matches an open tab falls back to that group's last tab.
@@ -1520,27 +1513,6 @@ export interface AppSettings {
    * project page's layout.
    */
   projectShellHeightPct: number
-  /**
-   * How wide the second pane is, as a percentage of the row, when there are
-   * two side by side. Bounded by `PANE_SPLIT_PCT` and dragged by the divider
-   * between them.
-   *
-   * **One value for every project**, the same answer `projectShellHeightPct`
-   * gives and for the same reason: this is "how much room do I want beside my
-   * work", which is a fact about the person and the monitor rather than about a
-   * repository. It is also the stronger case of the two - this divider does not
-   * move when you switch tabs, so a per-project value would make the boundary
-   * jump every time somebody changed pane.
-   *
-   * It replaced `sessionSplitPct`, which measured the same divider when the
-   * right-hand column could only hold sessions; the old row is ignored.
-   *
-   * A percentage, not the fraction the renderer holds. The pane's other
-   * remembered size is a percentage, the settings row wants a number a person
-   * can retype, and `0.45` in a database column that its neighbour writes `30`
-   * into is the kind of difference nobody remembers on the day it matters.
-   */
-  paneSplitPct: number
 
   /**
    * Whether long lines wrap in a file read from the Files view.
@@ -1858,7 +1830,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalScrollback: TERMINAL_SCROLLBACK.default,
   terminalShell: null,
   projectShellHeightPct: PROJECT_SHELL_HEIGHT_PCT.default,
-  paneSplitPct: PANE_SPLIT_PCT.default,
   // Off, following the config editor rather than the prose one - see the field.
   filesWrap: false,
   railHidden: [],

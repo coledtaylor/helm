@@ -30,8 +30,7 @@ const TERMINAL: TerminalSettings = {
   terminalCursorBlink: DEFAULT_SETTINGS.terminalCursorBlink,
   terminalScrollback: DEFAULT_SETTINGS.terminalScrollback,
   terminalShell: DEFAULT_SETTINGS.terminalShell,
-  projectShellHeightPct: DEFAULT_SETTINGS.projectShellHeightPct,
-  paneSplitPct: DEFAULT_SETTINGS.paneSplitPct
+  projectShellHeightPct: DEFAULT_SETTINGS.projectShellHeightPct
 }
 
 function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProps {

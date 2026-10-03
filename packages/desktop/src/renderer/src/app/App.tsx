@@ -1,9 +1,10 @@
 import type { JSX, ReactNode } from 'react'
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Harness } from '@helm/core'
 import {
   activateTab,
   activeRef,
+  besideOf,
   closeGroup,
   closeTab,
   cycleTab,
@@ -11,6 +12,7 @@ import {
   findTab,
   focusGroup,
   fromSaved,
+  groupById,
   isLoopbackUrl,
   isProjectPinned,
   isScanRoot,
@@ -19,12 +21,16 @@ import {
   openFile,
   openTab,
   paneId,
+  paneRects,
   placeBeside,
   placeIn,
   placeRestored,
   reconcile,
-  sendToOtherGroup,
+  resizeSplit,
+  savedGroups,
+  sendBeside,
   sessionLabel,
+  splitWith,
   toSaved,
   withProjectPinned,
   withRepoIgnored,
@@ -33,6 +39,7 @@ import {
   type FileRef,
   type HistorySession,
   type LiveSession,
+  type PaneGroup as PaneGroupState,
   type PaneLayout,
   type PaneRef,
   type Profile,
@@ -81,6 +88,8 @@ import {
   overlayOpen,
   PaneActions,
   PaneCrumb,
+  PaneDrop,
+  PaneGrid,
   PaneGroup,
   PlusIcon,
   ProfileEditor,
@@ -113,6 +122,7 @@ import {
   VersionBanner,
   WelcomePane,
   type LaunchChoice,
+  type PaneDropZone,
   type ProfilePrediction,
   type QuickOpenAt,
   type QuickOpenMode,
@@ -126,7 +136,6 @@ import {
 import { sidebarFor, type SidebarView } from './sidebarFor'
 import type { AppMode, SessionConfirmRequest } from '../../../shared/ipc'
 import { helm } from './bridge'
-import { usePaneSplit } from './paneSplit'
 import { ProjectColumn } from './ProjectColumn'
 import { PullRequestTab } from './PullRequestTab'
 import { disposeShell } from './pterms'
@@ -253,10 +262,17 @@ export function App(): JSX.Element {
    * first and the real one after.
    */
   const [layout, setLayout] = useState<PaneLayout | null>(null)
-  /** The pane given the whole window, or null for the panes side by side. */
+  /** The pane given the whole window, by its group's id, or null for the arrangement. */
   const [maximized, setMaximized] = useState<number | null>(null)
   /**
-   * A pane's `+` was pressed and what it opened is on screen: which pane, the
+   * The tab being dragged out of a strip, or null. Every pane's drop zones
+   * wake for the length of the gesture, and need to know which tab it is to
+   * say which zones would do anything.
+   */
+  const [draggingTab, setDraggingTab] = useState<string | null>(null)
+  /**
+   * A pane's `+` was pressed and what it opened is on screen: which pane (its
+   * group's id), the
    * button it hangs from, and the folder that pane is about, read once when it
    * opened.
    */
@@ -303,13 +319,8 @@ export function App(): JSX.Element {
    * it would drop whenever somebody looked at another tab.
    */
   const [selectedLivePid, setSelectedLivePid] = useState<number | null>(null)
-  /**
-   * The split's boundary is a CSS custom property on the row, not state. The
-   * drag and the remembered split write it, through `usePaneSplit`.
-   */
-  const splitRowRef = useRef<HTMLDivElement>(null)
-  /** Each pane's body, measured to open a pty at roughly the right grid. */
-  const bodyRefs = useRef<(HTMLDivElement | null)[]>([])
+  /** Each pane's body by its group's id, measured to open a pty at roughly the right grid. */
+  const bodyRefs = useRef(new Map<number, HTMLDivElement>())
 
   const profileState = useProfiles()
   const newSession = useNewSession()
@@ -358,10 +369,10 @@ export function App(): JSX.Element {
   const browserViews = browsers.views
 
   /**
-   * What the Terminal group shows, and one writer for them. Six of the eight are
+   * What the Terminal group shows, and one writer for them. Six of the seven are
    * terminal preferences and reach the terminals through `settings:write`;
-   * `projectShellHeightPct` and `paneSplitPct` are layout, and sit in that group
-   * because it is where somebody looks for the shell and the panes.
+   * `projectShellHeightPct` is layout, and sits in that group because it is
+   * where somebody looks for the shell.
    */
   const terminalSettings = useMemo(
     () => ({
@@ -372,8 +383,7 @@ export function App(): JSX.Element {
       terminalScrollback: settings?.terminalScrollback ?? DEFAULT_SETTINGS.terminalScrollback,
       terminalShell: settings?.terminalShell ?? null,
       projectShellHeightPct:
-        settings?.projectShellHeightPct ?? DEFAULT_SETTINGS.projectShellHeightPct,
-      paneSplitPct: settings?.paneSplitPct ?? DEFAULT_SETTINGS.paneSplitPct
+        settings?.projectShellHeightPct ?? DEFAULT_SETTINGS.projectShellHeightPct
     }),
     [settings]
   )
@@ -390,7 +400,6 @@ export function App(): JSX.Element {
     (projectShellHeightPct: number) => writeSettings({ projectShellHeightPct }),
     [writeSettings]
   )
-  const savedSplitPct = settings?.paneSplitPct ?? DEFAULT_SETTINGS.paneSplitPct
 
   /**
    * Point Helm at a `gh` it did not find. Written straight through
@@ -524,26 +533,38 @@ export function App(): JSX.Element {
     })
   }, [])
 
-  const shownMax = maximized !== null && maximized < open.groups.length ? maximized : null
+  const shownMax = maximized !== null && groupById(open, maximized) !== undefined ? maximized : null
   const shownGroups = useMemo(
-    () => (shownMax === null ? open.groups.map((_, index) => index) : [shownMax]),
+    () => (shownMax === null ? open.groups.map((group) => group.id) : [shownMax]),
     [open.groups, shownMax]
   )
   const sidebarShown = !sidebarHidden && shownMax === null
-  /** Two panes side by side: every page in one gets the narrower layout. */
-  const compact = shownGroups.length > 1
-  const focusedGroup = open.groups[open.focused]
+  /**
+   * The panes sharing the window's width with another: every page in one gets
+   * the narrower layout. A pane stacked above or below another still has the
+   * whole width, and keeps the wide one.
+   */
+  const narrow = useMemo(() => {
+    if (shownMax !== null) return new Set<number>()
+    const rects = paneRects(open)
+    return new Set(open.groups.flatMap((group) => ((rects.get(group.id)?.width ?? 1) < 0.999 ? [group.id] : [])))
+  }, [open, shownMax])
+  // Memoized rather than looked up in the body: a group looked up there is, to
+  // the React Compiler, something that may be mutated later, which would cost
+  // every callback that depends on it its memoization. A hook's result is
+  // frozen.
+  const focusedGroup = useMemo(() => groupById(open, open.focused), [open])
   const front = focusedGroup === undefined ? null : activeRef(focusedGroup)
   const frontId = front === null ? null : paneId(front)
   /** The tab in front of each pane on screen. */
   const visible = useMemo(
     () =>
-      shownGroups.flatMap((index) => {
-        const group = open.groups[index]
+      shownGroups.flatMap((id) => {
+        const group = groupById(open, id)
         const ref = group === undefined ? null : activeRef(group)
         return ref === null ? [] : [ref]
       }),
-    [open.groups, shownGroups]
+    [open, shownGroups]
   )
 
   /**
@@ -594,9 +615,6 @@ export function App(): JSX.Element {
     return () => clearTimeout(timer)
   }, [settingsLoaded, savedJson, storedJson, writeSettings])
 
-  // The divider between the panes (paneSplit.ts).
-  const startSplitDrag = usePaneSplit(splitRowRef, savedSplitPct, writeSettings)
-
   /*
    * The process pass runs only while the sessions pane is on screen. One
    * enumeration costs 400ms of a child process, so "off unless somebody is
@@ -641,7 +659,7 @@ export function App(): JSX.Element {
    * costs `openBrowser` its memoization.
    */
   const frontProject = useMemo(() => {
-    const group = open.groups[open.focused]
+    const group = groupById(open, open.focused)
     const ref = group === undefined ? null : activeRef(group)
     if (ref?.kind === 'project') return ref.path
     if (ref?.kind === 'file') return ref.root
@@ -773,8 +791,9 @@ export function App(): JSX.Element {
 
   /**
    * A launched session lands in the focused pane and takes its front - or, from
-   * the launcher's "Start beside", in the other pane, opening it if there is
-   * only one - or, from a pane's `+`, in that pane (`into`).
+   * the launcher's "Start beside", in the pane beside it (`besideOf`), opening
+   * one if the focused pane is alone - or, from a pane's `+`, in that pane
+   * (`into`).
    */
   const placeSession = useCallback(
     (id: number, beside = false, into?: number) => {
@@ -798,7 +817,7 @@ export function App(): JSX.Element {
     async (project: Project) => {
       setLaunchingPath(project.path)
       try {
-        const id = await sessionState.launch(project, bodyRefs.current[open.focused] ?? null)
+        const id = await sessionState.launch(project, bodyRefs.current.get(open.focused) ?? null)
         if (id !== null) placeSession(id)
       } finally {
         setLaunchingPath(null)
@@ -810,7 +829,7 @@ export function App(): JSX.Element {
   /** A profile launch lands exactly the way a project launch does - or in the pane `into`. */
   const launchProfile = useCallback(
     async (profile: Profile, into?: number) => {
-      const session = await profileState.launch(profile, bodyRefs.current[into ?? open.focused] ?? null)
+      const session = await profileState.launch(profile, bodyRefs.current.get(into ?? open.focused) ?? null)
       if (!session) return
       sessionState.adopt(session)
       placeSession(session.id, false, into)
@@ -824,7 +843,7 @@ export function App(): JSX.Element {
    */
   const resumeSession = useCallback(
     async (session: HistorySession) => {
-      const record = await historyState.resume(session, bodyRefs.current[open.focused] ?? null)
+      const record = await historyState.resume(session, bodyRefs.current.get(open.focused) ?? null)
       if (!record) return
       sessionState.adopt(record)
       placeSession(record.id)
@@ -841,8 +860,7 @@ export function App(): JSX.Element {
    */
   const startChosen = useCallback(
     async (choice: LaunchChoice, into?: number) => {
-      const other = open.focused === 0 ? 1 : 0
-      const target = into ?? (choice.beside && open.groups.length > 1 ? other : open.focused)
+      const target = into ?? (choice.beside ? (besideOf(open, open.focused) ?? open.focused) : open.focused)
       const launched = await newSession.launch(
         {
           cwd: choice.project.path,
@@ -852,7 +870,7 @@ export function App(): JSX.Element {
           permissionMode: choice.permissionMode,
           resume: choice.resume?.sessionId ?? null
         },
-        bodyRefs.current[target] ?? null
+        bodyRefs.current.get(target) ?? null
       )
       if (launched === null) return
       sessionState.adopt(launched.session)
@@ -860,7 +878,7 @@ export function App(): JSX.Element {
       if (into === undefined) newSession.hide()
       else setNewTab(null)
     },
-    [newSession, sessionState, placeSession, open.focused, open.groups.length]
+    [newSession, sessionState, placeSession, open]
   )
 
   /*
@@ -875,7 +893,7 @@ export function App(): JSX.Element {
       void newSession
         .launch(
           { cwd: path, projectPath: path, profileId: null, permissionMode: null, resume: null },
-          bodyRefs.current[open.focused] ?? null
+          bodyRefs.current.get(open.focused) ?? null
         )
         .then((launched) => {
           if (launched === null) return
@@ -894,13 +912,15 @@ export function App(): JSX.Element {
     async (ids: readonly number[], unasked = false) => {
       if (restoreOffer === null) return
       const { layout } = restoreOffer
+      // Sized for the pane at the saved one's place in reading order, when
+      // there is one there now; the panes are rearranged around them after.
       const paneOf = (id: number): number =>
-        layout?.groups.findIndex((group) =>
+        savedGroups(layout).findIndex((group) =>
           group.panes.some((pane) => pane.kind === 'session' && pane.id === id)
-        ) ?? -1
+        )
       const picks = ids.map((id) => {
-        const pane = paneOf(id)
-        const body = (pane >= 0 ? bodyRefs.current[pane] : undefined) ?? bodyRefs.current[open.focused]
+        const there = open.groups[paneOf(id)]
+        const body = (there === undefined ? undefined : bodyRefs.current.get(there.id)) ?? bodyRefs.current.get(open.focused)
         return { id, ...estimateGrid(body ?? null) }
       })
       const result = await restoreLost(picks, { unasked })
@@ -909,7 +929,7 @@ export function App(): JSX.Element {
       const pairs = new Map(result.restored.map(({ from, launched }) => [from, launched.session.id]))
       commit((current) => placeRestored(closeTab(current, 'restore'), layout, pairs))
     },
-    [restoreOffer, restoreLost, sessionState, commit, open.focused]
+    [restoreOffer, restoreLost, sessionState, commit, open]
   )
 
   /*
@@ -936,7 +956,7 @@ export function App(): JSX.Element {
    */
   const reviewPull = useCallback(
     async (repoPath: string, number: number) => {
-      const { cols, rows } = estimateGrid(bodyRefs.current[open.focused] ?? null)
+      const { cols, rows } = estimateGrid(bodyRefs.current.get(open.focused) ?? null)
       const launched = await helm.invoke('pr:review', { repoPath, number, cols, rows })
       sessionState.adopt(launched.session)
       placeSession(launched.session.id)
@@ -1020,7 +1040,7 @@ export function App(): JSX.Element {
   const closeAny = useCallback(
     (id: string) => {
       const at = findTab(open, id)
-      const ref = at === null ? undefined : open.groups[at.group]?.tabs[at.index]
+      const ref = at === null ? undefined : groupById(open, at.group)?.tabs[at.index]
       if (ref === undefined) return
       if (ref.kind === 'session') {
         closeSession(ref.id)
@@ -1042,9 +1062,55 @@ export function App(): JSX.Element {
   )
 
   const splitFocused = useCallback(() => {
-    commit(sendToOtherGroup)
+    commit(sendBeside)
     setMaximized(null)
   }, [commit])
+
+  /**
+   * A tab dropped on a pane: in its middle, it joins that pane at the end of
+   * the strip; at a side, it opens a new pane there. A new pane would be
+   * hidden behind a maximized one, so the window is given back first.
+   */
+  const dropTab = useCallback(
+    (tab: string, group: number, zone: PaneDropZone) => {
+      if (zone === 'center') {
+        commit((current) => moveTab(current, tab, group, groupById(current, group)?.tabs.length ?? 0))
+        return
+      }
+      commit((current) => splitWith(current, tab, group, zone))
+      setMaximized(null)
+    },
+    [commit]
+  )
+
+  /**
+   * Which zones of a pane would do anything with the tab being dragged: not
+   * its own pane's middle, which is where it already is, and not a side of a
+   * pane whose only tab it is, which would put a new pane where that one
+   * stood. `splitWith` refuses the second anyway; saying so here is what keeps
+   * a preview from promising it.
+   */
+  const dropAllows = useCallback(
+    (group: PaneGroupState, zone: PaneDropZone): boolean => {
+      if (draggingTab === null) return false
+      const own = group.tabs.some((ref) => paneId(ref) === draggingTab)
+      if (zone === 'center') return !own
+      return !own || group.tabs.length > 1
+    },
+    [draggingTab]
+  )
+
+  /** A tab drag starting or ending in any strip. */
+  const { setSuppressed: suppressBrowsers } = browsers
+  const onTabDragging = useCallback(
+    (tab: string | null) => {
+      setDraggingTab(tab)
+      // A native view paints over the drop marks, the zones' preview and the
+      // dragged tab's ghost, so it stands down for the length of the gesture.
+      suppressBrowsers('tab-drag', tab !== null)
+    },
+    [suppressBrowsers]
+  )
 
   // ---------------------------------------------------------------------------
   // The keyboard
@@ -1074,7 +1140,7 @@ export function App(): JSX.Element {
 
   /** The folder the focused pane is about, for the launcher to open on. */
   const frontFolder = useMemo(() => {
-    const group = open.groups[open.focused]
+    const group = groupById(open, open.focused)
     return folderOf(group === undefined ? null : activeRef(group), sessionsById)
   }, [open, sessionsById])
   const { show: showLauncher } = newSession
@@ -1092,7 +1158,7 @@ export function App(): JSX.Element {
         setNewTab(null)
         return
       }
-      const pane = open.groups[group]
+      const pane = groupById(open, group)
       prepareLauncher()
       setNewTab({ group, anchor, folder: folderOf(pane === undefined ? null : activeRef(pane), sessionsById) })
     },
@@ -1320,7 +1386,7 @@ export function App(): JSX.Element {
 
   /**
    * Ctrl+Tab cycles every tab in every pane on screen as one ring, and Ctrl+\
-   * sends the front tab to the other pane. In capture so neither reaches a
+   * sends the front tab to the pane beside it. In capture so neither reaches a
    * focused terminal. Ctrl+Shift+Tab is not bound by Claude Code; Shift+Tab
    * alone is (it cycles permission modes) and is deliberately left alone.
    */
@@ -1342,7 +1408,7 @@ export function App(): JSX.Element {
         return
       }
       // A maximized pane is the whole window, so the ring is its tabs.
-      const group = open.groups[shownMax]
+      const group = groupById(open, shownMax)
       const ids = group?.tabs.map(paneId) ?? []
       if (group === undefined || ids.length < 2) return
       const current = activeRef(group)
@@ -1352,7 +1418,7 @@ export function App(): JSX.Element {
     }
     window.addEventListener('keydown', onKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
-  }, [commit, open.groups, shownMax, splitFocused])
+  }, [commit, open, shownMax, splitFocused])
 
   // ---------------------------------------------------------------------------
   // What the tree, the tabs, the crumbs and the status bar say
@@ -2046,8 +2112,8 @@ export function App(): JSX.Element {
     />
   )
 
-  /** Whatever a non-session tab shows. */
-  const renderPage = (ref: PaneRef): ReactNode => {
+  /** Whatever a non-session tab shows, in a pane that is `compact` when it shares the width. */
+  const renderPage = (ref: PaneRef, compact: boolean): ReactNode => {
     switch (ref.kind) {
       case 'project': {
         const project = projectsByPath.get(ref.path)
@@ -2250,7 +2316,7 @@ export function App(): JSX.Element {
             onEvaluate={(source) => browsers.evaluate(view.id, source)}
             // The address dropdown hangs over the page; the view stands down
             // for it, the same way it does for a tab drag.
-            onCovering={browsers.setSuppressed}
+            onCovering={(covering) => browsers.setSuppressed('address-list', covering)}
           />
         )
       }
@@ -2325,9 +2391,11 @@ export function App(): JSX.Element {
   // The frame
   // ---------------------------------------------------------------------------
 
-  /** One pane: its strip, its crumb, its sessions' terminals and its front page. */
-  const renderGroup = (index: number, place: 'whole' | 'start' | 'end'): JSX.Element => {
-    const group = open.groups[index]!
+  /** One pane, by its group's id: its strip, its crumb, its sessions' terminals, its front page and its drop zones. */
+  const renderGroup = (id: number): JSX.Element | null => {
+    const index = open.groups.findIndex((candidate) => candidate.id === id)
+    const group = open.groups[index]
+    if (group === undefined) return null
     const groupFront = activeRef(group)
     const groupFrontId = groupFront === null ? null : paneId(groupFront)
     const attention = group.tabs.some(
@@ -2340,36 +2408,40 @@ export function App(): JSX.Element {
     return (
       <PaneGroup
         index={index}
-        focused={index === open.focused}
+        id={id}
+        focused={id === open.focused}
         attention={attention}
-        className={
-          place === 'whole' ? 'split-whole' : place === 'start' ? 'split-start' : 'split-end'
-        }
         bodyRef={(element) => {
-          bodyRefs.current[index] = element
+          if (element === null) bodyRefs.current.delete(id)
+          else bodyRefs.current.set(id, element)
         }}
-        onFocus={() => commit((current) => focusGroup(current, index))}
+        onFocus={() => commit((current) => focusGroup(current, id))}
+        drop={
+          <PaneDrop
+            active={draggingTab !== null}
+            allows={(zone) => dropAllows(group, zone)}
+            onDrop={(tab, zone) => dropTab(tab, id, zone)}
+          />
+        }
         strip={
           <TabBar
             tabs={group.tabs.flatMap(tabFor)}
             activeId={groupFrontId}
-            focused={index === open.focused}
+            focused={id === open.focused}
             onActivate={(id) => {
               commit((current) => activateTab(current, id))
               const ref = group.tabs.find((tab) => paneId(tab) === id)
               if (ref !== undefined) bringSidebarFor(ref)
             }}
             onClose={closeAny}
-            onMove={(id, toIndex) => commit((current) => moveTab(current, id, index, toIndex))}
-            onRename={(id, label) => {
-              if (id.startsWith('session:')) void sessionState.rename(sessionIdOf(id), label)
+            onMove={(tab, toIndex) => commit((current) => moveTab(current, tab, id, toIndex))}
+            onRename={(tab, label) => {
+              if (tab.startsWith('session:')) void sessionState.rename(sessionIdOf(tab), label)
             }}
             onKeep={keepTab}
-            // A native view paints over the drop mark and the dragged tab's
-            // ghost, so it stands down for the length of the gesture.
-            onDragging={browsers.setSuppressed}
-            onNewTab={(button) => toggleNewTab(index, button)}
-            newTabOpen={newTab?.group === index}
+            onDragging={onTabDragging}
+            onNewTab={(button) => toggleNewTab(id, button)}
+            newTabOpen={newTab?.group === id}
             actions={
               <>
                 {groupFront?.kind === 'file' && (
@@ -2390,19 +2462,19 @@ export function App(): JSX.Element {
                 )}
                 <PaneActions
                 split={single ? (group.tabs.length > 1 ? 'new' : null) : 'other'}
-                maximized={shownMax === index}
+                maximized={shownMax === id}
                 canMaximize={group.tabs.length > 0}
-                canClose={!single && index === 1}
+                canClose={!single}
                 onSplit={() => {
-                  commit((current) => sendToOtherGroup(focusGroup(current, index)))
+                  commit((current) => sendBeside(focusGroup(current, id)))
                   setMaximized(null)
                 }}
                 onMaximize={() => {
-                  commit((current) => focusGroup(current, index))
-                  setMaximized((current) => (current === index ? null : index))
+                  commit((current) => focusGroup(current, id))
+                  setMaximized((current) => (current === id ? null : id))
                 }}
                 onClose={() => {
-                  commit((current) => closeGroup(current, index))
+                  commit((current) => closeGroup(current, id))
                   setMaximized(null)
                 }}
               />
@@ -2439,7 +2511,7 @@ export function App(): JSX.Element {
         {groupFront !== null && groupFront.kind !== 'session' && groupFront.kind !== 'file' && (
           // On the pane itself: the pane is the island, and a page says what it
           // has in sections with hairlines rather than islands of its own.
-          <div className="absolute inset-0">{renderPage(groupFront)}</div>
+          <div className="absolute inset-0">{renderPage(groupFront, narrow.has(id))}</div>
         )}
       </PaneGroup>
     )
@@ -2829,9 +2901,9 @@ export function App(): JSX.Element {
         />
       }
     >
-      <div ref={splitRowRef} className="split-row relative flex h-full w-full">
+      <div className="relative h-full w-full">
         {empty ? (
-          <div className="split-whole">
+          <div className="h-full w-full">
             <WelcomePane
               roots={settings?.scanRoots ?? []}
               projectCount={discovery?.projects.length ?? 0}
@@ -2841,30 +2913,13 @@ export function App(): JSX.Element {
             />
           </div>
         ) : (
-          shownGroups.map((index, at) => (
-            <Fragment key={index}>
-              {at === 1 && (
-                // The divider is the gutter between the panes: a 3px grip that
-                // goes accent on hover, with an 8px target whatever the gap is.
-                <div
-                  role="separator"
-                  aria-orientation="vertical"
-                  title="Drag to resize"
-                  onMouseDown={startSplitDrag}
-                  className={cn(
-                    'group relative flex w-gutter shrink-0 cursor-col-resize items-center justify-center',
-                    "before:absolute before:inset-y-0 before:left-1/2 before:w-2 before:-translate-x-1/2 before:content-['']"
-                  )}
-                >
-                  <span className="h-10 w-[min(3px,var(--helm-gap))] rounded-full bg-border-strong transition-colors group-hover:bg-accent" />
-                </div>
-              )}
-              {renderGroup(
-                index,
-                shownGroups.length === 1 ? 'whole' : at === 0 ? 'start' : 'end'
-              )}
-            </Fragment>
-          ))
+          <PaneGrid
+            root={open.root}
+            maximized={shownMax}
+            gap={settings?.paneGap ?? DEFAULT_SETTINGS.paneGap}
+            panes={new Map(shownGroups.map((id) => [id, renderGroup(id)]))}
+            onResize={(path, sizes) => commit((current) => resizeSplit(current, path, sizes))}
+          />
         )}
 
         {harnessDialog}
@@ -2905,7 +2960,7 @@ export function App(): JSX.Element {
             onDismiss={newSession.hide}
           />
         )}
-        {newTab !== null && newTab.group < open.groups.length && (
+        {newTab !== null && groupById(open, newTab.group) !== undefined && (
           <NewTabMenu
             // A new `+` is a new menu, from its first step.
             key={newTab.group}

@@ -124,19 +124,30 @@ describe('settings', () => {
       // Every pane kind, because the validator checks each one's own fields and
       // a strip of only the field-less kinds would not exercise them.
       paneLayout: {
-        groups: [
-          {
-            panes: [
-              { kind: 'project', path: dir },
-              { kind: 'history' },
-              { kind: 'pulls' },
-              { kind: 'pr', repoPath: dir, number: 42 },
-              { kind: 'session', id: 7 }
-            ],
-            activeId: `project:${dir}`
-          },
-          { panes: [{ kind: 'config' }, { kind: 'settings' }], activeId: null }
-        ],
+        root: {
+          axis: 'row',
+          children: [
+            {
+              panes: [
+                { kind: 'project', path: dir },
+                { kind: 'history' },
+                { kind: 'pulls' },
+                { kind: 'pr', repoPath: dir, number: 42 },
+                { kind: 'session', id: 7 }
+              ],
+              activeId: `project:${dir}`
+            },
+            {
+              axis: 'column',
+              children: [
+                { panes: [{ kind: 'config' }], activeId: null },
+                { panes: [{ kind: 'settings' }], activeId: null }
+              ],
+              sizes: [0.7, 0.3]
+            }
+          ],
+          sizes: [0.6, 0.4]
+        },
         focused: 1
       },
       firstRunCompletedAt: '2026-08-09T12:00:00.000Z',
@@ -149,7 +160,6 @@ describe('settings', () => {
       terminalScrollback: 2500,
       terminalShell: join(dir, 'pwsh.exe'),
       projectShellHeightPct: 42,
-      paneSplitPct: 62,
       filesWrap: true,
       railHidden: ['pulls', 'config'],
       transcriptArchiveMaxBytes: 256 * 1024 * 1024,
@@ -200,6 +210,52 @@ describe('settings', () => {
     expect(readSettings(store)).toEqual(DEFAULT_SETTINGS)
   })
 
+  describe('a pane layout written before panes were a tree', () => {
+    const raw = (key: string, value: unknown): void => {
+      store.raw
+        .prepare('INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)')
+        .run(key, JSON.stringify(value), '')
+    }
+    const HISTORY = { panes: [{ kind: 'history' }], activeId: 'history' }
+    const CONFIG = { panes: [{ kind: 'config' }], activeId: null }
+
+    it('reads two groups as the row they were, with the divider where it was left', () => {
+      raw('paneLayout', { groups: [HISTORY, CONFIG], focused: 1 })
+      raw('paneSplitPct', 62)
+
+      expect(readSettings(store).paneLayout).toEqual({
+        root: { axis: 'row', children: [HISTORY, CONFIG], sizes: [0.38, 0.62] },
+        focused: 1
+      })
+    })
+
+    it('reads two groups at the old default split when the divider was never moved', () => {
+      raw('paneLayout', { groups: [HISTORY, CONFIG], focused: 0 })
+
+      expect(readSettings(store).paneLayout).toEqual({
+        root: { axis: 'row', children: [HISTORY, CONFIG], sizes: [0.55, 0.45] },
+        focused: 0
+      })
+    })
+
+    it('reads one group as that group, and the result is a layout the writer accepts', () => {
+      raw('paneLayout', { groups: [HISTORY], focused: 0 })
+
+      const { paneLayout } = readSettings(store)
+      expect(paneLayout).toEqual({ root: HISTORY, focused: 0 })
+      expect(validateSetting('paneLayout', paneLayout)).toBeNull()
+    })
+
+    it('reads a value that is neither shape as no layout, and no key for the old divider', () => {
+      raw('paneLayout', { panes: [] })
+      raw('paneSplitPct', 62)
+
+      const settings = readSettings(store)
+      expect(settings.paneLayout).toBeNull()
+      expect(settings).not.toHaveProperty('paneSplitPct')
+    })
+  })
+
   it('falls back to the default for a value that is not valid JSON', () => {
     store.raw
       .prepare("INSERT INTO app_settings (key, value, updated_at) VALUES ('theme', '{oops', '')")
@@ -208,6 +264,19 @@ describe('settings', () => {
     expect(readSettings(store).theme).toBe(DEFAULT_SETTINGS.theme)
   })
 })
+
+/** Two groups to split, for the validator's split cases. */
+const H = { panes: [{ kind: 'history' }], activeId: null }
+const S = { panes: [{ kind: 'settings' }], activeId: null }
+
+/** Splits nested `depth` deep, alternating axis, each beside one group. */
+function nested(depth: number): unknown {
+  let node: unknown = H
+  for (let level = 0; level < depth; level += 1) {
+    node = { axis: level % 2 === 0 ? 'row' : 'column', children: [node, S], sizes: [0.5, 0.5] }
+  }
+  return node
+}
 
 describe('settings validation', () => {
   /**
@@ -319,30 +388,40 @@ describe('settings validation', () => {
       key: 'paneLayout',
       good: [
         null,
-        { groups: [{ panes: [], activeId: null }], focused: 0 },
-        { groups: [{ panes: [{ kind: 'history' }], activeId: 'history' }], focused: 0 },
+        { root: { panes: [], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'history' }], activeId: 'history' }, focused: 0 },
         {
-          groups: [
-            {
-              panes: [
-                { kind: 'project', path: 'C:\\work\\helm' },
-                { kind: 'pr', repoPath: 'C:\\work\\helm', number: 7 },
-                { kind: 'pulls' },
-                { kind: 'session', id: 12 }
-              ],
-              activeId: 'session:12'
-            },
-            {
-              panes: [
-                { kind: 'config' },
-                { kind: 'content' },
-                { kind: 'settings' },
-                { kind: 'file', root: 'C:\\work\\helm', path: 'C:\\work\\helm\\README.md' }
-              ],
-              activeId: null
-            }
-          ],
-          focused: 1
+          root: {
+            axis: 'row',
+            children: [
+              {
+                panes: [
+                  { kind: 'project', path: 'C:\\work\\helm' },
+                  { kind: 'pr', repoPath: 'C:\\work\\helm', number: 7 },
+                  { kind: 'pulls' },
+                  { kind: 'session', id: 12 }
+                ],
+                activeId: 'session:12'
+              },
+              {
+                axis: 'column',
+                children: [
+                  { panes: [{ kind: 'config' }, { kind: 'content' }], activeId: null },
+                  {
+                    panes: [
+                      { kind: 'settings' },
+                      { kind: 'file', root: 'C:\\work\\helm', path: 'C:\\work\\helm\\README.md' }
+                    ],
+                    activeId: null
+                  }
+                ],
+                sizes: [0.5, 0.5]
+              },
+              { panes: [{ kind: 'history' }], activeId: null }
+            ],
+            sizes: [0.4, 0.35, 0.25]
+          },
+          focused: 2
         }
       ],
       bad: [
@@ -351,62 +430,74 @@ describe('settings validation', () => {
         'history',
         42,
         { focused: 0 },
-        { groups: {}, focused: 0 },
-        // The single strip this replaced, which is the shape an old row is in.
+        { root: null, focused: 0 },
+        { root: [], focused: 0 },
+        // The shape a layout had before panes were a tree. Read back, it is
+        // upgraded (`upgradeSavedLayout`); written, it is a bug in the writer.
+        { groups: [{ panes: [{ kind: 'history' }], activeId: 'history' }], focused: 0 },
+        // The single strip that shape replaced.
         { panes: [{ kind: 'history' }], activeId: 'history' },
-        // No group, and more groups than there are places for.
-        { groups: [], focused: 0 },
+        // A split of fewer than two, across no axis, or with a share missing,
+        // spare, zero, negative or not a number.
+        { root: { axis: 'row', children: [{ panes: [{ kind: 'history' }], activeId: null }], sizes: [1] }, focused: 0 },
         {
-          groups: [
-            { panes: [], activeId: null },
-            { panes: [], activeId: null },
-            { panes: [], activeId: null }
-          ],
+          root: { axis: 'diagonal', children: [H, S], sizes: [0.5, 0.5] },
           focused: 0
         },
+        { root: { axis: 'row', children: [H, S], sizes: [1] }, focused: 0 },
+        { root: { axis: 'row', children: [H, S], sizes: [0.5, 0.25, 0.25] }, focused: 0 },
+        { root: { axis: 'row', children: [H, S], sizes: [1, 0] }, focused: 0 },
+        { root: { axis: 'row', children: [H, S], sizes: [1.5, -0.5] }, focused: 0 },
+        { root: { axis: 'row', children: [H, S], sizes: [0.5, Number.NaN] }, focused: 0 },
+        { root: { axis: 'row', children: [H, S], sizes: ['0.5', '0.5'] }, focused: 0 },
+        { root: { axis: 'row', children: [H, S] }, focused: 0 },
+        { root: { axis: 'row', children: [H, null], sizes: [0.5, 0.5] }, focused: 0 },
+        // An empty group beside a full one: `toSaved` never writes one, so one
+        // here is a writer that has stopped normalising.
+        { root: { axis: 'row', children: [H, { panes: [], activeId: null }], sizes: [0.5, 0.5] }, focused: 0 },
+        // Nested past any arrangement a person could make.
+        { root: nested(40), focused: 0 },
         // A focus that names no group.
-        { groups: [{ panes: [], activeId: null }], focused: 1 },
-        { groups: [{ panes: [], activeId: null }], focused: -1 },
-        { groups: [{ panes: [], activeId: null }], focused: 0.5 },
-        { groups: [{ panes: [], activeId: null }] },
-        { groups: [null], focused: 0 },
-        { groups: [{ activeId: null }], focused: 0 },
+        { root: { panes: [], activeId: null }, focused: 1 },
+        { root: { axis: 'row', children: [H, S], sizes: [0.5, 0.5] }, focused: 2 },
+        { root: { panes: [], activeId: null }, focused: -1 },
+        { root: { panes: [], activeId: null }, focused: 0.5 },
+        { root: { panes: [], activeId: null } },
+        { root: { activeId: null }, focused: 0 },
         // A kind this build does not have, which is the shape a renamed pane
         // would arrive in.
-        { groups: [{ panes: [{ kind: 'terminal' }], activeId: null }], focused: 0 },
+        { root: { panes: [{ kind: 'terminal' }], activeId: null }, focused: 0 },
         // A session is written down by its row id, and only by one; browser
         // tabs and the restore offer never are. See `SavedPane`.
-        { groups: [{ panes: [{ kind: 'session' }], activeId: null }], focused: 0 },
-        { groups: [{ panes: [{ kind: 'session', id: '1' }], activeId: null }], focused: 0 },
-        { groups: [{ panes: [{ kind: 'session', id: 0 }], activeId: null }], focused: 0 },
-        { groups: [{ panes: [{ kind: 'session', id: 1.5 }], activeId: null }], focused: 0 },
-        { groups: [{ panes: [{ kind: 'browser', id: 1 }], activeId: null }], focused: 0 },
-        { groups: [{ panes: [{ kind: 'restore' }], activeId: null }], focused: 0 },
-        { groups: [{ panes: [{ kind: 'project' }], activeId: null }], focused: 0 },
+        { root: { panes: [{ kind: 'session' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'session', id: '1' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'session', id: 0 }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'session', id: 1.5 }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'browser', id: 1 }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'restore' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'project' }], activeId: null }, focused: 0 },
         // A file is read inside its project, so it is written down with both.
-        { groups: [{ panes: [{ kind: 'file', path: 'C:\\a\\b.ts' }], activeId: null }], focused: 0 },
-        { groups: [{ panes: [{ kind: 'file', root: 'C:\\a' }], activeId: null }], focused: 0 },
-        { groups: [{ panes: [{ kind: 'file', root: '', path: 'C:\\a\\b.ts' }], activeId: null }], focused: 0 },
-        { groups: [{ panes: [{ kind: 'project', path: '' }], activeId: null }], focused: 0 },
-        {
-          groups: [{ panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm' }], activeId: null }],
-          focused: 0
-        },
-        {
-          groups: [{ panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm', number: 0 }], activeId: null }],
-          focused: 0
-        },
-        { groups: [{ panes: ['history'], activeId: null }], focused: 0 },
+        { root: { panes: [{ kind: 'file', path: 'C:\\a\\b.ts' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'file', root: 'C:\\a' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'file', root: '', path: 'C:\\a\\b.ts' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'project', path: '' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm', number: 0 }], activeId: null }, focused: 0 },
+        { root: { panes: ['history'], activeId: null }, focused: 0 },
         // An id is compared against tabs, never parsed, so anything that is not
         // a string cannot match one.
-        { groups: [{ panes: [], activeId: 7 }], focused: 0 },
-        // Longer than any workspace, counted across both groups: a runaway list
+        { root: { panes: [], activeId: 7 }, focused: 0 },
+        // Longer than any workspace, counted across every group: a runaway list
         // is a bug, not an arrangement.
         {
-          groups: [
-            { panes: Array.from({ length: 60 }, () => ({ kind: 'history' })), activeId: null },
-            { panes: Array.from({ length: 41 }, () => ({ kind: 'history' })), activeId: null }
-          ],
+          root: {
+            axis: 'row',
+            children: [
+              { panes: Array.from({ length: 60 }, () => ({ kind: 'history' })), activeId: null },
+              { panes: Array.from({ length: 41 }, () => ({ kind: 'history' })), activeId: null }
+            ],
+            sizes: [0.5, 0.5]
+          },
           focused: 0
         }
       ]
@@ -467,19 +558,6 @@ describe('settings validation', () => {
       key: 'projectShellHeightPct',
       good: [10, 30, 50],
       bad: [9, 51, 0, -30, 100, 30.5, '30', null, Number.NaN, Number.POSITIVE_INFINITY]
-    },
-    {
-      // The sessions column's share of the window. The bounds are wider than
-      // the shell's because neither side of this divider is the subordinate
-      // one - a workspace squeezed to a fifth is a choice somebody can make,
-      // where a project page that is mostly shell is not.
-      //
-      // The non-finite cases matter here for the same reason: the fraction
-      // becomes a `flex-grow`, and `flex: NaN 1 0%` is dropped by the parser,
-      // which would collapse the column rather than fail.
-      key: 'paneSplitPct',
-      good: [20, 45, 80],
-      bad: [19, 81, 0, -45, 100, 45.5, '45', null, Number.NaN, Number.POSITIVE_INFINITY]
     },
     {
       // Whether a file wraps. `'true'` and `1` are in the bad column because
@@ -758,7 +836,7 @@ describe('settings validation', () => {
       pinnedProjects: [join(dir, 'alpha')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
       paneLayout: {
-        groups: [{ panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' }],
+        root: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
         focused: 0
       },
       firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
@@ -771,7 +849,6 @@ describe('settings validation', () => {
       terminalScrollback: 50_000,
       terminalShell: join(dir, 'cmd.exe'),
       projectShellHeightPct: 45,
-      paneSplitPct: 70,
       filesWrap: true,
       railHidden: ['browser'],
       transcriptArchiveMaxBytes: 512 * 1024 * 1024,
@@ -812,9 +889,9 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   pinnedProjects: [join(dir, 'alpha')],
   windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
   paneLayout: {
-        groups: [{ panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' }],
-        focused: 0
-      },
+    root: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
+    focused: 0
+  },
   firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
   claudePath: join(dir, 'claude.exe'),
   usageDisplay: 'off',
@@ -825,7 +902,6 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   terminalScrollback: 50_000,
   terminalShell: join(dir, 'cmd.exe'),
   projectShellHeightPct: 45,
-  paneSplitPct: 70,
   filesWrap: true,
   railHidden: ['browser'],
   transcriptArchiveMaxBytes: 512 * 1024 * 1024,

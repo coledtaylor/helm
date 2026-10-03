@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { TabBar, type Tab, type TabBarProps } from './TabBar'
@@ -144,6 +144,34 @@ describe('TabBar: the new-tab button', () => {
     unmount()
     renderBar()
     expect(screen.queryByRole('button', { name: 'New tab' })).toBeNull()
+  })
+
+  it('says which tab is being dragged, and that the drag is over once it is dropped anywhere', async () => {
+    const onDragging = vi.fn()
+    renderBar({ onDragging })
+    const data = new Map<string, string>()
+    const dataTransfer = {
+      types: [] as string[],
+      setData: (type: string, value: string) => {
+        data.set(type, value)
+        dataTransfer.types = [...data.keys()]
+      },
+      getData: (type: string) => data.get(type) ?? '',
+      effectAllowed: 'none'
+    }
+    const tab = screen.getByRole('tab', { name: 'beta, waiting for you' }).closest('[draggable]')!
+
+    fireEvent.dragStart(tab, { dataTransfer })
+    expect(onDragging).toHaveBeenLastCalledWith('session:2')
+    expect(tab.className).toContain('opacity-40')
+
+    // Dropped on another pane: this strip hears no `dragend` when the tab's
+    // element has gone with it, so the window's drop is what ends the drag -
+    // once the drop itself has been handled.
+    fireEvent.drop(window)
+    expect(onDragging).toHaveBeenLastCalledWith('session:2')
+    await waitFor(() => expect(onDragging).toHaveBeenLastCalledWith(null))
+    expect(tab.className).not.toContain('opacity-40')
   })
 
   it('takes a tab dropped on it as a drop at the end of the strip', () => {

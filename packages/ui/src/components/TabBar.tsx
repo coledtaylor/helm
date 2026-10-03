@@ -61,15 +61,16 @@ export interface TabBarProps {
   activeId: string | null
   /**
    * Whether this strip's pane is the focused one. Its front tab takes the
-   * stronger fill; the other pane's front tab the hover tone - so with two
-   * panes on screen, which one the keyboard means is visible at a glance.
+   * stronger fill; every other pane's front tab the hover tone - so with
+   * several panes on screen, which one the keyboard means is visible at a
+   * glance.
    */
   focused: boolean
   onActivate: (id: string) => void
   onClose: (id: string) => void
   /**
    * A tab should end up at `toIndex` in this strip - moved along it by
-   * keyboard or pointer, or dropped onto it from the other pane's strip. The
+   * keyboard or pointer, or dropped onto it from another pane's strip. The
    * index counts after the tab has left wherever it was. Omit to disable both.
    */
   onMove?: ((id: string, toIndex: number) => void) | undefined
@@ -91,31 +92,35 @@ export interface TabBarProps {
   /** What the `+` opened is on screen: the button stays lit while it is. */
   newTabOpen?: boolean | undefined
   /**
-   * Whether a tab is being dragged right now.
+   * The tab being dragged out of this strip right now, or null when the drag
+   * is over.
    *
-   * Reported because something outside the DOM needs to know. The browser
-   * pane's `WebContentsView` paints above every pixel the renderer draws,
-   * including the drop mark and the ghost of the tab being moved - so it gets
-   * out of the way for the length of the gesture. A drag is a fraction of a
-   * second and the page keeps running behind it, which is why this is the
-   * cheap answer and a scrim would not be: a drag is not modal.
+   * Reported for two things outside the strip. Every pane's drop zones wake up
+   * for the length of the gesture and need to know which tab it is - the
+   * `dataTransfer` will not say until the drop. And the browser pane's
+   * `WebContentsView` paints above every pixel the renderer draws, including
+   * the drop mark, the zones' preview and the ghost of the tab being moved - so
+   * it gets out of the way. A drag is a fraction of a second and the page keeps
+   * running behind it, which is why this is the cheap answer and a scrim would
+   * not be: a drag is not modal.
    *
    * A **toast** deliberately does not do this. See `App.tsx`.
    */
-  onDragging?: ((dragging: boolean) => void) | undefined
+  onDragging?: ((tab: string | null) => void) | undefined
 }
 
 /**
  * The drag payload's type. Its own, rather than `text/plain` alone, so a strip
- * can tell a tab being dragged from text being dragged over it - and so the
- * other pane's strip, which never saw the drag start, can accept it.
+ * can tell a tab being dragged from text being dragged over it - and so
+ * another pane's strip, or its drop zones, which never saw the drag start, can
+ * accept it.
  */
-const TAB_MIME = 'application/x-helm-tab'
+export const TAB_MIME = 'application/x-helm-tab'
 
 /**
  * A pane's tabs, as one-line pills.
  *
- * Pills on the island rather than folder tabs lifting into it: with two panes
+ * Pills on the island rather than folder tabs lifting into it: with panes
  * side by side, each an island, the strip is a row *inside* its pane and the
  * front tab is marked by fill rather than by joining the pane below. That is
  * also what lets every tab be one line - a folder tab needed its second line
@@ -123,8 +128,9 @@ const TAB_MIME = 'application/x-helm-tab'
  *
  * Reordering is a pointer drag with a keyboard equivalent, Ctrl+Shift+Arrow,
  * because a strip that can only be arranged with a mouse is a strip half the
- * ways into this app cannot reach. A drag can also carry a tab across to the
- * other pane's strip, which is how a tab changes pane by pointer.
+ * ways into this app cannot reach. A drag can also carry a tab to another
+ * pane's strip, or onto a pane itself (`PaneDrop`) - into it, or to one of its
+ * sides to open a new pane there.
  *
  * A `+` follows the last tab, as it does in a browser, and stays in view when
  * the strip scrolls: the tabs scroll in a box that grows to its contents and no
@@ -171,8 +177,40 @@ export function TabBar({
   const finishDrag = (): void => {
     setDragging(null)
     setDropIndex(null)
-    onDragging?.(false)
+    onDragging?.(null)
   }
+
+  /*
+   * The drag is over at the drop, wherever it lands. The source tab's
+   * `dragend` is not enough: a drop that moves the tab to another pane takes
+   * its element out of this strip first, and an event fired at a detached
+   * element reaches nothing - not React's root, so not `onDragEnd`. Missed, the
+   * strip would keep the tab drawn faded for the next time it came back, and
+   * the browser view would stay hidden.
+   *
+   * So the drop is heard on the window, in capture, because a target's own
+   * handler stops it bubbling - and the ending is put off until the dispatch
+   * is over, because ending it here would re-render every strip and every
+   * pane's drop zones before the target's handler had read where the drop
+   * was. `dragend` is heard the same way, for a drag let go outside the window
+   * or abandoned with Escape, where nothing was dropped.
+   */
+  useEffect(() => {
+    if (dragging === null) return undefined
+    const end = (): void => {
+      window.setTimeout(() => {
+        setDragging(null)
+        setDropIndex(null)
+        onDragging?.(null)
+      }, 0)
+    }
+    window.addEventListener('drop', end, true)
+    window.addEventListener('dragend', end, true)
+    return () => {
+      window.removeEventListener('drop', end, true)
+      window.removeEventListener('dragend', end, true)
+    }
+  }, [dragging, onDragging])
 
   const carriesTab = (event: DragEvent<HTMLElement>): boolean =>
     canMove && event.dataTransfer.types.includes(TAB_MIME)
@@ -208,7 +246,7 @@ export function TabBar({
       <div
         // The empty stretch past the last tab - and the `+` - is a drop target
         // too: "put it at the end" is the commonest place to drop a tab from
-        // the other pane.
+        // another pane.
         onDragOver={(event) => {
           if (!carriesTab(event)) return
           event.preventDefault()
@@ -261,7 +299,7 @@ export function TabBar({
                 draggable={movable}
                 onDragStart={(event) => {
                   setDragging(tab.id)
-                  onDragging?.(true)
+                  onDragging?.(tab.id)
                   event.dataTransfer.effectAllowed = 'move'
                   event.dataTransfer.setData(TAB_MIME, tab.id)
                   // Chromium refuses to start a drag with no plain payload.

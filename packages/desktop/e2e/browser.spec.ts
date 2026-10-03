@@ -214,3 +214,48 @@ test('persistence: a cookie a page sets is kept in the browser profile, apart fr
   const sent = fixture.requests.findIndex((request, at) => at >= asked && request === `${fixture.http}/two`)
   expect(fixture.cookies[sent]).toContain(`${COOKIE.name}=${COOKIE.value}`)
 })
+
+test('dragging: the page stands down while its tab is dragged, and is drawn where the tab lands', async ({
+  helm
+}) => {
+  const ui = helm.window
+  const first = ui.getByRole('region', { name: 'First pane' })
+  const second = ui.getByRole('region', { name: 'Second pane' })
+  /** Whether the page's native view is on screen - asked of the window that holds it. */
+  const viewShown = (): Promise<boolean[]> =>
+    helm.app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]!.contentView.children.flatMap((view) =>
+        'webContents' in view ? [view.getVisible()] : []
+      )
+    )
+
+  await ui.locator('[data-rail="settings"]').click()
+  await showBrowser(ui)
+  await go(ui, `${fixture.http}/`)
+  const tab = ui.getByRole('tab', { name: /Helm fixture one/ })
+  await expect(tab).toBeVisible()
+  await expect.poll(viewShown).toEqual([true])
+
+  // By hand, to look while it is held over the first pane's right side: the
+  // page is off the screen, and the part of the pane it would take is drawn.
+  const box = (await first.boundingBox())!
+  await tab.hover()
+  await ui.mouse.down()
+  await ui.mouse.move(box.x + box.width - 12, box.y + box.height / 2, { steps: 6 })
+  await expect(first.locator('[data-pane-drop-preview]')).toHaveAttribute('data-pane-drop-preview', 'right')
+  await expect.poll(viewShown).toEqual([false])
+  await ui.mouse.up()
+  await expect(second.getByRole('tab')).toHaveCount(1)
+  await expect.poll(viewShown).toEqual([true])
+
+  // Back into the first pane's middle: the second, emptied, goes - its strip
+  // with it, before the drag that strip started could hear itself end.
+  await tab.dragTo(first, { targetPosition: { x: box.width / 4, y: box.height / 2 } })
+  await expect(ui.getByRole('region', { name: /pane$/ })).toHaveCount(1)
+  await expect.poll(viewShown).toEqual([true])
+  // The drag is over, so nothing is left lying over the pane to catch a click.
+  await first.getByRole('tab', { name: 'Settings' }).click()
+  await first.getByRole('tab', { name: /Helm fixture one/ }).click()
+  await address(ui).click()
+  await expect(address(ui)).toBeFocused()
+})

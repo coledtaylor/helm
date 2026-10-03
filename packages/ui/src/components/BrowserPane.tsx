@@ -1,6 +1,7 @@
 import type { JSX } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { cn } from '../lib/cn'
+import { PANES_MOVED_EVENT } from '../lib/paneGeometry'
 import { SEGMENT_ON } from '../lib/segmented'
 import { ConsolePanel, type ConsoleEntry } from './ConsolePanel'
 import {
@@ -170,10 +171,12 @@ export function BrowserPane({
    * `useLayoutEffect` for the first one so the view is placed in the same frame
    * the pane appears in - an effect would put the view one frame behind, which
    * on a tab switch is a visible flash of the page in the wrong place. After
-   * that a `ResizeObserver` on the placeholder catches the split drag, the
+   * that a `ResizeObserver` on the placeholder catches a divider drag, the
    * window resize and the console opening; a scroll or a layout change that
    * moves the pane without resizing it is caught by the window listeners, since
-   * `ResizeObserver` fires on size and not on position.
+   * `ResizeObserver` fires on size and not on position. `PANES_MOVED_EVENT` is
+   * the pane grid saying it has just placed every pane, which is the one way a
+   * pane moves without the window or anything in it scrolling.
    */
   const report = useCallback(() => {
     const box = holeRef.current?.getBoundingClientRect()
@@ -189,10 +192,12 @@ export function BrowserPane({
     observer.observe(hole)
     window.addEventListener('resize', report)
     window.addEventListener('scroll', report, true)
+    window.addEventListener(PANES_MOVED_EVENT, report)
     return () => {
       observer.disconnect()
       window.removeEventListener('resize', report)
       window.removeEventListener('scroll', report, true)
+      window.removeEventListener(PANES_MOVED_EVENT, report)
     }
   }, [report])
 

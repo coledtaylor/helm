@@ -24,6 +24,9 @@ import { helm } from './bridge'
  * So the pane reports its rectangle and this decides whether it paints.
  */
 
+/** Why every view is off the screen: a tab being dragged, or the address bar's list hanging over the page. */
+export type SuppressReason = 'tab-drag' | 'address-list'
+
 export interface BrowserPanesState {
   /** Every live view, keyed by id. Adopted from main on mount. */
   views: Map<number, BrowserState>
@@ -57,13 +60,17 @@ export interface BrowserPanesState {
    */
   setShowing: (id: number, showing: boolean) => void
   /**
-   * Take every view off the screen, whatever the panes last said.
+   * Take every view off the screen, whatever the panes last said, for one
+   * `reason` - until that reason says it is over.
    *
-   * The tab-drag case, and the one that cannot be expressed as a bounds report:
-   * a drag does not resize anything, so nothing re-measures and no rectangle is
-   * sent. See `App.tsx`, where the drag is.
+   * A tab drag, and the address bar's dropdown: the cases that cannot be
+   * expressed as a bounds report, because nothing resizes and so nothing
+   * re-measures. Each reason is held on its own. They were one boolean once,
+   * and then the dropdown's "not covering" - said by every browser pane as it
+   * mounts - ended a drag that was still running, and hid that a drag whose
+   * end was never heard was still holding every view down.
    */
-  setSuppressed: (suppressed: boolean) => void
+  setSuppressed: (reason: SuppressReason, suppressed: boolean) => void
   /** The last addresses any view visited, newest first. */
   recent: string[]
   /** The last problem `browser:open` refused with, for the strip to report. */
@@ -87,7 +94,7 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
   const rects = useRef(
     new Map<number, { x: number; y: number; width: number; height: number; showing: boolean }>()
   )
-  const suppressed = useRef(false)
+  const suppressed = useRef(new Set<SuppressReason>())
 
   const push = useCallback((id: number): void => {
     const rect = rects.current.get(id)
@@ -102,7 +109,7 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
       // read rather than subscribed to *here* because this runs on every frame
       // of a drag; the subscription below is what makes a dialog opening move
       // the view without waiting for the next resize.
-      visible: rect.showing && !suppressed.current && !overlayOpen()
+      visible: rect.showing && suppressed.current.size === 0 && !overlayOpen()
     })
   }, [])
 
@@ -343,9 +350,10 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
   )
 
   const setSuppressed = useCallback(
-    (next: boolean) => {
-      if (suppressed.current === next) return
-      suppressed.current = next
+    (reason: SuppressReason, next: boolean) => {
+      if (suppressed.current.has(reason) === next) return
+      if (next) suppressed.current.add(reason)
+      else suppressed.current.delete(reason)
       pushAll()
     },
     [pushAll]
