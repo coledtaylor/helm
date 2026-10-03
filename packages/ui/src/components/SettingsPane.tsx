@@ -1,5 +1,5 @@
 import type { JSX, ReactNode } from 'react'
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import {
   ACCENT_SWATCHES,
   offerableUsageModes,
@@ -1295,14 +1295,13 @@ function ArchiveGroup({
               ? 'Reading…'
               : stats.sessions === 0
                 ? 'Nothing archived yet'
-                : `${stats.sessions.toLocaleString()} conversations kept`
+                : `${count(stats.sessions, 'conversation')} kept`
           }
         />
         <dl className="mt-2.5 space-y-1.5">
           <Fact label="Kept">
             <span data-settings-archive-sessions={String(stats?.sessions ?? 0)}>
-              {(stats?.sessions ?? 0).toLocaleString()} sessions ·{' '}
-              {(stats?.messages ?? 0).toLocaleString()} messages
+              {count(stats?.sessions ?? 0, 'session')} · {count(stats?.messages ?? 0, 'message')}
             </span>
           </Fact>
           <Fact label="Stored">
@@ -1312,7 +1311,7 @@ function ArchiveGroup({
           </Fact>
           <Fact label="Dropped">
             <span data-settings-archive-evicted={String(stats?.evictedSessions ?? 0)}>
-              {(stats?.evictedSessions ?? 0).toLocaleString()} sessions
+              {count(stats?.evictedSessions ?? 0, 'session')}
             </span>
           </Fact>
         </dl>
@@ -2618,7 +2617,7 @@ const fileName = (path: string): string => path.split(/[\\/]/).pop() ?? path
 // ---------------------------------------------------------------------------
 
 const count = (n: number, noun: string): string =>
-  `${String(n)} ${noun}${n === 1 ? '' : 's'}`
+  `${n.toLocaleString()} ${noun}${n === 1 ? '' : 's'}`
 
 /**
  * One group of settings.
@@ -2638,13 +2637,20 @@ function Group({
   hint?: string | undefined
   children: ReactNode
 }): JSX.Element {
+  // Named by its heading, so each group is a region a screen reader can jump
+  // to, under the title a person reads.
+  const headingId = useId()
   return (
     <section
       data-settings-group={name}
+      aria-labelledby={headingId}
       className="mt-5 overflow-hidden rounded-raised border border-border bg-surface-raised"
     >
       <header className="px-4 pt-3 pb-2.5">
-        <h2 className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
+        <h2
+          id={headingId}
+          className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase"
+        >
           {title}
         </h2>
         {hint !== undefined && (

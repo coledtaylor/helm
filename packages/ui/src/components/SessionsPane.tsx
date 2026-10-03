@@ -283,7 +283,7 @@ function Section({
   children: ReactNode
 }): JSX.Element {
   return (
-    <section className="mb-1">
+    <section aria-label={label} className="mb-1">
       <div className="flex items-center gap-1.5 px-2.5 py-1.5">
         <span className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
           {label}
@@ -621,7 +621,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }): JSX.
 
 function Group({ label, children }: { label: string; children: ReactNode }): JSX.Element {
   return (
-    <section className="flex min-w-0 flex-col gap-1.5">
+    <section aria-label={label} className="flex min-w-0 flex-col gap-1.5">
       <h3 className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
         {label}
       </h3>

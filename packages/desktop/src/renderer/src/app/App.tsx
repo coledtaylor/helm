@@ -13,10 +13,10 @@ import {
   fromSaved,
   isLoopbackUrl,
   isProjectPinned,
+  isScanRoot,
   liveSessionsIn,
   moveTab,
   openTab,
-  PANE_SPLIT_PCT,
   paneId,
   reconcile,
   sendToOtherGroup,
@@ -101,6 +101,7 @@ import {
 } from '@helm/ui'
 import type { AppMode, SessionConfirmRequest } from '../../../shared/ipc'
 import { helm } from './bridge'
+import { usePaneSplit } from './paneSplit'
 import { ProjectColumn } from './ProjectColumn'
 import { PullRequestTab } from './PullRequestTab'
 import { disposeShell } from './pterms'
@@ -110,7 +111,7 @@ import { terminalFontStack } from '../terminal'
 import { crumbStatus, indicatorOf, sessionNote, useNow } from './sessionView'
 import { useConfig } from './useConfig'
 import { useContent } from './useContent'
-import { useHistory } from './useHistory'
+import { sessionHistoryProps, useHistory } from './useHistory'
 import { useLauncher } from './useLauncher'
 import { useProfiles } from './useProfiles'
 import { forgetPullDetail } from './usePullDetail'
@@ -231,16 +232,10 @@ export function App(): JSX.Element {
    */
   const [selectedLivePid, setSelectedLivePid] = useState<number | null>(null)
   /**
-   * The split's boundary is a CSS custom property on the row, not state.
-   * `--split` is written by the drag and by the effect below and by nothing
-   * else, so a `mousemove` moves a boundary without reconciling anything. The
-   * argument in full, and the two attempts this replaces, are in `theme.css`
-   * beside `.split-row`.
+   * The split's boundary is a CSS custom property on the row, not state. The
+   * drag and the remembered split write it, through `usePaneSplit`.
    */
   const splitRowRef = useRef<HTMLDivElement>(null)
-  const draggingSplit = useRef(false)
-  /** Where the current drag has got to, for the one write on release. */
-  const splitDragged = useRef<number | null>(null)
   /** Each pane's body, measured to open a pty at roughly the right grid. */
   const bodyRefs = useRef<(HTMLDivElement | null)[]>([])
 
@@ -519,64 +514,8 @@ export function App(): JSX.Element {
     return () => clearTimeout(timer)
   }, [settingsLoaded, savedJson, storedJson, writeSettings])
 
-  /**
-   * The remembered split, put on the row - on mount and whenever the setting
-   * changes, and skipped while a drag is running, so a `settings:changed` from
-   * anywhere else cannot pull the boundary out from under the pointer.
-   * `useLayoutEffect`, so the property is on the row before the browser paints;
-   * an ordinary effect would show a frame of the CSS default.
-   */
-  useLayoutEffect(() => {
-    if (draggingSplit.current) return
-    splitRowRef.current?.style.setProperty('--split', String(savedSplitPct / 100))
-  }, [savedSplitPct])
-
-  // The divider between the panes: a plain mouse drag, bounded so neither pane
-  // can be dragged out of usefulness.
-  useEffect(() => {
-    const onMove = (event: MouseEvent): void => {
-      if (!draggingSplit.current || !splitRowRef.current) return
-      // A move with no button held is not this drag any more. Release outside
-      // the window and no `mouseup` is ever delivered, so `buttons` is the only
-      // thing that says so - and it is also what stops a driver's synthetic
-      // hover from passing for a drag (`drag()` in main/bridge.ts).
-      if (event.buttons === 0) {
-        draggingSplit.current = false
-        document.body.style.userSelect = ''
-        return
-      }
-      // Re-measured every move: the window is resizable while a drag runs.
-      const box = splitRowRef.current.getBoundingClientRect()
-      if (box.width < 1) return
-      const fraction = 1 - (event.clientX - box.left) / box.width
-      const bounded = Math.min(
-        PANE_SPLIT_PCT.max / 100,
-        Math.max(PANE_SPLIT_PCT.min / 100, fraction)
-      )
-      splitDragged.current = bounded
-      // The whole move: one custom property, no state, nothing reconciled.
-      splitRowRef.current.style.setProperty('--split', String(bounded))
-    }
-    const onUp = (): void => {
-      draggingSplit.current = false
-      document.body.style.userSelect = ''
-      // One write for the whole gesture, and none for a press that never moved.
-      const landed = splitDragged.current
-      splitDragged.current = null
-      if (landed === null) return
-      const pct = Math.round(landed * 100)
-      // Snap to the rounded value the setting will hold, so the next
-      // `settings:changed` from anywhere does not move the boundary a pixel.
-      splitRowRef.current?.style.setProperty('--split', String(pct / 100))
-      if (pct !== savedSplitPct) writeSettings({ paneSplitPct: pct })
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [savedSplitPct, writeSettings])
+  // The divider between the panes (paneSplit.ts).
+  const startSplitDrag = usePaneSplit(splitRowRef, savedSplitPct, writeSettings)
 
   /*
    * The process pass runs only while the sessions pane is on screen. One
@@ -1447,8 +1386,7 @@ export function App(): JSX.Element {
   // ---------------------------------------------------------------------------
 
   /** Whether `path` is one of the scanned folders - what removal can act on. */
-  const isRoot = (path: string): boolean =>
-    (settings?.scanRoots ?? []).some((root) => root.toLowerCase() === path.toLowerCase())
+  const isRoot = (path: string): boolean => isScanRoot(settings?.scanRoots ?? [], path)
 
   /** The harness a project *is*, when it is one - for its `template:`. */
   const harnessAt = (path: string): Harness | null =>
@@ -1634,34 +1572,8 @@ export function App(): JSX.Element {
       case 'history':
         return (
           <SessionHistory
-            summary={historyState.summary}
-            page={historyState.page}
-            loading={historyState.loading}
-            error={historyState.error}
-            search={historyState.search}
-            onSearchChange={historyState.setSearch}
-            scope={historyState.scope}
-            onScopeChange={historyState.setScope}
-            archiveStats={historyState.archiveStats}
-            grouping={historyState.grouping}
-            onGroupingChange={historyState.setGrouping}
-            resumableOnly={historyState.resumableOnly}
-            onResumableOnlyChange={historyState.setResumableOnly}
-            project={historyState.project}
-            onProjectChange={historyState.setProject}
-            selected={historyState.selected}
-            onSelect={historyState.select}
-            prompts={historyState.prompts}
-            promptsLoading={historyState.promptsLoading}
-            conversation={historyState.conversation}
-            conversationLoading={historyState.conversationLoading}
-            onRename={(sessionId, name) => void historyState.rename(sessionId, name)}
-            onRefresh={historyState.refresh}
-            refreshing={historyState.refreshing}
+            {...sessionHistoryProps(historyState)}
             onResume={(session) => void resumeSession(session)}
-            resuming={historyState.resuming}
-            resumeError={historyState.resumeError}
-            onDismissResumeError={historyState.dismissResumeError}
             onReveal={launcher.reveal}
             compact={compact}
           />
@@ -2320,11 +2232,7 @@ export function App(): JSX.Element {
                   role="separator"
                   aria-orientation="vertical"
                   title="Drag to resize"
-                  onMouseDown={(event) => {
-                    event.preventDefault()
-                    draggingSplit.current = true
-                    document.body.style.userSelect = 'none'
-                  }}
+                  onMouseDown={startSplitDrag}
                   className={cn(
                     'group relative flex w-gutter shrink-0 cursor-col-resize items-center justify-center',
                     "before:absolute before:inset-y-0 before:left-1/2 before:w-2 before:-translate-x-1/2 before:content-['']"

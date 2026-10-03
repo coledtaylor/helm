@@ -1062,9 +1062,11 @@ nothing looks broken. Parking the view outside the window does not help
 two-pixel corner falls outside the window and is clipped, and the view is hidden
 - and only ever *moved*, never resized - once it has painted.
 
-`pnpm browser-check` covers all of it: the endpoint and its 401s, the ten tools
-driven over the wire independently of `claude`, every tool against a tab that is
-never on screen, the four-cell reach matrix, the lifetime rules, argv hygiene,
+`pnpm browser-check` covered all of it until tests replaced it
+(`main/browser.test.ts`, `main/browser-mcp.test.ts`, `e2e/browser.spec.ts`,
+`e2e/agent-tools.spec.ts`): the endpoint and its 401s, the ten tools driven
+over the wire independently of `claude`, every tool against a tab that is never
+on screen, the four-cell reach matrix, the lifetime rules, argv hygiene,
 and one real `claude` session asked to open the fixture and click a planted
 element.
 

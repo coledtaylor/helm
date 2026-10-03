@@ -107,7 +107,11 @@ function claudeCommand(): ClaudeCommand {
       'Claude Code CLI not found. Install it (or put `claude` on PATH) and restart Helm.'
     )
   }
-  return { file: command.file, prefixArgs: command.prefixArgs }
+  return {
+    file: command.file,
+    prefixArgs: command.prefixArgs,
+    ...(command.shim ? { shim: command.resolved } : {})
+  }
 }
 
 export function createConfigService({

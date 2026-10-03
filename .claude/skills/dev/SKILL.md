@@ -51,7 +51,6 @@ to pass them before a change is done. Each runs in its own data directory under
 |---|---|
 | `pnpm fidelity` | does xterm still render a TUI correctly (spike page, no sessions) |
 | `pnpm claude-check` | does the real `claude` CLI behave inside Helm's terminal |
-| `pnpm browser-check` | the browser pane's native view, hiding, reach and the MCP endpoint |
 | `pnpm packaging-check` | first run, the built artefacts and the personal-path audit; only when the owner asks |
 
 Most take `--only=<group>`; the `GROUPS` constant in each driver is the list.

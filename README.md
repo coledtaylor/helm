@@ -279,7 +279,6 @@ pnpm shell             # interactive pane hosting pwsh
 pnpm --filter @helm/desktop claude   # ...hosting the real claude TUI
 pnpm fidelity          # terminal fidelity inside xterm
 pnpm claude-check      # the real claude TUI in the pane
-pnpm browser-check     # the browser pane and its agent tools
 pnpm selftest          # native modules in a packaged build
 ```
 

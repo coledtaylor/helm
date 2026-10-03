@@ -453,3 +453,34 @@ describe('historySummary', () => {
     })
   })
 })
+
+describe('search speed', () => {
+  /**
+   * The bound a keystroke has to beat. The query measures around a millisecond
+   * over this machine's 3,470 prompts, so a hundred is two orders of magnitude
+   * of room: what this catches is a search that stopped using the index or
+   * started doing a query per row, not a slow afternoon.
+   */
+  it('answers a search over 3,200 prompts within 100ms at the 95th percentile', () => {
+    const subjects = ['geofencing', 'the parser', 'release notes', 'a flaky test', 'the schema']
+    index(
+      Array.from({ length: 3200 }, (_, i) => ({
+        sessionId: `s${String(i % 800)}`,
+        text: `prompt ${String(i)} about ${subjects[i % subjects.length] ?? ''}`,
+        project: i % 2 === 0 ? ALPHA : BETA
+      }))
+    )
+    expect(historySummary(store, HISTORY)).toMatchObject({ sessions: 800, prompts: 3200 })
+
+    const timings: number[] = []
+    for (const term of ['geofenc', 'parser', 'prompt 31', 'nothing matches this', 'beta']) {
+      for (let run = 0; run < 8; run++) {
+        const started = performance.now()
+        readHistorySessions(store, { search: term })
+        timings.push(performance.now() - started)
+      }
+    }
+    timings.sort((a, b) => a - b)
+    expect(timings[Math.ceil(timings.length * 0.95) - 1]).toBeLessThan(100)
+  })
+})

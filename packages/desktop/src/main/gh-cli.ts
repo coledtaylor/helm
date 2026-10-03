@@ -67,7 +67,8 @@ export function findGhExecutable(): string | null {
  *
  * The `.cmd` case is not hypothetical: scoop and npm both install gh as a batch
  * shim on Windows, and `CreateProcess` cannot execute one - so it goes through
- * `cmd.exe /c`, the same arrangement `resolveClaudeCommand` makes.
+ * `cmd.exe`, the same arrangement `resolveClaudeCommand` makes. `runGh` builds
+ * that command line, because the quoting is the part that goes wrong.
  */
 export function resolveGhCommand(at?: string): GhCommand | null {
   const resolved = at !== undefined ? (isExecutableFile(at) ? at : null) : findGhExecutable()
@@ -75,9 +76,9 @@ export function resolveGhCommand(at?: string): GhCommand | null {
 
   const ext = extname(resolved).toLowerCase()
   if (process.platform === 'win32' && (ext === '.cmd' || ext === '.bat')) {
-    return { file: process.env['COMSPEC'] ?? 'cmd.exe', prefixArgs: ['/c', resolved], resolved }
+    return { file: process.env['COMSPEC'] ?? 'cmd.exe', prefixArgs: [], resolved, shim: true }
   }
-  return { file: resolved, prefixArgs: [], resolved }
+  return { file: resolved, prefixArgs: [], resolved, shim: false }
 }
 
 /** The sentence a machine with no `gh` gets. Names the remedy, not the failure. */

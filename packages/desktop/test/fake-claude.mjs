@@ -60,6 +60,33 @@ if (argv.includes('--help') || argv.includes('-h')) {
   process.exit(0)
 }
 
+// `claude mcp add-json <name> <json> -s <scope>` and `claude mcp remove <name>
+// -s <scope>` write the file the real CLI writes for that scope: `.mcp.json` in
+// the working directory for `project`, `~/.claude.json` for `user` and, under
+// the working directory's entry, for `local`.
+if (argv[0] === 'mcp' && (argv[1] === 'add-json' || argv[1] === 'remove')) {
+  const at = argv.indexOf('-s')
+  const scope = at >= 0 ? argv[at + 1] : 'local'
+  const name = argv[2]
+  const file = scope === 'project' ? join(process.cwd(), '.mcp.json') : join(homedir(), '.claude.json')
+  const document = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8') || '{}') : {}
+  const holder = scope === 'local' ? (((document.projects ??= {})[process.cwd()]) ??= {}) : document
+  const servers = (holder.mcpServers ??= {})
+  if (argv[1] === 'add-json') {
+    servers[name] = JSON.parse(argv[3])
+    out(`Added stdio MCP server ${name} to ${scope} config\n`)
+  } else {
+    if (!(name in servers)) {
+      process.stderr.write(`No MCP server named ${name} in ${scope} config\n`)
+      process.exit(1)
+    }
+    delete servers[name]
+    out(`Removed MCP server ${name} from ${scope} config\n`)
+  }
+  writeFileSync(file, `${JSON.stringify(document, null, 2)}\n`)
+  process.exit(0)
+}
+
 // Anything else that is not interactive (`claude mcp list`, `claude -p ...`)
 // answers nothing and succeeds.
 if (argv[0] === 'mcp' || argv.includes('-p') || argv.includes('--print')) process.exit(0)

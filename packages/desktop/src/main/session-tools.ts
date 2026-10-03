@@ -3,11 +3,16 @@ import {
   describeSessionGone,
   describeSessionListing,
   heldBy,
+  readProfile,
   type HostedSessionFacts,
   type LiveSession,
   type SessionResources,
-  type SessionsOverview
+  type SessionsOverview,
+  type Store
 } from '@helm/core'
+import type { ActivityService } from './activity'
+import type { ResourcesService } from './resources'
+import type { SessionHost } from './sessions'
 
 /**
  * Helm's session-awareness tools: what the other sessions are doing.
@@ -152,6 +157,69 @@ export interface SessionToolsWorld {
    * was built for rather than a way around the budget.
    */
   measure: () => Promise<SessionResources[]>
+}
+
+/** The three services that already know, and the store the profiles are in. */
+export interface SessionToolsSources {
+  store: Store
+  sessions: Pick<SessionHost, 'list' | 'tokenHolder'>
+  activity: Pick<ActivityService, 'refresh' | 'overview'>
+  resources: Pick<ResourcesService, 'watch' | 'refresh' | 'snapshots'>
+}
+
+/**
+ * What a session may be told about the other sessions.
+ *
+ * Assembled from the three things that already know: the activity poller's
+ * machine-wide listing, the resource service's process pass, and the session
+ * host's own rows. **Nothing here reads the registry or the process table a
+ * second time** - a second reader would be a second answer to "what is
+ * running", free to disagree with the pane about it.
+ *
+ * `factsFor` is where the boundary is enforced rather than described: it
+ * builds the answer field by field out of the row, and `argv` is not one of
+ * the fields. A review session's argv carries its opening prompt, and every
+ * argv carries the path to that session's own bearer token.
+ */
+export function sessionToolsWorld({
+  store,
+  sessions,
+  activity,
+  resources
+}: SessionToolsSources): SessionToolsWorld {
+  return {
+    refreshOverview: () => activity.refresh(),
+    overview: () => activity.overview(),
+    callerOf: (token) => sessions.tokenHolder(token)?.id ?? null,
+    factsFor: (helmSessionId) => {
+      const record = sessions.list().find((row) => row.id === helmSessionId)
+      if (record === undefined) return null
+      const profile = record.profileId === null ? null : readProfile(store, record.profileId)
+      return {
+        helmSessionId: record.id,
+        branch: record.branch,
+        // The profile may have been deleted since - a session is a record of
+        // what happened and outlives the profile it came from - so this is
+        // "what it was launched from, if that still exists" rather than a join
+        // anything depends on.
+        profile: profile?.name ?? null,
+        overlays: profile?.overlays ?? [],
+        startedAtMs: Date.parse(record.startedAt) || null
+      }
+    },
+    measure: async () => {
+      // A tool call is somebody looking, for exactly one pass. `watch` is
+      // reference-counted, so this neither switches the pane's own pass off
+      // when it returns nor leaves a timer running when nobody else wants one.
+      resources.watch(true)
+      try {
+        await resources.refresh()
+      } finally {
+        resources.watch(false)
+      }
+      return resources.snapshots()
+    }
+  }
 }
 
 const text = (body: string): SessionToolAnswer => ({ text: body })

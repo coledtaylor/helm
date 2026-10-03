@@ -536,6 +536,7 @@ function AlreadyRunning({ sessions }: { sessions: readonly LiveSession[] }): JSX
 
   return (
     <p
+      role="note"
       data-already-running={sessions.length}
       className={cn(
         'mt-3 flex items-start gap-2 rounded-raised border border-warn/30 bg-warn/10 px-3 py-2',

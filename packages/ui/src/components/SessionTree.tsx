@@ -276,7 +276,7 @@ export function SessionTree({
         )}
 
         {shownPins.length > 0 && (
-          <section data-pinned-section className="mb-1">
+          <section data-pinned-section aria-label="Pinned" className="mb-1">
             <Caption icon={<PinIcon width={9} height={9} />} label="Pinned" count={shownPins.length} />
             {shownPins.map((pin) =>
               pin.project === null ? (

@@ -251,8 +251,8 @@ export function BrowserPane({
             // And on the click itself, not only on the focus it causes.
             // Clicking a bar that already has the caret fires no focus event, so
             // focus alone would leave the dropdown shut for exactly the gesture
-            // somebody makes when they want it. `browser-check`'s BR-4 drives the
-            // click and nothing else, which is what caught this.
+            // somebody makes when they want it. A probe that drove the click and
+            // nothing else is what caught this.
             onClick={() => setSuggesting(true)}
             onBlur={() => {
               // After the click on a suggestion has had its chance to land.

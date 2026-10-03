@@ -47,6 +47,9 @@ describe('session host', () => {
     await vi.waitFor(() => expect(host.list().filter((s) => s.status === 'running')).toEqual([]), {
       timeout: 10_000
     })
+    // As before-quit does: a killed pty can report its exit after this, and
+    // the host must not write it to a store that has been closed.
+    host.shutdown()
     services.store.close()
     disposeWorld(world)
   })

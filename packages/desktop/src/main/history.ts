@@ -9,10 +9,12 @@ import {
   projectsDirIn,
   readHistoryTail,
   scanTranscripts,
+  type ArchiveStats,
   type HistorySummary,
   type Store,
   type TranscriptFile
 } from '@helm/core'
+import { createArchiveService, type ArchiveService } from './archive'
 
 /**
  * Keeping the session index level with a file Helm does not own.
@@ -202,6 +204,89 @@ export function createHistoryService({
       poll = null
       watcher?.close()
       watcher = null
+    }
+  }
+}
+
+export interface HistoryIndexDeps {
+  store: Store
+  /** Overridden to index a fixture instead of the real tree. */
+  home?: string | undefined
+  /** The archive's ceiling, read through a function: it can change while the app is running. */
+  maxBytes: () => number
+  onHistoryChange: (summary: HistorySummary) => void
+  onArchiveChange: (stats: ArchiveStats) => void
+}
+
+export interface HistoryIndex {
+  history: HistoryService
+  archive: ArchiveService
+  /**
+   * The start-up pass, then both watches. Returns the pass's totals, or throws
+   * what it threw - with the watches armed either way, because a first pass
+   * that failed is not a reason to stop looking.
+   */
+  start: () => HistorySummary
+  /** Both watches and every timer, before the store is let go of. */
+  stop: () => void
+}
+
+/**
+ * The session index and the transcript archive, wired together.
+ *
+ * Declared in one order and wired in the other: the archive is a **second
+ * consumer of the walk the session index already does** rather than a second
+ * walk, so `createHistoryService` hands it the transcript map it has just
+ * built. `archive.start` is given the index's own `refresh` for the same
+ * reason - the watch over `projects/` wakes one pass that serves both.
+ * `main/archive.ts` explains why it is this walk and not the usage index's.
+ */
+export function createHistoryIndex({
+  store,
+  home = claudeHome(),
+  maxBytes,
+  onHistoryChange,
+  onArchiveChange
+}: HistoryIndexDeps): HistoryIndex {
+  const archive = createArchiveService({
+    store,
+    projectsDir: projectsDirIn(home),
+    maxBytes,
+    onChange: onArchiveChange
+  })
+
+  const history = createHistoryService({
+    store,
+    home,
+    onTranscripts: (transcripts) => archive.consume(transcripts),
+    onChange: onHistoryChange
+  })
+
+  return {
+    history,
+    archive,
+    start() {
+      try {
+        return history.refresh()
+      } finally {
+        history.start()
+        // The archive rides that same first pass - `onTranscripts` has already
+        // run by the time `refresh()` returned - so this only arms the watch
+        // over `projects/`, which is the trigger a session appending to its
+        // transcript without submitting a prompt would otherwise not have.
+        // A session that ended while Helm was closed was caught by the pass
+        // above, which is what makes the start-up sweep a sweep.
+        archive.start(() => {
+          history.refresh()
+        })
+      }
+    },
+    // Both halves: the archive's watch and its catch-up timer end in a pass that
+    // writes, so it has to stop before the store is let go of just as the
+    // session index does.
+    stop() {
+      history.stop()
+      archive.stop()
     }
   }
 }

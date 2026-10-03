@@ -40,10 +40,9 @@ export TypeScript source, so there is one build step.
 - Every change ships with its tests: a bug gets a failing test before the fix,
   a feature gets tests that cover it. [docs/TESTING.md](docs/TESTING.md) says
   which kind.
-- The in-app drivers (`fidelity`, `claude-check`, `browser-check`,
-  `packaging-check`) and `scripts/drive-dev.mjs` are diagnostic tools, not
-  tests. Use them to diagnose something a test cannot reach, or when asked. No
-  change "owes" a driver run.
+- The in-app drivers (`fidelity`, `claude-check`, `packaging-check`) and
+  `scripts/drive-dev.mjs` are diagnostic tools, not tests. Use them to diagnose
+  something a test cannot reach, or when asked. No change "owes" a driver run.
 
 ## UI
 

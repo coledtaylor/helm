@@ -1285,6 +1285,15 @@ export function isProjectPinned(pinned: readonly string[], path: string): boolea
 }
 
 /**
+ * Whether `path` is itself one of the scanned folders - the whole of what
+ * "remove this folder from Helm" can act on. A project found *inside* a root
+ * is not one: removing it would mean removing its parent.
+ */
+export function isScanRoot(roots: readonly string[], path: string): boolean {
+  return roots.some((root) => samePath(root, path))
+}
+
+/**
  * The live sessions whose working directory is this folder.
  *
  * The whole of the launch-time warning's arithmetic, and it lives here beside

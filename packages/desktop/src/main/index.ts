@@ -9,9 +9,6 @@ import {
   shell
 } from 'electron'
 import {
-  claudeHome,
-  projectsDirIn,
-  readProfile,
   writeSetting,
   type AppliedTheme,
   type AppSettings
@@ -47,10 +44,8 @@ import {
   type BrowserHost
 } from './browser'
 import { createBrowserMcp, type BrowserMcpHost } from './browser-mcp'
-import type { SessionToolsWorld } from './session-tools'
-import { runBrowserChecks } from './browsercheck'
-import { createArchiveService } from './archive'
-import { createHistoryService } from './history'
+import { sessionToolsWorld, type SessionToolsWorld } from './session-tools'
+import { createHistoryIndex } from './history'
 import { createPullsService } from './pulls'
 import { createUsageService } from './usage'
 import { maybeCheckForUpdate } from './update'
@@ -88,8 +83,6 @@ type Mode =
   | 'claude'
   | 'packaging-check'
   | 'packaging-firstrun'
-  | 'browser-check'
-  | 'browser-restart'
 
 function modeFromArgv(): Mode {
   if (process.argv.includes('--selftest')) return 'selftest'
@@ -97,8 +90,6 @@ function modeFromArgv(): Mode {
   if (process.argv.includes('--claude-check')) return 'claude-check'
   if (process.argv.includes('--packaging-check')) return 'packaging-check'
   if (process.argv.includes('--packaging-firstrun')) return 'packaging-firstrun'
-  if (process.argv.includes('--browser-check')) return 'browser-check'
-  if (process.argv.includes('--browser-restart')) return 'browser-restart'
   if (process.argv.includes('--claude')) return 'claude'
   if (process.argv.includes('--shell')) return 'shell'
   return 'app'
@@ -110,9 +101,7 @@ const mode = modeFromArgv()
 const isSpikeMode =
   mode !== 'app' &&
   mode !== 'packaging-check' &&
-  mode !== 'packaging-firstrun' &&
-  mode !== 'browser-check' &&
-  mode !== 'browser-restart'
+  mode !== 'packaging-firstrun'
 
 /**
  * A check's window keeps rendering when something else is in front of it.
@@ -407,28 +396,17 @@ function startApp(options: AppOptions = {}): void {
   })
 
   /*
-   * The archive, and the session index that feeds it.
-   *
-   * Declared in this order and wired in the other: the archive is a **second
-   * consumer of the walk the session index already does** rather than a second
-   * walk, so `createHistoryService` hands it the transcript map it has just
-   * built. `archive.start` is given the index's own `refresh` for the same
-   * reason - the watch over `projects/` wakes one pass that serves both.
-   * `main/archive.ts` explains why it is this walk and not the usage index's.
+   * The archive, and the session index that feeds it. `createHistoryIndex`
+   * wires the one to the other; `main/history.ts` says how.
    */
-  const archive = createArchiveService({
-    store: services.store,
-    projectsDir: projectsDirIn(options.claudeHome ?? claudeHome()),
-    maxBytes: () => services.settings.transcriptArchiveMaxBytes,
-    onChange: (stats) => emit(win, 'archive:changed', stats)
-  })
-
-  const history = createHistoryService({
+  const historyIndex = createHistoryIndex({
     store: services.store,
     home: options.claudeHome,
-    onTranscripts: (transcripts) => archive.consume(transcripts),
-    onChange: (summary) => emit(win, 'history:changed', summary)
+    maxBytes: () => services.settings.transcriptArchiveMaxBytes,
+    onHistoryChange: (summary) => emit(win, 'history:changed', summary),
+    onArchiveChange: (stats) => emit(win, 'archive:changed', stats)
   })
+  const { history, archive } = historyIndex
 
   const usage = createUsageService({
     store: services.store,
@@ -554,53 +532,9 @@ function startApp(options: AppOptions = {}): void {
   // interval. A no-op when nothing is watching.
   sessions.onChanged(() => void resources.refresh())
 
-  /*
-   * What a session may be told about the other sessions.
-   *
-   * Assembled from the three things that already know: the activity poller's
-   * machine-wide listing, the resource service's process pass, and the session
-   * host's own rows. **Nothing here reads the registry or the process table a
-   * second time** - a second reader would be a second answer to "what is
-   * running", free to disagree with the pane about it.
-   *
-   * `factsFor` is where the boundary is enforced rather than described: it
-   * builds the answer field by field out of the row, and `argv` is not one of
-   * the fields. A review session's argv carries its opening prompt, and every
-   * argv carries the path to that session's own bearer token.
-   */
-  sessionTools = {
-    refreshOverview: () => activity.refresh(),
-    overview: () => activity.overview(),
-    callerOf: (token) => sessions.tokenHolder(token)?.id ?? null,
-    factsFor: (helmSessionId) => {
-      const record = sessions.list().find((row) => row.id === helmSessionId)
-      if (record === undefined) return null
-      const profile = record.profileId === null ? null : readProfile(services.store, record.profileId)
-      return {
-        helmSessionId: record.id,
-        branch: record.branch,
-        // The profile may have been deleted since - a session is a record of
-        // what happened and outlives the profile it came from - so this is
-        // "what it was launched from, if that still exists" rather than a join
-        // anything depends on.
-        profile: profile?.name ?? null,
-        overlays: profile?.overlays ?? [],
-        startedAtMs: Date.parse(record.startedAt) || null
-      }
-    },
-    measure: async () => {
-      // A tool call is somebody looking, for exactly one pass. `watch` is
-      // reference-counted, so this neither switches the pane's own pass off
-      // when it returns nor leaves a timer running when nobody else wants one.
-      resources.watch(true)
-      try {
-        await resources.refresh()
-      } finally {
-        resources.watch(false)
-      }
-      return resources.snapshots()
-    }
-  }
+  // What a session may be told about the other sessions: `sessionToolsWorld`
+  // says why it is these three and nothing else.
+  sessionTools = sessionToolsWorld({ store: services.store, sessions, activity, resources })
 
   // Built on the config service rather than beside it: the import picker's
   // sources are the console's own scopes, and what a skill *is* is the
@@ -648,27 +582,29 @@ function startApp(options: AppOptions = {}): void {
             error: err instanceof Error ? err.message : String(err)
           })
         })
+        // The first pull-request sweep waits for the scan, because the scan is
+        // what it sweeps. Started beside it, it read the project cache - empty
+        // on a fresh install, and missing anything cloned since the last run -
+        // so every repository the scan then found went unfetched until the next
+        // tick, with the pane saying it was checking them. The pane paints from
+        // SQLite in the meantime either way.
+        .finally(() => {
+          void pulls.refresh().catch((err: unknown) => {
+            console.warn(`pull requests could not be fetched: ${String(err)}`)
+          })
+        })
       emit(win, 'scan:status', { running: true })
 
       // Off the renderer's critical path: the first pass reads 875 KB and
       // writes 3,470 rows, which is ~30ms the launcher should not spend
       // before it paints. The window gets `history:changed` when it lands.
       setImmediate(() => {
+        // The first pass, which the archive rides, and then the watches.
         try {
-          emit(win, 'history:changed', history.refresh())
+          emit(win, 'history:changed', historyIndex.start())
         } catch (err) {
           console.warn(`history index could not be built: ${String(err)}`)
         }
-        history.start()
-        // The archive rides that same first pass - `onTranscripts` has already
-        // run by the time `refresh()` returned - so this only arms the watch
-        // over `projects/`, which is the trigger a session appending to its
-        // transcript without submitting a prompt would otherwise not have.
-        // A session that ended while Helm was closed was caught by the pass
-        // above, which is what makes the start-up sweep a sweep.
-        archive.start(() => {
-          history.refresh()
-        })
 
         // Cheap by comparison - one 134 KB file, parsed - but it is on the
         // same "after the first paint" footing: the status bar has everything
@@ -681,13 +617,10 @@ function startApp(options: AppOptions = {}): void {
         }
         usage.start()
 
-        // Last, and deliberately: this one spawns `git` per repository and
-        // `gh` per remote, and the pane it feeds paints from SQLite in the
-        // meantime. The timer is armed either way - a fetch that fails is not a
-        // reason to stop trying every five minutes.
-        void pulls.refresh().catch((err: unknown) => {
-          console.warn(`pull requests could not be fetched: ${String(err)}`)
-        })
+        // Last, and deliberately: a sweep spawns `git` per repository and `gh`
+        // per remote. The first one runs when the scan lands (above); the timer
+        // is armed either way - a fetch that fails is not a reason to stop
+        // trying every five minutes.
         pulls.start()
 
         // And the one request Helm's own process makes. Here rather than at
@@ -810,7 +743,7 @@ function startApp(options: AppOptions = {}): void {
     persistBounds()
     // Before the store is let go of: a debounced index pass, or a config watch
     // firing after `will-quit`, would write to a closed connection.
-    history.stop()
+    historyIndex.stop()
     usage.stop()
     pulls.stop()
     config.stop()
@@ -1100,66 +1033,6 @@ app.whenReady().then(() => {
             )
             console.log(`${mode} report: ${file}`)
             for (const c of checks) console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-
-            app.once('quit', () => process.exit(pass ? 0 : 1))
-            setTimeout(() => app.exit(pass ? 0 : 1), 60_000)
-            setTimeout(() => app.quit(), 200)
-          })
-          .catch((err: unknown) => {
-            console.error(`${mode} crashed: ${String(err)}`)
-            setTimeout(() => app.exit(1), 200)
-          })
-      }
-    })
-    return
-  }
-
-  /**
-   * The browser pane, driven through the real window in two phases.
-   *
-   * The second exists for the reason every second phase in this file does:
-   * "a cookie the fixture set is still there after a restart" is not a claim
-   * the process that set it can make. `run-browser.mjs` starts this again with
-   * `--browser-restart`, against the same isolated data directory and therefore
-   * the same `persist:helm-browser` partition, and the fixture server is
-   * started fresh on the port the first phase wrote down.
-   */
-  if (mode === 'browser-check' || mode === 'browser-restart') {
-    const restart = mode === 'browser-restart'
-    // A collector, because M17's `live` group spawns a real `claude` and the
-    // only witness for what a session said is its output. Every other group in
-    // this driver spawns nothing and never reads it.
-    const collector = createCollector()
-    startApp({
-      observer: collector,
-      confirm: collector.confirm,
-      onReady: (ctx) => {
-        collector.answerWith(true)
-        const onlyArg = process.argv.find((a) => a.startsWith('--only='))
-        void runBrowserChecks(ctx, collector, {
-          dataDir,
-          shotDir: join(dataDir, 'screenshots'),
-          phase: restart ? 'restart' : 'main',
-          ...(onlyArg ? { only: onlyArg.slice('--only='.length).split(',') } : {})
-        })
-          .then((checks) => {
-            const pass = checks.every((c) => c.ok)
-            const file = writeReport(
-              restart ? 'browser-restart-report.json' : 'browser-report.json',
-              {
-                startedAt: new Date().toISOString(),
-                mode: appMode,
-                dataDir,
-                versions: process.versions,
-                pass,
-                checks
-              }
-            )
-            console.log(`${mode} report: ${file}`)
-            for (const c of checks) {
-              console.log(`${c.ok ? 'PASS' : 'FAIL'}  ${c.id}  ${c.title}`)
-              for (const n of c.notes) console.log(`      ${n}`)
-            }
 
             app.once('quit', () => process.exit(pass ? 0 : 1))
             setTimeout(() => app.exit(pass ? 0 : 1), 60_000)

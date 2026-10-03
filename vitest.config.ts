@@ -15,6 +15,35 @@ export default defineConfig({
     // test from leaving an open SQLite handle in a process another test reuses.
     pool: 'forks',
     testTimeout: 30_000,
+    // `pnpm test` runs with --coverage; a targeted `vitest run <file>` does
+    // not, so a narrow run never trips the thresholds.
+    coverage: {
+      provider: 'v8',
+      include: ['packages/*/src/**/*.{ts,tsx}'],
+      exclude: [
+        '**/*.test.{ts,tsx}',
+        '**/*.d.ts',
+        // Test helpers that live beside the code they fake.
+        '**/*.testkit.{ts,tsx}',
+        'packages/ui/src/test-setup.ts',
+        'packages/core/src/store/migrations.generated.ts',
+        // The diagnostic drivers and the spike page they drive are tools, not
+        // app code (docs/TESTING.md).
+        'packages/desktop/src/main/{fidelity,claudecheck,packagingcheck,selftest,checkkit}.ts',
+        'packages/desktop/src/renderer/src/{spike,probe,latency}.ts'
+      ],
+      reporter: ['text-summary', 'html'],
+      reportsDirectory: 'reports/coverage',
+      // The floor only goes up: a run that beats it raises it in this file,
+      // rounded down to a whole percent, and a run below it fails.
+      thresholds: {
+        autoUpdate: (value: number) => Math.floor(value),
+        lines: 77,
+        functions: 68,
+        branches: 65,
+        statements: 74
+      }
+    },
     projects: [
       {
         extends: true,

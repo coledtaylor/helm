@@ -7,9 +7,8 @@ import type { Confirm, ConfirmRequest, SessionHost, SessionObserver } from './se
 import type { Services } from './services'
 
 /**
- * What the in-app drivers (`browser-check`, `packaging-check`) are handed once
- * the window has mounted. These are diagnostic tools, not tests: see
- * docs/TESTING.md.
+ * What the in-app driver (`packaging-check`) is handed once the window has
+ * mounted. It is a diagnostic tool, not a test: see docs/TESTING.md.
  */
 export interface CheckContext {
   win: BrowserWindow

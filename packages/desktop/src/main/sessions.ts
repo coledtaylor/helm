@@ -325,7 +325,16 @@ export function createSessionHost({
     ...[...hosted.values()].filter((h) => !h.closed).map((h) => h.record.name)
   ]
 
+  /** Set by `shutdown`, after which no exit is this host's to record. */
+  let shutDown = false
+
   function onExit(id: number, exitCode: number): void {
+    // `shutdown` has completed every row, and by now the database may be gone
+    // too: a pty reports its exit on a later turn than the kill, so a tab closed
+    // just before a quit reports after `will-quit` has let go of the store.
+    // Writing then threw on the closed connection - an uncaught main-process
+    // exception, which is Electron's error dialog and a Helm that never exits.
+    if (shutDown) return
     // The row is the source of truth for the duration - it measures against the
     // clock that wrote `started_at`. `finishSession` returns null if this exit
     // was already recorded, in which case there is nothing to announce.
@@ -825,6 +834,7 @@ export function createSessionHost({
     },
 
     shutdown() {
+      shutDown = true
       // Rows first: once the processes are gone their `onExit` handlers may not
       // get a turn on the event loop before the process image is replaced, and
       // a row left claiming to be running would be reconciled to `lost` at the
