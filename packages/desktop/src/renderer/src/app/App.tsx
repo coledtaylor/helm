@@ -16,6 +16,7 @@ import {
   isScanRoot,
   liveSessionsIn,
   moveTab,
+  openFile,
   openTab,
   paneId,
   placeBeside,
@@ -27,6 +28,7 @@ import {
   withProjectPinned,
   withRepoIgnored,
   type EditorHighlight,
+  type FileRef,
   type HistorySession,
   type LiveSession,
   type PaneLayout,
@@ -43,6 +45,7 @@ import {
   BookIcon,
   BrowserPane,
   cn,
+  CodeIcon,
   ConfigConsole,
   ConfigDeleteDialog,
   ConfigDeletedNotice,
@@ -55,7 +58,14 @@ import {
   type ConsoleEntry,
   ContentNothingSelected,
   ContentViewer,
+  DocIcon,
   EffectiveViewPane,
+  FileActions,
+  FileCrumb,
+  FilesRootPicker,
+  FilesStatusNote,
+  FilesTree,
+  FileView,
   FolderIcon,
   FolderPlusIcon,
   GearIcon,
@@ -78,6 +88,7 @@ import {
   ProjectPane,
   PullRequestIcon,
   PullsPane,
+  QuickOpenDialog,
   pullRepoChoices,
   pullsSummaryLine,
   Rail,
@@ -119,6 +130,7 @@ import { terminalFontStack } from '../terminal'
 import { crumbStatus, indicatorOf, sessionNote, useNow } from './sessionView'
 import { useConfig } from './useConfig'
 import { useContent } from './useContent'
+import { fileKey, joinRoot, relativeTo, useFiles } from './useFiles'
 import { sessionHistoryProps, useHistory } from './useHistory'
 import { useLauncher } from './useLauncher'
 import { useProfiles } from './useProfiles'
@@ -146,7 +158,7 @@ const KIND_ICON = {
  * What the rail's sidebar views are. Pages - history, settings and the rest -
  * open as tabs instead; see `RailItem`.
  */
-type SidebarView = 'sessions' | 'profiles'
+type SidebarView = 'sessions' | 'files' | 'profiles'
 
 /**
  * A link in a rendered note, handed to the OS browser.
@@ -230,6 +242,16 @@ export function App(): JSX.Element {
   const [layout, setLayout] = useState<PaneLayout | null>(null)
   /** The pane given the whole window, or null for the panes side by side. */
   const [maximized, setMaximized] = useState<number | null>(null)
+  /**
+   * The file tab standing as a preview - opened by a single click, replaced by
+   * the next one (`openFile`). Not written down: a restart reopens it as an
+   * ordinary tab, which is what a tab that survived a restart is.
+   */
+  const [preview, setPreview] = useState<string | null>(null)
+  /** Ctrl+P, open on this project, or null. */
+  const [quickOpenRoot, setQuickOpenRoot] = useState<string | null>(null)
+  /** Where each file tab's caret is, so VS Code opens at the same line. */
+  const fileCarets = useRef(new Map<string, number>())
   const [sidebarView, setSidebarView] = useState<SidebarView>('sessions')
   /** The rail's current view, pressed again, puts the sidebar away. */
   const [sidebarHidden, setSidebarHidden] = useState(false)
@@ -584,6 +606,7 @@ export function App(): JSX.Element {
     const group = open.groups[open.focused]
     const ref = group === undefined ? null : activeRef(group)
     if (ref?.kind === 'project') return ref.path
+    if (ref?.kind === 'file') return ref.root
     if (ref?.kind === 'session') return sessionsById.get(ref.id)?.projectPath ?? null
     return null
   }, [open, sessionsById])
@@ -999,12 +1022,82 @@ export function App(): JSX.Element {
     const group = open.groups[open.focused]
     const ref = group === undefined ? null : activeRef(group)
     if (ref?.kind === 'project') return ref.path
+    if (ref?.kind === 'file') return ref.root
     if (ref?.kind !== 'session') return null
     const session = sessionsById.get(ref.id)
     return session === undefined ? null : (session.projectPath ?? session.cwd)
   }, [open, sessionsById])
   const { show: showLauncher } = newSession
   const openLauncher = useCallback(() => showLauncher(frontFolder), [showLauncher, frontFolder])
+
+  // ---------------------------------------------------------------------------
+  // Files
+  // ---------------------------------------------------------------------------
+
+  /** The file tabs on screen: the ones read, re-read and watched. */
+  const shownFiles = useMemo(
+    () => visible.flatMap((ref) => (ref.kind === 'file' ? [{ root: ref.root, path: ref.path }] : [])),
+    [visible]
+  )
+  const files = useFiles({
+    active: sidebarShown && sidebarView === 'files',
+    follow: frontFolder,
+    shown: shownFiles,
+    revision: discovery
+  })
+  const { noteOpened, loadListing } = files
+
+  /**
+   * A file, opened to be read beside the session changing it (`openFile`): a
+   * single click previews it, a double click or Ctrl+P keeps it.
+   *
+   * The preview that comes back is worked out here, from the layout on screen,
+   * rather than inside the update - an updater has to be pure, and React runs
+   * it twice in development to check.
+   */
+  const openFileAt = useCallback(
+    (root: string, path: string, keep: boolean) => {
+      const ref: FileRef = { kind: 'file', root, path }
+      const id = paneId(ref)
+      const still = preview !== null && findTab(open, preview) !== null ? preview : null
+      const placed = openFile(open, ref, still, keep)
+      const landed = findTab(placed.layout, id)
+      commit((current) => openFile(current, ref, still, keep).layout)
+      setPreview(placed.preview)
+      // A file sent to the pane a maximized one is hiding gives the window back.
+      setMaximized((current) => (current === null || current === landed?.group ? current : null))
+      noteOpened(root, relativeTo(root, path))
+    },
+    [open, preview, commit, noteOpened]
+  )
+
+  /** A preview tab double-clicked: it stays. */
+  const keepTab = useCallback((id: string) => {
+    setPreview((current) => (current === id ? null : current))
+  }, [])
+
+  const openInEditor = useCallback((path: string, line: number | null) => {
+    void helm.invoke('files:openInEditor', { path, line })
+  }, [])
+  const copyPath = useCallback((path: string) => {
+    void helm.invoke('clipboard:write', path)
+  }, [])
+
+  /**
+   * Ctrl+P: a file in the project the Files view is on, which follows the
+   * pane in front. With nothing to search yet, the Files view opens instead,
+   * and picks a project.
+   */
+  const filesRoot = files.root
+  const openQuickOpen = useCallback(() => {
+    if (filesRoot === null) {
+      setSidebarView('files')
+      setSidebarHidden(false)
+      return
+    }
+    loadListing(filesRoot)
+    setQuickOpenRoot(filesRoot)
+  }, [filesRoot, loadListing])
 
   /**
    * Ctrl+N opens the launcher from anywhere in the window, a focused terminal
@@ -1028,6 +1121,25 @@ export function App(): JSX.Element {
     window.addEventListener('keydown', onKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
   }, [setupNeeded, openLauncher])
+
+  /**
+   * Ctrl+P, from anywhere in the window, a focused terminal included - in
+   * capture, as Ctrl+N is. Claude Code binds it to the same things it binds
+   * Ctrl+N to - the previous line, the previous choice - and the arrow keys
+   * do each of those, which is the argument Ctrl+N's handler makes too.
+   */
+  useEffect(() => {
+    if (setupNeeded) return undefined
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!event.ctrlKey || event.altKey || event.shiftKey || event.metaKey) return
+      if (event.key.toLowerCase() !== 'p') return
+      event.preventDefault()
+      event.stopPropagation()
+      if (!overlayOpen()) openQuickOpen()
+    }
+    window.addEventListener('keydown', onKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
+  }, [setupNeeded, openQuickOpen])
 
   /**
    * Ctrl+Tab cycles every tab in every pane on screen as one ring, and Ctrl+\
@@ -1347,11 +1459,26 @@ export function App(): JSX.Element {
           }
         ]
       }
+      case 'file':
+        return [
+          {
+            id: paneId(ref),
+            title: folderName(ref.path),
+            hint: paneId(ref) === preview ? `${ref.path}\nPreview - double-click to keep it open` : ref.path,
+            icon: <DocIcon width={13} height={13} />,
+            mono: true,
+            preview: paneId(ref) === preview
+          }
+        ]
     }
   }
 
   /** The crumb under a session's tab. */
   const crumbFor = (ref: PaneRef | null): ReactNode => {
+    if (ref?.kind === 'file') {
+      const view = files.tabs.get(fileKey(ref.path))?.view ?? null
+      return <FileCrumb relPath={view?.relPath ?? relativeTo(ref.root, ref.path)} changes={view?.changes ?? null} />
+    }
     if (ref?.kind !== 'session') return null
     const session = sessionsById.get(ref.id)
     if (!session) return null
@@ -2032,8 +2159,32 @@ export function App(): JSX.Element {
           />
         )
       case 'session':
+      case 'file':
+        // Neither is a page: a session is its terminal and a file its view,
+        // both drawn edge to edge by `renderGroup`.
         return null
     }
+  }
+
+  /** A file tab's view: the code on the pane itself, no page gutter around it. */
+  const renderFile = (ref: FileRef): JSX.Element => {
+    const key = fileKey(ref.path)
+    const state = files.tabs.get(key)
+    return (
+      <FileView
+        key={paneId(ref)}
+        view={state?.view ?? null}
+        error={state?.error ?? null}
+        wrap={files.wrap}
+        onWrapChange={files.setWrap}
+        onHighlight={helmHighlight}
+        onCaretChange={(caret) => fileCarets.current.set(key, caret.line)}
+        onReveal={launcher.reveal}
+        onOpenInEditor={
+          files.editor === null ? null : () => openInEditor(ref.path, fileCarets.current.get(key) ?? null)
+        }
+      />
+    )
   }
 
   // ---------------------------------------------------------------------------
@@ -2075,11 +2226,29 @@ export function App(): JSX.Element {
             onRename={(id, label) => {
               if (id.startsWith('session:')) void sessionState.rename(sessionIdOf(id), label)
             }}
+            onKeep={keepTab}
             // A native view paints over the drop mark and the dragged tab's
             // ghost, so it stands down for the length of the gesture.
             onDragging={browsers.setSuppressed}
             actions={
-              <PaneActions
+              <>
+                {groupFront?.kind === 'file' && (
+                  <FileActions
+                    path={groupFront.path}
+                    onOpenInEditor={
+                      files.editor === null
+                        ? null
+                        : () =>
+                            openInEditor(
+                              groupFront.path,
+                              fileCarets.current.get(fileKey(groupFront.path)) ?? null
+                            )
+                    }
+                    onReveal={launcher.reveal}
+                    onCopyPath={copyPath}
+                  />
+                )}
+                <PaneActions
                 split={single ? (group.tabs.length > 1 ? 'new' : null) : 'other'}
                 maximized={shownMax === index}
                 canMaximize={group.tabs.length > 0}
@@ -2097,6 +2266,7 @@ export function App(): JSX.Element {
                   setMaximized(null)
                 }}
               />
+              </>
             }
           />
         }
@@ -2125,7 +2295,8 @@ export function App(): JSX.Element {
             </div>
           )
         })}
-        {groupFront !== null && groupFront.kind !== 'session' && (
+        {groupFront?.kind === 'file' && <div className="absolute inset-0">{renderFile(groupFront)}</div>}
+        {groupFront !== null && groupFront.kind !== 'session' && groupFront.kind !== 'file' && (
           // A page draws its own islands until it is moved onto the pane's
           // (the overhaul's last step); the gutter keeps them off its edges.
           <div className="absolute inset-0 p-2">
@@ -2186,6 +2357,15 @@ export function App(): JSX.Element {
             current: sidebarShown && sidebarView === 'sessions',
             attention: statusCounts.waiting > 0,
             onSelect: () => toggleView('sessions')
+          },
+          {
+            id: 'files',
+            label: 'Files',
+            icon: <DocIcon width={17} height={17} />,
+            kind: 'view',
+            current: sidebarShown && sidebarView === 'files',
+            onSelect: () => toggleView('files'),
+            hooks: { 'data-open-files': true }
           },
           page(
             'history',
@@ -2327,6 +2507,62 @@ export function App(): JSX.Element {
           is mounted only while it is the view: its rows are titled buttons
           inside the sidebar, and kept hidden in the DOM they would be counted
           by every `aside button[title]` that means "a project row". */}
+      {sidebarView === 'files' && (
+        <Sidebar
+          title="Files"
+          scope={<FilesRootPicker roots={files.roots} value={files.root} onChange={files.setRoot} />}
+          actions={
+            files.root === null ? undefined : (
+              <>
+                <SidebarAction
+                  label="Reveal project in Explorer"
+                  onClick={() => {
+                    if (files.root !== null) launcher.reveal(files.root)
+                  }}
+                >
+                  <FolderIcon width={13} height={13} />
+                </SidebarAction>
+                {files.editor !== null && (
+                  <SidebarAction
+                    label="Open project in VS Code"
+                    onClick={() => {
+                      if (files.root !== null) openInEditor(files.root, null)
+                    }}
+                  >
+                    <CodeIcon width={13} height={13} />
+                  </SidebarAction>
+                )}
+              </>
+            )
+          }
+          footer={
+            files.status !== null && (files.status.repo === null || files.status.files === null) ? (
+              <FilesStatusNote status={files.status} />
+            ) : undefined
+          }
+        >
+          {files.root === null ? (
+            <p className="px-3.5 py-6 text-[12px] text-fg-subtle">Choose a project above to see its files.</p>
+          ) : (
+            <FilesTree
+              rootLabel={folderName(files.root)}
+              dirs={files.dirs}
+              expanded={files.expanded}
+              loading={files.loadingDirs}
+              status={files.status}
+              selectedPath={front?.kind === 'file' ? front.path : null}
+              onToggleDir={files.toggleDir}
+              onOpen={(path, keep) => {
+                if (files.root !== null) openFileAt(files.root, path, keep)
+              }}
+              onReveal={launcher.reveal}
+              onCopyPath={copyPath}
+              onOpenInEditor={files.editor === null ? null : (path) => openInEditor(path, null)}
+              onGoToFile={openQuickOpen}
+            />
+          )}
+        </Sidebar>
+      )}
       {sidebarView === 'profiles' && (
         <Sidebar
           title="Profiles"
@@ -2467,6 +2703,21 @@ export function App(): JSX.Element {
         {templateDialogs}
         {confirmDialog}
         {configEntryDialog}
+        {quickOpenRoot !== null && (
+          <QuickOpenDialog
+            rootLabel={
+              files.roots.find((scope) => scope.path.toLowerCase() === quickOpenRoot.toLowerCase())?.label ??
+              folderName(quickOpenRoot)
+            }
+            listing={files.listing}
+            recent={files.recentIn(quickOpenRoot)}
+            onOpen={(relPath) => {
+              setQuickOpenRoot(null)
+              openFileAt(quickOpenRoot, joinRoot(quickOpenRoot, relPath), true)
+            }}
+            onDismiss={() => setQuickOpenRoot(null)}
+          />
+        )}
         {newSession.open && (
           <NewSessionDialog
             projects={discovery?.projects ?? EMPTY_PROJECTS}

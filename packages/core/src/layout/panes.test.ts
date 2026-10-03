@@ -10,6 +10,7 @@ import {
   focusGroup,
   fromSaved,
   moveTab,
+  openFile,
   openTab,
   paneId,
   placeBeside,
@@ -18,6 +19,7 @@ import {
   sendToOtherGroup,
   toSaved,
   visibleTabs,
+  type FileRef,
   type PaneLayout,
   type PaneRef,
   type SavedPaneLayout
@@ -343,5 +345,55 @@ describe('placeRestored', () => {
     expect(shape(placed)).toEqual(['>history *session:8 session:9'])
     expect(placeRestored(now, null, new Map([[1, 8]]))).toBe(now)
     expect(placeRestored(now, saved, new Map())).toBe(now)
+  })
+})
+
+describe('openFile', () => {
+  const file = (name: string): FileRef => ({ kind: 'file', root: '/p', path: `/p/${name}` })
+
+  it('opens beside a session in front, in a pane of its own when there is only one', () => {
+    const { layout, preview } = openFile(layoutOf([session(1)]), file('a.ts'), null, false)
+    expect(shape(layout)).toEqual([' *session:1', '>*file:/p/a.ts'])
+    expect(preview).toBe('file:/p/a.ts')
+  })
+
+  it('opens in the other pane when two are open and a session is in front of the focused one', () => {
+    const start = focusGroup(layoutOf([session(1)], [HISTORY]), 0)
+    const { layout } = openFile(start, file('a.ts'), null, true)
+    expect(shape(layout)).toEqual([' *session:1', '>history *file:/p/a.ts'])
+  })
+
+  it('opens in the focused pane when what is in front is not a session', () => {
+    const { layout } = openFile(layoutOf([session(1)], [HISTORY]), file('a.ts'), null, true)
+    expect(shape(layout)).toEqual([' *session:1', '>history *file:/p/a.ts'])
+    const alone = openFile(layoutOf([HISTORY]), file('a.ts'), null, true).layout
+    expect(shape(alone)).toEqual(['>history *file:/p/a.ts'])
+  })
+
+  it('replaces the preview in place on the next single click, and keeps a tab opened to stay', () => {
+    let state = openFile(layoutOf([session(1)]), file('a.ts'), null, false)
+    state = openFile(focusGroup(state.layout, 1), file('b.ts'), state.preview, false)
+    expect(shape(state.layout)).toEqual([' *session:1', '>*file:/p/b.ts'])
+    expect(state.preview).toBe('file:/p/b.ts')
+
+    state = openFile(state.layout, file('c.ts'), state.preview, true)
+    expect(shape(state.layout)).toEqual([' *session:1', '>file:/p/b.ts *file:/p/c.ts'])
+    expect(state.preview).toBe('file:/p/b.ts')
+  })
+
+  it('brings an open file forward, and keeping the preview ends it being one', () => {
+    let state = openFile(layoutOf([session(1)]), file('a.ts'), null, false)
+    const back = focusGroup(state.layout, 0)
+    state = openFile(back, file('a.ts'), state.preview, false)
+    expect(shape(state.layout)).toEqual([' *session:1', '>*file:/p/a.ts'])
+    expect(state.preview).toBe('file:/p/a.ts')
+    expect(openFile(state.layout, file('a.ts'), state.preview, true).preview).toBeNull()
+  })
+
+  it('forgets a preview whose tab has been closed', () => {
+    const state = openFile(layoutOf([HISTORY]), file('a.ts'), null, false)
+    const closed = closeTab(state.layout, 'file:/p/a.ts')
+    const next = openFile(closed, file('b.ts'), state.preview, true)
+    expect(next.preview).toBeNull()
   })
 })

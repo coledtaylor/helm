@@ -197,6 +197,11 @@ Templates are `helm-data/templates` when `PORTABLE_EXECUTABLE_DIR` is set, and
   4s, through `execFile`. Passes never overlap.
 - "Could not look" (`null`, painted "Unknown") and "nothing there" (`[]`) are
   never merged.
+- The Files view is read-only, and every `files:*` call names a root main
+  checks it knows (a scanned project, a profile's folder, a hosted session's
+  working directory). Changed lines are the working tree against `HEAD`, said
+  as that and never attributed to a session: git does not know who made a
+  change. Only what is on screen is watched, and main is told the whole set.
 - `claude --resume` must run in the directory history recorded. Transcripts are
   found by scanning `projects/*` for `<uuid>.jsonl`, never by deriving a path.
 - `CLAUDE_CONFIG_DIR` moves credentials too, so a session pointed at a fixture

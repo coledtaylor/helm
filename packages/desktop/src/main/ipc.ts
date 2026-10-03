@@ -18,6 +18,7 @@ import type { BrowserHost } from './browser'
 import type { BrowserMcpHost } from './browser-mcp'
 import type { ConfigService } from './config'
 import { highlightForEditor, type ContentService } from './content'
+import type { FilesService } from './files'
 import type { TemplateService } from './templates'
 import type { RestoreService } from './restore'
 import type { ArchiveService } from './archive'
@@ -134,6 +135,8 @@ export interface IpcContext {
   config: ConfigService
   /** Reads, renders and searches what Claude writes; see `content.ts`. */
   content: ContentService
+  /** The Files view's tree, file reads, Ctrl+P list and watches; see `files.ts`. */
+  files: FilesService
   /** Authors what `template:list` reads back; see `templates.ts`. */
   templates: TemplateService
   /** Built-in and user themes, and the watch on the user's; see `themes.ts`. */
@@ -644,6 +647,14 @@ export function registerIpc(ctx: IpcContext): void {
     'content:snapshots': ({ scopePath, path }) => ctx.content.snapshots(scopePath, path),
     'content:restore': ({ id, path }) => ctx.content.restore(id, path),
     'content:artifact': ({ scopePath, path }) => ctx.content.artifact(scopePath, path),
+    'files:dir': ({ root, relPath }) => ctx.files.dir(root, relPath),
+    'files:status': ({ root }) => ctx.files.status(root),
+    'files:read': ({ root, path }) => ctx.files.read(root, path),
+    'files:list': ({ root }) => ctx.files.list(root),
+    'files:watch': ({ roots }) => ctx.files.watch(roots),
+    'files:editor': () => ({ name: ctx.files.editor() }),
+    'files:openInEditor': ({ path, line }) => ctx.files.openInEditor(path, line),
+
     'content:wikilink': ({ scopePath, target, from }) => ({
       path: ctx.content.wikilink(scopePath, target, from)
     }),

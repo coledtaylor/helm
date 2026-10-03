@@ -34,6 +34,7 @@ import {
 } from './services'
 import { createConfigService } from './config'
 import { createTemplateService } from './templates'
+import { createFilesService } from './files'
 import {
   attachArtifactConsole,
   CONTENT_SCHEME,
@@ -455,6 +456,22 @@ function startApp(options: AppOptions = {}): void {
   attachArtifactConsole(win, (entry) => emit(win, 'content:artifactConsole', entry))
 
   /**
+   * The Files view. Its roots are the content viewer's scopes - every project,
+   * harness and profile folder - and the folder each hosted session is working
+   * in, because "the files of the session in front of me" is the question it
+   * answers and a profile's session can run somewhere no scan reached.
+   */
+  const files = createFilesService({
+    roots: () => [
+      ...content.scopes().map((scope) => scope.path),
+      ...sessions.list().map((session) => session.cwd)
+    ],
+    onChanged: (root, paths) => emit(win, 'files:changed', { root, paths }),
+    protocolHandler: (url) => app.getApplicationNameForProtocol(url),
+    openExternal: (url) => shell.openExternal(url)
+  })
+
+  /**
    * The browser pane's views.
    *
    * Settings are read through a function and written through one, for the two
@@ -580,6 +597,7 @@ function startApp(options: AppOptions = {}): void {
     pulls,
     config,
     content,
+    files,
     templates,
     themes,
     window: () => win,
@@ -772,6 +790,7 @@ function startApp(options: AppOptions = {}): void {
     usage.stop()
     pulls.stop()
     config.stop()
+    files.stop()
     /*
      * The endpoint goes **before** the sessions, and the order is the point.
      *

@@ -182,7 +182,12 @@ test('ticked to resume without asking, the next crash is put back with no questi
 
   ;({ window } = await crashAndRestart(helm, world))
   const offer = window.getByRole('region', { name: '1 session was running when Helm closed' })
-  await offer.getByRole('checkbox', { name: 'Always resume without asking' }).check()
+  // Clicked, then waited on: the box shows the stored setting, so it ticks when
+  // the write has come back from main - `check()` asserts it the instant after
+  // the click, and lost that race under a loaded suite.
+  const always = offer.getByRole('checkbox', { name: 'Always resume without asking' })
+  await always.click()
+  await expect(always).toBeChecked()
   await expect
     .poll(async () => (await invoke<AppSettings>(window, 'settings:read')).restoreWithoutAsking)
     .toBe(true)

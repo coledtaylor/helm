@@ -663,3 +663,23 @@ export function DevToolsIcon(props: IconProps): JSX.Element {
     </Icon>
   )
 }
+
+/** Two angle brackets: hand this to VS Code, the editor a file is edited in. */
+export function CodeIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M5.5 4.5 2 8l3.5 3.5" />
+      <path d="M10.5 4.5 14 8l-3.5 3.5" />
+    </Icon>
+  )
+}
+
+/** One page over another: copy, as every app on this platform draws it. */
+export function CopyIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.25" />
+      <path d="M10.5 5.5V3.75a1.25 1.25 0 0 0-1.25-1.25h-5.5A1.25 1.25 0 0 0 2.5 3.75v5.5a1.25 1.25 0 0 0 1.25 1.25H5.5" />
+    </Icon>
+  )
+}

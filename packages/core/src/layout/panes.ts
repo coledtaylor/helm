@@ -89,6 +89,8 @@ export function paneId(ref: PaneRef): string {
       return `browser:${String(ref.id)}`
     case 'session':
       return `session:${String(ref.id)}`
+    case 'file':
+      return `file:${ref.path}`
     default:
       // history, sessions, pulls, config, content, settings: one of each, so
       // the kind is the identity.
@@ -309,6 +311,64 @@ export function placeBeside(layout: PaneLayout, ref: PaneRef): PaneLayout {
   if (opened.groups.length === 1) return moveTab(opened, id, 1, 0)
   const other = layout.focused === 0 ? 1 : 0
   return moveTab(opened, id, other, opened.groups[other]!.tabs.length)
+}
+
+/** A file tab, as `openFile` takes it. */
+export type FileRef = Extract<PaneRef, { kind: 'file' }>
+
+/**
+ * Opens a file to be read beside the session that is changing it.
+ *
+ * Where it lands is the whole point of the rule. With a session in front of the
+ * focused pane, the file goes to the **other** pane - opening one if there is
+ * only one - so the terminal and the file are side by side rather than one
+ * hiding the other. With anything else in front, the file opens in the focused
+ * pane: that is the pane already being used for reading, and a file sent past
+ * it would take the session's place on the far side.
+ *
+ * **Preview.** A file opened by a single click stands as the pane's preview tab
+ * and the next single click replaces it in place, so reading through a tree
+ * does not leave a tab per file looked at. `keep` opens a tab that stays - a
+ * double click, or Ctrl+P - and keeping the preview itself turns it into an
+ * ordinary tab. `preview` is the id of the tab standing as the preview now, or
+ * null; what comes back is the layout and the preview after.
+ */
+export function openFile(
+  layout: PaneLayout,
+  ref: FileRef,
+  preview: string | null,
+  keep: boolean
+): { layout: PaneLayout; preview: string | null } {
+  const id = paneId(ref)
+  const still = preview !== null && findTab(layout, preview) !== null ? preview : null
+
+  if (findTab(layout, id) !== null) {
+    return { layout: activateTab(layout, id), preview: keep && still === id ? null : still }
+  }
+
+  const group = layout.groups[layout.focused]
+  const front = group === undefined ? null : activeRef(group)
+  const target =
+    front?.kind !== 'session'
+      ? layout.focused
+      : layout.groups.length === 1
+        ? layout.groups.length
+        : layout.focused === 0
+          ? 1
+          : 0
+
+  if (!keep && still !== null) {
+    const at = findTab(layout, still)!
+    if (at.group === target) {
+      const tabs = layout.groups[target]!.tabs.map((tab) => (paneId(tab) === still ? ref : tab))
+      return {
+        layout: normalize(withGroup(layout, target, { tabs, activeId: id }), target),
+        preview: id
+      }
+    }
+  }
+
+  return { layout: openTab(layout, ref, target), preview: keep ? still : id }
 }
 
 /**

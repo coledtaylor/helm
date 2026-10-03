@@ -89,3 +89,19 @@ describe('TabBar', () => {
     expect(screen.queryByRole('textbox', { name: 'Rename this tab' })).toBeNull()
   })
 })
+
+describe('TabBar: a preview tab', () => {
+  it('is drawn in italic and kept by a double click', () => {
+    const onKeep = vi.fn()
+    renderBar({
+      tabs: [{ id: 'file:a', title: 'a.ts', mono: true, preview: true }, ...TABS],
+      activeId: 'file:a',
+      onKeep
+    })
+    const title = screen.getByRole('tab', { name: 'a.ts' }).querySelector('[data-tab-title]')
+    expect(title?.className).toContain('italic')
+    expect(title?.className).toContain('font-mono')
+    fireEvent.doubleClick(screen.getByRole('tab', { name: 'a.ts' }))
+    expect(onKeep).toHaveBeenCalledWith('file:a')
+  })
+})

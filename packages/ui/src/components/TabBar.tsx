@@ -41,6 +41,14 @@ export interface Tab {
    * on the bar as well.
    */
   renamable?: boolean | undefined
+  /**
+   * A file opened by a single click, standing in until the next one replaces
+   * it. Its title is italic - the convention every editor uses for it - and a
+   * double click keeps it, through `onKeep` on the bar.
+   */
+  preview?: boolean | undefined
+  /** The title is machine data - a file name - and is set in mono. */
+  mono?: boolean | undefined
 }
 
 export interface TabBarProps {
@@ -65,6 +73,8 @@ export interface TabBarProps {
    * back to whatever it calls the thing by default. Omit to disable renaming.
    */
   onRename?: ((id: string, label: string | null) => void) | undefined
+  /** A preview tab was double-clicked: it stays rather than being replaced. */
+  onKeep?: ((id: string) => void) | undefined
   /** The pane's own controls - split, maximize, close - kept out of the
    * strip's scroll so they stay reachable when tabs overflow. */
   actions?: ReactNode | undefined
@@ -115,6 +125,7 @@ export function TabBar({
   onClose,
   onMove,
   onRename,
+  onKeep,
   actions,
   onDragging
 }: TabBarProps): JSX.Element | null {
@@ -309,7 +320,13 @@ export function TabBar({
                   onClick={() => onActivate(tab.id)}
                   // Double-click, not a menu and not a pencil on hover: the tab
                   // is the thing being named, and it costs the strip no pixels.
-                  onDoubleClick={canRename ? () => setEditing(tab.id) : undefined}
+                  onDoubleClick={
+                    canRename
+                      ? () => setEditing(tab.id)
+                      : tab.preview === true && onKeep !== undefined
+                        ? () => onKeep(tab.id)
+                        : undefined
+                  }
                   onKeyDown={(event) => moveWithKeyboard(event, index)}
                   // The front tab keeps its fill under the pointer: that fill
                   // says "front of this pane" and a tone that moved would say
@@ -323,7 +340,15 @@ export function TabBar({
                   )}
                 >
                   <Mark tab={tab} active={active} />
-                  <span data-tab-title className="min-w-0 truncate leading-[16px]">
+                  <span
+                    data-tab-title
+                    data-tab-preview={tab.preview === true ? 'true' : undefined}
+                    className={cn(
+                      'min-w-0 truncate leading-[16px]',
+                      tab.mono === true && 'font-mono text-[11.5px]',
+                      tab.preview === true && 'italic'
+                    )}
+                  >
                     {tab.title}
                   </span>
                   {tab.badge !== undefined && (

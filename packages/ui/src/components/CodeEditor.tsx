@@ -1,5 +1,6 @@
 import type { ChangeEvent, CSSProperties, JSX, KeyboardEvent, ReactNode, RefObject } from 'react'
 import {
+  Fragment,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -89,6 +90,20 @@ export interface EditorStatus {
   lines: number
 }
 
+/**
+ * Lines to mark, 1-based: what differs from the last commit, for the file view.
+ *
+ * Two sets rather than a list of hunks, because the gutter asks one question
+ * per line it draws - "is this one marked" - and a set answers that without a
+ * search.
+ */
+export interface EditorLineMarks {
+  /** Lines added or changed. */
+  changed: ReadonlySet<number>
+  /** Lines with something removed directly below them; 0 is above the first line. */
+  removedAfter: ReadonlySet<number>
+}
+
 export interface CodeEditorHandle {
   focus: () => void
   /** Selects an absolute range and scrolls it into view. */
@@ -100,11 +115,11 @@ export interface CodeEditorProps {
   onChange: (value: string) => void
   /**
    * Which surface this is, which decides the data attribute the textarea
-   * carries: `data-config-editor` or `data-content-editor`. A driver can query
-   * either and drive it through the value setter, which is the second of SPEC's
-   * reasons for a textarea.
+   * carries: `data-config-editor`, `data-content-editor` or `data-file-view`. A
+   * driver can query any of them and drive it through the value setter, which
+   * is the second of SPEC's reasons for a textarea.
    */
-  surface: 'config' | 'content'
+  surface: 'config' | 'content' | 'file'
   /** The file. Its extension decides the language, the indent and the pairs. */
   path: string
   ariaLabel: string
@@ -113,6 +128,19 @@ export interface CodeEditorProps {
   wrap: boolean
   /** The JSON is not valid, so the island's edge says so. */
   invalid?: boolean
+  /**
+   * Read, never written: the file view, where a file is read beside the
+   * session changing it and edited in VS Code. The caret, the selection, find
+   * and go to line all still work; no key changes the text.
+   */
+  readOnly?: boolean
+  /**
+   * No box of its own - no border, no corner, no fill. For a host that is
+   * already the island, so the code sits on it rather than in a well inside it.
+   */
+  bare?: boolean
+  /** Lines to mark in the gutter and behind the text. */
+  marks?: EditorLineMarks | null
   onCaretChange?: ((caret: { line: number; column: number }) => void) | undefined
   onStatusChange?: ((status: EditorStatus) => void) | undefined
   ref?: RefObject<CodeEditorHandle | null>
@@ -154,6 +182,9 @@ export function CodeEditor({
   onHighlight,
   wrap,
   invalid = false,
+  readOnly = false,
+  bare = false,
+  marks = null,
   onCaretChange,
   onStatusChange,
   ref
@@ -512,6 +543,10 @@ export function CodeEditor({
       closeFind()
       return
     }
+    // Every action below is an edit, and a read-only box takes none. `Tab`
+    // falls through to the browser, which moves the focus on - what a key that
+    // cannot indent should do.
+    if (readOnly) return
     const action = editorKeyAction(
       area.value,
       area.selectionStart,
@@ -527,6 +562,7 @@ export function CodeEditor({
   }
 
   const onChangeValue = (event: ChangeEvent<HTMLTextAreaElement>): void => {
+    if (readOnly) return
     onChange(event.target.value)
     readCaret()
   }
@@ -594,6 +630,21 @@ export function CodeEditor({
           parseFloat(getComputedStyle(mirror).paddingTop) + winStart * lineHeightOf(area))
     pre.style.top = `${String(top)}px`
 
+    /*
+     * A row for **every rendered line**, not only the ones in view.
+     *
+     * The gutter scrolls by transform (`syncScroll`), never by a render, so a
+     * number exists only if it was laid out here - and this runs when the text
+     * or the window changes, not when the box scrolls. Rows cut to the lines in
+     * view at that moment were the "line numbers don't go to the bottom" bug:
+     * scroll down a 470-line note and the gutter beside it was empty, because
+     * its ten numbers had been laid out for the top of the file.
+     *
+     * Every `.line` box was read here either way, so the visible-only version
+     * saved array entries and nothing else. What bounds the count is the
+     * window: the whole file below `WINDOW_THRESHOLD`, a margin either side of
+     * the view above it.
+     */
     const lineEls = pre.querySelectorAll<HTMLElement>('.line')
     const scrollTop = area.scrollTop
     const height = area.clientHeight
@@ -605,10 +656,10 @@ export function CodeEditor({
       if (!el) continue
       const rect = el.getBoundingClientRect()
       const rowTop = rect.top - base
+      next.push({ index: winStart + k, top: rowTop, height: rect.height })
       if (rowTop + rect.height < scrollTop || rowTop > scrollTop + height) continue
       if (firstVisible === -1) firstVisible = winStart + k
       lastVisible = winStart + k
-      next.push({ index: winStart + k, top: rowTop, height: rect.height })
     }
     setRows((previous) => (sameRows(previous, next) ? previous : next))
 
@@ -664,6 +715,24 @@ export function CodeEditor({
     '--editor-gutter-width': `${String(Math.max(2.75, digits * 0.62 + 1.4))}rem`
   } as CSSProperties
 
+  /**
+   * Where something was removed, as the top edge of the row below it - or the
+   * bottom edge of the last row, for a removal at the end of the file. Only the
+   * rows laid out are asked, which is the window, so a long file pays for the
+   * markers near the view and not for the rest.
+   */
+  const removals = useMemo(() => {
+    if (marks === null || marks.removedAfter.size === 0) return []
+    const out: Array<{ key: number; top: number }> = []
+    rows.forEach((row, at) => {
+      if (marks.removedAfter.has(row.index)) out.push({ key: row.index, top: row.top })
+      if (at === rows.length - 1 && marks.removedAfter.has(row.index + 1)) {
+        out.push({ key: row.index + 1, top: row.top + row.height })
+      }
+    })
+    return out
+  }, [marks, rows])
+
   return (
     <div
       data-editor
@@ -679,21 +748,44 @@ export function CodeEditor({
       data-editor-coloured={settled && (coloured?.highlighted ?? false)}
       data-editor-direct-writes={directWrites}
       data-editor-invalid={invalid}
+      data-editor-read-only={readOnly}
+      data-editor-bare={bare}
       className="helm-editor"
       style={style}
     >
       <div className="helm-editor-gutter" data-editor-gutter>
         <div ref={gutterRef} className="helm-editor-gutter-rows">
-          {rows.map((row) => (
+          {rows.map((row) => {
+            const changed = marks?.changed.has(row.index + 1) === true
+            return (
+              <Fragment key={row.index}>
+                <span
+                  data-editor-line-number={row.index + 1}
+                  data-editor-current={row.index === caret.line - 1}
+                  data-editor-changed={changed ? 'true' : undefined}
+                  className="helm-editor-number"
+                  style={{ top: `${String(row.top)}px` }}
+                >
+                  {row.index + 1}
+                </span>
+                {changed && (
+                  <span
+                    aria-hidden
+                    className="helm-editor-mark"
+                    style={{ top: `${String(row.top)}px`, height: `${String(row.height)}px` }}
+                  />
+                )}
+              </Fragment>
+            )
+          })}
+          {removals.map((removal) => (
             <span
-              key={row.index}
-              data-editor-line-number={row.index + 1}
-              data-editor-current={row.index === caret.line - 1}
-              className="helm-editor-number"
-              style={{ top: `${String(row.top)}px` }}
-            >
-              {row.index + 1}
-            </span>
+              key={`removed-${String(removal.key)}`}
+              aria-hidden
+              data-editor-removed-after={removal.key}
+              className="helm-editor-removed"
+              style={{ top: `${String(removal.top)}px` }}
+            />
           ))}
         </div>
       </div>
@@ -701,6 +793,17 @@ export function CodeEditor({
       <div className="helm-editor-body">
         <div className="helm-editor-clip">
           <div ref={rowsRef} className="helm-editor-rows">
+            {marks !== null &&
+              rows.map((row) =>
+                marks.changed.has(row.index + 1) ? (
+                  <div
+                    key={row.index}
+                    aria-hidden
+                    className="helm-editor-changed-line"
+                    style={{ top: `${String(row.top)}px`, height: `${String(row.height)}px` }}
+                  />
+                ) : null
+              )}
             {caretBox !== null && (
               <div
                 data-editor-caret-line
@@ -735,8 +838,11 @@ export function CodeEditor({
           ref={areaRef}
           {...(surface === 'config'
             ? { 'data-config-editor': true }
-            : { 'data-content-editor': true })}
+            : surface === 'content'
+              ? { 'data-content-editor': true }
+              : { 'data-file-view': true })}
           value={value}
+          readOnly={readOnly}
           onChange={onChangeValue}
           onKeyDown={onKeyDown}
           onKeyUp={readCaret}

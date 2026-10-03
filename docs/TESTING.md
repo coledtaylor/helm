@@ -90,6 +90,7 @@ tier above, so keep this one small.
 | `pulls` | a project's pull requests, one opened, and a review started |
 | `config` | an edit saved to disk and undone byte for byte |
 | `content` | a wikilink followed; an HTML artifact framed with no reach |
+| `files` | a file opened from the tree beside its session, its changed lines counted, its line numbers to the bottom, and the view following the session's next edit; Ctrl+P, and the hand-offs to VS Code, Explorer and the clipboard |
 | `browser` | browsing; the security posture; the refusals; a cookie surviving a restart |
 | `agent-tools` | a session drives the browser pane through its own token, and only its own tabs |
 

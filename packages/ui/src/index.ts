@@ -41,6 +41,9 @@ export {
   type ContentViewerProps
 } from './components/ContentViewer'
 export { ContentTreeList, type ContentTreeListProps } from './components/ContentTreeList'
+export { FilesRootPicker, FilesStatusNote, FilesTree, type FilesTreeProps } from './components/FilesTree'
+export { FileActions, FileCrumb, FileView, type FileViewProps } from './components/FileView'
+export { QuickOpenDialog, type QuickOpenDialogProps } from './components/QuickOpenDialog'
 export {
   ContentDocumentPane,
   type ArtifactConsoleEntry,

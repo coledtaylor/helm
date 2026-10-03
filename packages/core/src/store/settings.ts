@@ -166,6 +166,16 @@ function paneProblem(pane: unknown): string | null {
     }
     return null
   }
+  if (kind === 'file') {
+    const { root } = pane as Record<string, unknown>
+    if (typeof root !== 'string' || root.trim() === '') {
+      return `expected the file's project, got ${describe(root)}`
+    }
+    if (typeof path !== 'string' || path.trim() === '') {
+      return `expected a file path, got ${describe(path)}`
+    }
+    return null
+  }
   if (kind === 'pr') {
     if (typeof repoPath !== 'string' || repoPath.trim() === '') {
       return `expected a repository path, got ${describe(repoPath)}`

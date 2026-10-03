@@ -138,6 +138,7 @@ describe('settings over IPC', () => {
       pulls: { rearm: vi.fn(), refresh: vi.fn(() => Promise.resolve()), republish: vi.fn() } as never,
       config: {} as never,
       content: {} as never,
+      files: {} as never,
       templates: {} as never,
       themes,
       rendererReady: () => undefined

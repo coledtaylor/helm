@@ -618,6 +618,32 @@ overrides the gate; keep it.
   (`claude --resume`, in its own folder and profile, in the tab it had), and the
   primary button counts what it will do.
 
+- **A file tab** (from the Files view or Ctrl+P): read-only, and drawn on the
+  pane itself - no well inside the island - because it is read beside the
+  session changing it, and VS Code is one click away to change it. A single
+  click opens a **preview** tab, its name in italic, which the next single
+  click replaces in place; a double click (on the row or the tab) keeps it, as
+  Ctrl+P does. With a session in front of the focused pane the file opens in
+  the **other** pane, opening one if there is only one, so the two sit side by
+  side. The tab's name is mono 11.5px. The strip ends with **Open in VS Code**
+  as a secondary button - disabled and saying why where VS Code is not
+  installed - then Explorer and copy-path icons, then the pane's own controls.
+  The crumb is the path inside the project in mono, the folders giving way
+  before the name, and at the right how the file stands against the last
+  commit in `accent-text` beside a 2px accent bar ("2 lines changed since the
+  last commit", short form "2 changed" below 520px of crumb). The lines that
+  differ are marked the way a selected row is: a 2px accent edge where the
+  gutter meets the code, `accent-soft` behind the line, the number in
+  `accent-text`; a removal is a short accent tick across the line boundary. A
+  24px status line at the foot: caret position, language, line endings, Wrap,
+  and "Read only". A file that is gone, binary or past the size ceiling is a
+  centred notice with VS Code and Explorer as the way on, never an empty pane.
+- **Ctrl+P** is the launcher's palette shape: field across the top, rows of
+  34px - page icon, the file name, its folder in mono `fg-subtle` - with the
+  letters that matched in `accent-text`, the files opened lately before
+  anything is typed, and a key strip at the foot saying how many files were
+  searched and where the list came from.
+
 ## 5b. Shell chrome
 
 - **The frame**, left to right: the **rail** on the canvas, 2px, the
@@ -631,13 +657,13 @@ overrides the gate; keep it.
   went to Appearance, and Settings to the rail.
 - **The rail**: 44px of 34px icon buttons on the canvas, `rounded-well`,
   ordered by how often each is reached for rather than by feature - Sessions,
-  then session history, Content and the browser, a hairline, then the rare
-  ones (Profiles, pull requests, Config), and Settings pinned to the foot. The
+  then Files, session history, Content and the browser, a hairline, then the
+  rare ones (Profiles, pull requests, Config), and Settings pinned to the foot. The
   order is a fact about how Helm is used, so it is fixed rather than learned: a
   rail that reordered itself would move under muscle memory.
 
   An item is one of two kinds and says "here" differently. A **view** swaps
-  what the sidebar shows - Sessions, Profiles - and is current with `hover`
+  what the sidebar shows - Sessions, Files, Profiles - and is current with `hover`
   fill and the 2px accent edge a selected sidebar row wears, in the rail's own
   margin; pressed again, it puts the sidebar away. A **page** opens a tab in the
   focused pane and is current, with the fill alone, while that tab is in front.
@@ -645,7 +671,7 @@ overrides the gate; keep it.
   titled buttons, and inside the `aside` every "first project row" selector
   would land on it.
 - **Panes**: one or two islands side by side, each a tab strip, a crumb row
-  for a session's tab, and its body. Any tab may sit in either - a session
+  for a session's or a file's tab, and its body. Any tab may sit in either - a session
   beside a session, a session beside the project page it came from, history
   beside both - which is what a pane is for. A new tab opens in the **focused**
   pane, the one last pressed anywhere inside (taken in capture, so a terminal,
@@ -735,7 +761,7 @@ overrides the gate; keep it.
   the app will open.
 - **Sidebar**: one island, 256px, showing the view the rail chose. A 38px
   header names it in 12.5px/500 and carries its few actions as 26px icon
-  buttons; the view fills the rest. Two views so far:
+  buttons; the view fills the rest. Three views so far:
 
   **Sessions** is the tree, and the window is sessions first because the day
   is. A filter field ("Filter projects and sessions") over **Pinned**, then the
@@ -746,6 +772,22 @@ overrides the gate; keep it.
   group it matched. The header's actions are rescan, new harness and add a
   folder; the foot of the island is one line naming how many sessions are on
   this machine and how many are not Helm's, which opens the sessions pane.
+
+  **Files** is one project's tree. The header carries the project beside its
+  title - a 22px outlined pill naming it, over the platform's own list - and
+  Explorer and VS Code for the whole project as its actions. The project
+  follows the pane in front (a session's folder, a file's project) until the
+  pill picks another. Under the header, a **Go to file** field that is a
+  button: it opens Ctrl+P. Rows are 24px - caret for a folder, the page icon
+  for a file, the name - and git's short letter at the right in mono 10.5px
+  (`M` in `warn`, `U` and `A` in `success`, `D` and `!` in `danger`, `R` in
+  `accent-text`); a folder holding a change wears a 5px `warn` dot there
+  instead. Under the pointer or the keyboard, the letter's slot shows the row's
+  hand-offs - VS Code, Explorer, copy the path - as 20px icon buttons. The file
+  in front of the focused pane wears the selected-row recipe. Ignored folders
+  are listed greyed and never opened; `.git` is not listed. A project git could
+  not be asked about says so on the island's foot in `warn`, and one outside any
+  repository says it has no changes to mark - neither is drawn as clean.
 
   **Profiles** is the profile list, with Import and New in the header. It is
   only mounted while it is the view.

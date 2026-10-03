@@ -333,7 +333,12 @@ describe('settings validation', () => {
               activeId: 'session:12'
             },
             {
-              panes: [{ kind: 'config' }, { kind: 'content' }, { kind: 'settings' }],
+              panes: [
+                { kind: 'config' },
+                { kind: 'content' },
+                { kind: 'settings' },
+                { kind: 'file', root: 'C:\\work\\helm', path: 'C:\\work\\helm\\README.md' }
+              ],
               activeId: null
             }
           ],
@@ -378,6 +383,10 @@ describe('settings validation', () => {
         { groups: [{ panes: [{ kind: 'browser', id: 1 }], activeId: null }], focused: 0 },
         { groups: [{ panes: [{ kind: 'restore' }], activeId: null }], focused: 0 },
         { groups: [{ panes: [{ kind: 'project' }], activeId: null }], focused: 0 },
+        // A file is read inside its project, so it is written down with both.
+        { groups: [{ panes: [{ kind: 'file', path: 'C:\\a\\b.ts' }], activeId: null }], focused: 0 },
+        { groups: [{ panes: [{ kind: 'file', root: 'C:\\a' }], activeId: null }], focused: 0 },
+        { groups: [{ panes: [{ kind: 'file', root: '', path: 'C:\\a\\b.ts' }], activeId: null }], focused: 0 },
         { groups: [{ panes: [{ kind: 'project', path: '' }], activeId: null }], focused: 0 },
         {
           groups: [{ panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm' }], activeId: null }],

@@ -259,6 +259,33 @@ describe('CodeEditor: the gutter', () => {
     const band = container.querySelector<HTMLElement>('.helm-editor-caret-line')
     expect([band?.style.top, band?.style.height]).toEqual(['28px', '60px'])
   })
+
+  it('numbers the lines scrolled into view, down to the last one', () => {
+    // Sixty 20px lines in a 200px box: ten fit, and the rest are reached by scrolling.
+    const box4 = (top: number, height: number): DOMRect => ({ top, height, bottom: top + height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) })
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      if (this.classList.contains('helm-editor-layers')) return box4(0, 1200)
+      if (this.classList.contains('line') && this.closest('[data-editor-highlight]')) {
+        const index = [...(this.parentElement?.children ?? [])].indexOf(this)
+        return box4(12 + index * 20, 20)
+      }
+      return box4(0, 0)
+    })
+    vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(200)
+
+    const text = Array.from({ length: 60 }, (_, i) => `line ${String(i + 1)}`).join('\n')
+    const { container } = render(<Editor initial={text} path="C:\\scope\\notes.txt" />)
+    const area = box()
+    area.scrollTop = 1012
+    fireEvent.scroll(area)
+
+    const numbered = new Set(
+      [...container.querySelectorAll<HTMLElement>('[data-editor-gutter] [data-editor-line-number]')].map(
+        (number) => number.textContent
+      )
+    )
+    for (let line = 51; line <= 60; line += 1) expect(numbered).toContain(String(line))
+  })
 })
 
 describe('CodeEditor: colour arriving late, or not at all', () => {

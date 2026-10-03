@@ -58,6 +58,14 @@ export * from './theme/themes'
  */
 export * from './layout/panes'
 
+/**
+ * The Files view's ranking and its sentences about git, re-exported for the
+ * same reason: Ctrl+P ranks on every keystroke in the window, and the tree
+ * paints the letters. Both modules import nothing but types from this file.
+ */
+export * from './files/fuzzy'
+export * from './files/shape'
+
 export {
   frontmatterField,
   parseFrontmatter,
@@ -1286,6 +1294,12 @@ export type WorkspaceTab =
   | { kind: 'config' }
   | { kind: 'content' }
   | { kind: 'settings' }
+  /**
+   * A file, read beside the session changing it. `root` is the project it was
+   * opened from - what the view is scoped to, what its path is shown relative
+   * to, and the folder Helm checks it is still inside before reading a byte.
+   */
+  | { kind: 'file'; root: string; path: string }
 
 /** How many tabs are worth writing down. Past this the list is a bug, not a
  * workspace, and a settings row nobody can shrink is worse than a truncation. */
@@ -2626,6 +2640,90 @@ export interface EditorHighlight {
   tooLarge: boolean
   /** How long the tokenise took in main, for the latency group to report. */
   tookMs: number
+}
+
+// ---------------------------------------------------------------------------
+// The Files view
+// ---------------------------------------------------------------------------
+
+/** How git sees one path in the working tree, against `HEAD` and the index. */
+export type GitFileState = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted'
+
+/**
+ * Every changed path under a project, for the tree's letters.
+ *
+ * `files` is null when git could not be asked - which is "unknown" and never
+ * "clean" - and `{}` when it answered with nothing changed. A project outside
+ * any repository has `repo: null` and an empty map: there is nothing git could
+ * say about it.
+ */
+export interface FilesStatus {
+  root: string
+  /** The repository's top level, or null when the project is not in one. */
+  repo: string | null
+  /** Project-relative, forward-slashed path to its state. */
+  files: Record<string, GitFileState> | null
+  error: string | null
+}
+
+/**
+ * The lines of a file that differ from the last commit, numbered in the file
+ * as it is now. Ranges are inclusive and 1-based.
+ */
+export interface LineChanges {
+  changed: Array<[number, number]>
+  /** Lines with something removed directly below them; 0 is above the first line. */
+  removedAfter: number[]
+  changedCount: number
+  removedCount: number
+}
+
+/**
+ * How one file stands against the last commit. Five answers, because each
+ * says something different on screen and two of them - "no changes" and "could
+ * not look" - must never be painted the same.
+ */
+export type FileChangeState =
+  /** In the last commit. `lines` empty: unchanged since. */
+  | { kind: 'tracked'; lines: LineChanges }
+  /** Untracked, or staged but never committed: every line is new. */
+  | { kind: 'new' }
+  | { kind: 'ignored' }
+  /** Not inside any git repository. */
+  | { kind: 'outside' }
+  /** git could not be asked. */
+  | { kind: 'unknown'; reason: string }
+
+/** One file, read for the file view. */
+export interface FileView {
+  root: string
+  path: string
+  /** Relative to `root`, forward-slashed. */
+  relPath: string
+  exists: boolean
+  size: number
+  mtimeMs: number
+  binary: boolean
+  /** Past the view's ceiling: not read, and the pane says so. */
+  tooLarge: boolean
+  /** The text, with line feeds only; how the file ends its lines is `eol`. */
+  content: string
+  eol: 'LF' | 'CRLF' | 'mixed' | null
+  changes: FileChangeState
+  /** Set when the file could not be shown at all - outside the project, a folder. */
+  error: string | null
+}
+
+/** Every file in a project, for Ctrl+P. */
+export interface FileListing {
+  root: string
+  /** Project-relative, forward-slashed. */
+  files: string[]
+  /** The repository's own list, or a walk where there is no repository. */
+  source: 'git' | 'walk'
+  /** The walk stopped at its ceiling, so the list is not the whole project. */
+  truncated: boolean
+  error: string | null
 }
 
 /** A file, its bytes, and - for markdown - what they render to. */

@@ -13,6 +13,9 @@ import type {
   ContentScope,
   ContentSearchResult,
   ContentTree,
+  FileListing,
+  FilesStatus,
+  FileView,
   CreateConfigRequest,
   CreateConfigResult,
   DeleteConfigRequest,
@@ -1226,6 +1229,37 @@ export interface IpcRequests {
    */
   'shell:openExternal': { request: { url: string }; response: { opened: boolean } }
 
+  /**
+   * The Files view: a project's tree with git's letters on it, one file read
+   * beside the session changing it, and every file for Ctrl+P. Every request
+   * names a `root`, which main checks is a folder it knows before listing or
+   * reading anything under it.
+   *
+   * Read-only, all of it. The file view is for reading; VS Code is one click
+   * away for editing, and is not racing an agent's writes.
+   */
+  'files:dir': { request: { root: string; relPath: string }; response: ContentDirListing }
+  'files:status': { request: { root: string }; response: FilesStatus }
+  'files:read': { request: { root: string; path: string }; response: FileView }
+  'files:list': { request: { root: string }; response: FileListing }
+  /**
+   * The roots the window has on screen, all of them, each time the set
+   * changes. Main watches those and lets go of any other, so a reloaded window
+   * cannot leave watches behind it.
+   */
+  'files:watch': { request: { roots: string[] }; response: void }
+  /** VS Code's name here, or null where nothing on this machine opens `vscode://`. */
+  'files:editor': { request: void; response: { name: string | null } }
+  /**
+   * Opens a file in VS Code, at a line when there is one, through its own
+   * `vscode://` handler - no process spawned by Helm, no `code` on the PATH
+   * needed. A path outside every folder Helm knows is refused.
+   */
+  'files:openInEditor': {
+    request: { path: string; line: number | null }
+    response: { opened: boolean }
+  }
+
   /** The terminal pane's clipboard, routed through Electron rather than the
    * async DOM Clipboard API, which needs a permission prompt and a focused
    * document - neither of which a hosted TUI can rely on. */
@@ -1540,6 +1574,14 @@ export interface IpcEvents {
 
   /** A line a page wrote, or a load that failed. Feeds the console panel. */
   'browser:logged': { id: number; entry: BrowserConsoleEntry }
+
+  /**
+   * Files changed under a root the window is watching - project-relative and
+   * forward-slashed, `.git` standing for "the status moved" - or null when
+   * there were too many to name. Gathered for a quarter of a second from the
+   * first change, so a session writing steadily still shows up as it works.
+   */
+  'files:changed': { root: string; paths: string[] | null }
 }
 
 // ---------------------------------------------------------------------------
@@ -1681,6 +1723,13 @@ export const REQUEST_CHANNELS = Object.keys({
   'content:artifact': true,
   'content:wikilink': true,
   'shell:openExternal': true,
+  'files:dir': true,
+  'files:status': true,
+  'files:read': true,
+  'files:list': true,
+  'files:watch': true,
+  'files:editor': true,
+  'files:openInEditor': true,
   'clipboard:read': true,
   'clipboard:write': true,
   'browser:open': true,
@@ -1747,5 +1796,6 @@ export const EVENT_CHANNELS = Object.keys({
   'browser:changed': true,
   'browser:opened': true,
   'browser:closed': true,
-  'browser:logged': true
+  'browser:logged': true,
+  'files:changed': true
 } satisfies Record<EventChannel, true>) as EventChannel[]

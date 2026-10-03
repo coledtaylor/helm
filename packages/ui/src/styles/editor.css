@@ -285,6 +285,66 @@
 }
 
 /* ---------------------------------------------------------------------------
+ * Marked lines: what differs from the last commit, in the file view
+ *
+ * The accent's two jobs and no more (DESIGN.md): a 2px edge where the gutter
+ * meets the code - the same mark a selected row carries - and accent-soft
+ * behind the text. Never a solid fill.
+ * ------------------------------------------------------------------------ */
+
+.helm-editor-mark {
+  position: absolute;
+  right: 0;
+  width: 2px;
+  background: var(--helm-accent);
+}
+
+.helm-editor-number[data-editor-changed='true'] {
+  color: var(--helm-accent-text);
+}
+
+.helm-editor-changed-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: var(--helm-accent-soft);
+}
+
+/* Something removed between two lines: a short tick across the boundary, at
+ * the gutter's edge, where an added line's bar would be. */
+.helm-editor-removed {
+  position: absolute;
+  right: 0;
+  width: 6px;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+  background: var(--helm-accent);
+}
+
+/* ---------------------------------------------------------------------------
+ * Bare: on a host that is already the island
+ *
+ * The file view's code sits on the pane rather than in a well inside it, so
+ * the box gives up its edge, its corner and its fill - and with them the
+ * focus edge, which on a box nobody types into would read as an input.
+ * ------------------------------------------------------------------------ */
+
+.helm-editor[data-editor-bare='true'],
+.helm-editor[data-editor-bare='true']:focus-within {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+/* A read-only box shows where the caret is without a blinking bar in it: the
+ * caret is how a selection starts and how go-to-line lands, not a place text
+ * will appear. The line band still follows it. */
+.helm-editor[data-editor-read-only='true'] .helm-editor-input {
+  caret-color: transparent;
+}
+
+/* ---------------------------------------------------------------------------
  * The textarea
  * ------------------------------------------------------------------------ */
 
