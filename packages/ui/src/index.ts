@@ -55,6 +55,11 @@ export { HealthPanel, type HealthPanelProps } from './components/HealthPanel'
 export { McpPanel, type McpPanelProps } from './components/McpPanel'
 export { NewHarnessDialog, type NewHarnessDialogProps } from './components/NewHarnessDialog'
 export {
+  NewSessionDialog,
+  type LaunchChoice,
+  type NewSessionDialogProps
+} from './components/NewSessionDialog'
+export {
   SaveAsTemplateDialog,
   type SaveAsTemplateDialogProps
 } from './components/SaveAsTemplateDialog'

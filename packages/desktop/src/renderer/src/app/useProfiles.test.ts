@@ -61,12 +61,12 @@ describe('useProfiles', () => {
     const { result } = renderHook(() => useProfiles())
     await waitFor(() => expect(result.current.profiles).toEqual([OTHER]))
 
-    let saved: { ok: boolean; problems: string[] } | undefined
+    let saved: { profile: Profile | null; problems: string[] } | undefined
     await act(async () => {
       saved = await result.current.save(DRAFT)
     })
 
-    expect(saved).toEqual({ ok: true, problems: [] })
+    expect(saved).toEqual({ profile: { ...DRAFT, id: DEV.id, ...stamp }, problems: [] })
     expect(bridge.invoked('profile:save')).toEqual([{ draft: DRAFT }])
     await waitFor(() => expect(result.current.profiles).toEqual([DEV, OTHER]))
   })
@@ -76,11 +76,11 @@ describe('useProfiles', () => {
     const { result } = renderHook(() => useProfiles())
     await waitFor(() => expect(result.current.profiles).toEqual([OTHER]))
 
-    let saved: { ok: boolean; problems: string[] } | undefined
+    let saved: { profile: Profile | null; problems: string[] } | undefined
     await act(async () => {
       saved = await result.current.save({ ...DRAFT, name: 'other' }, null)
     })
-    expect(saved).toEqual({ ok: false, problems: ['A profile named “other” already exists.'] })
+    expect(saved).toEqual({ profile: null, problems: ['A profile named “other” already exists.'] })
     expect(result.current.profiles).toEqual([OTHER])
   })
 

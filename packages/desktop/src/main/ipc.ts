@@ -1,4 +1,5 @@
 import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron'
+import { homedir } from 'node:os'
 import {
   createHarness,
   forgetProjects,
@@ -196,6 +197,7 @@ export function registerIpc(ctx: IpcContext): void {
       },
       claudeVersion: await readClaudeVersion(),
       windowsBuild: windowsBuildNumber() ?? null,
+      home: homedir(),
       releasesUrl: RELEASES_PAGE
     }),
 
@@ -479,6 +481,7 @@ export function registerIpc(ctx: IpcContext): void {
     // The renderer awaits this one, so a failure to spawn arrives as a rejected
     // promise with a sentence in it rather than a tab that never fills in.
     'session:start': (request) => ctx.sessions.start(request),
+    'session:launch': (request) => ctx.sessions.launch(request),
     'session:close': (request) => ctx.sessions.close(request),
     'session:list': () => ctx.sessions.list(),
     // A read of what main already holds, not a fresh pass: the poller is what

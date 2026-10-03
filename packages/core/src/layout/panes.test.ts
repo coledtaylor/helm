@@ -12,6 +12,7 @@ import {
   moveTab,
   openTab,
   paneId,
+  placeBeside,
   reconcile,
   sendToOtherGroup,
   toSaved,
@@ -152,6 +153,29 @@ describe('sendToOtherGroup', () => {
   it('does nothing to a lone tab', () => {
     const layout = layoutOf([session(1)])
     expect(sendToOtherGroup(layout)).toBe(layout)
+  })
+})
+
+describe('placeBeside', () => {
+  it('opens the second pane for the tab when there is one', () => {
+    const layout = layoutOf([session(1)])
+    expect(shape(placeBeside(layout, session(2)))).toEqual([' *session:1', '>*session:2'])
+  })
+
+  it('appends to the pane that is not focused when there are two', () => {
+    const layout = focusGroup(layoutOf([session(1)], [HISTORY]), 0)
+    expect(shape(placeBeside(layout, session(2)))).toEqual([' *session:1', '>history *session:2'])
+    const fromRight = layoutOf([session(1)], [HISTORY])
+    expect(shape(placeBeside(fromRight, session(2)))).toEqual(['>session:1 *session:2', ' *history'])
+  })
+
+  it('moves a tab reconcile already put in the focused pane', () => {
+    const layout = reconcile(layoutOf([session(1)]), () => true, [session(1), session(2)])
+    expect(shape(placeBeside(layout, session(2)))).toEqual([' *session:1', '>*session:2'])
+  })
+
+  it('leaves a tab alone in an otherwise empty window', () => {
+    expect(shape(placeBeside(EMPTY_LAYOUT, session(1)))).toEqual(['>*session:1'])
   })
 })
 

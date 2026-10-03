@@ -140,7 +140,7 @@ describe('ProfileEditor', () => {
     tick('Grant access to docs')
     choose('Model', 'sonnet')
     type('Opening prompt', '/recap')
-    fireEvent.click(screen.getByRole('button', { name: 'Save profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save and start' }))
 
     expect(props.onSave).toHaveBeenCalledWith({
       ...BLANK,
@@ -210,7 +210,7 @@ describe('ProfileEditor', () => {
 
     choose('Agent', 'tools:reviewer')
     tick('MCP server tracker')
-    fireEvent.click(screen.getByRole('button', { name: 'Save profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save and start' }))
 
     expect(props.onSave).toHaveBeenCalledWith(
       expect.objectContaining({ agent: 'tools:reviewer', mcp: ['tracker'], overlays: [TOOLS] })

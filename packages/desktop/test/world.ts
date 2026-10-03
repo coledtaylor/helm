@@ -2,7 +2,14 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { openStore, writeSettings, type AppSettings } from '@helm/core'
+import {
+  createProfile,
+  openStore,
+  writeSettings,
+  type AppSettings,
+  type Profile,
+  type ProfileDraft
+} from '@helm/core'
 
 /**
  * A machine of Helm's own for one test: a home directory with its own
@@ -143,6 +150,16 @@ export function seedSettings(world: World, patch: Partial<AppSettings> = {}): vo
       firstRunCompletedAt: new Date().toISOString(),
       ...patch
     })
+  } finally {
+    store.close()
+  }
+}
+
+/** A saved profile, written through the app's own store before the app opens it. */
+export function seedProfile(world: World, draft: ProfileDraft): Profile {
+  const store = openStore({ file: join(world.dataDir, 'helm.db') })
+  try {
+    return createProfile(store, draft)
   } finally {
     store.close()
   }

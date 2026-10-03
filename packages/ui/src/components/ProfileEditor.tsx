@@ -601,7 +601,9 @@ export function ProfileEditor({
             saving ? 'cursor-default opacity-60' : 'hover:bg-accent-soft active:bg-active'
           )}
         >
-          {saving ? 'Saving…' : 'id' in initial ? 'Save changes' : 'Save profile'}
+          {/* A new profile is made to be used, so saving one starts it - the
+              page it would otherwise leave behind is one nobody stays on. */}
+          {saving ? 'Saving…' : 'id' in initial ? 'Save changes' : 'Save and start'}
         </button>
       </footer>
     </Overlay>

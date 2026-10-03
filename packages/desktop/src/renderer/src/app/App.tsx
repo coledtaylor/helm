@@ -18,6 +18,7 @@ import {
   moveTab,
   openTab,
   paneId,
+  placeBeside,
   reconcile,
   sendToOtherGroup,
   sessionLabel,
@@ -54,6 +55,7 @@ import {
   ContentViewer,
   EffectiveViewPane,
   FolderIcon,
+  FolderPlusIcon,
   GearIcon,
   GlobeIcon,
   HarnessIcon,
@@ -63,6 +65,8 @@ import {
   LayersIcon,
   McpPanel,
   NewHarnessDialog,
+  NewSessionDialog,
+  overlayOpen,
   PaneActions,
   PaneCrumb,
   PaneGroup,
@@ -93,6 +97,7 @@ import {
   TitleBar,
   VersionBanner,
   WelcomePane,
+  type LaunchChoice,
   type ProfilePrediction,
   type RailItem,
   type Tab,
@@ -117,6 +122,7 @@ import { useProfiles } from './useProfiles'
 import { forgetPullDetail } from './usePullDetail'
 import { usePulls } from './usePulls'
 import { useLiveSessions } from './useLiveSessions'
+import { useNewSession } from './useNewSession'
 import { useSessions } from './useSessions'
 import { useSetup } from './useSetup'
 import { useTemplates } from './useTemplates'
@@ -158,6 +164,7 @@ const EMPTY_CONSOLE: ConsoleEntry[] = []
 
 /** The same, for a project with nothing running in it - which is most of them. */
 const EMPTY_LIVE: LiveSession[] = []
+const EMPTY_PROJECTS: Project[] = []
 
 /**
  * The editors' tokeniser, on the far side of an IPC boundary.
@@ -240,6 +247,7 @@ export function App(): JSX.Element {
   const bodyRefs = useRef<(HTMLDivElement | null)[]>([])
 
   const profileState = useProfiles()
+  const newSession = useNewSession()
   const historyState = useHistory()
   const pullsState = usePulls()
   const configState = useConfig()
@@ -263,7 +271,11 @@ export function App(): JSX.Element {
     answered !== null && answered.newer && answered.latest !== null && answered.url !== null
       ? { latest: answered.latest, newer: true, url: answered.url }
       : null
-  const setup = useSetup(settings, launcher.rescan)
+  /** Late-bound for the reason `focusSessionRef` is: starting a session needs
+   * the panes, and setup is read before they exist. */
+  const harnessCreatedRef = useRef<(path: string) => void>(() => undefined)
+  const onHarnessCreated = useCallback((path: string) => harnessCreatedRef.current(path), [])
+  const setup = useSetup(settings, launcher.rescan, onHarnessCreated)
   /**
    * Template authoring, held at app level because both of its entry points are:
    * the New Harness dialog and Settings reach the manager, and a harness's page
@@ -679,11 +691,18 @@ export function App(): JSX.Element {
     [openBrowser]
   )
 
-  /** A launched session lands in the focused pane and takes its front. */
+  /**
+   * A launched session lands in the focused pane and takes its front - or, from
+   * the launcher's "Start beside", in the other pane, opening it if there is
+   * only one.
+   */
   const placeSession = useCallback(
-    (id: number) => {
-      commit((current) => openTab(current, { kind: 'session', id }))
-      setMaximized((current) => (current === null || current === open.focused ? current : null))
+    (id: number, beside = false) => {
+      const ref = { kind: 'session', id } as const
+      commit((current) => (beside ? placeBeside(current, ref) : openTab(current, ref)))
+      setMaximized((current) =>
+        beside || (current !== null && current !== open.focused) ? null : current
+      )
     },
     [commit, open.focused]
   )
@@ -725,6 +744,56 @@ export function App(): JSX.Element {
     },
     [historyState, sessionState, placeSession, open.focused]
   )
+
+  /**
+   * What the launcher was showing when Enter was pressed. The grid is measured
+   * off the pane the session is going to, where that pane exists; a new one
+   * beside is measured off the focused pane and refits when it lands.
+   */
+  const startChosen = useCallback(
+    async (choice: LaunchChoice) => {
+      const other = open.focused === 0 ? 1 : 0
+      const target = choice.beside && open.groups.length > 1 ? other : open.focused
+      const launched = await newSession.launch(
+        {
+          cwd: choice.project.path,
+          projectPath: choice.project.path,
+          name: choice.project.name,
+          profileId: choice.profileId,
+          permissionMode: choice.permissionMode,
+          resume: choice.resume?.sessionId ?? null
+        },
+        bodyRefs.current[target] ?? null
+      )
+      if (launched === null) return
+      sessionState.adopt(launched.session)
+      placeSession(launched.session.id, choice.beside)
+      newSession.hide()
+    },
+    [newSession, sessionState, placeSession, open.focused, open.groups.length]
+  )
+
+  /*
+   * A harness created whole ends in a session in it, not on a page: creating
+   * one is a step on the way to working there. Not during first run, which
+   * owns the window until it is finished.
+   */
+  const setupNeeded = setup.needed
+  useEffect(() => {
+    harnessCreatedRef.current = (path: string) => {
+      if (setupNeeded) return
+      void newSession
+        .launch(
+          { cwd: path, projectPath: path, profileId: null, permissionMode: null, resume: null },
+          bodyRefs.current[open.focused] ?? null
+        )
+        .then((launched) => {
+          if (launched === null) return
+          sessionState.adopt(launched.session)
+          placeSession(launched.session.id)
+        })
+    }
+  }, [setupNeeded, newSession, sessionState, placeSession, open.focused])
 
   /**
    * "Review with Claude", from a pull request tab. The prompt is composed in
@@ -779,14 +848,18 @@ export function App(): JSX.Element {
       setSaving(true)
       try {
         const id = editing !== null && 'id' in editing ? editing.id : null
-        const { ok, problems } = await profileState.save(draft, id)
+        const { profile, problems } = await profileState.save(draft, id)
         setSaveProblems(problems)
-        if (ok) setEditing(null)
+        if (profile === null) return
+        setEditing(null)
+        // A new profile is made to be used: it ends in a session, not on the
+        // list it was added to. An edit is only an edit.
+        if (id === null) void launchProfile(profile)
       } finally {
         setSaving(false)
       }
     },
-    [editing, profileState]
+    [editing, profileState, launchProfile]
   )
 
   // Main asks the user first, so this can be fired and forgotten.
@@ -864,6 +937,45 @@ export function App(): JSX.Element {
     window.addEventListener('keydown', onKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
   }, [browserInFront, openBrowser])
+
+  /**
+   * The folder the focused pane is about, for the launcher to open on: a
+   * project tab's, or a session's project - or its folder, for a session no
+   * project was recorded against, such as a profile's at a harness root.
+   */
+  const frontFolder = useMemo(() => {
+    const group = open.groups[open.focused]
+    const ref = group === undefined ? null : activeRef(group)
+    if (ref?.kind === 'project') return ref.path
+    if (ref?.kind !== 'session') return null
+    const session = sessionsById.get(ref.id)
+    return session === undefined ? null : (session.projectPath ?? session.cwd)
+  }, [open, sessionsById])
+  const { show: showLauncher } = newSession
+  const openLauncher = useCallback(() => showLauncher(frontFolder), [showLauncher, frontFolder])
+
+  /**
+   * Ctrl+N opens the launcher from anywhere in the window, a focused terminal
+   * included - in capture, as Ctrl+Tab is, so xterm never sees it. Claude Code
+   * binds nothing to it; a shell would read it as "next history line", and the
+   * arrow keys say the same thing there. Not over another dialog, and not
+   * during first run.
+   *
+   * A browser tab's page is the exception: keys typed into it go to that page's
+   * own process, not this window, so Ctrl+N there is the page's.
+   */
+  useEffect(() => {
+    if (setupNeeded) return undefined
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!event.ctrlKey || event.altKey || event.shiftKey || event.metaKey) return
+      if (event.key.toLowerCase() !== 'n') return
+      event.preventDefault()
+      event.stopPropagation()
+      if (!overlayOpen()) openLauncher()
+    }
+    window.addEventListener('keydown', onKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
+  }, [setupNeeded, openLauncher])
 
   /**
    * Ctrl+Tab cycles every tab in every pane on screen as one ring, and Ctrl+\
@@ -2071,6 +2183,9 @@ export function App(): JSX.Element {
           title="Sessions"
           actions={
             <>
+              <SidebarAction label="New session (Ctrl+N)" onClick={openLauncher} data-new-session>
+                <PlusIcon width={13} height={13} />
+              </SidebarAction>
               <SidebarAction
                 label="Rescan all folders"
                 onClick={launcher.rescan}
@@ -2090,7 +2205,7 @@ export function App(): JSX.Element {
                 <HarnessIcon width={13} height={13} />
               </SidebarAction>
               <SidebarAction label="Add a folder to scan" onClick={launcher.addRoot} data-add-root>
-                <PlusIcon width={13} height={13} />
+                <FolderPlusIcon width={13} height={13} />
               </SidebarAction>
             </>
           }
@@ -2179,6 +2294,25 @@ export function App(): JSX.Element {
 
   const empty = open.groups.length === 1 && open.groups[0]!.tabs.length === 0
 
+  /**
+   * One line over the panes, for what a launch composed and anything that went
+   * wrong doing it, first failure first. A launcher error is said in the
+   * launcher while it is open; this is for a launch with nowhere else to say it
+   * - a new harness's first session, a profile from the sidebar.
+   */
+  const toast: { text: string; failed: boolean; dismiss: () => void } | null =
+    browsers.error !== null
+      ? { text: browsers.error, failed: true, dismiss: browsers.dismissError }
+      : !newSession.open && newSession.error !== null
+        ? { text: newSession.error, failed: true, dismiss: newSession.dismissError }
+        : profileState.error !== null
+          ? { text: profileState.error, failed: true, dismiss: profileState.dismissError }
+          : newSession.warning !== null
+            ? { text: newSession.warning, failed: false, dismiss: newSession.dismissWarning }
+            : profileState.notice !== null
+              ? { text: profileState.notice, failed: false, dismiss: profileState.dismissNotice }
+              : null
+
   return (
     <AppShell
       rail={rail}
@@ -2220,6 +2354,7 @@ export function App(): JSX.Element {
               projectCount={discovery?.projects.length ?? 0}
               onAddRoot={launcher.addRoot}
               onCreateHarness={() => setup.openDialog('new')}
+              onNewSession={openLauncher}
             />
           </div>
         ) : (
@@ -2253,6 +2388,23 @@ export function App(): JSX.Element {
         {templateDialogs}
         {confirmDialog}
         {configEntryDialog}
+        {newSession.open && (
+          <NewSessionDialog
+            projects={discovery?.projects ?? EMPTY_PROJECTS}
+            recency={newSession.recency}
+            live={machineSessions.sessions}
+            profiles={profileState.profiles}
+            home={info?.home ?? null}
+            initialPath={newSession.initialPath}
+            resumable={newSession.resumable}
+            onShowing={newSession.loadResumable}
+            busy={newSession.busy}
+            error={newSession.error}
+            now={now}
+            onStart={(choice) => void startChosen(choice)}
+            onDismiss={newSession.hide}
+          />
+        )}
 
         {/* What a launch composed, and anything that went wrong doing it. Over
             the panes rather than in one, because a profile is launched from the
@@ -2262,9 +2414,7 @@ export function App(): JSX.Element {
             A browser refusal that produced no tab shares it: there is no pane
             to say it in. Anything that *did* produce a tab says so on that
             tab's own problem line instead. */}
-        {(profileState.notice !== null ||
-          profileState.error !== null ||
-          browsers.error !== null) && (
+        {toast !== null && (
           <div className="pointer-events-none absolute inset-x-0 top-0 z-40 flex justify-center p-3">
             {/* Two elements for one island, and the outer one is the fix:
                 `bg-danger/10` is a *tint*, and a tint over a transparent
@@ -2275,23 +2425,15 @@ export function App(): JSX.Element {
                 role="status"
                 className={cn(
                   'flex items-start gap-3 rounded-raised border px-3 py-2 text-[12px]',
-                  profileState.error !== null || browsers.error !== null
+                  toast.failed
                     ? 'border-danger/30 bg-danger/10 text-danger'
                     : 'border-border text-fg-muted'
                 )}
               >
-                <span className="min-w-0">
-                  {browsers.error ?? profileState.error ?? profileState.notice}
-                </span>
+                <span className="min-w-0">{toast.text}</span>
                 <button
                   type="button"
-                  onClick={
-                    browsers.error !== null
-                      ? browsers.dismissError
-                      : profileState.error !== null
-                        ? profileState.dismissError
-                        : profileState.dismissNotice
-                  }
+                  onClick={toast.dismiss}
                   aria-label="Dismiss"
                   className="shrink-0 text-fg-subtle hover:text-fg"
                 >

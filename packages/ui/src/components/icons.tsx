@@ -67,6 +67,16 @@ export function FolderIcon(props: IconProps): JSX.Element {
   )
 }
 
+/** A folder with a plus: add a folder to scan, beside the plain plus that starts a session. */
+export function FolderPlusIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M7.25 12.5h-4A1.25 1.25 0 0 1 2 11.25v-6.5A1.25 1.25 0 0 1 3.25 3.5h2.4c.4 0 .78.19 1.01.51l.68.94h5.41A1.25 1.25 0 0 1 14 6.2v1.55" />
+      <path d="M11.75 9.5v4.5M9.5 11.75H14" />
+    </Icon>
+  )
+}
+
 export function SparkIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>

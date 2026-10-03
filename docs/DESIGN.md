@@ -172,7 +172,8 @@ shadow-panel` over a dimmed backdrop.
 **`Overlay` is the one owner of that treatment.** The scrim, the centring, the
 z-index, the island and its shadow, and Escape-to-dismiss all live in
 `packages/ui/src/components/Overlay.tsx`, and every dialog routes through it -
-a call site says how wide its island is and nothing else. This is the only
+a call site says how wide its island is, and a palette says `align="top"`,
+and nothing else. This is the only
 place in `packages/ui` or the renderer allowed to write `fixed inset-0`;
 **`no-raw-overlay`** in `eslint.config.js` refuses it everywhere else, and
 exempts that one file by name.
@@ -576,6 +577,35 @@ overrides the gate; keep it.
   once there were two of them. The sentence is not a tooltip and not a
   confirmation: it is on screen *before* the button is pressed, which is also
   what makes a mistyped placeholder visible rather than invisible.
+
+  The launcher's sentence is the third, and the one that changes as you move:
+  it describes the highlighted row, so arrowing to a conversation turns "Runs"
+  into "Reopens", and picking a profile names what it composes and every flag
+  it adds.
+- **The new-session launcher** (Ctrl+N, or the sidebar's `+`): a palette, not a
+  page. It is an `Overlay` with `align="top"`, so the field stays put while
+  the list under it grows and shrinks, on `surface-raised` with its footer and
+  key strip on `surface`. Four decisions in it:
+
+  - **Six folders, then "keep typing".** A launcher is typed into, and a list
+    that never scrolls keeps the field, the folders and the footer in one
+    glance. With nothing typed it is ordered by when each folder was last
+    worked in, with the one in front first.
+  - **A folder's conversations sit under it**, indented to its name, and only
+    under the highlighted one. A section of its own at the foot of the list
+    could be reached only by arrowing through every other folder, each of which
+    would take the section over on the way.
+  - **A click highlights; it never starts.** Enter, a double click, or the key
+    strip's Start does. That is the launch-disclosure rule: the sentence for
+    the row has to be on screen before the session runs.
+  - **The profile follows the folder until it is chosen**, and the permission
+    mode follows the profile until it is. A folder starts with the profile most
+    about it: among those naming it as their root or an overlay, the one
+    composing the fewest folders.
+
+  Its key strip is buttons that look like hints - the key in mono, the word
+  beside it - because the strip is the only place a pointer could start a
+  session from.
 
 ## 5b. Shell chrome
 

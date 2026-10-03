@@ -281,6 +281,23 @@ export function sendToOtherGroup(layout: PaneLayout): PaneLayout {
 }
 
 /**
+ * Puts a tab in the pane beside the focused one, opening that pane if there is
+ * only one - the launcher's "Start beside".
+ *
+ * Opened and then moved, rather than opened there directly, because a session
+ * may already have a tab by the time it is placed: `reconcile` gives every
+ * hosted session one, in the focused group. A lone tab in a lone pane has
+ * nothing to sit beside, and stays where it is.
+ */
+export function placeBeside(layout: PaneLayout, ref: PaneRef): PaneLayout {
+  const id = paneId(ref)
+  const opened = openTab(layout, ref)
+  if (opened.groups.length === 1) return moveTab(opened, id, 1, 0)
+  const other = layout.focused === 0 ? 1 : 0
+  return moveTab(opened, id, other, opened.groups[other]!.tabs.length)
+}
+
+/**
  * Closes a group by handing its tabs to the other one, never by closing them.
  * A group's close button that ended the sessions in it would be a destructive
  * control dressed as a layout one.

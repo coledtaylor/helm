@@ -84,7 +84,8 @@ tier above, so keep this one small.
 | `panes` | two panes, the waiting one marked |
 | `settings` | a setting survives a restart; the gear opens Settings and Ctrl+Tab walks every tab |
 | `history` | an ended session is in history and resumes where it ran |
-| `profiles` | a profile made in the form launches with its overlay |
+| `profiles` | a profile made in the form starts with its overlay when saved |
+| `launcher` | Ctrl+N, a folder typed, a profile and mode picked there; a conversation reopened in the pane beside; a new harness and a new profile each end in a session |
 | `pulls` | a project's pull requests, one opened, and a review started |
 | `config` | an edit saved to disk and undone byte for byte |
 | `content` | a wikilink followed; an HTML artifact framed with no reach |

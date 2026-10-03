@@ -78,7 +78,13 @@ export interface SetupState {
 export function useSetup(
   settings: AppSettings | null,
   /** Called when the roots have changed and the tree should be rebuilt. */
-  onRootsChanged: () => void
+  onRootsChanged: () => void,
+  /**
+   * Called with a harness that was created whole. Creating one is a step on
+   * the way to working in it, so the caller starts a session there rather
+   * than leaving somebody on a page.
+   */
+  onHarnessCreated?: (path: string) => void
 ): SetupState {
   const [status, setStatus] = useState<ClaudeStatus | null>(null)
   const [checking, setChecking] = useState(false)
@@ -273,13 +279,14 @@ export function useSetup(
             return
           }
           setDialog(null)
+          onHarnessCreated?.(result.path)
         })
         .catch((err: unknown) => {
           setDialogProblems([err instanceof Error ? err.message : String(err)])
         })
         .finally(() => setCreating(false))
     },
-    [onRootsChanged]
+    [onRootsChanged, onHarnessCreated]
   )
 
   // One question: has this profile been through setup. Deliberately not "does

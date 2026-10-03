@@ -16,7 +16,7 @@ const test = base.extend({
   }
 })
 
-test('a profile made in the New profile dialog launches its composition with one click', async ({ helm, world }) => {
+test('a profile made in the New profile dialog starts its composition when it is saved', async ({ helm, world }) => {
   const { window } = helm
   const hub = harnessIn(world)
   const after = (argv: readonly string[], flag: string): string | undefined => argv[argv.indexOf(flag) + 1]
@@ -32,10 +32,9 @@ test('a profile made in the New profile dialog launches its composition with one
   await dialog.getByRole('checkbox', { name: 'Compose tools' }).check()
   await expect(dialog.getByRole('checkbox', { name: 'Grant access to tools' })).toBeChecked()
   await dialog.getByRole('combobox', { name: 'Model' }).selectOption('sonnet')
-  await dialog.getByRole('button', { name: 'Save profile' }).click()
+  await dialog.getByRole('button', { name: 'Save and start' }).click()
   await expect(dialog).toBeHidden()
-
-  await window.getByRole('list', { name: 'Saved profiles' }).getByRole('button', { name: /^hub dev/ }).click()
+  await expect(window.getByRole('list', { name: 'Saved profiles' }).getByRole('button', { name: /^hub dev/ })).toBeVisible()
 
   await expect(window.getByRole('tab', { name: 'hub dev, ready' })).toBeVisible()
   await expect(window.getByRole('tab', { name: /^hub dev/ })).toHaveCount(1)

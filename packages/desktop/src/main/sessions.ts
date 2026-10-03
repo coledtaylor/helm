@@ -1,11 +1,11 @@
 import { type BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import { basename } from 'node:path'
 import {
-  buildResumeArgs,
   finishSession,
   historyTitle,
-  launchRequestFromProfile,
+  launchRequestInFolder,
   newClaudeSessionId,
+  PERMISSION_MODES,
   prepareLaunch,
   readGitBranch,
   readHistorySession,
@@ -17,9 +17,11 @@ import {
   sessionLabel,
   startSession,
   uniqueSessionName,
-  writeSessionMcpConfig,
+  type HistorySession,
   type LaunchedReviewPlan,
   type LaunchPlan,
+  type PermissionMode,
+  type Profile,
   type SessionMcpServer,
   type SessionRecord
 } from '@helm/core'
@@ -37,7 +39,9 @@ import type {
   CloseSessionRequest,
   CloseSessionResult,
   LaunchedProfile,
+  LaunchedSession,
   LaunchProfileRequest,
+  LaunchSessionRequest,
   RenameSessionRequest,
   ResumedSession,
   ResumeSessionRequest,
@@ -201,6 +205,11 @@ function nativeConfirm(window: () => BrowserWindow | null): Confirm {
 
 export interface SessionHost {
   start: (req: StartSessionRequest) => Promise<SessionRecord>
+  /**
+   * The new-session launcher's launch: a folder, a profile or none, an explicit
+   * permission mode, and optionally a conversation to reopen there.
+   */
+  launch: (req: LaunchSessionRequest) => Promise<LaunchedSession>
   /** Synthesises the profile's overlays, then spawns against them. */
   launchProfile: (req: LaunchProfileRequest) => Promise<LaunchedProfile>
   /** Reopens a conversation from the history index in a new tab. */
@@ -566,126 +575,195 @@ export function createSessionHost({
     return record
   }
 
+  /**
+   * The checks a reopened conversation has to pass, made here rather than
+   * trusted from the renderer.
+   *
+   * The launcher and the history pane already refuse to offer a session they
+   * know is reaped, but "know" is an index that was current a moment ago, and
+   * the failure this guards against - `claude` printing "No conversation found"
+   * into a fresh tab and exiting - is a broken terminal. A sentence the window
+   * can show is better than a tab that dies in front of somebody.
+   */
+  function resumable(sessionId: string): HistorySession {
+    const history = readHistorySession(services.store, sessionId)
+    if (!history) {
+      throw new Error('That session is not in the history index any more.')
+    }
+    if (!history.projectExists) {
+      throw new Error(
+        `${history.project} is no longer on disk. Claude Code resolves a session id against the working directory, so this conversation cannot be reopened from anywhere else.`
+      )
+    }
+    if (history.transcriptFile === null) {
+      throw new Error(
+        'Claude Code has removed this conversation’s transcript, so there is nothing left to resume. Its prompts are still in the history.'
+      )
+    }
+    return history
+  }
+
+  /**
+   * Every launch but a review: a folder, a profile or none, a permission mode,
+   * and optionally a conversation to reopen. `start`, `launchProfile`,
+   * `resume` and the launcher's `launch` are this with some of those fixed,
+   * so there is one way a composition becomes argv.
+   */
+  async function launchComposed(
+    composition: {
+      cwd: string
+      projectPath: string | null
+      /** Basis for the name of a new conversation; unused for a reopened one. */
+      name: string | undefined
+      profile: Profile | null
+      permissionMode: PermissionMode | null
+      history: HistorySession | null
+    },
+    grid: { cols: number; rows: number }
+  ): Promise<{ session: SessionRecord; plan: LaunchPlan }> {
+    const { cwd, projectPath, profile, permissionMode, history } = composition
+
+    /*
+     * A reopened conversation is labelled the way the history pane names it,
+     * and the label never reaches the CLI - `-n` is not passed on a resume. A
+     * tab titled `/usage` is a tab nobody can pick out of a strip, and that is
+     * what the opening prompt gave for 291 of one machine's sessions.
+     */
+    const base =
+      history === null
+        ? composition.name?.trim() || basename(cwd) || 'session'
+        : sanitizeSessionName(historyTitle(history)) || history.projectName
+    // Uniqued against every tab in the strip: three sessions in one folder is
+    // the normal case, and `/resume` shows only the name.
+    const name = uniqueSessionName(base, takenNames())
+
+    const tools = registerBrowserTools(name)
+    let plan: LaunchPlan
+    try {
+      plan = prepareLaunch({
+        ...launchRequestInFolder({
+          cwd,
+          name,
+          profile,
+          permissionMode,
+          resume: history?.sessionId ?? null,
+          shimRoot
+        }),
+        mcp: tools?.mcp ?? null,
+        // A reopened conversation keeps the id it has; asserting it again with
+        // `--session-id` is refused by the CLI as already in use.
+        sessionId: history === null ? await mintSessionId() : null
+      })
+    } catch (err) {
+      // An overlay that could not be synthesised is a launch that did not
+      // happen, and the token minted for it would otherwise outlive it.
+      browserMcp?.()?.release(tools?.token ?? null)
+      throw err
+    }
+    attachBrowserTools(tools?.token ?? null, plan.mcpConfigFile)
+
+    // The overlay work happens before the row exists, so a profile pointing at
+    // a repo that has been deleted fails here rather than as a session that
+    // starts and quietly composes nothing.
+    const session = await spawn(
+      plan,
+      grid,
+      { projectPath, profileId: profile?.id ?? null },
+      tools?.token ?? null
+    )
+    return { session, plan }
+  }
+
+  /** What a composed launch says about itself, for the window to report. */
+  const composed = (session: SessionRecord, plan: LaunchPlan): LaunchedSession => ({
+    session,
+    overlays: plan.overlays.map((shim) => shim.name),
+    composedInstructions: plan.memoryFile !== null,
+    warnings: plan.warnings
+  })
+
   return {
     async start(req) {
-      const base = req.name?.trim() || basename(req.cwd) || 'session'
-      const name = uniqueSessionName(base, takenNames())
-      const tools = registerBrowserTools(name)
-      const plan = prepareLaunch({
-        root: req.cwd,
-        name,
-        shimRoot,
-        mcp: tools?.mcp ?? null,
-        sessionId: await mintSessionId()
-      })
-      attachBrowserTools(tools?.token ?? null, plan.mcpConfigFile)
-      return spawn(plan, req, { projectPath: req.projectPath }, tools?.token ?? null)
+      const { session } = await launchComposed(
+        {
+          cwd: req.cwd,
+          projectPath: req.projectPath ?? null,
+          name: req.name,
+          profile: null,
+          permissionMode: null,
+          history: null
+        },
+        req
+      )
+      return session
+    },
+
+    async launch(req) {
+      if (req.permissionMode !== null && !PERMISSION_MODES.includes(req.permissionMode)) {
+        throw new Error(
+          `${String(req.permissionMode)} is not a permission mode Claude Code accepts.`
+        )
+      }
+      const profile = req.profileId === null ? null : readProfile(services.store, req.profileId)
+      if (req.profileId !== null && profile === null) {
+        throw new Error('That profile no longer exists.')
+      }
+      const history = req.resume === null ? null : resumable(req.resume)
+      const { session, plan } = await launchComposed(
+        {
+          // The history row decides where a conversation is reopened, never
+          // the window: `--resume` resolves an id against the working
+          // directory and silently finds nothing anywhere else.
+          cwd: history?.project ?? req.cwd,
+          projectPath: history?.project ?? req.projectPath ?? null,
+          name: req.name,
+          profile,
+          permissionMode: req.permissionMode,
+          history
+        },
+        req
+      )
+      return composed(session, plan)
     },
 
     async launchProfile(req) {
       const profile = readProfile(services.store, req.profileId)
       if (!profile) throw new Error('That profile no longer exists.')
 
-      // Named after the profile, uniqued against every tab in the strip: three
-      // sessions from one profile is the normal case, and `/resume` shows only
-      // the name.
-      const name = uniqueSessionName(profile.name, takenNames())
-      const tools = registerBrowserTools(name)
-      const plan = prepareLaunch({
-        ...launchRequestFromProfile(profile, shimRoot, name),
-        mcp: tools?.mcp ?? null,
-        sessionId: await mintSessionId()
-      })
-      attachBrowserTools(tools?.token ?? null, plan.mcpConfigFile)
-
-      // The overlay work happens before the row exists, so a profile pointing
-      // at a repo that has been deleted fails here rather than as a session
-      // that starts and quietly composes nothing.
-      const session = await spawn(plan, req, { profileId: profile.id }, tools?.token ?? null)
-
-      return {
-        session,
-        profile,
-        overlays: plan.overlays.map((shim) => shim.name),
-        composedInstructions: plan.memoryFile !== null,
-        warnings: plan.warnings
-      }
+      // At the profile's own root, named after it, in its own permission mode:
+      // the launch the profile describes, unchanged.
+      const { session, plan } = await launchComposed(
+        {
+          cwd: profile.root,
+          projectPath: null,
+          name: profile.name,
+          profile,
+          permissionMode: profile.permissionMode,
+          history: null
+        },
+        req
+      )
+      return { ...composed(session, plan), profile }
     },
 
     /**
-     * Reopening a conversation `history.jsonl` remembers.
-     *
-     * Both preconditions are checked here rather than trusted from the
-     * renderer. The launcher already refuses to offer a session it knows is
-     * reaped, but "knows" is an index that was current a moment ago, and the
-     * failure it is guarding against - `claude` printing "No conversation
-     * found" into a fresh tab and exiting - is exactly the broken terminal the
-     * milestone is about. A sentence the pane can show is better than a tab
-     * that dies in front of the user.
+     * Reopening a conversation `history.jsonl` remembers, as it was: no
+     * profile and no permission mode. The launcher is where a conversation is
+     * reopened with a composition.
      */
     async resume(req) {
-      const history = readHistorySession(services.store, req.sessionId)
-      if (!history) {
-        throw new Error('That session is not in the history index any more.')
-      }
-      if (!history.projectExists) {
-        throw new Error(
-          `${history.project} is no longer on disk. Claude Code resolves a session id against the working directory, so this conversation cannot be reopened from anywhere else.`
-        )
-      }
-      if (history.transcriptFile === null) {
-        throw new Error(
-          'Claude Code has removed this conversation’s transcript, so there is nothing left to resume. Its prompts are still in the history.'
-        )
-      }
-
-      // Helm's own label for the tab, not the session's name - `-n` is not
-      // passed, so nothing here reaches the CLI. The same name the history pane
-      // shows, which is the point: a tab titled `/usage` is a tab nobody can
-      // pick out of a strip, and that is what the opening prompt gave for 291
-      // of this machine's sessions.
-      const label = uniqueSessionName(
-        sanitizeSessionName(historyTitle(history)) || history.projectName,
-        takenNames()
-      )
-
-      /*
-       * A resumed session gets the browser tools too, and it goes through the
-       * same core writer rather than a second one - `writeSessionMcpConfig` is
-       * what `prepareLaunch` calls, and this is the one launch path that does
-       * not build its argv there. What it must **not** borrow from
-       * `prepareLaunch` is everything else: `-n`, a model, an overlay set. The
-       * conversation was had under whatever it was had under.
-       */
-      const tools = registerBrowserTools(label)
-      const mcpConfigFile =
-        tools === null ? null : writeSessionMcpConfig(tools.mcp.dir, tools.mcp.servers)
-      attachBrowserTools(tools?.token ?? null, mcpConfigFile)
-
-      const session = await spawn(
+      const history = resumable(req.sessionId)
+      const { session } = await launchComposed(
         {
           cwd: history.project,
-          name: label,
-          argv: buildResumeArgs(history.sessionId, mcpConfigFile),
-          overlays: [],
-          memoryFile: null,
-          mcpConfigFile,
-          /*
-           * The id it already has, recorded rather than re-minted.
-           *
-           * `--resume <id>` was measured registering under that same id on
-           * 2.1.238, so this row and the registry agree without the flag - and
-           * passing `--session-id` here would be asserting an id that already
-           * exists, which the CLI refuses outright.
-           */
-          claudeSessionId: history.sessionId,
-          warnings: []
+          projectPath: history.project,
+          name: undefined,
+          profile: null,
+          permissionMode: null,
+          history
         },
-        req,
-        { projectPath: history.project },
-        tools?.token ?? null
+        req
       )
-
       return { session, history }
     },
 

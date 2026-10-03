@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { cleanStaleMcpConfigs, removeSessionMcpConfig, writeSessionMcpConfig } from './mcp'
-import { buildLaunchArgs, prepareLaunch } from './plan'
+import type { Profile } from '../types'
+import { buildLaunchArgs, launchRequestInFolder, prepareLaunch } from './plan'
 
 let root: string
 let shimRoot: string
@@ -141,6 +142,120 @@ describe('the assigned conversation id', () => {
     const none = prepareLaunch({ root, name: 'unassigned', shimRoot })
     expect(none.claudeSessionId).toBeNull()
     expect(none.argv).not.toContain('--session-id')
+  })
+})
+
+describe('reopening a conversation', () => {
+  const uuid = '0f6c2a8e-91d4-4b7a-8e33-5d2f1c9a7b40'
+
+  it('passes --resume in place of -n, and still ends the directory list', () => {
+    const argv = buildLaunchArgs({
+      root: '/x',
+      name: 'payroll export fix',
+      access: ['/repos/a'],
+      resume: uuid,
+      permissionMode: 'plan'
+    })
+    expect(argv).toEqual([
+      '--add-dir',
+      resolve('/repos/a'),
+      '--resume',
+      uuid,
+      '--permission-mode',
+      'plan'
+    ])
+  })
+
+  it('drops what belongs to a new conversation: the name, an assigned id and the opening prompt', () => {
+    const argv = buildLaunchArgs({
+      root: '/x',
+      name: 'plain',
+      resume: uuid,
+      sessionId: '11111111-2222-4333-8444-555555555555',
+      openingPrompt: 'review this'
+    })
+    expect(argv).toEqual(['--resume', uuid])
+  })
+
+  it('composes overlays into the reopened conversation and records the id it already has', () => {
+    const a = makeProject('a', '# a rules\n')
+    const plan = prepareLaunch({ root, name: 'reopened', overlays: [a], resume: uuid, shimRoot })
+    expect(plan.claudeSessionId).toBe(uuid)
+    expect(plan.argv.slice(0, 2)).toEqual(['--resume', uuid])
+    expect(plan.argv).toContain('--plugin-dir')
+    expect(plan.argv).toContain('--append-system-prompt-file')
+    expect(plan.argv).not.toContain('-n')
+  })
+})
+
+describe('launchRequestInFolder', () => {
+  const profile: Profile = {
+    id: 7,
+    name: 'CashApp',
+    root: '/harness',
+    overlays: ['/harness', '/harness/tools/cashflow'],
+    access: ['/harness/tools/cashflow'],
+    model: 'opus',
+    effort: 'xhigh',
+    permissionMode: 'auto',
+    agent: 'reviewer',
+    mcp: [],
+    openingPrompt: 'hello',
+    pinnedOrder: null,
+    createdAt: '2026-10-01T00:00:00.000Z',
+    updatedAt: '2026-10-01T00:00:00.000Z'
+  }
+
+  it('runs in the folder that was picked, with the profile composing everything else', () => {
+    const req = launchRequestInFolder({
+      cwd: '/harness/tools/cashflow',
+      name: 'cashflow',
+      profile,
+      permissionMode: 'auto',
+      shimRoot: '/shims'
+    })
+    expect(req).toMatchObject({
+      root: '/harness/tools/cashflow',
+      name: 'cashflow',
+      overlays: profile.overlays,
+      access: profile.access,
+      model: 'opus',
+      effort: 'xhigh',
+      permissionMode: 'auto',
+      agent: 'reviewer',
+      openingPrompt: 'hello',
+      shimRoot: '/shims',
+      resume: null
+    })
+  })
+
+  it('takes the permission mode it was given over the profile’s, including none at all', () => {
+    const plan = (permissionMode: 'plan' | null) =>
+      buildLaunchArgs(
+        launchRequestInFolder({ cwd: '/x', name: 'x', profile, permissionMode, shimRoot: '/shims' })
+      )
+    const planned = plan('plan')
+    expect(planned[planned.indexOf('--permission-mode') + 1]).toBe('plan')
+    expect(plan(null)).not.toContain('--permission-mode')
+  })
+
+  it('is a plain launch in the folder without a profile', () => {
+    const req = launchRequestInFolder({
+      cwd: '/repos/alpha',
+      name: 'alpha',
+      profile: null,
+      permissionMode: null,
+      resume: 'abc',
+      shimRoot: '/shims'
+    })
+    expect(req).toEqual({
+      root: '/repos/alpha',
+      name: 'alpha',
+      shimRoot: '/shims',
+      permissionMode: null,
+      resume: 'abc'
+    })
+    expect(buildLaunchArgs(req)).toEqual(['--resume', 'abc'])
   })
 })
 

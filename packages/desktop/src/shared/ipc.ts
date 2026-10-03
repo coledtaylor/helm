@@ -33,6 +33,7 @@ import type {
   McpPreview,
   McpResult,
   McpScope,
+  PermissionMode,
   Profile,
   ProfileDraft,
   PullDetailView,
@@ -104,6 +105,12 @@ export interface AppInfo {
   claudeVersion: string | null
   /** Windows build number; xterm uses it to pick ConPTY quirk handling. */
   windowsBuild: number | null
+  /**
+   * The home directory, so a path with no room for the rest of itself can be
+   * written from `~`. Used for showing, never for resolving: every path Helm
+   * acts on stays absolute.
+   */
+  home: string
   /**
    * The releases page, so a window can offer it without having asked GitHub
    * anything.
@@ -290,6 +297,44 @@ export interface ResumedSession {
   session: SessionRecord
   /** The indexed row it came from, for the pane to caption before the TUI paints. */
   history: HistorySession
+}
+
+/**
+ * A session from the new-session launcher: a folder, a saved profile or none,
+ * a permission mode, and optionally a conversation to reopen there.
+ *
+ * The profile goes as an id and is read back in the main process, for the
+ * reason `LaunchProfileRequest` gives; a conversation's working directory comes
+ * from the history index, for the reason `ResumeSessionRequest` gives. What the
+ * window does decide is the folder, and the permission mode - explicitly, so
+ * the mode on screen when the session was started is the mode it runs in.
+ */
+export interface LaunchSessionRequest {
+  /** The folder the session runs in. Unused when `resume` is set. */
+  cwd: string
+  /** The discovered project this is, when it is one. Recorded, not used to launch. */
+  projectPath?: string | null | undefined
+  /** Basis for the session's name; the folder's name when absent. */
+  name?: string | undefined
+  /** The saved profile whose composition the session is given, or null for none. */
+  profileId: number | null
+  /** Null passes no flag, whatever the profile says. */
+  permissionMode: PermissionMode | null
+  /** A conversation in the history index to reopen, or null to start a new one. */
+  resume: string | null
+  cols: number
+  rows: number
+}
+
+/** What a launcher launch composed, for anything worth saying before the TUI paints. */
+export interface LaunchedSession {
+  session: SessionRecord
+  /** Plugin namespaces the session was given, e.g. `['dev', 'cashflow']`. */
+  overlays: string[]
+  /** Whether composed project instructions were passed. */
+  composedInstructions: boolean
+  /** Non-fatal problems: an overlay or access folder that is not there any more. */
+  warnings: string[]
 }
 
 /**
@@ -776,6 +821,12 @@ export interface IpcRequests {
    * no tab.
    */
   'session:start': { request: StartSessionRequest; response: SessionRecord }
+  /**
+   * The new-session launcher's one call: a folder, a profile, a permission
+   * mode, or a conversation to reopen. Rejects with a sentence for the reasons
+   * `session:start` and `history:resume` do.
+   */
+  'session:launch': { request: LaunchSessionRequest; response: LaunchedSession }
   /** Terminate and forget. Confirms first if the process is still alive. */
   'session:close': { request: CloseSessionRequest; response: CloseSessionResult }
   /** Sessions this main process is currently hosting, for a renderer reload. */
@@ -1538,6 +1589,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'themes:duplicate': true,
   'shell:showItem': true,
   'session:start': true,
+  'session:launch': true,
   'session:close': true,
   'session:list': true,
   'session:activity': true,

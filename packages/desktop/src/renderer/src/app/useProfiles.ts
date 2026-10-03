@@ -22,7 +22,11 @@ export interface ProfilesState {
   notice: string | null
   dismissError: () => void
   dismissNotice: () => void
-  save: (draft: ProfileDraft, id?: number | null) => Promise<{ ok: boolean; problems: string[] }>
+  /** What main stored, or null with the problems that stopped it. */
+  save: (
+    draft: ProfileDraft,
+    id?: number | null
+  ) => Promise<{ profile: Profile | null; problems: string[] }>
   remove: (id: number) => Promise<boolean>
   togglePin: (profile: Profile) => Promise<void>
   reorder: (ids: number[]) => Promise<void>
@@ -65,9 +69,9 @@ export function useProfiles(): ProfilesState {
     setError(null)
     try {
       const result = await helm.invoke('profile:save', { draft, ...(id == null ? {} : { id }) })
-      return { ok: result.profile !== null, problems: result.problems }
+      return { profile: result.profile, problems: result.problems }
     } catch (err: unknown) {
-      return { ok: false, problems: [readable(err)] }
+      return { profile: null, problems: [readable(err)] }
     }
   }, [])
 
