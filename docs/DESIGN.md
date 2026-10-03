@@ -400,7 +400,7 @@ overrides the gate; keep it.
   - It carries **no `title`**; the row's own tooltip is the only one.
     `aria-label` says what it does.
 
-  **The tree's project rows carry one more: `+`, start a session here**, under
+  **The tree's project rows carry one more: a terminal, start a session here**, under
   the same three rules and beside the star. It is the exception the overhaul
   was for rather than a crack in the rule: the tree is sessions first, starting
   one is the commonest thing anybody does in it, and making it a page and a
@@ -713,7 +713,7 @@ overrides the gate; keep it.
   went to Appearance, and Settings to the rail.
 - **The rail**: 44px of 34px icon buttons on the canvas, `rounded-well`,
   ordered by how often each is reached for rather than by feature - Sessions,
-  Profiles, Files and session history, a hairline, then the browser, pull
+  Profiles and session history, a hairline, then Files, the browser, pull
   requests and Config, and Settings pinned to the foot. The order is a fact
   about how Helm is used, so it is fixed rather than learned: a rail that
   reordered itself would move under muscle memory.
@@ -884,8 +884,10 @@ overrides the gate; keep it.
   `accent-text`. Groups are separated by an `.island-rule`, never a border.
 
   **Pinned** sits above the first group and holds the projects somebody lifted
-  out of their harnesses. It is deliberately *not* shaped like a group: no
-  caret, and its label sits at `fg-subtle` where a group header sits at `fg`.
+  out of their harnesses. It folds away like a group - the same caret in the
+  same column, its projects indented as a group's are - and is otherwise
+  deliberately *not* shaped like one: its label is the 10px caption with a pin
+  before it, at `fg-subtle` where a group header sits at `fg`.
   **Only projects are pinnable** - a pinned harness would be very nearly the
   collapse state the group already has. Pins are flat and cross-harness, so a
   pinned project appears **once**, in the section and never also in its group,
@@ -905,7 +907,7 @@ overrides the gate; keep it.
   the rail's icon for its destination, so the two read as one object.
 - **Project rows in the tree**: one line - caret (only where there are sessions
   to show), kind icon, name, and the branch in mono `fg-subtle` at the right,
-  where it gives way first. Under the pointer the branch's slot shows `+`
+  where it gives way first. Under the pointer the branch's slot shows a terminal button
   (start a session here, no page in between) and the star, by the rules in §5.
   The row's own click opens the project's page. The icon stays because harness
   / repo / plain folder is the one thing a name and a branch cannot say; the

@@ -101,6 +101,20 @@ describe('SessionTree: revealing a row', () => {
     expect(sessionRow()).not.toBeNull()
   })
 
+  it('opens the Pinned section over a pinned project’s session', async () => {
+    const rerender = renderTree(null, null)
+    rerender({ pinnedPaths: [ZETA] })
+    await userEvent.click(screen.getByRole('button', { name: 'Pinned, 1 project' }))
+    expect(sessionRow()).toBeNull()
+
+    rerender({
+      pinnedPaths: [ZETA],
+      sessionsByPath: new Map([[ZETA.toLowerCase(), [session('focused')]]]),
+      reveal: { seq: 1, kind: 'session', id: 'session:7' }
+    })
+    expect(sessionRow()?.getAttribute('aria-current')).toBe('true')
+  })
+
   it('opens the harness a project page belongs to', async () => {
     const rerender = renderTree(null, null)
     await userEvent.click(screen.getByRole('button', { name: 'north, 1 project' }))

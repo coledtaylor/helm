@@ -252,6 +252,16 @@ select:focus-visible {
   border-color: var(--helm-accent);
 }
 
+/* A menu (`Menu`) holds the focus only so its keys reach it; the row the keys
+ * are on is its focus mark (`aria-activedescendant`). The first arrow pressed
+ * inside it is what turns Chromium's focus-visible on, and the ring round the
+ * whole popup that followed marked nothing the row did not. Set here rather
+ * than with the utility on the menu, because this sheet's `:focus-visible`
+ * is unlayered and outranks every Tailwind utility. */
+[data-menu]:focus-visible {
+  outline: none;
+}
+
 /* The brand strip doubles as the window's drag region: the native title bar
  * is hidden (Window Controls Overlay) and this is what replaces it.
  * Interactive children opt back out. */

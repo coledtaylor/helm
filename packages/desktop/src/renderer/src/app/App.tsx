@@ -2433,7 +2433,7 @@ export function App(): JSX.Element {
   }
 
   // Ordered by how often each is reached for (DESIGN.md "The rail"): the
-  // daily views and history, then the occasional pages under a rule.
+  // daily three - sessions, profiles and history - then the rest under a rule.
   const rail = (
     <Rail
       hidden={new Set<string>(railHidden)}
@@ -2458,15 +2458,6 @@ export function App(): JSX.Element {
             onSelect: () => toggleView('profiles'),
             hooks: { 'data-open-profiles': true }
           },
-          {
-            id: 'files',
-            label: 'Files',
-            icon: <DocIcon width={17} height={17} />,
-            kind: 'view',
-            current: sidebarShown && sidebarView === 'files',
-            onSelect: () => toggleView('files'),
-            hooks: { 'data-open-files': true }
-          },
           page(
             'history',
             'Session history',
@@ -2477,6 +2468,15 @@ export function App(): JSX.Element {
           )
         ],
         [
+          {
+            id: 'files',
+            label: 'Files',
+            icon: <DocIcon width={17} height={17} />,
+            kind: 'view',
+            current: sidebarShown && sidebarView === 'files',
+            onSelect: () => toggleView('files'),
+            hooks: { 'data-open-files': true }
+          },
           page(
             'browser',
             'Browser',

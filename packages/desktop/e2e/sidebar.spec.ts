@@ -17,6 +17,22 @@ const test = base.extend({
   }
 })
 
+test('the rail’s menu is walked with the keys, marking the row it is on and not the whole popup', async ({ helm }) => {
+  const { window } = helm
+  await window.getByRole('navigation', { name: 'Destinations' }).click({ button: 'right' })
+  const menu = window.getByRole('menu', { name: 'Show on the rail' })
+  await expect(menu).toBeFocused()
+
+  // A key pressed inside it is what turns Chromium's focus-visible on.
+  await window.keyboard.press('ArrowDown')
+  await expect(menu).toHaveCSS('outline-style', 'none')
+
+  // Typing a name's first letter goes to its row, and Enter unticks it.
+  await window.keyboard.press('c')
+  await window.keyboard.press('Enter')
+  await expect(window.locator('[data-rail="config"]')).toHaveCount(0)
+})
+
 test('clicking a tab brings its sidebar back, opened and pointed at it', async ({ helm }) => {
   const { window } = helm
   const rail = (id: string) => window.locator(`[data-rail="${id}"]`)

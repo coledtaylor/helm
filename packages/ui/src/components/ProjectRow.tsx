@@ -3,7 +3,7 @@ import type { Project } from '@helm/core'
 import { cn } from '../lib/cn'
 import { ROW_SELECTED, ROW_SELECTED_GROUP } from '../lib/rows'
 import { SESSION_STATE_DOT, SESSION_STATE_LABEL, type SessionState } from '../lib/sessionstate'
-import { CaretIcon, FolderIcon, HarnessIcon, PinIcon, PlusIcon, RepoIcon } from './icons'
+import { CaretIcon, FolderIcon, HarnessIcon, PinIcon, RepoIcon, TerminalIcon } from './icons'
 
 const KIND_ICON = {
   harness: HarnessIcon,
@@ -33,7 +33,7 @@ export interface ProjectRowProps {
   pinned?: boolean | undefined
   /** Omitted, the row carries no star at all. */
   onTogglePin?: ((project: Project) => void) | undefined
-  /** The `+` that starts a session here without opening the project's page. */
+  /** The terminal button that starts a session here without opening the project's page. */
   onLaunch?: ((project: Project) => void) | undefined
   /** A session is starting here right now. */
   launching?: boolean | undefined
@@ -51,13 +51,13 @@ export interface ProjectRowProps {
  *
  * The row's own action is the whole row: it opens the project's page. The caret
  * is a second, smaller target for folding its sessions away, and two controls
- * appear under the pointer - `+` to start a session here directly, and the
+ * appear under the pointer - a terminal to start a session here directly, and the
  * star. They take the branch's place while they show rather than pushing
  * anything, so the name never moves under the pointer.
  *
  * `title` is deliberately on the main button and on nothing else in the tree:
  * the drivers reach the first project row with `aside nav button[title]`, and
- * the caret, the `+`, the star and every session row carry `aria-label`
+ * the caret, the terminal button, the star and every session row carry `aria-label`
  * instead so that selector stays a project.
  */
 export function ProjectRow({
@@ -88,7 +88,7 @@ export function ProjectRow({
         className={cn(
           'relative flex h-line w-full items-center gap-1.5 rounded-raised pr-2 text-left transition-colors',
           // `group-hover` rather than `hover`, so the tint follows the row and
-          // not the button: the caret, the `+` and the star sit outside it,
+          // not the button: the caret, the terminal button and the star sit outside it,
           // and a row that went flat while the pointer was on one of them
           // would read as several controls rather than one row.
           selected ? ROW_SELECTED_GROUP : 'group-hover:bg-hover'
@@ -171,7 +171,7 @@ export function ProjectRow({
                 'hover:bg-accent-soft hover:text-accent-text disabled:opacity-50'
               )}
             >
-              <PlusIcon width={12} height={12} />
+              <TerminalIcon width={12} height={12} />
             </button>
           )}
           {onTogglePin !== undefined && (

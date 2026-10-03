@@ -150,7 +150,7 @@ function mostUrgent(sessions: readonly TreeSession[]): SessionState | null {
  *
  * Sessions first, which is the order of the whole window now: a project with
  * something running in it opens out to show it, and one without is a single
- * line with a `+` under the pointer. Pinned projects sit above the harness
+ * line with a terminal button under the pointer. Pinned projects sit above the harness
  * groups, as they always have, and a session whose folder is no project the
  * scan found is listed at the bottom rather than not at all - every session
  * Helm hosts has a row somewhere.
@@ -178,6 +178,7 @@ export function SessionTree({
   const [query, setQuery] = useState('')
   const [foldedGroups, setFoldedGroups] = useState<ReadonlySet<string>>(new Set())
   const [foldedProjects, setFoldedProjects] = useState<ReadonlySet<string>>(new Set())
+  const [pinsFolded, setPinsFolded] = useState(false)
   const groups = useMemo(() => groupProjects(discovery, pinnedPaths), [discovery, pinnedPaths])
   const pins = useMemo(() => resolvePins(discovery, pinnedPaths), [discovery, pinnedPaths])
   const navRef = useRef<HTMLElement>(null)
@@ -212,6 +213,7 @@ export function SessionTree({
           each.members.some((member) => member.path.toLowerCase() === key)
       )
       if (group !== undefined) setFoldedGroups((current) => unfold(current, group.key))
+      if (pins.some((pin) => pin.path.toLowerCase() === key)) setPinsFolded(false)
     }
   }
   // The row in front - a session's or a project's page - is the tree's one
@@ -262,6 +264,7 @@ export function SessionTree({
   const groupOpen = (key: string): boolean => query !== '' || !foldedGroups.has(key)
   const projectOpen = (path: string): boolean =>
     query !== '' || !foldedProjects.has(path.toLowerCase())
+  const pinsOpen = query !== '' || !pinsFolded
 
   const total = discovery?.projects.length ?? 0
 
@@ -326,19 +329,29 @@ export function SessionTree({
 
         {shownPins.length > 0 && (
           <section data-pinned-section aria-label="Pinned" className="mb-1">
-            <Caption icon={<PinIcon width={9} height={9} />} label="Pinned" count={shownPins.length} />
-            {shownPins.map((pin) =>
-              pin.project === null ? (
-                <MissingProjectRow
-                  key={pin.path}
-                  path={pin.path}
-                  indent={4}
-                  onTogglePin={onTogglePin}
-                />
-              ) : (
-                renderProject(pin.project, 4, true)
-              )
-            )}
+            <Caption
+              icon={<PinIcon width={9} height={9} />}
+              label="Pinned"
+              count={shownPins.length}
+              fold={{
+                open: pinsOpen,
+                onToggle: () => setPinsFolded((folded) => !folded),
+                name: `Pinned, ${String(shownPins.length)} project${shownPins.length === 1 ? '' : 's'}`
+              }}
+            />
+            {pinsOpen &&
+              shownPins.map((pin) =>
+                pin.project === null ? (
+                  <MissingProjectRow
+                    key={pin.path}
+                    path={pin.path}
+                    indent={22}
+                    onTogglePin={onTogglePin}
+                  />
+                ) : (
+                  renderProject(pin.project, 22, true)
+                )
+              )}
           </section>
         )}
 
@@ -424,27 +437,50 @@ export function SessionTree({
 }
 
 /**
- * A section label that is not a group: no caret, and `fg-subtle` where a
- * harness header sits at `fg`. A section that looked like a harness would read
- * as a pinnable harness, and harnesses are not pinnable.
+ * A section label that is not a group: `fg-subtle` where a harness header sits
+ * at `fg`, at the caption's smaller size. A section that looked like a harness
+ * would read as a pinnable harness, and harnesses are not pinnable.
+ *
+ * Given `fold`, it folds its section away as a harness header does - the same
+ * caret in the same column, so every caret in the tree's top level lines up -
+ * and stays a caption in every other respect.
  */
 function Caption({
   icon,
   label,
-  count
+  count,
+  fold
 }: {
   icon?: JSX.Element | undefined
   label: string
   count: number
+  fold?: { open: boolean; onToggle: () => void; name: string } | undefined
 }): JSX.Element {
-  return (
-    <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 text-fg-subtle">
+  const content = (
+    <>
       {icon !== undefined && <span className="shrink-0">{icon}</span>}
       <span className="text-[10px] leading-[13px] font-semibold tracking-[.07em] uppercase">
         {label}
       </span>
       <span className="text-[10px] leading-[13px] tabular-nums">{count}</span>
-    </div>
+    </>
+  )
+  if (fold === undefined) {
+    return <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 text-fg-subtle">{content}</div>
+  }
+  return (
+    <button
+      type="button"
+      onClick={fold.onToggle}
+      aria-expanded={fold.open}
+      aria-label={fold.name}
+      className="flex h-line w-full items-center gap-1.5 rounded-raised pr-2 pl-1 text-left text-fg-subtle transition-colors hover:bg-hover hover:text-fg-muted"
+    >
+      <span className="grid size-4 shrink-0 place-items-center">
+        <CaretIcon width={10} height={10} className={cn('transition-transform', fold.open && 'rotate-90')} />
+      </span>
+      {content}
+    </button>
   )
 }
 

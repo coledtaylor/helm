@@ -105,6 +105,24 @@ describe('SessionTree pins', () => {
     expect(within(pinned()).getByText('folder gone')).toBeTruthy()
   })
 
+  it('folds away like a harness, and a filter opens it again for as long as it is typed', async () => {
+    const user = userEvent.setup()
+    renderTree({ pinnedPaths: ['C:\\work\\north\\repos\\zeta', GONE] })
+    const header = screen.getByRole('button', { name: 'Pinned, 2 projects' })
+    expect(header.getAttribute('aria-expanded')).toBe('true')
+
+    await user.click(header)
+    expect(header.getAttribute('aria-expanded')).toBe('false')
+    expect(rowsIn(pinned())).toEqual([])
+    expect(within(pinned()).queryByText('folder gone')).toBeNull()
+
+    const filter = screen.getByRole('textbox', { name: 'Filter projects and sessions' })
+    await user.type(filter, 'zet')
+    expect(rowsIn(pinned())).toEqual(['C:\\work\\north\\repos\\zeta'])
+    await user.clear(filter)
+    expect(rowsIn(pinned())).toEqual([])
+  })
+
   it('filters the Pinned section too, and clearing the filter brings every pin back', async () => {
     const user = userEvent.setup()
     renderTree({ pinnedPaths: ['C:\\work\\north\\repos\\zeta', 'C:\\work\\south\\repos\\alpha', GONE] })

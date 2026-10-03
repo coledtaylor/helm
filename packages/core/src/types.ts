@@ -1210,7 +1210,7 @@ export const PROJECT_SHELL_HEIGHT_PCT = { min: 10, max: 50, default: 30 } as con
  * `railHidden` is validated against it, so no write can hide the one way back
  * to un-hiding everything else. The ids are the rail's own (`data-rail`).
  */
-export const RAIL_DESTINATIONS = ['sessions', 'profiles', 'files', 'history', 'browser', 'pulls', 'config'] as const
+export const RAIL_DESTINATIONS = ['sessions', 'profiles', 'history', 'files', 'browser', 'pulls', 'config'] as const
 
 export type RailDestination = (typeof RAIL_DESTINATIONS)[number]
 
