@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  claudeHome,
   directoryExists,
   historyFileIn,
   projectsDirIn,
@@ -199,5 +200,41 @@ describe('directoryExists', () => {
     expect(directoryExists(dir)).toBe(true)
     expect(directoryExists(join(dir, 'file.txt'))).toBe(false)
     expect(directoryExists(join(dir, 'gone'))).toBe(false)
+  })
+})
+
+describe('claudeHome', () => {
+  const saved = {
+    CLAUDE_CONFIG_DIR: process.env['CLAUDE_CONFIG_DIR'],
+    USERPROFILE: process.env['USERPROFILE'],
+    HOME: process.env['HOME']
+  }
+
+  beforeEach(() => {
+    // The home directory is the test's own, so "~/.claude" names a place this
+    // test chose rather than the machine's.
+    Object.assign(process.env, { USERPROFILE: dir, HOME: dir })
+  })
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  })
+
+  it('is the directory CLAUDE_CONFIG_DIR names when it is set', () => {
+    const configured = join(dir, 'configured claude')
+    process.env['CLAUDE_CONFIG_DIR'] = configured
+    expect(claudeHome()).toBe(configured)
+    expect(historyFileIn(claudeHome())).toBe(join(configured, 'history.jsonl'))
+    expect(projectsDirIn(claudeHome())).toBe(join(configured, 'projects'))
+  })
+
+  it('is .claude in the home directory when CLAUDE_CONFIG_DIR is unset or blank', () => {
+    delete process.env['CLAUDE_CONFIG_DIR']
+    expect(claudeHome()).toBe(join(dir, '.claude'))
+    process.env['CLAUDE_CONFIG_DIR'] = '   '
+    expect(claudeHome()).toBe(join(dir, '.claude'))
   })
 })

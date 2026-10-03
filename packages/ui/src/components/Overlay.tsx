@@ -16,6 +16,12 @@ export interface OverlayProps extends Omit<HTMLAttributes<HTMLDivElement>, 'role
    * profile editor. Merged over the recipe, so a `max-w` here wins.
    */
   className?: string
+  /**
+   * `center` for a dialog, `top` for a palette: something typed into whose
+   * list grows and shrinks under the field, which would otherwise move the
+   * field with every keystroke as the island re-centred.
+   */
+  align?: 'center' | 'top'
   /** Escape and a click on the scrim both mean this. */
   onDismiss: () => void
   children: ReactNode
@@ -46,6 +52,7 @@ export interface OverlayProps extends Omit<HTMLAttributes<HTMLDivElement>, 'role
 export function Overlay({
   role = 'dialog',
   className,
+  align = 'center',
   onDismiss,
   children,
   ...island
@@ -66,7 +73,7 @@ export function Overlay({
 
   return (
     <div
-      className={SCRIM}
+      className={cn(SCRIM, PLACEMENT[align])}
       onMouseDown={(event) => {
         // Only the scrim itself. A drag that started inside the island and
         // finished out here is a text selection, not a dismissal.
@@ -86,7 +93,14 @@ export function Overlay({
  * `no-raw-overlay` refuses that pair everywhere else under `packages/ui` and
  * the renderer, and exempts this file by name.
  */
-const SCRIM = 'fixed inset-0 z-50 grid place-items-center bg-black/60 p-6'
+const SCRIM = 'fixed inset-0 z-50 grid bg-black/60 p-6'
+
+/** Where the island sits on the scrim. `top` clears the title strip and leaves
+ * the field where it was whatever the list beneath it does. */
+const PLACEMENT = {
+  center: 'place-items-center',
+  top: 'items-start justify-items-center pt-[92px]'
+} as const
 
 /**
  * The modal island: 12px radius, the stronger hairline, and `shadow-panel` -

@@ -6,8 +6,8 @@ import type { LiveSession, SessionPort, SessionResources } from '../types'
  * The shaping half of Helm's session-awareness tools: `main/session-tools.ts`
  * defines them and holds the token, and this decides what an answer says. In
  * core because `packages/core` never imports Electron and because this is where
- * a thing can be unit tested - the tools themselves are covered by
- * `sessions-check --only=tools`, which needs two real sessions to say anything.
+ * a thing can be unit tested - the tools themselves need two real sessions to
+ * say anything.
  *
  * ## The rule this file exists to make structural
  *

@@ -9,6 +9,7 @@ import type {
   HistorySummary,
   SessionRecord
 } from '@helm/core'
+import type { SessionHistoryProps } from '@helm/ui'
 import { helm } from './bridge'
 import { estimateGrid } from './terminals'
 
@@ -340,5 +341,47 @@ export function useHistory(): HistoryState {
     resuming,
     resumeError,
     dismissResumeError: useCallback(() => setResumeError(null), [])
+  }
+}
+
+/**
+ * The history pane's props, read off this hook's state.
+ *
+ * All of them but the three the app supplies itself: a resume places a tab,
+ * revealing a folder goes through the launcher, and `compact` is a fact about
+ * the pane the history is docked in. Here rather than spelled out in `App` so
+ * the hook and the pane can be tested together through the wiring the app uses.
+ */
+export function sessionHistoryProps(
+  state: HistoryState
+): Omit<SessionHistoryProps, 'onResume' | 'onReveal' | 'compact'> {
+  return {
+    summary: state.summary,
+    page: state.page,
+    loading: state.loading,
+    error: state.error,
+    search: state.search,
+    onSearchChange: state.setSearch,
+    scope: state.scope,
+    onScopeChange: state.setScope,
+    archiveStats: state.archiveStats,
+    grouping: state.grouping,
+    onGroupingChange: state.setGrouping,
+    resumableOnly: state.resumableOnly,
+    onResumableOnlyChange: state.setResumableOnly,
+    project: state.project,
+    onProjectChange: state.setProject,
+    selected: state.selected,
+    onSelect: state.select,
+    prompts: state.prompts,
+    promptsLoading: state.promptsLoading,
+    conversation: state.conversation,
+    conversationLoading: state.conversationLoading,
+    onRename: (sessionId, name) => void state.rename(sessionId, name),
+    onRefresh: state.refresh,
+    refreshing: state.refreshing,
+    resuming: state.resuming,
+    resumeError: state.resumeError,
+    onDismissResumeError: state.dismissResumeError
   }
 }

@@ -67,11 +67,13 @@ export {
 } from './profiles'
 export {
   finishSession,
+  noteConversation,
   readSessions,
   reconcileRunningSessions,
   renameSession,
   runningSessionNames,
   startSession,
+  type LostSession,
   type NewSession,
   type SessionQuery
 } from './sessions'

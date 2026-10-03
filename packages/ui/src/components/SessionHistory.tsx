@@ -18,8 +18,10 @@ import { ROW_SELECTED } from '../lib/rows'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes, formatMoment } from '../lib/time'
 import { Checkbox } from './Checkbox'
+import { EmptyState } from './EmptyState'
 import { PaneBack } from './PaneBack'
 import { CloseIcon, HistoryIcon, RefreshIcon, ResumeIcon, SearchIcon } from './icons'
+import { ICON_BUTTON, PAGE_BAR, PAGE_LIST_BESIDE } from '../lib/page'
 
 export type HistoryGrouping = 'recent' | 'project'
 
@@ -239,11 +241,9 @@ export function SessionHistory({
   }
 
   return (
-    // Islands with canvas gutters, like every other console (DESIGN.md).
-    <div className="flex h-full min-h-0 flex-col gap-2">
-      <header className="flex h-11 shrink-0 items-center gap-3 rounded-island border border-border bg-surface px-4">
-        <HistoryIcon width={15} height={15} className="shrink-0 text-accent" />
-        <h1 className="text-[13px] font-medium tracking-tight text-fg">Session history</h1>
+    // On the pane (DESIGN.md 3): the bar, then the list beside the detail.
+    <div className="flex h-full min-h-0 flex-col">
+      <header data-pane-header="history" className={PAGE_BAR}>
         {summary && (
           <p className="min-w-0 truncate text-[11px] text-fg-subtle">
             <Count n={summary.sessions} one="session" /> · <Count n={summary.prompts} one="prompt" />{' '}
@@ -267,16 +267,13 @@ export function SessionHistory({
               : 'Re-read the history file'
           }
           aria-label="Re-read the history file"
-          className={cn(
-            'grid size-6 shrink-0 place-items-center rounded text-fg-subtle transition-colors',
-            'hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-50'
-          )}
+          className={ICON_BUTTON}
         >
           <RefreshIcon className={cn(refreshing && 'animate-spin')} />
         </button>
       </header>
 
-      <div className="flex min-h-0 flex-1 gap-2">
+      <div className="flex min-h-0 flex-1">
         {/* ------------------------------------------------------------- */}
         {/* The list                                                       */}
         {/* ------------------------------------------------------------- */}
@@ -288,8 +285,8 @@ export function SessionHistory({
         {showList && (
         <div
           className={cn(
-            'flex flex-col overflow-hidden rounded-island border border-border bg-surface',
-            compact ? 'min-w-0 flex-1' : 'w-[38%] max-w-[560px] min-w-[340px] shrink-0'
+            'flex flex-col overflow-hidden',
+            compact ? 'min-w-0 flex-1' : cn('w-[38%] max-w-[560px] min-w-[340px] shrink-0', PAGE_LIST_BESIDE)
           )}
         >
           <div className="shrink-0 space-y-2 p-2">
@@ -380,9 +377,7 @@ export function SessionHistory({
               >
                 {/* Named, like the scope segments above them. Two segmented
                     groups now sit in this pane, and `aria-pressed` alone cannot
-                    say which group a button belongs to - `pnpm history-check`
-                    was clicking the first unpressed button it found, which
-                    became the wrong one the moment the second group arrived. */}
+                    say which group a button belongs to. */}
                 <Segment
                   active={grouping === 'recent'}
                   onClick={() => onGroupingChange('recent')}
@@ -507,7 +502,7 @@ export function SessionHistory({
         {/* The detail                                                     */}
         {/* ------------------------------------------------------------- */}
         {showDetail && (
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-island border border-border bg-surface">
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           {compact && selected !== null && (
             <PaneBack label="All sessions" onBack={() => onSelect(null)} />
           )}
@@ -587,7 +582,7 @@ function Row({
         session.firstPrompt.trim() === '' ? '' : `\n\nFirst prompt: ${session.firstPrompt}`
       }`}
       className={cn(
-        'session-row relative flex w-full flex-col gap-0.5 rounded-well py-1.5 pr-2 pl-4 text-left',
+        'session-row relative flex w-full flex-col gap-0.5 rounded-raised py-row pr-2 pl-4 text-left',
         'transition-colors',
         selected ? ROW_SELECTED : 'hover:bg-hover'
       )}
@@ -656,7 +651,7 @@ function Highlight({ text, needle }: { text: string; needle: string }): JSX.Elem
   while (found >= 0) {
     if (found > at) parts.push(text.slice(at, found))
     parts.push(
-      <mark key={key++} className="rounded-[2px] bg-accent/25 px-px text-inherit">
+      <mark key={key++} className="rounded-xs bg-accent/25 px-px text-inherit">
         {text.slice(found, found + term.length)}
       </mark>
     )
@@ -690,7 +685,7 @@ function Segment({
       {...rest}
       aria-pressed={active}
       className={cn(
-        'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
+        'rounded-raised px-2.5 py-0.5 text-[11px] transition-colors',
         active
           ? SEGMENT_ON
           : 'text-fg-muted hover:text-fg'
@@ -703,10 +698,11 @@ function Segment({
 
 function EmptyList({ loading, filtering }: { loading: boolean; filtering: boolean }): JSX.Element {
   if (loading) return <p className="px-2 py-6 text-center text-[12px] text-fg-subtle">Reading&hellip;</p>
+  if (filtering) return <p className="px-3 py-6 text-center text-[12px] text-fg-subtle">No session matches that.</p>
   return (
-    <p className="px-3 py-6 text-center text-[12px] text-fg-subtle">
-      {filtering ? 'No session matches that.' : 'No sessions recorded yet.'}
-    </p>
+    <EmptyState size="list" name="history-list" icon={<HistoryIcon width={18} height={18} />} title="No sessions yet">
+      A Claude Code session started anywhere on this machine is listed here.
+    </EmptyState>
   )
 }
 
@@ -722,45 +718,32 @@ function NothingSelected({
   archiveStats: ArchiveStats | null
 }): JSX.Element {
   return (
-    <div className="grid h-full place-items-center p-8">
-      <div className="max-w-md text-center">
-        <HistoryIcon width={22} height={22} className="mx-auto text-fg-subtle" />
-        <p className="mt-3 text-[13px] text-fg-muted">
-          Every Claude Code session on this machine, not just the ones started here.
-        </p>
-        <p className="mt-2 text-[12px] leading-relaxed text-fg-subtle">
-          {summary
-            ? `${summary.sessions.toLocaleString()} sessions across ${String(summary.projects)} projects. ${summary.resumable.toLocaleString()} still have a transcript and can be reopened; the rest are a record of what was asked.`
-            : 'Reading the history file…'}
-        </p>
-        {/* The archive's own sentence, and the empty one is written out rather
-            than hidden: "Helm has not kept anything yet" is the state a fresh
-            install is in, and a figure that only appears once it is non-zero is
-            a figure nobody can tell from a broken one. */}
-        <p data-archive-summary className="mt-2 text-[12px] leading-relaxed text-fg-subtle">
-          {archiveStats === null ? (
-            ''
-          ) : archiveStats.sessions === 0 ? (
-            <>
-              Helm has not archived a conversation yet. It keeps the ones it finds before Claude
-              Code deletes them, up to {formatBytes(archiveStats.maxBytes)}.
-            </>
-          ) : (
-            <>
-              {archiveStats.sessions.toLocaleString()} conversations kept here -{' '}
-              {archiveStats.messages.toLocaleString()} messages, {formatBytes(archiveStats.storedBytes)}{' '}
-              of {formatBytes(archiveStats.maxBytes)}.
-              {archiveStats.evictedSessions > 0 && (
-                <>
-                  {' '}
-                  {archiveStats.evictedSessions.toLocaleString()} were dropped to stay under it.
-                </>
-              )}
-            </>
-          )}
-        </p>
-      </div>
-    </div>
+    <EmptyState
+      name="history-detail"
+      icon={<HistoryIcon width={18} height={18} />}
+      title={
+        summary
+          ? `${summary.sessions.toLocaleString()} sessions across ${String(summary.projects)} projects`
+          : 'Reading the history file…'
+      }
+    >
+      {summary && `${summary.resumable.toLocaleString()} can be reopened. Pick one to see what was asked.`}
+      {/* The archive's own sentence, and the empty one is written out rather
+          than hidden: "Helm has not kept anything yet" is the state a fresh
+          install is in, and a figure that only appears once it is non-zero is
+          a figure nobody can tell from a broken one. */}
+      <span data-archive-summary className="mt-1 block">
+        {archiveStats === null
+          ? ''
+          : archiveStats.sessions === 0
+            ? `No conversation archived yet. Helm keeps them before Claude Code deletes them, up to ${formatBytes(archiveStats.maxBytes)}.`
+            : `${archiveStats.sessions.toLocaleString()} conversations archived, ${formatBytes(archiveStats.storedBytes)} of ${formatBytes(archiveStats.maxBytes)}${
+                archiveStats.evictedSessions > 0
+                  ? `; ${archiveStats.evictedSessions.toLocaleString()} dropped to stay under it`
+                  : ''
+              }.`}
+      </span>
+    </EmptyState>
   )
 }
 
@@ -849,8 +832,7 @@ function Detail({
           {/* A written-out control beside the double-click, not instead of it.
               The gesture is how a tab is renamed and belongs here too, but a
               gesture with nothing on screen to suggest it is a feature only its
-              author knows about - and `affordance-check` walks buttons, not
-              double-clicks. */}
+              author knows about. */}
           <button
             type="button"
             data-history-rename={session.sessionId}
@@ -1154,11 +1136,6 @@ function Unavailable({
  * already knows how to scan. The well is sunken and the bubbles are raised, so
  * the elevation says the same thing the alignment does - the messages sit *in*
  * a record rather than beside one.
- *
- * A `<ul>` rather than an `<ol>`, and that is not cosmetic: the prompts list
- * below is an `<ol>`, and `pnpm history-check`'s HIST-6 counts `ol li` to check
- * a reaped session still shows every prompt it had. A second ordered list in
- * the same pane would silently inflate that count.
  */
 function Conversation({
   conversation,

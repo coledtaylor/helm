@@ -2,7 +2,7 @@
 // user is sitting in front of.
 //
 // The drivers used to point the app they launch at `%APPDATA%\Helm` - the real
-// one - and settings-check went further and said so on purpose: it parked
+// one - and one of them went further and said so on purpose: it parked
 // settings on fixture values and put them back at the end. That is defensible
 // for a claim about persistence and indefensible in practice, because Helm is a
 // desktop app somebody is using while its checks run. Observed: a check run
@@ -59,26 +59,26 @@ export function realDataDir() {
  *
  * It is not hypothetical, and the shape of the damage is worth keeping:
  *
- * - **`workspaceTabs`** carried eight panes into every check on the machine
- *   this was found on, six of them project shells that each spawn a terminal.
- *   `S-1` cycles Ctrl+Tab expecting to land back where it started and found a
- *   ten-tab ring; `S-10` asserted "every terminal is attached" while counting
- *   terminals it never started. Both are right about the app and were failing
- *   about the strip.
+ * - **`paneLayout`** - `workspaceTabs`, when the window had a single strip -
+ *   carried eight panes into every check on the machine this was found on,
+ *   six of them project shells that each spawn a terminal. A probe cycling
+ *   Ctrl+Tab to land back where it started found a ten-tab ring; one asserting
+ *   "every terminal is attached" counted terminals it never started. Both were
+ *   right about the app and failing about the strip.
  * - **`windowBounds`** is the same bug one layer out and had not been noticed
- *   at all. `designshot.ts` says "1280 is the default" and computes what a pane
- *   is worth at that width; the window it was actually photographing was 1757
- *   wide, because that is where the developer left it.
+ *   at all. A screenshot driver took "1280 is the default" and computed what a
+ *   pane is worth at that width; the window it was actually photographing was
+ *   1757 wide, because that is where the developer left it.
  *
- * Both now start from the app's own defaults - an empty strip, 1280x820 - on
- * every machine, which is what those comments already claimed.
+ * Both now start from the app's own defaults - an empty window, 1280x820 - on
+ * every machine, which is what those drivers already assumed.
  *
  * **`firstRunCompletedAt` is deliberately not here.** It is the same *kind* of
  * row, and clearing it would put every check into the first-run setup pane
  * instead of the app. "Internal state" is not the rule; "where the developer
  * left the app" is, and completing first-run is not somewhere anybody left it.
  */
-export const UI_STATE_KEYS = ['workspaceTabs', 'windowBounds']
+export const UI_STATE_KEYS = ['paneLayout', 'windowBounds']
 
 /**
  * Where `name`'s run keeps its data.
@@ -210,11 +210,22 @@ export function seedDatabase(dataDir, { keepUiState = false } = {}) {
   // that moved would otherwise put the old behaviour back silently, and a check
   // quietly reverting to inheriting somebody's tabs is precisely the failure
   // this is here to end.
+  //
+  // And the rows still claiming to be running are the real app's sessions,
+  // live in it right now, not a crash of this one: left as they are, the copy
+  // would reconcile them to lost and offer to reopen conversations somebody is
+  // in. Marked on the copy before it opens, so its restore offer is about its
+  // own runs only. The registry guard in `main/restore.ts` would catch most of
+  // them, but not one a `/clear` moved, which the real app may not have
+  // recorded.
   const script = [
     "const Database = require('better-sqlite3')",
     "const db = new Database(process.argv[1], { readonly: true, fileMustExist: true })",
     "db.prepare('VACUUM INTO ?').run(process.argv[2])",
     'db.close()',
+    'const copied = new Database(process.argv[2], { fileMustExist: true })',
+    "copied.prepare(\"UPDATE sessions SET status = 'lost' WHERE status = 'running'\").run()",
+    'copied.close()',
     'const strip = JSON.parse(process.argv[3])',
     'if (strip.length > 0) {',
     '  const copy = new Database(process.argv[2], { fileMustExist: true })',

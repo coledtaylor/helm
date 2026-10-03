@@ -17,9 +17,7 @@ import { parseUsageLine, readUsageTail, scanUsageTranscripts } from './transcrip
 
 /**
  * The dollar half, unit-tested where a driver would be slow: the shapes a
- * transcript row can take, the arithmetic, and the index's idempotence. The
- * `usage-check` driver reconciles the totals against the user's real
- * transcripts; these cover the cases those transcripts do not happen to have.
+ * transcript row can take, the arithmetic, and the index's idempotence.
  */
 
 const AT = '2026-08-10T09:00:00.000Z'

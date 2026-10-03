@@ -271,7 +271,7 @@ export function EffectiveViewPane({
                         aria-pressed={kind === option}
                         onClick={() => setKind(option)}
                         className={cn(
-                          'rounded-[5px] px-2 py-0.5 text-[11px] capitalize transition-colors',
+                          'rounded-raised px-2 py-0.5 text-[11px] capitalize transition-colors',
                           kind === option
                             ? SEGMENT_ON
                             : 'text-fg-muted hover:text-fg'

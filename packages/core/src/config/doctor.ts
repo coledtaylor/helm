@@ -1,9 +1,5 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import type { DoctorReport } from '../types'
-import type { ClaudeCommand } from './mcp'
-
-const run = promisify(execFile)
+import { execClaude, type ClaudeCommand } from './mcp'
 
 /**
  * `claude doctor`, surfaced as a health panel (SPEC 4.2).
@@ -41,9 +37,8 @@ export async function runDoctor(command: ClaudeCommand): Promise<DoctorReport> {
   const ranAt = new Date().toISOString()
 
   try {
-    const result = await run(command.file, [...(command.prefixArgs ?? []), 'doctor'], {
+    const result = await execClaude(command, ['doctor'], {
       timeout: TIMEOUT_MS,
-      windowsHide: true,
       maxBuffer: 8 * 1024 * 1024
     })
     const output = `${result.stdout}${result.stderr}`.trim()

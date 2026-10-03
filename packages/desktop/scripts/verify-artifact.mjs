@@ -55,7 +55,11 @@ const REQUIRED = [
   'resources\\app.asar.unpacked\\node_modules\\node-pty\\prebuilds\\win32-x64\\conpty\\conpty.dll',
   'resources\\app.asar.unpacked\\node_modules\\node-pty\\prebuilds\\win32-x64\\conpty\\OpenConsole.exe',
   'resources\\app.asar.unpacked\\node_modules\\node-pty\\prebuilds\\win32-x64\\winpty-agent.exe',
-  'resources\\app.asar.unpacked\\node_modules\\node-pty\\prebuilds\\win32-x64\\winpty.dll'
+  'resources\\app.asar.unpacked\\node_modules\\node-pty\\prebuilds\\win32-x64\\winpty.dll',
+  // koffi, for the window's small corners (src/main/corners.ts). Not fatal when
+  // missing - the corners stay at Windows' default - which is why it is checked
+  // here rather than left for somebody to notice.
+  'resources\\app.asar.unpacked\\node_modules\\@koromix\\koffi-win32-x64\\win32_x64\\koffi.node'
 ]
 
 /**

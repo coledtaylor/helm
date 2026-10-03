@@ -1,6 +1,6 @@
 import type { JSX } from 'react'
 import { cn } from '../lib/cn'
-import { HelmMarkIcon } from './icons'
+import { HelmMarkIcon, TerminalIcon } from './icons'
 
 export interface WelcomePaneProps {
   roots: string[]
@@ -8,6 +8,8 @@ export interface WelcomePaneProps {
   onAddRoot: () => void
   /** Scaffold a harness. The same action first run offers, still reachable. */
   onCreateHarness?: (() => void) | undefined
+  /** Open the new-session launcher - what an empty workspace is usually for. */
+  onNewSession?: (() => void) | undefined
 }
 
 /** Shown when no project is selected. Names the roots being scanned so an empty
@@ -16,11 +18,14 @@ export function WelcomePane({
   roots,
   projectCount,
   onAddRoot,
-  onCreateHarness
+  onCreateHarness,
+  onNewSession
 }: WelcomePaneProps): JSX.Element {
   return (
     <div
       data-welcome-pane
+      // An island of its own, unlike every other page: it stands in for the
+      // pane itself when there is none, rather than sitting inside one.
       className="grid h-full place-items-center rounded-island border border-border bg-surface px-8"
     >
       <div className="max-w-md text-center">
@@ -66,10 +71,26 @@ export function WelcomePane({
           className="mx-auto text-fg-subtle opacity-35"
         />
         <p className="mt-8 text-[13px] text-fg-muted">
-          {projectCount > 0
-            ? 'Pick a project on the left.'
-            : 'Point Helm at a folder to get started.'}
+          {projectCount === 0
+            ? 'Point Helm at a folder to get started.'
+            : onNewSession
+              ? 'Start a session, or pick a project on the left.'
+              : 'Pick a project on the left.'}
         </p>
+        {projectCount > 0 && onNewSession && (
+          <button
+            type="button"
+            onClick={onNewSession}
+            className={cn(
+              'mt-4 inline-flex items-center gap-2 rounded-well border border-accent px-3.5 py-1.5',
+              'text-[12px] font-medium text-accent-text transition-colors hover:bg-accent-soft active:bg-active'
+            )}
+          >
+            <TerminalIcon width={14} height={14} />
+            New session
+            <span className="font-mono text-[11px] font-normal text-fg-subtle">Ctrl+N</span>
+          </button>
+        )}
 
         {roots.length > 0 && (
           <div className="mt-6 text-left">

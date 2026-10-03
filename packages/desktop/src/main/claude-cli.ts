@@ -185,8 +185,7 @@ function quoteForCmd(arg: string): string {
  * The documented answer is the `/s` form: `/s` forces the strip-first-and-last
  * branch, and an **extra pair of quotes around the whole command** is what that
  * branch then removes - leaving the inner line, quoting intact, for cmd to
- * parse normally. Nothing about the direct path changes, and `SESS-20` is what
- * says this still holds.
+ * parse normally. Nothing about the direct path changes.
  *
  * This is not hypothetical for a Windows user: an npm-installed CLI leaves a
  * `.cmd`, and a global prefix under `C:\Program Files` or a user folder with a

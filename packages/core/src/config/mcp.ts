@@ -27,6 +27,50 @@ export interface ClaudeCommand {
   file: string
   /** Arguments that must precede the subcommand, e.g. a script path. */
   prefixArgs?: readonly string[] | undefined
+  /**
+   * The `.cmd` or `.bat` shim that `file` (`cmd.exe`) runs, when the CLI is one.
+   *
+   * Set, it replaces `prefixArgs` and the command line is built here, because
+   * `cmd.exe /c` strips the first and last quote of a line holding more than
+   * two. A shim under a path with a space, followed by the JSON `add-json`
+   * takes, lost the front of its own path that way and cmd reported the rest as
+   * "not recognized". `/s` and one extra pair of quotes around the whole line is
+   * the documented way through - the same one `claudePtyArgs` takes for a
+   * session.
+   */
+  shim?: string | undefined
+}
+
+/**
+ * One argument as a Windows program's own parser reads it back: quoted when it
+ * holds whitespace or a quote, an inner quote escaped, and a run of
+ * backslashes doubled only where a quote follows it.
+ */
+function quoteArg(arg: string): string {
+  if (arg !== '' && !/[\s"]/.test(arg)) return arg
+  let out = '"'
+  let slashes = 0
+  for (const ch of arg) {
+    if (ch === '\\') {
+      slashes++
+      continue
+    }
+    out += ch === '"' ? `${'\\'.repeat(slashes * 2 + 1)}"` : `${'\\'.repeat(slashes)}${ch}`
+    slashes = 0
+  }
+  return `${out}${'\\'.repeat(slashes * 2)}"`
+}
+
+/** Runs the CLI with `args`, directly or through its shim. */
+export function execClaude(
+  command: ClaudeCommand,
+  args: readonly string[],
+  options: { cwd?: string; timeout: number; maxBuffer: number }
+): Promise<{ stdout: string; stderr: string }> {
+  const common = { ...options, windowsHide: true, encoding: 'utf8' as const }
+  if (command.shim === undefined) return run(command.file, [...(command.prefixArgs ?? []), ...args], common)
+  const line = [command.shim, ...args].map(quoteArg).join(' ')
+  return run(command.file, ['/d', '/s', '/c', `"${line}"`], { ...common, windowsVerbatimArguments: true })
 }
 
 const TIMEOUT_MS = 60_000
@@ -178,10 +222,9 @@ async function mcp(
   cwd: string
 ): Promise<McpRunResult> {
   try {
-    const result = await run(command.file, [...(command.prefixArgs ?? []), 'mcp', ...args], {
+    const result = await execClaude(command, ['mcp', ...args], {
       cwd,
       timeout: TIMEOUT_MS,
-      windowsHide: true,
       maxBuffer: 8 * 1024 * 1024
     })
     return { ok: true, output: `${result.stdout}${result.stderr}`.trim(), exitCode: 0 }

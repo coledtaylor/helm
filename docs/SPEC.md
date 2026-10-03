@@ -4,6 +4,11 @@ date: 2026-08-08
 tags: [claude-gui, electron, spec, launch-scope, plugin-dir, v1]
 ---
 
+> Probe ids in this document (SESS-n, PROF-n, HIST-n, CFG-n, S-n and the
+> like) name real-window check drivers that were removed on 2026-10-02 in
+> favour of ordinary tests (see TESTING.md). Git history has them; BR-n,
+> PKG-n, C-n and D-n still exist as diagnostic drivers.
+
 # Helm - v1 Spec
 
 A portable, configurable desktop shell **on top of** Claude Code. Not a client,
@@ -429,6 +434,13 @@ The `.claude/` directory of whatever scope you point at, as a real interface.
 > against a real session on haiku.
 
 ### 4.3 Content Viewer
+
+> **Superseded (2026-10-03): merged into the Files view.** The viewer was a
+> second tree beside Files and its Curated mode went unused. A note or an HTML
+> artifact now opens rendered in a file tab, with Preview / Source / Edit on its
+> crumb; full-text search moved into Ctrl+P (its Text half, Ctrl+Shift+F) and
+> still runs over the corpus described below. What follows is the record of
+> the viewer as it was built.
 
 Read what Claude writes without a detour through Explorer and a text editor.
 
@@ -1057,9 +1069,11 @@ nothing looks broken. Parking the view outside the window does not help
 two-pixel corner falls outside the window and is clipped, and the view is hidden
 - and only ever *moved*, never resized - once it has painted.
 
-`pnpm browser-check` covers all of it: the endpoint and its 401s, the ten tools
-driven over the wire independently of `claude`, every tool against a tab that is
-never on screen, the four-cell reach matrix, the lifetime rules, argv hygiene,
+`pnpm browser-check` covered all of it until tests replaced it
+(`main/browser.test.ts`, `main/browser-mcp.test.ts`, `e2e/browser.spec.ts`,
+`e2e/agent-tools.spec.ts`): the endpoint and its 401s, the ten tools driven
+over the wire independently of `claude`, every tool against a tab that is never
+on screen, the four-cell reach matrix, the lifetime rules, argv hygiene,
 and one real `claude` session asked to open the fixture and click a planted
 element.
 

@@ -224,7 +224,7 @@ export async function reopenShell(
   return mountShell(path, container, opts)
 }
 
-/** See `describeTerminal`: a read-only tap for `pnpm settings-check`. */
+/** See `describeTerminal`: a read-only tap for the real-window drivers. */
 export function describeShellTerminals(): Array<TerminalReport & { path: string; shell: string }> {
   return [...panes.entries()].map(([path, pane]) => ({
     ...describeTerminal(String(pane.id), pane.host),

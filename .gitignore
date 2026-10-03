@@ -13,6 +13,8 @@ reports/
 # `.claude/skills/` is checked in, because CLAUDE.md points at it.
 .claude/settings.local.json
 .claude/*.local.json
+# Worktrees Claude Code makes for parallel agents.
+.claude/worktrees/
 
 # Agent instructions that are true of one machine rather than of the project.
 # CLAUDE.md is the committed half; this is the half nobody else can use.

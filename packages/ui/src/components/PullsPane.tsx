@@ -1,10 +1,21 @@
 import type { JSX, ReactNode } from 'react'
 import { useState } from 'react'
-import { PR_STALE_DAYS, type PullRepo, type PullsSnapshot, type PullSummary } from '@helm/core/types'
+import type { PullRepo, PullsSnapshot, PullSummary } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import {
+  GROUP_MODES,
+  groupPulls,
+  matchesPull,
+  openPulls,
+  splitStale,
+  type GroupMode,
+  type PullGroup
+} from '../lib/pullTriage'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatMoment } from '../lib/time'
-import { PullRequestIcon, RefreshIcon, WarnIcon } from './icons'
+import { EmptyState } from './EmptyState'
+import { CaretIcon, PullRequestIcon, RefreshIcon, WarnIcon } from './icons'
+import { ICON_BUTTON, PAGE_BAR } from '../lib/page'
 import { PullChecksTally, PullRow, PullStateDot, useNow } from './PullRow'
 
 /**
@@ -169,129 +180,6 @@ export function pullsSummaryLine(snapshot: PullsSnapshot | null): string {
   return `${String(snapshot.open)} open · ${String(repos)} ${repos === 1 ? 'repo' : 'repos'}`
 }
 
-/** One row's worth: the pull request, and which repository it came from. */
-interface OpenPull {
-  repo: PullRepo
-  pull: PullSummary
-}
-
-/** What the `GROUP` control offers. Three, so it is a segmented control. */
-const GROUP_MODES = [
-  { id: 'none', label: 'None' },
-  { id: 'repo', label: 'Repo' },
-  { id: 'author', label: 'Author' }
-] as const
-
-type GroupMode = (typeof GROUP_MODES)[number]['id']
-
-/**
- * The filter, as one predicate over everything a row shows.
- *
- * The projects tree's behaviour rather than a second one of this pane's own: a
- * case-insensitive substring, an empty query matching everything, and no
- * syntax to learn. What differs is the set of fields, because the rows differ -
- * a pull request is found by its number at least as often as by its title, so
- * both `418` and `#418` find pull request 418, and the branch, the author and
- * the repository are all things somebody types when they know the row exists
- * and cannot see it.
- */
-function matchesPull({ repo, pull }: OpenPull, query: string): boolean {
-  const needle = query.trim().toLowerCase()
-  if (needle === '') return true
-  const fields = [
-    pull.title,
-    String(pull.number),
-    `#${String(pull.number)}`,
-    pull.headRefName,
-    pull.baseRefName,
-    pull.author,
-    repo.name,
-    repo.slug ?? ''
-  ]
-  return fields.some((field) => field.toLowerCase().includes(needle))
-}
-
-/** Days as milliseconds. The one place this pane does date arithmetic. */
-const DAY_MS = 24 * 60 * 60 * 1000
-
-/** A labelled division of one section's rows. `label` is null for `None`. */
-interface PullGroup {
-  key: string
-  label: string | null
-  /** The machine spelling beside the name - a slug, or nothing. */
-  sub: string | null
-  /** The group is a bot's, which is a fact about it and not part of its name. */
-  bot: boolean
-  /**
-   * The heading already names the repository, so the rows under it must not.
-   *
-   * DESIGN.md's source-pill rule: the pill appears only where rows have been
-   * flattened out of their groups. Grouping by repository puts them back into
-   * theirs, and a pill on every row would be the heading said once per row.
-   */
-  namesRepo: boolean
-  items: OpenPull[]
-}
-
-/**
- * The rows, arranged the way the `GROUP` control says.
- *
- * `None` returns the flat list as one unlabelled group, so every section below
- * renders through one path rather than branching on the mode - the difference
- * between the modes is this function's business and not the pane's.
- *
- * Repository order comes from `repos`, which arrives busiest-first from core,
- * so the grouping needs no second pass to know which repository to put first.
- * Authors have no such order to borrow, so they are counted here: most pull
- * requests first, ties by name, which is the same "busiest first" claim made
- * about the other axis.
- */
-function groupPulls(open: OpenPull[], mode: GroupMode, repos: readonly PullRepo[]): PullGroup[] {
-  if (mode === 'none' || open.length === 0) {
-    return [{ key: 'all', label: null, sub: null, bot: false, namesRepo: false, items: open }]
-  }
-  if (mode === 'repo') {
-    return repos
-      .map((repo) => ({
-        key: repo.path,
-        label: repo.name,
-        sub: repo.slug,
-        bot: false,
-        namesRepo: true,
-        items: open.filter((entry) => entry.repo.path === repo.path)
-      }))
-      .filter((group) => group.items.length > 0)
-  }
-  const byAuthor = new Map<string, OpenPull[]>()
-  for (const entry of open) {
-    const key = displayAuthor(entry.pull)
-    const held = byAuthor.get(key)
-    if (held === undefined) byAuthor.set(key, [entry])
-    else held.push(entry)
-  }
-  return [...byAuthor.entries()]
-    .sort(([aName, aItems], [bName, bItems]) =>
-      aItems.length === bItems.length
-        ? aName.localeCompare(bName)
-        : bItems.length - aItems.length
-    )
-    .map(([name, items]) => ({
-      key: `author:${name}`,
-      label: name,
-      sub: null,
-      // A bot says so beside its name rather than in it, exactly as the row
-      // does: `app/dependabot` is a login, and "bot" is the fact about it.
-      bot: items[0]?.pull.authorIsBot === true,
-      namesRepo: false,
-      items
-    }))
-}
-
-/** The author as a row paints it - a bot's `app/` prefix is not its name. */
-function displayAuthor(pull: PullSummary): string {
-  return pull.authorIsBot ? pull.author.replace(/^app\//, '') : pull.author
-}
-
 /** What `STALE` means, in the words of the cutoff that decided it. */
 function staleCaption(days: number): string {
   return days === 1 ? 'No motion in a day or more.' : `No motion in ${String(days)}+ days.`
@@ -328,36 +216,21 @@ export function PullsPane({
   // Three buckets, and the middle one is why they are three rather than two: a
   // repository that could not be fetched is *not* a repository with nothing
   // open, and filing it under "quiet" would report a failure as good news.
-  const open: OpenPull[] = repos.flatMap((repo) => repo.pulls.map((pull) => ({ repo, pull })))
+  const open = openPulls(repos)
   const failed = repos.filter((repo) => repo.error !== null)
   const quiet = repos.filter((repo) => repo.error === null && repo.pulls.length === 0)
-
-  // Most recently touched first, across every repository at once - which is the
-  // ordering the flattening exists for. `repos` arrives busiest-first and each
-  // repo's pulls are already sorted, but neither of those orders one repo's
-  // pull requests against another's.
-  open.sort((a, b) => (b.pull.updatedAt ?? 0) - (a.pull.updatedAt ?? 0))
 
   // What survives the filter, and then how it divides. In that order, so no
   // count on screen can be about rows that are not: a section's number is the
   // number of rows under it, always.
   const shown = open.filter((entry) => matchesPull(entry, query))
-  const split = staleDays !== PR_STALE_DAYS.off
-  const cutoff = split ? now - staleDays * DAY_MS : null
-  // A null `updatedAt` is a field that could not be read, not a pull request
-  // nothing has happened to - so it stays in ACTIVE. This surface does not file
-  // a row out of sight on the strength of something it does not know.
-  const isStale = ({ pull }: OpenPull): boolean =>
-    cutoff !== null && pull.updatedAt !== null && pull.updatedAt < cutoff
-  const active = split ? shown.filter((entry) => !isStale(entry)) : shown
-  const stale = split ? shown.filter(isStale) : []
+  const { split, active, stale } = splitStale(shown, staleDays, now)
   const filtering = query.trim() !== ''
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2">
-      <header className="flex h-11 shrink-0 items-center gap-3 rounded-island border border-border bg-surface px-4">
-        <PullRequestIcon width={15} height={15} className="shrink-0 text-accent" />
-        <h1 className="text-[13px] font-medium tracking-tight text-fg">Pull requests</h1>
+    // On the pane (DESIGN.md 3): the bar, then the list.
+    <div className="flex h-full min-h-0 flex-col">
+      <header data-pane-header="pulls" className={PAGE_BAR}>
         {snapshot !== null && (
           <p data-pulls-caption className="min-w-0 truncate text-[11px] text-fg-subtle">
             <Count n={snapshot.open} one="open" many="open" /> ·{' '}
@@ -378,16 +251,13 @@ export function PullsPane({
               : `Run ${snapshot.gh.path} against every repository`
           }
           aria-label="Check for open pull requests"
-          className={cn(
-            'grid size-6 shrink-0 place-items-center rounded text-fg-subtle transition-colors',
-            'hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-50'
-          )}
+          className={ICON_BUTTON}
         >
           <RefreshIcon className={cn(refreshing && 'animate-spin')} />
         </button>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-island border border-border bg-surface">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {problem !== null && (
           <p
             data-pulls-problem={problem.kind}
@@ -472,7 +342,7 @@ export function PullsPane({
                       aria-pressed={group === mode.id}
                       onClick={() => setGroup(mode.id)}
                       className={cn(
-                        'rounded-[5px] px-2.5 py-0.5 text-[11px] transition-colors',
+                        'rounded-raised px-2.5 py-0.5 text-[11px] transition-colors',
                         group === mode.id ? SEGMENT_ON : 'text-fg-muted hover:text-fg'
                       )}
                     >
@@ -595,8 +465,13 @@ export function PullsPane({
                               ? 'Collapse the stale pull requests'
                               : 'Show the stale pull requests again'
                           }
-                          className="rounded-well px-1.5 py-0.5 text-[10.5px] text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+                          className="inline-flex items-center gap-1 rounded-well px-1.5 py-0.5 text-[10.5px] text-fg-muted transition-colors hover:bg-hover hover:text-fg"
                         >
+                          <CaretIcon
+                            width={8}
+                            height={8}
+                            className={cn('transition-transform', staleShown && 'rotate-90')}
+                          />
                           {staleShown ? 'Hide' : 'Show'}
                         </button>
                       }
@@ -879,7 +754,12 @@ function GroupHeading({
   count: number
 }): JSX.Element {
   return (
-    <div data-pulls-group-heading={label} className="flex items-baseline gap-1.5 px-2 pt-1 pb-0.5">
+    <div
+      data-pulls-group-heading={label}
+      role="heading"
+      aria-level={3}
+      className="flex items-baseline gap-1.5 px-2 pt-1 pb-0.5"
+    >
       <span className="min-w-0 truncate text-[11px] text-fg-muted">{label}</span>
       {bot && <span className="shrink-0 text-[10px] text-fg-subtle opacity-70">bot</span>}
       <span data-pulls-group-count className="text-[10px] tabular-nums text-fg-subtle/70">
@@ -1013,18 +893,16 @@ function Empty({
     )
   }
   return (
-    <div className="px-6 py-8 text-center">
-      <PullRequestIcon width={22} height={22} className="mx-auto text-fg-subtle" />
-      <p className="mt-3 text-[12.5px] text-fg-muted">
-        {snapshot.checked === 0
-          ? 'Helm is not scanning any folders yet.'
-          : `None of the ${String(snapshot.checked)} folders Helm scans has a github.com origin.`}
-      </p>
-      <p className="mt-2 text-[11.5px] leading-relaxed text-fg-subtle">
-        A repository appears here once its <code className="font-mono">origin</code> remote points
-        at github.com. Other forges are not fetched.
-      </p>
-    </div>
+    <EmptyState
+      size="list"
+      name="pulls"
+      icon={<PullRequestIcon width={18} height={18} />}
+      title={snapshot.checked === 0 ? 'No folders scanned yet' : 'No GitHub repositories'}
+    >
+      {snapshot.checked === 0
+        ? 'A repository is listed once Helm scans a folder whose origin is on github.com.'
+        : `None of the ${String(snapshot.checked)} folders Helm scans has a github.com origin.`}
+    </EmptyState>
   )
 }
 

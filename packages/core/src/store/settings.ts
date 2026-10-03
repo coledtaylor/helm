@@ -1,14 +1,17 @@
 import { isAbsolute } from 'node:path'
 import { sql } from 'drizzle-orm'
+import { RETIRED_TAB_KINDS, upgradeSavedLayout } from '../layout/panes'
 import {
   BROWSER_PROJECT_URLS_MAX,
   BROWSER_REACH_MODES,
   BROWSER_RECENT_URLS_MAX,
   browserReachAllows,
-  CONTENT_WRAP_INDENT,
+  CORNER_RADIUS,
   DEFAULT_SETTINGS,
+  DENSITY_MODES,
   EFFORT_LEVELS,
   isRepoSlug,
+  PANE_GAP,
   PINNED_PROJECTS_MAX,
   PR_CHECKOUT_MODES,
   PR_IGNORED_REPOS_MAX,
@@ -16,10 +19,12 @@ import {
   PR_REVIEW_PROMPT_MAX_LENGTH,
   PR_STALE_DAYS,
   PROJECT_SHELL_HEIGHT_PCT,
-  SESSION_SPLIT_PCT,
+  RAIL_DESTINATIONS,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
+  THEME_ID_MAX_LENGTH,
+  THEME_ID_PATTERN,
   THEME_PREFERENCES,
   TRANSCRIPT_ARCHIVE_BYTES,
   USAGE_DISPLAY_MODES,
@@ -113,8 +118,144 @@ function unsafeFontFamily(value: string): boolean {
   return false
 }
 
+/**
+ * A theme's id, not its existence. The settings layer cannot know which files
+ * are in the themes directory, and should not: a slot naming a theme whose file
+ * has gone is resolved to the built-in of its kind at paint time, and the row
+ * keeps the name so the theme comes back when the file does.
+ */
+const themeId = (value: unknown): string | null =>
+  typeof value === 'string' && value.length <= THEME_ID_MAX_LENGTH && THEME_ID_PATTERN.test(value)
+    ? null
+    : `expected a theme id (lower-case letters, digits and dashes), got ${describe(value)}`
+
+/**
+ * `#rrggbb` and nothing else. This one reaches CSS through `deriveAccent`, which
+ * would also take `rgb()` - but the pane only ever writes hex, and one spelling
+ * in the row is one spelling to compare.
+ */
+const ACCENT_HEX = /^#[0-9a-f]{6}$/
+
+/**
+ * Why one persisted tab is not a tab, or null when it is.
+ *
+ * Every `kind` is checked against the union and every kind's own fields with
+ * it, because this is read back and rendered as panes - a `project` with no
+ * path is a tab pointing nowhere, and it would fail at the pane rather than at
+ * the write.
+ */
+function paneProblem(pane: unknown): string | null {
+  if (typeof pane !== 'object' || pane === null || Array.isArray(pane)) {
+    return `expected a pane, got ${describe(pane)}`
+  }
+  const { kind, path, repoPath, number, id } = pane as Record<string, unknown>
+  if (kind === 'history' || kind === 'pulls' || kind === 'config') return null
+  if (kind === 'session') {
+    // A row id. Never reopened from here - only read after a crash, to find
+    // where the session that is being reopened was.
+    if (!isFiniteNumber(id) || !Number.isInteger(id) || id <= 0) {
+      return `expected a session id, got ${describe(id)}`
+    }
+    return null
+  }
+  if (kind === 'settings' || kind === 'sessions') return null
+  // A kind an older build wrote and this one opens nothing for. Accepted so the
+  // rest of the layout it sits in still loads; `fromSaved` drops the tab.
+  if (typeof kind === 'string' && RETIRED_TAB_KINDS.has(kind)) return null
+  if (kind === 'project') {
+    if (typeof path !== 'string' || path.trim() === '') {
+      return `expected a project path, got ${describe(path)}`
+    }
+    return null
+  }
+  if (kind === 'file') {
+    const { root } = pane as Record<string, unknown>
+    if (typeof root !== 'string' || root.trim() === '') {
+      return `expected the file's project, got ${describe(root)}`
+    }
+    if (typeof path !== 'string' || path.trim() === '') {
+      return `expected a file path, got ${describe(path)}`
+    }
+    return null
+  }
+  if (kind === 'pr') {
+    if (typeof repoPath !== 'string' || repoPath.trim() === '') {
+      return `expected a repository path, got ${describe(repoPath)}`
+    }
+    if (!isFiniteNumber(number) || !Number.isInteger(number) || number <= 0) {
+      return `expected a pull request number, got ${describe(number)}`
+    }
+    return null
+  }
+  return `expected a pane kind, got ${describe(kind)}`
+}
+
+/** Deeper than this is not a tree a person arranged; see `paneTreeProblem`. */
+const PANE_TREE_DEPTH_MAX = 32
+
+/**
+ * Why a saved pane tree is not one, or null when it is, counting its groups
+ * and tabs into `count` as it goes.
+ *
+ * A node is a group - `panes` and `activeId` - or a split: an axis, two or more
+ * children and a positive share for each. The depth is bounded before the walk
+ * goes deeper, so a hand-edited value nested a thousand levels is refused
+ * rather than walked.
+ */
+function paneTreeProblem(node: unknown, depth: number, count: { groups: number; panes: number }): string | null {
+  if (depth > PANE_TREE_DEPTH_MAX) return `expected panes nested at most ${String(PANE_TREE_DEPTH_MAX)} deep`
+  if (typeof node !== 'object' || node === null || Array.isArray(node)) {
+    return `expected a group or a split, got ${describe(node)}`
+  }
+  const record = node as Record<string, unknown>
+  if ('axis' in record) {
+    const { axis, children, sizes } = record
+    if (axis !== 'row' && axis !== 'column') return `expected a split axis, got ${describe(axis)}`
+    if (!Array.isArray(children) || children.length < 2) {
+      return `expected a split of two or more, got ${describe(children)}`
+    }
+    if (
+      !Array.isArray(sizes) ||
+      sizes.length !== children.length ||
+      !sizes.every((size) => isFiniteNumber(size) && size > 0)
+    ) {
+      return `expected a positive share for each of ${String(children.length)} children, got ${describe(sizes)}`
+    }
+    for (const child of children) {
+      const problem = paneTreeProblem(child, depth + 1, count)
+      if (problem !== null) return problem
+    }
+    return null
+  }
+  const { panes, activeId } = record
+  if (!Array.isArray(panes)) return `expected an array of panes, got ${describe(panes)}`
+  if (activeId !== null && typeof activeId !== 'string') {
+    return `expected a tab id or null, got ${describe(activeId)}`
+  }
+  count.groups += 1
+  count.panes += panes.length
+  if (count.panes > WORKSPACE_TABS_MAX) {
+    return `expected at most ${String(WORKSPACE_TABS_MAX)} panes in all, got more`
+  }
+  for (const pane of panes) {
+    const problem = paneProblem(pane)
+    if (problem !== null) return problem
+  }
+  return null
+}
+
 export const SETTING_VALIDATORS: SettingValidators = {
   theme: oneOf(THEME_PREFERENCES),
+
+  themeDark: themeId,
+  themeLight: themeId,
+  paneGap: boundedInteger(PANE_GAP),
+  cornerRadius: boundedInteger(CORNER_RADIUS),
+  density: oneOf(DENSITY_MODES),
+  accentColor: (value) =>
+    value === null || (typeof value === 'string' && ACCENT_HEX.test(value))
+      ? null
+      : `expected null or a lower-case #rrggbb, got ${describe(value)}`,
 
   usageDisplay: oneOf(USAGE_DISPLAY_MODES),
 
@@ -215,54 +356,31 @@ export const SETTING_VALIDATORS: SettingValidators = {
   },
 
   /**
-   * The workspace strip. State like `windowBounds`, and validated like it:
-   * written by the window on every tab change, so a malformed value here is a
-   * strip that cannot be restored on the next launch.
+   * The panes. State like `windowBounds`, and validated like it: written by
+   * the window on every tab change, so a malformed value here is a layout that
+   * cannot be restored on the next launch.
    *
-   * Every `kind` is checked against the union and every kind's own fields with
-   * it, because this is read back and rendered as panes - a `project` with no
-   * path is a tab pointing nowhere, and it would fail at the pane rather than
-   * at the write. The whole value is rejected rather than the offending entry
-   * filtered out: a partly-written strip restored as if it were whole is a
-   * worse answer than the previous strip.
+   * A tree of splits and groups (`paneTreeProblem`), and a focus that is the
+   * place of one of its groups in reading order. The whole value is rejected
+   * rather than the offending entry filtered out: a partly-written layout
+   * restored as if it were whole is a worse answer than the previous one.
    */
-  workspaceTabs: (value) => {
+  paneLayout: (value) => {
     if (value === null) return null
     if (typeof value !== 'object' || Array.isArray(value)) {
-      return `expected a workspace strip or null, got ${describe(value)}`
+      return `expected a pane layout or null, got ${describe(value)}`
     }
-    const strip = value as Record<string, unknown>
-    const { panes, activeId } = strip
-    if (!Array.isArray(panes)) return `expected an array of panes, got ${describe(panes)}`
-    if (panes.length > WORKSPACE_TABS_MAX) {
-      return `expected at most ${String(WORKSPACE_TABS_MAX)} panes, got ${String(panes.length)}`
+    const { root, focused } = value as Record<string, unknown>
+    const count = { groups: 0, panes: 0 }
+    const problem = paneTreeProblem(root, 0, count)
+    if (problem !== null) return problem
+    if (!Number.isInteger(focused) || (focused as number) < 0 || (focused as number) >= count.groups) {
+      return `expected the place of a group, got ${describe(focused)}`
     }
-    if (activeId !== null && typeof activeId !== 'string') {
-      return `expected a tab id or null, got ${describe(activeId)}`
-    }
-    for (const pane of panes) {
-      if (typeof pane !== 'object' || pane === null || Array.isArray(pane)) {
-        return `expected a pane, got ${describe(pane)}`
-      }
-      const { kind, path, repoPath, number } = pane as Record<string, unknown>
-      if (kind === 'history' || kind === 'pulls' || kind === 'config') continue
-      if (kind === 'content' || kind === 'settings' || kind === 'sessions') continue
-      if (kind === 'project') {
-        if (typeof path !== 'string' || path.trim() === '') {
-          return `expected a project path, got ${describe(path)}`
-        }
-        continue
-      }
-      if (kind === 'pr') {
-        if (typeof repoPath !== 'string' || repoPath.trim() === '') {
-          return `expected a repository path, got ${describe(repoPath)}`
-        }
-        if (!isFiniteNumber(number) || !Number.isInteger(number) || number <= 0) {
-          return `expected a pull request number, got ${describe(number)}`
-        }
-        continue
-      }
-      return `expected a pane kind, got ${describe(kind)}`
+    // Every group holds a tab except the window's one empty group: `toSaved`
+    // writes no other. So the tab bound is also the bound on the tree's size.
+    if (count.groups > Math.max(1, count.panes)) {
+      return `expected every group to hold a tab, got ${String(count.groups)} groups for ${String(count.panes)} tabs`
     }
     return null
   },
@@ -334,32 +452,26 @@ export const SETTING_VALIDATORS: SettingValidators = {
    */
   projectShellHeightPct: boundedInteger(PROJECT_SHELL_HEIGHT_PCT),
 
-  /**
-   * The sessions column's width, bounded the way the divider already bounded
-   * it. One value for everybody rather than one per project - the argument is
-   * in the field's comment in `types.ts`, and it is the same one
-   * `projectShellHeightPct` makes with one addition: this divider stays put
-   * when you change tabs, so a per-project value would move the boundary every
-   * time somebody did.
-   *
-   * An integer for the same reason its neighbour is one: it is written on
-   * pointerup from a fraction, and a settings row wants 45 rather than
-   * 0.4499999.
-   */
-  sessionSplitPct: boundedInteger(SESSION_SPLIT_PCT),
-
-  /**
-   * Whether a source file wraps, and how far its continuation rows hang.
-   *
-   * Two keys rather than one nullable number, because they answer different
-   * questions and one of them survives the other being switched off: the indent
-   * a person settled on should still be there when they turn wrapping back on.
-   * Folding "off" into `indent: null` would lose it every time.
-   */
-  contentWrap: (value) =>
+  /** Whether a file in the Files view wraps. A boolean and nothing truthy. */
+  filesWrap: (value) =>
     typeof value === 'boolean' ? null : `expected true or false, got ${describe(value)}`,
 
-  contentWrapIndent: boundedInteger(CONTENT_WRAP_INDENT),
+  /**
+   * Known destinations, each once. `settings` is refused because it is not in
+   * `RAIL_DESTINATIONS` - the rail always keeps a way back to this setting.
+   */
+  railHidden: (value) => {
+    if (!Array.isArray(value)) return `expected an array of rail destinations, got ${describe(value)}`
+    const seen = new Set<string>()
+    for (const entry of value) {
+      if (typeof entry !== 'string' || !(RAIL_DESTINATIONS as readonly string[]).includes(entry)) {
+        return `expected one of ${RAIL_DESTINATIONS.join(', ')}, got ${describe(entry)}`
+      }
+      if (seen.has(entry)) return `${entry} is listed twice`
+      seen.add(entry)
+    }
+    return null
+  },
 
   /**
    * The transcript archive's ceiling, in bytes.
@@ -520,6 +632,7 @@ export const SETTING_VALIDATORS: SettingValidators = {
    */
   browserMcp: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
   browserMcpLocalOnly: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
+  restoreWithoutAsking: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
 
   /**
    * The session-awareness tools, checked exactly as strictly for exactly the
@@ -605,7 +718,23 @@ export function readSettings(store: Store): AppSettings {
       continue
     }
   }
+
+  // A layout written before panes were a tree, read as the row it was with the
+  // divider where its own setting left it. That setting is no key of this
+  // build's, so it is read here and nowhere else.
+  const split = rows.find((row) => row.key === 'paneSplitPct')
+  result.paneLayout = upgradeSavedLayout(result.paneLayout as unknown, parsedOrNull(split?.value))
   return result
+}
+
+/** A stored value read back, or null when there is none or it is not JSON. */
+function parsedOrNull(value: string | undefined): unknown {
+  if (value === undefined) return null
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    return null
+  }
 }
 
 export function writeSetting<K extends keyof AppSettings>(

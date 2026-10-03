@@ -58,6 +58,19 @@ export interface LaunchRequest {
    * a launch that fails outright rather than a session missing a feature.
    */
   sessionId?: string | null | undefined
+  /**
+   * A conversation to reopen, by id, instead of starting one.
+   *
+   * Everything about the composition still applies - overlays, access, model,
+   * effort, permission mode, agent - because `--resume` combines with all of
+   * them, and a conversation reopened without its overlays is a session missing
+   * the skills it was having. What it drops is what belongs to a *new*
+   * conversation: `-n` (it would rename the one being reopened), `--session-id`
+   * (the id exists, and the CLI refuses one that is already in use) and the
+   * opening prompt (it would be said a second time into a conversation that
+   * already had it).
+   */
+  resume?: string | null | undefined
 }
 
 /** The launch shape of a stored profile. */
@@ -81,13 +94,46 @@ export function launchRequestFromProfile(
 }
 
 /**
+ * A launch in a folder somebody picked, with a saved profile's composition or
+ * none - the new-session launcher's shape.
+ *
+ * The folder is where the session runs and the profile is what it is given:
+ * overlays, access, model, effort, agent and opening prompt. The profile's own
+ * root is deliberately not part of that. Most profiles are made at a harness
+ * root and say which project they are about through their overlays, so "this
+ * profile, in that folder" is a request the profile's root must not quietly
+ * override.
+ *
+ * The permission mode is the caller's, and explicit. The launcher shows the
+ * profile's as the default and lets it be changed, so what was on screen when
+ * the session was started is what runs; null passes no flag.
+ */
+export function launchRequestInFolder(options: {
+  cwd: string
+  name: string
+  profile: Profile | null
+  permissionMode: PermissionMode | null
+  resume?: string | null | undefined
+  shimRoot: string
+}): LaunchRequest {
+  const { cwd, name, profile, permissionMode, resume, shimRoot } = options
+  return {
+    ...(profile === null ? { name, shimRoot } : launchRequestFromProfile(profile, shimRoot, name)),
+    root: cwd,
+    permissionMode,
+    resume: resume ?? null
+  }
+}
+
+/**
  * Argv after the executable.
  *
  * The order is not cosmetic. `--add-dir` is variadic - it consumes arguments
  * until the next one that starts with a dash - so anything positional placed
- * after it would be swallowed into the directory list. `-n` always follows it
- * and always exists, which terminates that list, and the opening prompt goes
- * last where the CLI expects a bare prompt.
+ * after it would be swallowed into the directory list. `-n` - or `--resume`,
+ * for a conversation being reopened - always follows it and always exists,
+ * which terminates that list, and the opening prompt goes last where the CLI
+ * expects a bare prompt.
  */
 export function buildLaunchArgs(
   req: Omit<LaunchRequest, 'shimRoot'> & {
@@ -104,7 +150,10 @@ export function buildLaunchArgs(
   const access = dedupePaths(req.access ?? [])
   if (access.length > 0) argv.push('--add-dir', ...access)
 
-  argv.push('-n', sanitizeSessionName(req.name))
+  // Either one terminates the directory list. A reopened conversation keeps
+  // the name it already has.
+  if (req.resume) argv.push('--resume', req.resume)
+  else argv.push('-n', sanitizeSessionName(req.name))
 
   for (const dir of req.pluginDirs ?? []) argv.push('--plugin-dir', dir)
   if (req.memoryFile) argv.push('--append-system-prompt-file', req.memoryFile)
@@ -112,7 +161,7 @@ export function buildLaunchArgs(
   // prompt. Assigning the conversation id rather than discovering it later is
   // what lets the session row and the CLI's live registry agree from the first
   // instant; see `SessionRecord.claudeSessionId`.
-  if (req.sessionId) argv.push('--session-id', req.sessionId)
+  if (req.sessionId && !req.resume) argv.push('--session-id', req.sessionId)
   // One value, so it is safe anywhere after `-n`. Here rather than at the end
   // because the opening prompt is positional and everything before it has to
   // be a flag with its argument.
@@ -125,7 +174,7 @@ export function buildLaunchArgs(
 
   // Last, and only if it is really there: an empty string here would be a
   // positional argument the CLI reads as an empty prompt.
-  const prompt = req.openingPrompt?.trim()
+  const prompt = req.resume ? undefined : req.openingPrompt?.trim()
   if (prompt) argv.push(prompt)
 
   return argv
@@ -240,7 +289,8 @@ export function prepareLaunch(req: LaunchRequest): LaunchPlan {
     pluginDirs: shims.map((shim) => shim.dir),
     memoryFile,
     mcpConfigFile,
-    sessionId: req.sessionId
+    sessionId: req.sessionId,
+    resume: req.resume
   })
 
   return {
@@ -250,7 +300,9 @@ export function prepareLaunch(req: LaunchRequest): LaunchPlan {
     overlays: shims,
     memoryFile,
     mcpConfigFile,
-    claudeSessionId: req.sessionId ?? null,
+    // A reopened conversation keeps its id - `--resume <id>` was measured
+    // registering under that same id on 2.1.238.
+    claudeSessionId: req.resume ?? req.sessionId ?? null,
     warnings
   }
 }

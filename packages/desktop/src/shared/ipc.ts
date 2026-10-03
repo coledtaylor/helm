@@ -12,7 +12,9 @@ import type {
   ContentDocument,
   ContentScope,
   ContentSearchResult,
-  ContentTree,
+  FileListing,
+  FilesStatus,
+  FileView,
   CreateConfigRequest,
   CreateConfigResult,
   DeleteConfigRequest,
@@ -33,7 +35,9 @@ import type {
   McpPreview,
   McpResult,
   McpScope,
+  PermissionMode,
   Profile,
+  RestoreOffer,
   ProfileDraft,
   PullDetailView,
   PullsSnapshot,
@@ -53,7 +57,8 @@ import type {
   TemplateListing,
   TemplatePreview,
   TemplateWriteResult,
-  ThemePreference,
+  ThemeListing,
+  ThemeState,
   UsageSnapshot,
   WriteConfigRequest,
   WriteConfigResult
@@ -103,6 +108,12 @@ export interface AppInfo {
   claudeVersion: string | null
   /** Windows build number; xterm uses it to pick ConPTY quirk handling. */
   windowsBuild: number | null
+  /**
+   * The home directory, so a path with no room for the rest of itself can be
+   * written from `~`. Used for showing, never for resolving: every path Helm
+   * acts on stays absolute.
+   */
+  home: string
   /**
    * The releases page, so a window can offer it without having asked GitHub
    * anything.
@@ -289,6 +300,59 @@ export interface ResumedSession {
   session: SessionRecord
   /** The indexed row it came from, for the pane to caption before the TUI paints. */
   history: HistorySession
+}
+
+/**
+ * A session from the new-session launcher: a folder, a saved profile or none,
+ * a permission mode, and optionally a conversation to reopen there.
+ *
+ * The profile goes as an id and is read back in the main process, for the
+ * reason `LaunchProfileRequest` gives; a conversation's working directory comes
+ * from the history index, for the reason `ResumeSessionRequest` gives. What the
+ * window does decide is the folder, and the permission mode - explicitly, so
+ * the mode on screen when the session was started is the mode it runs in.
+ */
+export interface LaunchSessionRequest {
+  /** The folder the session runs in. Unused when `resume` is set. */
+  cwd: string
+  /** The discovered project this is, when it is one. Recorded, not used to launch. */
+  projectPath?: string | null | undefined
+  /** Basis for the session's name; the folder's name when absent. */
+  name?: string | undefined
+  /** The saved profile whose composition the session is given, or null for none. */
+  profileId: number | null
+  /** Null passes no flag, whatever the profile says. */
+  permissionMode: PermissionMode | null
+  /** A conversation in the history index to reopen, or null to start a new one. */
+  resume: string | null
+  cols: number
+  rows: number
+}
+
+/** What a launcher launch composed, for anything worth saying before the TUI paints. */
+export interface LaunchedSession {
+  session: SessionRecord
+  /** Plugin namespaces the session was given, e.g. `['dev', 'cashflow']`. */
+  overlays: string[]
+  /** Whether composed project instructions were passed. */
+  composedInstructions: boolean
+  /** Non-fatal problems: an overlay or access folder that is not there any more. */
+  warnings: string[]
+}
+
+/**
+ * Which of the sessions a crash took to reopen, each at the grid of the pane
+ * it is going back to. None at all is "not now".
+ */
+export interface RestoreSessionsRequest {
+  sessions: { id: number; cols: number; rows: number }[]
+}
+
+/** What came back, and what could not, each with the sentence why. */
+export interface RestoreSessionsResult {
+  /** `from` is the lost row the session reopened. */
+  restored: { from: number; launched: LaunchedSession }[]
+  failed: { id: number; name: string; reason: string }[]
 }
 
 /**
@@ -746,6 +810,24 @@ export interface IpcRequests {
 
   /** What `theme: 'system'` currently resolves to on this machine. */
   'theme:resolved': { request: void; response: ResolvedTheme }
+  /**
+   * The theme on screen, every token resolved. The renderer asks for it before
+   * its first paint, so a window opening in Daylight never shows a frame of
+   * Nocturne; after that, `theme:changed` carries the same shape.
+   */
+  'theme:current': { request: void; response: ThemeState }
+  /** Built-in and user themes, and the files that could not be read as one. */
+  'themes:list': { request: void; response: ThemeListing }
+  /**
+   * Opens the themes directory in the file manager, creating it (and its
+   * README) first if somebody deleted it.
+   */
+  'themes:openFolder': { request: void; response: void }
+  /**
+   * Writes a complete copy of a theme into the themes directory and shows it
+   * in the file manager. The answer is the new file's path.
+   */
+  'themes:duplicate': { request: { id: string }; response: { file: string } }
 
   /** Open a path in the OS file manager. */
   'shell:showItem': { request: { path: string }; response: void }
@@ -757,6 +839,23 @@ export interface IpcRequests {
    * no tab.
    */
   'session:start': { request: StartSessionRequest; response: SessionRecord }
+  /**
+   * The new-session launcher's one call: a folder, a profile, a permission
+   * mode, or a conversation to reopen. Rejects with a sentence for the reasons
+   * `session:start` and `history:resume` do.
+   */
+  'session:launch': { request: LaunchSessionRequest; response: LaunchedSession }
+  /**
+   * The sessions the last run was hosting when it stopped without shutting
+   * down, or null when there are none or they have been answered for.
+   */
+  'session:restorable': { request: void; response: RestoreOffer | null }
+  /**
+   * Reopens the ones asked for and answers the offer; asking for none is "not
+   * now". Rejects only when it was already answered - a session that could not
+   * be reopened is in `failed`, with its reason.
+   */
+  'session:restore': { request: RestoreSessionsRequest; response: RestoreSessionsResult }
   /** Terminate and forget. Confirms first if the process is still alive. */
   'session:close': { request: CloseSessionRequest; response: CloseSessionResult }
   /** Sessions this main process is currently hosting, for a renderer reload. */
@@ -1050,26 +1149,13 @@ export interface IpcRequests {
   'pr:review': { request: ReviewPullRequest; response: LaunchedReview }
 
   /**
-   * The content viewer. Rendering happens here rather than in the window:
+   * Notes and artifacts opened from the Files view, and Ctrl+P's text search.
+   * Rendering happens here rather than in the window:
    * shiki's grammars are megabytes the browser bundle must not carry, and a
    * live preview that re-parsed a 21 KB note on the UI thread per keystroke
    * would be the one place in the app that stutters.
    */
   'content:scopes': { request: void; response: ContentScope[] }
-  'content:tree': { request: { scopePath: string; refresh?: boolean }; response: ContentTree }
-  /**
-   * One directory of the tree view.
-   *
-   * A channel per directory rather than one walk, because the tree is lazy on
-   * purpose: `content:tree` walks a whole scope to decide what to *curate*, and
-   * a project has no ceiling that walk could be given which is not either a
-   * silent truncation or a several-second pause. This one costs a `readdir` and
-   * a `git check-ignore` against a directory somebody just clicked open.
-   */
-  'content:dir': {
-    request: { scopePath: string; relPath: string }
-    response: ContentDirListing
-  }
   /** A file, its bytes, and - for markdown - the HTML it renders to. */
   'content:document': {
     request: { scopePath: string; path: string }
@@ -1128,6 +1214,37 @@ export interface IpcRequests {
    * a program.
    */
   'shell:openExternal': { request: { url: string }; response: { opened: boolean } }
+
+  /**
+   * The Files view: a project's tree with git's letters on it, one file read
+   * beside the session changing it, and every file for Ctrl+P. Every request
+   * names a `root`, which main checks is a folder it knows before listing or
+   * reading anything under it.
+   *
+   * Read-only, all of it. The file view is for reading; VS Code is one click
+   * away for editing, and is not racing an agent's writes.
+   */
+  'files:dir': { request: { root: string; relPath: string }; response: ContentDirListing }
+  'files:status': { request: { root: string }; response: FilesStatus }
+  'files:read': { request: { root: string; path: string }; response: FileView }
+  'files:list': { request: { root: string }; response: FileListing }
+  /**
+   * The roots the window has on screen, all of them, each time the set
+   * changes. Main watches those and lets go of any other, so a reloaded window
+   * cannot leave watches behind it.
+   */
+  'files:watch': { request: { roots: string[] }; response: void }
+  /** VS Code's name here, or null where nothing on this machine opens `vscode://`. */
+  'files:editor': { request: void; response: { name: string | null } }
+  /**
+   * Opens a file in VS Code, at a line when there is one, through its own
+   * `vscode://` handler - no process spawned by Helm, no `code` on the PATH
+   * needed. A path outside every folder Helm knows is refused.
+   */
+  'files:openInEditor': {
+    request: { path: string; line: number | null }
+    response: { opened: boolean }
+  }
 
   /** The terminal pane's clipboard, routed through Electron rather than the
    * async DOM Clipboard API, which needs a permission prompt and a focused
@@ -1217,6 +1334,7 @@ export interface IpcRequests {
   'browser:console': { request: { id: number }; response: BrowserConsoleEntry[] }
 }
 
+/** The kind of theme on screen - what `.dark` on `<html>` says. */
 export type ResolvedTheme = 'light' | 'dark'
 
 // ---------------------------------------------------------------------------
@@ -1242,11 +1360,12 @@ export interface IpcSends {
   'pterm:input': { id: number; data: string }
   'pterm:resize': { id: number; cols: number; rows: number }
   /**
-   * Which session the user is actually looking at, or null for a non-terminal
-   * tab. Only the renderer knows this, and the main process needs it to decide
-   * whether an exit is worth a notification.
+   * Which sessions the user can actually see - the front tab of each pane that
+   * is showing a session, so none, one or two. Only the renderer knows this,
+   * and the main process needs it to decide whether an exit is worth a
+   * notification.
    */
-  'session:focus': { id: number | null }
+  'session:focus': { ids: number[] }
   /**
    * Whether anything is looking at the resource pass. Renderer to main.
    *
@@ -1297,7 +1416,9 @@ export interface IpcEvents {
   /** The whole list after any write, so every surface showing profiles agrees
    * without each of them refetching. */
   'profiles:changed': Profile[]
-  'theme:changed': { preference: ThemePreference; resolved: ResolvedTheme }
+  'theme:changed': ThemeState
+  /** A user theme file was added, changed or removed. The whole listing. */
+  'themes:changed': ThemeListing
   /**
    * The session index moved. Pushed rather than polled: the file is shared
    * with every `claude` on the machine, so the change that matters most is the
@@ -1439,6 +1560,14 @@ export interface IpcEvents {
 
   /** A line a page wrote, or a load that failed. Feeds the console panel. */
   'browser:logged': { id: number; entry: BrowserConsoleEntry }
+
+  /**
+   * Files changed under a root the window is watching - project-relative and
+   * forward-slashed, `.git` standing for "the status moved" - or null when
+   * there were too many to name. Gathered for a quarter of a second from the
+   * first change, so a session writing steadily still shows up as it works.
+   */
+  'files:changed': { root: string; paths: string[] | null }
 }
 
 // ---------------------------------------------------------------------------
@@ -1509,8 +1638,15 @@ export const REQUEST_CHANNELS = Object.keys({
   'template:fromFolder': true,
   'update:check': true,
   'theme:resolved': true,
+  'theme:current': true,
+  'themes:list': true,
+  'themes:openFolder': true,
+  'themes:duplicate': true,
   'shell:showItem': true,
   'session:start': true,
+  'session:launch': true,
+  'session:restorable': true,
+  'session:restore': true,
   'session:close': true,
   'session:list': true,
   'session:activity': true,
@@ -1562,8 +1698,6 @@ export const REQUEST_CHANNELS = Object.keys({
   'pr:detail': true,
   'pr:review': true,
   'content:scopes': true,
-  'content:tree': true,
-  'content:dir': true,
   'content:document': true,
   'content:render': true,
   'content:search': true,
@@ -1573,6 +1707,13 @@ export const REQUEST_CHANNELS = Object.keys({
   'content:artifact': true,
   'content:wikilink': true,
   'shell:openExternal': true,
+  'files:dir': true,
+  'files:status': true,
+  'files:read': true,
+  'files:list': true,
+  'files:watch': true,
+  'files:editor': true,
+  'files:openInEditor': true,
   'clipboard:read': true,
   'clipboard:write': true,
   'browser:open': true,
@@ -1615,6 +1756,7 @@ export const EVENT_CHANNELS = Object.keys({
   'settings:changed': true,
   'profiles:changed': true,
   'theme:changed': true,
+  'themes:changed': true,
   'history:changed': true,
   'archive:changed': true,
   'usage:changed': true,
@@ -1638,5 +1780,6 @@ export const EVENT_CHANNELS = Object.keys({
   'browser:changed': true,
   'browser:opened': true,
   'browser:closed': true,
-  'browser:logged': true
+  'browser:logged': true,
+  'files:changed': true
 } satisfies Record<EventChannel, true>) as EventChannel[]

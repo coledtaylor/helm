@@ -1,8 +1,13 @@
 import type { JSX, ReactNode } from 'react'
-import { useState } from 'react'
+import { createContext, useContext, useId, useState } from 'react'
 import {
+  ACCENT_SWATCHES,
   offerableUsageModes,
-  CONTENT_WRAP_INDENT,
+  CORNER_RADIUS,
+  DEFAULT_THEME_ID,
+  DENSITY_MODES,
+  deriveAccent,
+  PANE_GAP,
   COST_MODE_UNAVAILABLE,
   DEFAULT_PR_REVIEW_PROMPT,
   EFFORT_LEVELS,
@@ -11,7 +16,6 @@ import {
   PR_REVIEW_PROMPT_MAX_LENGTH,
   PR_STALE_DAYS,
   PROJECT_SHELL_HEIGHT_PCT,
-  SESSION_SPLIT_PCT,
   TERMINAL_CURSOR_STYLES,
   TERMINAL_FONT_SIZE,
   TERMINAL_SCROLLBACK,
@@ -27,16 +31,21 @@ import {
   type PrCheckoutMode,
   type PullRepo,
   type TerminalCursorStyle,
-  type ThemePreference,
+  type Density,
+  type ThemeDefinition,
+  type ThemeKind,
+  type ThemeListing,
+  type ThemeState,
+  type ThemeTokens,
   type UsageDisplayMode
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { SETTINGS_SECTIONS, type SettingsSectionId } from './SettingsSections'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatAge, formatBytes } from '../lib/time'
 import { Checkbox } from './Checkbox'
 import { CaretIcon, CheckIcon, CloseIcon, RefreshIcon, WarnIcon } from './icons'
 import type { SetupClaudeStatus } from './SetupPane'
-import { ThemeToggle } from './ThemeToggle'
 
 /**
  * Helm's own settings.
@@ -68,6 +77,8 @@ import { ThemeToggle } from './ThemeToggle'
  */
 
 export interface SettingsPaneProps {
+  /** The one section on screen; the sidebar lists the rest (`SettingsSections`). */
+  section: SettingsSectionId
   /** What Helm found out about the CLI. Null until the first read lands. */
   status: SetupClaudeStatus | null
   /** A status read the user asked for, so it gets a spinner. */
@@ -98,8 +109,17 @@ export interface SettingsPaneProps {
   pinnedProjects: string[]
   onUnpinProject: (path: string) => void
 
-  theme: ThemePreference
-  onThemeChange: (theme: ThemePreference) => void
+  /** Every setting the Appearance group writes. */
+  appearance: AppearanceSettings
+  onAppearanceChange: (patch: Partial<AppearanceSettings>) => void
+  /** Built-in and user themes. Null until the first read lands. */
+  themes: ThemeListing | null
+  /** The theme on screen, as the main process resolved it. Null until it lands. */
+  themeState: ThemeState | null
+  /** Opens the user themes folder, creating it if it was deleted. */
+  onOpenThemesFolder: () => void
+  /** Writes a complete copy of a theme into that folder and shows it. */
+  onDuplicateTheme: (id: string) => void
 
   usageDisplay: UsageDisplayMode
   updateCheck: boolean
@@ -170,11 +190,9 @@ export interface SettingsPaneProps {
   /** Opens the templates folder itself, for the editing this app does not do. */
   onRevealTemplates: () => void
 
-  /** The content viewer's wrapping default, and the hang on a continuation. */
-  contentWrap: boolean
-  onContentWrapChange: (wrap: boolean) => void
-  contentWrapIndent: number
-  onContentWrapIndentChange: (columns: number) => void
+  /** Whether long lines wrap in the Files view. */
+  filesWrap: boolean
+  onFilesWrapChange: (wrap: boolean) => void
 
   /**
    * How far the browser pane may reach.
@@ -205,6 +223,9 @@ export interface SettingsPaneProps {
    */
   sessionMcp: boolean
   onSessionMcpChange: (next: boolean) => void
+  /** Reopen what a crash took without asking. Also ticked from the offer itself. */
+  restoreWithoutAsking: boolean
+  onRestoreWithoutAskingChange: (next: boolean) => void
 
   /**
    * What Helm found out about `gh`, out of the pull-request snapshot. Null
@@ -327,11 +348,6 @@ export function pullRepoChoices(
  * project - the shell picker is already here - and a settings pane organised by
  * where a person would look for a thing beats one organised by which module
  * consumes it.
- *
- * `sessionSplitPct` is the second of those, and lands here by the same rule
- * rather than by being any more of a terminal preference than the first. The
- * two are one question asked about two axes - how much terminal do I want, and
- * where - and somebody who has come to change one has come to look at both.
  */
 export type TerminalSettings = Pick<
   AppSettings,
@@ -342,7 +358,6 @@ export type TerminalSettings = Pick<
   | 'terminalScrollback'
   | 'terminalShell'
   | 'projectShellHeightPct'
-  | 'sessionSplitPct'
 >
 
 /** What a fact reads when there is nothing to put in it. */
@@ -355,6 +370,7 @@ const USAGE_LABEL: Record<UsageDisplayMode, string> = {
 }
 
 export function SettingsPane({
+  section,
   status,
   checking,
   onRecheck,
@@ -367,8 +383,12 @@ export function SettingsPane({
   onRemoveRoot,
   pinnedProjects,
   onUnpinProject,
-  theme,
-  onThemeChange,
+  appearance,
+  onAppearanceChange,
+  themes,
+  themeState,
+  onOpenThemesFolder,
+  onDuplicateTheme,
   usageDisplay,
   updateCheck,
   onUpdateCheckChange,
@@ -392,10 +412,8 @@ export function SettingsPane({
   templatesDir,
   onManageTemplates,
   onRevealTemplates,
-  contentWrap,
-  onContentWrapChange,
-  contentWrapIndent,
-  onContentWrapIndentChange,
+  filesWrap,
+  onFilesWrapChange,
   browserReach,
   onBrowserReachChange,
   browserMcp,
@@ -404,6 +422,8 @@ export function SettingsPane({
   onBrowserMcpLocalOnlyChange,
   sessionMcp,
   onSessionMcpChange,
+  restoreWithoutAsking,
+  onRestoreWithoutAskingChange,
   gh,
   onLocateGh,
   onClearGhOverride,
@@ -426,326 +446,732 @@ export function SettingsPane({
   const overridden = status?.source === 'setting'
   const offerable = offerableUsageModes(hasCostEstimate)
 
+  const meta = SETTINGS_SECTIONS.find((entry) => entry.id === section) ?? SETTINGS_SECTIONS[0]!
+  // General and Workspace hold two groups each and keep their headings; every
+  // other section is one group, whose title is the page's and whose hint is
+  // the line under it.
+  const sole = section !== 'general' && section !== 'workspace'
+
   return (
-    <div
-      data-settings-pane
-      className="h-full overflow-y-auto rounded-island border border-border bg-surface"
-    >
+    <div data-settings-pane data-settings-section={section} className="h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-[720px] px-7 py-7">
-        <h1 className="text-[17px] font-medium tracking-tight text-fg">Settings</h1>
-        <p className="mt-1 text-[12.5px] leading-[1.55] text-fg-muted">
-          Helm&rsquo;s own settings. Claude&rsquo;s <code className="font-mono text-[11px]">.claude</code>{' '}
-          trees are the config console&rsquo;s, one tab over.
-        </p>
+        <h1 className="text-[17px] font-medium tracking-tight text-fg">{meta.label}</h1>
+        {meta.hint !== undefined && <p className="mt-1 text-[12px] leading-[1.5] text-fg-muted">{meta.hint}</p>}
 
-        <Group
-          name="claude"
-          title="Claude CLI"
-          hint="The executable Helm hands a pty to. Found on PATH unless you point it somewhere else."
-        >
-          <div className="pb-1">
-            <Verdict
-              tone={status === null ? 'todo' : found ? (status.tested ? 'ok' : 'warn') : 'warn'}
-              text={
-                status === null
-                  ? 'Looking…'
-                  : found
-                    ? overridden
-                      ? 'Set by you'
-                      : 'Found on this machine'
-                    : (status.error ?? 'Not found.')
-              }
+        <SoleGroup.Provider value={sole}>
+          {section === 'general' && (
+            <>
+                <Group
+                  name="claude"
+                  title="Claude CLI"
+                  hint="The claude executable Helm runs. Found on PATH unless you set one."
+                >
+                  <div className="pb-1">
+                    <Verdict
+                      tone={status === null ? 'todo' : found ? (status.tested ? 'ok' : 'warn') : 'warn'}
+                      text={
+                        status === null
+                          ? 'Looking…'
+                          : found
+                            ? overridden
+                              ? 'Set by you'
+                              : 'Found on this machine'
+                            : (status.error ?? 'Not found.')
+                      }
+                    />
+                    <dl className="mt-2.5 space-y-1.5">
+                      <Fact label="Path">
+                        <span data-settings-claude-path title={status?.path ?? ''}>
+                          {status?.path ?? NOTHING}
+                        </span>
+                      </Fact>
+                      <Fact label="Version">
+                        <span data-settings-claude-version>{status?.version ?? NOTHING}</span>
+                      </Fact>
+                      <Fact label="Config">
+                        <span data-settings-claude-config title={status?.configDir ?? ''}>
+                          {status?.configDir ?? NOTHING}
+                        </span>
+                      </Fact>
+                    </dl>
+
+                    {found && status !== null && !status.tested && (
+                      <p
+                        data-settings-version-warning
+                        className="mt-3 rounded-well border border-warn/30 bg-warn/10 px-3 py-2 text-[11.5px] leading-[1.55] text-warn"
+                      >
+                        Helm was tested against {status.testedRange.min} up to (not including){' '}
+                        {status.testedRange.max}. {status.semver ?? status.version} is outside that, so a
+                        flag may have moved. Nothing is blocked.
+                      </p>
+                    )}
+                  </div>
+
+                  <Actions>
+                    <Action data-settings-recheck onClick={onRecheck} disabled={checking}>
+                      <RefreshIcon className={cn('mr-1.5 inline', checking && 'animate-spin')} />
+                      Check again
+                    </Action>
+                    <Action data-settings-locate onClick={onLocateClaude}>
+                      Locate manually…
+                    </Action>
+                    <Action
+                      data-settings-clear-claude
+                      onClick={onClearClaudeOverride}
+                      disabled={!overridden}
+                      title={
+                        overridden
+                          ? 'Forget the executable you picked and use whatever Helm finds'
+                          : 'Nothing to clear - Helm found this one itself'
+                      }
+                    >
+                      Clear override
+                    </Action>
+                  </Actions>
+                </Group>
+
+                <Group name="statusbar" title="Status bar">
+                  <Row
+                    label="Usage in the status bar"
+                    hint={
+                      hasCostEstimate
+                        ? 'Percentages of your plan limits, an estimate of what the transcripts would have cost, or nothing.'
+                        : 'Percentages of your plan limits, or nothing. Cost joins the list once the transcript index has an estimate.'
+                    }
+                  >
+                    <div
+                      role="radiogroup"
+                      aria-label="Usage display"
+                      className="flex items-center gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
+                    >
+                      {USAGE_DISPLAY_MODES.map((mode) => {
+                        const available = offerable.includes(mode)
+                        return (
+                          <button
+                            key={mode}
+                            type="button"
+                            role="radio"
+                            data-settings-usage={mode}
+                            aria-checked={usageDisplay === mode}
+                            disabled={!available}
+                            title={available ? `Show ${USAGE_LABEL[mode].toLowerCase()}` : COST_MODE_UNAVAILABLE}
+                            onClick={() => onUsageDisplayChange(mode)}
+                            className={cn(
+                              'rounded-raised px-2.5 py-1 text-[11.5px] transition-colors',
+                              usageDisplay === mode
+                                ? SEGMENT_ON
+                                : 'text-fg-subtle hover:text-fg',
+                              !available && 'cursor-default opacity-45 hover:text-fg-subtle'
+                            )}
+                          >
+                            {USAGE_LABEL[mode]}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </Row>
+                </Group>
+            </>
+          )}
+
+          {section === 'workspace' && (
+            <>
+                <Group
+                  name="workspace"
+                  title="Workspace"
+                  hint={
+                    scanning
+                      ? `${count(roots.length, 'folder')} · scanning…`
+                      : `${count(roots.length, 'folder')} · ${count(projectCount, 'project')}`
+                  }
+                >
+                  {roots.length === 0 ? (
+                    <p className="pb-1 text-[12px] text-fg-subtle">
+                      Helm scans nothing until you say what to scan.
+                    </p>
+                  ) : (
+                    <ul className="overflow-hidden rounded-well border border-border bg-surface-sunken">
+                      {roots.map((root) => (
+                        <li
+                          key={root}
+                          data-settings-root={root}
+                          className="flex items-center gap-2 border-b border-border px-3 py-1.5 last:border-b-0"
+                        >
+                          <span
+                            className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg-muted"
+                            title={root}
+                          >
+                            {root}
+                          </span>
+                          <button
+                            type="button"
+                            data-settings-remove-root={root}
+                            onClick={() => onRemoveRoot(root)}
+                            aria-label={`Stop scanning ${root}`}
+                            title={`Stop scanning ${root}`}
+                            className={cn(
+                              'grid size-5 shrink-0 place-items-center rounded text-fg-subtle',
+                              'transition-colors hover:bg-hover hover:text-danger'
+                            )}
+                          >
+                            <CloseIcon width={11} height={11} />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <p className="mt-2.5 text-[11px] leading-[1.55] text-fg-subtle">
+                    A <em>harness</em> is a folder with a <code className="font-mono">harness.yaml</code>,
+                    and lets one session compose several repos&rsquo; skills. Removing a folder only stops
+                    Helm scanning it.
+                  </p>
+
+                  <Actions>
+                    <Action data-settings-add-root onClick={onAddRoot} primary={roots.length === 0}>
+                      Add a folder
+                    </Action>
+                  </Actions>
+
+                  <Divider />
+
+                  {/* Pins are made on the sidebar, on the row of the project being
+                      pinned - the star is there because that is where the decision is.
+                      This is where the set is legible all at once, which is what the
+                      sidebar cannot be: its Pinned section shows a vanished folder as
+                      one row saying so, and a list of the paths is what says *which*
+                      path, in a form that can be compared with what is on disk. */}
+                  <p className="text-[12.5px] text-fg">Pinned projects</p>
+                  <p className="mt-0.5 mb-2 text-[11px] leading-[1.55] text-fg-subtle">
+                    Shown first in the sidebar. Pin one with the star on its row.
+                  </p>
+
+                  {pinnedProjects.length === 0 ? (
+                    <p className="text-[12px] text-fg-subtle">Nothing is pinned.</p>
+                  ) : (
+                    <ul className="overflow-hidden rounded-well border border-border bg-surface-sunken">
+                      {pinnedProjects.map((path) => (
+                        <li
+                          key={path}
+                          data-settings-pinned={path}
+                          className="flex items-center gap-2 border-b border-border px-3 py-1.5 last:border-b-0"
+                        >
+                          <span
+                            className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg-muted"
+                            title={path}
+                          >
+                            {path}
+                          </span>
+                          {/* The roots list above wears the same shape with a danger
+                              hover on its ×, and this one deliberately does not:
+                              un-scanning a folder takes projects out of the tree, and
+                              un-pinning one moves a row back into its harness. */}
+                          <button
+                            type="button"
+                            data-settings-unpin={path}
+                            onClick={() => onUnpinProject(path)}
+                            aria-label={`Unpin ${path}`}
+                            title={`Unpin ${path}`}
+                            className={cn(
+                              'grid size-5 shrink-0 place-items-center rounded text-fg-subtle',
+                              'transition-colors hover:bg-hover hover:text-fg'
+                            )}
+                          >
+                            <CloseIcon width={11} height={11} />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </Group>
+
+                <TemplatesGroup
+                  total={templateCount}
+                  dir={templatesDir}
+                  onManage={onManageTemplates}
+                  onReveal={onRevealTemplates}
+                />
+            </>
+          )}
+
+          {section === 'appearance' && (
+            <AppearanceGroup
+              settings={appearance}
+              onChange={onAppearanceChange}
+              themes={themes}
+              state={themeState}
+              onOpenFolder={onOpenThemesFolder}
+              onDuplicate={onDuplicateTheme}
             />
-            <dl className="mt-2.5 space-y-1.5">
-              <Fact label="Path">
-                <span data-settings-claude-path title={status?.path ?? ''}>
-                  {status?.path ?? NOTHING}
-                </span>
-              </Fact>
-              <Fact label="Version">
-                <span data-settings-claude-version>{status?.version ?? NOTHING}</span>
-              </Fact>
-              <Fact label="Config">
-                <span data-settings-claude-config title={status?.configDir ?? ''}>
-                  {status?.configDir ?? NOTHING}
-                </span>
-              </Fact>
-            </dl>
-
-            {found && status !== null && !status.tested && (
-              <p
-                data-settings-version-warning
-                className="mt-3 rounded-well border border-warn/30 bg-warn/10 px-3 py-2 text-[11.5px] leading-[1.55] text-warn"
-              >
-                Helm was tested against {status.testedRange.min} up to (not including){' '}
-                {status.testedRange.max}. {status.semver ?? status.version} is outside that, so a
-                flag may have moved. Nothing is blocked.
-              </p>
-            )}
-          </div>
-
-          <Actions>
-            <Action data-settings-recheck onClick={onRecheck} disabled={checking}>
-              <RefreshIcon className={cn('mr-1.5 inline', checking && 'animate-spin')} />
-              Check again
-            </Action>
-            <Action data-settings-locate onClick={onLocateClaude}>
-              Locate manually…
-            </Action>
-            <Action
-              data-settings-clear-claude
-              onClick={onClearClaudeOverride}
-              disabled={!overridden}
-              title={
-                overridden
-                  ? 'Forget the executable you picked and use whatever Helm finds'
-                  : 'Nothing to clear - Helm found this one itself'
-              }
-            >
-              Clear override
-            </Action>
-          </Actions>
-        </Group>
-
-        <Group
-          name="workspace"
-          title="Workspace"
-          hint={
-            scanning
-              ? `${count(roots.length, 'folder')} · scanning…`
-              : `${count(roots.length, 'folder')} · ${count(projectCount, 'project')}`
-          }
-        >
-          {roots.length === 0 ? (
-            <p className="pb-1 text-[12px] text-fg-subtle">
-              Helm scans nothing until you say what to scan.
-            </p>
-          ) : (
-            <ul className="overflow-hidden rounded-well border border-border bg-surface-sunken">
-              {roots.map((root) => (
-                <li
-                  key={root}
-                  data-settings-root={root}
-                  className="flex items-center gap-2 border-b border-border px-3 py-1.5 last:border-b-0"
-                >
-                  <span
-                    className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg-muted"
-                    title={root}
-                  >
-                    {root}
-                  </span>
-                  <button
-                    type="button"
-                    data-settings-remove-root={root}
-                    onClick={() => onRemoveRoot(root)}
-                    aria-label={`Stop scanning ${root}`}
-                    title={`Stop scanning ${root}`}
-                    className={cn(
-                      'grid size-5 shrink-0 place-items-center rounded text-fg-subtle',
-                      'transition-colors hover:bg-hover hover:text-danger'
-                    )}
-                  >
-                    <CloseIcon width={11} height={11} />
-                  </button>
-                </li>
-              ))}
-            </ul>
           )}
 
-          <p className="mt-2.5 text-[11px] leading-[1.55] text-fg-subtle">
-            A folder of repositories works on its own. A <em>harness</em> is any folder with a{' '}
-            <code className="font-mono">harness.yaml</code> in it - that is the whole definition,
-            and it is what lets one session compose several repos&rsquo; skills at once. Removing a
-            folder here only stops Helm scanning it; nothing on disk is touched.
-          </p>
-
-          <Actions>
-            <Action data-settings-add-root onClick={onAddRoot} primary={roots.length === 0}>
-              Add a folder
-            </Action>
-          </Actions>
-
-          <Divider />
-
-          {/* Pins are made on the sidebar, on the row of the project being
-              pinned - the star is there because that is where the decision is.
-              This is where the set is legible all at once, which is what the
-              sidebar cannot be: its Pinned section shows a vanished folder as
-              one row saying so, and a list of the paths is what says *which*
-              path, in a form that can be compared with what is on disk. */}
-          <p className="text-[12.5px] text-fg">Pinned projects</p>
-          <p className="mt-0.5 mb-2 text-[11px] leading-[1.55] text-fg-subtle">
-            Lifted to the top of the sidebar, above the harnesses. Pinned by the star on a
-            project&rsquo;s row; a pin remembers the folder&rsquo;s path, so a project moved or
-            cloned somewhere else comes back unpinned.
-          </p>
-
-          {pinnedProjects.length === 0 ? (
-            <p className="text-[12px] text-fg-subtle">Nothing is pinned.</p>
-          ) : (
-            <ul className="overflow-hidden rounded-well border border-border bg-surface-sunken">
-              {pinnedProjects.map((path) => (
-                <li
-                  key={path}
-                  data-settings-pinned={path}
-                  className="flex items-center gap-2 border-b border-border px-3 py-1.5 last:border-b-0"
-                >
-                  <span
-                    className="min-w-0 flex-1 truncate font-mono text-[11px] text-fg-muted"
-                    title={path}
-                  >
-                    {path}
-                  </span>
-                  {/* The roots list above wears the same shape with a danger
-                      hover on its ×, and this one deliberately does not:
-                      un-scanning a folder takes projects out of the tree, and
-                      un-pinning one moves a row back into its harness. */}
-                  <button
-                    type="button"
-                    data-settings-unpin={path}
-                    onClick={() => onUnpinProject(path)}
-                    aria-label={`Unpin ${path}`}
-                    title={`Unpin ${path}`}
-                    className={cn(
-                      'grid size-5 shrink-0 place-items-center rounded text-fg-subtle',
-                      'transition-colors hover:bg-hover hover:text-fg'
-                    )}
-                  >
-                    <CloseIcon width={11} height={11} />
-                  </button>
-                </li>
-              ))}
-            </ul>
+          {section === 'terminal' && (
+            <TerminalGroup
+              terminal={terminal}
+              onChange={onTerminalChange}
+              fontStack={terminalFontStack}
+              shells={shells}
+              onLocateShell={onLocateShell}
+            />
           )}
-        </Group>
 
-        {/* Beside Workspace rather than further down, because it is the same
-            subject seen from the other end: that group is the folders Helm
-            scans, this one is what a new one gets written from. */}
-        <TemplatesGroup
-          total={templateCount}
-          dir={templatesDir}
-          onManage={onManageTemplates}
-          onReveal={onRevealTemplates}
-        />
+          {section === 'sessions' && (
+            <SessionsGroup
+              mcp={sessionMcp}
+              onMcpChange={onSessionMcpChange}
+              restore={restoreWithoutAsking}
+              onRestoreChange={onRestoreWithoutAskingChange}
+            />
+          )}
 
-        <Group name="appearance" title="Appearance">
-          <Row
-            label="Theme"
-            hint="System follows Windows. The same three-way switch sits in the title bar."
-          >
-            <span data-settings-theme={theme}>
-              <ThemeToggle value={theme} onChange={onThemeChange} />
-            </span>
-          </Row>
+          {section === 'files' && (
+            <FilesGroup wrap={filesWrap} onWrapChange={onFilesWrapChange} />
+          )}
 
-          <Divider />
+          {section === 'browser' && (
+            <BrowserGroup
+              reach={browserReach}
+              onReachChange={onBrowserReachChange}
+              mcp={browserMcp}
+              onMcpChange={onBrowserMcpChange}
+              mcpLocalOnly={browserMcpLocalOnly}
+              onMcpLocalOnlyChange={onBrowserMcpLocalOnlyChange}
+            />
+          )}
 
-          <Row
-            label="Usage in the status bar"
-            hint={
-              hasCostEstimate
-                ? 'Percentages of your plan limits, an estimate of what the transcripts would have cost, or nothing.'
-                : 'Percentages of your plan limits, or nothing. Cost joins the list once the transcript index has an estimate.'
-            }
-          >
-            <div
-              role="radiogroup"
-              aria-label="Usage display"
-              className="flex items-center gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
-            >
-              {USAGE_DISPLAY_MODES.map((mode) => {
-                const available = offerable.includes(mode)
-                return (
-                  <button
-                    key={mode}
-                    type="button"
-                    role="radio"
-                    data-settings-usage={mode}
-                    aria-checked={usageDisplay === mode}
-                    disabled={!available}
-                    title={available ? `Show ${USAGE_LABEL[mode].toLowerCase()}` : COST_MODE_UNAVAILABLE}
-                    onClick={() => onUsageDisplayChange(mode)}
-                    className={cn(
-                      'rounded-[5px] px-2.5 py-1 text-[11.5px] transition-colors',
-                      usageDisplay === mode
-                        ? SEGMENT_ON
-                        : 'text-fg-subtle hover:text-fg',
-                      !available && 'cursor-default opacity-45 hover:text-fg-subtle'
-                    )}
-                  >
-                    {USAGE_LABEL[mode]}
-                  </button>
-                )
-              })}
-            </div>
-          </Row>
-        </Group>
+          {section === 'github' && (
+            <GitHubGroup
+              gh={gh}
+              onLocate={onLocateGh}
+              onClearOverride={onClearGhOverride}
+              pollMinutes={prPollMinutes}
+              onPollMinutesChange={onPrPollMinutesChange}
+              staleDays={prStaleDays}
+              onStaleDaysChange={onPrStaleDaysChange}
+              repos={prRepos}
+              onIgnoredChange={onPrIgnoredReposChange}
+              reviewPrompt={prReviewPrompt}
+              onReviewPromptChange={onPrReviewPromptChange}
+              checkout={prCheckout}
+              onCheckoutChange={onPrCheckoutChange}
+              reviewModel={prReviewModel}
+              onReviewModelChange={onPrReviewModelChange}
+              reviewEffort={prReviewEffort}
+              onReviewEffortChange={onPrReviewEffortChange}
+            />
+          )}
 
-        <ContentGroup
-          wrap={contentWrap}
-          onWrapChange={onContentWrapChange}
-          indent={contentWrapIndent}
-          onIndentChange={onContentWrapIndentChange}
-        />
+          {section === 'archive' && (
+            <ArchiveGroup
+              stats={archiveStats}
+              maxBytes={transcriptArchiveMaxBytes}
+              onMaxBytesChange={onTranscriptArchiveMaxBytesChange}
+            />
+          )}
 
-        <BrowserGroup
-          reach={browserReach}
-          onReachChange={onBrowserReachChange}
-          mcp={browserMcp}
-          onMcpChange={onBrowserMcpChange}
-          mcpLocalOnly={browserMcpLocalOnly}
-          onMcpLocalOnlyChange={onBrowserMcpLocalOnlyChange}
-        />
-
-        <SessionsGroup mcp={sessionMcp} onMcpChange={onSessionMcpChange} />
-
-        <UpdatesGroup
-          appVersion={appVersion}
-          releasesUrl={releasesUrl}
-          update={update}
-          checking={updateChecking}
-          onCheckNow={onCheckForUpdate}
-          onOpenReleases={onOpenReleases}
-          updateCheck={updateCheck}
-          onUpdateCheckChange={onUpdateCheckChange}
-        />
-
-        <TerminalGroup
-          terminal={terminal}
-          onChange={onTerminalChange}
-          fontStack={terminalFontStack}
-          shells={shells}
-          onLocateShell={onLocateShell}
-        />
-
-        <ArchiveGroup
-          stats={archiveStats}
-          maxBytes={transcriptArchiveMaxBytes}
-          onMaxBytesChange={onTranscriptArchiveMaxBytesChange}
-        />
-
-        <GitHubGroup
-          gh={gh}
-          onLocate={onLocateGh}
-          onClearOverride={onClearGhOverride}
-          pollMinutes={prPollMinutes}
-          onPollMinutesChange={onPrPollMinutesChange}
-          staleDays={prStaleDays}
-          onStaleDaysChange={onPrStaleDaysChange}
-          repos={prRepos}
-          onIgnoredChange={onPrIgnoredReposChange}
-          reviewPrompt={prReviewPrompt}
-          onReviewPromptChange={onPrReviewPromptChange}
-          checkout={prCheckout}
-          onCheckoutChange={onPrCheckoutChange}
-          reviewModel={prReviewModel}
-          onReviewModelChange={onPrReviewModelChange}
-          reviewEffort={prReviewEffort}
-          onReviewEffortChange={onPrReviewEffortChange}
-        />
+          {section === 'updates' && (
+            <UpdatesGroup
+              appVersion={appVersion}
+              releasesUrl={releasesUrl}
+              update={update}
+              checking={updateChecking}
+              onCheckNow={onCheckForUpdate}
+              onOpenReleases={onOpenReleases}
+              updateCheck={updateCheck}
+              onUpdateCheckChange={onUpdateCheckChange}
+            />
+          )}
+        </SoleGroup.Provider>
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Appearance
+// ---------------------------------------------------------------------------
+
+export type AppearanceSettings = Pick<
+  AppSettings,
+  'theme' | 'themeDark' | 'themeLight' | 'paneGap' | 'cornerRadius' | 'density' | 'accentColor'
+>
+
+const DENSITY_LABEL: Record<Density, string> = { comfortable: 'Comfortable', compact: 'Compact' }
+
+/**
+ * Themes, shape and accent.
+ *
+ * Under the cards are **two slots and a switch**, not one choice: `themeDark`
+ * and `themeLight` each name a theme, and `theme` says which slot is on
+ * screen - one of them always, or whichever Windows is in. That is what lets
+ * "Follow Windows" mean something once there is more than one theme of a kind,
+ * and it is why the title bar's three-way toggle still works unchanged.
+ *
+ * So a card writes its **own kind's** slot. Following Windows, that is all it
+ * does, and a card of the kind Windows is not in today is recorded for later -
+ * which is why, while following, the two cards in the slots carry a tag saying
+ * when each one shows: a click that changed nothing on screen still visibly
+ * moved something. Not following, a card also pins the preference to its
+ * kind, so whatever was clicked is what is on screen.
+ *
+ * The selected ring is on the theme the main process says is showing, never on
+ * this pane's guess at it - a slot naming a deleted file resolves to a
+ * built-in, and the ring says so.
+ */
+function AppearanceGroup({
+  settings,
+  onChange,
+  themes,
+  state,
+  onOpenFolder,
+  onDuplicate
+}: {
+  settings: AppearanceSettings
+  onChange: (patch: Partial<AppearanceSettings>) => void
+  themes: ThemeListing | null
+  state: ThemeState | null
+  onOpenFolder: () => void
+  onDuplicate: (id: string) => void
+}): JSX.Element {
+  const all = themes?.themes ?? []
+  const follow = settings.theme === 'system'
+  const showing = state?.applied ?? null
+
+  // What each slot actually shows: its theme, or the built-in standing in for
+  // one that is not there - the same rule `resolveTheme` applies.
+  const slotTheme = (kind: ThemeKind): ThemeDefinition | undefined => {
+    const wanted = kind === 'dark' ? settings.themeDark : settings.themeLight
+    return all.find((t) => t.id === wanted) ?? all.find((t) => t.id === DEFAULT_THEME_ID[kind])
+  }
+  const dark = slotTheme('dark')
+  const light = slotTheme('light')
+
+  const pick = (theme: ThemeDefinition): void => {
+    const slot = theme.kind === 'dark' ? { themeDark: theme.id } : { themeLight: theme.id }
+    onChange(follow ? slot : { ...slot, theme: theme.kind })
+  }
+
+  const problems = [
+    ...(themes?.errors ?? []),
+    ...all.flatMap((t) => t.problems.map((message) => ({ file: t.file ?? t.id, message })))
+  ]
+
+  return (
+    <Group
+      name="appearance"
+      title="Appearance"
+      hint="Themes change Helm's chrome. Terminals keep their own colours."
+    >
+      <div
+        role="radiogroup"
+        aria-label="Theme"
+        data-settings-theme={settings.theme}
+        className="grid grid-cols-[repeat(auto-fill,minmax(164px,1fr))] gap-2.5 pt-1"
+      >
+        {all.map((theme) => (
+          <ThemeCard
+            key={theme.id}
+            theme={theme}
+            showing={showing?.id === theme.id}
+            slot={
+              !follow ? null : theme.id === dark?.id ? 'dark' : theme.id === light?.id ? 'light' : null
+            }
+            onPick={() => pick(theme)}
+          />
+        ))}
+      </div>
+
+      <label className="mt-3 flex items-center gap-2.5 text-[12.5px] text-fg-muted">
+        <Checkbox
+          checked={follow}
+          // Turning it off pins whatever is showing now, so the click changes
+          // nothing on screen - it only stops the next Windows change moving it.
+          onChange={() => onChange({ theme: follow ? (state?.resolved ?? 'dark') : 'system' })}
+          label="Follow Windows"
+          mark="data-settings-theme-follow"
+        />
+        <span>
+          Follow Windows: {light?.name ?? 'the light theme'} when Windows is light,{' '}
+          {dark?.name ?? 'the dark theme'} when it is dark
+        </span>
+      </label>
+
+      {problems.length > 0 && (
+        <ul
+          data-settings-theme-problems={problems.length}
+          className="mt-3 space-y-1 rounded-raised border border-warn/30 bg-warn/10 px-3 py-2 text-[11.5px] leading-[1.5]"
+        >
+          {problems.map((problem, index) => (
+            <li key={`${problem.file}:${String(index)}`} className="flex gap-2">
+              <span className="shrink-0 font-mono text-[11px] text-warn">{problem.file}</span>
+              <span className="min-w-0 text-fg-muted">{problem.message}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-raised border border-border bg-surface px-3.5 py-3">
+        <div className="min-w-[220px] flex-1">
+          <p className="text-[12.5px] text-fg">Your own themes</p>
+          <p className="mt-0.5 text-[11px] leading-[1.5] text-fg-subtle">
+            One JSON file of colours per theme. Saving one repaints Helm.
+          </p>
+          {/* Its own line, truncated from the left of nothing: a path wrapped
+              mid-sentence breaks at whichever backslash the width lands on. */}
+          <p
+            data-settings-themes-dir
+            title={themes?.dir}
+            className="mt-1 truncate font-mono text-[10.5px] text-fg-muted select-text"
+          >
+            {themes?.dir ?? NOTHING}
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <Action
+            data-settings-theme-duplicate={showing?.id ?? ''}
+            disabled={showing === null}
+            onClick={() => {
+              if (showing !== null) onDuplicate(showing.id)
+            }}
+          >
+            Duplicate {showing?.name ?? 'theme'}
+          </Action>
+          <Action data-settings-themes-open onClick={onOpenFolder}>
+            Open folder
+          </Action>
+        </div>
+      </div>
+
+      <div className="mt-2">
+        <Row
+          label="Space between panes"
+          hint={`Pixels of canvas between islands, ${String(PANE_GAP.min)} to ${String(PANE_GAP.max)}.`}
+        >
+          <Stepper
+            value={settings.paneGap}
+            min={PANE_GAP.min}
+            max={PANE_GAP.max}
+            label="Space between panes"
+            data-settings-gap={String(settings.paneGap)}
+            onChange={(paneGap) => onChange({ paneGap })}
+          />
+        </Row>
+
+        <Divider />
+
+        <Row label="Corner radius" hint="Panels take it; buttons, fields and popups are one pixel rounder.">
+          <Stepper
+            value={settings.cornerRadius}
+            min={CORNER_RADIUS.min}
+            max={CORNER_RADIUS.max}
+            label="Corner radius"
+            data-settings-radius={String(settings.cornerRadius)}
+            onChange={(cornerRadius) => onChange({ cornerRadius })}
+          />
+        </Row>
+
+        <Divider />
+
+        <Row label="Density" hint="How tightly lists and the tab strip pack. Text keeps its size.">
+          <div
+            role="radiogroup"
+            aria-label="Density"
+            className="flex items-center gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5"
+          >
+            {DENSITY_MODES.map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                role="radio"
+                data-settings-density={mode}
+                aria-checked={settings.density === mode}
+                onClick={() => onChange({ density: mode })}
+                className={cn(
+                  'rounded-raised px-2.5 py-1 text-[11.5px] transition-colors',
+                  settings.density === mode ? SEGMENT_ON : 'text-fg-subtle hover:text-fg'
+                )}
+              >
+                {DENSITY_LABEL[mode]}
+              </button>
+            ))}
+          </div>
+        </Row>
+
+        <Divider />
+
+        <Row
+          label="Accent"
+          hint="The theme's own, or one of these, fitted to stay readable on it."
+        >
+          <div role="radiogroup" aria-label="Accent" className="flex items-center gap-2.5 px-1">
+            <AccentSwatch
+              name={`${showing?.name ?? 'The theme'}'s own`}
+              mark="theme"
+              color={state === null ? null : themeAccent(all, state)}
+              selected={settings.accentColor === null}
+              onPick={() => onChange({ accentColor: null })}
+            />
+            {ACCENT_SWATCHES.map((swatch) => (
+              <AccentSwatch
+                key={swatch.hex}
+                name={swatch.name}
+                mark={swatch.hex}
+                color={
+                  showing === null
+                    ? swatch.hex
+                    : deriveAccent(showing.tokens, showing.kind, swatch.hex).accent
+                }
+                selected={settings.accentColor === swatch.hex}
+                onPick={() => onChange({ accentColor: swatch.hex })}
+              />
+            ))}
+          </div>
+        </Row>
+      </div>
+    </Group>
+  )
+}
+
+/**
+ * The accent the theme on screen has of its own. Read from the listing rather
+ * than from `state`, because with a chosen accent `state` carries the chosen
+ * one - and this swatch is the way back to the other.
+ */
+function themeAccent(all: ThemeDefinition[], state: ThemeState): string {
+  return all.find((t) => t.id === state.applied.id)?.tokens.accent ?? state.applied.tokens.accent
+}
+
+function AccentSwatch({
+  name,
+  mark,
+  color,
+  selected,
+  onPick
+}: {
+  name: string
+  mark: string
+  color: string | null
+  selected: boolean
+  onPick: () => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      aria-label={name}
+      title={name}
+      data-settings-accent={mark}
+      onClick={onPick}
+      // A theme colour, so an inline style - the value is data the main
+      // process parsed and re-spelled, never a literal in this file.
+      style={color === null ? undefined : { backgroundColor: color }}
+      className={cn(
+        'size-5 shrink-0 rounded-full ring-offset-2 ring-offset-surface-raised transition-shadow',
+        selected ? 'ring-[1.5px] ring-fg' : 'ring-1 ring-transparent hover:ring-border-strong'
+      )}
+    />
+  )
+}
+
+/**
+ * One theme as a card: a miniature of the window in that theme's own colours,
+ * its name and kind, and - while following Windows - which slot it fills.
+ */
+function ThemeCard({
+  theme,
+  showing,
+  slot,
+  onPick
+}: {
+  theme: ThemeDefinition
+  showing: boolean
+  slot: ThemeKind | null
+  onPick: () => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={showing}
+      data-settings-theme-card={theme.id}
+      title={theme.file === null ? `${theme.name}, built in` : `${theme.name}, from ${theme.file}`}
+      onClick={onPick}
+      className={cn(
+        'min-w-0 rounded-raised border bg-surface p-1.5 text-left transition-colors',
+        showing
+          ? 'border-accent ring-1 ring-accent'
+          : 'border-border hover:border-border-strong hover:bg-hover'
+      )}
+    >
+      <ThemeSwatch tokens={theme.tokens} />
+      <span className="flex min-w-0 items-center gap-1.5 px-1 pt-2 pb-0.5">
+        <span className="truncate text-[12.5px] font-medium text-fg">{theme.name}</span>
+        <span className="shrink-0 text-[11px] text-fg-subtle">
+          {theme.kind === 'dark' ? 'Dark' : 'Light'}
+        </span>
+        <span className="flex-1" />
+        {slot !== null && (
+          <span
+            data-settings-theme-slot={slot}
+            className="shrink-0 rounded-raised border border-border px-1 text-[10px] leading-[15px] text-fg-muted"
+          >
+            when {slot}
+          </span>
+        )}
+        {showing && <CheckIcon width={12} height={12} className="shrink-0 text-accent-text" />}
+      </span>
+    </button>
+  )
+}
+
+/**
+ * The window, small: canvas, rail, sidebar island and two session panes whose
+ * bodies are the terminal's fixed ground - because that is what every theme
+ * actually looks like with sessions open. Inline colours, from the theme's own
+ * parsed tokens; the terminal is the one token the stylesheet owns.
+ */
+function ThemeSwatch({ tokens }: { tokens: ThemeTokens }): JSX.Element {
+  const island = { backgroundColor: tokens.surface, borderColor: tokens['border-strong'] }
+  const bar = (width: string, color: string): JSX.Element => (
+    <span className="h-[3px] rounded-full" style={{ width, backgroundColor: color }} />
+  )
+  return (
+    <span
+      aria-hidden
+      className="flex h-[78px] gap-[3px] overflow-hidden rounded-raised p-[5px]"
+      style={{ backgroundColor: tokens.bg }}
+    >
+      <span className="flex w-[6px] shrink-0 flex-col gap-[3px] pt-px">
+        <span className="h-[6px] rounded-xs" style={{ backgroundColor: tokens.accent }} />
+        <span className="h-[6px] rounded-xs" style={{ backgroundColor: tokens['border-strong'] }} />
+        <span className="h-[6px] rounded-xs" style={{ backgroundColor: tokens['border-strong'] }} />
+      </span>
+      <span
+        className="flex w-[36px] shrink-0 flex-col gap-[4px] rounded-xs border px-[3px] py-[5px]"
+        style={island}
+      >
+        {bar('70%', tokens['fg-subtle'])}
+        {bar('90%', tokens.accent)}
+        {bar('60%', tokens['fg-subtle'])}
+        {bar('80%', tokens['fg-subtle'])}
+      </span>
+      {[1, 0.8].map((grow) => (
+        <span
+          key={grow}
+          className="flex min-w-0 flex-col overflow-hidden rounded-xs border"
+          style={{ ...island, flexGrow: grow, flexBasis: 0 }}
+        >
+          <span
+            className="flex h-[10px] shrink-0 items-center px-[3px]"
+            style={{ borderBottom: `1px solid ${tokens.border}` }}
+          >
+            <span className="h-[4px] w-[18px] rounded-xs" style={{ backgroundColor: tokens.active }} />
+          </span>
+          <span className="flex-1 bg-terminal" />
+        </span>
+      ))}
+    </span>
   )
 }
 
@@ -875,7 +1301,7 @@ function ArchiveGroup({
     <Group
       name="archive"
       title="Transcript archive"
-      hint="Claude Code deletes conversation transcripts on its own schedule and keeps the prompts for ever. Helm reads each one before that happens and stores the messages here, compressed. It never writes to Claude's files."
+      hint="Claude Code deletes transcripts on its own schedule. Helm keeps a compressed copy of each one first, and never writes to Claude's files."
     >
       <div className="pb-1">
         <Verdict
@@ -886,14 +1312,13 @@ function ArchiveGroup({
               ? 'Reading…'
               : stats.sessions === 0
                 ? 'Nothing archived yet'
-                : `${stats.sessions.toLocaleString()} conversations kept`
+                : `${count(stats.sessions, 'conversation')} kept`
           }
         />
         <dl className="mt-2.5 space-y-1.5">
           <Fact label="Kept">
             <span data-settings-archive-sessions={String(stats?.sessions ?? 0)}>
-              {(stats?.sessions ?? 0).toLocaleString()} sessions ·{' '}
-              {(stats?.messages ?? 0).toLocaleString()} messages
+              {count(stats?.sessions ?? 0, 'session')} · {count(stats?.messages ?? 0, 'message')}
             </span>
           </Fact>
           <Fact label="Stored">
@@ -903,7 +1328,7 @@ function ArchiveGroup({
           </Fact>
           <Fact label="Dropped">
             <span data-settings-archive-evicted={String(stats?.evictedSessions ?? 0)}>
-              {(stats?.evictedSessions ?? 0).toLocaleString()} sessions
+              {count(stats?.evictedSessions ?? 0, 'session')}
             </span>
           </Fact>
         </dl>
@@ -913,7 +1338,7 @@ function ArchiveGroup({
 
       <Row
         label="Keep at most"
-        hint="Reached, Helm drops the oldest archived conversation whole and marks it dropped - never half of one. Lowering this can evict immediately."
+        hint="At the limit the oldest conversation is dropped whole. Lowering it can drop some at once."
       >
         <Select
           value={String(maxBytes)}
@@ -950,10 +1375,9 @@ export interface UpdateOutcome {
  *
  * Separate from the component because the five states are the interesting part
  * and a component cannot be asked what it would say. Exported so a driver could
- * reach it - though `settings-check` deliberately writes its own expected
- * sentences rather than importing these, because a check that asked this
- * function what this function says would be asserting that the code agrees with
- * itself.
+ * reach it - though a check should write its own expected sentences rather than
+ * import these, because one that asked this function what this function says
+ * would be asserting that the code agrees with itself.
  *
  * `unreachable` is `todo` and not `warn`, which is the one judgement in here.
  * Offline is an expected answer, not a fault: nothing is broken, nothing is out
@@ -1026,54 +1450,16 @@ function askedWhen(checkedAt: string): string {
  * in which somebody wants to go and look for themselves.
  */
 /**
- * The content viewer's source view.
- *
- * Two rows and only the first is a preference about Helm - the second is a
- * number the first one uses, shown beside it rather than in a dialog behind it,
- * and disabled-looking is deliberately *not* what it does when wrapping is off:
- * the default here is off, so a greyed row would be the state most people find
- * it in, and a control nobody can try is a control nobody discovers.
+ * The Files view. One row: whether a long line wraps, which the toggle in a
+ * file's own status line writes too, so the two never disagree.
  */
-function ContentGroup({
-  wrap,
-  onWrapChange,
-  indent,
-  onIndentChange
-}: {
-  wrap: boolean
-  onWrapChange: (wrap: boolean) => void
-  indent: number
-  onIndentChange: (columns: number) => void
-}): JSX.Element {
+function FilesGroup({ wrap, onWrapChange }: { wrap: boolean; onWrapChange: (wrap: boolean) => void }): JSX.Element {
   return (
-    <Group name="content" title="Content viewer">
-      <Row
-        label="Wrap long lines"
-        hint="The default for a file opened as source. Every document keeps its own toggle in the header, so a minified payload can wrap without the next file wrapping too."
-      >
-        <span data-settings-content-wrap={String(wrap)}>
-          <Checkbox
-            checked={wrap}
-            onChange={() => onWrapChange(!wrap)}
-            label="Wrap long lines in the source view"
-          />
+    <Group name="files" title="Files" hint="How a file read from the Files view is shown.">
+      <Row label="Wrap long lines" hint="Notes always wrap while you edit them.">
+        <span data-settings-files-wrap={String(wrap)}>
+          <Checkbox checked={wrap} onChange={() => onWrapChange(!wrap)} label="Wrap long lines in files" />
         </span>
-      </Row>
-
-      <Divider />
-
-      <Row
-        label="Wrap indent"
-        hint="Columns a wrapped line's continuation hangs by, so a row that is the rest of the line above cannot be mistaken for the next one. Zero lines them up, which is what a plain editor does."
-      >
-        <NumberField
-          value={indent}
-          min={CONTENT_WRAP_INDENT.min}
-          max={CONTENT_WRAP_INDENT.max}
-          label="Wrap indent in columns"
-          data-settings-content-wrap-indent={String(indent)}
-          onCommit={onIndentChange}
-        />
       </Row>
     </Group>
   )
@@ -1114,7 +1500,7 @@ function BrowserGroup({
     <Group
       name="browser"
       title="Browser"
-      hint="A dev-server viewport, not a browser. Nothing is downloaded, every permission is refused, and the address bar never hands anything to a search engine - a page loads because you typed its address."
+      hint="A viewport for dev servers, not a browser: no downloads, no permissions, no search."
     >
       <Row
         label="Where the pane may go"
@@ -1188,16 +1574,20 @@ function BrowserGroup({
  */
 function SessionsGroup({
   mcp,
-  onMcpChange
+  onMcpChange,
+  restore,
+  onRestoreChange
 }: {
   mcp: boolean
   onMcpChange: (next: boolean) => void
+  restore: boolean
+  onRestoreChange: (next: boolean) => void
 }): JSX.Element {
   return (
     <Group
       name="sessions"
       title="Sessions"
-      hint="Helm can tell a session it hosts what the other Claude Code sessions on this machine are doing, so an agent can stay out of a working tree somebody else is in. It is read-only: there is no way for one session to send another anything, and no tool ever returns any part of another session’s conversation."
+      hint="What a session Helm hosts may know about the others on this machine, so it can stay out of a working tree somebody else is in. Read-only, and never another session’s conversation."
     >
       <Row
         label="Let Claude see the other sessions"
@@ -1212,6 +1602,22 @@ function SessionsGroup({
             checked={mcp}
             onChange={() => onMcpChange(!mcp)}
             label="Let Claude see the other sessions"
+          />
+        </span>
+      </Row>
+      <Row
+        label="Resume after a crash without asking"
+        hint={
+          restore
+            ? 'When Helm stops without shutting down, the next start reopens every session it was running, in the tab it had, and says what it could not.'
+            : 'When Helm stops without shutting down, the next start lists the sessions it was running and asks which to reopen.'
+        }
+      >
+        <span data-settings-restore-without-asking={String(restore)}>
+          <Checkbox
+            checked={restore}
+            onChange={() => onRestoreChange(!restore)}
+            label="Resume after a crash without asking"
           />
         </span>
       </Row>
@@ -1248,7 +1654,7 @@ function UpdatesGroup({
     <Group
       name="updates"
       title="Updates"
-      hint="The only request Helm's own process makes. It reads a version number and hands you a link - nothing is downloaded, replaced or restarted."
+      hint="The only request Helm makes on its own: it reads a version number. Nothing is downloaded."
     >
       <div className="pb-1">
         <Verdict
@@ -1286,7 +1692,7 @@ function UpdatesGroup({
 
       <Row
         label="Tell me about new releases"
-        hint="Asks on launch, at most once a day, and puts a line in the status bar if a newer Helm exists. Off stops only that - Check now still asks."
+        hint="Asks at launch, at most once a day, and says so in the status bar. Check now works either way."
       >
         <span data-settings-update-check={String(updateCheck)}>
           <Checkbox
@@ -1436,7 +1842,7 @@ function GitHubGroup({
     <Group
       name="github"
       title="GitHub"
-      hint="Pull requests are fetched by running your own gh CLI. Helm stores no GitHub credential and never sees your token."
+      hint="Pull requests come from your own gh CLI. Helm never sees your token."
     >
       <div className="pb-1">
         <Verdict
@@ -1786,7 +2192,7 @@ function ReviewPromptRow({
   return (
     <Row
       label="Review prompt"
-      hint="The first message a “Review with Claude” session is started with. The pull request pane shows exactly what it will run before you press the button."
+      hint="The first message of a “Review with Claude” session. The pull request shows exactly what will run."
     >
       <div className="flex flex-col items-end gap-1.5">
         <div className="flex items-center gap-2">
@@ -1897,7 +2303,7 @@ function TerminalGroup({
     <Group
       name="terminal"
       title="Terminal"
-      hint="Applies to every open terminal as you change it - session panes and project shells alike."
+      hint="Applies to every open terminal as you change it."
     >
       <FontRow terminal={terminal} onChange={onChange} />
 
@@ -1931,7 +2337,7 @@ function TerminalGroup({
               aria-checked={terminal.terminalCursorStyle === style}
               onClick={() => onChange({ terminalCursorStyle: style })}
               className={cn(
-                'rounded-[5px] px-2.5 py-1 text-[11.5px] transition-colors',
+                'rounded-raised px-2.5 py-1 text-[11.5px] transition-colors',
                 terminal.terminalCursorStyle === style
                   ? SEGMENT_ON
                   : 'text-fg-subtle hover:text-fg'
@@ -1975,7 +2381,7 @@ function TerminalGroup({
 
       <Row
         label="Shell for project panes"
-        hint="Claude sessions are unaffected - Helm hands the CLI its own terminal. A project pane can override this for itself."
+        hint="Claude sessions are unaffected. A project page can override it."
       >
         <div className="flex items-center gap-2">
           <Select
@@ -2006,7 +2412,7 @@ function TerminalGroup({
           moves is on a different tab. */}
       <Row
         label="Shell height"
-        hint="Percent of a project page the shell takes. Drag the handle above it to change it there; a project page never gives the shell more than half."
+        hint="Share of a project page the shell takes, up to half. Dragging its handle changes it too."
       >
         <NumberField
           value={terminal.projectShellHeightPct}
@@ -2015,23 +2421,6 @@ function TerminalGroup({
           label="Project shell height"
           data-settings-shell-height={String(terminal.projectShellHeightPct)}
           onCommit={(projectShellHeightPct) => onChange({ projectShellHeightPct })}
-        />
-      </Row>
-
-      {/* The other axis, and the same argument as the row above it: the divider
-          between the two panes is the control, and this is where the number
-          that divider landed on can be read and retyped. */}
-      <Row
-        label="Session split"
-        hint="Percent of the window the sessions take when a project and a session are both open. Drag the divider between them to change it there."
-      >
-        <NumberField
-          value={terminal.sessionSplitPct}
-          min={SESSION_SPLIT_PCT.min}
-          max={SESSION_SPLIT_PCT.max}
-          label="Session split"
-          data-settings-session-split={String(terminal.sessionSplitPct)}
-          onCommit={(sessionSplitPct) => onChange({ sessionSplitPct })}
         />
       </Row>
 
@@ -2210,15 +2599,23 @@ const fileName = (path: string): string => path.split(/[\\/]/).pop() ?? path
 // ---------------------------------------------------------------------------
 
 const count = (n: number, noun: string): string =>
-  `${String(n)} ${noun}${n === 1 ? '' : 's'}`
+  `${n.toLocaleString()} ${noun}${n === 1 ? '' : 's'}`
 
 /**
  * One group of settings.
  *
- * A raised card inside the pane's island, titled with the caps label every
- * other section in the app uses. Future groups append; nothing here knows how
- * many there are.
+ * A section of the page, titled with the caps label every other section in the
+ * app uses and set off from the one above by a faded rule - not a card. The pane
+ * is the island (DESIGN.md 3), and a card per group was a box inside it, eleven
+ * times over. Future groups append; nothing here knows how many there are.
  */
+/**
+ * Whether the group being drawn is its section's only one. Such a group is the
+ * page: the section's title already names it, so it draws no heading of its
+ * own and its hint becomes the line under that title.
+ */
+const SoleGroup = createContext(false)
+
 function Group({
   name,
   title,
@@ -2230,20 +2627,37 @@ function Group({
   hint?: string | undefined
   children: ReactNode
 }): JSX.Element {
+  // Named by its heading, so each group is a region a screen reader can jump
+  // to, under the title a person reads.
+  const headingId = useId()
+  const sole = useContext(SoleGroup)
+  if (sole) {
+    return (
+      <section data-settings-group={name} aria-label={title}>
+        {hint !== undefined && <p className="mt-1 text-[12px] leading-[1.5] text-fg-muted">{hint}</p>}
+        <div className="mt-6">{children}</div>
+      </section>
+    )
+  }
   return (
     <section
       data-settings-group={name}
-      className="mt-5 overflow-hidden rounded-raised border border-border bg-surface-raised"
+      aria-labelledby={headingId}
+      className="mt-6"
     >
-      <header className="px-4 pt-3 pb-2.5">
-        <h2 className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
+      <div aria-hidden className="island-rule mb-5" />
+      <header className="pb-2.5">
+        <h2
+          id={headingId}
+          className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase"
+        >
           {title}
         </h2>
         {hint !== undefined && (
           <p className="mt-1 text-[11.5px] leading-[1.5] text-fg-muted">{hint}</p>
         )}
       </header>
-      <div className="border-t border-border px-4 py-3">{children}</div>
+      <div>{children}</div>
     </section>
   )
 }
@@ -2407,7 +2821,7 @@ function StepButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'grid size-6 place-items-center rounded-[5px] text-[13px] leading-none transition-colors',
+        'grid size-6 place-items-center rounded-raised text-[13px] leading-none transition-colors',
         'text-fg-subtle hover:bg-hover hover:text-fg',
         'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent'
       )}

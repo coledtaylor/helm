@@ -48,7 +48,7 @@ export interface SessionsState {
   /** Moves a session tab to `toIndex` within the session tabs. */
   reorder: (id: number, toIndex: number) => void
   /** Tells main which pane is on screen, for the exit notification. */
-  reportFocus: (id: number | null) => void
+  reportFocus: (ids: readonly number[]) => void
 }
 
 export function useSessions(onActivate: (id: number) => void): SessionsState {
@@ -159,8 +159,8 @@ export function useSessions(onActivate: (id: number) => void): SessionsState {
     })
   }, [])
 
-  const reportFocus = useCallback((id: number | null) => {
-    helm.send('session:focus', { id })
+  const reportFocus = useCallback((ids: readonly number[]) => {
+    helm.send('session:focus', { ids: [...ids] })
   }, [])
 
   const dismissLaunchError = useCallback(() => setLaunchError(null), [])

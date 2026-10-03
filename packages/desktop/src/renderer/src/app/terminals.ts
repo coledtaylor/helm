@@ -199,8 +199,8 @@ function measureCell(prefs: {
  * drivers.
  *
  * A read-only tap, in the same spirit as `SessionObserver` in `sessions.ts`:
- * these terminals live outside React in a module registry, so `settings-check`
- * driving the window through `executeJavaScript` has no other way to see that a
+ * these terminals live outside React in a module registry, so a driver working
+ * the window through `executeJavaScript` has no other way to see that a
  * font change actually reached them. Nothing in the app calls it.
  */
 export function describeSessionTerminals(): TerminalReport[] {

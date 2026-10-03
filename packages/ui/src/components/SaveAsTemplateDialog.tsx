@@ -228,7 +228,7 @@ export function SaveAsTemplateDialog({
                         data-save-template-entry={entry.name}
                         data-save-template-entry-on={String(on && !locked)}
                         className={cn(
-                          'flex items-center gap-2 rounded-[5px] px-1.5 py-1 transition-colors',
+                          'flex items-center gap-2 rounded-raised px-1.5 py-1 transition-colors',
                           locked ? 'cursor-default' : 'cursor-pointer hover:bg-hover'
                         )}
                       >
@@ -238,7 +238,7 @@ export function SaveAsTemplateDialog({
                           // shown, and nothing is offered that will not happen.
                           <span
                             aria-hidden
-                            className="grid size-4 shrink-0 place-items-center rounded-[5px] border-[1.5px] border-border-strong"
+                            className="grid size-4 shrink-0 place-items-center rounded-raised border-[1.5px] border-border-strong"
                           />
                         ) : (
                           <Checkbox

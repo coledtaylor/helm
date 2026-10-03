@@ -30,7 +30,7 @@
  *
  * Measured off the pane rather than chosen from taste. In a 1280px window the
  * list is 38% of the workspace and a row leaves 327px for its title, which a
- * design-shot puts at 63 glyphs of 12px Inter. So a title of 60 characters plus
+ * screenshot put at 63 glyphs of 12px Inter. So a title of 60 characters plus
  * its ellipsis is one the row shows **whole** - and a title shown whole is one
  * whose truncation lands where this file put it, on a word boundary, instead of
  * wherever CSS `text-overflow` happened to clip. Dock the pane beside a session

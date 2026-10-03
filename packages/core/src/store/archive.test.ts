@@ -17,6 +17,7 @@ import {
   searchArchive
 } from './archive'
 import { openStore, type Store } from './db'
+import { indexHistory, readHistorySessions } from './history'
 
 let dir: string
 let store: Store
@@ -143,6 +144,21 @@ describe('the byte cursor', () => {
     expect(tail.read).toBeGreaterThan(0)
   })
 
+  it('reads exactly the bytes a transcript grew by and adds exactly the messages in them', async () => {
+    const file = join(dir, 'grown.jsonl')
+    await plant(file, [line({ at: 1 }), line({ at: 2, type: 'assistant', content: [{ type: 'text', text: 'one' }] })])
+    archive(file, 'sess')
+
+    const appended = `${line({ at: 3, content: 'two' })}\n${line({ at: 4, type: 'assistant', content: [{ type: 'text', text: 'three' }] })}\n`
+    await appendFile(file, appended, 'utf8')
+    const tail = readArchiveTail(file, archiveCursor(store, file), 'sess')
+    expect(tail.read).toBe(Buffer.byteLength(appended))
+
+    const second = archiveTranscriptFile(store, { file, sessionId: 'sess', tail })
+    expect(second.messages).toBe(2)
+    expect(readArchivedConversation(store, 'sess')?.messages.map((m) => m.text)).toEqual(['hello', 'one', 'two', 'three'])
+  })
+
   it('re-reads from zero when the file it belonged to was replaced', async () => {
     const file = join(dir, 'b.jsonl')
     await plant(file, [line({ at: 1 }), line({ at: 2 }), line({ at: 3 })])
@@ -220,6 +236,36 @@ describe('search', () => {
     expect([...searchArchive(store, 'zorblatt').keys()]).toEqual(['sess'])
     expect(searchArchive(store, 'zorbl').get('sess')?.text).toContain('zorblatt')
     expect(searchArchive(store, 'nothinglikethis').size).toBe(0)
+  })
+
+  it('finds it through the conversations scope of the history list and not through the prompts scope', async () => {
+    indexHistory(store, {
+      file: join(dir, 'history.jsonl'),
+      tail: {
+        lines: ['opening question', 'closing remark'].map((display, i) => ({
+          sessionId: 'sess',
+          project: dir,
+          timestamp: 1_760_000_000_000 + i,
+          display
+        })),
+        bytes: 100,
+        reset: false,
+        skipped: 0
+      },
+      transcripts: new Map(),
+      directoryExists: () => true
+    })
+    const file = join(dir, 'scoped.jsonl')
+    await plant(file, [
+      line({ at: 1, content: 'opening question' }),
+      line({ at: 2, type: 'assistant', content: [{ type: 'text', text: 'the answer is zorblatt' }] }),
+      line({ at: 3, content: 'closing remark' })
+    ])
+    archive(file, 'sess')
+
+    const messages = readHistorySessions(store, { search: 'zorblatt', scope: 'messages' })
+    expect(messages.sessions.map((s) => [s.sessionId, s.match])).toEqual([['sess', 'the answer is zorblatt']])
+    expect(readHistorySessions(store, { search: 'zorblatt', scope: 'prompts' }).total).toBe(0)
   })
 
   it('does not throw on input FTS5 would refuse', async () => {

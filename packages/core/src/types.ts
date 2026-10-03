@@ -21,6 +21,7 @@ import { PR_POLL_MINUTES, PR_STALE_DAYS, type PrCheckoutMode } from './github/ty
 import { DEFAULT_PR_REVIEW_PROMPT } from './github/prompt'
 // The same again: `AppSettings.browserReach` names it.
 import type { BrowserReach } from './browser/reach'
+import type { SavedPaneLayout } from './layout/panes'
 
 /**
  * The browser pane's URL rules, re-exported here rather than from the package
@@ -39,6 +40,31 @@ export {
   type BrowserReach,
   type ReachDecision
 } from './browser/reach'
+
+/**
+ * Themes, re-exported for the same reason: the renderer paints the tokens and
+ * the Appearance pane draws every theme's swatch, both in the browser bundle.
+ * `theme/themes.ts` and `theme/color.ts` import nothing but types and each
+ * other. Reading theme files off disk is `theme/load.ts`, which only the
+ * package root reaches.
+ */
+export * from './theme/color'
+export * from './theme/themes'
+
+/**
+ * The pane layout, re-exported for the same reason: the renderer arranges tabs
+ * into groups with it on every render. `layout/panes.ts` imports nothing but a
+ * type from this file.
+ */
+export * from './layout/panes'
+
+/**
+ * The Files view's ranking and its sentences about git, re-exported for the
+ * same reason: Ctrl+P ranks on every keystroke in the window, and the tree
+ * paints the letters. Both modules import nothing but types from this file.
+ */
+export * from './files/fuzzy'
+export * from './files/shape'
 
 export {
   frontmatterField,
@@ -496,6 +522,42 @@ export interface SessionActivityState {
    * process a new one, and this is the live value.
    */
   claudeSessionId: string | null
+}
+
+/**
+ * A session the last run was hosting when it stopped without shutting down,
+ * as the restore offer lists it.
+ */
+export interface RestorableSession {
+  /** Its row, now `lost`. */
+  id: number
+  /** What its tab said: `sessionLabel` of the row. */
+  name: string
+  cwd: string
+  /** The branch it was started on, as its tab's crumb had it. */
+  branch: string | null
+  /** The profile it was launched from, by name, or null for none. */
+  profile: string | null
+  /** True when it had a profile that has since been deleted. It reopens without. */
+  profileGone: boolean
+  /** When it was last spoken to, ms since epoch. Null when that is not known. */
+  lastAt: number | null
+  /** Why it cannot be reopened, as a sentence, or null when it can. */
+  blocked: string | null
+}
+
+/** What a crash took, offered back once at the next start. */
+export interface RestoreOffer {
+  /** In the order their tabs were in. */
+  sessions: RestorableSession[]
+  /**
+   * How many more the record calls lost whose conversation is still running -
+   * in another Helm, or a terminal. Left alone, because reopening one would be
+   * a second process on one conversation.
+   */
+  elsewhere: number
+  /** The panes as the stopped run last wrote them. `placeRestored` reads it. */
+  layout: SavedPaneLayout | null
 }
 
 /**
@@ -1084,6 +1146,23 @@ export type ThemePreference = 'system' | 'light' | 'dark'
 /** The three, as a value, so a validator and a control can share one list. */
 export const THEME_PREFERENCES: readonly ThemePreference[] = ['system', 'light', 'dark']
 
+/**
+ * The canvas showing between islands, in px. Two is the least that still reads
+ * as a gap between two hairlines rather than one thick one; past twelve the
+ * panes stop reading as one window.
+ */
+export const PANE_GAP = { min: 2, max: 12, default: 6 } as const
+
+/**
+ * Panel corners, in px. Controls and popups are always one more (DESIGN.md
+ * "Shape"), so this is the one number that moves every corner in the app.
+ */
+export const CORNER_RADIUS = { min: 0, max: 8, default: 3 } as const
+
+/** How tightly lists and strips are packed. Text size never changes with it. */
+export const DENSITY_MODES = ['comfortable', 'compact'] as const
+export type Density = (typeof DENSITY_MODES)[number]
+
 /** xterm's three cursor shapes, restated here so a validator and a control can
  * share one list without either of them importing xterm. */
 export const TERMINAL_CURSOR_STYLES = ['block', 'underline', 'bar'] as const
@@ -1125,33 +1204,15 @@ export const TERMINAL_SCROLLBACK = { min: 500, max: 200_000, default: 10_000 } a
 export const PROJECT_SHELL_HEIGHT_PCT = { min: 10, max: 50, default: 30 } as const
 
 /**
- * The hanging indent a wrapped source line's continuation carries, in columns.
+ * The rail's destinations that can be hidden, in the order the rail draws them.
  *
- * Its job is to say "this row is the last row continued" rather than "this row
- * is the next line", and that is a distinction the eye makes by *size*: at the
- * `tab-size: 2` this viewer sets, a two-column hang is the same distance as one
- * nesting step, so a continuation would read as a child of the line above it.
- * Four is the smallest value that cannot be mistaken for a level of nesting.
- *
- * Zero is allowed and is a real choice - it is what a plain editor does. The
- * ceiling is where the hang starts eating the measure it was meant to make
- * readable.
+ * Settings is not one, and leaving it out of this list is the whole mechanism:
+ * `railHidden` is validated against it, so no write can hide the one way back
+ * to un-hiding everything else. The ids are the rail's own (`data-rail`).
  */
-export const CONTENT_WRAP_INDENT = { min: 0, max: 16, default: 4 } as const
+export const RAIL_DESTINATIONS = ['sessions', 'profiles', 'history', 'files', 'browser', 'pulls', 'config'] as const
 
-/**
- * How much of the window's width the sessions column takes, as a percentage.
- *
- * The other axis of the same idea as `PROJECT_SHELL_HEIGHT_PCT`, and the same
- * bounds the divider has always enforced in its handler - 20% to 80% - now said
- * once here rather than as two literals inside a `mousemove`.
- *
- * The default is 45 because that is the number the split has silently opened at
- * since it was written, and this key is only being introduced to stop it
- * forgetting: somebody who never touches the divider must not have the app move
- * on them the first time they upgrade.
- */
-export const SESSION_SPLIT_PCT = { min: 20, max: 80, default: 45 } as const
+export type RailDestination = (typeof RAIL_DESTINATIONS)[number]
 
 /**
  * How much of `helm.db` the transcript archive may take, in bytes.
@@ -1165,10 +1226,10 @@ export const SESSION_SPLIT_PCT = { min: 20, max: 80, default: 45 } as const
  * any ordinary machine the ceiling is a guard rail rather than a budget.
  *
  * The floor is a kilobyte rather than something respectable, because a bound
- * that no check can drive past is a bound nothing has ever tested: the eviction
- * rule is the interesting part of this feature, and `pnpm transcript-check`
- * makes it fire by setting a ceiling smaller than what it just archived. The
- * settings pane offers sensible sizes; the validator only enforces the shape.
+ * that nothing can drive past is a bound nothing has ever tested: the eviction
+ * rule is the interesting part of this feature, and a ceiling smaller than what
+ * was just archived is what makes it fire. The settings pane offers sensible
+ * sizes; the validator only enforces the shape.
  */
 export const TRANSCRIPT_ARCHIVE_BYTES = {
   min: 1024,
@@ -1214,8 +1275,13 @@ export type WorkspaceTab =
   | { kind: 'pulls' }
   | { kind: 'pr'; repoPath: string; number: number }
   | { kind: 'config' }
-  | { kind: 'content' }
   | { kind: 'settings' }
+  /**
+   * A file, read beside the session changing it. `root` is the project it was
+   * opened from - what the view is scoped to, what its path is shown relative
+   * to, and the folder Helm checks it is still inside before reading a byte.
+   */
+  | { kind: 'file'; root: string; path: string }
 
 /** How many tabs are worth writing down. Past this the list is a bug, not a
  * workspace, and a settings row nobody can shrink is worse than a truncation. */
@@ -1248,6 +1314,15 @@ function samePath(a: string, b: string): boolean {
 /** Whether this project has been lifted into the sidebar's Pinned section. */
 export function isProjectPinned(pinned: readonly string[], path: string): boolean {
   return pinned.some((entry) => samePath(entry, path))
+}
+
+/**
+ * Whether `path` is itself one of the scanned folders - the whole of what
+ * "remove this folder from Helm" can act on. A project found *inside* a root
+ * is not one: removing it would mean removing its parent.
+ */
+export function isScanRoot(roots: readonly string[], path: string): boolean {
+  return roots.some((root) => samePath(root, path))
 }
 
 /**
@@ -1302,7 +1377,23 @@ export function withProjectPinned(
  * step needed to persist it.
  */
 export interface AppSettings {
+  /**
+   * Which slot is on screen: `dark` and `light` always, `system` whichever one
+   * Windows is in. The name predates named themes and is kept because the row
+   * it reads is every existing install's choice.
+   */
   theme: ThemePreference
+  /** The theme the dark slot shows - a built-in id or a user theme's. */
+  themeDark: string
+  /** The theme the light slot shows. */
+  themeLight: string
+  /** Px of canvas between islands. Bounded by `PANE_GAP`. */
+  paneGap: number
+  /** Px of panel corner. Bounded by `CORNER_RADIUS`. */
+  cornerRadius: number
+  density: Density
+  /** `#rrggbb` fitted to the theme by `deriveAccent`, or null for the theme's own. */
+  accentColor: string | null
   /** Directories the launcher scans. Empty means "not set up yet". */
   scanRoots: string[]
   /**
@@ -1328,24 +1419,36 @@ export interface AppSettings {
   /** Window geometry, restored on next launch. */
   windowBounds: { width: number; height: number; x?: number; y?: number } | null
   /**
-   * The workspace tab strip, restored on next launch: which panes are open, in
-   * the order they were arranged, and which one was in front.
+   * The panes, restored on next launch: how they were split and how big each
+   * was, which tabs are open in which group, in the order they were arranged,
+   * which one was in front of each, and which group had the focus
+   * (`layout/panes.ts`).
    *
    * State rather than a preference, so it sits beside `windowBounds` and not in
    * the settings pane - it is something Helm remembers, not something anyone
    * chose. Null means nothing has been written yet, which is not the same as an
-   * empty strip: a user who closed every tab gets an empty strip back.
+   * empty layout: a user who closed every tab gets an empty window back.
    *
-   * The **session** strip is deliberately not here. `before-quit` calls
-   * `sessions.shutdown()`, so no session survives a restart, and a strip of
-   * tabs pointing at processes that no longer exist is not a workspace
-   * restored - it is a strip of dead tabs to close.
+   * **Sessions are written down and never reopened from here.** `before-quit`
+   * ends every session, so on an ordinary start a saved session names nothing
+   * and is dropped before it is drawn; after a crash, this is where the restore
+   * offer finds the pane each one was in (`SavedPane`, `placeRestored`).
+   * Browser tabs are not written down at all. A group that held only sessions
+   * is restored as no group at all.
+   *
+   * It replaced `workspaceTabs`, the single strip the window had before it had
+   * groups. That row is now an unknown key, ignored on read, so the first
+   * launch after the change opens with an empty window once.
+   *
+   * It has been a tree since the panes could be split any way; before that it
+   * was one or two groups side by side, sized by a `paneSplitPct` setting of
+   * its own. `readSettings` reads that shape as the row it was
+   * (`upgradeSavedLayout`), and the old row is otherwise ignored.
    *
    * `activeId` is a tab id, which is only ever compared: a saved id that no
-   * longer matches an open pane falls back to the last tab, the same rule that
-   * governs `requestedId` while the app is running.
+   * longer matches an open tab falls back to that group's last tab.
    */
-  workspaceTabs: { panes: WorkspaceTab[]; activeId: string | null } | null
+  paneLayout: SavedPaneLayout | null
   /**
    * When the first-run flow was finished. Null means it has not been, which is
    * what puts the setup pane on screen instead of the launcher.
@@ -1410,49 +1513,28 @@ export interface AppSettings {
    * project page's layout.
    */
   projectShellHeightPct: number
-  /**
-   * How wide the sessions column is, as a percentage of the window, when a
-   * workspace pane and a session are both on screen. Bounded by
-   * `SESSION_SPLIT_PCT` and dragged by the divider between them.
-   *
-   * **One value for every project**, the same answer `projectShellHeightPct`
-   * gives and for the same reason: this is "how much terminal do I want beside
-   * my work", which is a fact about the person and the monitor rather than
-   * about a repository. It is also the stronger case of the two - this divider
-   * does not move when you switch tabs, so a per-project value would make the
-   * boundary jump every time somebody changed pane.
-   *
-   * A percentage, not the fraction the renderer holds. The pane's other
-   * remembered size is a percentage, the settings row wants a number a person
-   * can retype, and `0.45` in a database column that its neighbour writes `30`
-   * into is the kind of difference nobody remembers on the day it matters.
-   */
-  sessionSplitPct: number
 
   /**
-   * Whether the content viewer wraps long lines when it shows a file as source.
+   * Whether long lines wrap in a file read from the Files view.
    *
-   * **Default off, and that is a position this repository already took.** The
-   * content editor's textarea soft-wraps and says why in a comment beside it:
-   * it edits prose, where a paragraph is one very long line. The config editor
-   * next to it deliberately does not, because it edits JSON, "where a wrapped
-   * line hides the structure". A source file is structure, so the default
-   * follows the config editor rather than the prose one.
+   * **Default off**, following the config editor rather than the prose one: a
+   * source file is structure, and a wrapped line hides it. A note is the
+   * exception and is not governed by this - markdown in the editor always
+   * wraps, because a paragraph is one very long line.
    *
-   * This is the *default*, not the state. The document header carries a toggle
-   * that overrides it for the file on screen, because whether a given file
-   * reads better wrapped is a question about that file - a minified payload and
-   * a hand-written YAML want opposite answers, and neither is a preference
-   * about Helm.
+   * The toggle in a file's status line writes this, so the choice holds for
+   * the next file and the next start rather than resetting per tab.
    */
-  contentWrap: boolean
+  filesWrap: boolean
+
   /**
-   * The hanging indent on a wrapped line's continuation rows, in columns.
-   * Bounded by `CONTENT_WRAP_INDENT`; zero is a real choice. Has no effect
-   * while nothing is wrapped, which is why it is one setting rather than a
-   * pair that have to be kept consistent.
+   * Destinations taken off the rail, by a right-click on it.
+   *
+   * Only ids from `RAIL_DESTINATIONS`, which is what keeps Settings on the
+   * rail whatever this says. Hiding is not disabling: Ctrl+P, Ctrl+N and every
+   * other way into a destination still work.
    */
-  contentWrapIndent: number
+  railHidden: RailDestination[]
 
   /**
    * How many bytes of `helm.db` the transcript archive may occupy.
@@ -1636,11 +1718,20 @@ export interface AppSettings {
    */
   browserMcpLocalOnly: boolean
   /**
+   * Reopen the sessions a crash took without asking first.
+   *
+   * Off by default: the offer is one screen at the next start, and a crash
+   * that took a session somebody had finished with should not bring it back
+   * unasked. On, every session the offer would list as reopenable is reopened
+   * where it was, and anything that could not be is said once.
+   */
+  restoreWithoutAsking: boolean
+  /**
    * The last URLs a browser pane visited, newest first.
    *
    * The address bar's dropdown and nothing more elaborate - no history page, no
    * manager, no search over it (see the milestone's "explicitly out"). State
-   * rather than a preference, so it sits beside `workspaceTabs` and is
+   * rather than a preference, so it sits beside `paneLayout` and is
    * deliberately absent from the settings pane. Bounded by
    * `BROWSER_RECENT_URLS_MAX`.
    */
@@ -1715,10 +1806,16 @@ export const BROWSER_PROJECT_URLS_MAX = 200
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
+  themeDark: 'nocturne',
+  themeLight: 'daylight',
+  paneGap: PANE_GAP.default,
+  cornerRadius: CORNER_RADIUS.default,
+  density: 'comfortable',
+  accentColor: null,
   scanRoots: [],
   pinnedProjects: [],
   windowBounds: null,
-  workspaceTabs: null,
+  paneLayout: null,
   firstRunCompletedAt: null,
   claudePath: null,
   usageDisplay: 'percent',
@@ -1733,10 +1830,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   terminalScrollback: TERMINAL_SCROLLBACK.default,
   terminalShell: null,
   projectShellHeightPct: PROJECT_SHELL_HEIGHT_PCT.default,
-  sessionSplitPct: SESSION_SPLIT_PCT.default,
   // Off, following the config editor rather than the prose one - see the field.
-  contentWrap: false,
-  contentWrapIndent: CONTENT_WRAP_INDENT.default,
+  filesWrap: false,
+  railHidden: [],
   transcriptArchiveMaxBytes: TRANSCRIPT_ARCHIVE_BYTES.default,
   ghPath: null,
   prPollMinutes: PR_POLL_MINUTES.default,
@@ -1761,6 +1857,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // Off, because the pane defaults to `web`: an agent confined to loopback
   // beside a pane that is not would be a surprise rather than a posture.
   browserMcpLocalOnly: false,
+  restoreWithoutAsking: false,
   browserRecentUrls: [],
   browserProjectUrls: {},
   // On, because the collision this exists to prevent - two agents in one
@@ -2330,21 +2427,6 @@ export interface ContentTree {
   tookMs: number
 }
 
-/**
- * How the content pane is listing a scope.
- *
- * `curated` is the vault reading: the named roots, the discovered ones, newest
- * first inside each. `tree` is an ordinary file tree - every file, read one
- * directory at a time, with the repository's own ignore rules drawn rather than
- * applied silently.
- *
- * A scope's *kind* picks which one a scope opens on and nothing more. Both work
- * from either kind, because "a harness with a big `tools/` directory should
- * still be walkable" and "a project's `docs/` is still a vault" are both true,
- * and a mode locked to a kind cannot say so.
- */
-export type ContentViewMode = 'curated' | 'tree'
-
 /** Why a tree entry is greyed. `null` for one that is not. */
 export type ContentIgnoreReason = 'gitignore' | 'default'
 
@@ -2467,26 +2549,6 @@ export interface RenderedMarkdown {
 }
 
 /**
- * A file shown as source, highlighted.
- *
- * The source view is what every kind that is not markdown or HTML opens in, and
- * once source files are listed at all - which is the point of the split - that
- * view is where an agent's `tools/` scripts are read. A `<pre>` of undifferen-
- * tiated grey is a worse answer than the one the markdown renderer already
- * gives a fenced block, and it is the same machinery: one `highlightCode` call,
- * both themes in the output as custom properties.
- */
-export interface ContentSource {
-  /** Shiki's HTML, or `''` when there is none and the plain text should show. */
-  html: string
-  /** The grammar used. `plaintext` when nothing matched the extension. */
-  language: string
-  highlighted: boolean
-  /** True when the file was past the ceiling; `html` is empty and that is why. */
-  tooLarge: boolean
-}
-
-/**
  * A draft, tokenised, for the editor's underlay.
  *
  * Per line rather than as one block of HTML, because the underlay builds DOM
@@ -2508,13 +2570,95 @@ export interface EditorHighlight {
   tookMs: number
 }
 
+// ---------------------------------------------------------------------------
+// The Files view
+// ---------------------------------------------------------------------------
+
+/** How git sees one path in the working tree, against `HEAD` and the index. */
+export type GitFileState = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted'
+
+/**
+ * Every changed path under a project, for the tree's letters.
+ *
+ * `files` is null when git could not be asked - which is "unknown" and never
+ * "clean" - and `{}` when it answered with nothing changed. A project outside
+ * any repository has `repo: null` and an empty map: there is nothing git could
+ * say about it.
+ */
+export interface FilesStatus {
+  root: string
+  /** The repository's top level, or null when the project is not in one. */
+  repo: string | null
+  /** Project-relative, forward-slashed path to its state. */
+  files: Record<string, GitFileState> | null
+  error: string | null
+}
+
+/**
+ * The lines of a file that differ from the last commit, numbered in the file
+ * as it is now. Ranges are inclusive and 1-based.
+ */
+export interface LineChanges {
+  changed: Array<[number, number]>
+  /** Lines with something removed directly below them; 0 is above the first line. */
+  removedAfter: number[]
+  changedCount: number
+  removedCount: number
+}
+
+/**
+ * How one file stands against the last commit. Five answers, because each
+ * says something different on screen and two of them - "no changes" and "could
+ * not look" - must never be painted the same.
+ */
+export type FileChangeState =
+  /** In the last commit. `lines` empty: unchanged since. */
+  | { kind: 'tracked'; lines: LineChanges }
+  /** Untracked, or staged but never committed: every line is new. */
+  | { kind: 'new' }
+  | { kind: 'ignored' }
+  /** Not inside any git repository. */
+  | { kind: 'outside' }
+  /** git could not be asked. */
+  | { kind: 'unknown'; reason: string }
+
+/** One file, read for the file view. */
+export interface FileView {
+  root: string
+  path: string
+  /** Relative to `root`, forward-slashed. */
+  relPath: string
+  exists: boolean
+  size: number
+  mtimeMs: number
+  binary: boolean
+  /** Past the view's ceiling: not read, and the pane says so. */
+  tooLarge: boolean
+  /** The text, with line feeds only; how the file ends its lines is `eol`. */
+  content: string
+  eol: 'LF' | 'CRLF' | 'mixed' | null
+  changes: FileChangeState
+  /** Set when the file could not be shown at all - outside the project, a folder. */
+  error: string | null
+}
+
+/** Every file in a project, for Ctrl+P. */
+export interface FileListing {
+  root: string
+  /** Project-relative, forward-slashed. */
+  files: string[]
+  /** The repository's own list, or a walk where there is no repository. */
+  source: 'git' | 'walk'
+  /** The walk stopped at its ceiling, so the list is not the whole project. */
+  truncated: boolean
+  error: string | null
+}
+
 /** A file, its bytes, and - for markdown - what they render to. */
 export interface ContentDocument {
   file: ContentFile
   content: ConfigFileContent
   rendered: RenderedMarkdown | null
-  /** Set for anything shown as source: data, text, and an agent's own scripts. */
-  source: ContentSource | null
   /** Set when the file could not be rendered at all; the source still shows. */
   error: string | null
 }

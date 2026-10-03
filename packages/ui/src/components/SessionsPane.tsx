@@ -12,8 +12,10 @@ import { ROW_SELECTED } from '../lib/rows'
 import { SESSION_STATE_DOT, SESSION_STATE_LABEL, type SessionState } from '../lib/sessionstate'
 import { formatAge, formatMoment } from '../lib/time'
 import { Chip } from './Chip'
+import { EmptyState } from './EmptyState'
 import { PaneBack } from './PaneBack'
 import { BranchIcon, GlobeIcon, PlugIcon, TerminalIcon, WarnIcon } from './icons'
+import { PAGE_BAR, PAGE_LIST_BESIDE } from '../lib/page'
 
 /**
  * Every live Claude Code session on this machine, and what Helm's own are
@@ -135,17 +137,15 @@ export function SessionsPane({
   }
 
   return (
-    // Islands with canvas gutters, like every other console (DESIGN.md 3).
-    <div data-sessions-pane className="flex h-full min-h-0 flex-col gap-2">
+    // On the pane (DESIGN.md 3): the bar, then the list beside the detail.
+    <div data-sessions-pane className="flex h-full min-h-0 flex-col">
       {/* The strip measures **itself**, not the window - DESIGN.md's pane-header
           rule, which is about the box a pane actually occupies. Docked beside a
           session split at the window's `minWidth` this is 171px, and the age
           on the right is `shrink-0`, so without a threshold it painted past the
           island's own edge and read as "read just". */}
-      <header className="@container/head flex h-11 shrink-0 items-center gap-3 rounded-island border border-border bg-surface px-4">
-        <TerminalIcon width={15} height={15} className="shrink-0 text-accent" />
-        <h1 className="text-[13px] font-medium tracking-tight text-fg">Sessions</h1>
-        <p className="hidden min-w-0 truncate text-[11px] text-fg-subtle @[420px]/head:block">
+      <header data-pane-header="sessions" className={cn(PAGE_BAR, '@container/head')}>
+        <p className="hidden min-w-0 truncate text-[11px] text-fg-subtle @[300px]/head:block">
           {sessions.length === 0
             ? 'No Claude Code session is running on this machine'
             : `${describeCount(hosted.length, 'in Helm')} · ${describeCount(foreign.length, 'outside Helm')}`}
@@ -161,23 +161,27 @@ export function SessionsPane({
         )}
       </header>
 
-      <div className="flex min-h-0 flex-1 gap-2">
+      <div className="flex min-h-0 flex-1">
         {/* ------------------------------------------------------------- */}
         {/* The list - machine-wide                                        */}
         {/* ------------------------------------------------------------- */}
         {showList && (
           <div
             className={cn(
-              'flex flex-col overflow-hidden rounded-island border border-border bg-surface',
-              compact ? 'min-w-0 flex-1' : 'w-[38%] max-w-[520px] min-w-[320px] shrink-0'
+              'flex flex-col overflow-hidden',
+              compact ? 'min-w-0 flex-1' : cn('w-[38%] max-w-[520px] min-w-[320px] shrink-0', PAGE_LIST_BESIDE)
             )}
           >
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
               {sessions.length === 0 ? (
-                <p className="px-2 py-8 text-center text-[12px] text-fg-muted">
-                  Nothing is running. A session started anywhere on this machine appears here,
-                  whether or not Helm started it.
-                </p>
+                <EmptyState
+                  size="list"
+                  name="sessions-list"
+                  icon={<TerminalIcon width={18} height={18} />}
+                  title="Nothing running"
+                >
+                  A session started anywhere on this machine is listed here, in Helm or not.
+                </EmptyState>
               ) : (
                 <>
                   <Section label="In Helm" count={hosted.length}>
@@ -230,7 +234,7 @@ export function SessionsPane({
         {/* The detail - Helm's own, for the sessions Helm has one for      */}
         {/* ------------------------------------------------------------- */}
         {showDetail && (
-          <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-island border border-border bg-surface">
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
             {compact && selected !== null && (
               <PaneBack label="All sessions" onBack={() => onSelect(null)} />
             )}
@@ -283,7 +287,7 @@ function Section({
   children: ReactNode
 }): JSX.Element {
   return (
-    <section className="mb-1">
+    <section aria-label={label} className="mb-1">
       <div className="flex items-center gap-1.5 px-2.5 py-1.5">
         <span className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
           {label}
@@ -331,7 +335,7 @@ function Row({
       onClick={() => onSelect(session)}
       title={`${name} - ${SESSION_STATE_LABEL[state]}\n${session.cwd ?? 'working directory not recorded'}`}
       className={cn(
-        'relative flex w-full flex-col gap-0.5 rounded-well px-2.5 py-1.5 text-left transition-colors',
+        'relative flex w-full flex-col gap-0.5 rounded-raised px-2.5 py-row text-left transition-colors',
         selected ? ROW_SELECTED : 'hover:bg-hover'
       )}
     >
@@ -393,20 +397,15 @@ function Row({
 
 function NothingSelected({ count }: { count: number }): JSX.Element {
   return (
-    <div className="grid h-full place-items-center px-6 py-10 text-center">
-      <div className="max-w-[420px]">
-        <TerminalIcon width={22} height={22} className="mx-auto mb-3 text-fg-subtle" />
-        <p className="text-[12.5px] text-fg-muted">
-          {count === 0
-            ? 'No Claude Code session is running on this machine.'
-            : 'Pick a session to see what it is working in - and, for the ones Helm started, what it is holding.'}
-        </p>
-        <p className="mt-2 text-[11px] leading-[1.6] text-fg-subtle">
-          Every live session on the machine is listed, whoever started it. Helm can only show the
-          process tree and the ports for the ones it started itself.
-        </p>
-      </div>
-    </div>
+    <EmptyState
+      name="sessions-detail"
+      icon={<TerminalIcon width={18} height={18} />}
+      title={count === 0 ? 'No session running' : 'Pick a session'}
+    >
+      {count === 0
+        ? 'Nothing is running on this machine.'
+        : "See what it is working in, and for Helm's own, the processes and ports it holds."}
+    </EmptyState>
   )
 }
 
@@ -621,7 +620,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }): JSX.
 
 function Group({ label, children }: { label: string; children: ReactNode }): JSX.Element {
   return (
-    <section className="flex min-w-0 flex-col gap-1.5">
+    <section aria-label={label} className="flex min-w-0 flex-col gap-1.5">
       <h3 className="text-[10px] font-semibold tracking-[.07em] text-fg-subtle uppercase">
         {label}
       </h3>

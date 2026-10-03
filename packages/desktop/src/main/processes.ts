@@ -14,9 +14,7 @@ import { noProcessSnapshot, type PortRow, type ProcessRow, type ProcessSnapshot 
  * unelevated, which is the whole of what a tree needs, and
  * `MSFT_NetTCPConnection` gives `OwningProcess`, which maps a listening port to
  * a pid without a privileged call. `wmic` would answer the first and is
- * deprecated and absent from recent Windows 11 builds; `sessionscheck.ts`
- * records that reasoning at its own tree walk and this is the same mechanism,
- * not a third one.
+ * deprecated and absent from recent Windows 11 builds.
  *
  * `Get-NetTCPConnection` is the friendlier spelling of the second query and is
  * deliberately not used: it lives in a module, and **the first call pays for
@@ -30,17 +28,17 @@ import { noProcessSnapshot, type PortRow, type ProcessRow, type ProcessSnapshot 
  * queries. Measured on this machine over two runs of five and six consecutive
  * passes: **400-480ms wall, of which the two queries are 160-240ms** - the rest
  * is `powershell.exe` starting. Two spawns would very nearly double a pass for
- * nothing. Under `sessions-check`, with three sessions running and 301
- * processes on the machine, the same pass measured **478-547ms**: the shape of
- * this cost is the spawn, and load moves it by tens of milliseconds.
+ * nothing. With three sessions running and 301 processes on the machine, the
+ * same pass measured **478-547ms**: the shape of this cost is the spawn, and
+ * load moves it by tens of milliseconds.
  *
  * ## The budget, stated
  *
  * The number that matters for a repeating timer is not the wall time, it is how
  * much of it lands on the **main thread**, because that is what pty resizes and
  * IPC replies queue behind. The archive is the standing warning: 16MB chunks of
- * synchronous work at start-up were enough to make `settings-check`'s terminal
- * group fail, and that one was not on a timer.
+ * synchronous work at start-up were enough to make both late, and that one was
+ * not on a timer.
  *
  * So: `execFile`, never `execFileSync`. The 400ms is another process's, and
  * this one's share of a pass is the JSON parse - **0.11 to 0.21ms** over 58 to
@@ -68,7 +66,7 @@ import { noProcessSnapshot, type PortRow, type ProcessRow, type ProcessSnapshot 
  * for the Windows command line; a `"` inside it would have to survive that
  * quoting and then `powershell.exe`'s own re-parse, and the failure mode is a
  * script silently cut in half. `cmd`'s two-quote rule is the same class of bug
- * that broke every `.cmd` shim launch (`SESS-20`), and the cheapest way not to
+ * that broke every `.cmd` shim launch, and the cheapest way not to
  * have it is to have no quotes to strip.
  *
  * Each query is wrapped in its own `try`, under `$ErrorActionPreference =

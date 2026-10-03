@@ -6,7 +6,7 @@ import { GitChip } from './GitChip'
 import { fetchedCaption } from './PullsPane'
 import { PullRow, useNow } from './PullRow'
 import {
-  BookIcon,
+  DocIcon,
   CloseIcon,
   LayersIcon,
   RefreshIcon,
@@ -95,8 +95,8 @@ export interface ProjectPaneProps {
   onSaveAsTemplate?: ((project: Project) => void) | undefined
   /** Opens the config console with this project as its scope. */
   onOpenConfig?: ((project: Project) => void) | undefined
-  /** Opens the content viewer with this project as its scope. */
-  onOpenContent?: ((project: Project) => void) | undefined
+  /** Shows this project in the Files view. */
+  onOpenFiles?: ((project: Project) => void) | undefined
   /**
    * Takes this folder out of the scan roots. Passed **only for a project whose
    * own path is a root**, which is the whole of what can be removed: a repo
@@ -150,7 +150,7 @@ export function ProjectPane({
   onSaveAsProfile,
   onSaveAsTemplate,
   onOpenConfig,
-  onOpenContent,
+  onOpenFiles,
   onRemoveRoot,
   pulls = null,
   onOpenPull,
@@ -161,7 +161,7 @@ export function ProjectPane({
   const { repo, ignored } = projectPulls(pulls, project.path)
 
   return (
-    // The pane island the active folder tab lifts into.
+    // On the pane's own surface (DESIGN.md 3): sections under faded rules.
     <div
       // The pane is on screen. Every other handle here hangs off a panel that a
       // project may not have - a folder with no git remote has no pull
@@ -169,7 +169,7 @@ export function ProjectPane({
       // not depend on what the project turned out to be (`data-settings-pane`
       // is the same handle for the same reason).
       data-project-pane
-      className="h-full overflow-y-auto rounded-island border border-border bg-surface"
+      className="h-full overflow-y-auto"
     >
       <div className="px-6 py-5">
         <header className="flex items-baseline gap-3">
@@ -257,7 +257,7 @@ export function ProjectPane({
               the launch button in it - the same call the title bar's settings
               button makes beside the theme toggle. They carry the sidebar's own
               icons, so a link and its destination are the same object. */}
-          {(onOpenConfig ?? onOpenContent) && (
+          {(onOpenConfig ?? onOpenFiles) && (
             <span className="ml-auto flex shrink-0 items-center gap-1">
               {onOpenConfig && (
                 <PaneLink
@@ -269,14 +269,14 @@ export function ProjectPane({
                   Config
                 </PaneLink>
               )}
-              {onOpenContent && (
+              {onOpenFiles && (
                 <PaneLink
-                  mark="content"
-                  onClick={() => onOpenContent(project)}
-                  title={`Open the content viewer on ${project.name}`}
-                  icon={<BookIcon width={13} height={13} />}
+                  mark="files"
+                  onClick={() => onOpenFiles(project)}
+                  title={`Show ${project.name} in the Files view`}
+                  icon={<DocIcon width={13} height={13} />}
                 >
-                  Content
+                  Files
                 </PaneLink>
               )}
             </span>
@@ -294,7 +294,7 @@ export function ProjectPane({
           </p>
         )}
 
-        <div className="mt-5 grid gap-2 sm:grid-cols-2">
+        <div className="mt-6 grid gap-x-8 gap-y-6 sm:grid-cols-2">
           <Panel title="Git">
             {project.git ? (
               <div className="flex flex-col gap-2">
@@ -321,7 +321,7 @@ export function ProjectPane({
           </Panel>
         </div>
 
-        <Panel title="What this project would contribute to a session" className="mt-2">
+        <Panel title="What this project would contribute to a session" className="mt-6">
           {/* Clustered, not spread: a stat group reads as one phrase, and
               justifying three numbers across a wide card breaks it into three. */}
           <dl className="flex flex-wrap gap-x-11 gap-y-3">
@@ -397,7 +397,7 @@ function PullRequests({
     // is in Settings, with the rest of the settings.
     const slug = ignored?.slug ?? ''
     return (
-      <Panel title="Pull requests" mark="pulls-ignored" className="mt-2">
+      <Panel title="Pull requests" mark="pulls-ignored" className="mt-6">
         <p className="text-[12px] text-fg-muted">
           Pull requests for <span className="font-mono text-[11.5px]">{slug}</span> are not being
           fetched - the repository is on Helm&apos;s ignore list.
@@ -426,7 +426,7 @@ function PullRequests({
     <Panel
       title="Pull requests"
       mark="pulls"
-      className="mt-2"
+      className="mt-6"
       caption={
         <>
           <span className="font-mono text-[10.5px]">{repo.slug}</span>
@@ -536,6 +536,7 @@ function AlreadyRunning({ sessions }: { sessions: readonly LiveSession[] }): JSX
 
   return (
     <p
+      role="note"
       data-already-running={sessions.length}
       className={cn(
         'mt-3 flex items-start gap-2 rounded-raised border border-warn/30 bg-warn/10 px-3 py-2',
@@ -585,12 +586,13 @@ function Panel({
   className?: string | undefined
 }): JSX.Element {
   return (
-    // A raised surface inside the island: one ramp step lighter, 8px radius,
-    // no shadow (DESIGN.md "Island anatomy").
+    // A section of the page under a faded rule, not a card: the pane is the
+    // island (DESIGN.md 3), and a raised card per panel was a box inside it.
     <section
       {...(mark === undefined ? {} : { 'data-project-panel': mark })}
-      className={cn('rounded-raised border border-border bg-surface-raised px-4 py-3.5', className)}
+      className={cn('min-w-0', className)}
     >
+      <div aria-hidden className="island-rule mb-4" />
       {/* A bare label is a bare `h2`, not a one-child flex row. The row exists
           only when there is something to sit beside, because a flex item does
           not wrap the way a block does: the longest of these labels is "What
@@ -646,7 +648,7 @@ function ScannedFolder({
   onRemove: (project: Project) => void
 }): JSX.Element {
   return (
-    <Panel title="Scanned folder" mark="scan-root" className="mt-2">
+    <Panel title="Scanned folder" mark="scan-root" className="mt-6">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <button
           type="button"

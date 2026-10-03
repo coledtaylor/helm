@@ -1073,8 +1073,8 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       server = null
       if (current === null) return
       await new Promise<void>((resolve) => {
-        // Keep-alive sockets hold `close()` open forever otherwise, which is
-        // the hang `browsercheck.ts` documents at its own fixture servers.
+        // Keep-alive sockets hold `close()` open forever otherwise, and the
+        // app's quit would wait on a client that never hangs up.
         current.closeAllConnections()
         current.close(() => resolve())
       })

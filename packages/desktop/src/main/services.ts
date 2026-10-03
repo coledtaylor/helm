@@ -15,6 +15,8 @@ import {
   type AppSettings,
   type DiscoveryResult,
   type GitState,
+  type LostSession,
+  type SavedPaneLayout,
   type SeedResult,
   type Store
 } from '@helm/core'
@@ -32,11 +34,16 @@ export interface Services {
   /** Last completed scan, or null before the first one. */
   lastScan: DiscoveryResult | null
   /**
-   * Sessions the previous run left claiming to be running - a crash, or a kill
-   * from Task Manager. Reconciled on the way in, and counted so the number can
-   * be reported rather than silently swallowed.
+   * What the previous run left behind when it stopped without shutting down -
+   * a crash, or a kill from Task Manager: the sessions still claiming to be
+   * running, reconciled to `lost` on the way in, and the panes as that run
+   * last wrote them.
+   *
+   * Read together and before the window exists, because the window rewrites
+   * `paneLayout` within a second of opening, without the sessions it can no
+   * longer see - and that layout is the only record of where they were.
    */
-  lostSessions: number
+  lost: { sessions: LostSession[]; layout: SavedPaneLayout | null }
   /**
    * Overlay shim directories left behind by the previous run. Counted for the
    * same reason lost sessions are: it is evidence of how the last run ended.
@@ -51,11 +58,12 @@ export interface Services {
 
 export function createServices(): Services {
   const store = openStore({ file: dbFile })
+  const settings = readSettings(store)
   return {
     store,
-    settings: readSettings(store),
+    settings,
     lastScan: null,
-    lostSessions: reconcileRunningSessions(store),
+    lost: { sessions: reconcileRunningSessions(store), layout: settings.paneLayout },
     /*
      * The shims no live process is holding.
      *
@@ -141,12 +149,34 @@ export async function ensureScanRoots(services: Services): Promise<string[]> {
   return suggested
 }
 
+/**
+ * How many scans each `Services` has started, and which of them `lastScan` came
+ * from.
+ *
+ * Scans overlap - the startup scan is still walking when a root accepted in the
+ * setup pane starts another - and they finish in whatever order the disk
+ * decides. A scan that started earlier describes roots that have since changed,
+ * so it must not land on top of one that started later: it used to, and the
+ * app was left holding (and the window was told) the tree from before the
+ * accept.
+ */
+const scanOrder = new WeakMap<Services, { started: number; applied: number }>()
+
 export async function runScan(
   services: Services,
   opts: { includeGit?: boolean } = {}
 ): Promise<DiscoveryResult> {
+  const order = scanOrder.get(services) ?? { started: 0, applied: 0 }
+  scanOrder.set(services, order)
+  const ticket = ++order.started
+
   const roots = await ensureScanRoots(services)
   const result = await scan({ roots, includeGit: opts.includeGit ?? true })
+  // Superseded: a newer scan has already landed. Its answer is the current
+  // one, so it is what this caller gets too, and nothing here is written.
+  if (ticket < order.applied && services.lastScan !== null) return services.lastScan
+  order.applied = ticket
+
   cacheProjects(services.store, result.projects, result.harnesses)
   // The cache is written to on every pass and read from at every start, so a
   // row a scan can *disprove* has to go: otherwise a project that has been

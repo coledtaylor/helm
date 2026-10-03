@@ -579,7 +579,7 @@ export function ProfileEditor({
           <button
             type="button"
             onClick={onDelete}
-            className="rounded-well border border-border-strong px-3 py-1.5 text-[12px] text-warn transition-colors hover:bg-hover"
+            className="rounded-well border border-danger/45 px-3 py-1.5 text-[12px] text-danger transition-colors hover:bg-danger/10"
           >
             Delete profile
           </button>
@@ -601,7 +601,9 @@ export function ProfileEditor({
             saving ? 'cursor-default opacity-60' : 'hover:bg-accent-soft active:bg-active'
           )}
         >
-          {saving ? 'Saving…' : 'id' in initial ? 'Save changes' : 'Save profile'}
+          {/* A new profile is made to be used, so saving one starts it - the
+              page it would otherwise leave behind is one nobody stays on. */}
+          {saving ? 'Saving…' : 'id' in initial ? 'Save changes' : 'Save and start'}
         </button>
       </footer>
     </Overlay>
@@ -728,7 +730,5 @@ function Select({
  * The one control the system allows a solid accent fill (DESIGN.md §4).
  *
  * A real `<input type="checkbox">` under an overlaid tick rather than a styled
- * button: it keeps the label association, the space key, and `el.checked` -
- * which is what profiles-check reads to prove composing a repo also granted it
- * access.
+ * button: it keeps the label association, the space key, and `el.checked`.
  */

@@ -14,9 +14,7 @@
  * it stops answering the pointer entirely. Five sites, all identical, and it is
  * the same shape `SEGMENT_ON` was created for: the note there says the chosen
  * segment "turned out to be the one shape in the app with no hover state at
- * all", and this is the second one. `affordance-check` found it as a single
- * dead hover on one sidebar row, because that is the only one of the five its
- * walk reaches in the selected state.
+ * all", and this is the second one.
  *
  * The hover cannot be `bg-hover`. A selected row is not resting on the surface
  * any more, it is resting on `accent-soft`, and `hover` is a grey step - laid

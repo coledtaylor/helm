@@ -169,8 +169,7 @@ describe('renderMarkdown', () => {
   /**
    * `[[…]]` is not markdown, so remark parses what is inside it and the
    * brackets land in different nodes. Every one of these rendered as literal
-   * text and counted as no link at all; the vault had one, and `CONT-4`'s two
-   * parsers disagreeing by exactly one is what found it.
+   * text and counted as no link at all, and the vault had one.
    */
   it('finds a wikilink whose alias remark split into its own node', async () => {
     const index = buildWikiIndex([

@@ -83,8 +83,8 @@ jobs:
   release:
     needs: [version, check]
     # No always()/!cancelled() here, deliberately: a failed `check` must skip
-    # this job, and the default `needs` behaviour is what does that. A failing
-    # `pnpm check` on main therefore produces no tag and no release.
+    # this job, and the default `needs` behaviour is what does that. A main that
+    # does not typecheck, lint or build therefore produces no tag and no release.
     if: needs.version.outputs.release == 'true'
     runs-on: windows-latest
     permissions:

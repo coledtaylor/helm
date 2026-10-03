@@ -7,9 +7,10 @@ import type {
   ThemePreference,
   UsageDisplayMode
 } from '@helm/core'
-import type { AppInfo, ResolvedTheme } from '../../../shared/ipc'
+import type { AppInfo } from '../../../shared/ipc'
 import { helm } from './bridge'
 import { applyTerminalSettings } from './termprefs'
+import { applyShape } from './theme'
 
 /**
  * All of the launcher's state, in one hook.
@@ -67,11 +68,6 @@ function discoveryFromCache(cached: CachedProject[], roots: string[]): Discovery
   }
 }
 
-function applyTheme(resolved: ResolvedTheme): void {
-  document.documentElement.classList.toggle('dark', resolved === 'dark')
-  document.documentElement.style.colorScheme = resolved
-}
-
 export function useLauncher(): LauncherState {
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -92,6 +88,7 @@ export function useLauncher(): LauncherState {
   const adopt = useCallback((next: AppSettings) => {
     setSettings(next)
     applyTerminalSettings(next)
+    applyShape(next)
   }, [])
 
   useEffect(() => {
@@ -104,19 +101,16 @@ export function useLauncher(): LauncherState {
         setScanning(status.running)
         setScanError(status.error)
       }),
-      helm.on('settings:changed', adopt),
-      helm.on('theme:changed', ({ resolved }) => applyTheme(resolved))
+      helm.on('settings:changed', adopt)
     ]
 
     void (async () => {
-      const [appInfo, loaded, resolved] = await Promise.all([
+      const [appInfo, loaded] = await Promise.all([
         helm.invoke('app:info'),
-        helm.invoke('settings:read'),
-        helm.invoke('theme:resolved')
+        helm.invoke('settings:read')
       ])
       setInfo(appInfo)
       adopt(loaded)
-      applyTheme(resolved)
 
       const cached = await helm.invoke('discovery:cached')
       // A scan started by the main process may already have landed; do not let

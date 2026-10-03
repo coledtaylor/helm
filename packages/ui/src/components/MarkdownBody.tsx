@@ -68,6 +68,14 @@ export function MarkdownBody({
     [rendered, wantsToc]
   )
 
+  // **Memoised on the string, and it is load-bearing.** React re-applies
+  // `dangerouslySetInnerHTML` when the *object* it is handed differs, not when
+  // the markup does, so a fresh `{ __html }` per render rebuilt the body on
+  // every render of anything above it - and took the search marks the effect
+  // below lays into it with them. A note opened from a text search in a busy
+  // folder lost its marks within a second.
+  const markup = useMemo(() => ({ __html: rendered?.html ?? '' }), [rendered?.html])
+
   // Scroll back to the top when a different document arrives. Without this a
   // note opened from halfway down another one starts halfway down itself.
   useLayoutEffect(() => {
@@ -174,7 +182,7 @@ export function MarkdownBody({
           data-content-path={path}
           onClick={onClick}
           className={cn('markdown min-w-0 flex-1 select-text', stale && 'opacity-70 transition-opacity')}
-          dangerouslySetInnerHTML={{ __html: rendered.html }}
+          dangerouslySetInnerHTML={markup}
         />
 
         {/* A contents column, but only when there is both something to list and

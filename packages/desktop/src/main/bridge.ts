@@ -179,8 +179,7 @@ export async function drag(
  *
  * It lives here rather than in one driver because the rule is general: anything
  * that drives a gesture counts what was delivered, so a silent non-delivery
- * cannot read as "the app declined". `settings-check` S-20 and the workspace
- * divider's own probe both take their positive control from this.
+ * cannot read as "the app declined".
  *
  * The listeners go on `document` in the bubble phase, which is after React's
  * own handler at the root, so `hasPointerCapture` here is what the app left it

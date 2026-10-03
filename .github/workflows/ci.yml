@@ -17,6 +17,9 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# CI builds the app and gates the release. It runs no tests: those run
+# locally, before a change is merged (docs/TESTING.md). What is left here is
+# what a release cannot ship without - code that typechecks, lints and builds.
 jobs:
   check:
     # Helm is Windows-first (CLAUDE.md): junctions rather than symlinks, ConPTY,
@@ -47,15 +50,5 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      - name: Test
-        run: pnpm test
-
       - name: Build
         run: pnpm build
-
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results
-          path: reports/
-          if-no-files-found: ignore

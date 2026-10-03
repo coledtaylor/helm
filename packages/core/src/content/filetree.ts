@@ -63,7 +63,7 @@ const GIT_TIMEOUT_MS = 5_000
  * `repos/helm/` in a harness tree gets what they asked for; nothing about that
  * competes with `helm` also being its own scope.
  */
-const FALLBACK_SKIPPED_DIRS = new Set(
+export const FALLBACK_SKIPPED_DIRS = new Set(
   [...CURATED_SKIPPED_DIRS].filter((name) => name !== 'repos')
 )
 
@@ -96,7 +96,7 @@ function realOrSelf(path: string): string {
 }
 
 /** The nearest ancestor holding a `.git`, or null. A worktree's is a file. */
-function repoRootOf(start: string): string | null {
+export function repoRootOf(start: string): string | null {
   let dir = resolve(start)
   for (;;) {
     try {

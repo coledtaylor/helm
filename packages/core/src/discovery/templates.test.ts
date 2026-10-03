@@ -151,6 +151,28 @@ describe('previewTemplate', () => {
     expect(preview.problems).toEqual([])
   })
 
+  it('names exactly what the writer then writes, for the built-in and for a template', async () => {
+    await plant('demo', {
+      'template.yaml': 'label: "Demo"\n',
+      'CLAUDE.md.tpl': '# {{NAME}}\n',
+      'dot-claude/settings.json': '{}',
+      'notes/.gitkeep': '',
+      'tools/run.mjs': 'export {}\n'
+    })
+
+    for (const template of ['minimal', 'demo']) {
+      const preview = await previewTemplate({ templatesDir, template, mode: 'new' })
+      const result = await createHarness({ mode: 'new', dir: root, name: `from-${template}`, template, templatesDir })
+      expect(result.problems).toEqual([])
+
+      // Files, and folders with nothing in them: what a list of what was written names.
+      const written = await tree(join(root, `from-${template}`))
+      const leaves = written.filter((path) => !written.some((other) => other.startsWith(`${path}/`)))
+      expect(preview.entries[0], template).toBe('harness.yaml')
+      expect(preview.entries.map((entry) => entry.replace(/\/$/, '')).sort(), template).toEqual(leaves)
+    }
+  })
+
   it('says so rather than listing nothing for a template that is not there', async () => {
     const preview = await previewTemplate({ templatesDir, template: 'absent' })
     expect(preview.entries).toEqual([])

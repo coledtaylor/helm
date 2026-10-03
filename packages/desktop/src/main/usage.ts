@@ -54,14 +54,13 @@ export interface UsageService {
   /**
    * Reads a different file instead - `null` restores the real one.
    *
-   * The one way the usage reader can be pointed at a fixture, used by
-   * `--usage-check` to prove that a missing, stale or reshaped
-   * `cachedUsageUtilization` paints nothing. It is a method on the service
-   * rather than a channel on the IPC contract on purpose: the renderer has no
-   * business choosing which file the figures come from.
+   * The one way the usage reader can be pointed at a fixture, to prove that a
+   * missing, stale or reshaped `cachedUsageUtilization` paints nothing. It is a
+   * method on the service rather than a channel on the IPC contract on purpose:
+   * the renderer has no business choosing which file the figures come from.
    */
   pointAt: (file: string | null) => UsageSnapshot
-  /** The transcript index behind the dollar estimate; `usage-check` drives it. */
+  /** The transcript index behind the dollar estimate. */
   index: UsageIndex
   start: () => void
   stop: () => void

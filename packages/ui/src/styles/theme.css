@@ -25,10 +25,10 @@
 @source "../../../desktop/src/renderer/";
 
 /*
- * Dark mode is driven by a class on <html>, not by `prefers-color-scheme`
- * alone: the preference is a persisted setting with three states (system /
- * light / dark), and only the main process knows which one won. The renderer
- * is told the resolved answer and stamps the class.
+ * `.dark` on <html> says the theme on screen is a dark one, not that Windows
+ * is in dark mode: the preference is a persisted setting with three states
+ * (system / light / dark) naming two theme slots, and only the main process
+ * knows which theme won. The renderer is told and stamps the class.
  */
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -47,121 +47,58 @@
  * is on the element, `el.matches(':hover')` is true, and the rule that would
  * fill it is behind a media query that never matches. It is one line of CSS and
  * a dead app, which is why this override is worth more than the phone case it
- * gives up. `design-shot --only=states` reports the three hover probes that
- * caught it.
+ * gives up.
  */
 @custom-variant hover (&:hover);
 
 /* --------------------------------------------------------------------------
- * Tokens - "Nocturne Islands" (docs/DESIGN.md, Helm design system v1)
+ * Tokens - "Nocturne Islands" v2 (docs/DESIGN.md)
  *
- * Light is the base declaration and dark overrides it, so every colour has a
- * value before any variant applies. Same eleven roles in both modes, so every
- * component maps 1:1. Two rules the values encode:
+ * **No palette is declared here.** Colours are data: every theme - the three
+ * built-ins and any the user writes - is a set of nineteen values in
+ * `core/theme/themes.ts` or a JSON file, and the renderer paints the one on
+ * screen onto `<html>` as `--helm-*` custom properties before React's first
+ * frame (`renderer/app/theme.ts`). A second copy of Nocturne in this file would
+ * be a second source of truth for the default look, and the one that drifts.
  *
- * - Borders are alpha hairlines, not opaque greys: rgba(fg, .08) at rest and
- *   rgba(fg, .16) where an edge must read (border-strong). They sit on any
- *   surface without picking a parent to match.
- * - The accent never floods. Fills come from accent-soft at ~14% alpha
- *   (10% in light); accent itself is for 2px marks, outlines and checkboxes,
- *   and accent-text is the readable tint for text and labels on either mode.
+ * Two rules every theme's values encode (DESIGN.md "Themes"):
+ *
+ * - Borders are alpha hairlines, not opaque greys, so they sit on any surface
+ *   without picking a parent to match.
+ * - The accent never floods. Fills come from accent-soft; accent itself is for
+ *   2px marks, outlines and checkboxes, and accent-text is the readable tint.
  * ------------------------------------------------------------------------ */
 :root {
-  --helm-bg: #eceef4;
-  --helm-surface: #ffffff;
-  --helm-surface-raised: #f4f5fa;
-  --helm-surface-sunken: #e2e5ee;
-  --helm-hover: #e6e8f1;
-  --helm-active: #dde0ec;
-
-  --helm-border: rgb(22 24 38 / 0.1);
-  --helm-border-strong: rgb(22 24 38 / 0.2);
-
-  --helm-fg: #1d1f2e;
-  --helm-fg-muted: #595d6c;
-  /* Carries the 11px chip text, which is where the contrast floor actually
-   * binds: 4.54:1 on white. */
-  --helm-fg-subtle: #75798c;
-
-  /* Accent-600: the blurple deepens in light mode to hold 4.5:1 on white. */
-  --helm-accent: #6f61c4;
-  --helm-accent-fg: #ffffff;
-  --helm-accent-soft: rgb(111 97 196 / 0.1);
-  /* The hover step for a row that is already selected - see the note beside the
-   * dark value. On white: accent-soft composites to rgb(241 239 249) and this
-   * to rgb(226 223 243), a step of 15/16/6. */
-  --helm-accent-soft-hover: rgb(111 97 196 / 0.2);
-  --helm-accent-text: #5a4da8;
-
-  --helm-success: #2f7a43;
-  --helm-warn: #9a6b12;
-  --helm-danger: #c03b38;
-
-  /* Modals only. Islands get no shadow - elevation is an edge plus the sunken
-   * canvas behind it (DESIGN.md "no stacked shadows"). */
-  --helm-shadow: 0 24px 64px rgb(16 20 30 / 0.18);
-
   /* Not themed, and deliberately so: this is the terminal's own background,
    * fixed by Spike C's 24-bit theme, and the pane has to match it exactly or a
-   * seam appears around the grid. A light-mode variant would mean re-proving
-   * every colour check in that spike against a second palette. */
+   * seam appears around the grid. A theme that could move it would mean
+   * re-proving every colour check in that spike against another palette. */
   --helm-terminal: #11121a;
 
-  color-scheme: light;
+  /* Shape (DESIGN.md "Shape"). Overwritten from settings by `applyShape`;
+   * these are the defaults, and what stands in until settings arrive. Every
+   * corner in the app derives from the one radius - panels at it, controls and
+   * popups one pixel rounder - so the setting is one knob, not five. */
+  --helm-gap: 6px;
+  --helm-radius: 3px;
+
+  /* Density: how tightly the repeated things pack - list rows, the sidebar
+   * tree's lines and each pane's tab strip. Text size and every control's own
+   * padding are untouched by it. */
+  --helm-row-y: 6px;
+  --helm-line: 26px;
+  --helm-strip: 36px;
 }
 
-.dark {
-  --helm-bg: #12131f;
-  --helm-surface: #1a1c2b;
-  --helm-surface-raised: #202233;
-  --helm-surface-sunken: #0d0e17;
-  --helm-hover: #242639;
-  --helm-active: #2b2d44;
-
-  --helm-border: rgb(233 233 237 / 0.08);
-  --helm-border-strong: rgb(233 233 237 / 0.16);
-
-  --helm-fg: #e9e9ed;
-  --helm-fg-muted: #9397ab;
-  --helm-fg-subtle: #75798c;
-
-  --helm-accent: #9184d9;
-  /* Text on a solid accent fill (checkbox glyphs): the canvas colour, so the
-   * mark reads as punched out of the accent rather than white-on-purple. */
-  --helm-accent-fg: #12131f;
-  --helm-accent-soft: rgb(145 132 217 / 0.14);
-  /*
-   * A selected row still has to answer the pointer, and it cannot answer with
-   * `hover`: it is not resting on `surface` any more, it is resting on
-   * `accent-soft`, and `hover` is a *grey* step - putting it on top would make
-   * the row read as less selected under the pointer than beside it.
-   *
-   * So the same move the segmented control makes (DESIGN.md, "the chosen
-   * segment hovers to `bg-active`, not to `bg-hover` like everything else"),
-   * with the tint kept: more of what the row already is.
-   *
-   * Sized against the step that is known to read. On `surface` (#1a1c2b),
-   * `hover` (#242639) is +10/+10/+14 and that is the app's ordinary visible
-   * hover. Here, over the same surface, accent-soft composites to
-   * rgb(43 43 67) and this to rgb(57 55 88) - +14/+12/+21, comfortably past it.
-   * For contrast, `hover` on `surface-raised` is +4/+4/+6, which DESIGN.md
-   * already records as a change nobody can see.
-   */
-  --helm-accent-soft-hover: rgb(145 132 217 / 0.26);
-  --helm-accent-text: #d2cefd;
-
-  --helm-success: #8fbf7f;
-  --helm-warn: #d9b36c;
-  --helm-danger: #d97c76;
-
-  --helm-shadow: 0 24px 64px rgb(0 0 0 / 0.5);
-
-  color-scheme: dark;
+:root[data-density='compact'] {
+  --helm-row-y: 3px;
+  --helm-line: 22px;
+  --helm-strip: 32px;
 }
 
 /* `inline` resolves the var at utility-generation time, so `bg-surface`
- * emits `background-color: var(--helm-surface)` and follows the class swap
- * without a second set of dark: utilities at every call site. */
+ * emits `background-color: var(--helm-surface)` and follows a theme change
+ * without a second set of utilities at every call site. */
 @theme inline {
   --color-bg: var(--helm-bg);
   --color-surface: var(--helm-surface);
@@ -190,12 +127,32 @@
 
   --shadow-panel: var(--helm-shadow);
 
-  /* The three elevations of an island (DESIGN.md "Island anatomy"):
-   * rounded-island for panes on the canvas, rounded-raised for stat cards and
-   * code wells inside one, rounded-well for inputs and filter fields. */
-  --radius-island: 10px;
-  --radius-raised: 8px;
-  --radius-well: 7px;
+  /* The corner scale (DESIGN.md "Shape"): rounded-island for panes on the
+   * canvas, rounded-raised for cards, rows and segments inside one - both at
+   * the radius - and rounded-well for inputs, buttons and popups, one pixel
+   * rounder, so a control reads as a separate thing from the panel it sits in. */
+  --radius-island: var(--helm-radius);
+  --radius-raised: var(--helm-radius);
+  --radius-well: calc(var(--helm-radius) + 1px);
+
+  /* Tailwind's own scale, folded onto the same knob so a `rounded-md` written
+   * tomorrow follows the setting rather than escaping it. Bare `rounded` and
+   * every named step are control-sized; `xs` is for marks smaller than a
+   * control, where a full control radius would make a pill. */
+  --radius: calc(var(--helm-radius) + 1px);
+  --radius-xs: max(0px, calc(var(--helm-radius) - 1px));
+  --radius-sm: calc(var(--helm-radius) + 1px);
+  --radius-md: calc(var(--helm-radius) + 1px);
+  --radius-lg: calc(var(--helm-radius) + 1px);
+  --radius-xl: calc(var(--helm-radius) + 1px);
+
+  /* `gap-gutter`, `px-gutter`, `w-gutter`: the canvas between islands.
+   * `py-row`: a list row's vertical padding. `h-line`: one line of the
+   * sidebar tree. `h-strip`: a pane's tab strip. */
+  --spacing-gutter: var(--helm-gap);
+  --spacing-row: var(--helm-row-y);
+  --spacing-line: var(--helm-line);
+  --spacing-strip: var(--helm-strip);
 
   --font-sans:
     'Inter var', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -239,10 +196,9 @@ body {
  *
  * Keyed on what a thing *is*, so a control written tomorrow is affordant the
  * day it is written; there are ~130 of them on the seven main views and the one
- * that forgets is the one nobody notices. `pnpm affordance-check` asserts it
- * for every control it can reach (AFF-3), and asserts the converse in AFF-5 -
- * that a text field still says `text` and a disabled control still says
- * `default` - because `* { cursor: pointer }` would pass the first claim and is
+ * that forgets is the one nobody notices. The converse holds too - a text
+ * field still says `text` and a disabled control still says `default` -
+ * because `* { cursor: pointer }` would make every control affordant and is
  * the same lie pointing the other way.
  *
  * Both selectors sit inside `:where()`, which contributes no specificity. That
@@ -296,6 +252,16 @@ select:focus-visible {
   border-color: var(--helm-accent);
 }
 
+/* A menu (`Menu`) holds the focus only so its keys reach it; the row the keys
+ * are on is its focus mark (`aria-activedescendant`). The first arrow pressed
+ * inside it is what turns Chromium's focus-visible on, and the ring round the
+ * whole popup that followed marked nothing the row did not. Set here rather
+ * than with the utility on the menu, because this sheet's `:focus-visible`
+ * is unlayered and outranks every Tailwind utility. */
+[data-menu]:focus-visible {
+  outline: none;
+}
+
 /* The brand strip doubles as the window's drag region: the native title bar
  * is hidden (Window Controls Overlay) and this is what replaces it.
  * Interactive children opt back out. */
@@ -308,6 +274,83 @@ select:focus-visible {
 .app-drag input,
 .app-drag select {
   -webkit-app-region: no-drag;
+}
+
+/* Every native <select> draws its list as Helm does (DESIGN.md "Menus").
+ *
+ * Left to the platform, Chromium painted the open list white with the theme's
+ * light text on it - in every theme, since what it reads is the control's own
+ * colour and not the page's scheme. `base-select` (customizable select,
+ * Chromium 135+) hands the list to CSS while keeping everything the platform
+ * did for free: the keyboard, type-ahead, the form value.
+ *
+ * Unlayered on purpose, so it outranks Tailwind's `appearance-none`: a select
+ * that said that was asking for no native chrome, and this is none. Such a
+ * select already draws its own caret beside it, so the built-in one goes.
+ *
+ * The list is DOM in the top layer now, not a window of its own, so it no
+ * longer paints over a browser tab's native view. Each select here opens
+ * inside the pane it sits in, which is the only place the list then goes. */
+select,
+::picker(select) {
+  appearance: base-select;
+}
+
+/* base-select makes the closed control an inline-flex box; its text sits on
+ * the box's middle as a native control's did, not at its top. */
+select {
+  align-items: center;
+}
+
+select.appearance-none::picker-icon {
+  display: none;
+}
+
+select::picker-icon {
+  color: var(--helm-fg-subtle);
+}
+
+::picker(select) {
+  margin-block: 4px;
+  padding: 4px;
+  border: 1px solid var(--helm-border-strong);
+  border-radius: calc(var(--helm-radius) + 1px);
+  background: var(--helm-surface-raised);
+  color: var(--helm-fg);
+  box-shadow: none;
+  max-block-size: min(360px, 60vh);
+}
+
+select option {
+  min-block-size: 28px;
+  padding: 0 8px;
+  border-radius: var(--helm-radius);
+  background: transparent;
+  color: var(--helm-fg);
+  font-size: 12px;
+}
+
+select option:hover,
+select option:focus-visible {
+  background: var(--helm-hover);
+  outline: none;
+}
+
+select option:checked {
+  background: var(--helm-accent-soft);
+}
+
+select option:checked:hover,
+select option:checked:focus-visible {
+  background: var(--helm-accent-soft-hover);
+}
+
+select option::checkmark {
+  display: none;
+}
+
+select option:disabled {
+  color: var(--helm-fg-subtle);
 }
 
 /* A divider inside an island fades to transparent at its ends, so it reads as
@@ -354,29 +397,46 @@ select:focus-visible {
 /**
  * The tab strip keeps its scrollbar.
  *
- * It was hidden once, on the argument that a 40px strip has no room for one and
- * that the bar drew a rule through the seam where the active tab meets its pane.
- * Half of that was wrong and the other half was the wrong trade. The bar carries
+ * It was hidden once, on the argument that a strip this short has no room for
+ * one and that the bar drew a rule through the seam where the active tab met
+ * its pane. Half of that was wrong and the other half was the wrong trade. The bar carries
  * no arrow buttons - nothing in this app does, `scrollbar-width: thin` above
  * sees to that - and it is the only thing on screen that says there are more
  * tabs than fit. Hiding it did not make the strip cleaner, it made two open
  * tabs invisible and unreachable.
  *
- * So it stays, at the same `thin` every other scroll container in Helm uses -
- * 10px, measured, against 15px for `auto`. It only appears when the tabs
- * actually overflow, which is the only time it has anything to say.
+ * So it stays - but not at the `thin` every other scroll container uses. On
+ * Windows `thin` still paints arrow buttons and takes 10px of a 36px strip,
+ * which lifted every tab off the strip's centre and ran the arrows into the
+ * first and last tab (seen in the overhaul's last visual pass). Here the
+ * standard properties are put back to `auto`, which is what hands the bar to
+ * the `::-webkit-scrollbar` rules below - Chromium ignores those
+ * pseudo-elements on any element whose `scrollbar-width` or `scrollbar-color`
+ * is set, which the `*` rule above does for everything else. The result is a
+ * 4px thumb with no buttons along the strip's foot: still the thing that says
+ * there are more tabs than fit, and the wheel handler in `TabBar.tsx` does the
+ * scrolling. It only appears when the tabs actually overflow.
  *
- * The rule is kept rather than deleted because the class is what the wheel
- * handler in `TabBar.tsx` is named for, and because the next person to find a
- * bar in a 40px strip inconvenient should find this note before they hide it
- * again. `::-webkit-scrollbar` is not the lever: Chromium ignores those
- * pseudo-elements once `scrollbar-width` is set, which the `*` rule above does
- * for every element in the app, so the block of webkit rules there is doing
- * nothing on a current Chromium and the only real controls are
- * `scrollbar-width` and `scrollbar-color`.
+ * The next person to find a bar in a 36px strip inconvenient should find this
+ * note before they hide it again.
  */
 .tab-scroll {
-  scrollbar-width: thin;
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+
+.tab-scroll::-webkit-scrollbar {
+  height: 4px;
+}
+
+.tab-scroll::-webkit-scrollbar-button {
+  display: none;
+}
+
+.tab-scroll::-webkit-scrollbar-thumb {
+  border: 0;
+  border-radius: 2px;
+  background-color: var(--helm-border-strong);
 }
 
 /**
@@ -420,52 +480,4 @@ select:focus-visible {
 .session-row {
   content-visibility: auto;
   contain-intrinsic-size: auto 35px;
-}
-
-/* ---------------------------------------------------------------------------
- * The workspace/sessions split, driven by a custom property.
- *
- * The boundary lives in `--split` on the row, and **React never writes it**.
- * That is the whole design, and it is the third attempt at this.
- *
- * The first was `setSplit` on every `mousemove`, which is correct and stutters:
- * with the session history open, moving a divider reconciled 966 rows to
- * produce the same 966 rows, once per frame. The second wrote `column.style.flex`
- * directly during the drag and committed to React on release. That measured
- * thirty moves at 47.4ms → 0.1ms and was *worse in the hand* - because a direct
- * style write means the DOM and React disagree for the length of the gesture,
- * and React wins whenever anything re-renders. With a live session in the split
- * something re-renders constantly, since the terminal's own output updates
- * state; the pane was pulled by the pointer and yanked back by every unrelated
- * render, so it lagged, shrank from the wrong edge, and snapped on release.
- *
- * A custom property has no such fight, because there is no second writer. The
- * drag sets `--split` on the row; nothing in the render tree mentions it; a
- * re-render of `App` produces identical markup and leaves the boundary alone.
- * The settings write happens once, on release.
- *
- * `calc(1 - var(--split))` is a unitless flex-grow, which is what `flex-grow`
- * already is. The fallback in `var()` matters on the first frame: settings
- * arrive asynchronously and a row with no `--split` yet would otherwise resolve
- * to an invalid `flex` and collapse a column.
- * ------------------------------------------------------------------------ */
-.split-row {
-  --split: 0.45;
-}
-
-/* The sessions column - the one on the right of the divider. */
-.split-sessions {
-  flex: var(--split, 0.45) 1 0%;
-}
-
-/* The workspace column, taking whatever is left. */
-.split-workspace {
-  flex: calc(1 - var(--split, 0.45)) 1 0%;
-}
-
-/* Either column with the other maximized away. A class rather than a cleared
- * custom property: which panes are on screen is discrete state that belongs to
- * React, and only the *fraction* is the drag's. */
-.split-whole {
-  flex: 1 1 0%;
 }

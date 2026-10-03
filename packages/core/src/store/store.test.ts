@@ -18,6 +18,7 @@ import { knownMigrations } from './migrate'
 import { cacheProjects, forgetProjects, readCachedProjects } from './projects'
 import {
   finishSession,
+  noteConversation,
   readSessions,
   reconcileRunningSessions,
   renameSession,
@@ -111,22 +112,43 @@ describe('settings', () => {
   it('round-trips every value type in AppSettings', () => {
     const written = {
       theme: 'light',
+      themeDark: 'graphite',
+      themeLight: 'my-theme',
+      paneGap: 4,
+      cornerRadius: 0,
+      density: 'compact',
+      accentColor: '#4fc3b4',
       scanRoots: [dir, join(dir, 'other')],
       pinnedProjects: [join(dir, 'alpha'), join(dir, 'beta')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
       // Every pane kind, because the validator checks each one's own fields and
       // a strip of only the field-less kinds would not exercise them.
-      workspaceTabs: {
-        panes: [
-          { kind: 'project', path: dir },
-          { kind: 'history' },
-          { kind: 'pulls' },
-          { kind: 'pr', repoPath: dir, number: 42 },
-          { kind: 'config' },
-          { kind: 'content' },
-          { kind: 'settings' }
-        ],
-        activeId: `project:${dir}`
+      paneLayout: {
+        root: {
+          axis: 'row',
+          children: [
+            {
+              panes: [
+                { kind: 'project', path: dir },
+                { kind: 'history' },
+                { kind: 'pulls' },
+                { kind: 'pr', repoPath: dir, number: 42 },
+                { kind: 'session', id: 7 }
+              ],
+              activeId: `project:${dir}`
+            },
+            {
+              axis: 'column',
+              children: [
+                { panes: [{ kind: 'config' }], activeId: null },
+                { panes: [{ kind: 'settings' }], activeId: null }
+              ],
+              sizes: [0.7, 0.3]
+            }
+          ],
+          sizes: [0.6, 0.4]
+        },
+        focused: 1
       },
       firstRunCompletedAt: '2026-08-09T12:00:00.000Z',
       claudePath: join(dir, 'claude.exe'),
@@ -138,9 +160,8 @@ describe('settings', () => {
       terminalScrollback: 2500,
       terminalShell: join(dir, 'pwsh.exe'),
       projectShellHeightPct: 42,
-      sessionSplitPct: 62,
-      contentWrap: true,
-      contentWrapIndent: 6,
+      filesWrap: true,
+      railHidden: ['pulls', 'config'],
       transcriptArchiveMaxBytes: 256 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 15,
@@ -155,6 +176,7 @@ describe('settings', () => {
       browserReach: 'local',
       browserMcp: false,
       browserMcpLocalOnly: true,
+      restoreWithoutAsking: true,
       browserRecentUrls: ['http://localhost:3000/', 'https://example.com/docs'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
       sessionMcp: false
@@ -188,6 +210,52 @@ describe('settings', () => {
     expect(readSettings(store)).toEqual(DEFAULT_SETTINGS)
   })
 
+  describe('a pane layout written before panes were a tree', () => {
+    const raw = (key: string, value: unknown): void => {
+      store.raw
+        .prepare('INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)')
+        .run(key, JSON.stringify(value), '')
+    }
+    const HISTORY = { panes: [{ kind: 'history' }], activeId: 'history' }
+    const CONFIG = { panes: [{ kind: 'config' }], activeId: null }
+
+    it('reads two groups as the row they were, with the divider where it was left', () => {
+      raw('paneLayout', { groups: [HISTORY, CONFIG], focused: 1 })
+      raw('paneSplitPct', 62)
+
+      expect(readSettings(store).paneLayout).toEqual({
+        root: { axis: 'row', children: [HISTORY, CONFIG], sizes: [0.38, 0.62] },
+        focused: 1
+      })
+    })
+
+    it('reads two groups at the old default split when the divider was never moved', () => {
+      raw('paneLayout', { groups: [HISTORY, CONFIG], focused: 0 })
+
+      expect(readSettings(store).paneLayout).toEqual({
+        root: { axis: 'row', children: [HISTORY, CONFIG], sizes: [0.55, 0.45] },
+        focused: 0
+      })
+    })
+
+    it('reads one group as that group, and the result is a layout the writer accepts', () => {
+      raw('paneLayout', { groups: [HISTORY], focused: 0 })
+
+      const { paneLayout } = readSettings(store)
+      expect(paneLayout).toEqual({ root: HISTORY, focused: 0 })
+      expect(validateSetting('paneLayout', paneLayout)).toBeNull()
+    })
+
+    it('reads a value that is neither shape as no layout, and no key for the old divider', () => {
+      raw('paneLayout', { panes: [] })
+      raw('paneSplitPct', 62)
+
+      const settings = readSettings(store)
+      expect(settings.paneLayout).toBeNull()
+      expect(settings).not.toHaveProperty('paneSplitPct')
+    })
+  })
+
   it('falls back to the default for a value that is not valid JSON', () => {
     store.raw
       .prepare("INSERT INTO app_settings (key, value, updated_at) VALUES ('theme', '{oops', '')")
@@ -196,6 +264,19 @@ describe('settings', () => {
     expect(readSettings(store).theme).toBe(DEFAULT_SETTINGS.theme)
   })
 })
+
+/** Two groups to split, for the validator's split cases. */
+const H = { panes: [{ kind: 'history' }], activeId: null }
+const S = { panes: [{ kind: 'settings' }], activeId: null }
+
+/** Splits nested `depth` deep, alternating axis, each beside one group. */
+function nested(depth: number): unknown {
+  let node: unknown = H
+  for (let level = 0; level < depth; level += 1) {
+    node = { axis: level % 2 === 0 ? 'row' : 'column', children: [node, S], sizes: [0.5, 0.5] }
+  }
+  return node
+}
 
 describe('settings validation', () => {
   /**
@@ -215,6 +296,36 @@ describe('settings validation', () => {
       key: 'theme',
       good: ['system', 'light', 'dark'],
       bad: ['purple', 'Dark', '', null, 1, ['dark'], { theme: 'dark' }]
+    },
+    {
+      key: 'themeDark',
+      good: ['nocturne', 'graphite', 'my-theme', 'a', 'x'.repeat(48)],
+      bad: ['Nocturne', 'my theme', '-lead', 'trail-', 'two--dashes', '', 'x'.repeat(49), null, 1]
+    },
+    {
+      key: 'themeLight',
+      good: ['daylight', 'solarized-light-2'],
+      bad: ['../daylight', 'day_light', null]
+    },
+    {
+      key: 'paneGap',
+      good: [2, 6, 12],
+      bad: [1, 13, 6.5, '6', null]
+    },
+    {
+      key: 'cornerRadius',
+      good: [0, 3, 8],
+      bad: [-1, 9, 3.5, '3px', null]
+    },
+    {
+      key: 'density',
+      good: ['comfortable', 'compact'],
+      bad: ['Compact', 'cozy', null, 0]
+    },
+    {
+      key: 'accentColor',
+      good: [null, '#6ca6f5', '#000000'],
+      bad: ['#6CA6F5', '#6ca6f', '#6ca6f5ff', 'rgb(1 2 3)', 'blue', '', 6, {}]
     },
     {
       key: 'usageDisplay',
@@ -274,46 +385,121 @@ describe('settings validation', () => {
       ]
     },
     {
-      key: 'workspaceTabs',
+      key: 'paneLayout',
       good: [
         null,
-        { panes: [], activeId: null },
-        { panes: [{ kind: 'history' }], activeId: 'history' },
+        { root: { panes: [], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'history' }], activeId: 'history' }, focused: 0 },
         {
-          panes: [
-            { kind: 'project', path: 'C:\\work\\helm' },
-            { kind: 'pr', repoPath: 'C:\\work\\helm', number: 7 },
-            { kind: 'pulls' },
-            { kind: 'config' },
-            { kind: 'content' },
-            { kind: 'settings' }
-          ],
-          activeId: 'pr:C:\\work\\helm#7'
+          root: {
+            axis: 'row',
+            children: [
+              {
+                panes: [
+                  { kind: 'project', path: 'C:\\work\\helm' },
+                  { kind: 'pr', repoPath: 'C:\\work\\helm', number: 7 },
+                  { kind: 'pulls' },
+                  { kind: 'session', id: 12 }
+                ],
+                activeId: 'session:12'
+              },
+              {
+                axis: 'column',
+                children: [
+                  { panes: [{ kind: 'config' }, { kind: 'content' }], activeId: null },
+                  {
+                    panes: [
+                      { kind: 'settings' },
+                      { kind: 'file', root: 'C:\\work\\helm', path: 'C:\\work\\helm\\README.md' }
+                    ],
+                    activeId: null
+                  }
+                ],
+                sizes: [0.5, 0.5]
+              },
+              { panes: [{ kind: 'history' }], activeId: null }
+            ],
+            sizes: [0.4, 0.35, 0.25]
+          },
+          focused: 2
         }
       ],
       bad: [
-        // Not a strip at all.
+        // Not a layout at all.
         [],
         'history',
         42,
-        { activeId: null },
-        { panes: {}, activeId: null },
+        { focused: 0 },
+        { root: null, focused: 0 },
+        { root: [], focused: 0 },
+        // The shape a layout had before panes were a tree. Read back, it is
+        // upgraded (`upgradeSavedLayout`); written, it is a bug in the writer.
+        { groups: [{ panes: [{ kind: 'history' }], activeId: 'history' }], focused: 0 },
+        // The single strip that shape replaced.
+        { panes: [{ kind: 'history' }], activeId: 'history' },
+        // A split of fewer than two, across no axis, or with a share missing,
+        // spare, zero, negative or not a number.
+        { root: { axis: 'row', children: [{ panes: [{ kind: 'history' }], activeId: null }], sizes: [1] }, focused: 0 },
+        {
+          root: { axis: 'diagonal', children: [H, S], sizes: [0.5, 0.5] },
+          focused: 0
+        },
+        { root: { axis: 'row', children: [H, S], sizes: [1] }, focused: 0 },
+        { root: { axis: 'row', children: [H, S], sizes: [0.5, 0.25, 0.25] }, focused: 0 },
+        { root: { axis: 'row', children: [H, S], sizes: [1, 0] }, focused: 0 },
+        { root: { axis: 'row', children: [H, S], sizes: [1.5, -0.5] }, focused: 0 },
+        { root: { axis: 'row', children: [H, S], sizes: [0.5, Number.NaN] }, focused: 0 },
+        { root: { axis: 'row', children: [H, S], sizes: ['0.5', '0.5'] }, focused: 0 },
+        { root: { axis: 'row', children: [H, S] }, focused: 0 },
+        { root: { axis: 'row', children: [H, null], sizes: [0.5, 0.5] }, focused: 0 },
+        // An empty group beside a full one: `toSaved` never writes one, so one
+        // here is a writer that has stopped normalising.
+        { root: { axis: 'row', children: [H, { panes: [], activeId: null }], sizes: [0.5, 0.5] }, focused: 0 },
+        // Nested past any arrangement a person could make.
+        { root: nested(40), focused: 0 },
+        // A focus that names no group.
+        { root: { panes: [], activeId: null }, focused: 1 },
+        { root: { axis: 'row', children: [H, S], sizes: [0.5, 0.5] }, focused: 2 },
+        { root: { panes: [], activeId: null }, focused: -1 },
+        { root: { panes: [], activeId: null }, focused: 0.5 },
+        { root: { panes: [], activeId: null } },
+        { root: { activeId: null }, focused: 0 },
         // A kind this build does not have, which is the shape a renamed pane
         // would arrive in.
-        { panes: [{ kind: 'terminal' }], activeId: null },
-        { panes: [{ kind: 'project' }], activeId: null },
-        { panes: [{ kind: 'project', path: '' }], activeId: null },
-        { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm' }], activeId: null },
-        { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm', number: 0 }], activeId: null },
-        { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm', number: 1.5 }], activeId: null },
-        { panes: [{ kind: 'pr', repoPath: '', number: 7 }], activeId: null },
-        { panes: ['history'], activeId: null },
-        { panes: [null], activeId: null },
+        { root: { panes: [{ kind: 'terminal' }], activeId: null }, focused: 0 },
+        // A session is written down by its row id, and only by one; browser
+        // tabs and the restore offer never are. See `SavedPane`.
+        { root: { panes: [{ kind: 'session' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'session', id: '1' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'session', id: 0 }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'session', id: 1.5 }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'browser', id: 1 }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'restore' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'project' }], activeId: null }, focused: 0 },
+        // A file is read inside its project, so it is written down with both.
+        { root: { panes: [{ kind: 'file', path: 'C:\\a\\b.ts' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'file', root: 'C:\\a' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'file', root: '', path: 'C:\\a\\b.ts' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'project', path: '' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm' }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm', number: 0 }], activeId: null }, focused: 0 },
+        { root: { panes: ['history'], activeId: null }, focused: 0 },
         // An id is compared against tabs, never parsed, so anything that is not
         // a string cannot match one.
-        { panes: [], activeId: 7 },
-        // Longer than any workspace: a runaway list is a bug, not an arrangement.
-        { panes: Array.from({ length: 101 }, () => ({ kind: 'history' })), activeId: null }
+        { root: { panes: [], activeId: 7 }, focused: 0 },
+        // Longer than any workspace, counted across every group: a runaway list
+        // is a bug, not an arrangement.
+        {
+          root: {
+            axis: 'row',
+            children: [
+              { panes: Array.from({ length: 60 }, () => ({ kind: 'history' })), activeId: null },
+              { panes: Array.from({ length: 41 }, () => ({ kind: 'history' })), activeId: null }
+            ],
+            sizes: [0.5, 0.5]
+          },
+          focused: 0
+        }
       ]
     },
     {
@@ -374,35 +560,19 @@ describe('settings validation', () => {
       bad: [9, 51, 0, -30, 100, 30.5, '30', null, Number.NaN, Number.POSITIVE_INFINITY]
     },
     {
-      // The sessions column's share of the window. The bounds are wider than
-      // the shell's because neither side of this divider is the subordinate
-      // one - a workspace squeezed to a fifth is a choice somebody can make,
-      // where a project page that is mostly shell is not.
-      //
-      // The non-finite cases matter here for the same reason: the fraction
-      // becomes a `flex-grow`, and `flex: NaN 1 0%` is dropped by the parser,
-      // which would collapse the column rather than fail.
-      key: 'sessionSplitPct',
-      good: [20, 45, 80],
-      bad: [19, 81, 0, -45, 100, 45.5, '45', null, Number.NaN, Number.POSITIVE_INFINITY]
-    },
-    {
-      // Whether a source file wraps. `'true'` and `1` are in the bad column
-      // because this value is read straight into a class decision, where any
-      // truthy string would switch wrapping on and `'false'` would too.
-      key: 'contentWrap',
+      // Whether a file wraps. `'true'` and `1` are in the bad column because
+      // this value is read straight into a class decision, where any truthy
+      // string would switch wrapping on and `'false'` would too.
+      key: 'filesWrap',
       good: [true, false],
       bad: ['true', 'false', 1, 0, null, {}, []]
     },
     {
-      // The hanging indent, in columns. Zero is *good* - it is what a plain
-      // editor does, and the setting has to be able to say so. Negative is bad
-      // even though the CSS would accept it: a negative hang pulls a
-      // continuation left of the code it belongs to, which reads as a new
-      // statement rather than the same one.
-      key: 'contentWrapIndent',
-      good: [0, 4, 16],
-      bad: [-1, 17, 4.5, '4', null, Number.NaN, Number.POSITIVE_INFINITY]
+      // `settings` is the one destination that may never be hidden, so it is
+      // refused here rather than trusted to the rail's menu.
+      key: 'railHidden',
+      good: [[], ['history'], ['sessions', 'profiles', 'files', 'history', 'browser', 'pulls', 'config']],
+      bad: [null, 'history', ['settings'], ['content'], ['history', 'history'], [1], [''], {}]
     },
     {
       // A byte count, and null is in the *bad* column deliberately: there is no
@@ -525,6 +695,12 @@ describe('settings validation', () => {
       bad: ['false', 'true', 0, 1, null, [], {}]
     },
     {
+      // A string that reads as off would reopen sessions unasked.
+      key: 'restoreWithoutAsking',
+      good: [true, false],
+      bad: ['false', 'true', 0, 1, null, [], {}]
+    },
+    {
       // The interesting rejections are the ones that would put a row in the
       // dropdown that does nothing when clicked: a bare word, a relative path,
       // and `file:` - which the pane refuses to navigate to, so it must not be
@@ -570,13 +746,13 @@ describe('settings validation', () => {
    * A key with no row above generates no test, and generates it silently.
    *
    * The table is an array, so nothing makes a missing key an error - it simply
-   * produces one `it` fewer, in a file that already prints seventy of them. The
-   * same table one level up, in `settingscheck.ts`, went stale exactly this way
-   * when the content viewer's two wrapping keys landed: both were validated,
-   * neither was probed, and the only thing that noticed was a boolean buried in
-   * a check that takes minutes to reach. That one is a
-   * `Record<keyof AppSettings, ...>` now and fails to compile. This one cannot
-   * be, so it is asserted instead - and here, where it costs a second.
+   * produces one `it` fewer, in a file that already prints seventy of them. A
+   * table like this went stale exactly that way when the content viewer's two
+   * wrapping keys landed: both were validated, neither was probed, and the only
+   * thing that noticed was a boolean buried in a check that takes minutes to
+   * reach. This one cannot be a `Record<keyof AppSettings, ...>`, which would
+   * fail to compile, so it is asserted instead - and here, where it costs a
+   * second.
    */
   it('has a case for every key of AppSettings', () => {
     expect(cases.map((entry) => entry.key).sort()).toEqual(Object.keys(DEFAULT_SETTINGS).sort())
@@ -650,10 +826,19 @@ describe('settings validation', () => {
     // whole object back would be rejected for values it never touched.
     writeSettings(store, {
       theme: 'dark',
+      themeDark: 'graphite',
+      themeLight: 'daylight',
+      paneGap: 12,
+      cornerRadius: 8,
+      density: 'comfortable',
+      accentColor: null,
       scanRoots: [dir],
       pinnedProjects: [join(dir, 'alpha')],
       windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
-      workspaceTabs: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
+      paneLayout: {
+        root: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
+        focused: 0
+      },
       firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
       claudePath: join(dir, 'claude.exe'),
       usageDisplay: 'off',
@@ -664,9 +849,8 @@ describe('settings validation', () => {
       terminalScrollback: 50_000,
       terminalShell: join(dir, 'cmd.exe'),
       projectShellHeightPct: 45,
-      sessionSplitPct: 70,
-      contentWrap: true,
-      contentWrapIndent: 2,
+      filesWrap: true,
+      railHidden: ['browser'],
       transcriptArchiveMaxBytes: 512 * 1024 * 1024,
       ghPath: join(dir, 'gh.exe'),
       prPollMinutes: 0,
@@ -681,6 +865,7 @@ describe('settings validation', () => {
       browserReach: 'local',
       browserMcp: false,
       browserMcpLocalOnly: true,
+      restoreWithoutAsking: true,
       browserRecentUrls: ['http://localhost:3000/'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
       sessionMcp: false
@@ -694,10 +879,19 @@ describe('settings validation', () => {
 /** What the round-trip test above expects, spelled out away from the writer. */
 const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   theme: 'dark',
+  themeDark: 'graphite',
+  themeLight: 'daylight',
+  paneGap: 12,
+  cornerRadius: 8,
+  density: 'comfortable',
+  accentColor: null,
   scanRoots: [dir],
   pinnedProjects: [join(dir, 'alpha')],
   windowBounds: { width: 1280, height: 820, x: 40, y: 60 },
-  workspaceTabs: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
+  paneLayout: {
+    root: { panes: [{ kind: 'project', path: dir }, { kind: 'config' }], activeId: 'config' },
+    focused: 0
+  },
   firstRunCompletedAt: '2026-08-11T09:00:00.000Z',
   claudePath: join(dir, 'claude.exe'),
   usageDisplay: 'off',
@@ -708,9 +902,8 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   terminalScrollback: 50_000,
   terminalShell: join(dir, 'cmd.exe'),
   projectShellHeightPct: 45,
-  sessionSplitPct: 70,
-  contentWrap: true,
-  contentWrapIndent: 2,
+  filesWrap: true,
+  railHidden: ['browser'],
   transcriptArchiveMaxBytes: 512 * 1024 * 1024,
   ghPath: join(dir, 'gh.exe'),
   prPollMinutes: 0,
@@ -725,6 +918,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   browserReach: 'local',
   browserMcp: false,
   browserMcpLocalOnly: true,
+  restoreWithoutAsking: true,
   browserRecentUrls: ['http://localhost:3000/'],
   browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
   sessionMcp: false
@@ -891,7 +1085,7 @@ describe('session log', () => {
     const ended = started('beta')
     finishSession(store, ended.id, { exitCode: 0 })
 
-    expect(reconcileRunningSessions(store)).toBe(1)
+    expect(reconcileRunningSessions(store).map((lost) => lost.record.id)).toEqual([alive.id])
 
     const rows = readSessions(store)
     expect(rows.find((r) => r.id === alive.id)).toMatchObject({
@@ -901,6 +1095,58 @@ describe('session log', () => {
     })
     // The one that ended cleanly keeps its outcome.
     expect(rows.find((r) => r.id === ended.id)).toMatchObject({ status: 'exited', exitCode: 0 })
+  })
+
+  it('hands back what it reconciled, with the conversation each was last in and its mode', () => {
+    startSession(store, { name: 'plain', cwd: dir, claudeSessionId: 'c-plain' })
+    const cleared = startSession(store, {
+      name: 'cleared',
+      cwd: dir,
+      claudeSessionId: 'c-first',
+      permissionMode: 'plan'
+    })
+    startSession(store, { name: 'old row', cwd: dir })
+    noteConversation(store, cleared.id, 'c-after-clear')
+
+    const lost = reconcileRunningSessions(store)
+    expect(lost.map((l) => [l.record.name, l.conversationId, l.permissionMode])).toEqual([
+      ['plain', 'c-plain', null],
+      ['cleared', 'c-after-clear', 'plan'],
+      ['old row', null, null]
+    ])
+    expect(lost[1]?.record).toMatchObject({ id: cleared.id, status: 'lost', claudeSessionId: 'c-first' })
+    // Once each: the next start finds nothing claiming to run.
+    expect(reconcileRunningSessions(store)).toEqual([])
+  })
+
+  it('notes a moved conversation only while running, and forgets it when it moves back', () => {
+    const session = startSession(store, { name: 'a', cwd: dir, claudeSessionId: 'c-1' })
+    const last = (): string | null =>
+      (
+        store.raw
+          .prepare('SELECT last_claude_session_id AS last FROM sessions WHERE id = ?')
+          .get(session.id) as { last: string | null }
+      ).last
+
+    noteConversation(store, session.id, 'c-1')
+    expect(last()).toBeNull()
+    noteConversation(store, session.id, 'c-2')
+    expect(last()).toBe('c-2')
+    noteConversation(store, session.id, 'c-1')
+    expect(last()).toBeNull()
+
+    noteConversation(store, session.id, 'c-3')
+    finishSession(store, session.id, { exitCode: 0 })
+    noteConversation(store, session.id, 'c-4')
+    expect(last()).toBe('c-3')
+    // An id that is not there is not a row to write.
+    expect(() => noteConversation(store, 9999, 'c-5')).not.toThrow()
+  })
+
+  it('reads a permission mode it does not know as none', () => {
+    const session = startSession(store, { name: 'a', cwd: dir })
+    store.raw.prepare("UPDATE sessions SET permission_mode = 'yolo' WHERE id = ?").run(session.id)
+    expect(reconcileRunningSessions(store)[0]?.permissionMode).toBeNull()
   })
 
   it('lists newest first and filters by status and project', () => {

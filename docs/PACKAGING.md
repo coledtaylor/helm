@@ -86,8 +86,9 @@ runs the checks, skips the release job and finishes green.
   different answer after a squash, a rebase, a revert or a re-run.
 - **`ci.yml` does not run on pushes to `main` on its own.** `release.yml` calls
   it through `workflow_call`, so `main` is checked once per push rather than
-  twice. A failing `pnpm check` fails that job and `needs: [version, check]`
-  skips the release: no tag, no release, no artefacts.
+  twice. It typechecks, lints and builds; it runs no tests, which run locally.
+  A failure there fails that job and `needs: [version, check]` skips the
+  release: no tag, no release, no artefacts.
 - **The release is created as a draft and published in the same job**, which is
   not an approval gate. `/releases/latest` ignores drafts, and publishing the
   draft is what creates the tag, so the ref and the ~200 MB of assets appear

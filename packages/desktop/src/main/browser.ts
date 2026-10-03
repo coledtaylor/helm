@@ -18,7 +18,7 @@ import {
   type AppSettings,
   type BrowserReach
 } from '@helm/core'
-import { TITLEBAR_OVERLAY } from './chrome'
+import { TITLEBAR_HEIGHT } from './chrome'
 import { BROWSER_TABS_MAX, type BrowserConsoleEntry, type BrowserState } from '../shared/ipc'
 
 /**
@@ -66,8 +66,7 @@ import { BROWSER_TABS_MAX, type BrowserConsoleEntry, type BrowserState } from '.
  * came back with the fresh colour, the right `executeJavaScript` answer, and a
  * synthesised click counted in the page. `setVisible(false)` is therefore the
  * mechanism, because it is the one that also stops the view painting;
- * `BROWSER_LIVE_WHILE_HIDDEN` below is that answer pinned where the code is,
- * and `pnpm browser-check --only=hidden` is it pinned as an assertion.
+ * `BROWSER_LIVE_WHILE_HIDDEN` below is that answer pinned where the code is.
  *
  * **And a sixth thing, which M17 added.** A tab a session opened is never
  * mounted by the window, so it never reports a rectangle and its document would
@@ -93,8 +92,7 @@ import { BROWSER_TABS_MAX, type BrowserConsoleEntry, type BrowserState } from '.
  * `setVisible(false)` wins on the other one: it is the only one of the two that
  * actually stops the view painting.
  *
- * If a future Electron changes that, the choice below changes with it - and
- * `BR-3` is what says so before anybody finds out through M17.
+ * If a future Electron changes that, the choice below changes with it.
  */
 export const BROWSER_LIVE_WHILE_HIDDEN = true
 
@@ -138,9 +136,9 @@ const AGENT_VIEW_SIZE = { width: 1280, height: 800 }
  * **M16's guarantee has a precondition nobody had reason to notice: the
  * document has to have painted once while the view was shown.**
  * `setVisible(false)` leaves a view capturable, scriptable and clickable - that
- * is the spike, and `BR-3` pins it - but every measurement behind it was made
- * on a page that had been on screen first, and BR-3's freshness probe repaints
- * a document that is *already* composited. A view whose document has never
+ * is the spike - but every measurement behind it was made on a page that had
+ * been on screen first, and the spike's freshness probe repainted a document
+ * that was *already* composited. A view whose document has never
  * painted is a different thing, and it was measured while writing M17, on
  * Electron 43.3.0:
  *
@@ -245,8 +243,6 @@ interface View {
   openedBy: BrowserOpener | null
   /** Whether this view is attached to the window's content view right now. */
   attached: boolean
-  /** What Helm last told Electron about painting. Read by `inspect`. */
-  visible: boolean
   /**
    * Whether this view is sitting outside the window because nothing has ever
    * reported a rectangle for it. True only for a tab an agent opened that the
@@ -283,36 +279,6 @@ export interface BrowserHost {
   }): void
   /** Destroys every view. Called from `before-quit`, beside `sessions.shutdown()`. */
   shutdown(): void
-
-  /**
-   * What Electron is actually holding for a view.
-   *
-   * `browser-check`'s only route to any of this. A `WebContentsView` is not in
-   * the DOM, so a driver holding the window through `executeJavaScript` cannot
-   * see its bounds, its partition or its web contents at all - the same
-   * deliberate seam `installTerminalInspector` is, and on the same terms:
-   * product code carrying the one hook a check needs, exposing no capability
-   * the process did not already have, and never a writer.
-   *
-   * `visible` is what Helm last **told** Electron, so it is a statement about
-   * this file rather than about the screen. The check does not take its word
-   * for it: whether the view is actually painting is settled by sampling the
-   * window's own captured pixels, which is a reader the browser host has
-   * nothing to do with.
-   */
-  inspect(id: number): {
-    bounds: { x: number; y: number; width: number; height: number }
-    visible: boolean
-    /** Whether this view is sitting outside the window - see `PARKED_X`. */
-    parked: boolean
-    partition: string
-    webContentsId: number
-    url: string
-  } | null
-  /** The view's own frame, for the hidden-but-live assertion. */
-  capture(id: number): Promise<{ width: number; height: number; bitmap: Buffer } | null>
-  /** A synthesised click **into the view**, which is the third of the three. */
-  click(id: number, x: number, y: number): Promise<void>
 
   // -------------------------------------------------------------------------
   // The agent surface (M17)
@@ -392,7 +358,7 @@ export interface BrowserHostOptions {
  */
 const exempt = new Set<number>()
 
-/** For the check: proof the exemption is a finite set and not a mood. */
+/** For the tests: proof the exemption is a finite set and not a mood. */
 export function exemptedWebContents(): number[] {
   return [...exempt]
 }
@@ -909,11 +875,6 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       find: null,
       openedBy,
       attached: false,
-      // A new view paints nothing until the window has said where it goes. The
-      // alternative is a view at whatever bounds Electron defaults to, over
-      // the app, for the frame between construction and the first report. An
-      // agent's view is primed and then hidden instead - see `primeAgentView`.
-      visible: false,
       parked: openedBy !== null
     }
     views.set(entry.id, entry)
@@ -928,6 +889,10 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
      * dark canvas for the frame between attaching and the first paint.
      */
     view.setBackgroundColor('#00000000')
+    // A new view paints nothing until the window has said where it goes. The
+    // alternative is a view at whatever bounds Electron defaults to, over
+    // the app, for the frame between construction and the first report. An
+    // agent's view is primed and then hidden instead - see `primeAgentView`.
     view.setBounds({ x: 0, y: 0, width: 0, height: 0 })
     view.setVisible(false)
 
@@ -1176,11 +1141,10 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     const size = agentSize()
     entry.view.setBounds({
       x: Math.max(0, (content?.width ?? size.width) - AGENT_PEEK),
-      y: Math.max(TITLEBAR_OVERLAY.dark.height, (content?.height ?? size.height) - AGENT_PEEK),
+      y: Math.max(TITLEBAR_HEIGHT, (content?.height ?? size.height) - AGENT_PEEK),
       ...size
     })
     entry.view.setVisible(true)
-    entry.visible = true
   }
 
   /** Step two: once the document has painted, off the screen and up to size. */
@@ -1201,13 +1165,12 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     // front during the prime keeps it: the window's rectangle wins over this.
     if (!entry.parked) return
     entry.view.setVisible(false)
-    entry.visible = false
     // Position only. The **size** has been right since before the load, which
     // is the reason nothing has to be propagated to a hidden renderer: measured
     // on Electron 43.3.0, `setBounds` on a view that is not visible does not
     // reach it, so a view loaded small and enlarged afterwards keeps the small
     // viewport for ever.
-    entry.view.setBounds({ x: 0, y: TITLEBAR_OVERLAY.dark.height, ...agentSize() })
+    entry.view.setBounds({ x: 0, y: TITLEBAR_HEIGHT, ...agentSize() })
   }
 
   /**
@@ -1600,7 +1563,7 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
        * already puts the placeholder well below it; this is the guarantee, not
        * the layout.
        */
-      const top = TITLEBAR_OVERLAY.dark.height
+      const top = TITLEBAR_HEIGHT
       const y = Math.max(top, wantedY)
       const height = Math.max(0, wantedHeight - (y - wantedY))
 
@@ -1618,7 +1581,6 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
        * does not, so it is the one of the two that is actually a *hide*.
        */
       entry.view.setVisible(payload.visible)
-      entry.visible = payload.visible
     },
 
     shutdown() {
@@ -1630,31 +1592,6 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       }
       popups.clear()
       for (const entry of [...views.values()]) destroy(entry, false)
-    },
-
-    inspect(id) {
-      const live = liveFor(id)
-      if (live === null) return null
-      return {
-        bounds: live.entry.view.getBounds(),
-        visible: live.entry.visible,
-        parked: live.entry.parked,
-        partition: BROWSER_PARTITION,
-        webContentsId: live.entry.webContentsId,
-        url: live.wc.getURL()
-      }
-    },
-
-    async capture(id) {
-      const live = liveFor(id)
-      if (live === null) return null
-      const image = await live.wc.capturePage()
-      const size = image.getSize()
-      return { width: size.width, height: size.height, bitmap: image.toBitmap() }
-    },
-
-    async click(id, x, y) {
-      await host.pointer(id, x, y)
     },
 
     // -----------------------------------------------------------------------

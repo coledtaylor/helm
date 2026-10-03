@@ -1,17 +1,10 @@
 // Drives the dev app that is already open, from outside it.
 //
-// `pnpm design-shot` is the sanctioned way to *look* at the app, and it stays
-// that: it walks every main view in both themes, in a run of its own, and its
-// PNGs are what a design review argues over. What it cannot do is answer a
-// question about the app you have open right now - click this, then what;
-// what does the pane say when the fetch fails - because it drives its own
-// process through a fixed itinerary and exits.
+// It answers questions about the app you have open right now - click this,
+// then what; what does the pane say when the fetch fails. A diagnostic tool,
+// not a test (docs/TESTING.md).
 //
-// That gap is real. The fixture bug where every row of the Files view read
-// "No patch for this file in what was fetched" was invisible in the list and
-// obvious two clicks in, and two clicks in is not somewhere design-shot goes.
-//
-// So: `pnpm dev --drive` opens Chromium's remote debugging port, and this
+// `pnpm dev --drive` opens Chromium's remote debugging port, and this
 // talks to it.
 //
 //   pnpm dev --drive                          # in one terminal
@@ -214,9 +207,7 @@ switch (command) {
    *
    * `Page.captureScreenshot` rather than anything that goes through the window
    * manager: it is the renderer's own pixels, so it works with the window
-   * behind something else, and it is the same capture `design-shot` makes
-   * (`webContents.capturePage`) - which means an edge measured here and an edge
-   * measured there are the same edge.
+   * behind something else.
    */
   case 'shot': {
     const file = params[0] ?? 'dev.png'

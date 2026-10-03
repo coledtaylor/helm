@@ -174,8 +174,7 @@ const INLINE = new Set([
  * different nodes. `[[note|`alias`]]` becomes three siblings - `[[note|`, a
  * `<code>`, and `]]` - and a regex over any one of them matches nothing, so the
  * link rendered as literal text and was counted as no link at all. One in this
- * vault, silently, for as long as the transform had existed; `CONT-4`'s two
- * parsers disagreeing by exactly one is what found it.
+ * vault, silently, for as long as the transform had existed.
  *
  * Returns the link's raw inner text, the sibling holding the closing `]]`, and
  * whatever followed it there. The text is taken **flattened**, so an alias

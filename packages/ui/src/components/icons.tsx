@@ -67,6 +67,16 @@ export function FolderIcon(props: IconProps): JSX.Element {
   )
 }
 
+/** A folder with a plus: add a folder to scan, beside the plain plus that starts a session. */
+export function FolderPlusIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M7.25 12.5h-4A1.25 1.25 0 0 1 2 11.25v-6.5A1.25 1.25 0 0 1 3.25 3.5h2.4c.4 0 .78.19 1.01.51l.68.94h5.41A1.25 1.25 0 0 1 14 6.2v1.55" />
+      <path d="M11.75 9.5v4.5M9.5 11.75H14" />
+    </Icon>
+  )
+}
+
 export function SparkIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
@@ -248,33 +258,17 @@ export function SlidersIcon(props: IconProps): JSX.Element {
  * at the same optical weight as its neighbours in the title bar.
  */
 export function GearIcon(props: IconProps): JSX.Element {
-  const teeth = Array.from({ length: 6 }, (_, i) => {
-    const a = (i * 2 * Math.PI) / 6 + Math.PI / 6
-    return {
-      x1: 8 + 5.1 * Math.cos(a),
-      y1: 8 + 5.1 * Math.sin(a),
-      x2: 8 + 6.9 * Math.cos(a),
-      y2: 8 + 6.9 * Math.sin(a)
-    }
-  })
   return (
     <Icon {...props}>
-      {/* Six teeth rather than eight, a wide ring, and a filled hub rather than
-          a stroked one. At 14px on a 1x display the 1.5 stroke is a fixed
-          budget, so the only way to keep air inside the glyph is to spend it
-          further out: a small stroked circle closes to a blob, and eight teeth
-          on a tight ring read as the sun two buttons along. */}
-      <circle cx="8" cy="8" r="1.25" fill="currentColor" stroke="none" />
-      <circle cx="8" cy="8" r="5.1" />
-      {teeth.map((t, i) => (
-        <line
-          key={i}
-          x1={t.x1.toFixed(2)}
-          y1={t.y1.toFixed(2)}
-          x2={t.x2.toFixed(2)}
-          y2={t.y2.toFixed(2)}
-        />
-      ))}
+      {/* A cog with its teeth cut into the rim, drawn on a 24-unit grid and
+          scaled onto this one - the stroke is 2.25 there so it lands on the
+          same 1.5 as every other glyph here. The ring-and-spokes it replaces
+          read as a blob at rail size: spokes off a circle are a sun, not a
+          gear. */}
+      <g transform="scale(0.6667)" strokeWidth="2.25">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+        <circle cx="12" cy="12" r="3" />
+      </g>
     </Icon>
   )
 }
@@ -425,6 +419,24 @@ export function ArtifactIcon(props: IconProps): JSX.Element {
       <rect x="2.25" y="3" width="11.5" height="10" rx="1.5" />
       <path d="M2.25 6h11.5" />
       <path d="M4.25 4.5h.01M6 4.5h.01" />
+    </Icon>
+  )
+}
+
+/** A pane taking the whole window: four corners pointing out. */
+export function MaximizeIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9" />
+    </Icon>
+  )
+}
+
+/** The same corners pointing in: the window gives the panes back. */
+export function UnmaximizeIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M13.5 6.5h-4v-4M2.5 9.5h4v4M9.5 6.5 14 2M6.5 9.5 2 14" />
     </Icon>
   )
 }
@@ -632,6 +644,26 @@ export function DevToolsIcon(props: IconProps): JSX.Element {
       <path d="M5.75 5.25 3 8l2.75 2.75" />
       <path d="M10.25 5.25 13 8l-2.75 2.75" />
       <path d="M9 3.75 7 12.25" />
+    </Icon>
+  )
+}
+
+/** Two angle brackets: hand this to VS Code, the editor a file is edited in. */
+export function CodeIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M5.5 4.5 2 8l3.5 3.5" />
+      <path d="M10.5 4.5 14 8l-3.5 3.5" />
+    </Icon>
+  )
+}
+
+/** One page over another: copy, as every app on this platform draws it. */
+export function CopyIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.25" />
+      <path d="M10.5 5.5V3.75a1.25 1.25 0 0 0-1.25-1.25h-5.5A1.25 1.25 0 0 0 2.5 3.75v5.5a1.25 1.25 0 0 0 1.25 1.25H5.5" />
     </Icon>
   )
 }

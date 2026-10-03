@@ -104,5 +104,12 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
     "statements": [
       "ALTER TABLE `sessions` ADD `claude_session_id` text;"
     ]
+  },
+  {
+    "tag": "0012_hesitant_richard_fisk",
+    "statements": [
+      "ALTER TABLE `sessions` ADD `last_claude_session_id` text;",
+      "ALTER TABLE `sessions` ADD `permission_mode` text;"
+    ]
   }
 ]

@@ -21,7 +21,9 @@ export default tseslint.config(
       '**/dist/**',
       '**/dist-app/**',
       '**/drizzle/**',
-      '**/*.generated.ts'
+      '**/*.generated.ts',
+      // Agent worktrees: whole checkouts of this repository, linted in their own right.
+      '.claude/worktrees/**'
     ]
   },
 

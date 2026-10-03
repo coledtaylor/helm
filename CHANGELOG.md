@@ -14,6 +14,115 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.0.0
+
+Helm 2.0 is a new window built around your sessions. Your projects and the
+sessions running in them are always one glance away, panes split wherever you
+drag a tab, and a crash no longer costs you the sessions it took. It also brings
+themes, a session launcher on Ctrl+N and a Files view that shows what a session
+is changing.
+
+The first start after upgrading opens with no tabs: the pages you had open in
+1.x are not carried over. Your settings, profiles and history are.
+
+**The window**
+
+- The window is now an icon rail, a sidebar and your panes. The rail switches
+  the sidebar between Sessions, Profiles, Files and Settings, and opens History,
+  Browser, Pull requests and Config as tabs. Right-click the rail to hide what
+  you do not use.
+- Sessions lists your projects with their live sessions under them. The
+  terminal icon on a project's row starts one there. Pinned projects fold like
+  a harness group.
+- Clicking a tab brings back the sidebar view it belongs to, pointed at it: a
+  session's project unfolded, a file's folder opened.
+- Every pane has its own tab strip, a line naming the branch and profile, and
+  an amber edge while a session in it is waiting on you. The + after the last
+  tab opens a session, a profile session or a browser tab in that pane.
+- The status bar leads with the Helm and `claude` versions, and counts the
+  sessions working, waiting and idle.
+- Pages fill the pane they are in, with their controls in a bar under the tab
+  strip, and say what to do next when there is nothing to show. Settings lists
+  its sections in the sidebar and shows one at a time.
+
+**Panes you arrange**
+
+- Drag a tab to any side of a pane to split there. A preview shows the part of
+  the pane it will take, and letting go opens a new pane on that side with the
+  tab in it. Drop it in the middle of a pane to move it into that pane.
+- Panes nest in rows and columns, as many as fit. Drag any divider to resize,
+  or double-click one to share its split evenly. The arrangement comes back the
+  next time you start Helm.
+- The split button and Ctrl+\ move a tab into the pane beside it, or into a new
+  one. Any pane can be closed, and its tabs move to the pane that takes its
+  space.
+- The Session split setting is gone; the dividers replace it.
+
+**Themes**
+
+- Three built-in themes: Nocturne (the dark theme Helm has always had),
+  Graphite and Daylight. Choose one for dark and one for light, and Follow
+  Windows switches between them.
+- Your own themes are JSON files in `~/.config/helm/themes`. Saving one
+  repaints the window, and one that cannot be read falls back to a built-in
+  theme and says so.
+- Pick an accent colour, and Helm adjusts it in each theme so it stays
+  readable.
+- Pane gap, corner radius and density are settings under Appearance.
+- The window's edge follows the theme instead of your Windows accent colour,
+  and on Windows 11 its corners are the small ones.
+
+**Starting a session**
+
+- Ctrl+N opens a launcher on the folder in front. Typing narrows the folders,
+  most recently worked in first. Each folder starts with the profile that fits
+  it best, the permission mode follows the profile until you change it, and a
+  sentence names the folder, the overlays and every flag before anything runs.
+  Enter starts, Ctrl+Enter starts in the pane beside.
+- A folder's past conversations are listed under it in the launcher, ready to
+  reopen, with the chosen profile's overlays and flags.
+- A profile picked in the launcher runs in the folder you chose rather than at
+  its own root.
+- Saving a new profile, or creating a harness, starts a session in it.
+
+**Crash recovery**
+
+- If Helm stops without shutting down, the next start offers back every session
+  it was running. Resume reopens each one in its own folder, profile and
+  permission mode, under its tab's name, in the pane and place it had.
+- A session that cannot come back is listed with the reason, and a conversation
+  still running somewhere else is never offered. "Always resume without asking"
+  skips the question.
+
+**Files**
+
+- A Files view shows a project's tree, with git's letter on each changed file
+  and a dot on each folder holding one. It follows the pane in front, and a
+  picker points it at any other project.
+- A file opens read-only as a tab beside its session, with the lines that
+  differ from the last commit marked, and it updates as the session edits it. A
+  single click previews a file, a double click keeps its tab.
+- Ctrl+P finds a file by a few letters of its name, and Ctrl+Shift+F searches
+  what the files say. Any file can be opened in VS Code or Explorer, or have its
+  path copied.
+- The Content view is now part of Files: a note or an HTML artifact opens
+  rendered in its tab, with Preview, Source and Edit.
+
+**Fixed**
+
+- Adding an MCP server from the config console failed when `claude` was
+  installed under a path with a space.
+- A pull request's review threads never loaded when `gh` was installed under a
+  path with a space.
+- Pull requests for a project cloned since the last run, or for every project
+  on a fresh install, waited for the next scheduled refresh. The first refresh
+  now waits for the folder scan.
+- When two folder scans overlapped, the older one could finish last and replace
+  the newer result.
+- Line numbers in a long file stopped partway down. They now run to the end.
+- Quitting just after closing a session's tab could end in an error.
+- The archive settings said "1 sessions".
+
 ## 1.2.0
 
 A harness template can now refer to the harness it is creating. That is what a

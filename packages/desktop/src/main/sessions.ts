@@ -1,11 +1,12 @@
 import { type BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import { basename } from 'node:path'
 import {
-  buildResumeArgs,
   finishSession,
   historyTitle,
-  launchRequestFromProfile,
+  launchRequestInFolder,
   newClaudeSessionId,
+  noteConversation as recordConversation,
+  PERMISSION_MODES,
   prepareLaunch,
   readGitBranch,
   readHistorySession,
@@ -17,9 +18,12 @@ import {
   sessionLabel,
   startSession,
   uniqueSessionName,
-  writeSessionMcpConfig,
+  type HistorySession,
   type LaunchedReviewPlan,
   type LaunchPlan,
+  type LostSession,
+  type PermissionMode,
+  type Profile,
   type SessionMcpServer,
   type SessionRecord
 } from '@helm/core'
@@ -37,7 +41,9 @@ import type {
   CloseSessionRequest,
   CloseSessionResult,
   LaunchedProfile,
+  LaunchedSession,
   LaunchProfileRequest,
+  LaunchSessionRequest,
   RenameSessionRequest,
   ResumedSession,
   ResumeSessionRequest,
@@ -77,10 +83,12 @@ interface Hosted {
    */
   mcpToken: string | null
   mcpConfigFile: string | null
+  /** The conversation last written for it, so an unchanged one is not rewritten. */
+  conversation: string | null
 }
 
 /**
- * Optional taps for the `--sessions-check` driver.
+ * Optional taps for the check drivers.
  *
  * The app passes none. They exist because the two things this milestone has to
  * prove that leave no trace anywhere else - what a hosted session printed, and
@@ -201,10 +209,20 @@ function nativeConfirm(window: () => BrowserWindow | null): Confirm {
 
 export interface SessionHost {
   start: (req: StartSessionRequest) => Promise<SessionRecord>
+  /**
+   * The new-session launcher's launch: a folder, a profile or none, an explicit
+   * permission mode, and optionally a conversation to reopen there.
+   */
+  launch: (req: LaunchSessionRequest) => Promise<LaunchedSession>
   /** Synthesises the profile's overlays, then spawns against them. */
   launchProfile: (req: LaunchProfileRequest) => Promise<LaunchedProfile>
   /** Reopens a conversation from the history index in a new tab. */
   resume: (req: ResumeSessionRequest) => Promise<ResumedSession>
+  /**
+   * Reopens a conversation a crash took, as it was: in its own folder, with its
+   * own profile and permission mode, under the name its tab had.
+   */
+  restore: (lost: LostSession, grid: { cols: number; rows: number }) => Promise<LaunchedSession>
   /**
    * Starts a session on a pull request, with a prompt composed by the caller.
    *
@@ -229,6 +247,12 @@ export interface SessionHost {
   /** OS process id, for asserting a session is really gone. */
   pid: (id: number) => number | null
   /**
+   * The conversation a running session is in, as Claude Code's registry says,
+   * written to its row when it moves - which a `/clear` does. What a restore
+   * after a crash reopens.
+   */
+  noteConversation: (id: number, conversationId: string) => void
+  /**
    * The session a bearer token was minted for, or null.
    *
    * **The whole of attribution at Helm's endpoint**, and it is answered from
@@ -252,8 +276,12 @@ export interface SessionHost {
    * knowing what else cares that a session started.
    */
   onChanged: (listener: () => void) => void
-  /** Which pane the user is looking at; decides whether an exit notifies. */
-  setFocus: (id: number | null) => void
+  /**
+   * The sessions on screen - the front tab of each pane showing one. Decides
+   * whether an exit notifies: an exit in a pane somebody is looking at needs
+   * no toast to be seen.
+   */
+  setFocus: (ids: readonly number[]) => void
   runningCount: () => number
   /** Asks about every still-running session at once. True means go ahead. */
   confirmCloseAll: () => Promise<boolean>
@@ -287,7 +315,7 @@ export function createSessionHost({
 }: SessionHostDeps): SessionHost {
   const hosted = new Map<number, Hosted>()
   const grids = new Map<number, { cols: number; rows: number }>()
-  let focused: number | null = null
+  let focused: ReadonlySet<number> = new Set()
   const changed = new Set<() => void>()
   const announce = (): void => {
     for (const listener of changed) listener()
@@ -321,7 +349,16 @@ export function createSessionHost({
     ...[...hosted.values()].filter((h) => !h.closed).map((h) => h.record.name)
   ]
 
+  /** Set by `shutdown`, after which no exit is this host's to record. */
+  let shutDown = false
+
   function onExit(id: number, exitCode: number): void {
+    // `shutdown` has completed every row, and by now the database may be gone
+    // too: a pty reports its exit on a later turn than the kill, so a tab closed
+    // just before a quit reports after `will-quit` has let go of the store.
+    // Writing then threw on the closed connection - an uncaught main-process
+    // exception, which is Electron's error dialog and a Helm that never exits.
+    if (shutDown) return
     // The row is the source of truth for the duration - it measures against the
     // clock that wrote `started_at`. `finishSession` returns null if this exit
     // was already recorded, in which case there is nothing to announce.
@@ -372,7 +409,7 @@ export function createSessionHost({
     const win = window()
     // "Non-focused" is two conditions, not one: a session in a background tab
     // of a focused window is just as unwatched as one in a minimised window.
-    const watched = win !== null && !win.isDestroyed() && win.isFocused() && focused === record.id
+    const watched = win !== null && !win.isDestroyed() && win.isFocused() && focused.has(record.id)
     if (watched || !Notification.isSupported()) return
 
     const outcome =
@@ -458,7 +495,11 @@ export function createSessionHost({
   async function spawn(
     plan: LaunchPlan,
     grid: { cols: number; rows: number },
-    origin: { projectPath?: string | null | undefined; profileId?: number | null | undefined },
+    origin: {
+      projectPath?: string | null | undefined
+      profileId?: number | null | undefined
+      permissionMode?: PermissionMode | null | undefined
+    },
     mcpToken: string | null = null
   ): Promise<SessionRecord> {
     const command = resolveClaudeCommand()
@@ -510,7 +551,8 @@ export function createSessionHost({
       argv,
       // Taken off the plan rather than re-read out of `argv`: the plan is what
       // put the flag there, so this is the value at its source.
-      claudeSessionId: plan.claudeSessionId
+      claudeSessionId: plan.claudeSessionId,
+      permissionMode: origin.permissionMode ?? null
     })
 
     let handle: SessionHandle
@@ -547,133 +589,244 @@ export function createSessionHost({
       handle,
       closed: false,
       mcpToken,
-      mcpConfigFile: plan.mcpConfigFile
+      mcpConfigFile: plan.mcpConfigFile,
+      conversation: record.claudeSessionId
     })
     announce()
     return record
   }
 
+  /**
+   * The checks a reopened conversation has to pass, made here rather than
+   * trusted from the renderer.
+   *
+   * The launcher and the history pane already refuse to offer a session they
+   * know is reaped, but "know" is an index that was current a moment ago, and
+   * the failure this guards against - `claude` printing "No conversation found"
+   * into a fresh tab and exiting - is a broken terminal. A sentence the window
+   * can show is better than a tab that dies in front of somebody.
+   */
+  function resumable(sessionId: string): HistorySession {
+    const history = readHistorySession(services.store, sessionId)
+    if (!history) {
+      throw new Error('That session is not in the history index any more.')
+    }
+    if (!history.projectExists) {
+      throw new Error(
+        `${history.project} is no longer on disk. Claude Code resolves a session id against the working directory, so this conversation cannot be reopened from anywhere else.`
+      )
+    }
+    if (history.transcriptFile === null) {
+      throw new Error(
+        'Claude Code has removed this conversation’s transcript, so there is nothing left to resume. Its prompts are still in the history.'
+      )
+    }
+    return history
+  }
+
+  /**
+   * Every launch but a review: a folder, a profile or none, a permission mode,
+   * and optionally a conversation to reopen. `start`, `launchProfile`,
+   * `resume` and the launcher's `launch` are this with some of those fixed,
+   * so there is one way a composition becomes argv.
+   */
+  async function launchComposed(
+    composition: {
+      cwd: string
+      projectPath: string | null
+      /** Basis for the name of a new conversation; unused for a reopened one. */
+      name: string | undefined
+      /**
+       * What the tab is called, whatever it is reopening: a session restored
+       * after a crash comes back under the name its tab had.
+       */
+      title?: string | undefined
+      profile: Profile | null
+      permissionMode: PermissionMode | null
+      history: HistorySession | null
+    },
+    grid: { cols: number; rows: number }
+  ): Promise<{ session: SessionRecord; plan: LaunchPlan }> {
+    const { cwd, projectPath, profile, permissionMode, history } = composition
+
+    /*
+     * A reopened conversation is labelled the way the history pane names it,
+     * and the label never reaches the CLI - `-n` is not passed on a resume. A
+     * tab titled `/usage` is a tab nobody can pick out of a strip, and that is
+     * what the opening prompt gave for 291 of one machine's sessions.
+     */
+    const base =
+      composition.title ??
+      (history === null
+        ? composition.name?.trim() || basename(cwd) || 'session'
+        : sanitizeSessionName(historyTitle(history)) || history.projectName)
+    // Uniqued against every tab in the strip: three sessions in one folder is
+    // the normal case, and `/resume` shows only the name.
+    const name = uniqueSessionName(base, takenNames())
+
+    const tools = registerBrowserTools(name)
+    let plan: LaunchPlan
+    try {
+      plan = prepareLaunch({
+        ...launchRequestInFolder({
+          cwd,
+          name,
+          profile,
+          permissionMode,
+          resume: history?.sessionId ?? null,
+          shimRoot
+        }),
+        mcp: tools?.mcp ?? null,
+        // A reopened conversation keeps the id it has; asserting it again with
+        // `--session-id` is refused by the CLI as already in use.
+        sessionId: history === null ? await mintSessionId() : null
+      })
+    } catch (err) {
+      // An overlay that could not be synthesised is a launch that did not
+      // happen, and the token minted for it would otherwise outlive it.
+      browserMcp?.()?.release(tools?.token ?? null)
+      throw err
+    }
+    attachBrowserTools(tools?.token ?? null, plan.mcpConfigFile)
+
+    // The overlay work happens before the row exists, so a profile pointing at
+    // a repo that has been deleted fails here rather than as a session that
+    // starts and quietly composes nothing.
+    const session = await spawn(
+      plan,
+      grid,
+      { projectPath, profileId: profile?.id ?? null, permissionMode },
+      tools?.token ?? null
+    )
+    return { session, plan }
+  }
+
+  /** What a composed launch says about itself, for the window to report. */
+  const composed = (session: SessionRecord, plan: LaunchPlan): LaunchedSession => ({
+    session,
+    overlays: plan.overlays.map((shim) => shim.name),
+    composedInstructions: plan.memoryFile !== null,
+    warnings: plan.warnings
+  })
+
   return {
     async start(req) {
-      const base = req.name?.trim() || basename(req.cwd) || 'session'
-      const name = uniqueSessionName(base, takenNames())
-      const tools = registerBrowserTools(name)
-      const plan = prepareLaunch({
-        root: req.cwd,
-        name,
-        shimRoot,
-        mcp: tools?.mcp ?? null,
-        sessionId: await mintSessionId()
-      })
-      attachBrowserTools(tools?.token ?? null, plan.mcpConfigFile)
-      return spawn(plan, req, { projectPath: req.projectPath }, tools?.token ?? null)
+      const { session } = await launchComposed(
+        {
+          cwd: req.cwd,
+          projectPath: req.projectPath ?? null,
+          name: req.name,
+          profile: null,
+          permissionMode: null,
+          history: null
+        },
+        req
+      )
+      return session
+    },
+
+    async launch(req) {
+      if (req.permissionMode !== null && !PERMISSION_MODES.includes(req.permissionMode)) {
+        throw new Error(
+          `${String(req.permissionMode)} is not a permission mode Claude Code accepts.`
+        )
+      }
+      const profile = req.profileId === null ? null : readProfile(services.store, req.profileId)
+      if (req.profileId !== null && profile === null) {
+        throw new Error('That profile no longer exists.')
+      }
+      const history = req.resume === null ? null : resumable(req.resume)
+      const { session, plan } = await launchComposed(
+        {
+          // The history row decides where a conversation is reopened, never
+          // the window: `--resume` resolves an id against the working
+          // directory and silently finds nothing anywhere else.
+          cwd: history?.project ?? req.cwd,
+          projectPath: history?.project ?? req.projectPath ?? null,
+          name: req.name,
+          profile,
+          permissionMode: req.permissionMode,
+          history
+        },
+        req
+      )
+      return composed(session, plan)
     },
 
     async launchProfile(req) {
       const profile = readProfile(services.store, req.profileId)
       if (!profile) throw new Error('That profile no longer exists.')
 
-      // Named after the profile, uniqued against every tab in the strip: three
-      // sessions from one profile is the normal case, and `/resume` shows only
-      // the name.
-      const name = uniqueSessionName(profile.name, takenNames())
-      const tools = registerBrowserTools(name)
-      const plan = prepareLaunch({
-        ...launchRequestFromProfile(profile, shimRoot, name),
-        mcp: tools?.mcp ?? null,
-        sessionId: await mintSessionId()
-      })
-      attachBrowserTools(tools?.token ?? null, plan.mcpConfigFile)
-
-      // The overlay work happens before the row exists, so a profile pointing
-      // at a repo that has been deleted fails here rather than as a session
-      // that starts and quietly composes nothing.
-      const session = await spawn(plan, req, { profileId: profile.id }, tools?.token ?? null)
-
-      return {
-        session,
-        profile,
-        overlays: plan.overlays.map((shim) => shim.name),
-        composedInstructions: plan.memoryFile !== null,
-        warnings: plan.warnings
-      }
+      // At the profile's own root, named after it, in its own permission mode:
+      // the launch the profile describes, unchanged.
+      const { session, plan } = await launchComposed(
+        {
+          cwd: profile.root,
+          projectPath: null,
+          name: profile.name,
+          profile,
+          permissionMode: profile.permissionMode,
+          history: null
+        },
+        req
+      )
+      return { ...composed(session, plan), profile }
     },
 
     /**
-     * Reopening a conversation `history.jsonl` remembers.
-     *
-     * Both preconditions are checked here rather than trusted from the
-     * renderer. The launcher already refuses to offer a session it knows is
-     * reaped, but "knows" is an index that was current a moment ago, and the
-     * failure it is guarding against - `claude` printing "No conversation
-     * found" into a fresh tab and exiting - is exactly the broken terminal the
-     * milestone is about. A sentence the pane can show is better than a tab
-     * that dies in front of the user.
+     * Reopening a conversation `history.jsonl` remembers, as it was: no
+     * profile and no permission mode. The launcher is where a conversation is
+     * reopened with a composition.
      */
     async resume(req) {
-      const history = readHistorySession(services.store, req.sessionId)
-      if (!history) {
-        throw new Error('That session is not in the history index any more.')
-      }
-      if (!history.projectExists) {
-        throw new Error(
-          `${history.project} is no longer on disk. Claude Code resolves a session id against the working directory, so this conversation cannot be reopened from anywhere else.`
-        )
-      }
-      if (history.transcriptFile === null) {
-        throw new Error(
-          'Claude Code has removed this conversation’s transcript, so there is nothing left to resume. Its prompts are still in the history.'
-        )
-      }
-
-      // Helm's own label for the tab, not the session's name - `-n` is not
-      // passed, so nothing here reaches the CLI. The same name the history pane
-      // shows, which is the point: a tab titled `/usage` is a tab nobody can
-      // pick out of a strip, and that is what the opening prompt gave for 291
-      // of this machine's sessions.
-      const label = uniqueSessionName(
-        sanitizeSessionName(historyTitle(history)) || history.projectName,
-        takenNames()
-      )
-
-      /*
-       * A resumed session gets the browser tools too, and it goes through the
-       * same core writer rather than a second one - `writeSessionMcpConfig` is
-       * what `prepareLaunch` calls, and this is the one launch path that does
-       * not build its argv there. What it must **not** borrow from
-       * `prepareLaunch` is everything else: `-n`, a model, an overlay set. The
-       * conversation was had under whatever it was had under.
-       */
-      const tools = registerBrowserTools(label)
-      const mcpConfigFile =
-        tools === null ? null : writeSessionMcpConfig(tools.mcp.dir, tools.mcp.servers)
-      attachBrowserTools(tools?.token ?? null, mcpConfigFile)
-
-      const session = await spawn(
+      const history = resumable(req.sessionId)
+      const { session } = await launchComposed(
         {
           cwd: history.project,
-          name: label,
-          argv: buildResumeArgs(history.sessionId, mcpConfigFile),
-          overlays: [],
-          memoryFile: null,
-          mcpConfigFile,
-          /*
-           * The id it already has, recorded rather than re-minted.
-           *
-           * `--resume <id>` was measured registering under that same id on
-           * 2.1.238, so this row and the registry agree without the flag - and
-           * passing `--session-id` here would be asserting an id that already
-           * exists, which the CLI refuses outright.
-           */
-          claudeSessionId: history.sessionId,
-          warnings: []
+          projectPath: history.project,
+          name: undefined,
+          profile: null,
+          permissionMode: null,
+          history
         },
-        req,
-        { projectPath: history.project },
-        tools?.token ?? null
+        req
       )
-
       return { session, history }
+    },
+
+    /**
+     * The history row decides the folder, as for every reopened conversation;
+     * the lost row decides everything else. A profile deleted since is said
+     * rather than refused - the conversation is still worth having back.
+     */
+    async restore(lost, grid) {
+      const { record } = lost
+      if (lost.conversationId === null) {
+        throw new Error('Helm never learned which conversation this was, so there is nothing to reopen.')
+      }
+      const history = resumable(lost.conversationId)
+      const profile = record.profileId === null ? null : readProfile(services.store, record.profileId)
+      const { session, plan } = await launchComposed(
+        {
+          cwd: history.project,
+          projectPath: record.projectPath ?? history.project,
+          name: undefined,
+          title: sessionLabel(record),
+          profile,
+          permissionMode: lost.permissionMode,
+          history
+        },
+        grid
+      )
+      const launched = composed(session, plan)
+      if (record.profileId === null || profile !== null) return launched
+      return {
+        ...launched,
+        warnings: [
+          `The profile ${sessionLabel(record)} was started with no longer exists, so it reopened without one.`,
+          ...launched.warnings
+        ]
+      }
     },
 
     /**
@@ -759,7 +912,7 @@ export function createSessionHost({
         releaseBrowserTools(entry)
         hosted.delete(req.id)
       }
-      if (focused === req.id) focused = null
+      if (focused.has(req.id)) focused = new Set([...focused].filter((id) => id !== req.id))
       announce()
       return { closed: true }
     },
@@ -781,6 +934,13 @@ export function createSessionHost({
 
     pid: (id) => hosted.get(id)?.handle.pid ?? null,
 
+    noteConversation(id, conversationId) {
+      const entry = hosted.get(id)
+      if (!entry || !isRunning(entry) || entry.conversation === conversationId) return
+      entry.conversation = conversationId
+      recordConversation(services.store, id, conversationId)
+    },
+
     tokenHolder(token) {
       // A running session only. A token is revoked when its session ends, so
       // reaching this with a live token for an exited session would be a bug
@@ -798,8 +958,8 @@ export function createSessionHost({
       changed.add(listener)
     },
 
-    setFocus(id) {
-      focused = id
+    setFocus(ids) {
+      focused = new Set(ids)
     },
 
     runningCount: () => running().length,
@@ -821,6 +981,7 @@ export function createSessionHost({
     },
 
     shutdown() {
+      shutDown = true
       // Rows first: once the processes are gone their `onExit` handlers may not
       // get a turn on the event loop before the process image is replaced, and
       // a row left claiming to be running would be reconciled to `lost` at the
