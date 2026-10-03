@@ -121,7 +121,7 @@ export {
   type PaneGroupProps
 } from './components/PaneGroup'
 export { Rail, type RailItem, type RailProps } from './components/Rail'
-export { SessionTree, type SessionTreeProps, type TreeSession } from './components/SessionTree'
+export { SessionTree, type SessionTreeProps, type TreeReveal, type TreeSession } from './components/SessionTree'
 export {
   PullsPane,
   fetchedCaption,

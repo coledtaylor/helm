@@ -726,6 +726,17 @@ overrides the gate; keep it.
   a tab in the focused pane and is current, with the fill alone, while that tab
   is in front.
 
+  **The rail starts a piece of work; a tab carries it on.** Clicking a tab
+  brings back the view it belongs to, opened if the sidebar was put away and
+  pointed at the tab's own row: a session's or a project page's tab brings
+  Sessions with its row unfolded and scrolled to, a file's tab brings Files on
+  its project with every folder down to it open, and Settings' tab brings its
+  sections. A tab with its list inside it - History, Pull requests, Config -
+  or none at all (Browser) leaves the sidebar alone. Only a click on a tab does
+  this: focus moving between two panes does not, or a session beside a file
+  would flip the sidebar on every click across. A maximized pane keeps the
+  window, and the view still switches for when it is given back.
+
   **Settings is a view with a page.** The sidebar lists its sections (General,
   Appearance, Terminal, Sessions, Workspace, Files, Browser, GitHub, Archive,
   Updates) as sidebar rows, and the pane shows the one picked - a 17px title,

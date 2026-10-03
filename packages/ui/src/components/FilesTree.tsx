@@ -31,6 +31,11 @@ export interface FilesTreeProps {
   status: FilesStatus | null
   /** The file in front of the focused pane, absolute, or null. */
   selectedPath: string | null
+  /**
+   * Changed to scroll `selectedPath`'s row into view, once it is drawn - its
+   * folders may still be being read. Absent, the tree never scrolls itself.
+   */
+  revealSeq?: number
   onToggleDir: (relPath: string) => void
   /** A file to open: `keep` false for a single click, which opens a preview. */
   onOpen: (path: string, keep: boolean) => void
@@ -54,10 +59,26 @@ const LETTER_TONE: Record<GitFileState, string> = {
 }
 
 export function FilesTree(props: FilesTreeProps): JSX.Element {
-  const { rootLabel, dirs, status, onGoToFile } = props
+  const { rootLabel, dirs, loading, status, selectedPath, revealSeq, onGoToFile } = props
   const root = dirs.get('')
   const files = status?.files ?? null
   const dirty = useMemo(() => (files === null ? new Set<string>() : changedDirectories(files)), [files])
+
+  const listRef = useRef<HTMLDivElement>(null)
+  const revealed = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (revealSeq === undefined || revealed.current === revealSeq) return
+    const row = listRef.current?.querySelector<HTMLElement>('[aria-current="true"]')
+    if (row) {
+      row.scrollIntoView({ block: 'nearest' })
+      revealed.current = revealSeq
+      return
+    }
+    // Everything on the way is read and the row is still not drawn: the file
+    // is not in the tree (deleted, or behind a folder that is never walked).
+    // Stop waiting, so a folder opened later does not yank the tree to it.
+    if (root !== undefined && loading.size === 0) revealed.current = revealSeq
+  }, [revealSeq, selectedPath, root, dirs, loading])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -75,7 +96,7 @@ export function FilesTree(props: FilesTreeProps): JSX.Element {
         <span className="shrink-0 font-mono text-[10.5px]">Ctrl P</span>
       </button>
 
-      <div role="group" aria-label="Project files" className="min-h-0 flex-1 overflow-y-auto px-1.5 pt-0.5 pb-1.5 text-[12.5px]">
+      <div ref={listRef} role="group" aria-label="Project files" className="min-h-0 flex-1 overflow-y-auto px-1.5 pt-0.5 pb-1.5 text-[12.5px]">
         {root === undefined ? (
           <p className="px-2 py-6 text-center text-[12px] text-fg-subtle">Reading&hellip;</p>
         ) : root.error !== null ? (

@@ -110,6 +110,51 @@ describe('useFiles: the sidebar', () => {
     expect([...result.current.expanded]).toEqual(['src'])
   })
 
+  it('reveals a file: every folder down to it opened, and read once, on its project or another', async () => {
+    const { result } = renderHook((options: FilesOptions) => useFiles(options), {
+      initialProps: { active: true, follow: A, shown: NONE }
+    })
+    await waitFor(() => expect(result.current.dirs.has('')).toBe(true))
+    act(() => result.current.toggleDir('src'))
+    await waitFor(() => expect(result.current.dirs.has('src')).toBe(true))
+    bridge.clearRecords()
+
+    // The tree on screen reads what it opens, and not what was already open.
+    act(() => result.current.reveal(A, `${A}\\src\\deep\\x.ts`))
+    expect([...result.current.expanded]).toEqual(['src', 'src/deep'])
+    await waitFor(() => expect(result.current.dirs.has('src/deep')).toBe(true))
+    expect(bridge.invoked('files:dir')).toEqual([{ root: A, relPath: 'src/deep' }])
+
+    // Another project: the tree moves to it and is read whole, once.
+    bridge.clearRecords()
+    act(() => result.current.reveal(B, `${B}\\lib\\y.ts`))
+    expect(result.current.root).toBe(B)
+    expect([...result.current.expanded]).toEqual(['lib'])
+    await waitFor(() => expect(result.current.dirs.has('lib')).toBe(true))
+    expect(bridge.invoked('files:dir')).toEqual([
+      { root: B, relPath: '' },
+      { root: B, relPath: 'lib' }
+    ])
+  })
+
+  it('reads nothing for a reveal while the sidebar is away, and all of it when it comes back', async () => {
+    const { result, rerender } = renderHook((options: FilesOptions) => useFiles(options), {
+      initialProps: { active: false, follow: A, shown: NONE }
+    })
+    act(() => result.current.reveal(A, `${A}\\top.ts`))
+    expect([...result.current.expanded]).toEqual([])
+    act(() => result.current.reveal(A, `${A}\\src\\z.ts`))
+    expect([...result.current.expanded]).toEqual(['src'])
+    expect(bridge.invoked('files:dir')).toEqual([])
+
+    rerender({ active: true, follow: A, shown: NONE })
+    await waitFor(() => expect(result.current.dirs.has('src')).toBe(true))
+    expect(bridge.invoked('files:dir')).toEqual([
+      { root: A, relPath: '' },
+      { root: A, relPath: 'src' }
+    ])
+  })
+
   it('reads again what a change under the project touched: the status and the folder it was in', async () => {
     const { result } = renderHook((options: FilesOptions) => useFiles(options), {
       initialProps: { active: true, follow: A, shown: NONE }

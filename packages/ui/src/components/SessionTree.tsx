@@ -1,5 +1,5 @@
 import type { JSX } from 'react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DiscoveryResult, Harness, Project } from '@helm/core'
 import { isProjectPinned } from '@helm/core/types'
 import { cn } from '../lib/cn'
@@ -41,7 +41,17 @@ export interface SessionTreeProps {
   launchingPath: string | null
   onOpenSession: (id: string) => void
   onAddRoot: () => void
+  /**
+   * A row to bring into view: what is folded over it opens and the tree
+   * scrolls to it. A new `seq` asks again for the same row.
+   */
+  reveal?: TreeReveal | null
 }
+
+/** A session's row, by its id, or a project's, by its path. */
+export type TreeReveal =
+  | { seq: number; kind: 'session'; id: string }
+  | { seq: number; kind: 'project'; path: string }
 
 interface Group {
   key: string
@@ -162,16 +172,54 @@ export function SessionTree({
   onLaunch,
   launchingPath,
   onOpenSession,
-  onAddRoot
+  onAddRoot,
+  reveal = null
 }: SessionTreeProps): JSX.Element {
   const [query, setQuery] = useState('')
   const [foldedGroups, setFoldedGroups] = useState<ReadonlySet<string>>(new Set())
   const [foldedProjects, setFoldedProjects] = useState<ReadonlySet<string>>(new Set())
   const groups = useMemo(() => groupProjects(discovery, pinnedPaths), [discovery, pinnedPaths])
   const pins = useMemo(() => resolvePins(discovery, pinnedPaths), [discovery, pinnedPaths])
+  const navRef = useRef<HTMLElement>(null)
 
   const sessionsOf = (path: string): readonly TreeSession[] =>
     sessionsByPath.get(path.toLowerCase()) ?? []
+
+  /*
+   * A row asked for is unfolded while rendering, on the change of the request,
+   * rather than in an effect - the same render then draws it, and the effect
+   * below finds it to scroll to. The filter is left alone: what somebody typed
+   * there is theirs, and a row it hides stays hidden.
+   */
+  const [revealedSeq, setRevealedSeq] = useState<number | null>(null)
+  if (reveal !== null && reveal.seq !== revealedSeq) {
+    setRevealedSeq(reveal.seq)
+    const key =
+      reveal.kind === 'project'
+        ? reveal.path.toLowerCase()
+        : ([...sessionsByPath].find(([, rows]) => rows.some((row) => row.id === reveal.id))?.[0] ?? null)
+    if (key !== null) {
+      const unfold = (current: ReadonlySet<string>, item: string): ReadonlySet<string> => {
+        if (!current.has(item)) return current
+        const next = new Set(current)
+        next.delete(item)
+        return next
+      }
+      setFoldedProjects((current) => unfold(current, key))
+      const group = groups.find(
+        (each) =>
+          each.root?.path.toLowerCase() === key ||
+          each.members.some((member) => member.path.toLowerCase() === key)
+      )
+      if (group !== undefined) setFoldedGroups((current) => unfold(current, group.key))
+    }
+  }
+  // The row in front - a session's or a project's page - is the tree's one
+  // `aria-current`, so the scroll needs no second way of finding it.
+  useEffect(() => {
+    if (reveal === null) return
+    navRef.current?.querySelector<HTMLElement>('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' })
+  }, [reveal])
 
   // A project matches on its name, its path, or the name of anything running
   // in it - "where is the session called accruals" is a question this filter
@@ -266,6 +314,7 @@ export function SessionTree({
       </div>
 
       <nav
+        ref={navRef}
         aria-label="Projects and sessions"
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pb-1.5"
       >

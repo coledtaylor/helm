@@ -1,5 +1,6 @@
+import type { JSX } from 'react'
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ContentDirEntry, ContentDirListing, FilesStatus } from '@helm/core'
 import { FilesRootPicker, FilesStatusNote, FilesTree, type FilesTreeProps } from './FilesTree'
 
@@ -59,6 +60,74 @@ function renderTree(overrides: Partial<FilesTreeProps> = {}) {
 
 const row = (relPath: string): HTMLElement =>
   document.querySelector(`[data-files-entry="${relPath}"]`) as HTMLElement
+
+describe('FilesTree: revealing the file in front', () => {
+  const scrollIntoView = Element.prototype.scrollIntoView
+  let scrolled: string[] = []
+  beforeEach(() => {
+    scrolled = []
+    Element.prototype.scrollIntoView = function record(this: Element) {
+      scrolled.push(this.closest('[data-files-entry]')?.getAttribute('data-files-entry') ?? '')
+    }
+  })
+  afterEach(() => {
+    Element.prototype.scrollIntoView = scrollIntoView
+  })
+
+  const top = listing('', [entry('src', true), entry('new.ts')])
+  const src = listing('src', [entry('src/a.ts'), entry('src/b.ts')])
+  const tree = (over: Partial<FilesTreeProps>): JSX.Element => (
+    <FilesTree
+      rootLabel="p"
+      dirs={new Map([['', top]])}
+      expanded={new Set(['src'])}
+      loading={new Set(['src'])}
+      status={null}
+      selectedPath={`${ROOT}\\src\\b.ts`}
+      onToggleDir={vi.fn()}
+      onOpen={vi.fn()}
+      onReveal={vi.fn()}
+      onCopyPath={vi.fn()}
+      onOpenInEditor={null}
+      onGoToFile={vi.fn()}
+      {...over}
+    />
+  )
+
+  it('scrolls to its row once the folder holding it is read, and once per request', () => {
+    const view = render(tree({ revealSeq: 1 }))
+    expect(scrolled).toEqual([])
+    view.rerender(tree({ revealSeq: 1, dirs: new Map([['', top], ['src', src]]), loading: new Set() }))
+    expect(scrolled).toEqual(['src/b.ts'])
+
+    // Another render with nothing new asked leaves the scroll where somebody put it.
+    view.rerender(tree({ revealSeq: 1, dirs: new Map([['', top], ['src', src]]), loading: new Set(), status: STATUS }))
+    expect(scrolled).toEqual(['src/b.ts'])
+    view.rerender(tree({ revealSeq: 2, dirs: new Map([['', top], ['src', src]]), loading: new Set() }))
+    expect(scrolled).toEqual(['src/b.ts', 'src/b.ts'])
+  })
+
+  it('stops waiting for a file that is not in the tree, so a folder opened later does not jump to it', () => {
+    const view = render(tree({ revealSeq: 1, selectedPath: `${ROOT}\\lib\\c.ts`, expanded: new Set(), loading: new Set() }))
+    expect(scrolled).toEqual([])
+    const lib = listing('lib', [entry('lib/c.ts')])
+    view.rerender(
+      tree({
+        revealSeq: 1,
+        selectedPath: `${ROOT}\\lib\\c.ts`,
+        dirs: new Map([['', listing('', [entry('lib', true)])], ['lib', lib]]),
+        expanded: new Set(['lib']),
+        loading: new Set()
+      })
+    )
+    expect(scrolled).toEqual([])
+  })
+
+  it('never scrolls itself unless asked', () => {
+    render(tree({ dirs: new Map([['', top], ['src', src]]), loading: new Set() }))
+    expect(scrolled).toEqual([])
+  })
+})
 
 describe('FilesTree', () => {
   it('puts git’s letter on a changed file and marks the folder that holds one', () => {

@@ -118,8 +118,10 @@ import {
   type SettingsSectionId,
   type Tab,
   type TabIndicator,
+  type TreeReveal,
   type TreeSession
 } from '@helm/ui'
+import { sidebarFor, type SidebarView } from './sidebarFor'
 import type { AppMode, SessionConfirmRequest } from '../../../shared/ipc'
 import { helm } from './bridge'
 import { usePaneSplit } from './paneSplit'
@@ -155,12 +157,6 @@ const KIND_ICON = {
   repo: RepoIcon,
   folder: FolderIcon
 } as const
-
-/**
- * What the rail's sidebar views are. Pages - history, settings and the rest -
- * open as tabs instead; see `RailItem`.
- */
-type SidebarView = 'sessions' | 'files' | 'profiles' | 'settings'
 
 /**
  * A link in a rendered note, handed to the OS browser.
@@ -270,6 +266,11 @@ export function App(): JSX.Element {
   const [sidebarView, setSidebarView] = useState<SidebarView>('sessions')
   /** The rail's current view, pressed again, puts the sidebar away. */
   const [sidebarHidden, setSidebarHidden] = useState(false)
+  /** The last tab click's row, for the Sessions tree to bring into view. */
+  const [treeReveal, setTreeReveal] = useState<TreeReveal | null>(null)
+  /** Bumped when a file tab is clicked: the Files tree scrolls to its row. */
+  const [filesRevealSeq, setFilesRevealSeq] = useState<number | undefined>(undefined)
+  const revealCount = useRef(0)
   /** The project a session is starting in, from its page or its `+`. */
   const [launchingPath, setLaunchingPath] = useState<string | null>(null)
   /**
@@ -1070,6 +1071,34 @@ export function App(): JSX.Element {
       setSidebarHidden(false)
     },
     [setFilesRoot]
+  )
+
+  /**
+   * A tab clicked brings the sidebar it carries on from (`sidebarFor`), open
+   * and pointed at it - its file revealed in the tree, its session or project
+   * scrolled to - as though its rail item had been pressed and its row found.
+   *
+   * A click on a tab, and only that: focus moving between two panes leaves the
+   * sidebar alone, or a session beside a file would flip it on every click
+   * across. A maximized pane keeps the window; the view still switches, for
+   * when the window is given back.
+   */
+  const { reveal: revealFile } = files
+  const bringSidebarFor = useCallback(
+    (ref: PaneRef) => {
+      const view = sidebarFor(ref)
+      if (view === null) return
+      setSidebarView(view)
+      setSidebarHidden(false)
+      revealCount.current += 1
+      const seq = revealCount.current
+      if (ref.kind === 'file') {
+        revealFile(ref.root, ref.path)
+        setFilesRevealSeq(seq)
+      } else if (ref.kind === 'session') setTreeReveal({ seq, kind: 'session', id: paneId(ref) })
+      else if (ref.kind === 'project') setTreeReveal({ seq, kind: 'project', path: ref.path })
+    },
+    [revealFile]
   )
 
   /**
@@ -2264,7 +2293,11 @@ export function App(): JSX.Element {
             tabs={group.tabs.flatMap(tabFor)}
             activeId={groupFrontId}
             focused={index === open.focused}
-            onActivate={(id) => commit((current) => activateTab(current, id))}
+            onActivate={(id) => {
+              commit((current) => activateTab(current, id))
+              const ref = group.tabs.find((tab) => paneId(tab) === id)
+              if (ref !== undefined) bringSidebarFor(ref)
+            }}
             onClose={closeAny}
             onMove={(id, toIndex) => commit((current) => moveTab(current, id, index, toIndex))}
             onRename={(id, label) => {
@@ -2554,6 +2587,7 @@ export function App(): JSX.Element {
             launchingPath={launchingPath}
             onOpenSession={openTreeSession}
             onAddRoot={launcher.addRoot}
+            reveal={treeReveal}
           />
         </Sidebar>
       </div>
@@ -2606,6 +2640,7 @@ export function App(): JSX.Element {
               loading={files.loadingDirs}
               status={files.status}
               selectedPath={front?.kind === 'file' ? front.path : null}
+              {...(filesRevealSeq === undefined ? {} : { revealSeq: filesRevealSeq })}
               onToggleDir={files.toggleDir}
               onOpen={(path, keep) => {
                 if (files.root !== null) openFileAt(files.root, path, keep)

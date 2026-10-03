@@ -31,6 +31,8 @@ export interface FilesState {
   expanded: ReadonlySet<string>
   loadingDirs: ReadonlySet<string>
   toggleDir: (relPath: string) => void
+  /** Points the tree at a file: its project, with every folder down to it open. */
+  reveal: (root: string, path: string) => void
   status: FilesStatus | null
   /** Each file tab's file, keyed by its lower-cased path. */
   tabs: ReadonlyMap<string, FileTabState>
@@ -233,6 +235,28 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
     [readDir, expanded]
   )
 
+  const reveal = useCallback(
+    (at: string, path: string) => {
+      const sameRoot = rootRef.current !== null && keyOf(rootRef.current) === keyOf(at)
+      setRoot(at)
+      const folders = relativeTo(at, path).split('/').slice(0, -1)
+      const ancestors = folders.map((_, index) => folders.slice(0, index + 1).join('/'))
+      const held = expandedByRoot.get(keyOf(at)) ?? new Set<string>()
+      const opening = ancestors.filter((relPath) => !held.has(relPath))
+      if (opening.length === 0) return
+      setExpandedByRoot((current) => {
+        const set = new Set(current.get(keyOf(at)) ?? [])
+        for (const relPath of opening) set.add(relPath)
+        return new Map(current).set(keyOf(at), set)
+      })
+      // A tree already on screen reads what it opens, as `toggleDir` does. One
+      // that is coming onto the screen, or onto another project, is read whole
+      // by the effect above - every folder left open included.
+      if (active && sameRoot) for (const relPath of opening) readDir(relPath)
+    },
+    [active, expandedByRoot, readDir, setRoot]
+  )
+
   // -------------------------------------------------------------------------
   // File tabs
   // -------------------------------------------------------------------------
@@ -363,6 +387,7 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
     expanded,
     loadingDirs,
     toggleDir,
+    reveal,
     status,
     tabs,
     listing,
