@@ -60,7 +60,7 @@ describe('session host shutdown', () => {
       const { createServices } = await import('./services')
       const next = createServices()
       try {
-        expect(next.lostSessions).toBe(0)
+        expect(next.lost.sessions).toEqual([])
         const rows = readSessions(next.store)
         expect(rows).toHaveLength(2)
         expect(rows.find((row) => row.id === beta.id)).toMatchObject({

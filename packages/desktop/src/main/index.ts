@@ -9,6 +9,9 @@ import {
   shell
 } from 'electron'
 import {
+  claudeHome,
+  readSessionRegistry,
+  sessionRegistryDir,
   writeSetting,
   type AppliedTheme,
   type AppSettings
@@ -51,6 +54,7 @@ import { createUsageService } from './usage'
 import { maybeCheckForUpdate } from './update'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
 import { createActivityService } from './activity'
+import { createRestoreService } from './restore'
 import { createResourcesService } from './resources'
 import { createCollector, type CheckContext } from './checkkit'
 import { titleBarOverlayFor } from './chrome'
@@ -334,8 +338,10 @@ function startApp(options: AppOptions = {}): void {
   if (adoptExistingProfile(services)) {
     console.log('existing profile adopted; first run marked complete')
   }
-  if (services.lostSessions > 0) {
-    console.warn(`${services.lostSessions} session(s) did not outlive the last run; marked lost`)
+  if (services.lost.sessions.length > 0) {
+    console.warn(
+      `${String(services.lost.sessions.length)} session(s) did not outlive the last run; marked lost`
+    )
   }
   if (services.staleShims > 0) {
     console.log(`removed ${String(services.staleShims)} overlay shim(s) left by the last run`)
@@ -517,6 +523,24 @@ function startApp(options: AppOptions = {}): void {
   })
   sessions.onChanged(() => activity.refresh())
 
+  const restore = createRestoreService({
+    lost: services.lost,
+    store: services.store,
+    sessions,
+    refreshHistory: () => {
+      history.refresh()
+    },
+    // Read here rather than from the activity poller's last pass, which only
+    // starts once the window is up and would answer "nothing is running" to
+    // a window that asked first.
+    liveConversations: () =>
+      new Set(
+        readSessionRegistry(sessionRegistryDir(options.claudeHome ?? claudeHome())).flatMap((entry) =>
+          entry.sessionId === null ? [] : [entry.sessionId]
+        )
+      )
+  })
+
   /*
    * What each hosted session is *holding* - its process tree and its ports.
    *
@@ -544,6 +568,7 @@ function startApp(options: AppOptions = {}): void {
   registerIpc({
     services,
     sessions,
+    restore,
     activity,
     resources,
     pterm,

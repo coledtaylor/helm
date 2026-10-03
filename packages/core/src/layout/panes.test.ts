@@ -13,12 +13,14 @@ import {
   openTab,
   paneId,
   placeBeside,
+  placeRestored,
   reconcile,
   sendToOtherGroup,
   toSaved,
   visibleTabs,
   type PaneLayout,
-  type PaneRef
+  type PaneRef,
+  type SavedPaneLayout
 } from './panes'
 
 const session = (id: number): PaneRef => ({ kind: 'session', id })
@@ -244,24 +246,29 @@ describe('visibleTabs and findTab', () => {
 })
 
 describe('toSaved and fromSaved', () => {
-  it('keeps the persistable tabs in their groups and drops what does not survive a restart', () => {
-    const layout = layoutOf([project('C:\\a'), session(1)], [HISTORY, { kind: 'browser', id: 2 }])
+  it('writes down pages and sessions in their groups, and never a browser tab or the restore offer', () => {
+    const layout = layoutOf(
+      [project('C:\\a'), session(1)],
+      [HISTORY, { kind: 'restore' }, { kind: 'browser', id: 2 }]
+    )
     const saved = toSaved(layout)
     expect(saved).toEqual({
       groups: [
-        { panes: [project('C:\\a')], activeId: null },
+        { panes: [project('C:\\a'), session(1)], activeId: 'session:1' },
         { panes: [HISTORY], activeId: null }
       ],
       focused: 1
     })
-    // The fronts were tabs that are not written down, so neither is named, and
-    // each group restores with its last tab in front.
-    expect(shape(fromSaved(saved))).toEqual([' *project:C:\\a', '>*history'])
+    // A session nothing hosts is dropped before it is drawn; the other front
+    // was not written down, so that group restores with its last tab in front.
+    const hosted = (ref: PaneRef): boolean => ref.kind !== 'session'
+    expect(shape(reconcile(fromSaved(saved), hosted, []))).toEqual([' *project:C:\\a', '>*history'])
   })
 
   it('restores a group of only sessions as no group at all', () => {
     const saved = toSaved(layoutOf([HISTORY], [session(1)]))
-    expect(shape(fromSaved(saved))).toEqual(['>*history'])
+    const hosted = (ref: PaneRef): boolean => ref.kind !== 'session'
+    expect(shape(reconcile(fromSaved(saved), hosted, []))).toEqual(['>*history'])
   })
 
   it('folds groups past the limit into the last and drops duplicate tabs', () => {
@@ -278,5 +285,63 @@ describe('toSaved and fromSaved', () => {
 
   it('reads null as the empty window', () => {
     expect(fromSaved(null)).toEqual(EMPTY_LAYOUT)
+  })
+})
+
+describe('placeRestored', () => {
+  /** What the next start draws before anything is reopened: saved, then reconciled with no sessions hosted. */
+  const startedFrom = (saved: SavedPaneLayout, reopened: number[] = []): PaneLayout => {
+    const drawn = reconcile(fromSaved(saved), (ref) => ref.kind !== 'session', [])
+    return reconcile(drawn, (ref) => ref.kind !== 'session' || reopened.includes(ref.id), reopened.map(session))
+  }
+
+  it('puts each session back between the tabs it sat between, in the pane it was in', () => {
+    const saved = toSaved(
+      activateTab(layoutOf([project('C:\\a'), session(1), HISTORY], [session(2), SETTINGS]), 'session:1')
+    )
+    const now = startedFrom(saved, [11, 12])
+    // `reconcile` gave the reopened sessions tabs in the focused pane.
+    expect(shape(now)).toEqual(['>project:C:\\a *history session:11 session:12', ' *settings'])
+
+    const pairs = new Map([
+      [1, 11],
+      [2, 12]
+    ])
+    expect(shape(placeRestored(now, saved, pairs))).toEqual([
+      '>project:C:\\a *session:11 history',
+      ' session:12 *settings'
+    ])
+  })
+
+  it('opens a pane of only sessions again, on the side it was on', () => {
+    const saved = toSaved(activateTab(layoutOf([session(1), session(2)], [HISTORY]), 'session:2'))
+    const now = startedFrom(saved, [21, 22])
+    expect(shape(now)).toEqual(['>*history session:21 session:22'])
+
+    const placed = placeRestored(now, saved, new Map([[1, 21], [2, 22]]))
+    expect(shape(placed)).toEqual(['>session:21 *session:22', ' *history'])
+  })
+
+  it('keeps the order of what came back when a neighbour did not', () => {
+    const saved = toSaved(layoutOf([session(1), project('C:\\a'), session(2), session(3), HISTORY]))
+    const now = startedFrom(saved, [33])
+    expect(shape(placeRestored(now, saved, new Map([[3, 33]])))).toEqual([
+      '>project:C:\\a session:33 *history'
+    ])
+  })
+
+  it('reopens into an empty window', () => {
+    const saved = toSaved(layoutOf([session(1)], [session(2)]))
+    const now = startedFrom(saved, [5, 6])
+    expect(shape(placeRestored(now, saved, new Map([[1, 5], [2, 6]])))).toEqual([' *session:5', '>*session:6'])
+  })
+
+  it('leaves a session the saved layout does not name where it is, and does nothing without a layout', () => {
+    const saved = toSaved(layoutOf([HISTORY, session(1)]))
+    const now = startedFrom(saved, [8, 9])
+    const placed = placeRestored(now, saved, new Map([[1, 8], [4, 9]]))
+    expect(shape(placed)).toEqual(['>history *session:8 session:9'])
+    expect(placeRestored(now, null, new Map([[1, 8]]))).toBe(now)
+    expect(placeRestored(now, saved, new Map())).toBe(now)
   })
 })

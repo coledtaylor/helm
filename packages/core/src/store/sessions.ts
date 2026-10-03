@@ -1,5 +1,5 @@
-import { and, desc, eq, sql } from 'drizzle-orm'
-import type { SessionRecord, SessionStatus } from '../types'
+import { and, desc, eq, isNull, ne, or, sql } from 'drizzle-orm'
+import { PERMISSION_MODES, type PermissionMode, type SessionRecord, type SessionStatus } from '../types'
 import type { Store } from './db'
 import { sessions } from './schema'
 
@@ -24,6 +24,19 @@ export interface NewSession {
   argv?: string[]
   /** The conversation id passed as `--session-id`, or resumed. Null for none. */
   claudeSessionId?: string | null
+  /** The `--permission-mode` passed, or null for none. */
+  permissionMode?: PermissionMode | null
+}
+
+/**
+ * A session the previous run left claiming to be running, as the next one
+ * found it: the row, and the two facts a restore needs that a tab does not.
+ */
+export interface LostSession {
+  record: SessionRecord
+  /** The conversation it was last in - after a `/clear`, not the one it began. */
+  conversationId: string | null
+  permissionMode: PermissionMode | null
 }
 
 type Row = typeof sessions.$inferSelect
@@ -58,6 +71,7 @@ export function startSession(store: Store, input: NewSession): SessionRecord {
       profileId: input.profileId ?? null,
       argv: input.argv ?? [],
       claudeSessionId: input.claudeSessionId ?? null,
+      permissionMode: input.permissionMode ?? null,
       status: 'running'
     })
     .returning()
@@ -126,21 +140,68 @@ export function renameSession(store: Store, id: number, label: string | null): S
 }
 
 /**
- * Marks sessions that were still running when their host went away.
+ * Records the conversation a running session is in now, when it has moved.
+ *
+ * Written only on a change - the poller that calls this runs every 750ms, and
+ * the row it would otherwise rewrite is the same row every time. Back to the
+ * id it started as clears the column rather than repeating it, so "never
+ * moved" has one spelling.
+ */
+export function noteConversation(store: Store, id: number, conversationId: string): void {
+  const row = store.db
+    .select({ started: sessions.claudeSessionId })
+    .from(sessions)
+    .where(eq(sessions.id, id))
+    .get()
+  if (!row) return
+  const next = conversationId === row.started ? null : conversationId
+  store.db
+    .update(sessions)
+    .set({ lastClaudeSessionId: next })
+    .where(
+      and(
+        eq(sessions.id, id),
+        eq(sessions.status, 'running'),
+        next === null
+          ? sql`${sessions.lastClaudeSessionId} IS NOT NULL`
+          : or(isNull(sessions.lastClaudeSessionId), ne(sessions.lastClaudeSessionId, next))
+      )
+    )
+    .run()
+}
+
+function permissionModeOf(value: string | null): PermissionMode | null {
+  return value !== null && (PERMISSION_MODES as readonly string[]).includes(value)
+    ? (value as PermissionMode)
+    : null
+}
+
+/**
+ * Marks sessions that were still running when their host went away, and
+ * returns them, oldest first.
  *
  * Called once at startup. `ended_at` and `duration_ms` stay null: nobody
  * measured when those processes died, and a guessed duration in a table the
  * launcher
- * reports from is worse than an absent one.
+ * reports from is worse than an absent one. What is returned is what the
+ * crash took, which is what the restore offer is made of.
  */
-export function reconcileRunningSessions(store: Store): number {
+export function reconcileRunningSessions(store: Store): LostSession[] {
   const rows = store.db
     .update(sessions)
     .set({ status: 'lost' })
     .where(eq(sessions.status, 'running'))
-    .returning({ id: sessions.id })
+    .returning()
     .all()
-  return rows.length
+  return rows
+    .sort((a, b) => a.id - b.id)
+    .map((row) => ({
+      record: toRecord(row),
+      conversationId: row.lastClaudeSessionId ?? row.claudeSessionId,
+      // Read tolerantly: a mode a later CLI dropped is a row to reopen asking
+      // first, not one to refuse.
+      permissionMode: permissionModeOf(row.permissionMode)
+    }))
 }
 
 export interface SessionQuery {

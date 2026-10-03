@@ -5,6 +5,7 @@ import {
   historyTitle,
   launchRequestInFolder,
   newClaudeSessionId,
+  noteConversation as recordConversation,
   PERMISSION_MODES,
   prepareLaunch,
   readGitBranch,
@@ -20,6 +21,7 @@ import {
   type HistorySession,
   type LaunchedReviewPlan,
   type LaunchPlan,
+  type LostSession,
   type PermissionMode,
   type Profile,
   type SessionMcpServer,
@@ -81,6 +83,8 @@ interface Hosted {
    */
   mcpToken: string | null
   mcpConfigFile: string | null
+  /** The conversation last written for it, so an unchanged one is not rewritten. */
+  conversation: string | null
 }
 
 /**
@@ -215,6 +219,11 @@ export interface SessionHost {
   /** Reopens a conversation from the history index in a new tab. */
   resume: (req: ResumeSessionRequest) => Promise<ResumedSession>
   /**
+   * Reopens a conversation a crash took, as it was: in its own folder, with its
+   * own profile and permission mode, under the name its tab had.
+   */
+  restore: (lost: LostSession, grid: { cols: number; rows: number }) => Promise<LaunchedSession>
+  /**
    * Starts a session on a pull request, with a prompt composed by the caller.
    *
    * Takes the whole plan rather than a pull request number, because deciding
@@ -237,6 +246,12 @@ export interface SessionHost {
   grid: (id: number) => { cols: number; rows: number } | null
   /** OS process id, for asserting a session is really gone. */
   pid: (id: number) => number | null
+  /**
+   * The conversation a running session is in, as Claude Code's registry says,
+   * written to its row when it moves - which a `/clear` does. What a restore
+   * after a crash reopens.
+   */
+  noteConversation: (id: number, conversationId: string) => void
   /**
    * The session a bearer token was minted for, or null.
    *
@@ -480,7 +495,11 @@ export function createSessionHost({
   async function spawn(
     plan: LaunchPlan,
     grid: { cols: number; rows: number },
-    origin: { projectPath?: string | null | undefined; profileId?: number | null | undefined },
+    origin: {
+      projectPath?: string | null | undefined
+      profileId?: number | null | undefined
+      permissionMode?: PermissionMode | null | undefined
+    },
     mcpToken: string | null = null
   ): Promise<SessionRecord> {
     const command = resolveClaudeCommand()
@@ -532,7 +551,8 @@ export function createSessionHost({
       argv,
       // Taken off the plan rather than re-read out of `argv`: the plan is what
       // put the flag there, so this is the value at its source.
-      claudeSessionId: plan.claudeSessionId
+      claudeSessionId: plan.claudeSessionId,
+      permissionMode: origin.permissionMode ?? null
     })
 
     let handle: SessionHandle
@@ -569,7 +589,8 @@ export function createSessionHost({
       handle,
       closed: false,
       mcpToken,
-      mcpConfigFile: plan.mcpConfigFile
+      mcpConfigFile: plan.mcpConfigFile,
+      conversation: record.claudeSessionId
     })
     announce()
     return record
@@ -615,6 +636,11 @@ export function createSessionHost({
       projectPath: string | null
       /** Basis for the name of a new conversation; unused for a reopened one. */
       name: string | undefined
+      /**
+       * What the tab is called, whatever it is reopening: a session restored
+       * after a crash comes back under the name its tab had.
+       */
+      title?: string | undefined
       profile: Profile | null
       permissionMode: PermissionMode | null
       history: HistorySession | null
@@ -630,9 +656,10 @@ export function createSessionHost({
      * what the opening prompt gave for 291 of one machine's sessions.
      */
     const base =
-      history === null
+      composition.title ??
+      (history === null
         ? composition.name?.trim() || basename(cwd) || 'session'
-        : sanitizeSessionName(historyTitle(history)) || history.projectName
+        : sanitizeSessionName(historyTitle(history)) || history.projectName)
     // Uniqued against every tab in the strip: three sessions in one folder is
     // the normal case, and `/resume` shows only the name.
     const name = uniqueSessionName(base, takenNames())
@@ -668,7 +695,7 @@ export function createSessionHost({
     const session = await spawn(
       plan,
       grid,
-      { projectPath, profileId: profile?.id ?? null },
+      { projectPath, profileId: profile?.id ?? null, permissionMode },
       tools?.token ?? null
     )
     return { session, plan }
@@ -765,6 +792,41 @@ export function createSessionHost({
         req
       )
       return { session, history }
+    },
+
+    /**
+     * The history row decides the folder, as for every reopened conversation;
+     * the lost row decides everything else. A profile deleted since is said
+     * rather than refused - the conversation is still worth having back.
+     */
+    async restore(lost, grid) {
+      const { record } = lost
+      if (lost.conversationId === null) {
+        throw new Error('Helm never learned which conversation this was, so there is nothing to reopen.')
+      }
+      const history = resumable(lost.conversationId)
+      const profile = record.profileId === null ? null : readProfile(services.store, record.profileId)
+      const { session, plan } = await launchComposed(
+        {
+          cwd: history.project,
+          projectPath: record.projectPath ?? history.project,
+          name: undefined,
+          title: sessionLabel(record),
+          profile,
+          permissionMode: lost.permissionMode,
+          history
+        },
+        grid
+      )
+      const launched = composed(session, plan)
+      if (record.profileId === null || profile !== null) return launched
+      return {
+        ...launched,
+        warnings: [
+          `The profile ${sessionLabel(record)} was started with no longer exists, so it reopened without one.`,
+          ...launched.warnings
+        ]
+      }
     },
 
     /**
@@ -871,6 +933,13 @@ export function createSessionHost({
     grid: (id) => grids.get(id) ?? null,
 
     pid: (id) => hosted.get(id)?.handle.pid ?? null,
+
+    noteConversation(id, conversationId) {
+      const entry = hosted.get(id)
+      if (!entry || !isRunning(entry) || entry.conversation === conversationId) return
+      entry.conversation = conversationId
+      recordConversation(services.store, id, conversationId)
+    },
 
     tokenHolder(token) {
       // A running session only. A token is revoked when its session ends, so

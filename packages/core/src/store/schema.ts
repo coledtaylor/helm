@@ -184,6 +184,28 @@ export const sessions = sqliteTable(
      * refuses a uuid that already exists outright.
      */
     claudeSessionId: text('claude_session_id'),
+    /**
+     * The conversation the registry last reported this session having, when
+     * that is not the one it started as.
+     *
+     * `claudeSessionId` is what the session was launched into and stays that:
+     * a `/clear` gives the same process a new conversation id, measured on
+     * 2.1.238, and the old one is a different conversation. Restoring after a
+     * crash has to reopen the one somebody was in, so the activity poller writes
+     * the live id here as it moves. Null means it never moved.
+     */
+    lastClaudeSessionId: text('last_claude_session_id'),
+    /**
+     * The `--permission-mode` it was launched with, or null for none.
+     *
+     * A column for the reason `claudeSessionId` is one: the launch had the value
+     * in hand, and recovering it from `argv` would be a second parser of a
+     * string this repository wrote. Restoring after a crash reopens a
+     * conversation in the mode it had, which the launcher may have chosen
+     * against its profile's. A row from before this column reads null, which
+     * reopens it asking first - the safe direction to be wrong in.
+     */
+    permissionMode: text('permission_mode'),
     status: text('status', { enum: ['running', 'exited', 'lost'] })
       .notNull()
       .default('running'),

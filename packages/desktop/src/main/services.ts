@@ -15,6 +15,8 @@ import {
   type AppSettings,
   type DiscoveryResult,
   type GitState,
+  type LostSession,
+  type SavedPaneLayout,
   type SeedResult,
   type Store
 } from '@helm/core'
@@ -32,11 +34,16 @@ export interface Services {
   /** Last completed scan, or null before the first one. */
   lastScan: DiscoveryResult | null
   /**
-   * Sessions the previous run left claiming to be running - a crash, or a kill
-   * from Task Manager. Reconciled on the way in, and counted so the number can
-   * be reported rather than silently swallowed.
+   * What the previous run left behind when it stopped without shutting down -
+   * a crash, or a kill from Task Manager: the sessions still claiming to be
+   * running, reconciled to `lost` on the way in, and the panes as that run
+   * last wrote them.
+   *
+   * Read together and before the window exists, because the window rewrites
+   * `paneLayout` within a second of opening, without the sessions it can no
+   * longer see - and that layout is the only record of where they were.
    */
-  lostSessions: number
+  lost: { sessions: LostSession[]; layout: SavedPaneLayout | null }
   /**
    * Overlay shim directories left behind by the previous run. Counted for the
    * same reason lost sessions are: it is evidence of how the last run ended.
@@ -51,11 +58,12 @@ export interface Services {
 
 export function createServices(): Services {
   const store = openStore({ file: dbFile })
+  const settings = readSettings(store)
   return {
     store,
-    settings: readSettings(store),
+    settings,
     lastScan: null,
-    lostSessions: reconcileRunningSessions(store),
+    lost: { sessions: reconcileRunningSessions(store), layout: settings.paneLayout },
     /*
      * The shims no live process is holding.
      *

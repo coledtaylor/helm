@@ -97,6 +97,8 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
     onBrowserMcpLocalOnlyChange: vi.fn(),
     sessionMcp: true,
     onSessionMcpChange: vi.fn(),
+    restoreWithoutAsking: false,
+    onRestoreWithoutAskingChange: vi.fn(),
     gh: null,
     onLocateGh: vi.fn(),
     onClearGhOverride: vi.fn(),

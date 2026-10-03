@@ -198,6 +198,9 @@ export function createActivityService({
 
       claimed.add(found.file)
       pins.set(record.id, { pid: found.pid, procStart: found.procStart })
+      // A `/clear` moves the process to a new conversation; the row has to
+      // know which one a crash would have taken.
+      if (found.sessionId !== null) sessions.noteConversation(record.id, found.sessionId)
       states.push({
         id: record.id,
         activity: found.activity,

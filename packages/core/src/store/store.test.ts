@@ -18,6 +18,7 @@ import { knownMigrations } from './migrate'
 import { cacheProjects, forgetProjects, readCachedProjects } from './projects'
 import {
   finishSession,
+  noteConversation,
   readSessions,
   reconcileRunningSessions,
   renameSession,
@@ -129,7 +130,8 @@ describe('settings', () => {
               { kind: 'project', path: dir },
               { kind: 'history' },
               { kind: 'pulls' },
-              { kind: 'pr', repoPath: dir, number: 42 }
+              { kind: 'pr', repoPath: dir, number: 42 },
+              { kind: 'session', id: 7 }
             ],
             activeId: `project:${dir}`
           },
@@ -164,6 +166,7 @@ describe('settings', () => {
       browserReach: 'local',
       browserMcp: false,
       browserMcpLocalOnly: true,
+      restoreWithoutAsking: true,
       browserRecentUrls: ['http://localhost:3000/', 'https://example.com/docs'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
       sessionMcp: false
@@ -324,9 +327,10 @@ describe('settings validation', () => {
               panes: [
                 { kind: 'project', path: 'C:\\work\\helm' },
                 { kind: 'pr', repoPath: 'C:\\work\\helm', number: 7 },
-                { kind: 'pulls' }
+                { kind: 'pulls' },
+                { kind: 'session', id: 12 }
               ],
-              activeId: 'pr:C:\\work\\helm#7'
+              activeId: 'session:12'
             },
             {
               panes: [{ kind: 'config' }, { kind: 'content' }, { kind: 'settings' }],
@@ -365,9 +369,14 @@ describe('settings validation', () => {
         // A kind this build does not have, which is the shape a renamed pane
         // would arrive in.
         { groups: [{ panes: [{ kind: 'terminal' }], activeId: null }], focused: 0 },
-        // Sessions and browser tabs are never written down; see `PaneRef`.
-        { groups: [{ panes: [{ kind: 'session', id: 1 }], activeId: null }], focused: 0 },
+        // A session is written down by its row id, and only by one; browser
+        // tabs and the restore offer never are. See `SavedPane`.
+        { groups: [{ panes: [{ kind: 'session' }], activeId: null }], focused: 0 },
+        { groups: [{ panes: [{ kind: 'session', id: '1' }], activeId: null }], focused: 0 },
+        { groups: [{ panes: [{ kind: 'session', id: 0 }], activeId: null }], focused: 0 },
+        { groups: [{ panes: [{ kind: 'session', id: 1.5 }], activeId: null }], focused: 0 },
         { groups: [{ panes: [{ kind: 'browser', id: 1 }], activeId: null }], focused: 0 },
+        { groups: [{ panes: [{ kind: 'restore' }], activeId: null }], focused: 0 },
         { groups: [{ panes: [{ kind: 'project' }], activeId: null }], focused: 0 },
         { groups: [{ panes: [{ kind: 'project', path: '' }], activeId: null }], focused: 0 },
         {
@@ -602,6 +611,12 @@ describe('settings validation', () => {
       bad: ['false', 'true', 0, 1, null, [], {}]
     },
     {
+      // A string that reads as off would reopen sessions unasked.
+      key: 'restoreWithoutAsking',
+      good: [true, false],
+      bad: ['false', 'true', 0, 1, null, [], {}]
+    },
+    {
       // The interesting rejections are the ones that would put a row in the
       // dropdown that does nothing when clicked: a bare word, a relative path,
       // and `file:` - which the pane refuses to navigate to, so it must not be
@@ -767,6 +782,7 @@ describe('settings validation', () => {
       browserReach: 'local',
       browserMcp: false,
       browserMcpLocalOnly: true,
+      restoreWithoutAsking: true,
       browserRecentUrls: ['http://localhost:3000/'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
       sessionMcp: false
@@ -820,6 +836,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   browserReach: 'local',
   browserMcp: false,
   browserMcpLocalOnly: true,
+  restoreWithoutAsking: true,
   browserRecentUrls: ['http://localhost:3000/'],
   browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
   sessionMcp: false
@@ -986,7 +1003,7 @@ describe('session log', () => {
     const ended = started('beta')
     finishSession(store, ended.id, { exitCode: 0 })
 
-    expect(reconcileRunningSessions(store)).toBe(1)
+    expect(reconcileRunningSessions(store).map((lost) => lost.record.id)).toEqual([alive.id])
 
     const rows = readSessions(store)
     expect(rows.find((r) => r.id === alive.id)).toMatchObject({
@@ -996,6 +1013,58 @@ describe('session log', () => {
     })
     // The one that ended cleanly keeps its outcome.
     expect(rows.find((r) => r.id === ended.id)).toMatchObject({ status: 'exited', exitCode: 0 })
+  })
+
+  it('hands back what it reconciled, with the conversation each was last in and its mode', () => {
+    startSession(store, { name: 'plain', cwd: dir, claudeSessionId: 'c-plain' })
+    const cleared = startSession(store, {
+      name: 'cleared',
+      cwd: dir,
+      claudeSessionId: 'c-first',
+      permissionMode: 'plan'
+    })
+    startSession(store, { name: 'old row', cwd: dir })
+    noteConversation(store, cleared.id, 'c-after-clear')
+
+    const lost = reconcileRunningSessions(store)
+    expect(lost.map((l) => [l.record.name, l.conversationId, l.permissionMode])).toEqual([
+      ['plain', 'c-plain', null],
+      ['cleared', 'c-after-clear', 'plan'],
+      ['old row', null, null]
+    ])
+    expect(lost[1]?.record).toMatchObject({ id: cleared.id, status: 'lost', claudeSessionId: 'c-first' })
+    // Once each: the next start finds nothing claiming to run.
+    expect(reconcileRunningSessions(store)).toEqual([])
+  })
+
+  it('notes a moved conversation only while running, and forgets it when it moves back', () => {
+    const session = startSession(store, { name: 'a', cwd: dir, claudeSessionId: 'c-1' })
+    const last = (): string | null =>
+      (
+        store.raw
+          .prepare('SELECT last_claude_session_id AS last FROM sessions WHERE id = ?')
+          .get(session.id) as { last: string | null }
+      ).last
+
+    noteConversation(store, session.id, 'c-1')
+    expect(last()).toBeNull()
+    noteConversation(store, session.id, 'c-2')
+    expect(last()).toBe('c-2')
+    noteConversation(store, session.id, 'c-1')
+    expect(last()).toBeNull()
+
+    noteConversation(store, session.id, 'c-3')
+    finishSession(store, session.id, { exitCode: 0 })
+    noteConversation(store, session.id, 'c-4')
+    expect(last()).toBe('c-3')
+    // An id that is not there is not a row to write.
+    expect(() => noteConversation(store, 9999, 'c-5')).not.toThrow()
+  })
+
+  it('reads a permission mode it does not know as none', () => {
+    const session = startSession(store, { name: 'a', cwd: dir })
+    store.raw.prepare("UPDATE sessions SET permission_mode = 'yolo' WHERE id = ?").run(session.id)
+    expect(reconcileRunningSessions(store)[0]?.permissionMode).toBeNull()
   })
 
   it('lists newest first and filters by status and project', () => {

@@ -88,6 +88,29 @@ describe('activity service', () => {
         expect(stateOf(beta.id)?.activity).toBe('busy')
       }, WAIT)
     })
+
+    it('follows a /clear to the conversation it moved to, and writes that to the row', async () => {
+      const dir = h.world.projects.alpha
+      const session = await h.host.start({ cwd: dir, projectPath: dir, name: 'clearing', cols: 80, rows: 24 })
+      await h.ready(session.id)
+      const recorded = (): string | null =>
+        (
+          h.services.store.raw
+            .prepare('SELECT last_claude_session_id AS last FROM sessions WHERE id = ?')
+            .get(session.id) as { last: string | null }
+        ).last
+      await vi.waitFor(() => expect(stateOf(session.id)?.claudeSessionId).toBe(session.claudeSessionId), WAIT)
+      expect(recorded()).toBeNull()
+
+      h.host.input(session.id, '/clear\r')
+      let moved = ''
+      await vi.waitFor(async () => {
+        moved = (await h.run(session)).current
+        expect(moved).not.toBe(session.claudeSessionId)
+      }, WAIT)
+      await vi.waitFor(() => expect(stateOf(session.id)?.claudeSessionId).toBe(moved), WAIT)
+      expect(recorded()).toBe(moved)
+    })
   })
 
   describe('over a registry as a machine leaves it', () => {
@@ -118,7 +141,11 @@ describe('activity service', () => {
       exitCode: null
     }
     const ptyPid = deadPid + 1_000_000
-    const host = { list: () => [hosted], pid: () => ptyPid } as unknown as SessionHost
+    const host = {
+      list: () => [hosted],
+      pid: () => ptyPid,
+      noteConversation: () => undefined
+    } as unknown as SessionHost
     const now = Date.now()
 
     const files: Record<string, string> = {

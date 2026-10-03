@@ -21,6 +21,8 @@
 //   /wait        report status "waiting" until y or n is pressed
 //   /busy <ms>   report status "busy" for that long
 //   /child       start a long-running child process, for process-tree tests
+//   /clear       move to a new conversation id under the same process, and
+//                register under it, as the real CLI does
 //   anything else  is a prompt: recorded in history and the transcript, answered
 
 import { spawn } from 'node:child_process'
@@ -121,8 +123,20 @@ const name = option('--name', '-n') ?? null
 const startedAt = Date.now()
 const registryFile = join(configDir, 'sessions', `${String(process.pid)}.json`)
 const logFile = join(configDir, 'fake-claude', `${String(process.pid)}.json`)
-const transcriptFile = join(configDir, 'projects', projectDirName(cwd), `${sessionId}.jsonl`)
-const log = { pid: process.pid, argv, cwd, sessionId, resumed: resume !== undefined, received: [], resized: [], exitCode: null }
+const transcriptOf = (id) => join(configDir, 'projects', projectDirName(cwd), `${id}.jsonl`)
+let transcriptFile = transcriptOf(sessionId)
+// `sessionId` is the conversation the run began in; `current` follows a /clear.
+const log = {
+  pid: process.pid,
+  argv,
+  cwd,
+  sessionId,
+  current: sessionId,
+  resumed: resume !== undefined,
+  received: [],
+  resized: [],
+  exitCode: null
+}
 const children = []
 
 function findTranscript(id) {
@@ -224,6 +238,14 @@ function submit(line) {
 
   if (command === '/exit') return exit(0)
   if (command === '/crash') return exit(3)
+  if (command === '/clear') {
+    sessionId = randomUUID()
+    transcriptFile = transcriptOf(sessionId)
+    log.current = sessionId
+    saveLog()
+    setStatus('idle')
+    return answer('(no content)')
+  }
   if (command === '/wait') {
     asking = true
     setStatus('waiting', 'permission prompt')

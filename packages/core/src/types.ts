@@ -517,6 +517,42 @@ export interface SessionActivityState {
 }
 
 /**
+ * A session the last run was hosting when it stopped without shutting down,
+ * as the restore offer lists it.
+ */
+export interface RestorableSession {
+  /** Its row, now `lost`. */
+  id: number
+  /** What its tab said: `sessionLabel` of the row. */
+  name: string
+  cwd: string
+  /** The branch it was started on, as its tab's crumb had it. */
+  branch: string | null
+  /** The profile it was launched from, by name, or null for none. */
+  profile: string | null
+  /** True when it had a profile that has since been deleted. It reopens without. */
+  profileGone: boolean
+  /** When it was last spoken to, ms since epoch. Null when that is not known. */
+  lastAt: number | null
+  /** Why it cannot be reopened, as a sentence, or null when it can. */
+  blocked: string | null
+}
+
+/** What a crash took, offered back once at the next start. */
+export interface RestoreOffer {
+  /** In the order their tabs were in. */
+  sessions: RestorableSession[]
+  /**
+   * How many more the record calls lost whose conversation is still running -
+   * in another Helm, or a terminal. Left alone, because reopening one would be
+   * a second process on one conversation.
+   */
+  elsewhere: number
+  /** The panes as the stopped run last wrote them. `placeRestored` reads it. */
+  layout: SavedPaneLayout | null
+}
+
+/**
  * One live Claude Code session on this machine, whoever started it.
  *
  * **Listing is machine-wide; detail is Helm's own.** The registry Claude Code
@@ -1396,10 +1432,12 @@ export interface AppSettings {
    * chose. Null means nothing has been written yet, which is not the same as an
    * empty layout: a user who closed every tab gets an empty window back.
    *
-   * **Sessions and browser tabs are not written down.** `before-quit` ends
-   * every session and destroys every view, so a restored tab pointing at either
-   * would be a tab pointing at nothing - see `PaneRef`. A group that held only
-   * those is restored as no group at all.
+   * **Sessions are written down and never reopened from here.** `before-quit`
+   * ends every session, so on an ordinary start a saved session names nothing
+   * and is dropped before it is drawn; after a crash, this is where the restore
+   * offer finds the pane each one was in (`SavedPane`, `placeRestored`).
+   * Browser tabs are not written down at all. A group that held only sessions
+   * is restored as no group at all.
    *
    * It replaced `workspaceTabs`, the single strip the window had before it had
    * groups. That row is now an unknown key, ignored on read, so the first
@@ -1702,6 +1740,15 @@ export interface AppSettings {
    */
   browserMcpLocalOnly: boolean
   /**
+   * Reopen the sessions a crash took without asking first.
+   *
+   * Off by default: the offer is one screen at the next start, and a crash
+   * that took a session somebody had finished with should not bring it back
+   * unasked. On, every session the offer would list as reopenable is reopened
+   * where it was, and anything that could not be is said once.
+   */
+  restoreWithoutAsking: boolean
+  /**
    * The last URLs a browser pane visited, newest first.
    *
    * The address bar's dropdown and nothing more elaborate - no history page, no
@@ -1833,6 +1880,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // Off, because the pane defaults to `web`: an agent confined to loopback
   // beside a pane that is not would be a surprise rather than a posture.
   browserMcpLocalOnly: false,
+  restoreWithoutAsking: false,
   browserRecentUrls: [],
   browserProjectUrls: {},
   // On, because the collision this exists to prevent - two agents in one

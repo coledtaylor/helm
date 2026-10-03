@@ -149,8 +149,16 @@ function paneProblem(pane: unknown): string | null {
   if (typeof pane !== 'object' || pane === null || Array.isArray(pane)) {
     return `expected a pane, got ${describe(pane)}`
   }
-  const { kind, path, repoPath, number } = pane as Record<string, unknown>
+  const { kind, path, repoPath, number, id } = pane as Record<string, unknown>
   if (kind === 'history' || kind === 'pulls' || kind === 'config') return null
+  if (kind === 'session') {
+    // A row id. Never reopened from here - only read after a crash, to find
+    // where the session that is being reopened was.
+    if (!isFiniteNumber(id) || !Number.isInteger(id) || id <= 0) {
+      return `expected a session id, got ${describe(id)}`
+    }
+    return null
+  }
   if (kind === 'content' || kind === 'settings' || kind === 'sessions') return null
   if (kind === 'project') {
     if (typeof path !== 'string' || path.trim() === '') {
@@ -579,6 +587,7 @@ export const SETTING_VALIDATORS: SettingValidators = {
    */
   browserMcp: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
   browserMcpLocalOnly: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
+  restoreWithoutAsking: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
 
   /**
    * The session-awareness tools, checked exactly as strictly for exactly the

@@ -44,7 +44,10 @@ export interface FakeClaudeLog {
   pid: number
   argv: string[]
   cwd: string
+  /** The conversation the run began in. */
   sessionId: string
+  /** The conversation it is in now, which a `/clear` moves. */
+  current: string
   resumed: boolean
   received: string[]
   resized: { cols: number; rows: number }[]

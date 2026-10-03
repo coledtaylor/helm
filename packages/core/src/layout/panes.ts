@@ -21,13 +21,27 @@ import type { WorkspaceTab } from '../types'
 /**
  * Anything a pane can show.
  *
- * `WorkspaceTab` is the persisted subset, and the two kinds outside it are
- * outside it for one reason: each has something live behind it that does not
- * survive a restart. A session is a process `before-quit` ends, and a browser
- * tab is a `WebContentsView` it destroys - a layout that wrote either down
- * would restore tabs pointing at things that no longer exist.
+ * `WorkspaceTab` is what reopens on its own at the next start. A session is a
+ * process `before-quit` ends, a browser tab is a `WebContentsView` it
+ * destroys, and the restore offer is one start's question about the last.
  */
-export type PaneRef = WorkspaceTab | { kind: 'browser'; id: number } | { kind: 'session'; id: number }
+export type PaneRef =
+  | WorkspaceTab
+  | { kind: 'browser'; id: number }
+  | { kind: 'session'; id: number }
+  | { kind: 'restore' }
+
+/**
+ * A tab as `AppSettings.paneLayout` writes it down: every `WorkspaceTab`, and
+ * every session by its row id.
+ *
+ * A session is written down so that a crash can put its conversation back
+ * where it was (`placeRestored`). It never reopens by itself: the next start
+ * hosts no session with that id, so `reconcile` drops the tab before it is
+ * drawn. A browser tab is not written down at all, because nothing could put
+ * the page it was showing back.
+ */
+export type SavedPane = WorkspaceTab | { kind: 'session'; id: number }
 
 /** Side by side, and no more, in this phase. */
 export const PANE_GROUPS_MAX = 2
@@ -44,9 +58,9 @@ export interface PaneLayout {
   readonly focused: number
 }
 
-/** One group as `AppSettings.paneLayout` stores it: persistable tabs only. */
+/** One group as `AppSettings.paneLayout` stores it. See `SavedPane`. */
 export interface SavedPaneGroup {
-  panes: WorkspaceTab[]
+  panes: SavedPane[]
   activeId: string | null
 }
 
@@ -82,9 +96,9 @@ export function paneId(ref: PaneRef): string {
   }
 }
 
-/** Whether a tab is written down across a restart. See `PaneRef`. */
-export function isPersistable(ref: PaneRef): ref is WorkspaceTab {
-  return ref.kind !== 'browser' && ref.kind !== 'session'
+/** Whether a tab is written down across a restart. See `SavedPane`. */
+export function isPersistable(ref: PaneRef): ref is SavedPane {
+  return ref.kind !== 'browser' && ref.kind !== 'restore'
 }
 
 /** The tab in front of a group: its `activeId`, or the last tab if that is gone. */
@@ -365,15 +379,14 @@ export function cycleTab(layout: PaneLayout, step: 1 | -1): PaneLayout {
 }
 
 /**
- * What `AppSettings.paneLayout` keeps: the persistable tabs, in their groups.
- * A group holding only sessions is written as an empty one and disappears on
- * the next launch, which is the honest restore of a group whose every tab was
- * a process that did not survive.
+ * What `AppSettings.paneLayout` keeps: the persistable tabs, in their groups,
+ * and which was in front. A group holding only sessions comes back empty and
+ * disappears on an ordinary start, which is the honest restore of a group whose
+ * every tab was a process that did not survive; after a crash,
+ * `placeRestored` reads it to put them back.
  *
  * A front tab that is not written down is not written down as the front
- * either. Naming it would restore nothing, and it would make the saved value
- * change every time somebody moved between two sessions - a settings write for
- * a fact the next launch cannot use.
+ * either: naming it would restore nothing.
  */
 export function toSaved(layout: PaneLayout): SavedPaneLayout {
   return {
@@ -387,11 +400,105 @@ export function toSaved(layout: PaneLayout): SavedPaneLayout {
 }
 
 /** The saved layout as a live one. A saved `activeId` that names a tab no
- * longer there falls to that group's last tab, as a stale one always has. */
+ * longer there falls to that group's last tab, as a stale one always has, and
+ * a saved session is left for `reconcile` to drop when nothing hosts it. */
 export function fromSaved(saved: SavedPaneLayout | null): PaneLayout {
   if (saved === null) return EMPTY_LAYOUT
   return normalize(
     saved.groups.map((group) => ({ tabs: group.panes, activeId: group.activeId })),
     saved.focused
   )
+}
+
+/**
+ * Puts reopened sessions where the sessions they replace were.
+ *
+ * `saved` is the layout the crashed run last wrote, and `pairs` maps each lost
+ * session's row id to the row id of the session that reopened it. A session
+ * lands after the nearest tab before it in its saved strip that is still open
+ * in the same pane, or first in that pane when none is - so it keeps its place
+ * among whatever survived, without depending on which of its neighbours were
+ * reopened too.
+ *
+ * Its pane is the one holding the first tab of its saved group that is still
+ * open. A saved group whose every tab was a session went with them, and is
+ * opened again on the side it was on. A reopened session the saved layout does
+ * not name is left wherever it already is.
+ *
+ * A group's front tab comes back when it was one of these sessions, and the
+ * focus goes back to the pane that had it.
+ */
+export function placeRestored(
+  layout: PaneLayout,
+  saved: SavedPaneLayout | null,
+  pairs: ReadonlyMap<number, number>
+): PaneLayout {
+  if (saved === null) return layout
+  const named = new Map<number, number>()
+  for (const group of saved.groups) {
+    for (const pane of group.panes) {
+      const reopened = pane.kind === 'session' ? pairs.get(pane.id) : undefined
+      if (pane.kind === 'session' && reopened !== undefined) named.set(pane.id, reopened)
+    }
+  }
+  if (named.size === 0) return layout
+
+  // Off wherever `reconcile` put them, to go back where they were.
+  const placing = new Set([...named.values()].map((id) => paneId({ kind: 'session', id })))
+  const groups = layout.groups.map((group) => ({
+    tabs: group.tabs.filter((ref) => !placing.has(paneId(ref))),
+    activeId: group.activeId
+  }))
+  let focused = layout.focused
+  const holding = (id: string): number =>
+    groups.findIndex((group) => group.tabs.some((ref) => paneId(ref) === id))
+
+  saved.groups.forEach((savedGroup, at) => {
+    if (!savedGroup.panes.some((pane) => pane.kind === 'session' && named.has(pane.id))) return
+
+    let target = -1
+    for (const pane of savedGroup.panes) {
+      if (pane.kind === 'session') continue
+      target = holding(paneId(pane))
+      if (target >= 0) break
+    }
+    if (target < 0) {
+      if (groups.every((group) => group.tabs.length === 0)) target = 0
+      else if (groups.length < PANE_GROUPS_MAX) {
+        if (at === 0) {
+          groups.unshift({ tabs: [], activeId: null })
+          focused += 1
+          target = 0
+        } else {
+          groups.push({ tabs: [], activeId: null })
+          target = groups.length - 1
+        }
+      } else {
+        target = at === 0 ? 0 : groups.length - 1
+      }
+    }
+
+    const tabs = [...groups[target]!.tabs]
+    let activeId = groups[target]!.activeId
+    let insertAt = 0
+    for (const pane of savedGroup.panes) {
+      if (pane.kind === 'session') {
+        const reopened = named.get(pane.id)
+        if (reopened === undefined) continue
+        const ref: PaneRef = { kind: 'session', id: reopened }
+        tabs.splice(insertAt, 0, ref)
+        insertAt += 1
+        if (savedGroup.activeId === paneId(pane)) {
+          activeId = paneId(ref)
+          if (saved.focused === at) focused = target
+        }
+        continue
+      }
+      const index = tabs.findIndex((ref) => paneId(ref) === paneId(pane))
+      if (index >= 0) insertAt = index + 1
+    }
+    groups[target] = { tabs, activeId }
+  })
+
+  return normalize(groups, focused)
 }

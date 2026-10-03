@@ -19,6 +19,7 @@ import type { BrowserMcpHost } from './browser-mcp'
 import type { ConfigService } from './config'
 import { highlightForEditor, type ContentService } from './content'
 import type { TemplateService } from './templates'
+import type { RestoreService } from './restore'
 import type { ArchiveService } from './archive'
 import type { HistoryService } from './history'
 import type { PullsService } from './pulls'
@@ -102,6 +103,8 @@ export interface IpcContext {
   window: () => BrowserWindow | null
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
   sessions: SessionHost
+  /** What a crash took, offered back once; see `restore.ts`. */
+  restore: RestoreService
   /** What each of those is doing, from Claude Code's registry. */
   activity: ActivityService
   /** What each of those is holding: process tree and ports. */
@@ -482,6 +485,8 @@ export function registerIpc(ctx: IpcContext): void {
     // promise with a sentence in it rather than a tab that never fills in.
     'session:start': (request) => ctx.sessions.start(request),
     'session:launch': (request) => ctx.sessions.launch(request),
+    'session:restorable': () => ctx.restore.offer(),
+    'session:restore': (request) => ctx.restore.restore(request),
     'session:close': (request) => ctx.sessions.close(request),
     'session:list': () => ctx.sessions.list(),
     // A read of what main already holds, not a fresh pass: the poller is what

@@ -126,6 +126,7 @@ describe('settings over IPC', () => {
       services,
       window: () => win as unknown as BrowserWindow,
       sessions: {} as never,
+      restore: {} as never,
       activity: {} as never,
       resources: {} as never,
       pterm: {} as never,

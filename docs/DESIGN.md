@@ -606,6 +606,17 @@ overrides the gate; keep it.
   Its key strip is buttons that look like hints - the key in mono, the word
   beside it - because the strip is the only place a pointer could start a
   session from.
+- **The restore offer** (after Helm stops without shutting down): a page in a
+  tab, not a dialog, opened in front of the focused pane. It is the first thing
+  a start after a crash has to say, and somebody may want to look at the rest
+  of the window before answering; closing its tab is "not now". One list on
+  `surface-raised`, a row per session the crash took - its tab's name, its
+  folder and branch in mono, its profile, when it was last spoken to - all
+  ticked. A session that cannot come back is still listed, unticked and greyed
+  with the reason in place of its folder: one missing from the list would read
+  as Helm having forgotten it. The disclosure is one line under the list
+  (`claude --resume`, in its own folder and profile, in the tab it had), and the
+  primary button counts what it will do.
 
 ## 5b. Shell chrome
 

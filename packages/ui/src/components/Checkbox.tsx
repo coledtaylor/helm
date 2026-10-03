@@ -22,7 +22,8 @@ export function Checkbox({
   checked,
   onChange,
   label,
-  mark
+  mark,
+  disabled = false
 }: {
   checked: boolean
   onChange: () => void
@@ -35,6 +36,8 @@ export function Checkbox({
    * hook it already had instead of every driver learning a new one.
    */
   mark?: string | undefined
+  /** Shown but not changeable: a row that is listed for its reason, not its choice. */
+  disabled?: boolean | undefined
 }): JSX.Element {
   const marker = mark === undefined ? {} : { [mark]: '' }
   return (
@@ -43,11 +46,13 @@ export function Checkbox({
         type="checkbox"
         checked={checked}
         onChange={onChange}
+        disabled={disabled}
         aria-label={label}
         {...marker}
         className={cn(
           'peer size-4 cursor-pointer appearance-none rounded-raised border-[1.5px] border-fg-subtle',
-          'transition-colors checked:border-accent checked:bg-accent hover:border-fg-muted'
+          'transition-colors checked:border-accent checked:bg-accent hover:border-fg-muted',
+          'disabled:cursor-default disabled:opacity-40 disabled:hover:border-fg-subtle'
         )}
       />
       <CheckIcon

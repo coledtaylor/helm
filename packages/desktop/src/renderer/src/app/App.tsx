@@ -19,6 +19,7 @@ import {
   openTab,
   paneId,
   placeBeside,
+  placeRestored,
   reconcile,
   sendToOtherGroup,
   sessionLabel,
@@ -33,6 +34,7 @@ import {
   type Profile,
   type ProfileDraft,
   type Project,
+  type RestoreOffer,
   type SavedPaneLayout,
   type SessionRecord
 } from '@helm/core/types'
@@ -81,6 +83,7 @@ import {
   Rail,
   RefreshIcon,
   RepoIcon,
+  RestorePane,
   SaveAsTemplateDialog,
   SessionHistory,
   SessionsPane,
@@ -123,6 +126,7 @@ import { forgetPullDetail } from './usePullDetail'
 import { usePulls } from './usePulls'
 import { useLiveSessions } from './useLiveSessions'
 import { useNewSession } from './useNewSession'
+import { useRestore } from './useRestore'
 import { useSessions } from './useSessions'
 import { useSetup } from './useSetup'
 import { useTemplates } from './useTemplates'
@@ -248,6 +252,8 @@ export function App(): JSX.Element {
 
   const profileState = useProfiles()
   const newSession = useNewSession()
+  const restoreState = useRestore()
+  const { offer: restoreOffer, restore: restoreLost, dismiss: dismissRestore } = restoreState
   const historyState = useHistory()
   const pullsState = usePulls()
   const configState = useConfig()
@@ -412,9 +418,11 @@ export function App(): JSX.Element {
       if (ref.kind === 'pr') return !discovery || projectsByPath.has(ref.repoPath)
       if (ref.kind === 'browser') return browserViews.has(ref.id)
       if (ref.kind === 'session') return sessionsById.has(ref.id)
+      // Answered, it has nothing left to show.
+      if (ref.kind === 'restore') return restoreOffer !== null
       return true
     },
-    [discovery, projectsByPath, browserViews, sessionsById]
+    [discovery, projectsByPath, browserViews, sessionsById, restoreOffer]
   )
 
   /**
@@ -796,6 +804,48 @@ export function App(): JSX.Element {
   }, [setupNeeded, newSession, sessionState, placeSession, open.focused])
 
   /**
+   * Reopens sessions a crash took and puts each back in the pane and place it
+   * had, sized for that pane. Unasked is the `restoreWithoutAsking` path, which
+   * also says afterwards that it happened.
+   */
+  const resumeLost = useCallback(
+    async (ids: readonly number[], unasked = false) => {
+      if (restoreOffer === null) return
+      const { layout } = restoreOffer
+      const paneOf = (id: number): number =>
+        layout?.groups.findIndex((group) =>
+          group.panes.some((pane) => pane.kind === 'session' && pane.id === id)
+        ) ?? -1
+      const picks = ids.map((id) => {
+        const pane = paneOf(id)
+        const body = (pane >= 0 ? bodyRefs.current[pane] : undefined) ?? bodyRefs.current[open.focused]
+        return { id, ...estimateGrid(body ?? null) }
+      })
+      const result = await restoreLost(picks, { unasked })
+      if (result === null) return
+      for (const { launched } of result.restored) sessionState.adopt(launched.session)
+      const pairs = new Map(result.restored.map(({ from, launched }) => [from, launched.session.id]))
+      commit((current) => placeRestored(closeTab(current, 'restore'), layout, pairs))
+    },
+    [restoreOffer, restoreLost, sessionState, commit, open.focused]
+  )
+
+  /*
+   * The offer, acted on once settings say how: a tab in front of the focused
+   * pane, or - with `restoreWithoutAsking` - every session reopened straight
+   * away and the offer never drawn. Those that cannot come back are asked for
+   * too, so main says why in the same answer.
+   */
+  const restoreUnasked = settings === null ? null : settings.restoreWithoutAsking
+  const actedOn = useRef<RestoreOffer | null>(null)
+  useEffect(() => {
+    if (restoreOffer === null || restoreUnasked === null || actedOn.current === restoreOffer) return
+    actedOn.current = restoreOffer
+    if (restoreUnasked) void resumeLost(restoreOffer.sessions.map((session) => session.id), true)
+    else commit((current) => openTab(current, { kind: 'restore' }))
+  }, [restoreOffer, restoreUnasked, resumeLost, commit])
+
+  /**
    * "Review with Claude", from a pull request tab. The prompt is composed in
    * main from the cached pull request and the stored template, so this sends a
    * repository path, a number and the grid - argv assembled in a window is argv
@@ -902,9 +952,11 @@ export function App(): JSX.Element {
       if (ref.kind === 'pr') forgetPullDetail(ref.repoPath, ref.number)
       // Hiding the pane keeps the page; closing the tab destroys the view.
       if (ref.kind === 'browser') browsers.close(ref.id)
+      // Closing the offer is "not now", the same as its button.
+      if (ref.kind === 'restore') dismissRestore()
       commit((current) => closeTab(current, id))
     },
-    [open, closeSession, browsers, commit]
+    [open, closeSession, browsers, commit, dismissRestore]
   )
 
   const splitFocused = useCallback(() => {
@@ -1271,6 +1323,17 @@ export function App(): JSX.Element {
           }
         ]
       }
+      case 'restore':
+        return restoreOffer === null
+          ? []
+          : [
+              {
+                id: paneId(ref),
+                title: 'Restore sessions',
+                hint: 'What Helm was running when it closed',
+                icon: <HistoryIcon width={13} height={13} />
+              }
+            ]
       case 'project': {
         const project = projectsByPath.get(ref.path)
         if (!project) return []
@@ -1640,6 +1703,8 @@ export function App(): JSX.Element {
       }
       sessionMcp={settings?.sessionMcp ?? DEFAULT_SETTINGS.sessionMcp}
       onSessionMcpChange={(sessionMcp) => writeSettings({ sessionMcp })}
+      restoreWithoutAsking={settings?.restoreWithoutAsking ?? DEFAULT_SETTINGS.restoreWithoutAsking}
+      onRestoreWithoutAskingChange={(restoreWithoutAsking) => writeSettings({ restoreWithoutAsking })}
       contentWrap={settings?.contentWrap ?? DEFAULT_SETTINGS.contentWrap}
       onContentWrapChange={(contentWrap) => writeSettings({ contentWrap })}
       contentWrapIndent={settings?.contentWrapIndent ?? DEFAULT_SETTINGS.contentWrapIndent}
@@ -1954,6 +2019,18 @@ export function App(): JSX.Element {
       }
       case 'settings':
         return renderSettings()
+      case 'restore':
+        return restoreOffer === null ? null : (
+          <RestorePane
+            offer={restoreOffer}
+            withoutAsking={settings?.restoreWithoutAsking ?? DEFAULT_SETTINGS.restoreWithoutAsking}
+            onWithoutAskingChange={(restoreWithoutAsking) => writeSettings({ restoreWithoutAsking })}
+            busy={restoreState.busy}
+            onResume={(ids) => void resumeLost(ids)}
+            onNotNow={dismissRestore}
+            now={now}
+          />
+        )
       case 'session':
         return null
     }
@@ -2305,7 +2382,9 @@ export function App(): JSX.Element {
       ? { text: browsers.error, failed: true, dismiss: browsers.dismissError }
       : !newSession.open && newSession.error !== null
         ? { text: newSession.error, failed: true, dismiss: newSession.dismissError }
-        : profileState.error !== null
+        : restoreState.report !== null
+          ? { ...restoreState.report, dismiss: restoreState.dismissReport }
+          : profileState.error !== null
           ? { text: profileState.error, failed: true, dismiss: profileState.dismissError }
           : newSession.warning !== null
             ? { text: newSession.warning, failed: false, dismiss: newSession.dismissWarning }

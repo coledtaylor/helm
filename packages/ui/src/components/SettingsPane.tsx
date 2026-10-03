@@ -224,6 +224,9 @@ export interface SettingsPaneProps {
    */
   sessionMcp: boolean
   onSessionMcpChange: (next: boolean) => void
+  /** Reopen what a crash took without asking. Also ticked from the offer itself. */
+  restoreWithoutAsking: boolean
+  onRestoreWithoutAskingChange: (next: boolean) => void
 
   /**
    * What Helm found out about `gh`, out of the pull-request snapshot. Null
@@ -427,6 +430,8 @@ export function SettingsPane({
   onBrowserMcpLocalOnlyChange,
   sessionMcp,
   onSessionMcpChange,
+  restoreWithoutAsking,
+  onRestoreWithoutAskingChange,
   gh,
   onLocateGh,
   onClearGhOverride,
@@ -719,7 +724,12 @@ export function SettingsPane({
           onMcpLocalOnlyChange={onBrowserMcpLocalOnlyChange}
         />
 
-        <SessionsGroup mcp={sessionMcp} onMcpChange={onSessionMcpChange} />
+        <SessionsGroup
+          mcp={sessionMcp}
+          onMcpChange={onSessionMcpChange}
+          restore={restoreWithoutAsking}
+          onRestoreChange={onRestoreWithoutAskingChange}
+        />
 
         <UpdatesGroup
           appVersion={appVersion}
@@ -1595,10 +1605,14 @@ function BrowserGroup({
  */
 function SessionsGroup({
   mcp,
-  onMcpChange
+  onMcpChange,
+  restore,
+  onRestoreChange
 }: {
   mcp: boolean
   onMcpChange: (next: boolean) => void
+  restore: boolean
+  onRestoreChange: (next: boolean) => void
 }): JSX.Element {
   return (
     <Group
@@ -1619,6 +1633,22 @@ function SessionsGroup({
             checked={mcp}
             onChange={() => onMcpChange(!mcp)}
             label="Let Claude see the other sessions"
+          />
+        </span>
+      </Row>
+      <Row
+        label="Resume after a crash without asking"
+        hint={
+          restore
+            ? 'When Helm stops without shutting down, the next start reopens every session it was running, in the tab it had, and says what it could not.'
+            : 'When Helm stops without shutting down, the next start lists the sessions it was running and asks which to reopen.'
+        }
+      >
+        <span data-settings-restore-without-asking={String(restore)}>
+          <Checkbox
+            checked={restore}
+            onChange={() => onRestoreChange(!restore)}
+            label="Resume after a crash without asking"
           />
         </span>
       </Row>

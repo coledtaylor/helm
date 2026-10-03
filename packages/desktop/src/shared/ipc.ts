@@ -35,6 +35,7 @@ import type {
   McpScope,
   PermissionMode,
   Profile,
+  RestoreOffer,
   ProfileDraft,
   PullDetailView,
   PullsSnapshot,
@@ -335,6 +336,21 @@ export interface LaunchedSession {
   composedInstructions: boolean
   /** Non-fatal problems: an overlay or access folder that is not there any more. */
   warnings: string[]
+}
+
+/**
+ * Which of the sessions a crash took to reopen, each at the grid of the pane
+ * it is going back to. None at all is "not now".
+ */
+export interface RestoreSessionsRequest {
+  sessions: { id: number; cols: number; rows: number }[]
+}
+
+/** What came back, and what could not, each with the sentence why. */
+export interface RestoreSessionsResult {
+  /** `from` is the lost row the session reopened. */
+  restored: { from: number; launched: LaunchedSession }[]
+  failed: { id: number; name: string; reason: string }[]
 }
 
 /**
@@ -827,6 +843,17 @@ export interface IpcRequests {
    * `session:start` and `history:resume` do.
    */
   'session:launch': { request: LaunchSessionRequest; response: LaunchedSession }
+  /**
+   * The sessions the last run was hosting when it stopped without shutting
+   * down, or null when there are none or they have been answered for.
+   */
+  'session:restorable': { request: void; response: RestoreOffer | null }
+  /**
+   * Reopens the ones asked for and answers the offer; asking for none is "not
+   * now". Rejects only when it was already answered - a session that could not
+   * be reopened is in `failed`, with its reason.
+   */
+  'session:restore': { request: RestoreSessionsRequest; response: RestoreSessionsResult }
   /** Terminate and forget. Confirms first if the process is still alive. */
   'session:close': { request: CloseSessionRequest; response: CloseSessionResult }
   /** Sessions this main process is currently hosting, for a renderer reload. */
@@ -1590,6 +1617,8 @@ export const REQUEST_CHANNELS = Object.keys({
   'shell:showItem': true,
   'session:start': true,
   'session:launch': true,
+  'session:restorable': true,
+  'session:restore': true,
   'session:close': true,
   'session:list': true,
   'session:activity': true,

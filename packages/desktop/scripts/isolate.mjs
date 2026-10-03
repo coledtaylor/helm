@@ -210,11 +210,22 @@ export function seedDatabase(dataDir, { keepUiState = false } = {}) {
   // that moved would otherwise put the old behaviour back silently, and a check
   // quietly reverting to inheriting somebody's tabs is precisely the failure
   // this is here to end.
+  //
+  // And the rows still claiming to be running are the real app's sessions,
+  // live in it right now, not a crash of this one: left as they are, the copy
+  // would reconcile them to lost and offer to reopen conversations somebody is
+  // in. Marked on the copy before it opens, so its restore offer is about its
+  // own runs only. The registry guard in `main/restore.ts` would catch most of
+  // them, but not one a `/clear` moved, which the real app may not have
+  // recorded.
   const script = [
     "const Database = require('better-sqlite3')",
     "const db = new Database(process.argv[1], { readonly: true, fileMustExist: true })",
     "db.prepare('VACUUM INTO ?').run(process.argv[2])",
     'db.close()',
+    'const copied = new Database(process.argv[2], { fileMustExist: true })',
+    "copied.prepare(\"UPDATE sessions SET status = 'lost' WHERE status = 'running'\").run()",
+    'copied.close()',
     'const strip = JSON.parse(process.argv[3])',
     'if (strip.length > 0) {',
     '  const copy = new Database(process.argv[2], { fileMustExist: true })',

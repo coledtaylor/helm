@@ -80,6 +80,8 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onBrowserMcpLocalOnlyChange: vi.fn(),
     sessionMcp: false,
     onSessionMcpChange: vi.fn(),
+    restoreWithoutAsking: false,
+    onRestoreWithoutAskingChange: vi.fn(),
     gh: SIGNED_IN,
     onLocateGh: vi.fn(),
     onClearGhOverride: vi.fn(),

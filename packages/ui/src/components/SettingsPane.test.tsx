@@ -122,6 +122,8 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onBrowserMcpLocalOnlyChange: vi.fn(),
     sessionMcp: true,
     onSessionMcpChange: vi.fn(),
+    restoreWithoutAsking: false,
+    onRestoreWithoutAskingChange: vi.fn(),
     gh: null,
     onLocateGh: vi.fn(),
     onClearGhOverride: vi.fn(),
@@ -206,7 +208,10 @@ describe('SettingsPane', () => {
         ['checkbox', 'Let Claude drive the browser'],
         ['checkbox', 'Confine Claude’s browser tools to this machine']
       ],
-      Sessions: [['checkbox', 'Let Claude see the other sessions']],
+      Sessions: [
+        ['checkbox', 'Let Claude see the other sessions'],
+        ['checkbox', 'Resume after a crash without asking']
+      ],
       Updates: [
         ['checkbox', 'Check for new releases on launch'],
         ['button', 'Check now'],
@@ -513,6 +518,18 @@ describe('SettingsPane', () => {
       await userEvent.click(tick())
       expect(props.onUpdateCheckChange).toHaveBeenLastCalledWith(true)
     })
+  })
+
+  it('turns resuming after a crash without asking on, and says what each answer does', async () => {
+    const { props, rerender } = renderPane({ restoreWithoutAsking: false })
+    const sessions = group('Sessions')
+    const tick = within(sessions).getByRole('checkbox', { name: 'Resume after a crash without asking' })
+    expect(sessions.textContent).toContain('lists the sessions it was running and asks which to reopen')
+
+    await userEvent.click(tick)
+    expect(props.onRestoreWithoutAskingChange).toHaveBeenLastCalledWith(true)
+    rerender({ restoreWithoutAsking: true })
+    expect(group('Sessions').textContent).toContain('reopens every session it was running, in the tab it had')
   })
 })
 
