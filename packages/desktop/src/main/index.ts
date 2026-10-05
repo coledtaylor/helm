@@ -9,14 +9,16 @@ import {
   shell
 } from 'electron'
 import {
+  addPluginFolder,
   claudeHome,
+  pluginThemeOf,
   readSessionRegistry,
   sessionRegistryDir,
   writeSetting,
   type AppliedTheme,
   type AppSettings
 } from '@helm/core'
-import { join } from 'node:path'
+import { delimiter, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { emit, pushTheme, registerIpc } from './ipc'
@@ -41,6 +43,14 @@ import {
   createContentService,
   registerContentProtocol
 } from './content'
+import { PLUGIN_SCHEME } from '../shared/ipc'
+import { createPluginHost } from './plugins/host'
+import { registerPluginProtocol } from './plugins/protocol'
+import { guardPluginFrames, installPluginPermissions } from './plugins/guards'
+// The plugin runtime: served to every plugin page under `/__helm/`, so no
+// plugin carries a copy of its own (see `main/plugins/protocol.ts`).
+import pluginBridge from '../renderer/plugin-runtime/bridge-entry.ts?script'
+import pluginStylesheet from '../renderer/plugin-runtime/helm.css?raw'
 import {
   browserWillNavigate,
   browserWindowOpen,
@@ -150,6 +160,13 @@ protocol.registerSchemesAsPrivileged([
   {
     scheme: CONTENT_SCHEME,
     privileges: { standard: true, secure: true, supportFetchAPI: false, corsEnabled: false }
+  },
+  // A plugin's pages: an origin per plugin (`helm-plugin://<id>`), secure so
+  // its storage and module scripts work, and no fetch - its network goes
+  // through Helm. See `main/plugins/protocol.ts`.
+  {
+    scheme: PLUGIN_SCHEME,
+    privileges: { standard: true, secure: true, supportFetchAPI: false, corsEnabled: false }
   }
 ])
 
@@ -185,7 +202,14 @@ app.on('web-contents-created', (_e, contents) => {
   contents.on('will-navigate', (event, url) => {
     if (!browserWillNavigate(contents.id, url)) event.preventDefault()
   })
+  // A plugin frame stays on its own origin, and only Helm's pages that frame
+  // plugins put one there (`plugins/guards.ts`). Read at navigation time, so
+  // the plugin host can be made after this is armed.
+  guardPluginFrames(contents, (id) => pluginFrameHosts(id))
 })
+
+/** Set once the plugin host exists; until then no web contents frames plugins. */
+let pluginFrameHosts: (contentsId: number) => boolean = () => false
 
 function createWindow(
   page: 'index' | 'spike',
@@ -365,11 +389,35 @@ function startApp(options: AppOptions = {}): void {
   const themes = createThemeService(themesDir)
   const windowTheme = (): AppliedTheme => themes.state(services.settings).applied
 
-  let win: BrowserWindow | null = createWindow(
-    'index',
-    services.settings.windowBounds ?? null,
-    windowTheme()
-  )
+  /*
+   * Plugins, read before the window exists: what a plugin *is* comes from its
+   * folder (cheap - a manifest and a stat per file it names), and its scheme
+   * has to answer by the time the window asks for its first panel. A service
+   * marked `start: "enable"` starts here, in the background.
+   */
+  let win: BrowserWindow | null = null
+  // `pnpm dev` starts from a fresh copy of the database every launch, so a
+  // plugin being worked on is registered from HELM_PLUGINS instead of being
+  // added again in Settings each time. Dev builds only: an installed Helm
+  // registers a folder when the user adds one, and at no other time.
+  if (appMode === 'dev') {
+    for (const folder of (process.env['HELM_PLUGINS'] ?? '').split(delimiter)) {
+      if (folder.trim() !== '' && isAbsolute(folder.trim())) addPluginFolder(services.store, folder.trim())
+    }
+  }
+  const plugins = createPluginHost({
+    store: services.store,
+    window: () => win,
+    theme: () => pluginThemeOf(windowTheme(), services.settings),
+    bridge: pluginBridge,
+    stylesheet: pluginStylesheet
+  })
+  plugins.start()
+  registerPluginProtocol((id) => plugins.served(id), plugins.runtime)
+  installPluginPermissions()
+  pluginFrameHosts = (id) => plugins.framesPlugins(id)
+
+  win = createWindow('index', services.settings.windowBounds ?? null, windowTheme())
 
   /**
    * Helm's own MCP endpoint, reached through a getter.
@@ -606,13 +654,14 @@ function startApp(options: AppOptions = {}): void {
     files,
     templates,
     themes,
+    plugins,
     window: () => win,
     ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
     ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),
     ...(options.chooseFile !== undefined ? { chooseFile: options.chooseFile } : {}),
     rendererReady: () => {
       emit(win, 'settings:changed', services.settings)
-      pushTheme({ services, themes, window: () => win })
+      pushTheme({ services, themes, plugins, window: () => win })
       // The first scan is kicked off by the main process rather than waited on
       // by the renderer: the launcher paints from the cache immediately and
       // this replaces it when it lands.
@@ -777,6 +826,9 @@ function startApp(options: AppOptions = {}): void {
     if (boundsTimer) clearTimeout(boundsTimer)
     boundsTimer = null
     win = null
+    // The background host is a window too, and a hidden one would keep the
+    // app alive after its only visible window closed.
+    plugins.shutdown()
   })
 
   app.on('activate', () => {
@@ -797,6 +849,9 @@ function startApp(options: AppOptions = {}): void {
     pulls.stop()
     config.stop()
     files.stop()
+    // Plugins' services are processes like a session's, ended the same way:
+    // synchronously, the whole tree, while main is still guaranteed a turn.
+    plugins.shutdown()
     /*
      * The endpoint goes **before** the sessions, and the order is the point.
      *

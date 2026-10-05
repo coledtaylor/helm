@@ -169,7 +169,12 @@ describe('SettingsPane', () => {
       ['archive', 'Archive', ['Transcript archive']],
       ['updates', 'Updates', ['Updates']]
     ]
-    expect(sections.map(([id]) => id)).toEqual(SETTINGS_SECTIONS.map((entry) => entry.id))
+    // Plugins and Secrets are listed with the rest but drawn by pages of their
+    // own (PluginSettings, SecretsSettings), each with its tests.
+    const drawnElsewhere = new Set<SettingsSectionId>(['plugins', 'secrets'])
+    expect(sections.map(([id]) => id)).toEqual(
+      SETTINGS_SECTIONS.map((entry) => entry.id).filter((id) => !drawnElsewhere.has(id))
+    )
 
     const controls: Record<string, Array<[string, string]>> = {
       'Claude CLI': [

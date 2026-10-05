@@ -1,0 +1,23 @@
+{
+  "name": "@helm/sample-plugin",
+  "version": "0.0.1",
+  "description": "Items from a small API in a panel, a tab and the status bar: every part a Helm plugin can have, and the plugin its tests drive.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "watch": "vite build --watch",
+    "serve": "node server.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@helm/plugin-sdk": "workspace:*",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^5.2.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "vite": "^7.3.6"
+  }
+}

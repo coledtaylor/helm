@@ -20,7 +20,9 @@ at the code it governs, and in git history.
 packages/
 ├── core/     # headless logic: discovery, launch, config, content, github, usage, archive, store, layout
 ├── ui/       # React components
-└── desktop/  # Electron main, preload and renderer
+├── desktop/  # Electron main, preload and renderer
+└── plugin-sdk/ # manifest validator, bridge types, helm-plugin CLI, authoring guide
+examples/sample-plugin/  # every plugin surface; the plugin the E2E tests drive
 ```
 
 pnpm workspaces with `node-linker=hoisted` (`.npmrc` says why). `core` and `ui`
@@ -88,10 +90,16 @@ export TypeScript source, so there is one build step.
   strips userinfo from a remote URL before anything is stored.
 - The `persist:helm-browser` partition holds the user's cookies and logins.
   Nothing reads it; the only call against it is `clearStorageData`.
+- The plugin secret store (`main/plugins/secrets.ts`) is the one place Helm
+  keeps a secret, and only one the user typed into it. It is encrypted with
+  `safeStorage` and refuses to store when encryption is unavailable; a value is
+  filled in by main, for a host and a plugin the user allowed, and never sent
+  to any window. Helm never reads a Claude or GitHub credential to put there.
 - The network posture is stated identically in README, docs/PACKAGING.md, the
   `update:check` comment in `shared/ipc.ts` and SPEC 5; change all four
   together. Helm contacts nothing on its own except the update check, and it
-  listens only on loopback, for the sessions it hosts.
+  listens only on loopback, for the sessions it hosts. A plugin's pages reach
+  only the origins its manifest lists.
 
 ## Browser pane
 
@@ -145,6 +153,34 @@ export TypeScript source, so there is one build step.
   session id.
 - These tools are awareness only. Nothing sends a session anything, waits on
   one or hands one work.
+
+## Plugins
+
+`main/plugins/` hosts them. `packages/plugin-sdk` holds the manifest validator
+Helm loads with, so a manifest change starts there. `apiVersion` 1 is the only
+one; anything else is an error in Settings, never a crash.
+
+- A plugin page is served on `helm-plugin://<id>/`, one origin per plugin,
+  framed out of process, with no preload and no Node. The bridge and the
+  primitives stylesheet are injected into every page it serves.
+- Its CSP has `connect-src 'none'`: `helm.fetch` (`net.ts`) is its only way
+  out, to origins the manifest lists, checked again on every redirect hop.
+- `guards.ts`: `will-frame-navigate` keeps a plugin frame on its own origin,
+  and plugin origins get `clipboard-sanitized-write` and no other permission.
+- `helm.exec` runs only programs the manifest names, with an argument array
+  and no shell. A service gets a loopback port and a token for the run. Both
+  run with the user's rights, which is why Settings names them. Turning a
+  plugin off or reloading it ends its calls in flight, programs and service.
+- Frames live outside React (`app/pluginFrames.ts`) and move between slots
+  with `moveBefore`; `appendChild` would reload them. One relay
+  (`renderer/src/plugins/relay.ts`) per page owns every frame's port.
+- A plugin's failure shows in its own surface (`PluginFrame`), never in Helm's
+  chrome, and never takes Helm down.
+- Background pages are iframes in the hidden `plugin-host.html` window, not
+  top-level pages: Chromium partitions an iframe's storage by its top-level
+  site, and a top-level page would share nothing with the plugin's panels.
+- A plugin adds no tools to a session and sends no notifications.
+- `HELM_PLUGINS` registers folders in a dev build only.
 
 ## Overlays and templates
 

@@ -38,6 +38,27 @@ export interface StatusBarProps {
    */
   update: { latest: string; newer: boolean; url: string } | null
   onOpenUpdate: (url: string) => void
+  /** Each plugin's item, in the order the plugins were added. Pressing one opens its panel. */
+  plugins?: readonly StatusPluginItem[] | undefined
+}
+
+export interface StatusPluginItem {
+  /** The plugin's id. */
+  id: string
+  /** The plugin's name, said in the tooltip when the item has none of its own. */
+  name: string
+  text: string
+  tone: 'neutral' | 'accent' | 'success' | 'warn' | 'danger'
+  tooltip: string | null
+  onSelect: () => void
+}
+
+const PLUGIN_TONE: Record<StatusPluginItem['tone'], string> = {
+  neutral: 'text-fg-subtle hover:text-fg',
+  accent: 'text-accent-text',
+  success: 'text-success',
+  warn: 'text-warn',
+  danger: 'text-danger'
 }
 
 /**
@@ -61,7 +82,8 @@ export function StatusBar({
   usageDisplay,
   onUsageDisplayChange,
   update,
-  onOpenUpdate
+  onOpenUpdate,
+  plugins = []
 }: StatusBarProps): JSX.Element {
   const total = sessions.working + sessions.waiting + sessions.idle
   return (
@@ -160,6 +182,25 @@ export function StatusBar({
       )}
 
       <span className="flex-1" />
+
+      {/* A plugin's word, in its own tone, never more than a line of caption:
+          the bar is chrome, and a plugin is one voice on it. */}
+      {plugins.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          data-status-plugin={item.id}
+          title={item.tooltip ?? item.name}
+          onClick={item.onSelect}
+          className={cn(
+            '-mx-1 max-w-[220px] shrink-0 truncate rounded px-1 transition-colors hover:bg-hover',
+            PLUGIN_TONE[item.tone]
+          )}
+        >
+          {item.text}
+        </button>
+      ))}
+      {plugins.length > 0 && <Divider />}
 
       <UsageStatus snapshot={usage} mode={usageDisplay} onModeChange={onUsageDisplayChange} />
     </footer>

@@ -54,7 +54,7 @@ export default tseslint.config(
   // React surfaces
   // ---------------------------------------------------------------------------
   {
-    files: ['packages/ui/**/*.{ts,tsx}', 'packages/desktop/src/renderer/**/*.{ts,tsx}'],
+    files: ['packages/ui/**/*.{ts,tsx}', 'packages/desktop/src/renderer/**/*.{ts,tsx}', 'examples/*/src/**/*.{ts,tsx}'],
     languageOptions: {
       globals: { ...globals.browser }
     },
@@ -88,6 +88,13 @@ export default tseslint.config(
   // Build scripts print what they generated; that output is the confirmation.
   {
     files: ['**/scripts/**/*.{mjs,js,ts}'],
+    rules: { 'no-console': 'off' }
+  },
+
+  // A plugin's programs, its service and the sample's server are Node
+  // processes: what they print is their output, and Helm shows it in the log.
+  {
+    files: ['examples/sample-plugin/{server.mjs,programs/**/*.mjs,service/**/*.mjs}'],
     rules: { 'no-console': 'off' }
   },
 

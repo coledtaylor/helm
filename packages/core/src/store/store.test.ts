@@ -422,9 +422,28 @@ describe('settings validation', () => {
             sizes: [0.4, 0.35, 0.25]
           },
           focused: 2
+        },
+        // A plugin's tab: bare, and with parameters and a title of its own.
+        {
+          root: {
+            panes: [
+              { kind: 'plugin', plugin: 'sample', tab: 'detail', params: {}, title: null },
+              { kind: 'plugin', plugin: 'sample', tab: 'run', params: { run: 1234, live: true, name: 'a b' }, title: 'Run 1234' }
+            ],
+            activeId: null
+          },
+          focused: 0
         }
       ],
       bad: [
+        // A plugin's tab with an id no manifest could have, a tab name with
+        // capitals, parameters that are not a flat record, or an empty title.
+        { root: { panes: [{ kind: 'plugin', plugin: 'Sample', tab: 'detail', params: {}, title: null }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'plugin', plugin: 'sample', tab: 'Detail', params: {}, title: null }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'plugin', plugin: 'sample', tab: 'run', params: { run: { id: 1 } }, title: null }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'plugin', plugin: 'sample', tab: 'run', params: [], title: null }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'plugin', plugin: 'sample', tab: 'run', title: null }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'plugin', plugin: 'sample', tab: 'run', params: {}, title: '' }], activeId: null }, focused: 0 },
         // Not a layout at all.
         [],
         'history',
@@ -571,8 +590,26 @@ describe('settings validation', () => {
       // `settings` is the one destination that may never be hidden, so it is
       // refused here rather than trusted to the rail's menu.
       key: 'railHidden',
-      good: [[], ['history'], ['sessions', 'profiles', 'files', 'history', 'browser', 'pulls', 'config']],
-      bad: [null, 'history', ['settings'], ['content'], ['history', 'history'], [1], [''], {}]
+      good: [
+        [],
+        ['history'],
+        ['sessions', 'profiles', 'files', 'history', 'browser', 'pulls', 'config'],
+        // A plugin's rail icon, by its prefixed id.
+        ['plugin:sample', 'history']
+      ],
+      bad: [
+        null,
+        'history',
+        ['settings'],
+        ['content'],
+        ['history', 'history'],
+        [1],
+        [''],
+        {},
+        ['plugin:'],
+        ['plugin:Sample'],
+        ['plugin:sample', 'plugin:sample']
+      ]
     },
     {
       // A byte count, and null is in the *bad* column deliberately: there is no

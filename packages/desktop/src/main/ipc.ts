@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import {
   createHarness,
   forgetProjects,
+  pluginThemeOf,
   isWithin,
   listTemplates,
   orphanedProjectPaths,
@@ -33,6 +34,7 @@ import { setGhOverride } from './gh-cli'
 import { readClaudeStatus, verifyClaudeAt } from './setup'
 import { checkForUpdate, RELEASES_PAGE } from './update'
 import { appMode, dataDir, dbFile, templatesDir } from './paths'
+import type { PluginHost } from './plugins/host'
 import { activePty, windowsBuildNumber } from './pty'
 import {
   exportProfile,
@@ -83,10 +85,13 @@ type SendHandlers = {
  * announcing it is listening. Each of them is "the answer to `state()` may
  * have moved", and nothing about which one it was changes what to paint.
  */
-export function pushTheme(ctx: Pick<IpcContext, 'services' | 'themes' | 'window'>): void {
+export function pushTheme(ctx: Pick<IpcContext, 'services' | 'themes' | 'window' | 'plugins'>): void {
   const state = ctx.themes.state(ctx.services.settings)
   applyWindowTheme(ctx.window(), state.applied)
   emit(ctx.window(), 'theme:changed', state)
+  // Plugin pages follow too: the same colours, and the corner and density
+  // settings their controls are drawn with.
+  ctx.plugins.pushTheme(pluginThemeOf(state.applied, ctx.services.settings))
 }
 
 /** Typed `webContents.send`. The only way the main process pushes to a window. */
@@ -141,6 +146,8 @@ export interface IpcContext {
   templates: TemplateService
   /** Built-in and user themes, and the watch on the user's; see `themes.ts`. */
   themes: ThemeService
+  /** Plugin folders, their pages' bridge calls, services and secrets; see `plugins/host.ts`. */
+  plugins: PluginHost
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
   /**
@@ -272,6 +279,9 @@ export function registerIpc(ctx: IpcContext): void {
         patch.accentColor !== undefined
       ) {
         pushTheme(ctx)
+      } else if (patch.cornerRadius !== undefined || patch.density !== undefined) {
+        // Shape is not part of the window's theme, but it is part of a plugin's.
+        ctx.plugins.pushTheme(pluginThemeOf(ctx.themes.state(next).applied, next))
       }
       return next
     },
@@ -679,6 +689,39 @@ export function registerIpc(ctx: IpcContext): void {
     },
 
     /*
+     * Plugins. Every decision - what a manifest allows, whose secret may go
+     * where, what a page may open - is in `main/plugins/`; these delegate.
+     */
+    'plugins:list': () => ctx.plugins.list(),
+    'plugins:add': async () => {
+      const title = 'Add a plugin folder'
+      let path: string | null
+      if (ctx.chooseDirectory) path = ctx.chooseDirectory(title)
+      else {
+        const win = ctx.window()
+        const options: Electron.OpenDialogOptions = { title, properties: ['openDirectory'] }
+        const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+        path = result.canceled ? null : (result.filePaths[0] ?? null)
+      }
+      if (path === null) return { path: null, error: null, plugins: ctx.plugins.list() }
+      return ctx.plugins.add(path)
+    },
+    'plugins:remove': ({ path, deleteSecrets }) => ctx.plugins.remove(path, deleteSecrets),
+    'plugins:setEnabled': ({ path, enabled }) => ctx.plugins.setEnabled(path, enabled),
+    'plugins:reload': ({ path }) => ctx.plugins.reload(path),
+    'plugins:setSetting': ({ plugin, key, value }) => ctx.plugins.setSetting(plugin, key, value),
+    // The sender is part of the call's name, so two Helm pages relaying calls
+    // cannot cancel each other's.
+    'plugins:call': (request, event) => ctx.plugins.call(request, event.sender.id),
+    'plugins:command': ({ plugin, id }) => ctx.plugins.command(plugin, id),
+    'plugins:metrics': () => ctx.plugins.metrics(),
+    'plugins:log': ({ path }) => ctx.plugins.log(path),
+    'plugins:ownSecrets': ({ path }) => ctx.plugins.ownSecrets(path),
+    'secrets:list': () => ctx.plugins.secrets.list(),
+    'secrets:save': (input) => ctx.plugins.secrets.save(input),
+    'secrets:remove': ({ key }) => ctx.plugins.secrets.remove(key),
+
+    /*
      * The browser pane. Every handler is a one-line delegation on purpose:
      * every decision behind them - what a typed address means, whether the
      * reach posture allows it, what hiding is - lives in `main/browser.ts` and
@@ -724,6 +767,11 @@ export function registerIpc(ctx: IpcContext): void {
     'pterm:resize': ({ id, cols, rows }) => ctx.pterm.resize(id, cols, rows),
 
     'browser:bounds': (payload) => ctx.browsers.bounds(payload),
+
+    'plugins:cancel': ({ callId }, event) => ctx.plugins.cancel(callId, event.sender.id),
+    'plugins:answer': ({ requestId }) => ctx.plugins.answer(requestId),
+    'plugins:backgroundState': ({ plugin, revision, state, error }) =>
+      ctx.plugins.backgroundState(plugin, revision, state, error),
 
     // Consumed by one-shot `ipcMain.once` listeners in the spike drivers, which
     // register alongside these. A no-op here keeps the contract exhaustive

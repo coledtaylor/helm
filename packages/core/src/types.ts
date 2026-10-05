@@ -22,6 +22,8 @@ import { DEFAULT_PR_REVIEW_PROMPT } from './github/prompt'
 // The same again: `AppSettings.browserReach` names it.
 import type { BrowserReach } from './browser/reach'
 import type { SavedPaneLayout } from './layout/panes'
+// A plugin's tab is a `WorkspaceTab`, and its rail id may be in `railHidden`.
+import type { PluginParams, PluginRailId } from './plugins/tabs'
 
 /**
  * The browser pane's URL rules, re-exported here rather than from the package
@@ -57,6 +59,15 @@ export * from './theme/themes'
  * type from this file.
  */
 export * from './layout/panes'
+
+/**
+ * A plugin's tab and rail id, re-exported for the same reason: the renderer
+ * opens plugin tabs and names their rail buttons. `plugins/tabs.ts` imports
+ * only the SDK's patterns, which are pure.
+ */
+export * from './plugins/tabs'
+export * from './plugins/theme'
+export type * from './plugins/info'
 
 /**
  * The Files view's ranking and its sentences about git, re-exported for the
@@ -1214,6 +1225,9 @@ export const RAIL_DESTINATIONS = ['sessions', 'profiles', 'history', 'files', 'b
 
 export type RailDestination = (typeof RAIL_DESTINATIONS)[number]
 
+/** Anything `railHidden` may name: one of Helm's destinations, or a plugin's rail icon. */
+export type RailItemId = RailDestination | PluginRailId
+
 /**
  * How much of `helm.db` the transcript archive may take, in bytes.
  *
@@ -1282,6 +1296,13 @@ export type WorkspaceTab =
    * to, and the folder Helm checks it is still inside before reading a byte.
    */
   | { kind: 'file'; root: string; path: string }
+  /**
+   * One of the `tabs` a plugin's manifest declares, with what it was opened
+   * with. Kept across a restart; a plugin that is gone or disabled by then
+   * takes its tabs with it. `title` is the one the page or the opener gave it,
+   * or null for the manifest's.
+   */
+  | { kind: 'plugin'; plugin: string; tab: string; params: PluginParams; title: string | null }
 
 /** How many tabs are worth writing down. Past this the list is a bug, not a
  * workspace, and a settings row nobody can shrink is worse than a truncation. */
@@ -1530,11 +1551,13 @@ export interface AppSettings {
   /**
    * Destinations taken off the rail, by a right-click on it.
    *
-   * Only ids from `RAIL_DESTINATIONS`, which is what keeps Settings on the
-   * rail whatever this says. Hiding is not disabling: Ctrl+P, Ctrl+N and every
-   * other way into a destination still work.
+   * Only ids from `RAIL_DESTINATIONS` and plugins' rail ids, which is what
+   * keeps Settings on the rail whatever this says. Hiding is not disabling:
+   * Ctrl+P, Ctrl+N and every other way into a destination still work. A
+   * plugin's id outlives the plugin, harmlessly: it names nothing until a
+   * plugin with that id is back.
    */
-  railHidden: RailDestination[]
+  railHidden: RailItemId[]
 
   /**
    * How many bytes of `helm.db` the transcript archive may occupy.

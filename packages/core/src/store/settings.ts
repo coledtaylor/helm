@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path'
 import { sql } from 'drizzle-orm'
 import { RETIRED_TAB_KINDS, upgradeSavedLayout } from '../layout/panes'
+import { isPluginRailId, PLUGIN_TITLE_MAX, pluginParamsProblem, pluginTabNameProblem } from '../plugins/tabs'
 import {
   BROWSER_PROJECT_URLS_MAX,
   BROWSER_REACH_MODES,
@@ -175,6 +176,17 @@ function paneProblem(pane: unknown): string | null {
     }
     if (typeof path !== 'string' || path.trim() === '') {
       return `expected a file path, got ${describe(path)}`
+    }
+    return null
+  }
+  if (kind === 'plugin') {
+    const { plugin, tab, params, title } = pane as Record<string, unknown>
+    const named = pluginTabNameProblem(plugin, tab)
+    if (named !== null) return named
+    const problem = pluginParamsProblem(params)
+    if (problem !== null) return problem
+    if (title !== null && (typeof title !== 'string' || title.trim() === '' || title.length > PLUGIN_TITLE_MAX)) {
+      return `expected a tab title or null, got ${describe(title)}`
     }
     return null
   }
@@ -457,15 +469,19 @@ export const SETTING_VALIDATORS: SettingValidators = {
     typeof value === 'boolean' ? null : `expected true or false, got ${describe(value)}`,
 
   /**
-   * Known destinations, each once. `settings` is refused because it is not in
-   * `RAIL_DESTINATIONS` - the rail always keeps a way back to this setting.
+   * Known destinations and plugins' rail ids (`plugin:<id>`), each once.
+   * `settings` is refused because it is not in `RAIL_DESTINATIONS` - the rail
+   * always keeps a way back to this setting.
    */
   railHidden: (value) => {
     if (!Array.isArray(value)) return `expected an array of rail destinations, got ${describe(value)}`
     const seen = new Set<string>()
     for (const entry of value) {
-      if (typeof entry !== 'string' || !(RAIL_DESTINATIONS as readonly string[]).includes(entry)) {
-        return `expected one of ${RAIL_DESTINATIONS.join(', ')}, got ${describe(entry)}`
+      if (
+        typeof entry !== 'string' ||
+        !((RAIL_DESTINATIONS as readonly string[]).includes(entry) || isPluginRailId(entry))
+      ) {
+        return `expected one of ${RAIL_DESTINATIONS.join(', ')} or a plugin's rail id, got ${describe(entry)}`
       }
       if (seen.has(entry)) return `${entry} is listed twice`
       seen.add(entry)

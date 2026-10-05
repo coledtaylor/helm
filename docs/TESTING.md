@@ -93,6 +93,7 @@ tier above, so keep this one small.
 | `files` | a file opened from the tree beside its session, its changed lines counted, its line numbers to the bottom, and the view following the session's next edit; Ctrl+P, and the hand-offs to VS Code, Explorer and the clipboard |
 | `browser` | browsing; the security posture; the refusals; a cookie surviving a restart |
 | `agent-tools` | a session drives the browser pane through its own token, and only its own tabs |
+| `plugins` | the sample plugin against a server of its own: its background page, a secret it asks for, its panel, badge, status and a tab with parameters; `helm.fetch` held to the manifest's origins on every redirect; Helm's shortcuts from inside a plugin page and its commands from Ctrl+Shift+P; a crashed plugin page and Reload; an unsupported `apiVersion` said in Settings, and a plugin turned off and on; a theme change reaching a page without reloading it |
 
 - **Each test gets a world** (`test/world.ts`): a temporary root with a space in
   its path, holding a home directory with its own `.claude`, the fake `claude`
@@ -111,6 +112,12 @@ tier above, so keep this one small.
 - **The browser pane's page** is a native view, not part of the window's DOM.
   Once it has loaded a page, it appears in `app.windows()` as a page of its
   own.
+- **A plugin's page** is a frame of the window: `e2e/plugin-fixture.ts` copies
+  the sample plugin into the world, registers it, starts its server, and finds
+  a page with `pluginFrame`. `test:e2e` builds the sample first. Once a plugin
+  frame's process ends, Playwright counts the whole window as crashed and will
+  not drive it again, so the crash test drives the window through the main
+  process instead.
 - Wait on conditions (`expect`, `expect.poll`), never on sleeps.
 
 ## The fake `claude`

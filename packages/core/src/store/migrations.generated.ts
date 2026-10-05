@@ -111,5 +111,13 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "ALTER TABLE `sessions` ADD `last_claude_session_id` text;",
       "ALTER TABLE `sessions` ADD `permission_mode` text;"
     ]
+  },
+  {
+    "tag": "0013_cooing_roxanne_simpson",
+    "statements": [
+      "CREATE TABLE `plugin_settings` (\n\t`plugin` text NOT NULL,\n\t`key` text NOT NULL,\n\t`value` text NOT NULL,\n\t`updated_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL,\n\tPRIMARY KEY(`plugin`, `key`)\n);",
+      "CREATE TABLE `plugins` (\n\t`path` text PRIMARY KEY NOT NULL,\n\t`enabled` integer DEFAULT true NOT NULL,\n\t`added_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL\n);",
+      "CREATE TABLE `secrets` (\n\t`key` text PRIMARY KEY NOT NULL,\n\t`value` blob NOT NULL,\n\t`hosts` text DEFAULT '[]' NOT NULL,\n\t`plugins` text DEFAULT '[]' NOT NULL,\n\t`created_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL,\n\t`updated_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL\n);"
+    ]
   }
 ]

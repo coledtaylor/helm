@@ -51,3 +51,35 @@ describe('StatusBar: which Helm and which claude', () => {
     expect(segments()[0]).toBe('No sessions running')
   })
 })
+
+describe('StatusBar: plugin items', () => {
+  it("draws each plugin's word in its tone, right of the sessions, and a press opens it", () => {
+    const onSelect = vi.fn()
+    renderBar({
+      plugins: [
+        { id: 'sample', name: 'Sample', text: '2 unread', tone: 'accent', tooltip: 'Sample items', onSelect },
+        { id: 'other', name: 'Other', text: 'Offline', tone: 'danger', tooltip: null, onSelect: vi.fn() }
+      ]
+    })
+    const sample = screen.getByRole('button', { name: '2 unread' })
+    expect(sample.getAttribute('data-status-plugin')).toBe('sample')
+    expect(sample.getAttribute('title')).toBe('Sample items')
+    expect(sample.className).toContain('text-accent-text')
+    const other = screen.getByRole('button', { name: 'Offline' })
+    // No tooltip of its own: the plugin's name says whose word it is.
+    expect(other.getAttribute('title')).toBe('Other')
+    expect(other.className).toContain('text-danger')
+    sample.click()
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    const all = segments()
+    expect(all.indexOf('2 unread')).toBeGreaterThan(all.indexOf('No sessions running'))
+    // A rule between them and the usage figures.
+    expect(all[all.indexOf('Offline') + 1]).toBe('|')
+  })
+
+  it('draws no rule for plugins when none has an item', () => {
+    renderBar({ plugins: [] })
+    expect(document.querySelectorAll('[data-status-plugin]')).toHaveLength(0)
+    expect(segments().filter((segment) => segment === '|')).toHaveLength(2)
+  })
+})

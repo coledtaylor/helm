@@ -108,3 +108,28 @@ describe('Rail', () => {
     expect(screen.queryByRole('menu')).toBeNull()
   })
 })
+
+describe('Rail: a count on a destination', () => {
+  const rail = (badge: number | null | undefined): HTMLElement => {
+    render(<Rail groups={[[item('plugin:sample', { label: 'Sample', kind: 'view', badge })]]} />)
+    return screen.getByRole('button', { name: /^Sample/ })
+  }
+
+  it('is drawn on the button and said in its name', () => {
+    const button = rail(3)
+    expect(button.querySelector('[data-rail-badge]')?.textContent).toBe('3')
+    expect(button.getAttribute('aria-label')).toBe('Sample, 3')
+    // The tooltip stays the destination's name.
+    expect(button.getAttribute('title')).toBe('Sample')
+  })
+
+  it('stops at 99+, which is as much as the mark can hold', () => {
+    expect(rail(1234).querySelector('[data-rail-badge]')?.textContent).toBe('99+')
+  })
+
+  it.each([0, null, undefined])('is not drawn for %s', (badge) => {
+    const button = rail(badge)
+    expect(button.querySelector('[data-rail-badge]')).toBeNull()
+    expect(button.getAttribute('aria-label')).toBe('Sample')
+  })
+})

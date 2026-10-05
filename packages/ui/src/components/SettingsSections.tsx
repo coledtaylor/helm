@@ -19,8 +19,12 @@ export type SettingsSectionId =
   | 'files'
   | 'browser'
   | 'github'
+  | 'plugins'
+  | 'secrets'
   | 'archive'
   | 'updates'
+  /** One plugin's page, by its folder: a plugin whose manifest failed has no id. */
+  | `plugin:${string}`
 
 export interface SettingsSection {
   id: SettingsSectionId
@@ -43,22 +47,35 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'files', label: 'Files' },
   { id: 'browser', label: 'Browser' },
   { id: 'github', label: 'GitHub' },
+  { id: 'plugins', label: 'Plugins' },
+  { id: 'secrets', label: 'Secrets' },
   { id: 'archive', label: 'Archive' },
   { id: 'updates', label: 'Updates' }
 ]
 
+/** A registered plugin, listed under Plugins with a page of its own. */
+export interface SettingsPluginLink {
+  path: string
+  name: string
+  /** Turned off, or failed to load: said beside its name. */
+  state: 'on' | 'off' | 'error'
+}
+
 export interface SettingsSectionsProps {
   current: SettingsSectionId
   onSelect: (id: SettingsSectionId) => void
+  plugins?: readonly SettingsPluginLink[] | undefined
 }
 
+export const pluginSection = (path: string): SettingsSectionId => `plugin:${path}`
+
 /** The sidebar's list of sections, with the sidebar's own selected-row recipe. */
-export function SettingsSections({ current, onSelect }: SettingsSectionsProps): JSX.Element {
+export function SettingsSections({ current, onSelect, plugins = [] }: SettingsSectionsProps): JSX.Element {
   return (
     <nav aria-label="Settings sections" className="flex flex-col gap-px px-1.5 pb-1.5">
       {SETTINGS_SECTIONS.map((section) => {
         const selected = section.id === current
-        return (
+        const link = (
           <button
             key={section.id}
             type="button"
@@ -75,6 +92,40 @@ export function SettingsSections({ current, onSelect }: SettingsSectionsProps): 
             )}
             {section.label}
           </button>
+        )
+        if (section.id !== 'plugins' || plugins.length === 0) return link
+        // Each plugin's own page, under Plugins, a step in.
+        return (
+          <div key={section.id} className="contents">
+            {link}
+            {plugins.map((plugin) => {
+              const id = pluginSection(plugin.path)
+              const chosen = id === current
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  data-settings-plugin-link={plugin.path}
+                  aria-current={chosen ? 'page' : undefined}
+                  title={plugin.path}
+                  onClick={() => onSelect(id)}
+                  className={cn(
+                    'relative flex h-line w-full items-center gap-2 rounded-raised pr-2.5 pl-6 text-left text-[12.5px] transition-colors',
+                    chosen ? cn(ROW_SELECTED, 'font-medium text-fg') : 'text-fg-muted hover:bg-hover hover:text-fg'
+                  )}
+                >
+                  {chosen && (
+                    <span aria-hidden className="absolute top-1.5 bottom-1.5 left-0 w-[2px] rounded-full bg-accent" />
+                  )}
+                  <span className="min-w-0 flex-1 truncate">{plugin.name}</span>
+                  {plugin.state === 'off' && <span className="shrink-0 text-[11px] font-normal text-fg-subtle">Off</span>}
+                  {plugin.state === 'error' && (
+                    <span className="shrink-0 text-[11px] font-normal text-danger">Not loaded</span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
         )
       })}
     </nav>

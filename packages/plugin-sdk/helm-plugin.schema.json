@@ -1,0 +1,475 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Helm plugin manifest",
+  "description": "helm-plugin.json, at the root of a Helm plugin folder. Helm validates it with @helm/plugin-sdk/manifest when it loads the plugin; this schema says the same for an editor. Checks that span fields - rail.panel naming a panel, a command tab naming a tab, {{key}} naming a declared secret - are made by Helm and `helm-plugin validate`, not here.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "id",
+    "name"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "For editors. Ignored by Helm."
+    },
+    "apiVersion": {
+      "enum": [
+        1
+      ],
+      "description": "The bridge version the plugin was written against."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+      "description": "Lower-case letters, digits and dashes. The plugin origin is helm-plugin://<id>."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60,
+      "pattern": "\\S",
+      "description": "What Helm calls the plugin."
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40,
+      "pattern": "\\S"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "\\S"
+    },
+    "icon": {
+      "$ref": "#/$defs/iconEntry",
+      "description": "An .svg or .png in the folder, drawn as a mask in the rail colours. 64 KB at most."
+    },
+    "rail": {
+      "type": "object",
+      "description": "A rail icon that opens one of the panels in the sidebar.",
+      "required": [
+        "title",
+        "panel"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "pattern": "\\S",
+          "description": "The rail button tooltip."
+        },
+        "panel": {
+          "type": "string",
+          "description": "A key of panels."
+        }
+      }
+    },
+    "panels": {
+      "type": "object",
+      "maxProperties": 20,
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "title",
+          "entry"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60,
+            "pattern": "\\S",
+            "description": "The sidebar header."
+          },
+          "entry": {
+            "$ref": "#/$defs/htmlEntry"
+          },
+          "actions": {
+            "type": "array",
+            "maxItems": 5,
+            "description": "Icon buttons in the sidebar header. A press arrives as the action event.",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "title",
+                "icon"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/name"
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 60,
+                  "pattern": "\\S",
+                  "description": "Its tooltip and accessible name."
+                },
+                "icon": {
+                  "enum": [
+                    "refresh",
+                    "plus",
+                    "search",
+                    "list",
+                    "settings",
+                    "external",
+                    "pin",
+                    "edit",
+                    "trash",
+                    "link",
+                    "eye"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "tabs": {
+      "type": "object",
+      "maxProperties": 50,
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "title",
+          "entry"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60,
+            "pattern": "\\S",
+            "description": "The tab title until its page sets one with helm.surface.setTitle."
+          },
+          "entry": {
+            "$ref": "#/$defs/htmlEntry"
+          }
+        }
+      }
+    },
+    "background": {
+      "$ref": "#/$defs/htmlEntry",
+      "description": "A page that runs from the moment the plugin is turned on, with no surface open."
+    },
+    "commands": {
+      "type": "array",
+      "maxItems": 100,
+      "description": "Entries in the command palette (Ctrl+Shift+P).",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "title"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/name"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "\\S"
+          },
+          "tab": {
+            "type": "string",
+            "description": "Opens this tab. Without it the command arrives as the command event, at the background page or else the rail panel."
+          }
+        }
+      }
+    },
+    "settings": {
+      "type": "array",
+      "maxItems": 100,
+      "description": "A settings page Helm draws for the plugin.",
+      "items": {
+        "$ref": "#/$defs/setting"
+      }
+    },
+    "network": {
+      "type": "array",
+      "maxItems": 50,
+      "description": "The origins helm.fetch may reach.",
+      "items": {
+        "type": "string",
+        "pattern": "^([Hh][Tt][Tt][Pp][Ss]?):\\/\\/(\\*\\.)?([^/?#@\\s]+?)(?::(\\d{1,5}))?\\/?$",
+        "description": "https://api.example.com, https://*.example.com (every subdomain, not the domain) or http://127.0.0.1:8080. No path."
+      }
+    },
+    "secrets": {
+      "type": "array",
+      "maxItems": 50,
+      "uniqueItems": true,
+      "description": "The secret keys the plugin uses as {{key}}. The user stores the values in Settings > Secrets.",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+      }
+    },
+    "exec": {
+      "type": "object",
+      "maxProperties": 50,
+      "description": "Programs helm.exec may run, by the name the plugin calls them.",
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/program"
+          },
+          {
+            "type": "object",
+            "required": [
+              "command"
+            ],
+            "properties": {
+              "command": {
+                "$ref": "#/$defs/program"
+              },
+              "args": {
+                "$ref": "#/$defs/args"
+              },
+              "env": {
+                "$ref": "#/$defs/env"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "service": {
+      "description": "A long-running process Helm starts, supervises and stops, reached as helm.fetch(\"service:/path\").",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "oneOf": [
+            {
+              "required": [
+                "command"
+              ]
+            },
+            {
+              "required": [
+                "node"
+              ]
+            }
+          ],
+          "properties": {
+            "command": {
+              "$ref": "#/$defs/program"
+            },
+            "node": {
+              "$ref": "#/$defs/scriptEntry"
+            },
+            "args": {
+              "$ref": "#/$defs/args"
+            },
+            "env": {
+              "$ref": "#/$defs/env"
+            },
+            "start": {
+              "enum": [
+                "enable",
+                "demand"
+              ],
+              "description": "demand (the default) starts it on the first service: request; enable starts it with the plugin."
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+    },
+    "htmlEntry": {
+      "type": "string",
+      "pattern": "^(?!\\s)(?![\\\\/])(?![A-Za-z]:)(?!(?:[^\\\\/]*[\\\\/])*\\.\\.(?:[\\\\/]|$))(?!(?:\\.?[\\\\/])*__helm[\\\\/])[^\\u0000]*\\.(?:[Hh][Tt][Mm][Ll])(?:[\\\\/]\\.?)*$",
+      "description": "An .html file, by a path relative to the plugin folder that stays inside it and is not under __helm/."
+    },
+    "iconEntry": {
+      "type": "string",
+      "pattern": "^(?!\\s)(?![\\\\/])(?![A-Za-z]:)(?!(?:[^\\\\/]*[\\\\/])*\\.\\.(?:[\\\\/]|$))(?!(?:\\.?[\\\\/])*__helm[\\\\/])[^\\u0000]*\\.(?:[Ss][Vv][Gg]|[Pp][Nn][Gg])(?:[\\\\/]\\.?)*$"
+    },
+    "scriptEntry": {
+      "type": "string",
+      "pattern": "^(?!\\s)(?![\\\\/])(?![A-Za-z]:)(?!(?:[^\\\\/]*[\\\\/])*\\.\\.(?:[\\\\/]|$))(?!(?:\\.?[\\\\/])*__helm[\\\\/])[^\\u0000]*\\.(?:[Jj][Ss]|[Mm][Jj][Ss]|[Cc][Jj][Ss])(?:[\\\\/]\\.?)*$",
+      "description": "A script in the plugin folder, run by the Node inside Helm."
+    },
+    "program": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 260,
+      "pattern": "^(?!\\s)[^\\u0000]*(?<!\\s)$",
+      "description": "A program name found on PATH, a path relative to the plugin folder, or an absolute path. Not a command line."
+    },
+    "args": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "string",
+        "pattern": "^[^\\u0000]*$"
+      }
+    },
+    "env": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[^\\u0000]*$"
+      },
+      "description": "Environment variables. Values may use {{key}} for a declared secret."
+    },
+    "setting": {
+      "type": "object",
+      "required": [
+        "key",
+        "label",
+        "type"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "\\S"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "pattern": "\\S"
+        },
+        "type": {
+          "enum": [
+            "text",
+            "number",
+            "toggle",
+            "select",
+            "secret"
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "default": {
+              "type": "string"
+            },
+            "placeholder": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "\\S"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "number"
+            },
+            "default": {
+              "type": "number"
+            },
+            "min": {
+              "type": "number"
+            },
+            "max": {
+              "type": "number"
+            }
+          }
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "toggle"
+            },
+            "default": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "required": [
+            "options"
+          ],
+          "properties": {
+            "type": {
+              "const": "select"
+            },
+            "options": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "required": [
+                  "value",
+                  "label"
+                ],
+                "properties": {
+                  "value": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "default": {
+              "type": "string",
+              "description": "One of the options values."
+            }
+          }
+        },
+        {
+          "required": [
+            "secret"
+          ],
+          "properties": {
+            "type": {
+              "const": "secret"
+            },
+            "secret": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+              "description": "A key from secrets."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

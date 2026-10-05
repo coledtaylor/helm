@@ -63,6 +63,14 @@ import type {
   WriteConfigRequest,
   WriteConfigResult
 } from '@helm/core'
+import type { HelmErrorCode, HelmTheme, PluginParams, SettingValue, SurfaceKind } from '@helm/plugin-sdk'
+import type {
+  PluginInfo,
+  PluginLogLine,
+  PluginMetrics,
+  SecretInput,
+  SecretsState
+} from '@helm/core'
 import type { ProbeOp, TermCreateOptions } from './protocol'
 
 /**
@@ -766,8 +774,9 @@ export interface IpcRequests {
    *
    * **Helm contacts nothing on its own initiative except the update check.
    * Everything else on the network happens because you asked for it: the
-   * pull-request surface goes through your own `gh`, and the browser pane
-   * fetches the page you navigate to.**
+   * pull-request surface goes through your own `gh`, the browser pane fetches
+   * the page you navigate to, and a plugin you added reaches the hosts its
+   * manifest names.**
    *
    * That is the whole network posture, and it is written identically here, in
    * the README, in docs/PACKAGING.md and in SPEC 5. If it moves again, all four
@@ -789,6 +798,14 @@ export interface IpcRequests {
    * behind one token, with a tick each. Two families of tools is not two
    * sockets and is not an outbound connection, so what changed is the listening
    * paragraph in those four places and nothing here.
+   *
+   * Plugins did move the sentence, by its last clause: a plugin's background
+   * page can fetch with nobody pressing anything, so the sentence says whose
+   * initiative that is - the plugin the user added - and how far it reaches:
+   * the origins in its manifest, through `helm.fetch` (`main/plugins/net.ts`),
+   * every redirect hop checked again. A plugin's programs and service run with
+   * the user's rights and are not confined, and a service listens on loopback
+   * for its own plugin; the four places say both.
    *
    * The app asks on its own too: once per launch, at most once a day, when
    * `updateCheck` is on - see `maybeCheckForUpdate`. Neither path downloads
@@ -1332,6 +1349,134 @@ export interface IpcRequests {
   'browser:clearStorage': { request: { id: number }; response: BrowserState | null }
   /** The ring buffer, for a panel that has just been opened on an old tab. */
   'browser:console': { request: { id: number }; response: BrowserConsoleEntry[] }
+
+  /**
+   * Plugins (`main/plugins/host.ts`). The list is all the window draws plugins
+   * from, and it is pushed again on `plugins:changed` whenever any of it moves:
+   * a folder added, a plugin reloaded, a status item or badge set.
+   */
+  'plugins:list': { request: void; response: PluginInfo[] }
+  /**
+   * Settings > Plugins, "Add plugin folder": the native picker, then the folder
+   * registered and read. A folder with no `helm-plugin.json` is refused; one
+   * whose manifest is wrong is registered and shown with what is wrong, so it
+   * can be fixed in place and reloaded.
+   */
+  'plugins:add': { request: void; response: PluginAddResult }
+  /** `deleteSecrets`: keys only this plugin could use, which the user chose to delete with it. */
+  'plugins:remove': { request: { path: string; deleteSecrets: string[] }; response: PluginInfo[] }
+  'plugins:setEnabled': { request: { path: string; enabled: boolean }; response: PluginInfo[] }
+  /** Reads the folder again. Every page of the plugin reloads and its service restarts. */
+  'plugins:reload': { request: { path: string }; response: PluginInfo[] }
+  /** One value on a plugin's settings page, or null to go back to the manifest's default. */
+  'plugins:setSetting': { request: { plugin: string; key: string; value: SettingValue }; response: PluginInfo[] }
+  /**
+   * A bridge call from a plugin page, relayed by the Helm page framing it.
+   * `plugin` is what that page established from the message's origin and
+   * source (`pluginFrames.ts`); nothing the plugin wrote decides it.
+   */
+  'plugins:call': { request: PluginCallRequest; response: PluginCallOutcome }
+  /** A Quick Open command with no tab, for the plugin's background page. */
+  'plugins:command': { request: { plugin: string; id: string }; response: void }
+  /** Memory and CPU per plugin. Asked while a plugin's settings page is open, never polled otherwise. */
+  'plugins:metrics': { request: void; response: PluginMetrics[] }
+  /** What the plugin's service printed and what Helm noted about it, oldest first. */
+  'plugins:log': { request: { path: string }; response: PluginLogLine[] }
+  /** The stored keys no other plugin may use - what removing this one offers to delete. */
+  'plugins:ownSecrets': { request: { path: string }; response: string[] }
+
+  /**
+   * Settings > Secrets. Values cross this boundary in one direction only: in,
+   * on `secrets:save`. Nothing here, or anywhere, sends one back.
+   */
+  'secrets:list': { request: void; response: SecretsState }
+  /** Throws with the sentence the form shows - an unreadable origin, no encryption. */
+  'secrets:save': { request: SecretInput; response: SecretsState }
+  'secrets:remove': { request: { key: string }; response: SecretsState }
+}
+
+/** The scheme plugin pages are served on: `helm-plugin://<id>/<path>`, an origin per plugin. */
+export const PLUGIN_SCHEME = 'helm-plugin'
+
+// What the window draws of a plugin, and of the secrets: in core so the ui
+// package's Settings pages can be typed by them (`core/plugins/info.ts`).
+export type {
+  PluginBackgroundInfo,
+  PluginBackgroundState,
+  PluginInfo,
+  PluginLogLine,
+  PluginMetrics,
+  PluginPanelInfo,
+  PluginSecretState,
+  PluginServiceInfo,
+  PluginServiceState,
+  PluginTabInfo,
+  SecretInfo,
+  SecretInput,
+  SecretsState
+} from '@helm/core'
+
+export interface PluginAddResult {
+  /** The folder picked, or null when the picker was cancelled. */
+  path: string | null
+  /** Why it was not added, as a sentence. */
+  error: string | null
+  plugins: PluginInfo[]
+}
+
+export interface PluginCallRequest {
+  plugin: string
+  surface: SurfaceKind
+  method: string
+  args: unknown[]
+  /** Chosen by the relay, so `plugins:cancel` can name the call. */
+  callId: string
+}
+
+export type PluginCallOutcome = { ok: true; value: unknown } | { ok: false; code: HelmErrorCode; message: string }
+
+/** What `helm.fetch` sends across: a `Request`, taken apart. */
+export interface PluginFetchRequest {
+  url: string
+  method: string
+  headers: Array<[string, string]>
+  body: Uint8Array | null
+  redirect: 'follow' | 'manual' | 'error'
+}
+
+/** And what comes back, for the bridge to make a `Response` of. */
+export interface PluginFetchResponse {
+  status: number
+  statusText: string
+  headers: Array<[string, string]>
+  body: Uint8Array
+  url: string
+  redirected: boolean
+}
+
+/** Main asking the window to do something a plugin asked for. */
+export type PluginUiRequest =
+  | { kind: 'openTab'; plugin: string; tab: string; params: PluginParams; title: string | null }
+  | {
+      kind: 'secret'
+      /** Answered on `plugins:answer` when the dialog closes. */
+      requestId: string
+      plugin: string
+      key: string
+      /** The plugin's own origins, offered as the hosts the value may go to. */
+      hosts: string[]
+    }
+
+/**
+ * An event for a plugin's pages. Each Helm page framing the plugin delivers it
+ * to its own frames: the window to panels and tabs, the background host to the
+ * background page.
+ */
+export interface PluginDelivery {
+  plugin: string
+  event: 'settings' | 'secrets' | 'command'
+  data: unknown
+  to: 'all' | 'background'
 }
 
 /** The kind of theme on screen - what `.dark` on `<html>` says. */
@@ -1396,6 +1541,13 @@ export interface IpcSends {
    * the next frame's bounds supersede this one's.
    */
   'browser:bounds': BrowserBounds
+
+  /** A plugin page aborted a call it made - a fetch's `AbortSignal`, a page that went away. */
+  'plugins:cancel': { callId: string }
+  /** The secret dialog a plugin asked for has closed; main answers the plugin's call. */
+  'plugins:answer': { requestId: string }
+  /** The background host's word on a background page: it connected, or it crashed. */
+  'plugins:backgroundState': { plugin: string; revision: number; state: 'running' | 'crashed'; error: string | null }
 }
 
 // ---------------------------------------------------------------------------
@@ -1568,6 +1720,20 @@ export interface IpcEvents {
    * first change, so a session writing steadily still shows up as it works.
    */
   'files:changed': { root: string; paths: string[] | null }
+
+  /** Every plugin folder, after anything about any of them moved. */
+  'plugins:changed': PluginInfo[]
+  /** A plugin asked for something only the window can do: open a tab, ask for a secret. */
+  'plugins:ui': PluginUiRequest
+  /** An event for a plugin's pages; see `PluginDelivery`. */
+  'plugins:deliver': PluginDelivery
+  /** The secrets list moved - a save, a removal - from any window. No values, ever. */
+  'secrets:changed': SecretsState
+  /**
+   * The theme as plugin pages see it, after any change to the colours or the
+   * shape settings. To both Helm pages that frame plugins, which pass it on.
+   */
+  'plugins:theme': HelmTheme
 }
 
 // ---------------------------------------------------------------------------
@@ -1729,7 +1895,21 @@ export const REQUEST_CHANNELS = Object.keys({
   'browser:stopFind': true,
   'browser:zoom': true,
   'browser:clearStorage': true,
-  'browser:console': true
+  'browser:console': true,
+  'plugins:list': true,
+  'plugins:add': true,
+  'plugins:remove': true,
+  'plugins:setEnabled': true,
+  'plugins:reload': true,
+  'plugins:setSetting': true,
+  'plugins:call': true,
+  'plugins:command': true,
+  'plugins:metrics': true,
+  'plugins:log': true,
+  'plugins:ownSecrets': true,
+  'secrets:list': true,
+  'secrets:save': true,
+  'secrets:remove': true
 } satisfies Record<RequestChannel, true>) as RequestChannel[]
 
 export const SEND_CHANNELS = Object.keys({
@@ -1746,7 +1926,10 @@ export const SEND_CHANNELS = Object.keys({
   'pterm:resize': true,
   'session:confirmed': true,
   'probe:res': true,
-  'browser:bounds': true
+  'browser:bounds': true,
+  'plugins:cancel': true,
+  'plugins:answer': true,
+  'plugins:backgroundState': true
 } satisfies Record<SendChannel, true>) as SendChannel[]
 
 export const EVENT_CHANNELS = Object.keys({
@@ -1781,5 +1964,10 @@ export const EVENT_CHANNELS = Object.keys({
   'browser:opened': true,
   'browser:closed': true,
   'browser:logged': true,
-  'files:changed': true
+  'files:changed': true,
+  'plugins:changed': true,
+  'plugins:ui': true,
+  'plugins:deliver': true,
+  'secrets:changed': true,
+  'plugins:theme': true
 } satisfies Record<EventChannel, true>) as EventChannel[]

@@ -1,0 +1,569 @@
+/*
+ * Helm's primitives, for plugin pages (DESIGN.md "Plugin surfaces").
+ *
+ * Served at `/__helm/helm.css` on every plugin origin and linked at the top of
+ * every page's `<head>`, before the plugin's own styles. The colours are the
+ * nineteen theme tokens the bridge writes onto `<html>` as `--helm-*` and
+ * rewrites when the theme changes, so a page drawn with these classes follows
+ * Helm without a reload; `--helm-radius` and `data-density` arrive the same
+ * way, so corners and row height follow their settings too.
+ *
+ * Everything is in the `helm` layer, and the statement below orders it:
+ *
+ * - **Unlayered plugin CSS wins over all of it**, whatever its specificity,
+ *   because unlayered rules outrank every layer.
+ * - **A Tailwind page gets the order it would want**: its preflight (`base`)
+ *   is under the primitives, so `.helm-button` is not reset to a bare button,
+ *   and its utilities are over them, so `class="helm-button px-4"` takes the
+ *   padding. Naming Tailwind's layers here is what places `helm` between them;
+ *   the plugin's own `@layer` statement later cannot reorder layers already
+ *   declared. On a page without Tailwind the four names are empty layers.
+ */
+@layer theme, base, helm, components, utilities;
+
+@layer helm {
+  :root {
+    --helm-font-sans: 'Inter var', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    --helm-font-mono: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+    /* The corner scale (DESIGN.md "Shape"): rows and cards at the radius,
+     * controls one pixel rounder so they read as separate from their panel. */
+    --helm-radius-well: calc(var(--helm-radius, 3px) + 1px);
+    /* Density: how tightly repeated rows pack. Text and controls never move. */
+    --helm-row-y: 6px;
+    --helm-line: 26px;
+    accent-color: var(--helm-accent);
+  }
+
+  :root[data-density='compact'] {
+    --helm-row-y: 3px;
+    --helm-line: 22px;
+  }
+
+  :where(html, body) {
+    height: 100%;
+  }
+
+  /* A plugin surface sits inside one of Helm's islands, so its ground is the
+   * island's surface, edge to edge, and it draws no island of its own. */
+  :where(body) {
+    margin: 0;
+    background: var(--helm-surface);
+    color: var(--helm-fg);
+    font-family: var(--helm-font-sans);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    cursor: default;
+  }
+
+  :where(*, ::before, ::after) {
+    box-sizing: border-box;
+  }
+
+  :where(button, [role='button'], a[href], select, summary, input[type='checkbox'], input[type='radio']) {
+    cursor: pointer;
+  }
+
+  :where(:disabled, [aria-disabled='true']) {
+    cursor: default;
+  }
+
+  ::selection {
+    background: var(--helm-accent-soft);
+  }
+
+  :where(:focus-visible) {
+    outline: 2px solid var(--helm-accent);
+    outline-offset: 2px;
+  }
+
+  /* A field's accent border is its focus mark; a ring on top reads as two. */
+  :where(input:not([type='checkbox'], [type='radio']), textarea, select):focus-visible {
+    outline: none;
+    border-color: var(--helm-accent);
+  }
+
+  /* Chromium's default scrollbar is a light grey slab that ignores the theme. */
+  :where(*) {
+    scrollbar-width: thin;
+    scrollbar-color: var(--helm-border-strong) transparent;
+  }
+
+  /* Every select opens its list as Helm's menus do (DESIGN.md "Select"):
+   * `base-select` hands the list to CSS and keeps the keyboard native. */
+  :where(select),
+  ::picker(select) {
+    appearance: base-select;
+  }
+
+  :where(select) {
+    align-items: center;
+  }
+
+  :where(select)::picker-icon {
+    color: var(--helm-fg-subtle);
+  }
+
+  ::picker(select) {
+    margin-block: 4px;
+    padding: 4px;
+    border: 1px solid var(--helm-border-strong);
+    border-radius: var(--helm-radius-well);
+    background: var(--helm-surface-raised);
+    color: var(--helm-fg);
+    box-shadow: none;
+    max-block-size: min(360px, 60vh);
+  }
+
+  :where(select) option {
+    min-block-size: 28px;
+    padding: 0 8px;
+    border-radius: var(--helm-radius);
+    background: transparent;
+    color: var(--helm-fg);
+    font-size: 12px;
+  }
+
+  :where(select) option:hover,
+  :where(select) option:focus-visible {
+    background: var(--helm-hover);
+    outline: none;
+  }
+
+  :where(select) option:checked {
+    background: var(--helm-accent-soft);
+  }
+
+  :where(select) option:checked:hover,
+  :where(select) option:checked:focus-visible {
+    background: var(--helm-accent-soft-hover);
+  }
+
+  :where(select) option::checkmark {
+    display: none;
+  }
+
+  :where(select) option:disabled {
+    color: var(--helm-fg-subtle);
+  }
+
+  /* ------------------------------------------------------------------------
+   * Buttons (DESIGN.md "Controls"). The accent outlines, never fills.
+   * ---------------------------------------------------------------------- */
+  .helm-button {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid var(--helm-border-strong);
+    border-radius: var(--helm-radius-well);
+    background: transparent;
+    color: var(--helm-fg);
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    white-space: nowrap;
+    transition: background-color 120ms, color 120ms, border-color 120ms;
+  }
+
+  .helm-button:hover:not(:disabled) {
+    background: var(--helm-hover);
+  }
+
+  .helm-button[data-variant='primary'] {
+    border-color: var(--helm-accent);
+    color: var(--helm-accent-text);
+  }
+
+  .helm-button[data-variant='primary']:hover:not(:disabled) {
+    background: var(--helm-accent-soft);
+  }
+
+  .helm-button[data-variant='ghost'] {
+    border-color: transparent;
+    color: var(--helm-fg-muted);
+  }
+
+  .helm-button[data-variant='ghost']:hover:not(:disabled) {
+    color: var(--helm-fg);
+  }
+
+  .helm-button[data-variant='danger'] {
+    border-color: color-mix(in srgb, var(--helm-danger) 45%, transparent);
+    color: var(--helm-danger);
+  }
+
+  .helm-button[data-variant='danger']:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--helm-danger) 10%, transparent);
+  }
+
+  /* Disabled keeps its outline at reduced opacity; it never swaps to a grey fill. */
+  .helm-button:disabled,
+  .helm-icon-button:disabled {
+    opacity: 0.45;
+  }
+
+  .helm-button svg,
+  .helm-icon-button svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+
+  .helm-icon-button {
+    display: inline-grid;
+    flex-shrink: 0;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--helm-radius-well);
+    background: transparent;
+    color: var(--helm-fg-subtle);
+    transition: background-color 120ms, color 120ms;
+  }
+
+  .helm-icon-button:hover:not(:disabled) {
+    background: var(--helm-hover);
+    color: var(--helm-fg);
+  }
+
+  .helm-icon-button[aria-pressed='true'] {
+    color: var(--helm-accent-text);
+  }
+
+  /* ------------------------------------------------------------------------
+   * Fields: a sunken well. Hover strengthens the hairline, focus makes it the
+   * accent, and the fill never changes under the pointer.
+   * ---------------------------------------------------------------------- */
+  .helm-input,
+  .helm-select,
+  .helm-textarea {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--helm-border);
+    border-radius: var(--helm-radius-well);
+    background: var(--helm-surface-sunken);
+    color: var(--helm-fg);
+    font: inherit;
+    font-size: 12px;
+    transition: border-color 120ms;
+  }
+
+  .helm-input,
+  .helm-select {
+    height: 28px;
+    padding: 0 8px;
+  }
+
+  .helm-textarea {
+    display: block;
+    min-height: 64px;
+    padding: 6px 8px;
+    line-height: 1.5;
+    resize: vertical;
+  }
+
+  .helm-input::placeholder,
+  .helm-textarea::placeholder {
+    color: var(--helm-fg-subtle);
+  }
+
+  .helm-input:hover:not(:disabled, :focus-visible),
+  .helm-select:hover:not(:disabled, :focus-visible),
+  .helm-textarea:hover:not(:disabled, :focus-visible) {
+    border-color: var(--helm-border-strong);
+  }
+
+  .helm-input:disabled,
+  .helm-select:disabled,
+  .helm-textarea:disabled {
+    color: var(--helm-fg-subtle);
+  }
+
+  .helm-input[aria-invalid='true'],
+  .helm-select[aria-invalid='true'],
+  .helm-textarea[aria-invalid='true'] {
+    border-color: color-mix(in srgb, var(--helm-danger) 60%, transparent);
+  }
+
+  .helm-select {
+    padding-right: 4px;
+  }
+
+  /* ------------------------------------------------------------------------
+   * Lists. A row is the action: it carries no buttons. Selection is the soft
+   * accent plus a 2px bar down the left edge, never a solid fill.
+   * ---------------------------------------------------------------------- */
+  .helm-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin: 0;
+    padding: 4px;
+    list-style: none;
+  }
+
+  .helm-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: var(--helm-row-y) 8px;
+    border: 0;
+    border-radius: var(--helm-radius-well);
+    background: transparent;
+    color: var(--helm-fg);
+    font: inherit;
+    text-align: left;
+    text-decoration: none;
+  }
+
+  :is(button, a).helm-row {
+    width: 100%;
+  }
+
+  .helm-row:is(button, a, [role='option'], [role='button'], [tabindex]):hover {
+    background: var(--helm-hover);
+  }
+
+  .helm-row:is([aria-selected='true'], [aria-current]:not([aria-current='false'])) {
+    background: var(--helm-accent-soft);
+  }
+
+  .helm-row:is([aria-selected='true'], [aria-current]:not([aria-current='false'])):hover {
+    background: var(--helm-accent-soft-hover);
+  }
+
+  .helm-row:is([aria-selected='true'], [aria-current]:not([aria-current='false']))::before {
+    content: '';
+    position: absolute;
+    top: 6px;
+    bottom: 6px;
+    left: 0;
+    width: 2px;
+    border-radius: 9999px;
+    background: var(--helm-accent);
+  }
+
+  /* ------------------------------------------------------------------------
+   * Marks. A chip is borderless and carries its tone in its text; a state
+   * chip is the one outlined pill, for the single word that is a thing's
+   * whole status; a dot is the same tone at 6px.
+   * ---------------------------------------------------------------------- */
+  .helm-chip,
+  .helm-state {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    line-height: 15px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .helm-chip {
+    --helm-tone: var(--helm-fg-subtle);
+    color: var(--helm-tone);
+  }
+
+  .helm-state {
+    --helm-tone: var(--helm-fg-muted);
+    --helm-tone-edge: var(--helm-border-strong);
+    padding: 0 7px;
+    border: 1px solid var(--helm-tone-edge);
+    border-radius: 9999px;
+    color: var(--helm-tone);
+  }
+
+  .helm-dot {
+    --helm-tone: var(--helm-fg-subtle);
+    display: inline-block;
+    flex-shrink: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background: var(--helm-tone);
+  }
+
+  :is(.helm-chip, .helm-state, .helm-dot)[data-tone='accent'] {
+    --helm-tone: var(--helm-accent-text);
+    --helm-tone-edge: color-mix(in srgb, var(--helm-accent) 40%, transparent);
+  }
+
+  .helm-dot[data-tone='accent'] {
+    --helm-tone: var(--helm-accent);
+  }
+
+  :is(.helm-chip, .helm-state, .helm-dot)[data-tone='success'] {
+    --helm-tone: var(--helm-success);
+    --helm-tone-edge: color-mix(in srgb, var(--helm-success) 40%, transparent);
+  }
+
+  :is(.helm-chip, .helm-state, .helm-dot)[data-tone='warn'] {
+    --helm-tone: var(--helm-warn);
+    --helm-tone-edge: color-mix(in srgb, var(--helm-warn) 40%, transparent);
+  }
+
+  :is(.helm-chip, .helm-state, .helm-dot)[data-tone='danger'] {
+    --helm-tone: var(--helm-danger);
+    --helm-tone-edge: color-mix(in srgb, var(--helm-danger) 40%, transparent);
+  }
+
+  /* A tag: the hairline pill for neutral ones, the soft accent for a kind. */
+  .helm-tag {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    padding: 0 7px;
+    border: 1px solid var(--helm-border-strong);
+    border-radius: 9999px;
+    color: var(--helm-fg-muted);
+    font-size: 11px;
+    line-height: 15px;
+    white-space: nowrap;
+  }
+
+  .helm-tag[data-tone='accent'] {
+    border-color: transparent;
+    background: var(--helm-accent-soft);
+    color: var(--helm-accent-text);
+  }
+
+  /* ------------------------------------------------------------------------
+   * Page parts.
+   * ---------------------------------------------------------------------- */
+
+  /* A page's bar: a row along its top with a hairline under it. */
+  .helm-bar {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 6px;
+    min-height: 40px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--helm-border);
+  }
+
+  /* A divider inside the surface fades at its ends, a crease and not a wall. */
+  .helm-rule {
+    height: 1px;
+    flex-shrink: 0;
+    border: 0;
+    margin: 0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      var(--helm-border-strong) 20%,
+      var(--helm-border-strong) 80%,
+      transparent
+    );
+  }
+
+  /* The caps label over a section. The one place weight goes past 500. */
+  .helm-caps {
+    color: var(--helm-fg-subtle);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    line-height: 1.4;
+    text-transform: uppercase;
+  }
+
+  /* A row's second line, a hint, a timestamp. */
+  .helm-meta {
+    color: var(--helm-fg-muted);
+    font-size: 11px;
+  }
+
+  /* Machine data: a path, a hash, a size, a command. */
+  .helm-mono {
+    font-family: var(--helm-font-mono);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* What a page or list says when it has nothing to show: an icon in a small
+   * well, what is empty, one sentence, and the way on. */
+  .helm-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    max-width: 360px;
+    margin: 0 auto;
+    padding: 32px 16px;
+    text-align: center;
+  }
+
+  .helm-empty > .helm-empty-icon {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    margin-bottom: 12px;
+    border: 1px solid var(--helm-border);
+    border-radius: var(--helm-radius-well);
+    background: var(--helm-surface-raised);
+    color: var(--helm-fg-subtle);
+  }
+
+  .helm-empty > .helm-empty-icon svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .helm-empty > .helm-empty-title {
+    margin: 0;
+    color: var(--helm-fg);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .helm-empty > .helm-empty-text {
+    margin: 4px 0 0;
+    color: var(--helm-fg-subtle);
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  .helm-empty > .helm-empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 16px;
+  }
+}
+
+/*
+ * Outside the layer, because Chromium ignores these pseudo-elements on any
+ * element whose `scrollbar-width` or `scrollbar-color` is set and they only
+ * paint where the standard properties are left at `auto` - which a plugin that
+ * resets them gets. Kept to the same shape as Helm's own bars.
+ */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background-color: var(--helm-border-strong);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--helm-fg-subtle);
+}

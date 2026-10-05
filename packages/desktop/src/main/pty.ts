@@ -1,9 +1,10 @@
 import type { BrowserWindow } from 'electron'
-import { execFile, execFileSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { readdirSync } from 'node:fs'
 import * as pty from 'node-pty'
 import { release } from 'node:os'
 import { join } from 'node:path'
+import { treeKill } from './treekill'
 
 /**
  * Environment variables Electron injects (or that leak from the dev toolchain)
@@ -154,42 +155,6 @@ function open(opts: SpawnOptions): pty.IPty {
 // ---------------------------------------------------------------------------
 // Termination
 // ---------------------------------------------------------------------------
-
-/**
- * The backstop behind `IPty.kill()`.
- *
- * Spike C deviation #8: node-pty's console-process enumeration hits
- * `AttachConsole failed` and falls back to killing the pty's own pid alone. A
- * hosted `claude` is a process *tree* - it spawns Node children for MCP
- * servers, ripgrep for searches, whatever a Bash tool call started - so that
- * fallback can leave the tree behind while the pane it belonged to is gone.
- * `taskkill /T` walks the tree the way node-pty could not.
- *
- * Not a substitute for `IPty.kill()`, which is still what releases the ConPTY
- * handles: this runs alongside it.
- */
-function treeKill(pid: number, sync: boolean): void {
-  if (pid <= 0) return
-  if (process.platform !== 'win32') {
-    try {
-      // Negative pid = the process group, which is the POSIX equivalent of /T.
-      process.kill(-pid, 'SIGKILL')
-    } catch {
-      // Already gone, or never had a group of its own.
-    }
-    return
-  }
-  const args = ['/PID', String(pid), '/T', '/F']
-  if (sync) {
-    try {
-      execFileSync('taskkill.exe', args, { windowsHide: true, stdio: 'ignore', timeout: 4000 })
-    } catch {
-      // Exit code 128 means "no such process", which is the outcome we wanted.
-    }
-    return
-  }
-  execFile('taskkill.exe', args, { windowsHide: true, timeout: 4000 }, () => undefined)
-}
 
 /** How long a process gets to honour `IPty.kill()` before the tree kill. */
 const GRACE_MS = 1500

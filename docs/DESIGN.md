@@ -988,11 +988,100 @@ overrides the gate; keep it.
   exactly as hard as one of Helm's does - the reason the listing is
   machine-wide. It has no tab, so it opens the sessions pane on itself.
 
+## 5c. Plugin surfaces
+
+A plugin draws inside places Helm already has and never brings chrome of its
+own. **Helm draws the frame, the plugin draws the page**: the rail icon, the
+panel's header, the tab, the status bar item, the palette row and every error
+state are Helm's components, and the plugin's page fills the body of one of
+them. That is what keeps a plugin looking like part of the window rather than
+a website inside it.
+
+- **The rail**: a plugin with a rail icon gets a group of its own under a
+  hairline, after Helm's destinations and above Settings. Its icon is a mask,
+  so it takes the rail's colours, and it hides from the rail's menu like any
+  other item. It is a **view**: it opens the plugin's panel in the sidebar.
+- **The rail badge** is a count, never an alert: a 15px pill at the icon's top
+  right, an `accent` hairline on `bg` with the number in 9.5px/500
+  `accent-text` tabular numerals, "99+" past 99, and absent at zero. The count
+  is part of the button's accessible name ("Sample, 2"). Never filled - the
+  accent does not flood for a plugin either.
+- **A panel** is the sidebar island with the plugin's page as its body. The
+  38px header is Helm's: the panel's title and up to five actions as the
+  standard 26px icon buttons. An action's glyph is named in the manifest from
+  Helm's own set (refresh, plus, search, list, settings, external, pin, edit,
+  trash, link, eye), so a plugin cannot draw a header that looks unlike every
+  other one.
+- **A tab** is a tab like any other: one line, the plugin's icon, the title the
+  page sets. The page fills the pane's body edge to edge, as a page does.
+- **A status bar item** is one plugin's single line of caption, in one of five
+  tones (`neutral` in `fg-subtle`, `accent` in `accent-text`, `success`,
+  `warn`, `danger`), at most 220px and truncated past it, before Helm's own
+  items with a divider after the last. Pressing it opens the plugin's panel.
+- **Ctrl+Shift+P** runs a plugin's commands, drawn as Quick Open is so the two
+  read as one family: a 560px raised palette, the field across the top with the
+  command glyph in `accent`, 34px rows of icon, title and - right, in
+  `fg-subtle` - the plugin it belongs to, the chosen row with the selected-row
+  tint and 2px bar, and a key strip at the foot.
+- **A failure says so in the plugin's own place**, never as a toast or a
+  dialog. The surface becomes an `EmptyState` on `surface`: the warn glyph,
+  "*Plugin* stopped" (its process ended) or "*Plugin* did not load" (it never
+  answered), Helm's sentence under it, and **Reload** and **Plugin settings**.
+  Every surface of one plugin shares a process, so a crash shows on all of
+  them at once. The rest of the window is untouched.
+- **Settings > Plugins** lists every folder added: name, version in mono, the
+  folder in mono `fg-subtle`, and a state chip in outline - "Not loaded" in
+  `danger`, "Off" neutral. Each plugin is a page of its own in Settings'
+  sidebar: what went wrong first as a verdict (an unsupported `apiVersion` is
+  said by name there), then its settings form drawn from the manifest's
+  schema with Settings' own rows, the secrets it uses, the hosts it may reach
+  and the programs and service it runs - all three in mono, because the user
+  is being told exactly what this plugin can do - memory and CPU, its log
+  (Helm's own notes in `fg-subtle`, the plugin's lines in `fg`), and turn off,
+  reload and remove. **Settings > Secrets** lists every secret by key, with its
+  hosts and plugins, and never its value.
+- **The secret dialog** is a modal (`Overlay`): the key glyph, "*Plugin* needs
+  *key*", a password field, the hosts the value may go to and the plugins that
+  may use it, with the asking plugin and its hosts ticked, then Save. It is the
+  only way a value gets in, and the value never comes back out to any page.
+
+**The primitives.** Every plugin page gets `/__helm/helm.css`, linked before
+its own styles. The theme arrives as CSS variables on `<html>` - the nineteen
+roles as `--helm-<role>` (`--helm-surface`, `--helm-fg-muted`,
+`--helm-accent-soft`, ...), `--helm-radius`, `data-density` and `data-theme`
+for light and dark - and is rewritten in place when the theme changes, so a
+page never reloads for it. The classes are Helm's controls by another name:
+
+| class | is |
+|---|---|
+| `.helm-button` | the 28px secondary button; `data-variant="primary"` is the accent outline with `accent-text`, never a fill; `ghost`, `danger` |
+| `.helm-icon-button` | a 24px icon button; `aria-pressed="true"` for a toggle that is on |
+| `.helm-input`, `.helm-select`, `.helm-textarea` | the field well; `aria-invalid="true"` for a field in error |
+| `.helm-list`, `.helm-row` | a list and its rows at the density's height; `aria-selected` or `aria-current` is the selected row's `accent-soft` and 2px bar |
+| `.helm-chip`, `.helm-state`, `.helm-dot` | a chip carried by its tone alone, a state in a hairline outline of its tone, a 6px status dot; `data-tone` picks the tone |
+| `.helm-tag` | a label pill in outline; `data-tone="accent"` is `accent-soft` behind `accent-text` |
+| `.helm-bar`, `.helm-rule` | a page's bar of controls over a hairline, a divider that fades at its ends |
+| `.helm-caps`, `.helm-meta`, `.helm-mono` | the caps label, secondary text, machine data |
+| `.helm-empty` | the empty state, with `-icon`, `-title`, `-text` and `-actions` |
+
+They live in the CSS layer `helm`, ordered `theme, base, helm, components,
+utilities`, so a plugin's own unlayered CSS beats them and a Tailwind page's
+utilities do too. A plugin may style itself however it likes; the primitives
+are how it looks like Helm without trying, and every rule in this file -
+no solid accent fills, no shadows, no weight past 500, mono for machine data -
+is already in them.
+
+**Keys.** A Helm shortcut pressed inside a plugin page is forwarded to Helm if
+the page did not handle it: Ctrl, Alt or Meta with a key, except the editing
+keys (copy, paste, select all, undo) and AltGr. Ctrl+N and Ctrl+Shift+P work
+with focus anywhere.
+
 ## 6. Foreign-ground islands
 
 Two islands host content Helm does not own: the terminal and the embedded
 document/artifact viewer. The rule: **the island's chrome is themed; the
-content's ground is its own, fixed in every theme.**
+content's ground is its own, fixed in every theme.** A plugin page is not
+foreign ground: it is drawn in the theme's tokens and follows them live (§5c).
 
 - The terminal keeps `#11121A` (`bg-terminal`) in every theme - load-bearing
   for Spike C's color checks. It fills a pane's body edge to edge under the

@@ -120,7 +120,7 @@ const ARTIFACT_CSP = [
   "base-uri 'none'"
 ].join('; ')
 
-const MIME: Record<string, string> = {
+export const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.htm': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -153,7 +153,7 @@ const artifacts = new Map<
   { dir: string; file: string; links: Array<{ target: string; heading: string | null; resolved: boolean }> }
 >()
 
-function isInside(dir: string, path: string): boolean {
+export function isInside(dir: string, path: string): boolean {
   const rel = relative(dir, path)
   return rel === '' || (!rel.startsWith('..') && !/^[A-Za-z]:/.test(rel))
 }

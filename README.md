@@ -154,6 +154,12 @@ in a harness is yours to decide.
 - **Usage in the status bar** - session and weekly percentages read from Claude
   Code's own cached figures, or an estimate in dollars. A reading Helm cannot
   stand behind shows nothing at all rather than a stale number.
+- **Plugins** - a folder with a `helm-plugin.json` adds a rail icon and panel,
+  tabs, a status bar item, commands for Ctrl+Shift+P and a settings page, all
+  drawn in Helm's theme. Each runs in a process of its own, so one that hangs
+  or crashes takes nothing else with it. Add one in **Settings → Plugins**;
+  [the SDK](packages/plugin-sdk/README.md) has `helm-plugin create`,
+  `helm-plugin validate` and the authoring guide.
 
 ### The version guard warns; it never gates
 
@@ -180,8 +186,9 @@ rather than a request.
 
 **Helm contacts nothing on its own initiative except the update check.
 Everything else on the network happens because you asked for it: the
-pull-request surface goes through your own `gh`, and the browser pane fetches
-the page you navigate to.** There is no telemetry, no crash reporting, no
+pull-request surface goes through your own `gh`, the browser pane fetches the
+page you navigate to, and a plugin you added reaches the hosts its manifest
+names.** There is no telemetry, no crash reporting, no
 fonts and no CDN, and with the tick off Helm asks nothing at all unless you
 press something.
 
@@ -212,13 +219,30 @@ fails, Helm tells you whether GitHub refused your token or could not be reached
 at all, and it only suggests `gh auth login` for the first - a dropped
 connection is not something a new sign-in fixes.
 
+A **plugin** you add reaches the network on the terms its manifest states.
+Its pages have none of their own: every request goes through Helm, to the
+hosts the manifest names and nowhere else, with every redirect checked against
+the same list. A plugin can do that on its own schedule - that is what its
+background page is for - so "because you asked" means you added it. When it
+needs a token, you type it into **Settings → Secrets** and say which hosts and
+plugins may use it; Helm stores it encrypted with Windows' per-user
+encryption, refuses to store it at all when that is unavailable, fills it into
+a request at the last moment and never hands the value back to any page. The
+programs and the background service a plugin declares are a different thing:
+they are ordinary programs running as you, and Helm does not limit what they
+reach. **Settings → Plugins** lists each plugin's hosts, programs and service,
+and turning a plugin off stops all of them. A service listens on `127.0.0.1`
+on a port Helm hands it, behind a token for that run - the plugin's process
+listening, not Helm's.
+
 ## Architecture
 
 ```
 packages/
 ├── core/      # headless: launch/, discovery/, config/, content/, store/ - ZERO electron imports
 ├── ui/        # React components
-└── desktop/   # Electron main + preload + renderer + pty host
+├── desktop/   # Electron main + preload + renderer + pty host
+└── plugin-sdk/ # the manifest validator, the bridge's types, the helm-plugin CLI
 ```
 
 Stack: Electron, TypeScript strict, React + Vite, Tailwind, xterm.js + node-pty,
@@ -239,6 +263,8 @@ what keeps the app portable and a future mobile client possible.
   the code site it governs, and the detail is in `.claude/skills/`.
 - [docs/PACKAGING.md](docs/PACKAGING.md) - what the build produces, where data
   goes, and why there is no auto-updater.
+- [packages/plugin-sdk/README.md](packages/plugin-sdk/README.md) - writing a
+  plugin: the manifest, the bridge, the primitives and the CLI.
 - [docs/SPEC.md](docs/SPEC.md) section 8 - the three spikes in full: the
   packaging and terminal-fidelity findings the current configuration rests on.
 

@@ -23,6 +23,8 @@ export interface RailItem {
   current: boolean
   /** Something in this destination is waiting on you. */
   attention?: boolean | undefined
+  /** A count the destination wants seen: a plugin's unread items. Nothing is drawn for none. */
+  badge?: number | null | undefined
   /**
    * False for the one item that must stay: Settings is where hiding is undone
    * from, so it is listed in the menu ticked and cannot be unticked.
@@ -126,7 +128,7 @@ function RailButton({ item }: { item: RailItem }): JSX.Element {
     <button
       type="button"
       onClick={item.onSelect}
-      aria-label={item.label}
+      aria-label={item.badge != null && item.badge > 0 ? `${item.label}, ${String(item.badge)}` : item.label}
       title={item.label}
       aria-current={item.current ? 'true' : undefined}
       data-rail={item.id}
@@ -145,6 +147,20 @@ function RailButton({ item }: { item: RailItem }): JSX.Element {
         <span aria-hidden className="absolute inset-y-2 -left-[5px] w-[2px] rounded-full bg-accent" />
       )}
       {item.icon}
+      {item.badge != null && item.badge > 0 && (
+        // Outlined in the accent on the canvas's own ground, so it stays
+        // legible over the icon without the accent ever filling anything.
+        <span
+          aria-hidden
+          data-rail-badge={item.badge}
+          className={cn(
+            'absolute -top-px -right-px grid h-[15px] min-w-[15px] place-items-center rounded-full border border-accent',
+            'bg-bg px-[3px] text-[9.5px] leading-none font-medium text-accent-text tabular-nums'
+          )}
+        >
+          {item.badge > 99 ? '99+' : item.badge}
+        </span>
+      )}
       {item.attention === true && (
         <span
           aria-hidden

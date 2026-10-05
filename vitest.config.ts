@@ -8,6 +8,8 @@ import { defineConfig } from 'vitest/config'
  *   Library.
  * - `desktop`: main-process services in Node, with Electron faked and real
  *   ptys running the fake `claude` (`packages/desktop/test`).
+ * - `sdk`: the plugin SDK - its manifest validator, its schema and its
+ *   `helm-plugin` command - in Node.
  */
 export default defineConfig({
   test: {
@@ -38,8 +40,8 @@ export default defineConfig({
       // rounded down to a whole percent, and a run below it fails.
       thresholds: {
         autoUpdate: (value: number) => Math.floor(value),
-        lines: 78,
-        functions: 71,
+        lines: 79,
+        functions: 72,
         branches: 68,
         statements: 76
       }
@@ -61,6 +63,10 @@ export default defineConfig({
       {
         extends: true,
         test: { name: 'desktop', include: ['packages/desktop/src/main/**/*.test.ts'], environment: 'node' }
+      },
+      {
+        extends: true,
+        test: { name: 'sdk', include: ['packages/plugin-sdk/test/**/*.test.ts'], environment: 'node' }
       }
     ]
   }

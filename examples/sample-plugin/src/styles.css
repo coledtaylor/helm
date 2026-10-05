@@ -1,0 +1,75 @@
+/*
+ * The sample's own layout. Colours, type, controls and rows are Helm's: its
+ * primitives stylesheet is on every plugin page before this one, and its
+ * theme is on <html> as --helm-* variables, kept current by Helm.
+ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+  padding: 20px 24px;
+}
+
+.pad {
+  margin: 0;
+  padding: 8px 12px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 500;
+}
+
+p {
+  margin: 0;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.grow {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* A two-line row: the dot keeps to the title's line, as Helm's own rows do. */
+.item {
+  align-items: flex-start;
+}
+
+.item > .helm-dot {
+  margin-top: calc((1lh - 6px) / 2);
+}
+
+.title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.output {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--helm-border);
+  border-radius: var(--helm-radius);
+  background: var(--helm-surface-sunken);
+  white-space: pre-wrap;
+}
+
+.error {
+  color: var(--helm-danger);
+}

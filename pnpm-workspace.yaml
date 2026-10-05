@@ -1,5 +1,8 @@
 packages:
   - packages/*
+  # Plugins built against Helm's plugin surface: the shape a plugin takes, and
+  # what the tests drive. Helm ships none of them.
+  - examples/*
 
 # Native modules that must run their install scripts. pnpm 10 blocks postinstall
 # by default; better-sqlite3 and node-pty ship N-API prebuilds that the install
