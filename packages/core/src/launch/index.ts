@@ -1,3 +1,4 @@
+export { cmdShimArgs, isBatchFile, quoteForCmd } from './cmdshim'
 export {
   buildClaudeArgs,
   buildResumeArgs,

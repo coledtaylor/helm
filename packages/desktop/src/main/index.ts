@@ -10,6 +10,7 @@ import {
 } from 'electron'
 import {
   claudeHome,
+  pluginThemeOf,
   readSessionRegistry,
   sessionRegistryDir,
   writeSetting,
@@ -41,7 +42,13 @@ import {
   createContentService,
   registerContentProtocol
 } from './content'
-import { loadPlugins, PLUGIN_SCHEME, registerPluginProtocol } from './plugins'
+import { PLUGIN_SCHEME } from '../shared/ipc'
+import { createPluginHost } from './plugins/host'
+import { registerPluginProtocol } from './plugins/protocol'
+// The plugin runtime: served to every plugin page under `/__helm/`, so no
+// plugin carries a copy of its own (see `main/plugins/protocol.ts`).
+import pluginBridge from '../renderer/plugin-runtime/bridge-entry.ts?script'
+import pluginStylesheet from '../renderer/plugin-runtime/helm.css?raw'
 import {
   browserWillNavigate,
   browserWindowOpen,
@@ -154,7 +161,7 @@ protocol.registerSchemesAsPrivileged([
   },
   // A plugin's pages: an origin per plugin (`helm-plugin://<id>`), secure so
   // its storage and module scripts work, and no fetch - its network goes
-  // through Helm. See `main/plugins.ts`.
+  // through Helm. See `main/plugins/protocol.ts`.
   {
     scheme: PLUGIN_SCHEME,
     privileges: { standard: true, secure: true, supportFetchAPI: false, corsEnabled: false }
@@ -373,11 +380,24 @@ function startApp(options: AppOptions = {}): void {
   const themes = createThemeService(themesDir)
   const windowTheme = (): AppliedTheme => themes.state(services.settings).applied
 
-  let win: BrowserWindow | null = createWindow(
-    'index',
-    services.settings.windowBounds ?? null,
-    windowTheme()
-  )
+  /*
+   * Plugins, read before the window exists: what a plugin *is* comes from its
+   * folder (cheap - a manifest and a stat per file it names), and its scheme
+   * has to answer by the time the window asks for its first panel. A service
+   * marked `start: "enable"` starts here, in the background.
+   */
+  let win: BrowserWindow | null = null
+  const plugins = createPluginHost({
+    store: services.store,
+    window: () => win,
+    theme: () => pluginThemeOf(windowTheme(), services.settings),
+    bridge: pluginBridge,
+    stylesheet: pluginStylesheet
+  })
+  plugins.start()
+  registerPluginProtocol((id) => plugins.served(id), plugins.runtime)
+
+  win = createWindow('index', services.settings.windowBounds ?? null, windowTheme())
 
   /**
    * Helm's own MCP endpoint, reached through a getter.
@@ -614,13 +634,14 @@ function startApp(options: AppOptions = {}): void {
     files,
     templates,
     themes,
+    plugins,
     window: () => win,
     ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
     ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),
     ...(options.chooseFile !== undefined ? { chooseFile: options.chooseFile } : {}),
     rendererReady: () => {
       emit(win, 'settings:changed', services.settings)
-      pushTheme({ services, themes, window: () => win })
+      pushTheme({ services, themes, plugins, window: () => win })
       // The first scan is kicked off by the main process rather than waited on
       // by the renderer: the launcher paints from the cache immediately and
       // this replaces it when it lands.
@@ -785,6 +806,9 @@ function startApp(options: AppOptions = {}): void {
     if (boundsTimer) clearTimeout(boundsTimer)
     boundsTimer = null
     win = null
+    // The background host is a window too, and a hidden one would keep the
+    // app alive after its only visible window closed.
+    plugins.shutdown()
   })
 
   app.on('activate', () => {
@@ -805,6 +829,9 @@ function startApp(options: AppOptions = {}): void {
     pulls.stop()
     config.stop()
     files.stop()
+    // Plugins' services are processes like a session's, ended the same way:
+    // synchronously, the whole tree, while main is still guaranteed a turn.
+    plugins.shutdown()
     /*
      * The endpoint goes **before** the sessions, and the order is the point.
      *
@@ -1026,8 +1053,6 @@ app.whenReady().then(() => {
   // window, because the spike pages share this process and a scheme with no
   // handler fails a load rather than falling through to something worse.
   registerContentProtocol()
-  loadPlugins(process.env['HELM_PLUGINS'])
-  registerPluginProtocol()
 
   if (isSpikeMode) {
     startSpike()

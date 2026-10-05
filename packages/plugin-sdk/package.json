@@ -1,0 +1,45 @@
+{
+  "name": "@helm/plugin-sdk",
+  "version": "1.0.0",
+  "description": "Types, the manifest schema and helpers for building Helm plugins. The runtime - the window.helm bridge, theme tokens and primitives stylesheet - comes from the running Helm.",
+  "license": "MIT",
+  "//private": "Not published yet: a plugin repository links it by path (`helm-plugin create` writes that dependency). It has no build step, so the folder is the package.",
+  "private": true,
+  "type": "module",
+  "types": "./src/types.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/types.d.ts"
+    },
+    "./global": {
+      "types": "./src/global.d.ts"
+    },
+    "./manifest": {
+      "types": "./src/manifest.d.ts",
+      "default": "./src/manifest.js"
+    },
+    "./react": {
+      "types": "./src/react.d.ts",
+      "default": "./src/react.js"
+    },
+    "./helm-plugin.schema.json": "./helm-plugin.schema.json"
+  },
+  "bin": {
+    "helm-plugin": "./bin/helm-plugin.mjs"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.7",
+    "react": "^19.2.0"
+  }
+}

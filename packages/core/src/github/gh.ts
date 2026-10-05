@@ -14,6 +14,7 @@ import {
 } from './parse'
 import type { GhAuthReading } from './parse'
 import type { PullDetail, PullPatch, PullReviewThread, PullSummary } from './types'
+import { cmdShimArgs } from '../launch/cmdshim'
 
 /**
  * Running the user's own `gh`.
@@ -51,38 +52,6 @@ export interface GhCommand {
   resolved: string
   /** `resolved` is a batch file, run through `file` (`cmd.exe`). */
   shim: boolean
-}
-
-/** Anything cmd.exe would read as structure rather than as text. */
-const CMD_SPECIAL = /[\s"&<>()@^|]/
-
-/**
- * One argument, quoted so `cmd.exe` hands it to the batch file intact.
- *
- * The same rule `quoteForCmd` follows for `claude` in the desktop package, and
- * the same known limit: a literal `"` cannot be expressed through cmd, so it is
- * dropped rather than allowed to end the command line early. Nothing Helm
- * passes to gh contains one.
- */
-function quoteForCmd(arg: string): string {
-  const clean = arg.replace(/"/g, '')
-  return CMD_SPECIAL.test(clean) || clean === '' ? `"${clean}"` : clean
-}
-
-/**
- * The `cmd.exe` arguments for a batch-file gh, as one verbatim command line.
- *
- * Not `['/c', resolved, ...args]`, which is what this was, because cmd re-parses
- * the line under a rule of its own: unless there are exactly two quotes on it,
- * it strips the first and the last, whatever they were quoting. A shim under a
- * path with a space is two quotes on its own, so any argument that also needed
- * quoting - the GraphQL query for review threads always does - cut the shim's
- * path in half and cmd reported it as "not recognized as an internal or
- * external command". `/s` plus an extra pair of quotes around the whole line is
- * the documented way out, exactly as `claudePtyArgs` does it for a session.
- */
-function cmdShimArgs(resolved: string, args: string[]): string[] {
-  return ['/s', '/c', `"${[resolved, ...args].map(quoteForCmd).join(' ')}"`]
 }
 
 export interface GhRun {
@@ -126,6 +95,7 @@ export async function runGh(
   return new Promise<GhRun>((resolve) => {
     execFile(
       command.file,
+      // A batch-file gh runs through cmd.exe as one verbatim line (`cmdshim.ts`).
       command.shim ? cmdShimArgs(command.resolved, args) : [...command.prefixArgs, ...args],
       {
         ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),

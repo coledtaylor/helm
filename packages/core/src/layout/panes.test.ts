@@ -21,6 +21,7 @@ import {
   placeRestored,
   reconcile,
   resizeSplit,
+  retitleTab,
   savedGroups,
   sendBeside,
   splitWith,
@@ -44,6 +45,13 @@ const HISTORY: PaneRef = { kind: 'history' }
 const SETTINGS: PaneRef = { kind: 'settings' }
 const CONFIG: PaneRef = { kind: 'config' }
 const PULLS: PaneRef = { kind: 'pulls' }
+const plugin = (tab: string, params: Record<string, string | number | boolean> = {}, title: string | null = null): PaneRef => ({
+  kind: 'plugin',
+  plugin: 'sample',
+  tab,
+  params,
+  title
+})
 
 /** A group of tabs, as a saved tree spells one. Browser tabs are let in for building live layouts. */
 const g = (...tabs: PaneRef[]): SavedPaneGroup => ({ panes: tabs as SavedPane[], activeId: null })
@@ -88,6 +96,32 @@ describe('paneId', () => {
     expect(paneId({ kind: 'pr', repoPath: 'C:\\r', number: 7 })).toBe('pr:C:\\r#7')
     expect(paneId(browser(3))).toBe('browser:3')
     expect(paneId(HISTORY)).toBe('history')
+  })
+
+  it('names a plugin tab by its parameters, in one spelling whatever order they were given in', () => {
+    expect(paneId(plugin('detail'))).toBe('plugin:sample/detail')
+    expect(paneId(plugin('run', { run: 7, live: true }))).toBe('plugin:sample/run?{"live":true,"run":7}')
+    expect(paneId(plugin('run', { live: true, run: 7 }))).toBe(paneId(plugin('run', { run: 7, live: true })))
+    expect(paneId(plugin('run', { run: 8 }))).not.toBe(paneId(plugin('run', { run: 7 })))
+    // The title is what the tab is called, not which tab it is.
+    expect(paneId(plugin('detail', {}, 'Renamed'))).toBe('plugin:sample/detail')
+  })
+})
+
+describe('retitleTab', () => {
+  it('renames a plugin tab in place, moving nothing', () => {
+    const layout = layoutOf(row([g(HISTORY, plugin('run', { run: 1 })), g(SETTINGS)]), 1)
+    const renamed = retitleTab(layout, 'plugin:sample/run?{"run":1}', 'Run 1')
+    expect(renamed.groups[0]!.tabs[1]).toEqual(plugin('run', { run: 1 }, 'Run 1'))
+    expect(shape(renamed)).toEqual(shape(layout))
+    expect(retitleTab(renamed, 'plugin:sample/run?{"run":1}', null).groups[0]!.tabs[1]).toEqual(plugin('run', { run: 1 }))
+  })
+
+  it('leaves every other tab, a missing one and an unchanged title alone', () => {
+    const layout = layoutOf(row([g(HISTORY, plugin('detail', {}, 'Same'))]))
+    expect(retitleTab(layout, 'history', 'Nope')).toBe(layout)
+    expect(retitleTab(layout, 'plugin:sample/gone', 'Nope')).toBe(layout)
+    expect(retitleTab(layout, 'plugin:sample/detail', 'Same')).toBe(layout)
   })
 })
 
@@ -441,6 +475,16 @@ describe('visibleTabs and findTab', () => {
 })
 
 describe('toSaved and fromSaved', () => {
+  it('writes a plugin tab down with its parameters and title, and reads it back the same', () => {
+    const layout = layoutOf(row([g(HISTORY, plugin('run', { run: 4 }, 'Run 4'))]))
+    const saved = toSaved(layout)
+    expect(saved.root).toEqual({
+      panes: [HISTORY, plugin('run', { run: 4 }, 'Run 4')],
+      activeId: 'plugin:sample/run?{"run":4}'
+    })
+    expect(shape(fromSaved(saved))).toEqual(shape(layout))
+  })
+
   it('writes down the tree, its shares, and pages and sessions in their groups', () => {
     const layout = activateTab(
       layoutOf(

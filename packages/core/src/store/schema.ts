@@ -575,3 +575,61 @@ export const pullRequests = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.slug, t.number] })]
 )
+
+/**
+ * The plugin folders Helm loads, registered by path (Settings > Plugins).
+ *
+ * Only the folder and the switch. Everything a plugin *is* - its id, its
+ * surfaces, what it may reach - is read from its `helm-plugin.json` at every
+ * start and every reload, so a plugin developed in place is never described by
+ * a stale copy of its own manifest. The path is the key because it is what the
+ * user chose; the id belongs to the folder's contents and can change under it.
+ */
+export const plugins = sqliteTable('plugins', {
+  path: text('path').primaryKey(),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  addedAt: text('added_at').notNull().default(now)
+})
+
+/**
+ * The values a user gave a plugin's settings page, by plugin **id** rather
+ * than by folder: moving a plugin's checkout, or adding it again after
+ * removing it, keeps what was set. Only values the user changed are stored;
+ * the manifest's defaults are applied on read.
+ */
+export const pluginSettings = sqliteTable(
+  'plugin_settings',
+  {
+    plugin: text('plugin').notNull(),
+    key: text('key').notNull(),
+    /** JSON: a string, number or boolean. */
+    value: text('value', { mode: 'json' }).$type<string | number | boolean>().notNull(),
+    updatedAt: text('updated_at').notNull().default(now)
+  },
+  (t) => [primaryKey({ columns: [t.plugin, t.key] })]
+)
+
+/**
+ * Secrets the user stored for plugins (Settings > Secrets), Postman-style:
+ * a key a plugin references as `{{key}}`, and the value Helm puts there.
+ *
+ * `value` is ciphertext from Electron's `safeStorage` - DPAPI, bound to the
+ * Windows user - and nothing else is ever written to it: when encryption is
+ * not available the store refuses, rather than keeping a plaintext copy. It is
+ * decrypted only in the main process, at the moment a request or a program
+ * needs it, and never leaves it.
+ *
+ * `hosts` and `plugins` are what the user allowed: the origins the value may
+ * be sent to, and the plugin ids that may ask for it. Both have to agree, and
+ * the plugin has to declare the key, before a value is used.
+ */
+export const secrets = sqliteTable('secrets', {
+  key: text('key').primaryKey(),
+  value: blob('value', { mode: 'buffer' }).notNull(),
+  /** JSON array of canonical origins (`https://api.example.com`, `https://*.example.com`). */
+  hosts: text('hosts', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  /** JSON array of plugin ids. */
+  plugins: text('plugins', { mode: 'json' }).$type<string[]>().notNull().default([]),
+  createdAt: text('created_at').notNull().default(now),
+  updatedAt: text('updated_at').notNull().default(now)
+})

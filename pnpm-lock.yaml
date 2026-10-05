@@ -56,6 +56,9 @@ importers:
 
   examples/sample-plugin:
     devDependencies:
+      '@helm/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
       '@types/react':
         specifier: ^19.2.7
         version: 19.2.18
@@ -77,6 +80,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@helm/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
       '@shikijs/langs':
         specifier: ^4.4.3
         version: 4.4.3
@@ -132,6 +138,9 @@ importers:
       '@helm/core':
         specifier: workspace:*
         version: link:../core
+      '@helm/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
       '@helm/ui':
         specifier: workspace:*
         version: link:../ui
@@ -199,12 +208,24 @@ importers:
       electron-vite:
         specifier: ^5.0.0
         version: 5.0.0(vite@7.3.6(@types/node@26.2.0)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.11)(yaml@2.9.0))
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
       tailwindcss:
         specifier: ^4.3.3
         version: 4.3.3
       vite:
         specifier: ^7.3.6
         version: 7.3.6(@types/node@26.2.0)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.11)(yaml@2.9.0)
+
+  packages/plugin-sdk:
+    devDependencies:
+      '@types/react':
+        specifier: ^19.2.7
+        version: 19.2.18
+      react:
+        specifier: ^19.2.0
+        version: 19.2.8
 
   packages/ui:
     dependencies:

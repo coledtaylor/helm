@@ -1,4 +1,5 @@
 import type { WorkspaceTab } from '../types'
+import { pluginTabId } from '../plugins/tabs'
 
 /**
  * The panes in the window and the tabs in each, as data.
@@ -38,8 +39,6 @@ export type PaneRef =
   | { kind: 'browser'; id: number }
   | { kind: 'session'; id: number }
   | { kind: 'restore' }
-  /** A plugin's tab: one of the `tabs` its manifest declares. */
-  | { kind: 'plugin'; plugin: string; tab: string }
 
 /**
  * A tab as `AppSettings.paneLayout` writes it down: every `WorkspaceTab`, and
@@ -154,7 +153,7 @@ export function paneId(ref: PaneRef): string {
     case 'file':
       return `file:${ref.path}`
     case 'plugin':
-      return `plugin:${ref.plugin}/${ref.tab}`
+      return pluginTabId(ref.plugin, ref.tab, ref.params)
     default:
       // history, sessions, pulls, config, content, settings: one of each, so
       // the kind is the identity.
@@ -164,7 +163,7 @@ export function paneId(ref: PaneRef): string {
 
 /** Whether a tab is written down across a restart. See `SavedPane`. */
 export function isPersistable(ref: PaneRef): ref is SavedPane {
-  return ref.kind !== 'browser' && ref.kind !== 'restore' && ref.kind !== 'plugin'
+  return ref.kind !== 'browser' && ref.kind !== 'restore'
 }
 
 /** The tab in front of a group: its `activeId`, or the last tab if that is gone. */
@@ -517,6 +516,21 @@ export function activateTab(layout: PaneLayout, id: string): PaneLayout {
   const group = groupById(layout, at.group)!
   if (group.activeId === id && layout.focused === at.group) return layout
   return normalize(layout.root, replaced(layout, { ...group, activeId: id }), at.group, layout.nextId)
+}
+
+/**
+ * A plugin's tab, renamed in place: its page set a title of its own, or put
+ * the manifest's back (null). Nothing else about the layout moves, so a page
+ * naming itself is not a change of focus. Any other tab is left as it is.
+ */
+export function retitleTab(layout: PaneLayout, id: string, title: string | null): PaneLayout {
+  const at = findTab(layout, id)
+  if (at === null) return layout
+  const group = groupById(layout, at.group)!
+  const ref = group.tabs[at.index]!
+  if (ref.kind !== 'plugin' || ref.title === title) return layout
+  const tabs = group.tabs.map((tab, index) => (index === at.index ? { ...ref, title } : tab))
+  return { ...layout, groups: layout.groups.map((other) => (other.id === group.id ? { ...other, tabs } : other)) }
 }
 
 export function focusGroup(layout: PaneLayout, id: number): PaneLayout {

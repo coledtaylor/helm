@@ -56,6 +56,17 @@ export {
   type PullRow
 } from './pulls'
 export {
+  addPluginFolder,
+  forgetPluginSettings,
+  readPluginFolders,
+  readPluginSettings,
+  removePluginFolder,
+  setPluginEnabled,
+  writePluginSetting,
+  type PluginFolder,
+  type PluginSettingValue
+} from './plugins'
+export {
   createProfile,
   deleteProfile,
   findProfileByName,
@@ -77,6 +88,7 @@ export {
   type NewSession,
   type SessionQuery
 } from './sessions'
+export { deleteSecret, readSecret, readSecrets, writeSecret, type SecretRow } from './secrets'
 export {
   readSettings,
   validateSetting,
