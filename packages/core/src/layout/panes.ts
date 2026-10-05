@@ -38,6 +38,8 @@ export type PaneRef =
   | { kind: 'browser'; id: number }
   | { kind: 'session'; id: number }
   | { kind: 'restore' }
+  /** A plugin's tab: one of the `tabs` its manifest declares. */
+  | { kind: 'plugin'; plugin: string; tab: string }
 
 /**
  * A tab as `AppSettings.paneLayout` writes it down: every `WorkspaceTab`, and
@@ -151,6 +153,8 @@ export function paneId(ref: PaneRef): string {
       return `session:${String(ref.id)}`
     case 'file':
       return `file:${ref.path}`
+    case 'plugin':
+      return `plugin:${ref.plugin}/${ref.tab}`
     default:
       // history, sessions, pulls, config, content, settings: one of each, so
       // the kind is the identity.
@@ -160,7 +164,7 @@ export function paneId(ref: PaneRef): string {
 
 /** Whether a tab is written down across a restart. See `SavedPane`. */
 export function isPersistable(ref: PaneRef): ref is SavedPane {
-  return ref.kind !== 'browser' && ref.kind !== 'restore'
+  return ref.kind !== 'browser' && ref.kind !== 'restore' && ref.kind !== 'plugin'
 }
 
 /** The tab in front of a group: its `activeId`, or the last tab if that is gone. */

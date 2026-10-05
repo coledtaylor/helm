@@ -1,7 +1,7 @@
 import type { PaneRef } from '@helm/core/types'
 
 /** What the sidebar can show: the lists the rail opens and tabs are opened from. */
-export type SidebarView = 'sessions' | 'files' | 'profiles' | 'settings'
+export type SidebarView = 'sessions' | 'files' | 'profiles' | 'settings' | `plugin:${string}`
 
 /**
  * The sidebar a tab carries on from, or null for a tab that needs none.
@@ -29,6 +29,7 @@ export function sidebarFor(ref: PaneRef): SidebarView | null {
     case 'pr':
     case 'config':
     case 'browser':
+    case 'plugin':
       return null
   }
 }

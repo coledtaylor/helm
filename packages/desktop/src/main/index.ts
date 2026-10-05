@@ -41,6 +41,7 @@ import {
   createContentService,
   registerContentProtocol
 } from './content'
+import { loadPlugins, PLUGIN_SCHEME, registerPluginProtocol } from './plugins'
 import {
   browserWillNavigate,
   browserWindowOpen,
@@ -149,6 +150,13 @@ initDataDir()
 protocol.registerSchemesAsPrivileged([
   {
     scheme: CONTENT_SCHEME,
+    privileges: { standard: true, secure: true, supportFetchAPI: false, corsEnabled: false }
+  },
+  // A plugin's pages: an origin per plugin (`helm-plugin://<id>`), secure so
+  // its storage and module scripts work, and no fetch - its network goes
+  // through Helm. See `main/plugins.ts`.
+  {
+    scheme: PLUGIN_SCHEME,
     privileges: { standard: true, secure: true, supportFetchAPI: false, corsEnabled: false }
   }
 ])
@@ -1018,6 +1026,8 @@ app.whenReady().then(() => {
   // window, because the spike pages share this process and a scheme with no
   // handler fails a load rather than falling through to something worse.
   registerContentProtocol()
+  loadPlugins(process.env['HELM_PLUGINS'])
+  registerPluginProtocol()
 
   if (isSpikeMode) {
     startSpike()

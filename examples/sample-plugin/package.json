@@ -1,0 +1,21 @@
+{
+  "name": "@helm/sample-plugin",
+  "version": "0.0.1",
+  "description": "A generic Helm plugin: a rail icon, a sidebar panel and a tab. The shape every plugin takes.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "watch": "vite build --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^5.2.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "vite": "^7.3.6"
+  }
+}

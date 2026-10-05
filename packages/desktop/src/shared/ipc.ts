@@ -1332,6 +1332,40 @@ export interface IpcRequests {
   'browser:clearStorage': { request: { id: number }; response: BrowserState | null }
   /** The ring buffer, for a panel that has just been opened on an old tab. */
   'browser:console': { request: { id: number }; response: BrowserConsoleEntry[] }
+
+  /** The plugins loaded at start (spike: from `HELM_PLUGINS`). See `main/plugins.ts`. */
+  'plugins:list': { request: void; response: PluginInfo[] }
+  /** Spike diagnostic: which process each frame in the window runs in. */
+  'plugins:frames': { request: void; response: PluginFrameReport }
+}
+
+/** The scheme plugin pages are served on: `helm-plugin://<id>/<path>`, an origin per plugin. */
+export const PLUGIN_SCHEME = 'helm-plugin'
+
+/** A plugin surface - a sidebar panel or a tab - and the page Helm frames for it. */
+export interface PluginSurface {
+  title: string
+  /** `helm-plugin://<id>/<path>`: the plugin's own origin. */
+  url: string
+}
+
+export interface PluginInfo {
+  id: string
+  name: string
+  /** The rail icon as a `data:` URL, drawn as a mask so it takes the rail's own colour. */
+  icon: string | null
+  /** The rail entry and the panel it opens, or null for a plugin with no rail icon. */
+  rail: { title: string; panel: string } | null
+  panels: Record<string, PluginSurface>
+  tabs: Record<string, PluginSurface>
+}
+
+export interface PluginFrameReport {
+  chrome: string
+  /** The window's own renderer. */
+  app: { osProcessId: number; memoryKb: number | null } | null
+  /** Every frame below it - plugin pages, artifacts - and the process it runs in. */
+  frames: Array<{ url: string; origin: string; osProcessId: number; memoryKb: number | null }>
 }
 
 /** The kind of theme on screen - what `.dark` on `<html>` says. */
@@ -1729,7 +1763,9 @@ export const REQUEST_CHANNELS = Object.keys({
   'browser:stopFind': true,
   'browser:zoom': true,
   'browser:clearStorage': true,
-  'browser:console': true
+  'browser:console': true,
+  'plugins:list': true,
+  'plugins:frames': true
 } satisfies Record<RequestChannel, true>) as RequestChannel[]
 
 export const SEND_CHANNELS = Object.keys({

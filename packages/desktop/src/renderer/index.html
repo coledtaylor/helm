@@ -11,10 +11,14 @@
          is served by the main process from a directory pinned to a token, under
          a policy of its own with `default-src 'none'` in it, into an iframe
          with no `allow-same-origin`. Widening `default-src` instead would have
-         let the app itself reach the same URLs. -->
+         let the app itself reach the same URLs.
+
+         `helm-plugin:` is a plugin's pages, each plugin its own origin under a
+         policy of its own with no network (`main/plugins.ts`). -->
+
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: http://localhost:*; frame-src helm-content:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: http://localhost:*; frame-src helm-content: helm-plugin:"
     />
     <title>Helm</title>
   </head>

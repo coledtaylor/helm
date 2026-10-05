@@ -54,7 +54,7 @@ export default tseslint.config(
   // React surfaces
   // ---------------------------------------------------------------------------
   {
-    files: ['packages/ui/**/*.{ts,tsx}', 'packages/desktop/src/renderer/**/*.{ts,tsx}'],
+    files: ['packages/ui/**/*.{ts,tsx}', 'packages/desktop/src/renderer/**/*.{ts,tsx}', 'examples/*/src/**/*.{ts,tsx}'],
     languageOptions: {
       globals: { ...globals.browser }
     },

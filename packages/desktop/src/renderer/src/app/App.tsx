@@ -162,6 +162,9 @@ import { useBrowsers } from './useBrowsers'
 import { useShells } from './useShells'
 import { useUpdate } from './useUpdate'
 import { useUsage } from './useUsage'
+import { usePlugins } from './usePlugins'
+import { PluginFrame, PluginIcon } from './PluginFrame'
+import { disposePluginFrame, pluginOf } from './pluginFrames'
 
 const KIND_ICON = {
   harness: HarnessIcon,
@@ -303,6 +306,7 @@ export function App(): JSX.Element {
   /** Where each file tab's caret is, so VS Code opens at the same line. */
   const fileCarets = useRef(new Map<string, number>())
   const [sidebarView, setSidebarView] = useState<SidebarView>('sessions')
+  const plugins = usePlugins()
   /** The rail's current view, pressed again, puts the sidebar away. */
   const [sidebarHidden, setSidebarHidden] = useState(false)
   /** The last tab click's row, for the Sessions tree to bring into view. */
@@ -489,9 +493,10 @@ export function App(): JSX.Element {
       if (ref.kind === 'session') return sessionsById.has(ref.id)
       // Answered, it has nothing left to show.
       if (ref.kind === 'restore') return restoreOffer !== null
+      if (ref.kind === 'plugin') return plugins.get(ref.plugin)?.tabs[ref.tab] !== undefined
       return true
     },
-    [discovery, projectsByPath, browserViews, sessionsById, restoreOffer]
+    [discovery, projectsByPath, browserViews, sessionsById, restoreOffer, plugins]
   )
 
   /**
@@ -596,6 +601,24 @@ export function App(): JSX.Element {
     },
     [open, commit]
   )
+
+  /**
+   * What a plugin page asks of Helm. The sender is known by its origin, which
+   * the browser sets, and a plugin can only open the tabs its own manifest
+   * declares.
+   */
+  useEffect(() => {
+    const onMessage = (event: MessageEvent): void => {
+      const id = pluginOf(event)
+      if (id === null) return
+      const data = event.data as { type?: unknown; tab?: unknown }
+      if (data.type === 'helm:tabs.open' && typeof data.tab === 'string') {
+        if (plugins.get(id)?.tabs[data.tab] !== undefined) openPane({ kind: 'plugin', plugin: id, tab: data.tab })
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [plugins, openPane])
 
   /**
    * The saved panes, written back whenever the arrangement changes.
@@ -1056,6 +1079,8 @@ export function App(): JSX.Element {
       if (ref.kind === 'browser') browsers.close(ref.id)
       // Closing the offer is "not now", the same as its button.
       if (ref.kind === 'restore') dismissRestore()
+      // The page ends with its tab, not with a render.
+      if (ref.kind === 'plugin') disposePluginFrame(paneId(ref))
       commit((current) => closeTab(current, id))
     },
     [open, closeSession, browsers, commit, dismissRestore]
@@ -1646,6 +1671,19 @@ export function App(): JSX.Element {
             icon: <GearIcon width={13} height={13} />
           }
         ]
+      case 'plugin': {
+        const plugin = plugins.get(ref.plugin)
+        const surface = plugin?.tabs[ref.tab]
+        if (plugin === undefined || surface === undefined) return []
+        return [
+          {
+            id: paneId(ref),
+            title: surface.title,
+            hint: `${plugin.name} plugin`,
+            icon: <PluginIcon url={plugin.icon} size={13} />
+          }
+        ]
+      }
       case 'browser': {
         const view = browserViews.get(ref.id)
         if (!view) return []
@@ -2322,6 +2360,19 @@ export function App(): JSX.Element {
       }
       case 'settings':
         return renderSettings()
+      case 'plugin': {
+        const surface = plugins.get(ref.plugin)?.tabs[ref.tab]
+        if (surface === undefined) return null
+        return (
+          <PluginFrame
+            frameKey={paneId(ref)}
+            plugin={ref.plugin}
+            url={surface.url}
+            title={surface.title}
+            className="absolute inset-0"
+          />
+        )
+      }
       case 'restore':
         return restoreOffer === null ? null : (
           <RestorePane
@@ -2567,6 +2618,26 @@ export function App(): JSX.Element {
     if (hiding && sidebarShown && sidebarView === known) setSidebarHidden(true)
   }
 
+  // Plugins with a rail icon, in a group of their own under a rule: each opens
+  // its panel in the sidebar, the way Sessions and Files do.
+  const pluginRailItems = [...plugins.values()].flatMap((plugin): RailItem[] => {
+    if (plugin.rail === null) return []
+    const view: SidebarView = `plugin:${plugin.id}`
+    return [
+      {
+        id: view,
+        label: plugin.rail.title,
+        icon: <PluginIcon url={plugin.icon} size={17} />,
+        kind: 'view',
+        current: sidebarShown && sidebarView === view,
+        hideable: false,
+        onSelect: () => toggleView(view),
+        hooks: { 'data-open-plugin': plugin.id }
+      }
+    ]
+  })
+  const railPlugins = pluginRailItems.length === 0 ? [] : [pluginRailItems]
+
   // Ordered by how often each is reached for (DESIGN.md "The rail"): the
   // daily three - sessions, profiles and history - then the rest under a rule.
   const rail = (
@@ -2636,7 +2707,8 @@ export function App(): JSX.Element {
             inFront('config'),
             'data-open-config'
           )
-        ]
+        ],
+        ...railPlugins
       ]}
       footer={[
         {
@@ -2838,6 +2910,26 @@ export function App(): JSX.Element {
           />
         </Sidebar>
       )}
+      {[...plugins.values()].map((plugin) => {
+        const panel = plugin.rail === null ? undefined : plugin.panels[plugin.rail.panel]
+        if (plugin.rail === null || panel === undefined) return null
+        return (
+          <div
+            key={plugin.id}
+            className={cn('flex h-full', sidebarView !== `plugin:${plugin.id}` && 'hidden')}
+          >
+            <Sidebar title={panel.title}>
+              <PluginFrame
+                frameKey={`panel:${plugin.id}/${plugin.rail.panel}`}
+                plugin={plugin.id}
+                url={panel.url}
+                title={panel.title}
+                className="relative min-h-0 flex-1"
+              />
+            </Sidebar>
+          </div>
+        )
+      })}
     </>
   )
 

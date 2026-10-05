@@ -33,6 +33,7 @@ import { setGhOverride } from './gh-cli'
 import { readClaudeStatus, verifyClaudeAt } from './setup'
 import { checkForUpdate, RELEASES_PAGE } from './update'
 import { appMode, dataDir, dbFile, templatesDir } from './paths'
+import { listPlugins, pluginFrameReport } from './plugins'
 import { activePty, windowsBuildNumber } from './pty'
 import {
   exportProfile,
@@ -677,6 +678,9 @@ export function registerIpc(ctx: IpcContext): void {
     'clipboard:write': (text) => {
       clipboard.writeText(text)
     },
+
+    'plugins:list': () => listPlugins(),
+    'plugins:frames': () => pluginFrameReport(ctx.window()),
 
     /*
      * The browser pane. Every handler is a one-line delegation on purpose:
