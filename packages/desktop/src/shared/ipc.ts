@@ -774,8 +774,9 @@ export interface IpcRequests {
    *
    * **Helm contacts nothing on its own initiative except the update check.
    * Everything else on the network happens because you asked for it: the
-   * pull-request surface goes through your own `gh`, and the browser pane
-   * fetches the page you navigate to.**
+   * pull-request surface goes through your own `gh`, the browser pane fetches
+   * the page you navigate to, and a plugin you added reaches the hosts its
+   * manifest names.**
    *
    * That is the whole network posture, and it is written identically here, in
    * the README, in docs/PACKAGING.md and in SPEC 5. If it moves again, all four
@@ -797,6 +798,14 @@ export interface IpcRequests {
    * behind one token, with a tick each. Two families of tools is not two
    * sockets and is not an outbound connection, so what changed is the listening
    * paragraph in those four places and nothing here.
+   *
+   * Plugins did move the sentence, by its last clause: a plugin's background
+   * page can fetch with nobody pressing anything, so the sentence says whose
+   * initiative that is - the plugin the user added - and how far it reaches:
+   * the origins in its manifest, through `helm.fetch` (`main/plugins/net.ts`),
+   * every redirect hop checked again. A plugin's programs and service run with
+   * the user's rights and are not confined, and a service listens on loopback
+   * for its own plugin; the four places say both.
    *
    * The app asks on its own too: once per launch, at most once a day, when
    * `updateCheck` is on - see `maybeCheckForUpdate`. Neither path downloads

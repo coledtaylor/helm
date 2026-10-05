@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Frame, Locator, Page } from '@playwright/test'
 import type { HelmBridge } from '@helm/plugin-sdk'
-import { expect, test as base } from './helm'
+import { expect, test as base, type Helm } from './helm'
 import { TOKEN, installSample, pluginFrame, registerPlugin, startServer, type SampleFixture } from './plugin-fixture'
 
 /**
@@ -176,27 +176,64 @@ test("Helm's shortcuts work from inside a plugin page, and its commands run from
   expect(sample.server.items.map((item) => item.title)).toContain('From the palette')
 })
 
+/**
+ * Runs `script` in Helm's window, or in the frame at `frameUrl`, through the
+ * main process. Once a plugin frame's process ends, Playwright counts the whole
+ * page as crashed and drives it no further, though Helm's own process is fine.
+ */
+function inHelm<T>(helm: Helm, script: string, frameUrl?: string): Promise<T> {
+  return helm.app.evaluate(
+    async ({ BrowserWindow }, { script, frameUrl }) => {
+      const win = BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().endsWith('/plugin-host.html'))
+      if (win === undefined) throw new Error('no Helm window')
+      if (frameUrl === undefined) return (await win.webContents.executeJavaScript(script)) as T
+      const frame = win.webContents.mainFrame.framesInSubtree.find((f) => f.url.startsWith(frameUrl))
+      return (frame === undefined ? null : await frame.executeJavaScript(script)) as T
+    },
+    { script, frameUrl }
+  )
+}
+
 test('a plugin page that crashes says so in its own place, and Reload brings it back', async ({ helm, sample }) => {
   const ui = helm.window
   await storeToken(ui, sample.server.url)
   const panel = await openPanel(ui)
   await expect(panel.locator('[data-sample-item]')).toHaveCount(3)
+  const url = panel.url()
 
-  const cdp = await ui.context().newCDPSession(panel)
-  // Never answered: the process it would answer from is the one that ends.
-  void cdp.send('Page.crash').catch(() => undefined)
+  // The page's process ends from outside, the way a renderer that runs out of
+  // memory or is ended in Task Manager does.
+  const pids = await helm.app.evaluate(({ BrowserWindow }, url) => {
+    const win = BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().endsWith('/plugin-host.html'))
+    const frame = win?.webContents.mainFrame.framesInSubtree.find((f) => f.url.startsWith(url))
+    if (win === undefined || frame === undefined) throw new Error(`no frame at ${url}`)
+    const pids = { helm: win.webContents.getOSProcessId(), plugin: frame.osProcessId }
+    process.kill(pids.plugin)
+    return pids
+  }, url)
+  // The plugin had a process of its own to lose.
+  expect(pids.plugin).not.toBe(pids.helm)
 
-  const failed = ui.locator('[data-plugin-error]')
-  await expect(failed).toContainText('Sample stopped')
-  // Helm itself is untouched.
-  await rail(ui).getByRole('button', { name: 'Session history' }).click()
-  await expect(ui.getByRole('tab', { name: 'Session history' })).toBeVisible()
+  await expect
+    .poll(() => inHelm<string>(helm, `document.querySelector('[data-plugin-error]')?.textContent ?? ''`))
+    .toContain('Sample stopped')
 
-  await rail(ui).getByRole('button', { name: /^Sample/ }).click()
-  await failed.getByRole('button', { name: 'Reload' }).click()
-  await expect(failed).toHaveCount(0)
-  const again = await pluginFrame(ui, 'dist/panels/main.html')
-  await expect(again.locator('[data-sample-item]')).toHaveCount(3)
+  // Helm itself is untouched: another destination opens.
+  await inHelm(helm, `document.querySelector('[aria-label="Session history"]').click()`)
+  await expect
+    .poll(() => inHelm<boolean>(helm, `[...document.querySelectorAll('[role=tab]')].some((t) => t.textContent.includes('Session history'))`))
+    .toBe(true)
+
+  // The panel stays in the sidebar beside the tab, still saying what happened.
+  expect(await inHelm<number>(helm, `document.querySelectorAll('[data-plugin-error]').length`)).toBe(1)
+  await inHelm(
+    helm,
+    `[...document.querySelectorAll('[data-plugin-error] button')].find((b) => b.textContent === 'Reload').click()`
+  )
+  await expect.poll(() => inHelm<number>(helm, `document.querySelectorAll('[data-plugin-error]').length`)).toBe(0)
+  await expect
+    .poll(() => inHelm<number | null>(helm, `document.querySelectorAll('[data-sample-item]').length`, url))
+    .toBe(3)
 })
 
 test('Settings > Plugins: an unsupported apiVersion is said plainly, and turning a plugin off takes its surfaces away', async ({

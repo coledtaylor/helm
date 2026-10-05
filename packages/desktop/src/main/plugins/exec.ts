@@ -125,6 +125,8 @@ export function runProgram(options: {
   signal: AbortSignal
 }): Promise<ExecResult> {
   const { dir, spec, request, signal } = options
+  // An abort that came first never fires its event again: start nothing.
+  if (signal.aborted) return Promise.reject(new PluginCallError('aborted', 'the program was cancelled'))
   const resolved = resolveProgram(dir, spec.command)
   if (resolved === null) {
     return Promise.reject(new PluginCallError('not-found', `${spec.command} was not found on this computer`))

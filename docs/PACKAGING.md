@@ -159,8 +159,9 @@ Code-signing the build would retire reason 1. It would not touch 2 or 3.
 
 **Helm contacts nothing on its own initiative except the update check.
 Everything else on the network happens because you asked for it: the
-pull-request surface goes through your own `gh`, and the browser pane fetches
-the page you navigate to.**
+pull-request surface goes through your own `gh`, the browser pane fetches the
+page you navigate to, and a plugin you added reaches the hosts its manifest
+names.**
 
 There is no telemetry, no crash reporting, no fonts and no CDN. With
 `updateCheck` off, Helm asks nothing by itself at all; the one remaining route
@@ -191,10 +192,27 @@ embedded token is a credential too, so `parseGitHubRemote` strips the userinfo
 before anything reaches the database. A machine with no `gh` gets a sentence
 naming where to get one, and everything else in Helm works unchanged.
 
+**Plugins reach the hosts their manifests name.** A plugin page has no network
+of its own (`connect-src 'none'`); `helm.fetch` sends its requests from the
+main process, only to an origin the manifest lists, following redirects one
+hop at a time so that every hop is checked against the same list. A plugin's
+background page may fetch on its own schedule, which is the plugin's doing
+rather than Helm's - the user added it - and is why the sentence above says
+so. A plugin never holds a secret: it writes `{{key}}`, and main fills in a
+value the user typed into Settings > Secrets, only for a host and a plugin the
+user allowed. The store is `safeStorage` (DPAPI, bound to the signed-in user),
+and with encryption unavailable it refuses to store anything rather than fall
+back to plaintext. The programs (`exec`) and the service a plugin declares are
+ordinary processes with the user's rights, and their network is not confined;
+Settings > Plugins names them per plugin, and turning the plugin off ends
+them. A service listens on `127.0.0.1` on a port Helm gives it and is reached
+with a token minted for the run - a listener of the plugin's, not Helm's, so
+the inbound paragraph above still describes the app.
+
 ## The update check needs the repository to be public
 
 `update.ts` sends `User-Agent` and `Accept` and nothing else - no token, because
-Helm handles no credentials. GitHub answers an unauthenticated request for a
+Helm handles no GitHub credential. GitHub answers an unauthenticated request for a
 **private** repository's releases with `404`, so while the repository is private
 the check reports *"could not ask"* however current the release actually is.
 

@@ -181,6 +181,14 @@ describe('runProgram', () => {
     await expect(pending).rejects.toMatchObject({ code: 'aborted' })
   })
 
+  it('starts nothing for a call cancelled before the program was reached', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    await expect(run(spec(node, ['tree.mjs']), [], { signal: controller.signal })).rejects.toMatchObject({
+      code: 'aborted'
+    })
+  })
+
   it('says a program that is not there was not found', async () => {
     await expect(run(spec('helm-no-such-tool-anywhere'))).rejects.toMatchObject({ code: 'not-found' })
     await expect(run(spec('bin/missing.exe'))).rejects.toMatchObject({ code: 'not-found' })

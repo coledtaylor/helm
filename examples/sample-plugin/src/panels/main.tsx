@@ -97,7 +97,7 @@ function Panel(): JSX.Element {
             <li key={item.id}>
               <button
                 type="button"
-                className="helm-row"
+                className="helm-row item"
                 data-sample-item={item.id}
                 onClick={() => void helm.tabs.open('item', { id: item.id }, { title: item.title })}
               >

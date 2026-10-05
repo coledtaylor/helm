@@ -1,5 +1,5 @@
 import type { JSX } from 'react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import type {
   PluginInfo,
   PluginLogLine,
@@ -664,7 +664,9 @@ function RemovePluginDialog({
 }): JSX.Element {
   const [chosen, setChosen] = useState<string[]>([])
   const cancelRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => {
+  // In the commit that draws the dialog, so nothing - a key, a test - can find
+  // it on screen with the focus still behind it.
+  useLayoutEffect(() => {
     cancelRef.current?.focus()
   }, [])
   return (

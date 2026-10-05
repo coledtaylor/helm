@@ -91,6 +91,13 @@ export default tseslint.config(
     rules: { 'no-console': 'off' }
   },
 
+  // A plugin's programs, its service and the sample's server are Node
+  // processes: what they print is their output, and Helm shows it in the log.
+  {
+    files: ['examples/sample-plugin/{server.mjs,programs/**/*.mjs,service/**/*.mjs}'],
+    rules: { 'no-console': 'off' }
+  },
+
   {
     files: ['packages/desktop/src/main/**/*.ts'],
     rules: {

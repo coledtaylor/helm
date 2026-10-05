@@ -46,6 +46,15 @@ p {
   min-width: 0;
 }
 
+/* A two-line row: the dot keeps to the title's line, as Helm's own rows do. */
+.item {
+  align-items: flex-start;
+}
+
+.item > .helm-dot {
+  margin-top: calc((1lh - 6px) / 2);
+}
+
 .title {
   overflow: hidden;
   text-overflow: ellipsis;

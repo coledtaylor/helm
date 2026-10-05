@@ -440,6 +440,25 @@ describe('bridge calls', () => {
     expect(await pending).toMatchObject({ ok: false, code: 'aborted' })
   })
 
+  it('ends the calls a plugin has in flight when it is switched off or reloaded, whatever its pages do', async () => {
+    start()
+    const slow = (callId: string): Promise<unknown> =>
+      call('fetch', [{ url: 'https://api.example.com/slow', method: 'GET', headers: [], body: null, redirect: 'follow' }], {
+        callId,
+        sender: 1
+      })
+    const off = slow('slow-off')
+    await vi.waitFor(() => expect(hops).toHaveLength(1))
+    host.setEnabled(sampleDir, false)
+    expect(await off).toMatchObject({ ok: false, code: 'aborted' })
+
+    host.setEnabled(sampleDir, true)
+    const reloaded = slow('slow-reload')
+    await vi.waitFor(() => expect(hops).toHaveLength(2))
+    host.reload(sampleDir)
+    expect(await reloaded).toMatchObject({ ok: false, code: 'aborted' })
+  })
+
   it('runs a declared program and refuses one it does not declare', async () => {
     start()
     expect(await call('exec', ['echo', ['a b', 'c']])).toEqual({

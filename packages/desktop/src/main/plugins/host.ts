@@ -143,7 +143,8 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
   const launcher = options.launcher ?? electronServiceLauncher
   const watching = options.watch ?? true
   const entries: Entry[] = []
-  const calls = new Map<string, AbortController>()
+  /** Calls in flight, by sender and call id, with the plugin each one turned out to be for. */
+  const calls = new Map<string, { controller: AbortController; entry: Entry | null }>()
   const secretRequests = new Map<string, { plugin: string; key: string; resolve: (state: 'ready' | 'missing') => void }>()
   let revisions = 0
   let stopped = false
@@ -278,6 +279,9 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
 
   /** Everything an entry has running: its service, its watch, its pending reload, its status. */
   function stopRuntime(entry: Entry, sync = false): void {
+    // A program it runs ends with it, rather than when its page notices or its
+    // timeout comes round: the pages are the renderer's, the processes are ours.
+    for (const call of calls.values()) if (call.entry === entry) call.controller.abort()
     entry.service?.stop(sync)
     entry.service = null
     entry.watcher?.close()
@@ -663,13 +667,15 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
     async call(request, sender) {
       const callKey = `${String(sender)}:${request.callId}`
       const controller = new AbortController()
-      calls.set(callKey, controller)
+      const inFlight: { controller: AbortController; entry: Entry | null } = { controller, entry: null }
+      calls.set(callKey, inFlight)
       try {
         if (stopped) throw new PluginCallError('unavailable', 'Helm is shutting down')
         if (!SURFACES.includes(request.surface)) throw new PluginCallError('invalid', 'unknown surface')
         const entry = byId(request.plugin)
         const plugin = entry === null ? null : live(entry)
         if (entry === null || plugin === null) throw new PluginCallError('unavailable', 'the plugin is not enabled')
+        inFlight.entry = entry
         const method = Object.hasOwn(methods, request.method) ? methods[request.method] : undefined
         if (method === undefined) throw new PluginCallError('invalid', `helm.${request.method} is not part of the bridge`)
         const args = Array.isArray(request.args) ? request.args : []
@@ -683,7 +689,7 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
     },
 
     cancel(callId, sender) {
-      calls.get(`${String(sender)}:${callId}`)?.abort()
+      calls.get(`${String(sender)}:${callId}`)?.controller.abort()
     },
 
     command(plugin, id) {
@@ -807,7 +813,7 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
 
     shutdown() {
       stopped = true
-      for (const controller of calls.values()) controller.abort()
+      for (const call of calls.values()) call.controller.abort()
       calls.clear()
       for (const request of secretRequests.values()) request.resolve('missing')
       secretRequests.clear()

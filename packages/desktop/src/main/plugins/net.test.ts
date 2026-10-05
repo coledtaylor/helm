@@ -1,15 +1,49 @@
+import { EventEmitter } from 'node:events'
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openStore, type Store } from '@helm/core'
 import { validateManifest, type NormalizedManifest } from '@helm/plugin-sdk/manifest'
 import type { PluginFetchRequest } from '../../shared/ipc'
-import type { FetchContext, SendHop } from './net'
+import type { FetchContext, Hop, SendHop } from './net'
 import type { SecretStore } from './secrets'
 
-vi.mock('electron', async () => (await import('../../../test/electron')).electronFake())
+/**
+ * Chromium's side of `electronSender`: `net.request` and the plugin
+ * partition. Refused unless a test hands `request` a request of its own.
+ */
+const chromium = vi.hoisted(() => ({
+  request: null as ((options: Record<string, unknown>) => unknown) | null,
+  partitions: [] as string[],
+  verify: null as ((request: { hostname: string }, callback: (result: number) => void) => void) | null
+}))
 
-const { pluginFetch, SERVICE_TOKEN_HEADER } = await import('./net')
+vi.mock('electron', async () => {
+  const fake = (await import('../../../test/electron')).electronFake()
+  return {
+    ...fake,
+    net: {
+      ...(fake['net'] as Record<string, unknown>),
+      request: (options: Record<string, unknown>) => {
+        if (chromium.request === null) throw new Error('no network in tests')
+        return chromium.request(options)
+      }
+    },
+    session: {
+      fromPartition: (name: string) => {
+        chromium.partitions.push(name)
+        return {
+          name,
+          setCertificateVerifyProc: (proc: NonNullable<typeof chromium.verify>) => {
+            chromium.verify = proc
+          }
+        }
+      }
+    }
+  }
+})
+
+const { electronSender, pluginFetch, PLUGIN_NET_PARTITION, RESPONSE_MAX_BYTES, SERVICE_TOKEN_HEADER } = await import('./net')
 const { createSecretStore } = await import('./secrets')
 const { PluginCallError } = await import('./errors')
 
@@ -207,6 +241,19 @@ describe('reach', () => {
     expect(a.seen).toEqual([])
   })
 
+  it('refuses what is not a request at all', async () => {
+    expect((await refusal(pluginFetch(null, context()))).code).toBe('invalid')
+    expect((await refusal(pluginFetch(req(`${a.url}/${'x'.repeat(9000)}`), context()))).code).toBe('invalid')
+  })
+
+  it('refuses a request body past its limit before anything is sent', async () => {
+    const result = await refusal(
+      pluginFetch(req(`${a.url}/`, { method: 'POST', body: new Uint8Array(16 * 1024 * 1024 + 1) }), context())
+    )
+    expect(result).toEqual({ code: 'invalid', message: 'a request body is limited to 16 MB' })
+    expect(a.seen).toEqual([])
+  })
+
   it.each([
     [{ method: 'CONNECT' }],
     [{ method: 'BAD METHOD' }],
@@ -268,6 +315,44 @@ describe('redirects', () => {
       ['POST', '{"a":1}', 'application/json'],
       ['GET', '', null]
     ])
+  })
+
+  it.each([301, 302])('turns a POST answered with %i into a GET, as a browser does', async (status) => {
+    const body = new TextEncoder().encode('form=1')
+    await pluginFetch(
+      req(`${a.url}/redirect?to=/after&status=${String(status)}`, {
+        method: 'POST',
+        headers: [['content-type', 'application/x-www-form-urlencoded']],
+        body
+      }),
+      context()
+    )
+    expect(a.seen.map((one) => [one.method, one.body])).toEqual([
+      ['POST', 'form=1'],
+      ['GET', '']
+    ])
+  })
+
+  it('keeps a 307 a POST, body and all', async () => {
+    await pluginFetch(
+      req(`${a.url}/redirect?to=/after&status=307`, {
+        method: 'POST',
+        headers: [['content-type', 'text/plain']],
+        body: new TextEncoder().encode('kept')
+      }),
+      context()
+    )
+    expect(a.seen.map((one) => [one.method, one.path, one.body])).toEqual([
+      ['POST', '/redirect?to=/after&status=307', 'kept'],
+      ['POST', '/after', 'kept']
+    ])
+  })
+
+  it('says a redirect to something that is not a URL is the network, and goes nowhere', async () => {
+    const result = await refusal(pluginFetch(req(`${a.url}/redirect?to=${encodeURIComponent('http://[nope')}`), context()))
+    expect(result.code).toBe('network')
+    expect(result.message).toContain('not a URL')
+    expect(a.seen).toHaveLength(1)
   })
 })
 
@@ -392,5 +477,268 @@ describe('cancelling', () => {
     const result = await refusal(pluginFetch(req(`${a.url}/`), context({ send: broken })))
     expect(result.code).toBe('network')
     expect(result.message).toContain('connection reset')
+  })
+})
+
+/** A request as Chromium's `net.request` hands it back: what was set on it, and its events. */
+class FakeRequest extends EventEmitter {
+  headers: Array<[string, string]> = []
+  written: Buffer[] = []
+  ended = false
+  aborted = false
+
+  constructor(private readonly refuseHeader: string | null) {
+    super()
+  }
+
+  setHeader(name: string, value: string): void {
+    if (name === this.refuseHeader) throw new Error(`Invalid header name: ${name}`)
+    this.headers.push([name, value])
+  }
+
+  write(chunk: Buffer): void {
+    this.written.push(chunk)
+  }
+
+  end(): void {
+    this.ended = true
+  }
+
+  abort(): void {
+    this.aborted = true
+  }
+}
+
+class FakeResponse extends EventEmitter {
+  constructor(
+    readonly statusCode: number,
+    readonly statusMessage: string,
+    readonly headers: Record<string, string | string[]>
+  ) {
+    super()
+  }
+}
+
+/** Chromium answering from now on: every request it was asked for, and the options each was made with. */
+function chromiumAnswers(refuseHeader: string | null = null): {
+  requests: FakeRequest[]
+  options: Array<Record<string, unknown>>
+} {
+  const requests: FakeRequest[] = []
+  const options: Array<Record<string, unknown>> = []
+  chromium.request = (made) => {
+    options.push(made)
+    const request = new FakeRequest(refuseHeader)
+    requests.push(request)
+    return request
+  }
+  return { requests, options }
+}
+
+const API = 'https://api.example.com/items'
+const hop = (patch: Partial<Hop> = {}): Hop => ({ url: new URL(API), method: 'GET', headers: [], body: null, ...patch })
+const live = (): AbortSignal => new AbortController().signal
+
+describe('the transport, over Chromium', () => {
+  beforeEach(() => {
+    chromium.request = null
+  })
+
+  it('sends one hop on the plugin partition, with no cookies, no cache, and its headers and body as given', async () => {
+    const { requests, options } = chromiumAnswers()
+    const pending = electronSender(
+      hop({
+        method: 'POST',
+        headers: [
+          ['content-type', 'application/json'],
+          ['x-trace', '7']
+        ],
+        body: new TextEncoder().encode('{"a":1}')
+      }),
+      live()
+    )
+    const request = requests[0]!
+    expect(options[0]).toMatchObject({
+      method: 'POST',
+      url: API,
+      redirect: 'manual',
+      credentials: 'omit',
+      cache: 'no-store',
+      session: { name: PLUGIN_NET_PARTITION }
+    })
+    expect(request.headers).toEqual([
+      ['content-type', 'application/json'],
+      ['x-trace', '7']
+    ])
+    expect(Buffer.concat(request.written).toString('utf8')).toBe('{"a":1}')
+    expect(request.ended).toBe(true)
+
+    const response = new FakeResponse(201, 'Created', { 'content-type': 'application/json', 'set-cookie': ['a=1', 'b=2'] })
+    request.emit('response', response)
+    response.emit('data', Buffer.from('{"items":'))
+    response.emit('data', Buffer.from('[]}'))
+    response.emit('end')
+    const result = await pending
+    expect(result).toMatchObject({
+      kind: 'response',
+      status: 201,
+      statusText: 'Created',
+      headers: [
+        ['content-type', 'application/json'],
+        ['set-cookie', 'a=1'],
+        ['set-cookie', 'b=2']
+      ]
+    })
+    expect(result.kind === 'response' ? new TextDecoder().decode(result.body) : null).toBe('{"items":[]}')
+  })
+
+  it('writes no body for a request without one, and makes the partition once however many are sent', async () => {
+    const { requests } = chromiumAnswers()
+    for (let i = 0; i < 3; i += 1) {
+      const pending = electronSender(hop(), live())
+      const request = requests.at(-1)!
+      const response = new FakeResponse(204, 'No Content', {})
+      request.emit('response', response)
+      response.emit('end')
+      expect(await pending).toMatchObject({ kind: 'response', status: 204 })
+      expect(request.written).toEqual([])
+    }
+    expect(chromium.partitions).toEqual([PLUGIN_NET_PARTITION])
+  })
+
+  it('reports a redirect without following it, and stops the request', async () => {
+    const { requests } = chromiumAnswers()
+    const pending = electronSender(hop(), live())
+    const request = requests[0]!
+    request.emit('redirect', 302, 'GET', 'https://api.example.com/next', { location: ['https://api.example.com/next'] })
+    expect(await pending).toEqual({
+      kind: 'redirect',
+      status: 302,
+      statusText: '',
+      location: 'https://api.example.com/next',
+      headers: [['location', 'https://api.example.com/next']]
+    })
+    expect(request.aborted).toBe(true)
+    expect(requests).toHaveLength(1)
+  })
+
+  it('refuses a response past its limit, stops reading it, and ignores the end that follows', async () => {
+    const { requests } = chromiumAnswers()
+    const pending = electronSender(hop(), live())
+    const request = requests[0]!
+    const response = new FakeResponse(200, 'OK', {})
+    request.emit('response', response)
+    response.emit('data', Buffer.alloc(RESPONSE_MAX_BYTES))
+    response.emit('data', Buffer.alloc(1))
+    response.emit('end')
+    await expect(pending).rejects.toMatchObject({ code: 'network', message: 'the response is over 32 MB' })
+    expect(request.aborted).toBe(true)
+  })
+
+  it('ends as aborted when cancelled before it was sent, setting nothing on the request', async () => {
+    const { requests } = chromiumAnswers()
+    const controller = new AbortController()
+    controller.abort()
+    await expect(electronSender(hop({ headers: [['x-a', '1']] }), controller.signal)).rejects.toMatchObject({
+      name: 'AbortError'
+    })
+    expect(requests[0]!.aborted).toBe(true)
+    expect(requests[0]!.headers).toEqual([])
+  })
+
+  it('ends as aborted when cancelled in flight, and an answer that comes later changes nothing', async () => {
+    const { requests } = chromiumAnswers()
+    const controller = new AbortController()
+    const pending = electronSender(hop(), controller.signal)
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    const request = requests[0]!
+    expect(request.aborted).toBe(true)
+    request.emit('redirect', 302, 'GET', 'https://api.example.com/late', {})
+  })
+
+  it('refuses a header Chromium will not send, and sends nothing', async () => {
+    const { requests } = chromiumAnswers('bad header')
+    const result = electronSender(
+      hop({
+        headers: [
+          ['x-fine', '1'],
+          ['bad header', '2']
+        ]
+      }),
+      live()
+    )
+    await expect(result).rejects.toMatchObject({
+      code: 'invalid',
+      message: 'a header was refused: Invalid header name: bad header'
+    })
+    expect(requests[0]!.aborted).toBe(true)
+    expect(requests[0]!.ended).toBe(false)
+  })
+
+  it("passes on the transport's own error, and says a response cut off midway was cut off", async () => {
+    const { requests } = chromiumAnswers()
+    const refused = electronSender(hop(), live())
+    requests[0]!.emit('error', new Error('net::ERR_CONNECTION_REFUSED'))
+    await expect(refused).rejects.toThrow('net::ERR_CONNECTION_REFUSED')
+
+    const cut = electronSender(hop(), live())
+    const response = new FakeResponse(200, 'OK', {})
+    requests[1]!.emit('response', response)
+    response.emit('data', Buffer.from('half'))
+    response.emit('error', new Error('socket hang up'))
+    await expect(cut).rejects.toThrow('the response was cut off')
+  })
+
+  it('accepts a self-signed certificate on this machine and nowhere else', async () => {
+    const { requests } = chromiumAnswers()
+    // The partition, and its rule, are made with the first request.
+    const pending = electronSender(hop(), live())
+    const response = new FakeResponse(200, 'OK', {})
+    requests[0]!.emit('response', response)
+    response.emit('end')
+    await pending
+
+    const verdict = (hostname: string): number => {
+      let result = Number.NaN
+      chromium.verify?.({ hostname }, (value) => {
+        result = value
+      })
+      return result
+    }
+    expect(['localhost', '127.0.0.1', '::1'].map(verdict)).toEqual([0, 0, 0])
+    expect(['api.example.com', '10.0.0.5', '127.0.0.1.example.com'].map(verdict)).toEqual([-3, -3, -3])
+  })
+
+  it('is what helm.fetch sends through: a redirect reported by Chromium is followed as the next hop', async () => {
+    secrets.save({ key: 'token', value: 's3cret', hosts: ['https://api.example.com'], plugins: ['sample'] })
+    const listed = validateManifest({
+      apiVersion: 1,
+      id: 'sample',
+      name: 'Sample',
+      network: ['https://api.example.com'],
+      secrets: ['token']
+    })
+    if (!listed.ok) throw new Error(listed.errors.join('; '))
+    const { requests, options } = chromiumAnswers()
+    const pending = pluginFetch(
+      req(`${API}?page=1`, { headers: [['authorization', 'Bearer {{token}}']] }),
+      context({ manifest: listed.manifest, send: electronSender })
+    )
+    await vi.waitFor(() => expect(requests).toHaveLength(1))
+    expect(requests[0]!.headers).toEqual([['authorization', 'Bearer s3cret']])
+    requests[0]!.emit('redirect', 301, 'GET', '/items?page=2', {})
+
+    await vi.waitFor(() => expect(requests).toHaveLength(2))
+    const response = new FakeResponse(200, 'OK', { 'content-type': 'text/plain' })
+    requests[1]!.emit('response', response)
+    response.emit('data', Buffer.from('page 2'))
+    response.emit('end')
+
+    const result = await pending
+    expect(result).toMatchObject({ status: 200, url: 'https://api.example.com/items?page=2', redirected: true })
+    expect(text(result.body)).toBe('page 2')
+    expect(options.map((one) => one['url'])).toEqual([`${API}?page=1`, 'https://api.example.com/items?page=2'])
+    expect(requests[1]!.headers).toEqual([['authorization', 'Bearer s3cret']])
   })
 })

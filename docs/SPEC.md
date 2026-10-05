@@ -1110,8 +1110,9 @@ option open and is what makes the app genuinely portable.
 
 **Helm contacts nothing on its own initiative except the update check.
 Everything else on the network happens because you asked for it: the
-pull-request surface goes through your own `gh`, and the browser pane fetches
-the page you navigate to.**
+pull-request surface goes through your own `gh`, the browser pane fetches the
+page you navigate to, and a plugin you added reaches the hosts its manifest
+names.**
 
 That replaced "Helm's own process opens exactly one outbound connection"
 (decided 2026-08-15). The browser pane made the old claim false, and the answer
@@ -1120,6 +1121,12 @@ Helm does not phone home, there is no telemetry - is unchanged, and the app has
 stopped claiming something it no longer does. The same wording appears in the
 README, [PACKAGING.md](PACKAGING.md) and the `update:check` comment in
 `shared/ipc.ts`, and CLAUDE.md's rule that all four move together stays.
+
+Plugins (2026-10-05) moved it by one clause, for the same reason and in the
+same way: a plugin's background page can fetch with nobody pressing anything,
+so leaving the sentence alone would have been the old false claim again. The
+clause names the limit rather than hiding the fact - the user added the
+plugin, and its pages reach only what its manifest lists.
 
 - **The update check** reaches the GitHub releases API for a version number and
   a URL. It happens two ways and no
@@ -1137,12 +1144,29 @@ README, [PACKAGING.md](PACKAGING.md) and the `update:check` comment in
   turn it off - plus a fetch when a pull request is opened and one when a review
   checks a branch out. Bytes therefore leave the machine without `update:check`
   being invoked, and Helm opens no socket of its own for any of it.
-- **No credential of any kind is stored, read or handled.** Claude's sign-in is
+- **No Claude or GitHub credential is stored, read or handled.** Claude's sign-in is
   detected from the *existence* of an artefact, and GitHub's from what `gh`
   prints when it is asked to do something - its `auth status` exit code as an
   opinion, and its fetch failures as the verdict that overrules it. Nothing
   opens either. A remote URL carrying an embedded token is a credential too, and
-  it is stripped before anything is written to the database.
+  it is stripped before anything is written to the database. The one secret
+  store Helm has is the plugins' (below), and it holds only what the user typed
+  into it.
+- **A plugin you added reaches the hosts its manifest names**, and its pages
+  reach nothing else. A plugin page has no network of its own
+  (`connect-src 'none'`); `helm.fetch` sends its requests from the main
+  process, only to an origin the manifest lists, taking redirects one hop at a
+  time so each hop is checked against the same list, and a URL a server
+  supplied is never searched for placeholders. A plugin never holds a secret:
+  it writes `{{key}}`, and main fills in a value the user typed into Settings >
+  Secrets, only for a host and a plugin the user allowed. The store is
+  `safeStorage` (DPAPI), and it refuses to store anything when encryption is
+  unavailable rather than fall back to plaintext. The programs (`exec`) and
+  service a plugin declares run with the user's rights and their network is
+  not confined - Settings > Plugins names them per plugin, and turning a plugin
+  off ends them. A service listens on `127.0.0.1`, on a port Helm hands it,
+  behind a token minted for the run; that is the plugin's listener, and the
+  bullet below is still the whole of Helm's own.
 - **The browser pane fetches the page you navigate to**, and nothing else. It
   is a dev-server viewport rather than a browser (M16): a `WebContentsView` in
   a partition of its own, `persist:helm-browser`, whose cookies and storage live
@@ -1170,11 +1194,11 @@ README, [PACKAGING.md](PACKAGING.md) and the `update:check` comment in
   output, and not the argv a session was launched with, which carries both a
   review session's opening prompt and the path to that session's own bearer
   token. See 4.7 and CLAUDE.md's rules.
-- **No credential of any kind is stored, read or handled**, and the browser
-  partition is not an exception. It holds whatever cookies the sites you visit
-  set, exactly as a browser profile does, and **Helm reads none of it**: nothing
-  in the app opens that cookie jar, and the only thing it ever does to the
-  partition is `clearStorageData` from the button in the pane.
+- **The browser partition holds credentials, and Helm reads none of them.**
+  It holds whatever cookies the sites you visit set, exactly as a browser
+  profile does: nothing in the app opens that cookie jar, and the only thing
+  it ever does to the partition is `clearStorageData` from the button in the
+  pane.
 - **Nothing else talks to anything.** No telemetry, no crash reporting, no
   fonts, no CDN. The renderer's `will-navigate` is prevented and its window-open
   handler denies, so a link in rendered content is inert without
