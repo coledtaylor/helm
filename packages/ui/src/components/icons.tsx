@@ -460,6 +460,18 @@ export function EyeIcon(props: IconProps): JSX.Element {
   )
 }
 
+/** A secret: a key's bow and its bit. */
+export function KeyIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <circle cx="5.25" cy="10.75" r="2.75" />
+      <path d="M7.25 8.75 13 3" />
+      <path d="m11.25 4.75 1.5 1.5" />
+      <path d="m9.75 6.25 1 1" />
+    </Icon>
+  )
+}
+
 /** A wikilink: two nodes joined. */
 export function LinkIcon(props: IconProps): JSX.Element {
   return (

@@ -141,6 +141,8 @@ export interface ServiceOptions {
   launcher: ServiceLauncher
   onChange: () => void
   log: (line: Omit<PluginLogLine, 'at'>) => void
+  /** The waits, shortened by a test that cannot sit through real ones. The app uses the defaults. */
+  timing?: { readyMs?: number; backoffMinMs?: number; backoffMaxMs?: number } | undefined
 }
 
 export interface ServiceSupervisor {
@@ -160,6 +162,9 @@ interface Waiter {
 
 export function createServiceSupervisor(options: ServiceOptions): ServiceSupervisor {
   const { spec } = options
+  const readyMs = options.timing?.readyMs ?? SERVICE_READY_MS
+  const backoffMinMs = options.timing?.backoffMinMs ?? BACKOFF_MIN_MS
+  const backoffMaxMs = options.timing?.backoffMaxMs ?? BACKOFF_MAX_MS
   let state: PluginServiceInfo['state'] = 'stopped'
   let error: string | null = null
   let restarts = 0
@@ -275,10 +280,10 @@ export function createServiceSupervisor(options: ServiceOptions): ServiceSupervi
       crashed(code)
     })
 
-    const ready = await listening(port, SERVICE_READY_MS, () => mine !== generation)
+    const ready = await listening(port, readyMs, () => mine !== generation)
     if (mine !== generation) return
     if (!ready) {
-      note(`it did not listen on 127.0.0.1:${String(port)} within ${String(SERVICE_READY_MS / 1000)}s; stopping it`)
+      note(`it did not listen on 127.0.0.1:${String(port)} within ${String(readyMs / 1000)}s; stopping it`)
       child.kill(false)
       crashed(null)
       return
@@ -304,7 +309,7 @@ export function createServiceSupervisor(options: ServiceOptions): ServiceSupervi
       fail(`it ${how}, and has stopped ${String(CRASH_LIMIT)} times in a minute; Helm will not start it again until the plugin is reloaded`)
       return
     }
-    const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_MIN_MS * 2 ** (consecutive - 1))
+    const delay = Math.min(backoffMaxMs, backoffMinMs * 2 ** (consecutive - 1))
     note(`it ${how}; starting it again in ${String(delay / 1000)}s`)
     restarts += 1
     set('crashed', `it ${how}`)

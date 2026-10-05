@@ -140,7 +140,7 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
     given.onmessage = (portEvent: MessageEvent) => receive(portEvent.data as HelmMessage)
     given.start()
     if (data.context !== undefined) context = data.context
-    if (data.theme !== undefined) {
+    if (data.theme !== undefined && data.theme !== null) {
       theme = data.theme
       applyTheme(doc, theme)
     }
@@ -260,7 +260,7 @@ function toResponse(answer: PluginFetchResponse): Response {
       // A header the platform will not hold in a Response; the page would not have seen it from fetch either.
     }
   }
-  const response = new Response(NULL_BODY.has(answer.status) ? null : answer.body, {
+  const response = new Response(NULL_BODY.has(answer.status) ? null : (answer.body as Uint8Array<ArrayBuffer>), {
     status: answer.status,
     statusText: answer.statusText,
     headers

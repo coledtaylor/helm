@@ -1,0 +1,576 @@
+# Writing a Helm plugin
+
+`@helm/plugin-sdk` holds the types, the manifest validator and schema, React
+hooks and the `helm-plugin` command for building Helm plugins. The runtime
+itself - `window.helm`, the theme and the primitives stylesheet - comes from
+the Helm that runs the plugin, so a plugin never ships a copy of it.
+
+## What a plugin is
+
+A plugin is a folder on your computer with a `helm-plugin.json` at its root.
+You register the folder in Helm, and Helm reads the manifest and serves the
+folder to its pages.
+
+- Every page the plugin has is an ordinary HTML page, served at
+  `helm-plugin://<id>/<path>`. That origin is the plugin's identity: its
+  storage, its messages and its permissions are its own, and no other plugin
+  or Helm page shares them.
+- Its pages run in a process of their own, separate from Helm's window. A
+  plugin that loops forever or crashes takes down its own pages and nothing
+  else.
+- A page has no network access and no access to the computer. It asks Helm,
+  through `window.helm`, for what the manifest says it may have: requests to
+  the hosts it lists, the programs it names, the secrets it declares.
+
+## Quick start
+
+```
+node <path-to-helm>/packages/plugin-sdk/bin/helm-plugin.mjs create my-plugin
+```
+
+writes a working plugin into `my-plugin/`: a rail icon, a sidebar panel and a
+tab, in plain HTML and JavaScript with nothing to build. Then, in Helm:
+
+1. Open Settings > Plugins and press **Add folder**.
+2. Pick `my-plugin`. Its icon appears on the rail.
+3. Edit `pages/panel.html` or `pages/panel.js` and save. Helm reloads the
+   plugin.
+
+`helm-plugin validate` checks a plugin the way Helm does when it loads it -
+the manifest, then every file the manifest names - and exits 1 when Helm would
+refuse it:
+
+```
+cd my-plugin
+node <path-to-helm>/packages/plugin-sdk/bin/helm-plugin.mjs validate
+```
+
+The SDK is not published. A plugin that wants its types or hooks links it by
+path, for example in `package.json`:
+
+```json
+{ "devDependencies": { "@helm/plugin-sdk": "file:../helm/packages/plugin-sdk" } }
+```
+
+after which `npx helm-plugin validate` works too.
+
+### Reloading
+
+Helm watches the manifest and the folders the pages named in it live in, and
+reloads the plugin a moment after a burst of writes ends. A build that writes
+to `dist/` reloads it once. Keep pages in a folder (`pages/`, `dist/`) rather
+than at the plugin root: a page at the root is watched as a single file, so a
+script beside it would not trigger a reload. `node_modules` is never watched.
+
+Settings > Plugins > the plugin > **Reload** reads the folder again by hand.
+
+## The manifest
+
+`helm-plugin.json`. Every surface is optional; a plugin with none loads and
+does nothing. For editor completion, point `$schema` at the SDK's schema:
+
+```json
+{ "$schema": "./node_modules/@helm/plugin-sdk/helm-plugin.schema.json" }
+```
+
+Paths (`icon`, every `entry`, `background`, `service.node`) are relative to the
+plugin folder and may not leave it, through `..` or a link. Nothing may live
+under `__helm/`, where Helm serves its runtime.
+
+| field | what it is |
+| --- | --- |
+| `apiVersion` | Required. `1`. The bridge the plugin was written against. A Helm that does not speak it refuses the plugin and says so in Settings. |
+| `id` | Required. 1-63 lower-case letters, digits and dashes, starting with a letter or digit. The plugin's origin is `helm-plugin://<id>`. Two loaded plugins cannot share an id. |
+| `name` | Required. What Helm calls the plugin, up to 60 characters. |
+| `version`, `description` | Shown in Settings. Up to 40 and 300 characters. |
+| `icon` | An `.svg` or `.png`, 64 KB at most. Drawn as a mask, so only its shape counts: it takes the rail's own colours. |
+| `rail` | `{ "title", "panel" }`: a rail button with that tooltip, opening that panel in the sidebar. |
+| `panels` | Sidebar panels by name: `{ "title", "entry", "actions"? }`. |
+| `tabs` | Tabs by name: `{ "title", "entry" }`. |
+| `background` | A page that runs whenever the plugin is on. |
+| `commands` | Entries in the command palette: `{ "id", "title", "tab"? }`. |
+| `settings` | A settings page Helm draws: see [Settings](#settings). |
+| `network` | The origins `helm.fetch` may reach. |
+| `secrets` | The secret keys the plugin uses as `{{key}}`. |
+| `exec` | Programs `helm.exec` may run, by name. |
+| `service` | One long-running process Helm supervises. |
+
+Names - panel and tab keys, action, command and program names - are 1-32
+lower-case letters, digits and dashes.
+
+Limits: 20 panels, 50 tabs, 5 actions a panel, 100 commands, 100 settings, 50
+origins, 50 secrets, 50 programs, 64 arguments and 64 environment variables a
+program.
+
+Helm warns about a top-level field it does not know, and loads the plugin
+anyway. Everything else it refuses, and lists every problem at once:
+
+```
+helm-plugin.json: rail.panel must name one of the panels - "main" is not one
+```
+
+## Surfaces
+
+### Rail and panels
+
+A `rail` entry puts a button on Helm's rail. Pressing it opens its panel in the
+sidebar; pressing it again puts the sidebar away. The user can hide the button
+from the rail's right-click menu like any of Helm's own.
+
+Helm draws the panel's header: its `title`, and an icon button for each of
+its `actions`. A press arrives at the panel as the `action` event:
+
+```json
+"panels": {
+  "main": {
+    "title": "Runs",
+    "entry": "dist/panels/main.html",
+    "actions": [
+      { "id": "refresh", "title": "Refresh", "icon": "refresh" },
+      { "id": "new", "title": "New run", "icon": "plus" }
+    ]
+  }
+}
+```
+
+```js
+helm.on('action', ({ id }) => {
+  if (id === 'refresh') reload()
+})
+```
+
+The icons are Helm's: `refresh`, `plus`, `search`, `list`, `settings`,
+`external`, `pin`, `edit`, `trash`, `link`, `eye`.
+
+### Tabs
+
+A tab is a page in one of Helm's panes. It splits, drags and maximises like
+Helm's own tabs, keeps its state while it does, and is reopened when Helm
+starts again.
+
+A plugin opens its tabs itself:
+
+```js
+await helm.tabs.open('run', { id: 42 }, { title: 'Run 42' })
+```
+
+The parameters are part of the tab's identity: the same tab with the same
+parameters is brought forward, and other parameters open another tab. They are
+up to 16 keys of strings, numbers and booleans (a string up to 512 characters),
+and the page reads them from `helm.context.params`. `title` names the tab until its page names it:
+
+```js
+helm.surface.setTitle('Run 42 - passed') // null puts back the manifest's title
+```
+
+### Background page
+
+`background` is a page with no surface. It starts when the plugin is turned
+on and runs until it is turned off, whether or not any of its panels or tabs
+are open - the place to poll, to keep a badge current, and to answer
+commands. It shares the plugin's origin, so its `localStorage`, IndexedDB and
+`BroadcastChannel`s are the same ones the panels and tabs see.
+
+If it crashes it stays stopped, and Settings says so. **Reload** starts it
+again.
+
+### Status bar item and badge
+
+```js
+await helm.status.set({ text: '3 failing', tone: 'danger', tooltip: 'Runs in the last hour' })
+await helm.status.set(null) // takes it away
+
+await helm.badge.set(3) // a count on the rail button; null or 0 takes it away
+```
+
+`tone` is `neutral`, `accent`, `success`, `warn` or `danger`. The text is up to
+80 characters. Pressing the item opens the plugin's rail panel, or its page in
+Settings when it has none. A badge over 99 is drawn as 99+.
+
+Both belong to the plugin, not to the page that set them: any of its pages can
+change them. When the background page crashes, Helm takes both away rather
+than keep showing what a stopped page said.
+
+### Commands
+
+```json
+"commands": [
+  { "id": "open-runs", "title": "Open runs", "tab": "runs" },
+  { "id": "sync", "title": "Sync now" }
+]
+```
+
+Each appears in the command palette (Ctrl+Shift+P) under the plugin's name. A
+command with a `tab` opens that tab. One without arrives as the `command`
+event: at the background page when there is one, and otherwise at the rail
+panel, which Helm opens first. A command with neither a tab nor a page to
+receive it is refused.
+
+```js
+helm.on('command', ({ id }) => {
+  if (id === 'sync') sync()
+})
+```
+
+## Settings
+
+Helm draws a page for the plugin in Settings, from `settings`:
+
+```json
+"settings": [
+  { "key": "server", "type": "text", "label": "Server", "default": "https://ci.example.com", "placeholder": "https://..." },
+  { "key": "limit", "type": "number", "label": "Runs shown", "default": 20, "min": 1, "max": 100 },
+  { "key": "failedOnly", "type": "toggle", "label": "Failed runs only", "default": false },
+  { "key": "order", "type": "select", "label": "Order", "options": [{ "value": "new", "label": "Newest first" }], "default": "new" },
+  { "key": "token", "type": "secret", "label": "Token", "secret": "ci-token", "description": "A personal access token." }
+]
+```
+
+Every setting has a `key`, a `label` and an optional `description`. A `secret`
+setting holds no value: it shows whether the secret it names is stored, with a
+button to add it.
+
+```js
+const values = await helm.settings.get() // { server: '...', limit: 20, failedOnly: false, order: 'new' }
+helm.on('settings', (values) => apply(values))
+```
+
+A setting the user has not changed reads as its `default`, or `null` without
+one. `secret` settings are not among the values: a page asks
+`helm.secrets.state` instead.
+
+## The bridge: `window.helm`
+
+Helm puts `window.helm` on every page it serves, before the page's own scripts
+run. Calls made before it has connected to Helm wait for it rather than fail.
+
+| member | what it does |
+| --- | --- |
+| `apiVersion` | `1`. |
+| `context` | `{ plugin, surface, name, params }`: where this page is running. `surface` is `panel`, `tab` or `background`; `name` is the panel's or tab's key. It never changes for the life of the page. |
+| `theme` | The current theme. See [Theme and styling](#theme-and-styling). |
+| `visible` | Whether the surface is on screen. Always false for the background page. |
+| `fetch(input, init?)` | `fetch`, sent by Helm. See [Network](#network). |
+| `exec(name, args?, options?)` | Runs a program from `exec`. See [Programs](#programs). |
+| `tabs.open(tab, params?, options?)` | Opens one of the plugin's tabs. |
+| `surface.setTitle(title)` | Names a tab in the strip; null puts back the manifest's. No effect outside a tab. |
+| `status.set(item)` | The status bar item, or null. |
+| `badge.set(count)` | The rail badge, or null. |
+| `settings.get()` | Every setting's value. |
+| `secrets.state(key)` | `ready` or `missing`. |
+| `secrets.request(key)` | Opens Helm's dialog for adding the key, scoped to this plugin. Resolves with the state once it closes. |
+| `on(event, listener)` | Subscribes; returns the function that unsubscribes. |
+
+Events:
+
+| event | data |
+| --- | --- |
+| `theme` | The new `HelmTheme`. The page's CSS variables have already changed. |
+| `visibility` | Whether the surface is now on screen. |
+| `settings` | Every setting's value, after the user changed one. |
+| `secrets` | Every declared key's state, after one was stored, permitted or removed. |
+| `command` | `{ id }`: a command with no tab was chosen. |
+| `action` | `{ id }`: a panel header action was pressed. Panels only. |
+
+### Errors
+
+A call that fails rejects with an `Error` whose `code` says why:
+
+| `code` | meaning |
+| --- | --- |
+| `not-declared` | The URL, program, tab or secret is not in the manifest. |
+| `secret` | A `{{key}}` is not stored, not permitted for this plugin, or not bound to the request's host. |
+| `network` | The request could not be made or did not complete. |
+| `timeout` | No answer in time. |
+| `invalid` | The arguments were not what the method takes. |
+| `unavailable` | The plugin is turned off, or Helm is shutting down. |
+| `service` | The service is not running and could not be started. |
+| `not-found` | A program `exec` names is not on this computer. |
+
+A call cancelled through an `AbortSignal` rejects with a `DOMException` named
+`AbortError`, as `fetch` does.
+
+```js
+try {
+  await helm.exec('git', ['status'])
+} catch (error) {
+  if (error.code === 'not-found') showInstallHint()
+  else throw error
+}
+```
+
+## Network
+
+A plugin page has no network of its own: its Content-Security-Policy says
+`connect-src 'none'`, so `fetch`, `XMLHttpRequest`, `WebSocket` and
+`EventSource` all fail. `helm.fetch` is the way out, and it reaches only the
+origins in `network`:
+
+```json
+"network": ["https://api.github.com", "https://*.example.com", "http://127.0.0.1:8080"]
+```
+
+An origin is a scheme, a host and an optional port, with no path. `*.` in
+front of a domain means every subdomain of it, and not the domain itself.
+
+```js
+const response = await helm.fetch('https://api.github.com/user', {
+  headers: { authorization: 'Bearer {{github-token}}' }
+})
+const user = await response.json()
+```
+
+It takes what `fetch` takes and returns a `Response`. What differs:
+
+- **Redirects** are followed by Helm one hop at a time, and every hop is
+  checked against `network` again. A redirect to an origin the manifest does
+  not list fails with `not-declared`. A redirect to another origin drops
+  `Authorization`, `Cookie` and `Proxy-Authorization`. `redirect: 'manual'`
+  returns the redirect itself, with its status and headers, and
+  `redirect: 'error'` fails on one.
+- **No cookies** are sent or kept, and nothing is cached.
+- **Limits**: a request body of 16 MB, a response of 32 MB, 20 redirects, two
+  minutes for the whole request.
+- **Certificates**: a self-signed certificate is accepted on loopback
+  (`127.0.0.1`, `localhost`, `::1`) only.
+
+### The plugin's own service
+
+`service:/path` is a request to the plugin's [service](#services), on the port
+Helm gave it, with its token. It needs no `network` entry:
+
+```js
+const health = await (await helm.fetch('service:/health')).json()
+```
+
+## Secrets
+
+A secret is a value - a token, an API key - the user stores in Helm, encrypted
+on their computer. A plugin declares the keys it uses and writes them as
+`{{key}}`; Helm puts the value in on the way out. **The page never sees the
+value**, so a page that renders untrusted content cannot leak it.
+
+```json
+"secrets": ["github-token"]
+```
+
+`{{key}}` is replaced in:
+
+- a request URL's path and query (never its scheme, host or port),
+- a request header's value (never its name; a value with a line break is
+  refused),
+- a request body that is text: written as a JSON string's contents for
+  `application/json`, form-encoded for `application/x-www-form-urlencoded`,
+  and as it is for any other text,
+- the environment of a program or the service, in the manifest's `env`.
+
+Each stored secret is bound to the hosts it may be sent to and the plugins
+that may use it, and the user chooses both. A request that would send a secret
+anywhere else fails with `secret` before it is sent. A URL a server supplies -
+a redirect's `Location` - is never searched for `{{key}}`, so a server cannot
+ask for a secret by name. Requests to the plugin's own service may not carry
+secrets; the service gets them through its environment.
+
+When a secret is missing, ask for it:
+
+```js
+if ((await helm.secrets.state('github-token')) === 'missing') {
+  await helm.secrets.request('github-token') // Helm's dialog, scoped to this plugin and its hosts
+}
+```
+
+`missing` also covers a secret that is stored but not permitted for this
+plugin: another plugin's secrets are not the page's business. If the computer
+cannot encrypt, Helm stores no secrets at all.
+
+## Programs
+
+```json
+"exec": {
+  "git": "git",
+  "lint": { "command": "tools/lint.cmd", "args": ["--json"], "env": { "API_TOKEN": "{{ci-token}}" } }
+}
+```
+
+```js
+const { exitCode, stdout, stderr, timedOut } = await helm.exec('git', ['log', '-1', '--format=%s'])
+```
+
+- A program is a name looked up on `PATH`, a path with a slash relative to the
+  plugin folder, or an absolute path. The page names the program by its key in
+  `exec`, never by a path.
+- There is **no shell**. Arguments go to the program as an array, so text a
+  user typed is an argument, never a command. A `.cmd` or `.bat` file runs
+  through `cmd.exe` with its arguments quoted for it.
+- The program runs in the plugin folder, with the user's environment (less
+  Helm's own internals) and the manifest's `env`.
+- `options`: `stdin` (a string written and closed), `timeoutMs` (default 60
+  seconds, at most 10 minutes). A program that times out is stopped with
+  everything it started, and resolves with `timedOut: true`.
+- A non-zero exit is an answer, not an error. Output is limited to 16 MB per
+  stream, and a plugin may have 8 programs running at once.
+
+A plugin that declares programs or a service is marked in Settings as one that
+**runs programs on this computer**: what it runs runs with the user's rights.
+
+## Services
+
+One long-running process, started and stopped by Helm:
+
+```json
+"service": { "node": "service/main.mjs", "start": "demand" }
+```
+
+- `node` is a script in the plugin folder, run by the Node inside Helm - the
+  user needs no Node install. `command` is any program instead. Each takes
+  `args` and `env`.
+- It is given `HELM_SERVICE_PORT` to listen on, on `127.0.0.1`,
+  `HELM_SERVICE_TOKEN`, and `HELM_PLUGIN_ID`. Every request from Helm carries
+  the token as the `Helm-Service-Token` header; answer anything without it with
+  401.
+- `start: "demand"` (the default) starts it on the first `service:` request;
+  `"enable"` starts it with the plugin. It has 20 seconds to start listening.
+- It is restarted after a crash, after 1 second and then twice as long each
+  time up to 30 seconds. Five crashes inside a minute and Helm stops trying
+  until the plugin is reloaded.
+- It is stopped, with everything it started, when the plugin is turned off,
+  reloaded or removed, and when Helm quits.
+
+```js
+// service/main.mjs
+import { createServer } from 'node:http'
+
+createServer((req, res) => {
+  if (req.headers['helm-service-token'] !== process.env.HELM_SERVICE_TOKEN) {
+    res.writeHead(401).end()
+    return
+  }
+  res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true }))
+}).listen(Number(process.env.HELM_SERVICE_PORT), '127.0.0.1')
+```
+
+Its output goes to the plugin's log in Settings.
+
+## Theme and styling
+
+Helm injects its primitives stylesheet at the top of every page's `<head>`,
+before the plugin's own styles, and writes the theme onto `<html>`:
+
+- `--helm-<token>` for each of the theme's colours: `bg`, `surface`,
+  `surface-raised`, `surface-sunken`, `hover`, `active`, `border`,
+  `border-strong`, `fg`, `fg-muted`, `fg-subtle`, `accent`, `accent-fg`,
+  `accent-soft`, `accent-soft-hover`, `accent-text`, `success`, `warn`,
+  `danger`;
+- `--helm-radius` (the corner setting) and `--helm-radius-well` (one pixel
+  rounder, for controls);
+- `--helm-row-y` and `--helm-line`, which follow the density setting, and
+  `data-density="comfortable|compact"`;
+- `--helm-font-sans` and `--helm-font-mono`;
+- `data-theme="dark|light"`, a `dark` class for dark themes, and
+  `color-scheme`, so native controls match.
+
+All of it changes in place when the user changes the theme, with no reload;
+the `theme` event follows. A page sits inside one of Helm's panels, and its
+`body` is already the panel's surface.
+
+The primitives, so a plugin looks like the rest of Helm without copying it:
+
+| class | what it is |
+| --- | --- |
+| `helm-button` | A button. `data-variant="primary"` (outlined in the accent), `"ghost"`, `"danger"`. |
+| `helm-icon-button` | A 24px icon button. `aria-pressed="true"` for a toggled one. |
+| `helm-input`, `helm-select`, `helm-textarea` | Fields in Helm's sunken well. `aria-invalid="true"` marks one wrong. |
+| `helm-list`, `helm-row` | A list and its rows. `aria-selected="true"` or `aria-current` marks the chosen row. |
+| `helm-chip` | A borderless count or status, in a tone: `data-tone="accent|success|warn|danger"`. |
+| `helm-state` | The one outlined pill: a single word that is a thing's whole status. Takes `data-tone`. |
+| `helm-dot` | A 6px dot in a tone. |
+| `helm-tag` | A hairline pill; `data-tone="accent"` for a kind. |
+| `helm-bar` | A row along the top of a page, with a hairline under it. |
+| `helm-rule` | A divider that fades at its ends. |
+| `helm-caps` | The small capitals label over a section. |
+| `helm-meta` | A row's second line, a hint, a time. |
+| `helm-mono` | Machine data: a path, a hash, a size. |
+| `helm-empty` | An empty state, with `helm-empty-icon`, `helm-empty-title`, `helm-empty-text` and `helm-empty-actions` inside. |
+
+The primitives are in a CSS layer named `helm`, so **any unlayered CSS in the
+plugin wins over them**, whatever its specificity. For Tailwind, the layer
+order is declared as `theme, base, helm, components, utilities`: Tailwind's
+reset does not undo the primitives, and its utilities override them, so
+`class="helm-button px-4"` gets the padding.
+
+## React
+
+`@helm/plugin-sdk/react` has hooks over the bridge:
+
+```tsx
+import { useHelmEvent, useHelmSettings, useHelmTheme, useHelmVisible, useSecret } from '@helm/plugin-sdk/react'
+
+function Panel() {
+  const settings = useHelmSettings() // null until read, then kept current
+  const visible = useHelmVisible()
+  const theme = useHelmTheme()
+  const [token, requestToken] = useSecret('github-token') // 'ready' | 'missing' | null
+  useHelmEvent('action', ({ id }) => {
+    if (id === 'refresh') reload()
+  })
+  if (token === 'missing') return <button className="helm-button" onClick={() => void requestToken()}>Add token</button>
+  // ...
+}
+```
+
+React is an optional peer dependency; nothing else in the SDK needs it.
+
+## TypeScript
+
+```ts
+import type { HelmBridge, HelmContext, PluginManifest } from '@helm/plugin-sdk'
+```
+
+and, once in the project (a `.d.ts`, or `types` in `tsconfig.json`):
+
+```ts
+/// <reference types="@helm/plugin-sdk/global" />
+```
+
+which types `window.helm` and the global `helm`. `@helm/plugin-sdk/manifest`
+is the validator itself, for a build that wants to check the manifest.
+
+## Keyboard
+
+Keys pressed in a plugin page go to that page. So that Helm's shortcuts still
+work from inside a plugin - Ctrl+N, Ctrl+P, Ctrl+Tab and the rest - the bridge
+passes on a key with Ctrl, Alt or the Windows key held **after the page's own
+handlers have run, unless one of them called `preventDefault()`**. A page that
+binds a shortcut of its own calls `preventDefault()` and keeps it.
+
+The page's own editing keys are never passed on: Ctrl+A, C, V, X, Y and Z, and
+AltGr combinations, which many keyboards type characters with.
+
+## Errors and crashes
+
+- **The plugin will not load**: Settings > Plugins lists it with the reason -
+  a manifest problem, an `apiVersion` this Helm does not speak, a page that is
+  missing because the plugin is not built. Its surfaces do not appear.
+- **A page does not start** (it is missing, or is not a page Helm served):
+  its panel or tab shows that, in its own place, with **Reload**.
+- **A page crashes**: every surface of the plugin that shared its process
+  shows that it stopped, with **Reload** and a link to the plugin's Settings.
+  Helm and other plugins are unaffected.
+- The plugin's page in Settings has its **log** - the last 500 lines its
+  programs and service printed, and what Helm noted about it - and the memory
+  and CPU its processes are using.
+
+## What a plugin cannot do
+
+- **Reach the network directly.** Only `helm.fetch`, only to `network`.
+- **Run code it did not ship.** Pages may load scripts, styles, images, fonts
+  and workers from their own origin only. No inline scripts, no `eval`, no
+  remote scripts.
+- **Frame anything.** A page cannot contain another frame, and cannot navigate
+  off its own origin.
+- **Open windows or dialogs.** No popups, no `alert`, `confirm` or `prompt`,
+  no downloads. Writing text to the clipboard is the one browser permission a
+  page has.
+- **Post notifications**, or act in Claude Code sessions: plugins have no
+  agent tools.
+- **See a secret's value**, or another plugin's anything.

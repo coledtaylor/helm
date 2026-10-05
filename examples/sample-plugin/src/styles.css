@@ -1,90 +1,66 @@
 /*
- * Placeholder styling. In the finished design Helm serves its theme tokens and
- * a primitives stylesheet to every plugin page; until then this follows the
- * light or dark preference Helm sets, and leaves the background to the island
- * the frame sits in.
+ * The sample's own layout. Colours, type, controls and rows are Helm's: its
+ * primitives stylesheet is on every plugin page before this one, and its
+ * theme is on <html> as --helm-* variables, kept current by Helm.
  */
-:root {
-  color-scheme: light dark;
-  font: 12.5px/1.5 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
-  color: light-dark(#23252f, #d9dbe6);
-}
 
-body {
-  margin: 0;
-  background: transparent;
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
 }
 
 .page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 12px 14px;
+  gap: 12px;
+  max-width: 720px;
+  padding: 20px 24px;
 }
 
-.lede {
+.pad {
   margin: 0;
-  color: light-dark(#5b5f70, #9a9eb0);
+  padding: 8px 12px;
 }
 
 h1 {
   margin: 0;
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 500;
 }
 
-h2 {
-  margin: 0 0 6px;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: light-dark(#5b5f70, #9a9eb0);
-}
-
-button {
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid light-dark(#d4d7e2, #34374a);
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-button:hover {
-  background: light-dark(#e6e8f0, #24263a);
-}
-
-.probe {
-  padding-top: 12px;
-  border-top: 1px solid light-dark(#d4d7e2, #34374a);
-}
-
-dl {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 2px 12px;
-  margin: 0 0 10px;
-}
-
-dt {
-  color: light-dark(#5b5f70, #9a9eb0);
-}
-
-dd {
+p {
   margin: 0;
-  font-family: 'Cascadia Mono', Consolas, monospace;
 }
 
 .row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
+  align-items: center;
 }
 
-.hint {
-  margin: 10px 0 0;
-  color: light-dark(#5b5f70, #9a9eb0);
+.grow {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.output {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--helm-border);
+  border-radius: var(--helm-radius);
+  background: var(--helm-surface-sunken);
+  white-space: pre-wrap;
+}
+
+.error {
+  color: var(--helm-danger);
 }

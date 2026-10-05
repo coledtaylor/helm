@@ -1,13 +1,14 @@
 {
   "name": "@helm/sample-plugin",
   "version": "0.0.1",
-  "description": "A generic Helm plugin: a rail icon, a sidebar panel and a tab. The shape every plugin takes.",
+  "description": "Items from a small API in a panel, a tab and the status bar: every part a Helm plugin can have, and the plugin its tests drive.",
   "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "vite build",
     "watch": "vite build --watch",
+    "serve": "node server.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

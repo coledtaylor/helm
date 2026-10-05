@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from 'node:fs'
 import { isAbsolute, join, relative, sep } from 'node:path'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { app, type BrowserWindow, type WebContents } from 'electron'
 import {
@@ -102,6 +102,8 @@ export interface PluginHost {
   /** A theme or shape change, for every Helm page that frames plugins. */
   pushTheme(theme: HelmTheme): void
   served(id: string): ServedPlugin | null
+  /** Whether a web contents is one of the Helm pages that frame plugins: the window, or the background host. */
+  framesPlugins(contentsId: number): boolean
   runtime: PluginRuntime
   shutdown(): void
 }
@@ -129,6 +131,8 @@ interface Entry {
   background: { state: PluginBackgroundState; error: string | null }
   watcher: FSWatcher | null
   reloadTimer: NodeJS.Timeout | null
+  /** What the watched files were at the last read; null when there were too many to say. */
+  fingerprint: string | null
   log: PluginLogLine[]
   running: number
 }
@@ -298,6 +302,7 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
     const dir = entry.load.ok ? entry.load.plugin.dir : entry.folder.path
     if (!existsSync(dir)) return
     const relevant = relevantPaths(entry.load)
+    entry.fingerprint = fingerprint(dir, relevant)
     try {
       entry.watcher = watch(dir, { recursive: true }, (_event, name) => {
         if (name === null) return
@@ -307,6 +312,12 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
         entry.reloadTimer = setTimeout(() => {
           entry.reloadTimer = null
           if (!entries.includes(entry) || !entry.folder.enabled) return
+          // Windows reports a file being *read* as a change - its last-access
+          // time moved - so a service starting or a page loading would reload
+          // the plugin under itself. A change is a file that came, went, or
+          // has another size or modification time.
+          const now = fingerprint(dir, relevant)
+          if (now !== null && now === entry.fingerprint) return
           note(entry, `reloaded: ${rel.join('/')} changed`)
           read(entry)
           changed()
@@ -559,20 +570,19 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
         entries.push(entry)
         read(entry)
       }
-      syncBackground()
+      // A turn later, not now: `start` runs before the window exists, and the
+      // background host is a window too. Opened first, it would be the app's
+      // first window - the one the taskbar, a driver and a test all reach for.
+      setImmediate(() => {
+        if (!stopped) syncBackground()
+      })
     },
 
     list,
 
     add(path) {
       if (!isAbsolute(path)) return { path, error: 'Choose a folder.', plugins: list() }
-      let isFolder = false
-      try {
-        isFolder = statSync(path).isDirectory()
-      } catch {
-        isFolder = false
-      }
-      if (!isFolder) return { path, error: `${path} is not a folder.`, plugins: list() }
+      if (!isDirectory(path)) return { path, error: `${path} is not a folder.`, plugins: list() }
       if (!existsSync(join(path, MANIFEST_FILE))) {
         return {
           path,
@@ -697,6 +707,10 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
       if (entry.background.state === 'stopped') return
       if (state === 'crashed' && entry.background.state !== 'crashed') {
         note(entry, `background page stopped${error === null ? '' : `: ${error}`}`)
+        // What it painted is what a page that is no longer running said. The
+        // status bar and the rail say nothing rather than something stale.
+        entry.status = null
+        entry.badge = null
       }
       entry.background = { state, error: state === 'crashed' ? (error ?? 'it stopped responding') : null }
       changed()
@@ -773,6 +787,12 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
       emitAll('plugins:theme', theme)
     },
 
+    framesPlugins(contentsId) {
+      const win = options.window()
+      if (win !== null && !win.isDestroyed() && win.webContents.id === contentsId) return true
+      return background.contents()?.id === contentsId
+    },
+
     served(id) {
       const entry = byId(id)
       const plugin = entry === null ? null : live(entry)
@@ -803,6 +823,14 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
   }
 }
 
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 function blankEntry(folder: PluginFolder): Entry {
   return {
     folder,
@@ -814,9 +842,50 @@ function blankEntry(folder: PluginFolder): Entry {
     background: { state: 'stopped', error: null },
     watcher: null,
     reloadTimer: null,
+    fingerprint: null,
     log: [],
     running: 0
   }
+}
+
+/** Past this many files the folder is not fingerprinted, and every change reloads. */
+const FINGERPRINT_FILES_MAX = 5000
+
+/**
+ * The watched files' names, sizes and modification times, as one string: two
+ * readings that are equal saw the same files. Junctions and links are named but
+ * not followed. Null when there were too many files to be worth reading.
+ */
+function fingerprint(dir: string, relevant: (rel: readonly string[]) => boolean): string | null {
+  const lines: string[] = []
+  const walk = (rel: string[]): boolean => {
+    let names: string[]
+    try {
+      names = readdirSync(join(dir, ...rel))
+    } catch {
+      return true
+    }
+    for (const name of names) {
+      const next = [...rel, name]
+      if (name === 'node_modules' || name === '.git') continue
+      if (rel.length === 0 && !relevant(next)) continue
+      let stat
+      try {
+        stat = lstatSync(join(dir, ...next))
+      } catch {
+        continue
+      }
+      if (stat.isDirectory() && !stat.isSymbolicLink()) {
+        if (!walk(next)) return false
+        continue
+      }
+      lines.push(`${next.join('/')}\t${String(stat.size)}\t${String(stat.mtimeMs)}`)
+      if (lines.length > FINGERPRINT_FILES_MAX) return false
+    }
+    return true
+  }
+  if (!walk([])) return null
+  return lines.sort().join('\n')
 }
 
 /** Which changed paths in a plugin's folder are worth a reload. See `watchFolder`. */

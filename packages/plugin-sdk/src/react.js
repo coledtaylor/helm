@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 
 /** @returns {import('./types').HelmBridge} */
 function bridge() {
-  const helm = /** @type {{ helm?: import('./types').HelmBridge }} */ (/** @type {unknown} */ (window)).helm
+  const helm = /** @type {{ helm?: import('./types').HelmBridge }} */ (/** @type {unknown} */ (globalThis)).helm
   if (helm === undefined) throw new Error('window.helm is missing: this page is not being served by Helm')
   return helm
 }

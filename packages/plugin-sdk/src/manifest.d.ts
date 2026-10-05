@@ -8,6 +8,26 @@ import type {
 
 /** The bridge versions this Helm speaks. */
 export const SUPPORTED_API_VERSIONS: readonly number[]
+/** Every top-level field a manifest may have. Anything else is a warning. */
+export const MANIFEST_FIELDS: readonly string[]
+/** How many of each list or map a manifest may hold. */
+export const MANIFEST_LIMITS: Readonly<{
+  panels: number
+  tabs: number
+  actions: number
+  commands: number
+  settings: number
+  network: number
+  secrets: number
+  exec: number
+  args: number
+  env: number
+  options: number
+}>
+export const SETTING_TYPES: readonly SettingSpec['type'][]
+export const SERVICE_START_MODES: readonly ('enable' | 'demand')[]
+/** A `network` entry's shape. No flags, so the schema carries the same source. */
+export const ORIGIN_PATTERN: RegExp
 export const ID_PATTERN: RegExp
 export const NAME_PATTERN: RegExp
 export const SECRET_KEY_PATTERN: RegExp

@@ -34,6 +34,13 @@ export const SETTING_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/
 /** An environment variable's name. */
 export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 
+/**
+ * A `network` entry: http or https, an optional `*.` in front of the host, an
+ * optional port, an optional trailing slash and nothing else. No flags, so the
+ * schema can carry the same source: JSON Schema patterns have none.
+ */
+export const ORIGIN_PATTERN = /^([Hh][Tt][Tt][Pp][Ss]?):\/\/(\*\.)?([^/?#@\s]+?)(?::(\d{1,5}))?\/?$/
+
 /** `{{key}}`, wherever a secret may be referenced. */
 export const PLACEHOLDER_PATTERN = /\{\{([A-Za-z0-9][A-Za-z0-9_.-]{0,63})\}\}/g
 
@@ -58,9 +65,18 @@ export const PANEL_ACTION_ICONS = Object.freeze([
   'eye'
 ])
 
-const SETTING_TYPES = Object.freeze(['text', 'number', 'toggle', 'select', 'secret'])
+/** @type {readonly import('./types').SettingSpec['type'][]} */
+export const SETTING_TYPES = Object.freeze(['text', 'number', 'toggle', 'select', 'secret'])
 
-const LIMITS = Object.freeze({
+/**
+ * When a service starts: with the plugin, or on its first `service:` request.
+ *
+ * @type {readonly ('enable' | 'demand')[]}
+ */
+export const SERVICE_START_MODES = Object.freeze(['enable', 'demand'])
+
+/** How many of each list or map a manifest may hold. */
+export const MANIFEST_LIMITS = Object.freeze({
   panels: 20,
   tabs: 50,
   actions: 5,
@@ -74,7 +90,10 @@ const LIMITS = Object.freeze({
   options: 100
 })
 
-const KNOWN_FIELDS = new Set([
+const LIMITS = MANIFEST_LIMITS
+
+/** Every top-level field a manifest may have. Anything else is a warning. */
+export const MANIFEST_FIELDS = Object.freeze([
   '$schema',
   'apiVersion',
   'id',
@@ -93,6 +112,7 @@ const KNOWN_FIELDS = new Set([
   'exec',
   'service'
 ])
+const KNOWN_FIELDS = new Set(MANIFEST_FIELDS)
 
 /**
  * Every `{{key}}` in a string, in order, repeats kept.
@@ -115,7 +135,7 @@ export function placeholders(text) {
  * @returns {import('./manifest').OriginPattern | null}
  */
 export function parseOrigin(entry) {
-  const match = /^(https?):\/\/(\*\.)?([^/?#@\s]+?)(?::(\d{1,5}))?\/?$/i.exec(entry.trim())
+  const match = ORIGIN_PATTERN.exec(entry.trim())
   if (match === null) return null
   const scheme = /** @type {'http' | 'https'} */ (/** @type {string} */ (match[1]).toLowerCase())
   const wildcard = match[2] !== undefined
@@ -450,9 +470,10 @@ export function validateManifest(value) {
       const args = stringList(rawService['args'], 'service.args', fail)
       const env = environment(rawService['env'], 'service.env', fail, declaredSecret)
       const start = rawService['start'] ?? 'demand'
-      if (start !== 'enable' && start !== 'demand') fail('service.start must be "enable" or "demand"')
-      if (command !== null && args !== null && env !== null && hasCommand !== hasNode && (start === 'enable' || start === 'demand')) {
-        service = { kind: hasNode ? 'node' : 'command', command, args, env, start }
+      const startMode = SERVICE_START_MODES.find((mode) => mode === start)
+      if (startMode === undefined) fail(`service.start must be ${SERVICE_START_MODES.map((mode) => `"${mode}"`).join(' or ')}`)
+      if (command !== null && args !== null && env !== null && hasCommand !== hasNode && startMode !== undefined) {
+        service = { kind: hasNode ? 'node' : 'command', command, args, env, start: startMode }
       }
     }
   }
@@ -682,7 +703,7 @@ function readSetting(value, at, secrets, fail) {
   const label = text(value['label'], `${at}.label`, 80, fail)
   const description = optionalText(value['description'], `${at}.description`, 300, fail)
   const type = value['type']
-  if (typeof type !== 'string' || !SETTING_TYPES.includes(type)) {
+  if (typeof type !== 'string' || !SETTING_TYPES.includes(/** @type {never} */ (type))) {
     fail(`${at}.type must be one of ${SETTING_TYPES.join(', ')}`)
     return null
   }

@@ -21,7 +21,8 @@ export interface HelloMessage {
 export interface ConnectMessage {
   type: typeof CONNECT
   context: HelmContext
-  theme: HelmTheme
+  /** Null while the relay has not read one yet; the page keeps the one it booted with. */
+  theme: HelmTheme | null
   visible: boolean
 }
 

@@ -34,6 +34,9 @@ import {
   toSaved,
   withProjectPinned,
   withRepoIgnored,
+  isPluginRailId,
+  pluginRailId,
+  retitleTab,
   RAIL_DESTINATIONS,
   type EditorHighlight,
   type FileRef,
@@ -45,7 +48,7 @@ import {
   type Profile,
   type ProfileDraft,
   type Project,
-  type RailDestination,
+  type RailItemId,
   type RestoreOffer,
   type SavedPaneLayout,
   type SessionRecord
@@ -55,6 +58,24 @@ import {
   BrowserPane,
   cn,
   CodeIcon,
+  CommandPalette,
+  EyeIcon,
+  ExternalIcon,
+  LinkIcon,
+  ListIcon,
+  PencilIcon,
+  PinIcon,
+  PluginIcon,
+  PluginPage,
+  PluginsPage,
+  SearchIcon,
+  SecretDialog,
+  SecretsPage,
+  TrashIcon,
+  pluginSection,
+  type PaletteCommand,
+  type SecretPluginChoice,
+  type StatusPluginItem,
   ConfigConsole,
   ConfigDeleteDialog,
   ConfigDeletedNotice,
@@ -134,7 +155,8 @@ import {
   type TreeSession
 } from '@helm/ui'
 import { sidebarFor, type SidebarView } from './sidebarFor'
-import type { AppMode, SessionConfirmRequest } from '../../../shared/ipc'
+import type { PanelActionIcon } from '@helm/plugin-sdk'
+import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
 import { helm } from './bridge'
 import { ProjectColumn } from './ProjectColumn'
 import { PullRequestTab } from './PullRequestTab'
@@ -163,8 +185,16 @@ import { useShells } from './useShells'
 import { useUpdate } from './useUpdate'
 import { useUsage } from './useUsage'
 import { usePlugins } from './usePlugins'
-import { PluginFrame, PluginIcon } from './PluginFrame'
-import { disposePluginFrame, pluginOf } from './pluginFrames'
+import { PluginFrame } from './PluginFrame'
+import {
+  disposePluginFrame,
+  disposePluginFrames,
+  emitToPluginFrame,
+  queueToPluginFrame,
+  setPluginFrameHooks
+} from './pluginFrames'
+import { usePluginSettings } from './usePluginSettings'
+import type { SurfaceSpec } from '../plugins/relay'
 
 const KIND_ICON = {
   harness: HarnessIcon,
@@ -241,6 +271,38 @@ function folderOf(ref: PaneRef | null, sessionsById: ReadonlyMap<number, Session
   return session === undefined ? null : (session.projectPath ?? session.cwd)
 }
 
+/** A panel header action's glyph, by the name the manifest gives it. */
+const PANEL_ACTION_ICON: Record<PanelActionIcon, (props: { width: number; height: number }) => JSX.Element> = {
+  refresh: RefreshIcon,
+  plus: PlusIcon,
+  search: SearchIcon,
+  list: ListIcon,
+  settings: GearIcon,
+  external: ExternalIcon,
+  pin: PinIcon,
+  edit: PencilIcon,
+  trash: TrashIcon,
+  link: LinkIcon,
+  eye: EyeIcon
+}
+
+/** The surface a plugin's rail icon opens: its rail panel, as the relay knows it. */
+function railPanelSpec(id: string, plugin: PluginInfo): SurfaceSpec | null {
+  if (plugin.rail === null) return null
+  const panel = plugin.panels[plugin.rail.panel]
+  if (panel === undefined) return null
+  return {
+    key: `panel:${id}/${plugin.rail.panel}`,
+    plugin: id,
+    revision: plugin.revision,
+    url: panel.url,
+    surface: 'panel',
+    name: plugin.rail.panel,
+    params: {},
+    title: panel.title
+  }
+}
+
 /** The session id inside a `session:12` tab id. */
 const sessionIdOf = (id: string): number => Number(id.slice('session:'.length))
 
@@ -306,7 +368,13 @@ export function App(): JSX.Element {
   /** Where each file tab's caret is, so VS Code opens at the same line. */
   const fileCarets = useRef(new Map<string, number>())
   const [sidebarView, setSidebarView] = useState<SidebarView>('sessions')
-  const plugins = usePlugins()
+  const pluginState = usePlugins()
+  /** The plugins that are on, by id: only these have tabs, panels and rail icons. */
+  const plugins = pluginState.live
+  /** Plugins' secret requests, answered one dialog at a time, in order. */
+  const [secretAsks, setSecretAsks] = useState<Extract<PluginUiRequest, { kind: 'secret' }>[]>([])
+  /** Ctrl+Shift+P. */
+  const [paletteOpen, setPaletteOpen] = useState(false)
   /** The rail's current view, pressed again, puts the sidebar away. */
   const [sidebarHidden, setSidebarHidden] = useState(false)
   /** The last tab click's row, for the Sessions tree to bring into view. */
@@ -493,10 +561,14 @@ export function App(): JSX.Element {
       if (ref.kind === 'session') return sessionsById.has(ref.id)
       // Answered, it has nothing left to show.
       if (ref.kind === 'restore') return restoreOffer !== null
-      if (ref.kind === 'plugin') return plugins.get(ref.plugin)?.tabs[ref.tab] !== undefined
+      // Kept while the list is still being read, so a restored tab is not
+      // dropped before its plugin has had a chance to load.
+      if (ref.kind === 'plugin') {
+        return pluginState.list === null || plugins.get(ref.plugin)?.tabs[ref.tab] !== undefined
+      }
       return true
     },
-    [discovery, projectsByPath, browserViews, sessionsById, restoreOffer, plugins]
+    [discovery, projectsByPath, browserViews, sessionsById, restoreOffer, plugins, pluginState.list]
   )
 
   /**
@@ -572,6 +644,13 @@ export function App(): JSX.Element {
     [open, shownGroups]
   )
 
+  /** The plugin whose Settings page is chosen, and whether that page is on screen to be kept current. */
+  const settingsPlugin = settingsSection.startsWith('plugin:')
+    ? ((pluginState.list ?? []).find((plugin) => pluginSection(plugin.path) === settingsSection) ?? null)
+    : null
+  const settingsOnScreen = visible.some((ref) => ref.kind === 'settings')
+  const pluginSettings = usePluginSettings(settingsOnScreen && settingsPlugin !== null ? settingsPlugin.path : null)
+
   /**
    * Brings a tab forward from outside its pane - the tree, a notification, the
    * status bar - and gives the window back if that tab is in a pane the
@@ -603,22 +682,63 @@ export function App(): JSX.Element {
   )
 
   /**
-   * What a plugin page asks of Helm. The sender is known by its origin, which
-   * the browser sets, and a plugin can only open the tabs its own manifest
-   * declares.
+   * What the window does with what a plugin page says to it: a key the page
+   * did not take is pressed again here, on its frame, so Helm's shortcuts work
+   * from inside a plugin as from anywhere else; a tab's title goes on its tab.
+   * Set once - the relay outlives renders, and `commit` is stable.
    */
   useEffect(() => {
-    const onMessage = (event: MessageEvent): void => {
-      const id = pluginOf(event)
-      if (id === null) return
-      const data = event.data as { type?: unknown; tab?: unknown }
-      if (data.type === 'helm:tabs.open' && typeof data.tab === 'string') {
-        if (plugins.get(id)?.tabs[data.tab] !== undefined) openPane({ kind: 'plugin', plugin: id, tab: data.tab })
+    setPluginFrameHooks({
+      key: (_spec, element, key) => {
+        element.dispatchEvent(new KeyboardEvent('keydown', { ...key, bubbles: true, cancelable: true }))
+      },
+      title: (spec, title) => {
+        if (spec.surface === 'tab') commit((current) => retitleTab(current, spec.key, title))
       }
-    }
-    window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
-  }, [plugins, openPane])
+    })
+  }, [commit])
+
+  /**
+   * What a plugin asked main for that needs the window: a tab of its own
+   * opened, or a secret it is missing typed in. Main has checked that the tab
+   * and the key are ones the plugin declares.
+   */
+  useEffect(
+    () =>
+      helm.on('plugins:ui', (request) => {
+        if (request.kind === 'secret') {
+          setSecretAsks((current) => [...current, request])
+          return
+        }
+        const ref: PaneRef = {
+          kind: 'plugin',
+          plugin: request.plugin,
+          tab: request.tab,
+          params: request.params,
+          title: request.title
+        }
+        openPane(ref)
+        // Already open: the title it asked for this time is the one it shows.
+        if (request.title !== null) commit((current) => retitleTab(current, paneId(ref), request.title))
+      }),
+    [openPane, commit]
+  )
+
+  /**
+   * A plugin turned off or removed takes its pages with it, and a page from a
+   * revision the plugin has moved past ends. One on screen was already
+   * reloaded by its slot; this is for the ones parked off it.
+   */
+  useEffect(() => {
+    if (pluginState.list === null) return
+    disposePluginFrames((spec) => {
+      const plugin = plugins.get(spec.plugin)
+      if (plugin === undefined || spec.revision !== plugin.revision) return true
+      if (spec.surface === 'tab') return plugin.tabs[spec.name] === undefined
+      if (spec.surface === 'panel') return plugin.panels[spec.name] === undefined
+      return true
+    })
+  }, [plugins, pluginState.list])
 
   /**
    * The saved panes, written back whenever the arrangement changes.
@@ -1410,6 +1530,23 @@ export function App(): JSX.Element {
   }, [setupNeeded, openQuickOpen])
 
   /**
+   * Ctrl+Shift+P, the plugins' commands - in capture, as Ctrl+P is. Nothing in
+   * Claude Code or a shell binds it.
+   */
+  useEffect(() => {
+    if (setupNeeded) return undefined
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) return
+      if (event.key.toLowerCase() !== 'p') return
+      event.preventDefault()
+      event.stopPropagation()
+      if (!overlayOpen()) setPaletteOpen(true)
+    }
+    window.addEventListener('keydown', onKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
+  }, [setupNeeded])
+
+  /**
    * Ctrl+Tab cycles every tab in every pane on screen as one ring, and Ctrl+\
    * sends the front tab to the pane beside it. In capture so neither reaches a
    * focused terminal. Ctrl+Shift+Tab is not bound by Claude Code; Shift+Tab
@@ -1675,11 +1812,12 @@ export function App(): JSX.Element {
         const plugin = plugins.get(ref.plugin)
         const surface = plugin?.tabs[ref.tab]
         if (plugin === undefined || surface === undefined) return []
+        const title = ref.title ?? surface.title
         return [
           {
             id: paneId(ref),
-            title: surface.title,
-            hint: `${plugin.name} plugin`,
+            title: truncate(title, 30),
+            hint: `${title} - ${plugin.name}`,
             icon: <PluginIcon url={plugin.icon} size={13} />
           }
         ]
@@ -2039,7 +2177,57 @@ export function App(): JSX.Element {
     )
   }
 
-  const renderSettings = (): JSX.Element => (
+  /** Settings > Plugins, Secrets and each plugin's page; every other section is `SettingsPane`'s. */
+  const renderSettings = (): JSX.Element => {
+    if (settingsSection === 'secrets') {
+      return (
+        <SecretsPage
+          state={pluginSettings.secrets}
+          plugins={secretChoices}
+          onSave={pluginSettings.saveSecret}
+          onRemove={pluginSettings.removeSecret}
+        />
+      )
+    }
+    if (settingsPlugin !== null) {
+      const { path, id } = settingsPlugin
+      return (
+        <PluginPage
+          key={path}
+          plugin={settingsPlugin}
+          plugins={pluginState.list ?? []}
+          metrics={pluginSettings.metrics}
+          log={pluginSettings.log}
+          secrets={pluginSettings.secrets}
+          onSetEnabled={(enabled) => pluginSettings.setEnabled(path, enabled)}
+          onReload={() => pluginSettings.reload(path)}
+          ownSecrets={() => pluginSettings.ownSecrets(path)}
+          onRemove={(deleteSecrets) => {
+            pluginSettings.remove(path, deleteSecrets)
+            setSettingsSection('plugins')
+          }}
+          onSetSetting={(key, value) =>
+            id === null ? Promise.resolve('The plugin is not loaded.') : pluginSettings.setSetting(id, key, value)
+          }
+          onSaveSecret={pluginSettings.saveSecret}
+          onRemoveSecret={pluginSettings.removeSecret}
+        />
+      )
+    }
+    if (settingsSection === 'plugins' || settingsSection.startsWith('plugin:')) {
+      return (
+        <PluginsPage
+          plugins={pluginState.list}
+          addError={pluginSettings.addError}
+          onAdd={pluginSettings.add}
+          onOpen={(path) => setSettingsSection(pluginSection(path))}
+        />
+      )
+    }
+    return renderHelmSettings()
+  }
+
+  const renderHelmSettings = (): JSX.Element => (
     <SettingsPane
       section={settingsSection}
       status={setup.status}
@@ -2361,14 +2549,23 @@ export function App(): JSX.Element {
       case 'settings':
         return renderSettings()
       case 'plugin': {
-        const surface = plugins.get(ref.plugin)?.tabs[ref.tab]
-        if (surface === undefined) return null
+        const plugin = plugins.get(ref.plugin)
+        const surface = plugin?.tabs[ref.tab]
+        if (plugin === undefined || surface === undefined) return null
         return (
           <PluginFrame
-            frameKey={paneId(ref)}
-            plugin={ref.plugin}
-            url={surface.url}
-            title={surface.title}
+            spec={{
+              key: paneId(ref),
+              plugin: ref.plugin,
+              revision: plugin.revision,
+              url: surface.url,
+              surface: 'tab',
+              name: ref.tab,
+              params: ref.params,
+              title: ref.title ?? surface.title
+            }}
+            pluginName={plugin.name}
+            onOpenSettings={() => openSettings(pluginSection(plugin.path))}
             className="absolute inset-0"
           />
         )
@@ -2585,6 +2782,82 @@ export function App(): JSX.Element {
     setMaximized(null)
   }
 
+  /** A plugin's rail panel, brought up - never put away, as pressing its icon again would. */
+  const showPluginPanel = (id: string): void => {
+    setSidebarView(pluginRailId(id))
+    setSidebarHidden(false)
+    setMaximized(null)
+  }
+
+  /** The plugin panel the sidebar is showing, when it is showing one. */
+  const sidebarPanel = (() => {
+    if (!sidebarView.startsWith('plugin:')) return null
+    const id = sidebarView.slice('plugin:'.length)
+    const plugin = plugins.get(id)
+    const spec = plugin === undefined ? null : railPanelSpec(id, plugin)
+    if (plugin === undefined || spec === null) return null
+    return { spec, name: plugin.name, path: plugin.path, actions: plugin.panels[spec.name]?.actions ?? [] }
+  })()
+
+  /** Each plugin's status item; pressing one opens its panel, or its Settings page when it has none. */
+  const statusPlugins: StatusPluginItem[] = [...plugins.entries()].flatMap(([id, plugin]) =>
+    plugin.status === null
+      ? []
+      : [
+          {
+            id,
+            name: plugin.name,
+            text: plugin.status.text,
+            tone: plugin.status.tone ?? 'neutral',
+            tooltip: plugin.status.tooltip ?? null,
+            onSelect: () => (plugin.rail !== null ? showPluginPanel(id) : openSettings(pluginSection(plugin.path)))
+          }
+        ]
+  )
+
+  const paletteCommands: PaletteCommand[] = [...plugins.entries()].flatMap(([id, plugin]) =>
+    plugin.commands.map((command) => ({
+      key: `${id}/${command.id}`,
+      title: command.title,
+      source: plugin.name,
+      icon: <PluginIcon url={plugin.icon} size={13} />
+    }))
+  )
+
+  /**
+   * A command chosen in the palette. One with a tab opens it; one without is
+   * an event for the plugin's background page when it has one, and otherwise
+   * for its rail panel, which comes up to take it.
+   */
+  const runPluginCommand = (key: string): void => {
+    setPaletteOpen(false)
+    const slash = key.indexOf('/')
+    const id = key.slice(0, slash)
+    const plugin = plugins.get(id)
+    const command = plugin?.commands.find((candidate) => candidate.id === key.slice(slash + 1))
+    if (plugin === undefined || command === undefined) return
+    if (command.tab !== null) {
+      openPane({ kind: 'plugin', plugin: id, tab: command.tab, params: {}, title: null })
+      return
+    }
+    if (plugin.background !== null) {
+      void helm.invoke('plugins:command', { plugin: id, id: command.id })
+      return
+    }
+    const spec = railPanelSpec(id, plugin)
+    if (spec === null) return
+    showPluginPanel(id)
+    queueToPluginFrame(spec, 'command', { id: command.id })
+  }
+
+  const secretChoices: SecretPluginChoice[] = [...plugins.entries()].map(([id, plugin]) => ({
+    id,
+    name: plugin.name,
+    network: plugin.network,
+    secrets: plugin.secrets.map((entry) => entry.key)
+  }))
+  const secretAsk = secretAsks[0] ?? null
+
   const inFront = (...kinds: PaneRef['kind'][]): boolean =>
     front !== null && kinds.includes(front.kind)
   const page = (
@@ -2607,22 +2880,20 @@ export function App(): JSX.Element {
   const railHidden = settings?.railHidden ?? DEFAULT_SETTINGS.railHidden
   /** A tick in the rail's right-click menu: hidden, or back where it was. */
   const toggleRailItem = (id: string): void => {
-    const known = RAIL_DESTINATIONS.find((destination) => destination === id)
+    const known: RailItemId | undefined =
+      RAIL_DESTINATIONS.find((destination) => destination === id) ?? (isPluginRailId(id) ? id : undefined)
     if (known === undefined) return
     const hiding = !railHidden.includes(known)
-    const next: RailDestination[] = RAIL_DESTINATIONS.filter((destination) =>
-      destination === known ? hiding : railHidden.includes(destination)
-    )
-    writeSettings({ railHidden: next })
+    writeSettings({ railHidden: hiding ? [...railHidden, known] : railHidden.filter((item) => item !== known) })
     // Hiding the view the sidebar is showing puts the sidebar away with it.
     if (hiding && sidebarShown && sidebarView === known) setSidebarHidden(true)
   }
 
   // Plugins with a rail icon, in a group of their own under a rule: each opens
   // its panel in the sidebar, the way Sessions and Files do.
-  const pluginRailItems = [...plugins.values()].flatMap((plugin): RailItem[] => {
+  const pluginRailItems = [...plugins.entries()].flatMap(([id, plugin]): RailItem[] => {
     if (plugin.rail === null) return []
-    const view: SidebarView = `plugin:${plugin.id}`
+    const view = pluginRailId(id)
     return [
       {
         id: view,
@@ -2630,9 +2901,9 @@ export function App(): JSX.Element {
         icon: <PluginIcon url={plugin.icon} size={17} />,
         kind: 'view',
         current: sidebarShown && sidebarView === view,
-        hideable: false,
+        badge: plugin.badge,
         onSelect: () => toggleView(view),
-        hooks: { 'data-open-plugin': plugin.id }
+        hooks: { 'data-open-plugin': id }
       }
     ]
   })
@@ -2864,6 +3135,11 @@ export function App(): JSX.Element {
         <Sidebar title="Settings">
           <SettingsSections
             current={settingsSection}
+            plugins={(pluginState.list ?? []).map((plugin) => ({
+              path: plugin.path,
+              name: plugin.name,
+              state: !plugin.enabled ? 'off' : plugin.error !== null ? 'error' : 'on'
+            }))}
             onSelect={(section) => {
               setSettingsSection(section)
               openPane({ kind: 'settings' })
@@ -2910,26 +3186,36 @@ export function App(): JSX.Element {
           />
         </Sidebar>
       )}
-      {[...plugins.values()].map((plugin) => {
-        const panel = plugin.rail === null ? undefined : plugin.panels[plugin.rail.panel]
-        if (plugin.rail === null || panel === undefined) return null
-        return (
-          <div
-            key={plugin.id}
-            className={cn('flex h-full', sidebarView !== `plugin:${plugin.id}` && 'hidden')}
-          >
-            <Sidebar title={panel.title}>
-              <PluginFrame
-                frameKey={`panel:${plugin.id}/${plugin.rail.panel}`}
-                plugin={plugin.id}
-                url={panel.url}
-                title={panel.title}
-                className="relative min-h-0 flex-1"
-              />
-            </Sidebar>
-          </div>
-        )
-      })}
+      {sidebarPanel !== null && (
+        <Sidebar
+          title={sidebarPanel.spec.title}
+          actions={
+            sidebarPanel.actions.length === 0 ? undefined : (
+              <>
+                {sidebarPanel.actions.map((action) => {
+                  const Glyph = PANEL_ACTION_ICON[action.icon]
+                  return (
+                    <SidebarAction
+                      key={action.id}
+                      label={action.title}
+                      onClick={() => emitToPluginFrame(sidebarPanel.spec.key, 'action', { id: action.id })}
+                    >
+                      <Glyph width={13} height={13} />
+                    </SidebarAction>
+                  )
+                })}
+              </>
+            )
+          }
+        >
+          <PluginFrame
+            spec={sidebarPanel.spec}
+            pluginName={sidebarPanel.name}
+            onOpenSettings={() => openSettings(pluginSection(sidebarPanel.path))}
+            className="min-h-0 flex-1"
+          />
+        </Sidebar>
+      )}
     </>
   )
 
@@ -2990,6 +3276,7 @@ export function App(): JSX.Element {
           onUsageDisplayChange={launcher.setUsageDisplay}
           update={update}
           onOpenUpdate={(url) => void helmOpenExternal(url)}
+          plugins={statusPlugins}
         />
       }
     >
@@ -3033,6 +3320,28 @@ export function App(): JSX.Element {
               openFileAt(quickOpenRoot, joinRoot(quickOpenRoot, relPath), true, at)
             }}
             onDismiss={() => setQuickOpenRoot(null)}
+          />
+        )}
+        {paletteOpen && (
+          <CommandPalette
+            commands={paletteCommands}
+            onRun={runPluginCommand}
+            onDismiss={() => setPaletteOpen(false)}
+          />
+        )}
+        {secretAsk !== null && (
+          <SecretDialog
+            key={secretAsk.requestId}
+            existing={pluginSettings.secrets?.secrets.find((entry) => entry.key === secretAsk.key) ?? null}
+            presetKey={secretAsk.key}
+            requester={{ id: secretAsk.plugin, name: plugins.get(secretAsk.plugin)?.name ?? secretAsk.plugin }}
+            plugins={secretChoices}
+            available={pluginSettings.secrets?.available ?? true}
+            onSave={pluginSettings.saveSecret}
+            onClose={() => {
+              helm.send('plugins:answer', { requestId: secretAsk.requestId })
+              setSecretAsks((current) => current.slice(1))
+            }}
           />
         )}
         {newSession.open && (

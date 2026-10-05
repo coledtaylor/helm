@@ -22,7 +22,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         panel: `${src}/panels/main.html`,
-        detail: `${src}/tabs/detail.html`
+        item: `${src}/tabs/item.html`,
+        background: `${src}/background/index.html`
       }
     }
   }

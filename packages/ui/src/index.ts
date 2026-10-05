@@ -6,6 +6,22 @@ export {
   type BrowserPaneState
 } from './components/BrowserPane'
 export { Chip, type ChipProps, type ChipTone } from './components/Chip'
+export { EmptyState, type EmptyStateProps } from './components/EmptyState'
+export { CommandPalette, commandScore, type CommandPaletteProps, type PaletteCommand } from './components/CommandPalette'
+export { PluginIcon } from './components/PluginIcon'
+export {
+  PluginPage,
+  PluginsPage,
+  type PluginPageProps,
+  type PluginsPageProps
+} from './components/PluginSettings'
+export {
+  SecretDialog,
+  SecretsPage,
+  type SecretDialogProps,
+  type SecretPluginChoice,
+  type SecretsPageProps
+} from './components/SecretsSettings'
 export {
   ConsolePanel,
   type ConsoleEntry,
@@ -92,6 +108,8 @@ export {
 export {
   SETTINGS_SECTIONS,
   SettingsSections,
+  pluginSection,
+  type SettingsPluginLink,
   type SettingsSection,
   type SettingsSectionId,
   type SettingsSectionsProps
@@ -157,7 +175,7 @@ export {
 } from './components/SessionHistory'
 export { SessionsPane, type SessionsPaneProps } from './components/SessionsPane'
 export { Sidebar, SidebarAction, type SidebarProps } from './components/Sidebar'
-export { StatusBar, type StatusBarProps } from './components/StatusBar'
+export { StatusBar, type StatusBarProps, type StatusPluginItem } from './components/StatusBar'
 export { TabBar, type Tab, type TabBarProps, type TabIndicator } from './components/TabBar'
 export { UsageStatus, type UsageStatusProps } from './components/UsageStatus'
 export { TitleBar } from './components/TitleBar'

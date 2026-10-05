@@ -67,6 +67,7 @@ export * from './layout/panes'
  */
 export * from './plugins/tabs'
 export * from './plugins/theme'
+export type * from './plugins/info'
 
 /**
  * The Files view's ranking and its sentences about git, re-exported for the

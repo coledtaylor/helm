@@ -2,12 +2,64 @@
   "apiVersion": 1,
   "id": "sample",
   "name": "Sample",
+  "version": "1.0.0",
+  "description": "Items from a small API, in a panel, a tab and the status bar: every part a plugin can have, and the plugin Helm's tests drive.",
   "icon": "icon.svg",
   "rail": { "title": "Sample", "panel": "main" },
   "panels": {
-    "main": { "title": "Sample", "entry": "dist/panels/main.html" }
+    "main": {
+      "title": "Sample",
+      "entry": "dist/panels/main.html",
+      "actions": [
+        { "id": "add", "title": "New item", "icon": "plus" },
+        { "id": "refresh", "title": "Refresh", "icon": "refresh" }
+      ]
+    }
   },
   "tabs": {
-    "detail": { "title": "Sample detail", "entry": "dist/tabs/detail.html" }
-  }
+    "item": { "title": "Item", "entry": "dist/tabs/item.html" }
+  },
+  "background": "dist/background/index.html",
+  "commands": [
+    { "id": "refresh", "title": "Refresh items" },
+    { "id": "new", "title": "New item", "tab": "item" }
+  ],
+  "settings": [
+    {
+      "key": "server",
+      "type": "text",
+      "label": "Server",
+      "description": "Where the items come from. One of the origins under network.",
+      "default": "http://127.0.0.1:4790"
+    },
+    { "key": "limit", "type": "number", "label": "Items shown", "default": 20, "min": 1, "max": 100 },
+    { "key": "unreadOnly", "type": "toggle", "label": "Unread only", "default": false },
+    {
+      "key": "order",
+      "type": "select",
+      "label": "Order",
+      "options": [
+        { "value": "new", "label": "Newest first" },
+        { "value": "old", "label": "Oldest first" }
+      ],
+      "default": "new"
+    },
+    {
+      "key": "token",
+      "type": "secret",
+      "label": "Token",
+      "secret": "sample-token",
+      "description": "Sent to the server as a bearer token."
+    }
+  ],
+  "network": ["http://127.0.0.1:4790"],
+  "secrets": ["sample-token"],
+  "exec": {
+    "echo": {
+      "command": "node",
+      "args": ["programs/echo.mjs"],
+      "env": { "SAMPLE_TOKEN": "{{sample-token}}" }
+    }
+  },
+  "service": { "node": "service/main.mjs", "start": "demand" }
 }

@@ -18,6 +18,10 @@
       "types": "./src/manifest.d.ts",
       "default": "./src/manifest.js"
     },
+    "./folder": {
+      "types": "./src/folder.d.ts",
+      "default": "./src/folder.js"
+    },
     "./react": {
       "types": "./src/react.d.ts",
       "default": "./src/react.js"

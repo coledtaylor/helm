@@ -9,6 +9,7 @@ import {
   shell
 } from 'electron'
 import {
+  addPluginFolder,
   claudeHome,
   pluginThemeOf,
   readSessionRegistry,
@@ -17,7 +18,7 @@ import {
   type AppliedTheme,
   type AppSettings
 } from '@helm/core'
-import { join } from 'node:path'
+import { delimiter, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { emit, pushTheme, registerIpc } from './ipc'
@@ -45,6 +46,7 @@ import {
 import { PLUGIN_SCHEME } from '../shared/ipc'
 import { createPluginHost } from './plugins/host'
 import { registerPluginProtocol } from './plugins/protocol'
+import { guardPluginFrames, installPluginPermissions } from './plugins/guards'
 // The plugin runtime: served to every plugin page under `/__helm/`, so no
 // plugin carries a copy of its own (see `main/plugins/protocol.ts`).
 import pluginBridge from '../renderer/plugin-runtime/bridge-entry.ts?script'
@@ -200,7 +202,14 @@ app.on('web-contents-created', (_e, contents) => {
   contents.on('will-navigate', (event, url) => {
     if (!browserWillNavigate(contents.id, url)) event.preventDefault()
   })
+  // A plugin frame stays on its own origin, and only Helm's pages that frame
+  // plugins put one there (`plugins/guards.ts`). Read at navigation time, so
+  // the plugin host can be made after this is armed.
+  guardPluginFrames(contents, (id) => pluginFrameHosts(id))
 })
+
+/** Set once the plugin host exists; until then no web contents frames plugins. */
+let pluginFrameHosts: (contentsId: number) => boolean = () => false
 
 function createWindow(
   page: 'index' | 'spike',
@@ -387,6 +396,15 @@ function startApp(options: AppOptions = {}): void {
    * marked `start: "enable"` starts here, in the background.
    */
   let win: BrowserWindow | null = null
+  // `pnpm dev` starts from a fresh copy of the database every launch, so a
+  // plugin being worked on is registered from HELM_PLUGINS instead of being
+  // added again in Settings each time. Dev builds only: an installed Helm
+  // registers a folder when the user adds one, and at no other time.
+  if (appMode === 'dev') {
+    for (const folder of (process.env['HELM_PLUGINS'] ?? '').split(delimiter)) {
+      if (folder.trim() !== '' && isAbsolute(folder.trim())) addPluginFolder(services.store, folder.trim())
+    }
+  }
   const plugins = createPluginHost({
     store: services.store,
     window: () => win,
@@ -396,6 +414,8 @@ function startApp(options: AppOptions = {}): void {
   })
   plugins.start()
   registerPluginProtocol((id) => plugins.served(id), plugins.runtime)
+  installPluginPermissions()
+  pluginFrameHosts = (id) => plugins.framesPlugins(id)
 
   win = createWindow('index', services.settings.windowBounds ?? null, windowTheme())
 
