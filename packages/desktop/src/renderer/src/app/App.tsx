@@ -120,6 +120,7 @@ import {
   ProjectPane,
   QuickOpenDialog,
   Rail,
+  RAIL_ICON,
   RefreshIcon,
   RepoIcon,
   RestorePane,
@@ -2908,7 +2909,7 @@ export function App(): JSX.Element {
       {
         id: view,
         label: plugin.rail.title,
-        icon: <PluginIcon url={plugin.icon} size={17} />,
+        icon: <PluginIcon url={plugin.icon} size={RAIL_ICON.width} />,
         kind: 'view',
         current: sidebarShown && sidebarView === view,
         badge: plugin.badge,
@@ -2930,7 +2931,7 @@ export function App(): JSX.Element {
           {
             id: 'sessions',
             label: 'Sessions',
-            icon: <TerminalIcon width={17} height={17} />,
+            icon: <TerminalIcon {...RAIL_ICON} />,
             kind: 'view',
             current: sidebarShown && sidebarView === 'sessions',
             attention: statusCounts.waiting > 0,
@@ -2939,7 +2940,7 @@ export function App(): JSX.Element {
           {
             id: 'profiles',
             label: 'Profiles',
-            icon: <LayersIcon width={17} height={17} />,
+            icon: <LayersIcon {...RAIL_ICON} />,
             kind: 'view',
             current: sidebarShown && sidebarView === 'profiles',
             onSelect: () => toggleView('profiles'),
@@ -2948,7 +2949,7 @@ export function App(): JSX.Element {
           page(
             'history',
             'Session history',
-            <HistoryIcon width={17} height={17} />,
+            <HistoryIcon {...RAIL_ICON} />,
             openHistory,
             inFront('history'),
             'data-open-history'
@@ -2958,7 +2959,7 @@ export function App(): JSX.Element {
           {
             id: 'files',
             label: 'Files',
-            icon: <DocIcon width={17} height={17} />,
+            icon: <DocIcon {...RAIL_ICON} />,
             kind: 'view',
             current: sidebarShown && sidebarView === 'files',
             onSelect: () => toggleView('files'),
@@ -2967,7 +2968,7 @@ export function App(): JSX.Element {
           page(
             'browser',
             'Browser',
-            <GlobeIcon width={17} height={17} />,
+            <GlobeIcon {...RAIL_ICON} />,
             showBrowser,
             inFront('browser'),
             'data-open-browser'
@@ -2975,7 +2976,7 @@ export function App(): JSX.Element {
           page(
             'config',
             'Config',
-            <SlidersIcon width={17} height={17} />,
+            <SlidersIcon {...RAIL_ICON} />,
             openConfig,
             inFront('config'),
             'data-open-config'
@@ -2987,7 +2988,7 @@ export function App(): JSX.Element {
         {
           id: 'settings',
           label: 'Settings',
-          icon: <GearIcon width={17} height={17} />,
+          icon: <GearIcon {...RAIL_ICON} />,
           kind: 'view',
           // A view, because its sections are: the sidebar lists them and the
           // pane shows the one picked. Pressed again it puts the sidebar away

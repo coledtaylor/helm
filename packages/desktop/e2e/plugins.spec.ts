@@ -69,6 +69,21 @@ test('a plugin: its background page, a secret it asks for, its panel, badge, sta
   // The background page runs with nothing of the plugin's on screen.
   await expect(statusItem(ui)).toHaveText('Sample: no token')
 
+  // Its rail icon is drawn at the rail's size, as Helm's own are: the icon is
+  // what is left in the button once the badge, the dot and the 2px edge of a
+  // current view are set aside.
+  const iconSize = (button: Locator): Promise<number[][]> =>
+    button.evaluate((element) =>
+      [...element.children]
+        .filter((child) => !child.matches('[data-rail-badge], [data-rail-attention]'))
+        .map((child) => child.getBoundingClientRect())
+        .filter((box) => box.width > 2)
+        .map((box) => [box.width, box.height])
+    )
+  const sampleIcon = await iconSize(rail(ui).getByRole('button', { name: /^Sample/ }))
+  expect(sampleIcon).toEqual(await iconSize(ui.locator('[data-rail="sessions"]')))
+  expect(sampleIcon).toEqual([[20, 20]])
+
   const panel = await openPanel(ui)
   await panel.getByRole('button', { name: 'Add token' }).click()
   const dialog = ui.getByRole('dialog', { name: 'Sample needs sample-token' })

@@ -720,13 +720,16 @@ overrides the gate; keep it.
   **sidebar** island (256px), a gutter, then the **panes**, and a gutter
   to the window's edge. The title strip above it all, the status bar below.
 - **Title bar**: the native bar is hidden on Windows; Helm draws its own 36px
-  strip - the accent mark alone, centred over the rail so the two read as one
-  column, and the drag region - and the Window Controls Overlay paints the
+  strip - the accent mark alone, centred over the rail at the rail's icon size
+  so the two read as one column, and the drag region - and the Window Controls
+  Overlay paints the
   min/max/close buttons in the theme's `bg` and `fg-muted` (`main/chrome.ts`),
   retinted on every theme change. Nothing else lives in it: the theme toggle
   went to Appearance, and Settings to the rail.
-- **The rail**: 44px of 34px icon buttons on the canvas, `rounded-well`,
-  ordered by how often each is reached for rather than by feature - Sessions,
+- **The rail**: 48px of 40px icon buttons on the canvas, `rounded-well`, each
+  a 20px glyph (`RAIL_ICON`) drawn with a stroke thinned to keep the 1.6px line
+  of the rest of the chrome - bigger, not bolder. Ordered by how often each is
+  reached for rather than by feature - Sessions,
   Profiles and session history, a hairline, then Files, the browser and
   Config, and Settings pinned to the foot. The order is a fact
   about how Helm is used, so it is fixed rather than learned: a rail that
@@ -981,8 +984,9 @@ a website inside it.
 
 - **The rail**: a plugin with a rail icon gets a group of its own under a
   hairline, after Helm's destinations and above Settings. Its icon is a mask,
-  so it takes the rail's colours, and it hides from the rail's menu like any
-  other item. It is a **view**: it opens the plugin's panel in the sidebar.
+  so it takes the rail's colours, at the rail's 20px, and it hides from the
+  rail's menu like any other item. It is a **view**: it opens the plugin's
+  panel in the sidebar.
 - **The rail badge** is a count, never an alert: a 15px pill at the icon's top
   right, an `accent` hairline on `bg` with the number in 9.5px/500
   `accent-text` tabular numerals, "99+" past 99, and absent at zero. The count
