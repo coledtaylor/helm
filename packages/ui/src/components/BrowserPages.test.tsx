@@ -5,9 +5,9 @@ import { BROWSER_PAGE_MIME, BrowserPages, type BrowserPagesProps } from './Brows
 import { TAB_MIME } from './TabBar'
 
 const PAGES: BrowserPagesProps['pages'] = [
-  { id: 1, title: 'Dashboard', url: 'http://localhost:5173/', openedBy: null },
-  { id: 2, title: '', url: '', openedBy: null },
-  { id: 3, title: 'Settings', url: 'http://localhost:5173/settings', openedBy: 'browser overhaul' }
+  { id: 1, title: 'Dashboard', url: 'http://localhost:5173/', openedBy: null, sharedWith: null },
+  { id: 2, title: '', url: '', openedBy: null, sharedWith: null },
+  { id: 3, title: 'Settings', url: 'http://localhost:5173/settings', openedBy: 'browser overhaul', sharedWith: null }
 ]
 
 function renderPages(overrides: Partial<BrowserPagesProps> = {}): BrowserPagesProps {
@@ -38,6 +38,23 @@ describe('BrowserPages', () => {
     expect(tabs.map((tab) => tab.textContent)).toEqual(['Dashboard', 'New tab', 'Settingsbrowser overhaul'])
     expect(tabs[0]!.getAttribute('aria-selected')).toBe('true')
     expect(tabs[2]!.getAttribute('title')).toBe('http://localhost:5173/settings\nOpened by the session “browser overhaul”')
+  })
+
+  it('says "shared" on a page the user shared with a session, and names the session on hover', () => {
+    renderPages({
+      pages: [
+        {
+          id: 4,
+          title: 'Account',
+          url: 'https://example.com/account',
+          openedBy: null,
+          sharedWith: { session: 9, name: 'browser overhaul' }
+        }
+      ]
+    })
+    const tab = screen.getByRole('tab', { name: /^Account/ })
+    expect(tab.textContent).toBe('Accountshared')
+    expect(tab.getAttribute('title')).toBe('https://example.com/account\nShared with the session “browser overhaul”')
   })
 
   it('reports pages by their own ids: front, close, and a new one from the + that opens no menu', async () => {

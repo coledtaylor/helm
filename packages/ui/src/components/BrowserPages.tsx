@@ -9,6 +9,8 @@ export interface BrowserPage {
   url: string
   /** The session that opened it, or null when the user did. */
   openedBy: string | null
+  /** The session the user shared it with, or null. */
+  sharedWith: { session: number; name: string } | null
 }
 
 /**
@@ -41,7 +43,8 @@ const tabId = (id: number): string => `page:${String(id)}`
  * complaint: a sign-in that opened four pages left four tabs between the
  * sessions somebody was working in.
  *
- * A page an agent opened carries the session's name, as its tab did before.
+ * A page an agent opened carries the session's name, as its tab did before,
+ * and a page the user shared with a session says "shared".
  */
 export function BrowserPages({
   pages,
@@ -58,11 +61,17 @@ export function BrowserPages({
     // hint. An empty page is "New tab": a tab with no label is a tab you
     // cannot aim at.
     const where = page.url === '' ? 'A browser tab with no address yet' : page.url
+    const badge = page.openedBy ?? (page.sharedWith === null ? undefined : 'shared')
     return {
       id: tabId(page.id),
       title: page.title === '' ? 'New tab' : page.title,
-      ...(page.openedBy === null ? {} : { badge: page.openedBy }),
-      hint: page.openedBy === null ? where : `${where}\nOpened by the session “${page.openedBy}”`,
+      ...(badge === undefined ? {} : { badge }),
+      hint:
+        page.openedBy !== null
+          ? `${where}\nOpened by the session “${page.openedBy}”`
+          : page.sharedWith !== null
+            ? `${where}\nShared with the session “${page.sharedWith.name}”`
+            : where,
       icon: <GlobeIcon width={13} height={13} />
     }
   })

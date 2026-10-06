@@ -5,6 +5,7 @@ import {
   activateTab,
   activeRef,
   besideOf,
+  browserSearchName,
   closeGroup,
   closeTab,
   cycleTab,
@@ -54,6 +55,7 @@ import {
 } from '@helm/core/types'
 import {
   AppShell,
+  BROWSER_ZOOM,
   BrowserPages,
   BrowserPane,
   cn,
@@ -154,6 +156,7 @@ import {
 import { sidebarFor, type SidebarView } from './sidebarFor'
 import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
 import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
+import { browserKeyCommand, COMMANDS_THAT_REPEAT, type BrowserCommand } from '../../../shared/browserKeys'
 import { helm } from './bridge'
 import { ProjectColumn } from './ProjectColumn'
 import { disposeShell, terminalShellKey } from './pterms'
@@ -828,10 +831,13 @@ export function App(): JSX.Element {
     [configScopePath, setConfigScope, openPane]
   )
   /**
-   * Ctrl+L focuses the address bar. A counter rather than a boolean, because
-   * "focus it" is an event: pressing it twice has to re-select.
+   * Where the caret should go in the Browser tab - a page's address bar (Ctrl+L,
+   * a new page) or its find field (Ctrl+F) - until that page's pane has put it
+   * there and said so (`onFocusRequestDone`). Answered once, so a page coming
+   * back to the front later does not take the caret again.
    */
-  const [focusAddressAt, setFocusAddressAt] = useState(0)
+  const [browserFocus, setBrowserFocus] = useState<{ page: number; what: 'address' | 'find' } | null>(null)
+  const browserFocusDone = useCallback(() => setBrowserFocus(null), [])
 
   /**
    * A new page in the Browser tab, on whichever project the focused pane is
@@ -860,7 +866,7 @@ export function App(): JSX.Element {
           commit((current) =>
             into === undefined ? openTab(current, BROWSER_TAB) : placeIn(current, BROWSER_TAB, into)
           )
-          if (focusAddress === true) setFocusAddressAt((at) => at + 1)
+          if (focusAddress === true) setBrowserFocus({ page: state.id, what: 'address' })
         })
     },
     [browsers, commit, frontProject]
@@ -1225,27 +1231,93 @@ export function App(): JSX.Element {
   // ---------------------------------------------------------------------------
 
   /**
-   * Ctrl+L and Ctrl+T, only while the Browser tab is in front of the focused
-   * pane: the address bar, and a new page with the caret in it. In capture so
-   * a focused terminal does not eat them - but gated, because Ctrl+L is *clear
-   * the screen* in every shell Helm hosts and stealing it from a session would
-   * be a worse bug than not having the shortcut.
+   * What a browser key does, from wherever it was pressed: here with the caret
+   * in the Browser tab's chrome, or in a page, where main reads it and sends
+   * `browser:command`. One place, so the two cannot differ. `id` is the page
+   * the key was meant for - the one in front, or the page it was pressed in.
+   */
+  const runBrowserCommand = useCallback(
+    (id: number | null, command: BrowserCommand) => {
+      if (command === 'new-page') {
+        openBrowser({ project: null, focusAddress: true })
+        return
+      }
+      if (command === 'reopen-page') {
+        void browsers.reopen().then((state) => {
+          if (state !== null) commit((current) => openTab(current, BROWSER_TAB))
+        })
+        return
+      }
+      const page = id === null ? undefined : browserViews.get(id)
+      if (page === undefined) return
+      if (page.id !== frontPage) browsers.activate(page.id)
+      switch (command) {
+        case 'close-page':
+          browsers.close(page.id)
+          return
+        case 'find':
+        case 'address':
+          setBrowserFocus({ page: page.id, what: command })
+          return
+        case 'reload':
+        case 'hard-reload':
+          browsers.reload(page.id, command === 'hard-reload')
+          return
+        case 'back':
+          browsers.back(page.id)
+          return
+        case 'forward':
+          browsers.forward(page.id)
+          return
+        case 'zoom-in':
+          browsers.zoom(page.id, Math.min(BROWSER_ZOOM.max, page.zoomLevel + BROWSER_ZOOM.step))
+          return
+        case 'zoom-out':
+          browsers.zoom(page.id, Math.max(BROWSER_ZOOM.min, page.zoomLevel - BROWSER_ZOOM.step))
+          return
+        case 'zoom-reset':
+          browsers.zoom(page.id, 0)
+          return
+        case 'devtools':
+          browsers.devtools(page.id)
+      }
+    },
+    [openBrowser, browsers, browserViews, frontPage, commit]
+  )
+  useEffect(
+    () => helm.on('browser:command', ({ id, command }) => runBrowserCommand(id, command)),
+    [runBrowserCommand]
+  )
+
+  /**
+   * The browser's keys with the caret in Helm's own chrome, only while the
+   * Browser tab is in front of the focused pane (`shared/browserKeys.ts` has
+   * the list). In capture so a focused terminal does not eat them - but gated,
+   * because Ctrl+L is *clear the screen* in every shell Helm hosts and
+   * stealing it from a session would be a worse bug than not having the
+   * shortcut. A menu or a dialog open has the keys to itself.
    */
   const browserInFront = front?.kind === 'browser'
   useEffect(() => {
     if (!browserInFront) return undefined
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!event.ctrlKey || event.altKey || event.shiftKey) return
-      if (event.key !== 'l' && event.key !== 't') return
+      const command = browserKeyCommand({
+        key: event.key,
+        control: event.ctrlKey,
+        shift: event.shiftKey,
+        alt: event.altKey,
+        meta: event.metaKey
+      })
+      if (command === null || overlayOpen()) return
       if (document.activeElement?.closest('.xterm')) return
       event.preventDefault()
       event.stopPropagation()
-      if (event.key === 'l') setFocusAddressAt((at) => at + 1)
-      else openBrowser({ project: null, focusAddress: true })
+      if (event.repeat && !COMMANDS_THAT_REPEAT.has(command)) return
+      runBrowserCommand(frontPage, command)
     }
     window.addEventListener('keydown', onKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
-  }, [browserInFront, openBrowser])
+  }, [browserInFront, frontPage, runBrowserCommand])
 
   /** The folder the focused pane is about, for the launcher to open on. */
   const frontFolder = useMemo(() => {
@@ -2243,6 +2315,8 @@ export function App(): JSX.Element {
       onRevealTemplates={() => launcher.reveal(templates.templatesDir)}
       browserReach={settings?.browserReach ?? DEFAULT_SETTINGS.browserReach}
       onBrowserReachChange={(browserReach) => writeSettings({ browserReach })}
+      browserSearch={settings?.browserSearch ?? DEFAULT_SETTINGS.browserSearch}
+      onBrowserSearchChange={(browserSearch) => writeSettings({ browserSearch })}
       browserMcp={settings?.browserMcp ?? DEFAULT_SETTINGS.browserMcp}
       onBrowserMcpChange={(browserMcp) => writeSettings({ browserMcp })}
       browserMcpLocalOnly={settings?.browserMcpLocalOnly ?? DEFAULT_SETTINGS.browserMcpLocalOnly}
@@ -2433,7 +2507,13 @@ export function App(): JSX.Element {
                   state={view}
                   entries={browsers.entries.get(view.id) ?? EMPTY_CONSOLE}
                   recent={browsers.recent}
-                  focusAddressAt={focusAddressAt}
+                  focusRequest={browserFocus?.page === view.id ? browserFocus.what : null}
+                  onFocusRequestDone={browserFocusDone}
+                  searchEngine={browserSearchName(settings?.browserSearch ?? DEFAULT_SETTINGS.browserSearch)}
+                  still={browsers.stills.get(view.id) ?? null}
+                  canShare={settings?.browserMcp ?? DEFAULT_SETTINGS.browserMcp}
+                  onShareTargets={browsers.shareTargets}
+                  onShare={(session) => browsers.share(view.id, session)}
                   onBounds={(rect) => browsers.sendBounds(view.id, rect, true)}
                   onNavigate={(input) => browsers.navigate(view.id, input)}
                   onBack={() => browsers.back(view.id)}

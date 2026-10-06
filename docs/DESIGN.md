@@ -305,8 +305,9 @@ overrides the gate; keep it.
   a tick column only where something is ticked. Arrows, Home and End,
   type-ahead, Enter, Escape; focus moves in once it is placed and goes back to
   the control that opened it. **It is an overlay while open** (`lib/overlay.ts`),
-  so a browser tab's native view stands down for it as it does for a dialog,
-  and it is portalled to the body and kept 8px inside the window, so neither
+  so a browser tab's native view stands down for it as it does for a dialog -
+  leaving a still of the page where it was, so the menu opens over the page
+  rather than over a hole - and it is portalled to the body and kept 8px inside the window, so neither
   the sidebar's clip nor the window's edge cuts it off.
 - **Stepper**: a segmented-control shell holding − and + buttons either side of
   a tabular mono readout. For a small bounded integer someone nudges while
@@ -428,7 +429,10 @@ overrides the gate; keep it.
 
   One word may follow the title, muted (`badge`): the session that opened a
   browser tab, because a tab Claude opened and one you opened are otherwise
-  identical in the strip. A strip with no tabs and no actions is **not drawn**.
+  identical in the strip - or "shared", for a page of yours a session may
+  drive. The page itself says which session can drive it in a 30px
+  `accent-soft` note above it, `accent-text`, with a secondary "Stop sharing"
+  when the user shared it. A strip with no tabs and no actions is **not drawn**.
 - **The crumb row**: under a session's tab, 26px of mono `fg-subtle` naming
   where it is - project `›` branch `·` profile - and, at the right in Inter,
   what it is doing and for how long, in its state's tone ("Working · 4m" in
@@ -791,7 +795,7 @@ overrides the gate; keep it.
   tab's own pane, not a side of a pane whose only tab it is, and not a side of
   a pane too small to halve, where the pointer means the middle instead. A
   browser page is a native view over all of this, so it is off the screen for
-  the length of the drag.
+  the length of the drag, with a still of itself in its place.
 
   Every divider is the gutter it sits in, with a 3px `border-strong` grip that
   goes accent on hover - upright between panes side by side, on its side

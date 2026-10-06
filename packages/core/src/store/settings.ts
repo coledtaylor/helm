@@ -5,6 +5,7 @@ import { isPluginRailId, PLUGIN_TITLE_MAX, pluginParamsProblem, pluginTabNamePro
 import {
   BROWSER_PROJECT_URLS_MAX,
   BROWSER_REACH_MODES,
+  BROWSER_SEARCH_ENGINES,
   BROWSER_RECENT_URLS_MAX,
   browserReachAllows,
   CORNER_RADIUS,
@@ -497,6 +498,7 @@ export const SETTING_VALIDATORS: SettingValidators = {
   },
 
   browserReach: oneOf(BROWSER_REACH_MODES),
+  browserSearch: oneOf(BROWSER_SEARCH_ENGINES),
 
   /**
    * The two agent controls, and a boolean is checked as a boolean for the

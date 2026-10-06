@@ -28,19 +28,20 @@ export const EMPTY_STRIP: PageStrip = { order: [], active: null, openers: new Ma
 
 /**
  * A page joins the strip. `after` is the page that opened it, or null for one
- * the user or an agent opened, which goes at the end. `background` leaves the
- * page in front where it is - unless there is none.
+ * the user or an agent opened, which goes at the end - or at `at`, for a
+ * closed page brought back where it was. `background` leaves the page in
+ * front where it is - unless there is none.
  */
 export function addPage(
   strip: PageStrip,
   id: number,
-  place: { after: number | null; background: boolean }
+  place: { after: number | null; background: boolean; at?: number }
 ): PageStrip {
   if (strip.order.includes(id)) {
     return place.background ? strip : { ...strip, active: id }
   }
   const opener = place.after !== null && strip.order.includes(place.after) ? place.after : null
-  let at = strip.order.length
+  let at = place.at === undefined ? strip.order.length : Math.max(0, Math.min(place.at, strip.order.length))
   const openers = new Map(strip.openers)
   if (opener !== null) {
     at = strip.order.indexOf(opener) + 1

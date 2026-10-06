@@ -227,8 +227,10 @@ export function Menu({
             id={`${ids}-${String(at)}`}
             data-menu-index={at}
             data-menu-item={entry.id}
-            role={role === 'listbox' ? 'option' : ticks ? 'menuitemcheckbox' : 'menuitem'}
-            aria-checked={role === 'menu' && ticks ? entry.checked === true : undefined}
+            // A tick is said on the rows that have one: a menu that mixes
+            // commands with a choice (the browser's) keeps its commands menu items.
+            role={role === 'listbox' ? 'option' : entry.checked !== undefined ? 'menuitemcheckbox' : 'menuitem'}
+            aria-checked={role === 'menu' && entry.checked !== undefined ? entry.checked : undefined}
             aria-selected={role === 'listbox' ? entry.checked === true : undefined}
             aria-disabled={entry.disabled === true ? true : undefined}
             title={entry.title}

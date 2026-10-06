@@ -15,7 +15,10 @@ import {
   USAGE_DISPLAY_MODES,
   type AppSettings,
   type ArchiveStats,
+  browserSearchName,
+  BROWSER_SEARCH_ENGINES,
   type BrowserReach,
+  type BrowserSearch,
   type DetectedShell,
   type TerminalCursorStyle,
   type Density,
@@ -204,6 +207,9 @@ export interface SettingsPaneProps {
    */
   browserReach: BrowserReach
   onBrowserReachChange: (reach: BrowserReach) => void
+  /** What the address bar does with a phrase: an engine, or `off`. A preference, so it is here. */
+  browserSearch: BrowserSearch
+  onBrowserSearchChange: (search: BrowserSearch) => void
   /**
    * The two browser-tool keys: whether Helm serves its browser tools to the
    * sessions it hosts, and whether those tools are held to this machine when
@@ -323,6 +329,8 @@ export function SettingsPane({
   onFilesWrapChange,
   browserReach,
   onBrowserReachChange,
+  browserSearch,
+  onBrowserSearchChange,
   browserMcp,
   onBrowserMcpChange,
   browserMcpLocalOnly,
@@ -617,6 +625,8 @@ export function SettingsPane({
             <BrowserGroup
               reach={browserReach}
               onReachChange={onBrowserReachChange}
+              search={browserSearch}
+              onSearchChange={onBrowserSearchChange}
               mcp={browserMcp}
               onMcpChange={onBrowserMcpChange}
               mcpLocalOnly={browserMcpLocalOnly}
@@ -1329,14 +1339,14 @@ function FilesGroup({ wrap, onWrapChange }: { wrap: boolean; onWrapChange: (wrap
 /**
  * The browser pane's posture, and what a Claude session may do with it.
  *
- * Three rows, because there are three decisions: where the pane may go at all,
- * whether the sessions Helm hosts can drive it, and whether they are held to
- * this machine when the pane is not. Everything else about the pane - downloads
- * denied, every permission denied, self-signed certificates accepted for
- * loopback and nowhere else, an address bar that never searches - is not a
- * setting and never will be. Those are the app's postures, and a posture with a
- * switch on it is a posture somebody turns off on the afternoon it gets in
- * their way.
+ * Four rows, because there are four decisions: where the pane may go at all,
+ * what the address bar does with a phrase, whether the sessions Helm hosts can
+ * drive it, and whether they are held to this machine when the pane is not.
+ * Everything else about the pane - downloads denied, every permission but
+ * clipboard writing and fullscreen denied, self-signed certificates accepted
+ * for loopback and nowhere else - is not a setting and never will be. Those
+ * are the app's postures, and a posture with a switch on it is a posture
+ * somebody turns off on the afternoon it gets in their way.
  *
  * The two reach rows are deliberately adjacent and worded as a pair, because
  * the rule between them is an intersection and the failure to avoid is somebody
@@ -1345,6 +1355,8 @@ function FilesGroup({ wrap, onWrapChange }: { wrap: boolean; onWrapChange: (wrap
 function BrowserGroup({
   reach,
   onReachChange,
+  search,
+  onSearchChange,
   mcp,
   onMcpChange,
   mcpLocalOnly,
@@ -1352,16 +1364,19 @@ function BrowserGroup({
 }: {
   reach: BrowserReach
   onReachChange: (reach: BrowserReach) => void
+  search: BrowserSearch
+  onSearchChange: (search: BrowserSearch) => void
   mcp: boolean
   onMcpChange: (next: boolean) => void
   mcpLocalOnly: boolean
   onMcpLocalOnlyChange: (next: boolean) => void
 }): JSX.Element {
+  const engine = browserSearchName(search)
   return (
     <Group
       name="browser"
       title="Browser"
-      hint="A viewport for dev servers, not a browser: no downloads, no permissions, no search."
+      hint="Pages in the Browser tab. Sites may copy to your clipboard and go full screen; downloads go to your own browser, and nothing else a site asks for is allowed."
     >
       <Row
         label="Where the pane may go"
@@ -1383,10 +1398,32 @@ function BrowserGroup({
       </Row>
 
       <Row
+        label="Search from the address bar"
+        hint={
+          engine === null
+            ? 'Off. Something that is not an address gets a sentence saying so, and nothing is fetched.'
+            : `Something that is not an address goes to ${engine} when you press Enter. Nothing is sent while you type.`
+        }
+      >
+        <Select
+          value={search}
+          label="Search from the address bar"
+          data-settings-browser-search={search}
+          onChange={(value) => onSearchChange(value as BrowserSearch)}
+        >
+          {BROWSER_SEARCH_ENGINES.map((choice) => (
+            <option key={choice} value={choice}>
+              {browserSearchName(choice) ?? 'Off'}
+            </option>
+          ))}
+        </Select>
+      </Row>
+
+      <Row
         label="Let Claude drive the browser"
         hint={
           mcp
-            ? 'Sessions Helm hosts can open pages, read them, click and type. Helm serves the tools on a loopback port with a token unique to each session, and its tabs are labelled with the session that opened them.'
+            ? 'Sessions Helm hosts can open pages of their own, read them, click and type, and drive a page of yours only once you share it from the browser bar. Helm serves the tools on a loopback port with a token unique to each session.'
             : 'Off. Helm opens no port at all and sessions are started without the tools, exactly as they were before.'
         }
       >

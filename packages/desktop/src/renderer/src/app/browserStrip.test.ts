@@ -45,6 +45,16 @@ describe('browser strip', () => {
     expect(removePage(strip(1, 2), 1).active).toBe(2)
   })
 
+  it('puts a page brought back where it was, held to the ends of the strip', () => {
+    const three = strip(1, 2, 3)
+    expect(addPage(three, 9, { after: null, background: false, at: 1 })).toMatchObject({
+      order: [1, 9, 2, 3],
+      active: 9
+    })
+    expect(addPage(three, 9, { after: null, background: false, at: 7 }).order).toEqual([1, 2, 3, 9])
+    expect(addPage(three, 9, { after: null, background: false, at: -1 }).order).toEqual([9, 1, 2, 3])
+  })
+
   it('moves a page to an index counted after it has left, and brings it forward', () => {
     expect(movePage(strip(1, 2, 3), 1, 2)).toMatchObject({ order: [2, 3, 1], active: 1 })
     expect(movePage(strip(1, 2, 3), 3, 0).order).toEqual([3, 1, 2])

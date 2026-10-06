@@ -1,5 +1,5 @@
 import type { Locator, Page } from '@playwright/test'
-import { COOKIE, POPUP_CODE, startBrowserFixture, type BrowserFixture } from './browser-fixture'
+import { COOKIE, COPIED, POPUP_CODE, startBrowserFixture, type BrowserFixture } from './browser-fixture'
 import { expect, test, type Helm } from './helm'
 
 /**
@@ -59,6 +59,55 @@ const windowCount = (helm: Helm): Promise<number> =>
 /** The tab's problem line, by what it says. */
 const problem = (ui: Page, saying: string | RegExp): Locator =>
   ui.getByRole('status').filter({ hasText: saying })
+
+/** Whether the web contents at `prefix` hold keyboard focus, which is where keystrokes would go. */
+const pageFocused = (helm: Helm, prefix: string): Promise<boolean> =>
+  helm.app.evaluate(
+    ({ webContents }, at) => webContents.getAllWebContents().some((wc) => wc.getURL().startsWith(at) && wc.isFocused()),
+    prefix
+  )
+
+/**
+ * Give the page at `prefix` keyboard focus, as clicking into it does.
+ * Playwright's click is synthesized input and moves no focus between web
+ * contents, so a test that needs the page to hold the keys says so by hand.
+ */
+const focusPage = (helm: Helm, prefix: string): Promise<void> =>
+  helm.app.evaluate(({ webContents }, at) => {
+    webContents.getAllWebContents().find((wc) => wc.getURL().startsWith(at))?.focus()
+  }, prefix)
+
+/**
+ * A key pressed in the page at `prefix`, the way a person's arrives: through
+ * Electron's input path, which is where Helm reads the browser's keys and
+ * where Chromium takes Escape out of fullscreen. Playwright's keyboard goes
+ * round both, so a test of either could not use it.
+ */
+const pressInPage = (
+  helm: Helm,
+  prefix: string,
+  keyCode: string,
+  modifiers: Array<'control' | 'shift'> = []
+): Promise<void> =>
+  helm.app.evaluate(
+    async ({ webContents }, { at, key, mods }) => {
+      const wc = webContents.getAllWebContents().find((candidate) => candidate.getURL().startsWith(at))
+      if (wc === undefined) throw new Error(`no page at ${at}`)
+      wc.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: mods })
+      if (key.length === 1 && !mods.includes('control')) wc.sendInputEvent({ type: 'char', keyCode: key, modifiers: mods })
+      wc.sendInputEvent({ type: 'keyUp', keyCode: key, modifiers: mods })
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    },
+    { at: prefix, key: keyCode, mods: modifiers }
+  )
+
+/** Whether each browser view in the app window is on screen. */
+const viewsShown = (helm: Helm): Promise<boolean[]> =>
+  helm.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0]!.contentView.children.flatMap((view) =>
+      'webContents' in view ? [view.getVisible()] : []
+    )
+  )
 
 test('browsing: a page loads in a browser tab, and back and forward move through what was visited', async ({
   helm
@@ -259,13 +308,6 @@ test('find in page: the caret stays in the find field while typing, and the coun
 }) => {
   const ui = helm.window
   const url = `${fixture.http}/find`
-  /** Whether the page's own web contents holds focus, which is where keystrokes would go. */
-  const pageFocused = (): Promise<boolean> =>
-    helm.app.evaluate(
-      ({ webContents }, prefix) =>
-        webContents.getAllWebContents().some((wc) => wc.getURL().startsWith(prefix) && wc.isFocused()),
-      url
-    )
 
   await showBrowser(ui)
   await go(ui, url)
@@ -279,7 +321,7 @@ test('find in page: the caret stays in the find field while typing, and the coun
   await helm.app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().find((win) => win.getParentWindow() === null)!.webContents.focus()
   )
-  expect(await pageFocused()).toBe(false)
+  expect(await pageFocused(helm, url)).toBe(false)
 
   await ui.getByRole('button', { name: 'Find in page' }).click()
   const field = ui.getByRole('textbox', { name: 'Find in page' })
@@ -291,7 +333,7 @@ test('find in page: the caret stays in the find field while typing, and the coun
   await expect(field).toHaveValue('needle')
   await expect(count).toHaveText('1 / 3')
   await expect(field).toBeFocused()
-  expect(await pageFocused()).toBe(false)
+  expect(await pageFocused(helm, url)).toBe(false)
 
   // Enter steps forward, Shift+Enter back, and the caret never leaves.
   await field.press('Enter')
@@ -299,11 +341,176 @@ test('find in page: the caret stays in the find field while typing, and the coun
   await field.press('Shift+Enter')
   await expect(count).toHaveText('1 / 3')
   await expect(field).toBeFocused()
-  expect(await pageFocused()).toBe(false)
+  expect(await pageFocused(helm, url)).toBe(false)
 
   // A word the page does not contain says so.
   await field.fill('haystacks')
   await expect(count).toHaveText('no matches')
+
+  // Escape closes the field and gives the page the caret back.
+  await field.press('Escape')
+  await expect(field).toHaveCount(0)
+  await expect.poll(() => pageFocused(helm, url)).toBe(true)
+})
+
+test("the keyboard: the browser's keys work with the caret in the page, and every other key is the page's", async ({
+  helm
+}) => {
+  const ui = helm.window
+  const url = `${fixture.http}/tools`
+  await showBrowser(ui)
+  await go(ui, url)
+  const page = await pageAt(helm, url)
+  await expect(page).toHaveTitle('Helm fixture tools')
+  const keys = (): Promise<string[]> => page.evaluate(() => (window as unknown as { keys: string[] }).keys)
+
+  // Typed into the page, each of these is the browser's: Main takes it before
+  // the page sees it and the window answers.
+  await pressInPage(helm, url, 'f', ['control'])
+  const find = ui.getByRole('textbox', { name: 'Find in page' })
+  await expect(find).toBeFocused()
+  await find.press('Escape')
+  await expect.poll(() => pageFocused(helm, url)).toBe(true)
+
+  await pressInPage(helm, url, 'l', ['control'])
+  await expect(address(ui)).toBeFocused()
+
+  await pressInPage(helm, url, 't', ['control'])
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Helm fixture tools', 'New tab'])
+  await expect(address(ui)).toBeFocused()
+
+  // A key that is not the browser's reaches the page, and none of the above did.
+  await pressInPage(helm, url, 'a')
+  await pressInPage(helm, url, 'a', ['control'])
+  expect(await keys()).toEqual(['a', 'Control+a'])
+
+  await pages(ui).getByRole('tab', { name: /Helm fixture tools/ }).click()
+  await pressInPage(helm, url, 'w', ['control'])
+  await expect(pages(ui).getByRole('tab')).toHaveText(['New tab'])
+
+  // Ctrl+Shift+T, from the window's side this time, brings it back where it was.
+  await address(ui).press('Control+Shift+T')
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Helm fixture tools', 'New tab'])
+  await expect(pages(ui).getByRole('tab', { name: /Helm fixture tools/ })).toHaveAttribute('aria-selected', 'true')
+  await expect(await pageAt(helm, url)).toHaveTitle('Helm fixture tools')
+})
+
+test('the address list: the page stands down for it and stays down, so a remembered address takes the click', async ({
+  helm
+}) => {
+  const ui = helm.window
+  const two = `${fixture.http}/two`
+  const find = `${fixture.http}/find`
+  await showBrowser(ui)
+  await go(ui, two)
+  await expect(await pageAt(helm, two)).toHaveTitle('Helm fixture two')
+  await go(ui, find)
+  await expect(await pageAt(helm, find)).toHaveTitle('Helm fixture find')
+  await expect.poll(() => viewsShown(helm)).toEqual([true])
+
+  await address(ui).click()
+  const list = ui.locator('[data-browser-recent]')
+  await expect(list).toBeVisible()
+  await expect.poll(() => viewsShown(helm)).toEqual([false])
+  // And it stays down while the list is open. The page is a native view over
+  // the window, so a view that came back for a moment would be under the
+  // pointer instead of the list, and a person's click would go to the page.
+  // (Playwright clicks the window's own document and cannot tell.)
+  for (let look = 0; look < 12; look += 1) {
+    expect(await viewsShown(helm), `look ${String(look)}`).toEqual([false])
+    await ui.waitForTimeout(100)
+  }
+
+  await list.locator(`[data-browser-recent-url="${two}"]`).click()
+  await expect(list).toHaveCount(0)
+  await expect(address(ui)).toHaveValue(two)
+  await expect.poll(() => viewsShown(helm)).toEqual([true])
+})
+
+test('the menu: zoom, width, DevTools and clearing data are behind More, opened over a still of the page', async ({
+  helm
+}) => {
+  const ui = helm.window
+  const url = `${fixture.http}/two`
+  await showBrowser(ui)
+  await go(ui, url)
+  await expect(await pageAt(helm, url)).toHaveTitle('Helm fixture two')
+  await expect.poll(() => viewsShown(helm)).toEqual([true])
+
+  await ui.getByRole('button', { name: 'More' }).click()
+  const menu = ui.getByRole('menu', { name: 'Browser' })
+  await expect(menu).toBeVisible()
+  // The page is off the screen for the menu, and a picture of it is where it was.
+  await expect.poll(() => viewsShown(helm)).toEqual([false])
+  await expect(ui.locator('[data-browser-still]')).toHaveCount(1)
+
+  await menu.getByRole('menuitem', { name: /Zoom in/ }).click()
+  await expect(menu).toHaveCount(0)
+  await expect.poll(() => viewsShown(helm)).toEqual([true])
+  await expect(ui.locator('[data-browser-still]')).toHaveCount(0)
+  // The zoom is said in the address bar, and a click there puts it back.
+  const chip = ui.getByRole('button', { name: 'Zoom 110%, back to actual size' })
+  await expect(chip).toBeVisible()
+  const level = (): Promise<number | undefined> =>
+    helm.app.evaluate(
+      ({ webContents }, at) => webContents.getAllWebContents().find((wc) => wc.getURL().startsWith(at))?.getZoomLevel(),
+      url
+    )
+  expect(await level()).toBe(0.5)
+  await chip.click()
+  await expect(chip).toHaveCount(0)
+  expect(await level()).toBe(0)
+})
+
+test('permissions: a page may write the clipboard and take the whole screen, and Escape gives the screen back', async ({
+  helm
+}) => {
+  const ui = helm.window
+  const url = `${fixture.http}/tools`
+  await showBrowser(ui)
+  await go(ui, url)
+  const page = await pageAt(helm, url)
+  const status = page.getByRole('status')
+  const clipboard = (): Promise<string> => helm.app.evaluate(({ clipboard: board }) => board.readText())
+  const screen = (): Promise<{ full: boolean; content: Electron.Rectangle; view: Electron.Rectangle }> =>
+    helm.app.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows()[0]!
+      const view = win.contentView.children.find((child) => 'webContents' in child)!
+      return { full: win.isFullScreen(), content: win.getContentBounds(), view: view.getBounds() }
+    })
+
+  // This writes the clipboard of the machine the tests run on, so what was
+  // there is put back.
+  const kept = await clipboard()
+  try {
+    await focusPage(helm, url)
+    await page.getByRole('button', { name: 'Copy' }).click()
+    await expect(status).toHaveText('copied')
+    expect(await clipboard()).toBe(COPIED)
+    // Reading it is still refused: a clipboard holds passwords.
+    expect(await page.evaluate(() => navigator.clipboard.readText().then(() => 'read', () => 'refused'))).toBe(
+      'refused'
+    )
+  } finally {
+    await helm.app.evaluate(({ clipboard: board }, text) => board.writeText(text), kept)
+  }
+
+  await focusPage(helm, url)
+  await page.getByRole('button', { name: 'Go full screen' }).click()
+  await expect(status).toHaveText('fullscreen')
+  // The whole window, the strip of the title bar included.
+  await expect
+    .poll(async () => {
+      const now = await screen()
+      return now.full && now.view.x === 0 && now.view.y === 0 && now.view.width === now.content.width
+    })
+    .toBe(true)
+
+  await pressInPage(helm, url, 'Escape')
+  await expect(status).toHaveText('left fullscreen')
+  await expect.poll(async () => (await screen()).full).toBe(false)
+  // Back in its pane, clear of the title bar.
+  await expect.poll(async () => (await screen()).view.y).toBeGreaterThan(36)
 })
 
 test('dragging: the page stands down while the Browser tab is dragged, and is drawn where the tab lands', async ({
@@ -312,13 +519,7 @@ test('dragging: the page stands down while the Browser tab is dragged, and is dr
   const ui = helm.window
   const first = ui.getByRole('region', { name: 'First pane' })
   const second = ui.getByRole('region', { name: 'Second pane' })
-  /** Whether the page's native view is on screen - asked of the window that holds it. */
-  const viewShown = (): Promise<boolean[]> =>
-    helm.app.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0]!.contentView.children.flatMap((view) =>
-        'webContents' in view ? [view.getVisible()] : []
-      )
-    )
+  const viewShown = (): Promise<boolean[]> => viewsShown(helm)
 
   await ui.locator('[data-rail="settings"]').click()
   await showBrowser(ui)

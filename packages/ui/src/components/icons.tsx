@@ -660,3 +660,25 @@ export function CopyIcon(props: IconProps): JSX.Element {
     </Icon>
   )
 }
+
+/** A box with an arrow leaving it: sharing a page with a session. */
+export function ShareIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <path d="M3.25 8.5v4a1 1 0 0 0 1 1h7.5a1 1 0 0 0 1-1v-4" />
+      <path d="M8 2.5v7.25" />
+      <path d="M5.5 5 8 2.5 10.5 5" />
+    </Icon>
+  )
+}
+
+/** Three dots in a row: the browser bar's overflow menu. Filled, so they read at 14px. */
+export function MoreIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <circle cx="3.75" cy="8" r="0.6" fill="currentColor" />
+      <circle cx="8" cy="8" r="0.6" fill="currentColor" />
+      <circle cx="12.25" cy="8" r="0.6" fill="currentColor" />
+    </Icon>
+  )
+}

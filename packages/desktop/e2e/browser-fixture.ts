@@ -31,6 +31,8 @@ export interface BrowserFixture {
 
 /** What `/popup` hands back to its opener. */
 export const POPUP_CODE = 'FIXTURE-CODE-5501'
+/** What `/tools` puts on the clipboard. */
+export const COPIED = 'copied by the fixture 7302'
 export const COOKIE = { name: 'helmcookie', value: 'persisted-4711' }
 
 /*
@@ -56,6 +58,29 @@ function respond(path: string, elsewhere: string): { headers: Record<string, str
       return {
         headers: HTML,
         body: page('Helm fixture find', '<p>needle one</p><p>a haystack</p><p>needle two</p><p>needle three</p>')
+      }
+    /*
+     * The two things a page may ask for - writing the clipboard and the whole
+     * screen - and a record of every key that reached the page, so a test can
+     * tell the browser's keys from the page's.
+     */
+    case '/tools':
+      return {
+        headers: HTML,
+        body: page(
+          'Helm fixture tools',
+          '<button id="copy">Copy</button> <button id="fs">Go full screen</button><p role="status" id="status">idle</p>',
+          `const status = document.getElementById('status')
+           window.keys = []
+           window.addEventListener('keydown', (event) => window.keys.push((event.ctrlKey ? 'Control+' : '') + event.key))
+           document.getElementById('copy').addEventListener('click', () => {
+             navigator.clipboard.writeText('${COPIED}').then(() => { status.textContent = 'copied' }, (error) => { status.textContent = 'copy refused: ' + error.name })
+           })
+           document.getElementById('fs').addEventListener('click', () => {
+             document.documentElement.requestFullscreen().then(() => { status.textContent = 'fullscreen' }, (error) => { status.textContent = 'fullscreen refused: ' + error.name })
+           })
+           document.addEventListener('fullscreenchange', () => { if (document.fullscreenElement === null) status.textContent = 'left fullscreen' })`
+        )
       }
     case '/cookie':
       return {

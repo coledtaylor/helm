@@ -88,6 +88,8 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
     filesWrap: DEFAULT_SETTINGS.filesWrap,
     onFilesWrapChange: vi.fn(),
     browserReach: DEFAULT_SETTINGS.browserReach,
+    browserSearch: DEFAULT_SETTINGS.browserSearch,
+    onBrowserSearchChange: vi.fn(),
     onBrowserReachChange: vi.fn(),
     browserMcp: DEFAULT_SETTINGS.browserMcp,
     onBrowserMcpChange: vi.fn(),

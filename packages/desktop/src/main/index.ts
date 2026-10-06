@@ -504,7 +504,11 @@ function startApp(options: AppOptions = {}): void {
     onChanged: (state) => emit(win, 'browser:changed', state),
     onOpened: (opened) => emit(win, 'browser:opened', opened),
     onClosed: (id) => emit(win, 'browser:closed', { id }),
-    onLogged: (id, entry) => emit(win, 'browser:logged', { id, entry })
+    onCommand: (command) => emit(win, 'browser:command', command),
+    onLogged: (id, entry) => emit(win, 'browser:logged', { id, entry }),
+    // With the tools off there is nobody to share a page with.
+    sessionOpener: (session) => (services.settings.browserMcp ? sessions.browserOpener(session) : null),
+    shareTargets: () => (services.settings.browserMcp ? sessions.browserSessions() : [])
   })
 
   /**

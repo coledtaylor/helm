@@ -13,9 +13,10 @@ import {
   browserWindowOpen,
   createBrowserHost,
   exemptedWebContents,
-  type BrowserHost
+  type BrowserHost,
+  type BrowserOpener
 } from './browser'
-import type { BrowserConsoleEntry, BrowserOpened, BrowserState } from '../shared/ipc'
+import type { BrowserCommandEvent, BrowserConsoleEntry, BrowserOpened, BrowserState } from '../shared/ipc'
 
 vi.mock('electron', async () => ({
   ...(await import('../../test/electron')).electronFake(),
@@ -32,6 +33,12 @@ vi.mock('electron', async () => ({
  * the socket open itself; here nothing but Helm can ask for the page again.
  */
 
+/** The sessions a harness can share a page with, by id: what `sessions.browserOpener` would answer. */
+const SESSIONS = new Map<number, BrowserOpener>([
+  [7, { key: 'token-alpha', name: 'alpha' }],
+  [8, { key: 'token-beta', name: 'beta' }]
+])
+
 interface Harness {
   host: BrowserHost
   window: FakeBrowserWindow
@@ -39,6 +46,7 @@ interface Harness {
   patch: (next: Partial<AppSettings>) => void
   opened: BrowserOpened[]
   closed: number[]
+  commands: BrowserCommandEvent[]
 }
 
 let current: Harness | null = null
@@ -48,6 +56,7 @@ function harness(patch: Partial<AppSettings> = {}): Harness {
   const window = new FakeBrowserWindow()
   const opened: BrowserOpened[] = []
   const closed: number[] = []
+  const commands: BrowserCommandEvent[] = []
   const host = createBrowserHost({
     window: () => window as unknown as BrowserWindow,
     settings: () => settings,
@@ -57,7 +66,10 @@ function harness(patch: Partial<AppSettings> = {}): Harness {
     onChanged: () => undefined,
     onOpened: (page) => opened.push(page),
     onClosed: (id) => closed.push(id),
-    onLogged: (_id: number, _entry: BrowserConsoleEntry) => undefined
+    onCommand: (command) => commands.push(command),
+    onLogged: (_id: number, _entry: BrowserConsoleEntry) => undefined,
+    sessionOpener: (session) => SESSIONS.get(session) ?? null,
+    shareTargets: () => [...SESSIONS].map(([session, opener]) => ({ session, name: opener.name }))
   })
   current = {
     host,
@@ -67,7 +79,8 @@ function harness(patch: Partial<AppSettings> = {}): Harness {
       settings = { ...settings, ...next }
     },
     opened,
-    closed
+    closed,
+    commands
   }
   return current
 }
@@ -156,13 +169,41 @@ describe('browser host - navigation and the address bar', () => {
     expect(stateOf(h, none.id).url).toBe('')
   })
 
-  it('never searches: a phrase is a sentence on the tab and nothing is loaded', () => {
+  it('searches a phrase with the engine in Settings, and with searching off says so and loads nothing', () => {
     const h = harness()
     const { id, wc } = openTab(h)
+    h.host.navigate(id, 'what is a webcontentsview')
+    expect(wc.loads).toEqual(['https://www.google.com/search?q=what%20is%20a%20webcontentsview'])
+    // An address is still an address.
+    h.host.navigate(id, 'localhost:3000')
+    expect(wc.loads.at(-1)).toBe('http://localhost:3000/')
+
+    h.patch({ browserSearch: 'duckduckgo' })
+    h.host.navigate(id, 'helm')
+    expect(wc.loads.at(-1)).toBe('https://duckduckgo.com/?q=helm')
+
+    h.patch({ browserSearch: 'off' })
+    const loaded = wc.loads.length
     const state = h.host.navigate(id, 'what is a webcontentsview')
-    expect(state?.problem).toContain('never searches')
-    expect(stateOf(h, id).problem).toContain('never searches')
+    expect(state?.problem).toContain('searching from the address bar is off')
+    expect(wc.loads).toHaveLength(loaded)
+  })
+
+  it('holds a search to the reach rule: on "This machine only" the results page is refused', () => {
+    const h = harness({ browserReach: 'local' })
+    const { id, wc } = openTab(h)
+    const state = h.host.navigate(id, 'helm desktop')
+    expect(state?.problem).toContain('This machine only')
     expect(wc.loads).toEqual([])
+  })
+
+  it('takes a picture of the page for the window to show while the view stands down', async () => {
+    const h = harness()
+    const { id, wc } = openTab(h, 'http://localhost:3000/')
+    expect(await h.host.snapshot(id)).toBe('data:image/png;base64,cGFnZQ==')
+    wc.picture = ''
+    expect(await h.host.snapshot(id)).toBeNull()
+    expect(await h.host.snapshot(999)).toBeNull()
   })
 
   it('reloads ignoring the cache when asked to, and ordinarily otherwise', () => {
@@ -222,6 +263,8 @@ describe('browser host - navigation and the address bar', () => {
     h.host.stopFind(id)
     expect(stateOf(h, id).find).toBeNull()
     expect(wc.stoppedFinding).toEqual(['clearSelection'])
+    // Closing the field gives the page the caret back, and only then.
+    expect(wc.focused).toBe(1)
 
     // An emptied find field is a stop too.
     h.host.find(id, 'token', true)
@@ -356,6 +399,16 @@ describe('browser host - where the view is', () => {
     h.host.bounds({ id, x: 10, y: 100, width: 390, height: 400, visible: true })
     expect(view.getBounds()).toEqual({ x: 15, y: 150, width: 585, height: 600 })
     expect(view.visible).toBe(true)
+  })
+
+  it("is clear while empty and white from the first page on, the ground a browser gives a page that sets none", () => {
+    const h = harness()
+    const { id, view, wc } = openTab(h)
+    expect(view.background).toBe('#00000000')
+    h.host.navigate(id, 'localhost:3000')
+    expect(view.background).toBe('#00000000')
+    wc.commit('http://localhost:3000/')
+    expect(view.background).toBe('#ffffff')
   })
 
   it('never lets the view into the top 36px, whatever the window reports', () => {
@@ -588,16 +641,264 @@ describe('browser host - security posture', () => {
     expect(fakeBrowser.openedExternally.slice(handedOff)).toEqual(['http://127.0.0.1:8080/payload.bin'])
   })
 
-  it('refuses every permission without asking', () => {
+  it('grants clipboard writing and fullscreen to the page that has the keyboard, and nothing else to anything', () => {
     const h = harness()
     const { wc } = openTab(h, 'http://127.0.0.1:8080/')
-    const answers: boolean[] = []
-    for (const permission of ['geolocation', 'media', 'notifications', 'clipboard-read', 'openExternal']) {
-      partition().permissionRequest!(wc, permission, (granted) => answers.push(granted))
+    const ask = (contents: unknown, permission: string): boolean => {
+      let answer: boolean | null = null
+      partition().permissionRequest!(contents, permission, (granted) => (answer = granted))
+      if (answer === null) throw new Error(`${permission} was never answered`)
+      return answer
     }
-    expect(answers).toEqual([false, false, false, false, false])
+
+    wc.hasFocus = true
+    expect(ask(wc, 'clipboard-sanitized-write')).toBe(true)
+    expect(ask(wc, 'fullscreen')).toBe(true)
+    for (const permission of ['clipboard-read', 'geolocation', 'media', 'notifications', 'openExternal']) {
+      expect(ask(wc, permission), permission).toBe(false)
+    }
+
+    // A page in the background - an agent's, say - gets neither.
+    wc.hasFocus = false
+    expect(ask(wc, 'clipboard-sanitized-write')).toBe(false)
+    expect(ask(wc, 'fullscreen')).toBe(false)
+
+    // Nor do contents that are not a page in the Browser tab: a popup, the app.
+    const popup = new FakeWebContents()
+    popup.hasFocus = true
+    expect(ask(popup, 'clipboard-sanitized-write')).toBe(false)
+    expect(ask(popup, 'fullscreen')).toBe(false)
+
+    expect(partition().permissionCheck!(wc, 'clipboard-sanitized-write', 'http://127.0.0.1:8080', {})).toBe(true)
     expect(partition().permissionCheck!(wc, 'geolocation', 'http://127.0.0.1:8080', {})).toBe(false)
+    expect(partition().permissionCheck!(null, 'fullscreen', '', {})).toBe(false)
     expect(partition().devicePermission!({ deviceType: 'usb' })).toBe(false)
+  })
+})
+
+describe('browser host - the keyboard inside a page', () => {
+  it("takes the Browser tab's keys before the page sees them, and leaves the page every other key", () => {
+    const h = harness()
+    const { id, wc } = openTab(h, 'http://localhost:3000/')
+
+    expect(wc.press({ key: 'w', control: true })).toBe(true)
+    expect(wc.press({ key: 'F5' })).toBe(true)
+    expect(wc.press({ key: 'T', control: true, shift: true })).toBe(true)
+    expect(h.commands).toEqual([
+      { id, command: 'close-page' },
+      { id, command: 'reload' },
+      { id, command: 'reopen-page' }
+    ])
+    // A command drawn in Helm's chrome takes the keyboard back to the window
+    // first; a reload leaves it in the page.
+    expect(h.window.webContents.focused).toBe(2)
+
+    // The page's own keys, a key coming back up and AltGr pass through.
+    expect(wc.press({ key: 'a' })).toBe(false)
+    expect(wc.press({ key: 'n', control: true })).toBe(false)
+    expect(wc.press({ key: 'w', control: true, type: 'keyUp' })).toBe(false)
+    expect(wc.press({ key: 'w', control: true, alt: true })).toBe(false)
+    expect(h.commands).toHaveLength(3)
+
+    // Held: Ctrl+W is swallowed but closes nothing more; Ctrl+= keeps zooming.
+    expect(wc.press({ key: 'w', control: true, isAutoRepeat: true })).toBe(true)
+    expect(wc.press({ key: '=', control: true, isAutoRepeat: true })).toBe(true)
+    expect(h.commands.slice(3)).toEqual([{ id, command: 'zoom-in' }])
+  })
+
+  it("leaves an agent's key presses to the page, even the Browser tab's own", async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    const { id, wc } = openTab(h, 'http://localhost:3000/')
+    const pressed = h.host.press(id, 'w', ['control'])
+    const typed = h.host.typeInto(id, 'T')
+    await vi.advanceTimersByTimeAsync(1000)
+    await Promise.all([pressed, typed])
+    expect(h.commands).toEqual([])
+    // And the next key the user presses is theirs again.
+    expect(wc.press({ key: 'w', control: true })).toBe(true)
+    expect(h.commands).toEqual([{ id, command: 'close-page' }])
+  })
+})
+
+/** A tab a session opened, loaded: what `browser_open` leaves behind. */
+async function openAgentTab(
+  h: Harness,
+  opener: BrowserOpener,
+  url: string
+): Promise<{ id: number; wc: FakeWebContents }> {
+  vi.useFakeTimers()
+  const pending = h.host.openFor(opener, url)
+  const wc = FakeWebContentsView.created.at(-1)!.webContents!
+  wc.commit(url)
+  await vi.advanceTimersByTimeAsync(1000)
+  const { state } = await pending
+  if (state === null) throw new Error('openFor refused')
+  return { id: state.id, wc }
+}
+
+describe('browser host - a page shared with a session', () => {
+  const alpha = SESSIONS.get(7)!
+  const beta = SESSIONS.get(8)!
+
+  it('shares a page the user opened with one session at a time, by its id, and takes it back', () => {
+    const h = harness()
+    const { id } = openTab(h, 'http://localhost:3000/')
+    expect(stateOf(h, id).sharedWith).toBeNull()
+    expect(h.host.shareTargets()).toEqual([
+      { session: 7, name: 'alpha' },
+      { session: 8, name: 'beta' }
+    ])
+
+    expect(h.host.share(id, 7)?.sharedWith).toEqual({ session: 7, name: 'alpha' })
+    expect(h.host.sharedWith(id)).toEqual(alpha)
+    // A new share replaces the old one: one session drives a page at a time.
+    expect(h.host.share(id, 8)?.sharedWith).toEqual({ session: 8, name: 'beta' })
+    expect(h.host.sharedWith(id)).toEqual(beta)
+    // A session that cannot take one - ended, no tools - changes nothing.
+    expect(h.host.share(id, 99)?.sharedWith).toEqual({ session: 8, name: 'beta' })
+    expect(h.host.share(id, null)?.sharedWith).toBeNull()
+    expect(h.host.sharedWith(id)).toBeNull()
+  })
+
+  it("never shares a page an agent opened: it is that session's already", async () => {
+    const h = harness()
+    const { id } = await openAgentTab(h, alpha, 'http://127.0.0.1:8080/')
+    expect(h.host.share(id, 8)?.sharedWith).toBeNull()
+    expect(h.host.sharedWith(id)).toBeNull()
+  })
+
+  it('lets the session it is shared with send it somewhere, and leaves closing it to the user', () => {
+    const h = harness()
+    const { id, wc } = openTab(h, 'http://localhost:3000/')
+    h.host.share(id, 7)
+
+    expect(h.host.navigateFor(alpha, id, 'http://localhost:3000/next').problem).toBeNull()
+    expect(wc.loads.at(-1)).toBe('http://localhost:3000/next')
+    const other = h.host.navigateFor(beta, id, 'http://localhost:3000/other')
+    expect(other.state).toBeNull()
+    expect(other.problem).toContain('is not shared with this session')
+
+    const closing = h.host.closeFor(alpha, id)
+    expect(closing).toEqual({
+      closed: false,
+      problem: `Browser tab ${String(id)} is the user's. They shared it with this session to read and drive, and closing it is theirs.`
+    })
+    expect(h.host.states(id)).toHaveLength(1)
+  })
+
+  it('takes back what was shared with a session when it ends, and its own pages stop saying it can drive them', async () => {
+    const h = harness()
+    const user = openTab(h, 'http://localhost:3000/')
+    h.host.share(user.id, 7)
+    const own = await openAgentTab(h, alpha, 'http://127.0.0.1:8080/')
+    expect(stateOf(h, own.id)).toMatchObject({ openedBy: 'alpha', openerRunning: true })
+
+    h.host.revoke('token-beta')
+    expect(stateOf(h, user.id).sharedWith).toEqual({ session: 7, name: 'alpha' })
+
+    h.host.revoke('token-alpha')
+    expect(stateOf(h, user.id).sharedWith).toBeNull()
+    // Who opened it is history and stays; that it can drive the page does not.
+    expect(stateOf(h, own.id)).toMatchObject({ openedBy: 'alpha', openerRunning: false })
+  })
+
+  it('shares only the page it was given: a page that one opens is the user\'s alone', () => {
+    const h = harness()
+    const { id, wc } = openTab(h, 'http://localhost:3000/')
+    h.host.share(id, 7)
+    const answer = browserWindowOpen(wc.id, {
+      url: 'http://localhost:3000/elsewhere',
+      disposition: 'foreground-tab',
+      features: ''
+    })
+    if (answer.action !== 'allow' || answer.createWindow === undefined) throw new Error('the page was refused')
+    answer.createWindow(handedOver(new FakeWebContents()))
+    const spawned = h.opened.at(-1)!.state
+    expect(spawned.sharedWith).toBeNull()
+    expect(h.host.sharedWith(spawned.id)).toBeNull()
+  })
+})
+
+describe('browser host - the pointer and the wheel an agent uses', () => {
+  it('hovers with a pointer move and nothing pressed, at whole pixels', async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    const { id, wc } = openTab(h, 'http://localhost:3000/')
+    const moved = h.host.hover(id, 40.6, 12.2)
+    await vi.advanceTimersByTimeAsync(200)
+    await moved
+    expect(wc.inputs).toEqual([{ type: 'mouseMove', x: 41, y: 12 }])
+  })
+
+  it('scrolls with a precise wheel turn at the point, its delta the wheel\'s way round', async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    const { id, wc } = openTab(h, 'http://localhost:3000/')
+    const turned = h.host.scroll(id, 640, 400, 0, 300)
+    await vi.advanceTimersByTimeAsync(200)
+    await turned
+    expect(wc.inputs).toEqual([
+      { type: 'mouseMove', x: 640, y: 400 },
+      {
+        type: 'mouseWheel',
+        x: 640,
+        y: 400,
+        deltaX: -0,
+        deltaY: -300,
+        hasPreciseScrollingDeltas: true,
+        canScroll: true
+      }
+    ])
+  })
+})
+
+describe('browser host - a page with the whole screen', () => {
+  it('fills the window while the page has the screen, ignores the pane meanwhile, and goes back where it was', () => {
+    const h = harness()
+    const { id, view, wc } = openTab(h, 'http://localhost:3000/')
+    const other = openTab(h, 'http://localhost:3000/two')
+    h.host.bounds({ id, x: 100, y: 80, width: 800, height: 500, visible: true })
+    expect(h.window.children.at(-1)).toBe(other.view)
+
+    h.window.fullScreen = true
+    h.window.contentBounds = { x: 0, y: 0, width: 2560, height: 1440 }
+    wc.enterFullscreen()
+    // The whole window, the top 36px included, above every other view.
+    expect(view.getBounds()).toEqual({ x: 0, y: 0, width: 2560, height: 1440 })
+    expect(view.visible).toBe(true)
+    expect(h.window.children.at(-1)).toBe(view)
+
+    // The pane re-measures in a window laid out at that size; that is not where the page goes.
+    h.host.bounds({ id, x: 0, y: 80, width: 2560, height: 1300, visible: false })
+    expect(view.getBounds()).toEqual({ x: 0, y: 0, width: 2560, height: 1440 })
+    expect(view.visible).toBe(true)
+
+    // A window resized under it keeps the page filling it.
+    h.window.contentBounds = { x: 0, y: 0, width: 1920, height: 1080 }
+    h.window.emit('resize')
+    expect(view.getBounds()).toEqual({ x: 0, y: 0, width: 1920, height: 1080 })
+
+    h.window.fullScreen = false
+    wc.leaveFullscreen()
+    expect(view.getBounds()).toEqual({ x: 100, y: 80, width: 800, height: 500 })
+    expect(view.visible).toBe(true)
+    h.window.emit('resize')
+    expect(view.getBounds()).toEqual({ x: 100, y: 80, width: 800, height: 500 })
+
+    // And the pane is heard again.
+    h.host.bounds({ id, x: 120, y: 80, width: 700, height: 500, visible: true })
+    expect(view.getBounds()).toEqual({ x: 120, y: 80, width: 700, height: 500 })
+  })
+
+  it('gives the screen back when a page closes while it has it', () => {
+    const h = harness()
+    const { id, wc } = openTab(h, 'http://localhost:3000/')
+    h.host.bounds({ id, x: 100, y: 80, width: 800, height: 500, visible: true })
+    h.window.fullScreen = true
+    wc.enterFullscreen()
+    h.host.close(id)
+    expect(h.window.isFullScreen()).toBe(false)
   })
 })
 

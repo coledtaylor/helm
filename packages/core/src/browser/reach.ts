@@ -27,6 +27,25 @@ export const BROWSER_REACH_MODES = ['web', 'local'] as const
 
 export type BrowserReach = (typeof BROWSER_REACH_MODES)[number]
 
+/**
+ * What the address bar does with something that is not an address: hand it to
+ * one of these, or (`off`) say it is not an address.
+ */
+export const BROWSER_SEARCH_ENGINES = ['google', 'duckduckgo', 'bing', 'off'] as const
+
+export type BrowserSearch = (typeof BROWSER_SEARCH_ENGINES)[number]
+
+const SEARCH_URLS: Record<Exclude<BrowserSearch, 'off'>, { name: string; url: string }> = {
+  google: { name: 'Google', url: 'https://www.google.com/search?q=' },
+  duckduckgo: { name: 'DuckDuckGo', url: 'https://duckduckgo.com/?q=' },
+  bing: { name: 'Bing', url: 'https://www.bing.com/search?q=' }
+}
+
+/** The engine's name, for a placeholder and a settings row, or null when searching is off. */
+export function browserSearchName(search: BrowserSearch): string | null {
+  return search === 'off' ? null : SEARCH_URLS[search].name
+}
+
 /** Allowed, or a whole sentence saying why not. */
 export interface ReachDecision {
   allowed: boolean
@@ -129,19 +148,43 @@ export function agentReach(reach: BrowserReach, mcpLocalOnly: boolean): BrowserR
 /**
  * What somebody typed into the address bar, as a URL - or a refusal.
  *
- * **This never searches, and that is the decision rather than an omission.**
- * Handing an unrecognised string to a search engine is a network request the
- * user did not ask for, made out of a typo, to a third party, from an app whose
- * whole network posture is "nothing on its own initiative". Going to Google is
- * something you do by typing its address.
+ * Four answers: it is already a URL, it is a bare port and therefore a dev
+ * server on this machine, it is a search, or - with `search` off - it is not
+ * an address and the pane says so.
  *
- * So there are three answers and no fourth: it is already a URL, it is a bare
- * port and therefore a dev server on this machine, or it is not an address and
- * the pane says so.
+ * **A search is something the user pressed Enter on, and nothing else.** It
+ * was "never" once, on the grounds that a typo handed to a third party is a
+ * request nobody asked for; it searches now because a browser that refuses a
+ * phrase does not feel like one, and the person typing it did ask. What keeps
+ * the old reasoning true is everything around it: nothing is sent while
+ * typing (there are no suggestions), the results address goes through the
+ * same reach rule as any other, and `off` is one setting away for anybody who
+ * wants the refusal back. A link or a remembered address is never searched -
+ * only the address bar passes `search`.
  */
-export function resolveBrowserAddress(input: string): { url: string | null; problem: string | null } {
+export function resolveBrowserAddress(
+  input: string,
+  search: BrowserSearch = 'off'
+): { url: string | null; problem: string | null } {
   const typed = input.trim()
-  if (typed === '') return { url: null, problem: 'Type an address, or a port number.' }
+  if (typed === '') {
+    return {
+      url: null,
+      problem:
+        search === 'off'
+          ? 'Type an address, or a port number.'
+          : 'Type an address, a port number, or something to search for.'
+    }
+  }
+
+  /** What is left when it is not an address: a search, or the sentence. */
+  const notAddress = (): { url: string | null; problem: string | null } =>
+    search === 'off'
+      ? { url: null, problem: notAnAddress(typed) }
+      : { url: `${SEARCH_URLS[search].url}${encodeURIComponent(typed)}`, problem: null }
+  // A space is the surest sign of a phrase: no host has one, and a URL typed
+  // with one is only ever pasted with its scheme.
+  const phrase = /\s/.test(typed)
 
   /*
    * A bare port. The papercut this pane exists for is `pnpm dev` on 3000, and
@@ -169,14 +212,17 @@ export function resolveBrowserAddress(input: string): { url: string | null; prob
       if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
         return { url: parsed.href, problem: null }
       }
+      // "c++: a tutorial" reads as a scheme to `new URL`, and is a phrase.
+      if (phrase) return notAddress()
       return {
         url: null,
         problem: `Helm's browser opens http and https pages only, and this is ${parsed.protocol.replace(':', '')}.`
       }
     } catch {
-      return { url: null, problem: `${typed} is not an address Helm can open.` }
+      return phrase ? notAddress() : { url: null, problem: `${typed} is not an address Helm can open.` }
     }
   }
+  if (phrase) return notAddress()
 
   // No scheme. `http://` rather than `https://`, because the case this is for
   // is a dev server, and a dev server that is on https will have been typed
@@ -185,18 +231,17 @@ export function resolveBrowserAddress(input: string): { url: string | null; prob
   try {
     parsed = new URL(`http://${typed}`)
   } catch {
-    return { url: null, problem: notAnAddress(typed) }
+    return notAddress()
   }
 
   const host = parsed.hostname.toLowerCase()
   // A dot, a port, or one of the loopback spellings. Anything else is a word,
-  // and a word is what a search box would have taken - so this is where the
-  // refusal lives.
+  // and a word is what a search box takes.
   const addressLike = host.includes('.') || LOOPBACK_HOSTS.has(host) || parsed.port !== ''
-  if (!addressLike) return { url: null, problem: notAnAddress(typed) }
+  if (!addressLike) return notAddress()
 
   return { url: parsed.href, problem: null }
 }
 
 const notAnAddress = (typed: string): string =>
-  `"${typed}" is not an address. Helm's browser never searches - type a URL, or a port number for a dev server on this machine.`
+  `"${typed}" is not an address, and searching from the address bar is off in Settings - type a URL, or a port number for a dev server on this machine.`

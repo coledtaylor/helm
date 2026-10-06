@@ -121,13 +121,22 @@ export TypeScript source, so there is one build step.
   are refused there.
 - A native view paints over all DOM, so it hides while anything is drawn over
   it, through `overlayOpen()` (`ui/src/lib/overlay.ts`), subscribed once in
-  `useBrowsers`. Toasts are drawn clear of the view instead. The view never
-  enters the top 36px, where Windows draws the window controls.
+  `useBrowsers`, and leaves a still of the page in its place
+  (`browser:snapshot`). Toasts are drawn clear of the view instead. The view
+  never enters the top 36px, where Windows draws the window controls, except
+  in fullscreen, when the page has the whole window and there is no title bar.
+- The browser's keys are one table (`shared/browserKeys.ts`): main reads it in
+  `before-input-event` for a key pressed in a page, the window for a key in
+  Helm's chrome, and both run the window's one dispatch. A key an agent sends
+  (`agentInput`) is always the page's.
 - Hide a view with `setVisible(false)`, which keeps the page capturable,
   scriptable and clickable.
 - Self-signed certificates are accepted for loopback only, and there is no
   `certificate-error` handler. Downloads are refused and handed to the system
-  browser, every permission is denied, and the address bar never searches.
+  browser. Every permission is denied but clipboard writing and fullscreen,
+  and those only to a page in the Browser tab that has the keyboard. Only the
+  address bar searches, on Enter, with the engine in `browserSearch` (`off`
+  refuses); nothing is sent while typing.
 
 ## Agent tools - the one inbound listener
 
@@ -145,7 +154,12 @@ export TypeScript source, so there is one build step.
   never `claude mcp add-json`. Leftover files are removed only when their owning
   pid is provably dead.
 - An agent navigation must pass both `browserReach` and `browserMcpLocalOnly`.
-- A tool drives only the tabs its own session opened. `browser_tabs` lists all.
+- A tool drives the tabs its own session opened and a tab the user shared with
+  it from the Share button, and only while the page is within `agentReach`. A
+  share is one session per tab, made by session id (the window never sees a
+  token), never inherited by a page the shared one opens, and revoked with the
+  session's token. `browser_tabs` lists all; `browser_close` closes only the
+  session's own.
 - `sessions_list` and `session_detail` (`main/session-tools.ts`, shaped by
   `core/registry/describe.ts`) never return any part of another session's
   conversation: no transcript, prompt, output, argv, conversation id or child

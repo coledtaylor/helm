@@ -165,6 +165,7 @@ describe('settings', () => {
       updateCheck: false,
       lastUpdateCheckAt: '2026-08-11T20:04:06.641Z',
       browserReach: 'local',
+      browserSearch: 'duckduckgo',
       browserMcp: false,
       browserMcpLocalOnly: true,
       restoreWithoutAsking: true,
@@ -646,6 +647,11 @@ describe('settings validation', () => {
       bad: ['none', 'Web', 'loopback', '', null, true, ['web']]
     },
     {
+      key: 'browserSearch',
+      good: ['google', 'duckduckgo', 'bing', 'off'],
+      bad: ['Google', 'yahoo', '', null, false, ['google']]
+    },
+    {
       // `'false'` is the interesting rejection for both, and it is the same one
       // `updateCheck` has: a row hand-edited into that string would switch the
       // endpoint **on** while the pane read it as off, since every non-empty
@@ -827,6 +833,7 @@ describe('settings validation', () => {
       updateCheck: true,
       lastUpdateCheckAt: null,
       browserReach: 'local',
+      browserSearch: 'duckduckgo',
       browserMcp: false,
       browserMcpLocalOnly: true,
       restoreWithoutAsking: true,
@@ -872,6 +879,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   updateCheck: true,
   lastUpdateCheckAt: null,
   browserReach: 'local',
+  browserSearch: 'duckduckgo',
   browserMcp: false,
   browserMcpLocalOnly: true,
   restoreWithoutAsking: true,
