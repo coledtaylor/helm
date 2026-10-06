@@ -1135,13 +1135,14 @@ export interface IpcRequests {
   }
 
   /**
-   * Hands a link in a rendered note to the OS browser.
+   * Hands a link in a rendered note, or one Ctrl+clicked in a terminal, to the
+   * OS browser.
    *
    * Needed because the alternative is nothing: `will-navigate` is prevented and
    * `setWindowOpenHandler` denies, so an `https://` link in a note is inert
    * without this. Restricted to http, https and mailto in the handler - a note
-   * is content, and `shell.openExternal` on an arbitrary scheme is a way to run
-   * a program.
+   * and a terminal's output are content, and `shell.openExternal` on an
+   * arbitrary scheme is a way to run a program.
    */
   'shell:openExternal': { request: { url: string }; response: { opened: boolean } }
 

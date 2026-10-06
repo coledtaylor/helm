@@ -608,10 +608,10 @@ export function registerIpc(ctx: IpcContext): void {
       path: ctx.content.wikilink(scopePath, target, from)
     }),
 
-    // A link in a note is the user's, not Helm's, so it opens where they expect
-    // links to open. The scheme check is the whole security of this handler:
-    // `shell.openExternal` will happily hand a `file:` URL to the shell, which
-    // on Windows is a way to run whatever it points at.
+    // A link in a note or a terminal is the user's, not Helm's, so it opens
+    // where they expect links to open. The scheme check is the whole security
+    // of this handler: `shell.openExternal` will happily hand a `file:` URL to
+    // the shell, which on Windows is a way to run whatever it points at.
     'shell:openExternal': async ({ url }) => {
       let parsed: URL
       try {

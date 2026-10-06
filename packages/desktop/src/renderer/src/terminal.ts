@@ -5,6 +5,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import '@xterm/xterm/css/xterm.css'
 import type { TermCreateOptions } from '../../shared/protocol'
+import { attachLinks } from './terminalLinks'
 
 /**
  * A 24-bit theme. Every entry is an exact hex triple so that a screenshot can
@@ -201,6 +202,8 @@ export interface TerminalHooks {
   onResize: (cols: number, rows: number) => void
   readClipboard: () => Promise<string>
   writeClipboard: (text: string) => Promise<void>
+  /** A link the user Ctrl+clicked: an http or https URL. See `attachLinks`. */
+  openLink: (url: string) => void
   /** Fired on every keydown that xterm will translate, for latency timing. */
   onKeyDown?: (at: number) => void
 }
@@ -312,6 +315,7 @@ export function createTerminal(
   }
 
   attachKeyBindings(term, hooks)
+  const links = attachLinks(term, container, hooks.openLink)
 
   // Diagnostic only: records what a wheel event actually looked like by the
   // time it reached the pane, so a "scrolling does not work" result can name
@@ -346,6 +350,7 @@ export function createTerminal(
     dispose: () => {
       observer?.disconnect()
       observer = null
+      links.dispose()
       // Disposes the loaded addons with it, webgl's GL context included.
       term.dispose()
     }

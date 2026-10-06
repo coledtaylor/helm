@@ -1,3 +1,4 @@
+import type { Locator, Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fakeClaudeLogs } from '../test/world'
@@ -95,4 +96,91 @@ test('a session tab is renamed, then closed with confirmation', async ({ helm, w
   await expect(window.getByRole('tab', { name: /^review/ })).toHaveCount(0)
   await expect.poll(() => processAlive(run.pid), { timeout: 10_000 }).toBe(false)
   await expect(window.getByRole('contentinfo')).toContainText('No sessions running')
+})
+
+/** Where `text` is drawn in a session's terminal: the middle of its second cell, in window coordinates. */
+async function pointAt(pane: Locator, sessionId: number, text: string): Promise<{ x: number; y: number }> {
+  const terminal = await pane.page().evaluate(
+    (key) =>
+      (
+        window as unknown as {
+          __helmTerminals: () => { sessions: { key: string; lines: string[]; cols: number; rows: number }[] }
+        }
+      )
+        .__helmTerminals()
+        .sessions.find((s) => s.key === key),
+    String(sessionId)
+  )
+  const screen = await pane.locator('.xterm-screen').boundingBox()
+  const row = terminal?.lines.findIndex((line) => line.includes(text)) ?? -1
+  if (terminal === undefined || screen === null || row < 0) throw new Error(`${text} is not on screen`)
+  const column = (terminal.lines[row] ?? '').indexOf(text) + 1
+  const cell = { width: screen.width / terminal.cols, height: screen.height / terminal.rows }
+  return { x: screen.x + (column + 0.5) * cell.width, y: screen.y + (row + 0.5) * cell.height }
+}
+
+async function ctrlClick(window: Page, at: { x: number; y: number }): Promise<void> {
+  await window.mouse.move(at.x, at.y)
+  await window.keyboard.down('Control')
+  await window.mouse.down()
+  await window.mouse.up()
+  await window.keyboard.up('Control')
+}
+
+test('a link in a session opens on Ctrl+click, once, wherever focus was, and a plain click stays the session’s', async ({
+  helm,
+  world
+}) => {
+  const { app, window } = helm
+  // Nothing leaves the app: the system browser is recorded rather than opened.
+  await app.evaluate(({ shell }) => {
+    const record = globalThis as { opened?: string[] }
+    record.opened = []
+    shell.openExternal = async (url: string) => {
+      record.opened?.push(url)
+    }
+  })
+  const opened = (): Promise<string[] | undefined> => app.evaluate(() => (globalThis as { opened?: string[] }).opened)
+  const docs = 'https://example.test/docs'
+  const bare = 'https://example.test/bare'
+
+  const id = await startSession(window, 'alpha')
+  const pane = window.getByRole('region', { name: 'First pane' })
+  const run = await claudeRunIn(world, world.projects.alpha)
+  const mouse = (): string[] => fakeClaudeLogs(world).find((log) => log.pid === run.pid)?.mouse ?? []
+
+  // Like Claude Code's fullscreen interface, the session asks for the mouse.
+  await typeLine(pane, '/links')
+  await expect.poll(() => terminalText(window, id)).toContain(`Or see ${bare} for more.`)
+  // The fake draws a hyperlink only when told the terminal shows them; as
+  // plain text the address would follow the words on the same line.
+  expect((await terminalText(window, id)).split('\n')).toContain('Read the docs')
+
+  // Focus elsewhere in the window first: the case where the session took the
+  // press for the one that activated its window, and opened nothing.
+  const filter = window.getByRole('textbox', { name: 'Filter projects and sessions' })
+  await filter.click()
+  await ctrlClick(window, await pointAt(pane, id, 'Read the docs'))
+  await expect.poll(opened).toEqual([docs])
+  await ctrlClick(window, await pointAt(pane, id, bare))
+  await expect.poll(opened).toEqual([docs, bare])
+
+  // Off the pane and straight back onto the cell it left from, where xterm on
+  // its own finds no link: the browser opened over the window, say, and the
+  // pointer is where it was when the window comes back.
+  await filter.hover()
+  await ctrlClick(window, await pointAt(pane, id, bare))
+  await expect.poll(opened).toEqual([docs, bare, bare])
+
+  // A plain click on the link is the session's: it is sent the press and the
+  // release, with no modifier, and nothing opens.
+  const plain = await pointAt(pane, id, 'Read the docs')
+  await window.mouse.click(plain.x, plain.y)
+  await expect.poll(mouse).toHaveLength(2)
+  expect(mouse().map((report) => report.slice(1))).toEqual([
+    expect.stringMatching(/^\[<0;\d+;\d+M$/),
+    expect.stringMatching(/^\[<0;\d+;\d+m$/)
+  ])
+  // So no Ctrl+click reached it, and each opened its link once.
+  expect(await opened()).toEqual([docs, bare, bare])
 })

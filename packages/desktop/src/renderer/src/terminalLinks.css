@@ -1,0 +1,19 @@
+/*
+ * xterm shows a hand over every link it underlines. A link opens on Ctrl+click
+ * only (terminalLinks.ts), so without Ctrl the pane keeps its own cursor: the
+ * text cursor, or the arrow while the program has asked for the mouse.
+ */
+:root:not(.helm-link-chord) .xterm .xterm-cursor-pointer {
+  cursor: inherit;
+}
+
+/*
+ * The WebGL renderer underlines a hovered link on a canvas of its own, at the
+ * bottom of the cell and in the theme's foreground whatever the link's colour.
+ * Claude Code draws its links itself - coloured, with a dashed underline - so
+ * hovering one drew a grey line just above its own. A link looks the way the
+ * program drew it; the hand is the sign it will open.
+ */
+.xterm .xterm-link-layer {
+  visibility: hidden;
+}
