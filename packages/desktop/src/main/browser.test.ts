@@ -185,18 +185,32 @@ describe('browser host - navigation and the address bar', () => {
     expect(messages(h, id).at(-1)).toContain('Cleared cookies and storage')
   })
 
-  it('finds in the page, steps through matches, and stopping clears the find state', () => {
+  it('finds in the page: a new query starts a search, the same query steps, and stopping clears the find state', () => {
     const h = harness()
     const { id, wc } = openTab(h, 'http://localhost:3000/')
     wc.commit('http://localhost:3000/')
 
+    // Electron's `findNext` is true for the request that *starts* a search.
+    h.host.find(id, 'tok', true)
     h.host.find(id, 'token', true)
-    expect(wc.finds).toEqual([{ query: 'token', forward: true, findNext: false }])
-    wc.emit('found-in-page', {}, { matches: 3, activeMatchOrdinal: 1 })
+    expect(wc.finds).toEqual([
+      { query: 'tok', forward: true, findNext: true },
+      { query: 'token', forward: true, findNext: true }
+    ])
+    // The answer to the search the next keystroke typed over changes nothing.
+    wc.emit('found-in-page', {}, { requestId: 1, matches: 9, activeMatchOrdinal: 1 })
+    expect(stateOf(h, id).find).toEqual({ query: 'token', matches: 0, active: 0 })
+    wc.emit('found-in-page', {}, { requestId: 2, matches: 3, activeMatchOrdinal: 1 })
     expect(stateOf(h, id).find).toEqual({ query: 'token', matches: 3, active: 1 })
 
+    // The same query again steps through that search, backwards here.
     h.host.find(id, 'token', false)
-    expect(wc.finds.at(-1)).toEqual({ query: 'token', forward: false, findNext: true })
+    expect(wc.finds.at(-1)).toEqual({ query: 'token', forward: false, findNext: false })
+    wc.emit('found-in-page', {}, { requestId: 3, matches: 3, activeMatchOrdinal: 3 })
+    expect(stateOf(h, id).find).toEqual({ query: 'token', matches: 3, active: 3 })
+
+    // The caret stays in the pane's find field: the page is never focused.
+    expect(wc.focused).toBe(0)
 
     h.host.stopFind(id)
     expect(stateOf(h, id).find).toBeNull()

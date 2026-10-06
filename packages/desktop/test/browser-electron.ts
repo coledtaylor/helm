@@ -120,7 +120,11 @@ export class FakeWebContents extends EventEmitter {
   closeDevTools(): void {
     this.devtools = false
   }
-  focus(): void {}
+  /** How many times Helm moved keyboard focus into this page. */
+  focused = 0
+  focus(): void {
+    this.focused += 1
+  }
   findInPage(query: string, options: { forward?: boolean; findNext?: boolean }): number {
     this.finds.push({ query, forward: options.forward ?? true, findNext: options.findNext ?? false })
     return this.finds.length

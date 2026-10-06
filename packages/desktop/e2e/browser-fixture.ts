@@ -51,6 +51,12 @@ function respond(path: string, elsewhere: string): { headers: Record<string, str
   switch (path) {
     case '/two':
       return { headers: HTML, body: page('Helm fixture two', '<p>Two</p>') }
+    // Three of one word and none of another, for find in page.
+    case '/find':
+      return {
+        headers: HTML,
+        body: page('Helm fixture find', '<p>needle one</p><p>a haystack</p><p>needle two</p><p>needle three</p>')
+      }
     case '/cookie':
       return {
         // A year, so the second app start reads a cookie that was stored rather

@@ -215,6 +215,58 @@ test('persistence: a cookie a page sets is kept in the browser profile, apart fr
   expect(fixture.cookies[sent]).toContain(`${COOKIE.name}=${COOKIE.value}`)
 })
 
+test('find in page: the caret stays in the find field while typing, and the count says how many matches', async ({
+  helm
+}) => {
+  const ui = helm.window
+  const url = `${fixture.http}/find`
+  /** Whether the page's own web contents holds focus, which is where keystrokes would go. */
+  const pageFocused = (): Promise<boolean> =>
+    helm.app.evaluate(
+      ({ webContents }, prefix) =>
+        webContents.getAllWebContents().some((wc) => wc.getURL().startsWith(prefix) && wc.isFocused()),
+      url
+    )
+
+  await showBrowser(ui)
+  await go(ui, url)
+  await expect(await pageAt(helm, url)).toHaveTitle('Helm fixture find')
+
+  // Loading the page gave it keyboard focus. A real click on the window takes
+  // focus back to the window's own web contents; Playwright's click is
+  // synthesized input and moves nothing, so that half is done here by hand.
+  // Without it the page holds focus from the start and the checks below prove
+  // nothing.
+  await helm.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().find((win) => win.getParentWindow() === null)!.webContents.focus()
+  )
+  expect(await pageFocused()).toBe(false)
+
+  await ui.getByRole('button', { name: 'Find in page' }).click()
+  const field = ui.getByRole('textbox', { name: 'Find in page' })
+  const count = ui.locator('[data-browser-find-count]')
+  await expect(field).toBeFocused()
+
+  // Key by key, the way a person types: every keystroke is a search.
+  await field.pressSequentially('needle', { delay: 50 })
+  await expect(field).toHaveValue('needle')
+  await expect(count).toHaveText('1 / 3')
+  await expect(field).toBeFocused()
+  expect(await pageFocused()).toBe(false)
+
+  // Enter steps forward, Shift+Enter back, and the caret never leaves.
+  await field.press('Enter')
+  await expect(count).toHaveText('2 / 3')
+  await field.press('Shift+Enter')
+  await expect(count).toHaveText('1 / 3')
+  await expect(field).toBeFocused()
+  expect(await pageFocused()).toBe(false)
+
+  // A word the page does not contain says so.
+  await field.fill('haystacks')
+  await expect(count).toHaveText('no matches')
+})
+
 test('dragging: the page stands down while its tab is dragged, and is drawn where the tab lands', async ({
   helm
 }) => {

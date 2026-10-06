@@ -239,6 +239,8 @@ interface View {
   /** The address a retry is trying to reach, and when it gives up. */
   retry: { url: string; until: number; step: number; timer: NodeJS.Timeout | null } | null
   find: { query: string; matches: number; active: number } | null
+  /** The id `findInPage` returned for the newest search. Results for any other are stale. */
+  findRequest: number | null
   /** The session that opened this tab, or null when the user did. */
   openedBy: BrowserOpener | null
   /** Whether this view is attached to the window's content view right now. */
@@ -873,6 +875,7 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       problem: null,
       retry: null,
       find: null,
+      findRequest: null,
       openedBy,
       attached: false,
       parked: openedBy !== null
@@ -983,6 +986,8 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     })
 
     wc.on('found-in-page', (_event, result) => {
+      // A search typed over by the next keystroke can still answer after it.
+      if (entry.find === null || result.requestId !== entry.findRequest) return
       entry.find = {
         query: entry.find?.query ?? '',
         matches: result.matches,
@@ -1481,18 +1486,20 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
         announce(entry)
         return
       }
-      entry.find = { query, matches: entry.find?.matches ?? 0, active: entry.find?.active ?? 0 }
       /*
-       * The page is focused first, and that is required rather than polite.
+       * `findNext: true` **starts** a search, despite the name, and `false`
+       * steps through the one already running (Electron's own docs). So a
+       * changed query is a new search and the same query again is a step.
+       * This was inverted once, and every first search was sent as a step
+       * through a search that never started: zero matches, always.
        *
-       * Chromium's find controller belongs to the focused web contents, and the
-       * caret is in the pane's find field - which is the *window's* contents,
-       * not the view's. Measured: without this, `findInPage` on a visible view
-       * showing text that plainly contains the word returns zero matches, which
-       * is indistinguishable from a page that does not contain it.
+       * And the page is **not** focused. The caret is in the pane's find field
+       * and has to stay there; focusing the view sent every keystroke after
+       * the first into the page instead.
        */
-      wc.focus()
-      wc.findInPage(query, { forward, findNext: entry.find.active > 0 })
+      const starting = entry.find?.query !== query
+      if (starting) entry.find = { query, matches: 0, active: 0 }
+      entry.findRequest = wc.findInPage(query, { forward, findNext: starting })
     },
 
     stopFind(id) {
