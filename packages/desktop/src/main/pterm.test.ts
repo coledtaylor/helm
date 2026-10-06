@@ -257,6 +257,26 @@ describe('which shell a project pane runs', () => {
   })
 })
 
+describe('terminal tabs', () => {
+  it('get a shell of their own, where a project pane reattaches to the one it has', () => {
+    const host = shellHost()
+    updateSettings(services, { terminalShell: ON_PATH['cmd.exe'] ?? null })
+
+    const project = host.open({ path: world.projects.alpha, cols: 100, rows: 20 })
+    const first = host.open({ path: world.projects.alpha, cols: 100, rows: 20, separate: true })
+    const second = host.open({ path: world.projects.alpha, cols: 100, rows: 20, separate: true })
+
+    expect(new Set([project.id, first.id, second.id]).size).toBe(3)
+    expect(host.open({ path: world.projects.alpha, cols: 100, rows: 20 }).id).toBe(project.id)
+    expect(shellSpawns()).toHaveLength(3)
+    expect(shellSpawns().every((spawn) => spawn.cwd === world.projects.alpha)).toBe(true)
+
+    // Closing a tab's shell leaves the project's alone.
+    host.close(first.id)
+    expect(host.list().map((shell) => shell.id)).toEqual([project.id, second.id])
+  })
+})
+
 describe('Claude sessions', () => {
   it('run the claude CLI whatever the shell setting says', async () => {
     const shell = join(world.root, 'Shells', 'nu.exe')

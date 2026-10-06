@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { bridge } from './bridge.testkit'
 import { FakeResizeObserver, layout, type Terminal } from './terminal.testkit'
-import { disposeShell, getShell, mountShell } from './pterms'
+import { disposeShell, getShell, mountShell, terminalShellKey } from './pterms'
 
 vi.mock('@xterm/xterm', () => import('./terminal.testkit'))
 vi.mock('@xterm/addon-fit', () => import('./terminal.testkit'))
@@ -85,5 +85,28 @@ describe('project shells', () => {
     expect(term.disposed).toBe(true)
     expect(getShell(ALPHA)).toBeUndefined()
     expect(bridge.invoked('pterm:close')).toEqual([{ id: IDS[ALPHA] }])
+  })
+})
+
+describe('terminal tabs', () => {
+  it('get a shell each, separate from the project’s, and end with their tab alone', async () => {
+    let next = 20
+    bridge.answer('pterm:open', () => ({ id: next++, shell: 'C:\\Shells\\pwsh.exe', requested: null, problem: null }))
+    await mountShell(ALPHA, box(), OPTS)
+    await mountShell(ALPHA, box(), { ...OPTS, key: terminalShellKey(1) })
+    await mountShell(ALPHA, box(), { ...OPTS, key: terminalShellKey(2) })
+
+    expect(bridge.invoked('pterm:open')).toEqual([
+      { path: ALPHA, cols: 100, rows: 20 },
+      { path: ALPHA, cols: 100, rows: 20, separate: true },
+      { path: ALPHA, cols: 100, rows: 20, separate: true }
+    ])
+    expect(new Set([getShell(ALPHA), getShell(terminalShellKey(1)), getShell(terminalShellKey(2))]).size).toBe(3)
+
+    await disposeShell(terminalShellKey(1))
+    expect(bridge.invoked('pterm:close')).toEqual([{ id: 21 }])
+    expect(getShell(ALPHA)).toBeDefined()
+    expect(getShell(terminalShellKey(2))).toBeDefined()
+    await disposeShell(terminalShellKey(2))
   })
 })

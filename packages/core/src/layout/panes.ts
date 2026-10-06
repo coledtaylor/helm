@@ -32,12 +32,17 @@ import { pluginTabId } from '../plugins/tabs'
  *
  * `WorkspaceTab` is what reopens on its own at the next start. A session is a
  * process `before-quit` ends, a browser tab is a `WebContentsView` it
- * destroys, and the restore offer is one start's question about the last.
+ * destroys, a terminal tab is a shell that dies with its tab, and the restore
+ * offer is one start's question about the last.
+ *
+ * A terminal tab's `id` is the window's own name for it, never a pty's: the
+ * shell behind it is opened once the tab has somewhere to draw it.
  */
 export type PaneRef =
   | WorkspaceTab
   | { kind: 'browser'; id: number }
   | { kind: 'session'; id: number }
+  | { kind: 'terminal'; id: number; path: string }
   | { kind: 'restore' }
 
 /**
@@ -148,6 +153,8 @@ export function paneId(ref: PaneRef): string {
       return `browser:${String(ref.id)}`
     case 'session':
       return `session:${String(ref.id)}`
+    case 'terminal':
+      return `terminal:${String(ref.id)}`
     case 'file':
       return `file:${ref.path}`
     case 'plugin':
@@ -161,7 +168,7 @@ export function paneId(ref: PaneRef): string {
 
 /** Whether a tab is written down across a restart. See `SavedPane`. */
 export function isPersistable(ref: PaneRef): ref is SavedPane {
-  return ref.kind !== 'browser' && ref.kind !== 'restore'
+  return ref.kind !== 'browser' && ref.kind !== 'terminal' && ref.kind !== 'restore'
 }
 
 /** The tab in front of a group: its `activeId`, or the last tab if that is gone. */

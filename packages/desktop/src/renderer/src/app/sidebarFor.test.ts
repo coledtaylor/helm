@@ -6,6 +6,7 @@ describe('sidebarFor', () => {
   it('brings the list each tab was opened from, and nothing for a tab that holds its own', () => {
     const cases: ReadonlyArray<[PaneRef, ReturnType<typeof sidebarFor>]> = [
       [{ kind: 'session', id: 1 }, 'sessions'],
+      [{ kind: 'terminal', id: 1, path: 'C:\\p' }, 'sessions'],
       [{ kind: 'project', path: 'C:\\p' }, 'sessions'],
       [{ kind: 'sessions' }, 'sessions'],
       [{ kind: 'restore' }, 'sessions'],

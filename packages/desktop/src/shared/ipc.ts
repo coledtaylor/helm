@@ -896,6 +896,8 @@ export interface IpcRequests {
        * `terminalShell` setting, and failing that whatever Helm detects.
        */
       shell?: string
+      /** A shell of its own, for a terminal tab, rather than the project's one. */
+      separate?: boolean
     }
     response: {
       id: number
