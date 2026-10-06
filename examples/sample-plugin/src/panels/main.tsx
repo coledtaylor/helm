@@ -1,6 +1,6 @@
 import { StrictMode, useEffect, useMemo, useState, type JSX } from 'react'
 import { createRoot } from 'react-dom/client'
-import { useHelmEvent, useHelmSettings, useSecret } from '@helm/plugin-sdk/react'
+import { useHelmEvent, useHelmSettings, useSecret } from '@coledtaylor/helm-plugin-sdk/react'
 import { CHANNEL, listItems, messageOf, optionsOf, type ItemList } from '../lib/api'
 import '../styles.css'
 

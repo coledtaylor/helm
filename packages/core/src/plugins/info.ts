@@ -1,4 +1,4 @@
-import type { PanelActionSpec, SettingSpec, SettingValue, StatusItem } from '@helm/plugin-sdk'
+import type { PanelActionSpec, SettingSpec, SettingValue, StatusItem } from '@coledtaylor/helm-plugin-sdk'
 
 /**
  * A plugin, as the window draws it: what main read from its folder and what

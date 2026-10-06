@@ -1,4 +1,4 @@
-import type { HelmContext, HelmTheme, PluginParams, SurfaceKind } from '@helm/plugin-sdk'
+import type { HelmContext, HelmTheme, PluginParams, SurfaceKind } from '@coledtaylor/helm-plugin-sdk'
 import { pluginThemeOf } from '@helm/core/types'
 import {
   PLUGIN_SCHEME,

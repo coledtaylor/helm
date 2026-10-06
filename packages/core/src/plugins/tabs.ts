@@ -1,4 +1,4 @@
-import { ID_PATTERN, NAME_PATTERN } from '@helm/plugin-sdk/manifest'
+import { ID_PATTERN, NAME_PATTERN } from '@coledtaylor/helm-plugin-sdk/manifest'
 
 /**
  * A plugin's tab as the layout holds it: which plugin, which of its tabs, and

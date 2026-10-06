@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Frame, Locator, Page } from '@playwright/test'
-import type { HelmBridge } from '@helm/plugin-sdk'
+import type { HelmBridge } from '@coledtaylor/helm-plugin-sdk'
 import { expect, test as base, type Helm } from './helm'
 import { TOKEN, installSample, pluginFrame, registerPlugin, startServer, type SampleFixture } from './plugin-fixture'
 

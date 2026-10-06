@@ -150,7 +150,7 @@ import {
   type TreeSession
 } from '@helm/ui'
 import { sidebarFor, type SidebarView } from './sidebarFor'
-import type { PanelActionIcon } from '@helm/plugin-sdk'
+import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
 import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
 import { helm } from './bridge'
 import { ProjectColumn } from './ProjectColumn'

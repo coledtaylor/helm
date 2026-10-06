@@ -158,6 +158,11 @@ export TypeScript source, so there is one build step.
 Helm loads with, so a manifest change starts there. `apiVersion` 1 is the only
 one; anything else is an error in Settings, never a crash.
 
+The SDK is published to npm as `@coledtaylor/helm-plugin-sdk`, and authors
+start with `npx @coledtaylor/helm-plugin-sdk create`. It ships what `files` in
+its `package.json` lists, and nothing it ships may reach outside its own
+folder: run through npx, that folder is a cache.
+
 - A plugin page is served on `helm-plugin://<id>/`, one origin per plugin,
   framed out of process, with no preload and no Node. The bridge and the
   primitives stylesheet are injected into every page it serves.
@@ -252,6 +257,9 @@ request.
 - A release is a version bump in `packages/desktop/package.json` plus a
   `## <version>` section in CHANGELOG.md, merged to `main`. CI does the rest.
   The `procedures` skill has the detail.
+- The plugin SDK publishes to npm on its own version: a bump in
+  `packages/plugin-sdk/package.json` merged to `main`. A change to the SDK
+  reaches plugin authors only with that bump.
 - Work is tracked in the ClickUp list "Helm - Claude Code Shell"
   (`901114291892`). Nothing in the repository refers to a task by id.
 - Machine-specific facts go in `CLAUDE.local.md` (gitignored). No personal path

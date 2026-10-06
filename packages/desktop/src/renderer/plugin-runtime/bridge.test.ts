@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { HelmBridge, HelmContext, HelmError, HelmTheme } from '@helm/plugin-sdk'
+import type { HelmBridge, HelmContext, HelmError, HelmTheme } from '@coledtaylor/helm-plugin-sdk'
 import type { PluginFetchRequest, PluginFetchResponse } from '../../shared/ipc'
 import { installBridge } from './bridge'
 import { CONNECT, HELLO, contextName, type FrameMessage } from './wire'

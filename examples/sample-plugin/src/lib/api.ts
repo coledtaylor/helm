@@ -1,4 +1,4 @@
-import type { SettingValue } from '@helm/plugin-sdk'
+import type { SettingValue } from '@coledtaylor/helm-plugin-sdk'
 
 /**
  * The sample server's API, through `helm.fetch`.

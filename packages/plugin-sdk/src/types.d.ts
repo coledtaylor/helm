@@ -7,8 +7,8 @@
  * the runtime, so it cannot carry a stale one - `apiVersion` in the manifest is
  * what ties a plugin to the Helm it was built against.
  *
- * `import type { HelmBridge } from '@helm/plugin-sdk'`, and add
- * `/// <reference types="@helm/plugin-sdk/global" />` once to have `window.helm`
+ * `import type { HelmBridge } from '@coledtaylor/helm-plugin-sdk'`, and add
+ * `/// <reference types="@coledtaylor/helm-plugin-sdk/global" />` once to have `window.helm`
  * typed everywhere.
  */
 
@@ -27,7 +27,7 @@ export type ApiVersion = 1
  * may not leave it.
  */
 export interface PluginManifest {
-  /** For editors: `"./node_modules/@helm/plugin-sdk/helm-plugin.schema.json"`. Ignored by Helm. */
+  /** For editors: `"./node_modules/@coledtaylor/helm-plugin-sdk/helm-plugin.schema.json"`. Ignored by Helm. */
   $schema?: string
   apiVersion: ApiVersion
   /** Lower-case letters, digits and dashes. The plugin's origin is `helm-plugin://<id>`. */

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { SettingValue } from '@helm/plugin-sdk'
+import type { SettingValue } from '@coledtaylor/helm-plugin-sdk'
 import type { PluginLogLine, PluginMetrics, SecretInput, SecretsState } from '../../../shared/ipc'
 import { helm } from './bridge'
 import { readable } from './errors'

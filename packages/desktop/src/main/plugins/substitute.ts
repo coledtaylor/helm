@@ -1,4 +1,4 @@
-import { PLACEHOLDER_PATTERN } from '@helm/plugin-sdk/manifest'
+import { PLACEHOLDER_PATTERN } from '@coledtaylor/helm-plugin-sdk/manifest'
 import { PluginCallError } from './errors'
 
 /**

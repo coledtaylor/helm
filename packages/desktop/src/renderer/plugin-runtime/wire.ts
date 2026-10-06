@@ -1,4 +1,4 @@
-import type { HelmContext, HelmErrorCode, HelmTheme } from '@helm/plugin-sdk'
+import type { HelmContext, HelmErrorCode, HelmTheme } from '@coledtaylor/helm-plugin-sdk'
 
 /**
  * The messages between a plugin page's bridge and the Helm page framing it.

@@ -17,8 +17,8 @@ import {
   type PluginFolder,
   type Store
 } from '@helm/core'
-import type { HelmTheme, SettingSpec, SettingValue, StatusItem, StatusTone, SurfaceKind } from '@helm/plugin-sdk'
-import { NAME_PATTERN } from '@helm/plugin-sdk/manifest'
+import type { HelmTheme, SettingSpec, SettingValue, StatusItem, StatusTone, SurfaceKind } from '@coledtaylor/helm-plugin-sdk'
+import { NAME_PATTERN } from '@coledtaylor/helm-plugin-sdk/manifest'
 import {
   PLUGIN_SCHEME,
   type EventChannel,

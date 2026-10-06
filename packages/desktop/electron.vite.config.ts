@@ -15,11 +15,11 @@ import { inlineScript } from './inline-script'
  * packages use (`better-sqlite3`) stay external and are listed in this
  * package's dependencies so electron-builder still sees them.
  *
- * `@helm/plugin-sdk` is bundled for the same last reason: main validates
+ * `@coledtaylor/helm-plugin-sdk` is bundled for the same last reason: main validates
  * manifests with the SDK's own validator, so the two can never disagree, and
  * a workspace package is not something the packaged app should carry loose.
  */
-const BUNDLED_WORKSPACE_PACKAGES = ['@helm/core', '@helm/ui', '@helm/plugin-sdk']
+const BUNDLED_WORKSPACE_PACKAGES = ['@helm/core', '@helm/ui', '@coledtaylor/helm-plugin-sdk']
 
 export default defineConfig({
   main: {

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import type { NormalizedExec } from '@helm/plugin-sdk/manifest'
+import type { NormalizedExec } from '@coledtaylor/helm-plugin-sdk/manifest'
 
 vi.mock('electron', async () => (await import('../../../test/electron')).electronFake())
 

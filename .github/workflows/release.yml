@@ -3,6 +3,9 @@ name: Release
 # Cutting a release is bumping the version in packages/desktop/package.json and
 # merging it to main. Nothing else - no tag to push by hand, no button.
 #
+# The plugin SDK is published to npm the same way, on its own version in
+# packages/plugin-sdk/package.json: see the `sdk` job.
+#
 # Why the trigger is a version bump and not every merge (decided 2026-08-10):
 # releasing on every merge burns a release on a typo fix in a doc and makes two
 # merges in a row collide on the same tag. Why it is not a manual dispatch: the
@@ -286,3 +289,91 @@ jobs:
             echo
             echo "- \`/releases/latest\` -> \`$tag\`, published, $assets"
           } >>"$GITHUB_STEP_SUMMARY"
+
+  # The plugin SDK goes to npm on its own version, the way the app goes to
+  # GitHub on its: bump packages/plugin-sdk/package.json, merge, and this job
+  # publishes it. Its gate asks the registry, not git, for the reason the app's
+  # asks for a tag - "is this version published" is the same answer every time.
+  #
+  # Trusted publishing: npm trusts this workflow in this repository by OIDC,
+  # set up on the package's settings page on npmjs.com, so no npm token is
+  # stored anywhere, and a publish from a public repository carries provenance.
+  # npm offers that only for a package that already exists, which is why the
+  # first version was published by hand and why a package npm has never heard
+  # of is skipped here rather than failed.
+  sdk:
+    needs: [check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/plugin-sdk
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          # Trusted publishing needs npm 11.5.1 or later; Node 24 ships it.
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - id: gate
+        run: |
+          set -euo pipefail
+
+          name=$(jq -er .name package.json)
+          version=$(jq -er .version package.json)
+          if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error file=packages/plugin-sdk/package.json::version '$version' is not <major>.<minor>.<patch>"
+            exit 1
+          fi
+
+          # A package npm has never heard of and a registry that could not be
+          # asked both exit non-zero; only the first is a reason to skip.
+          status=0
+          versions=$(npm view "$name" versions --json 2>/dev/null) || status=$?
+          if [[ $status -ne 0 ]]; then
+            if [[ $(jq -r '.error.code? // empty' <<<"$versions" 2>/dev/null) == E404 ]]; then
+              echo "publish=false" >>"$GITHUB_OUTPUT"
+              echo "GATE: publish=false - $name is not on npm; its first version is published by hand."
+              echo "**SDK not published.** \`$name\` is not on npm yet; publish its first version by hand." >>"$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::error::could not ask npm which versions of $name exist: $versions"
+            exit 1
+          fi
+
+          # One version comes back as a string, several as an array.
+          if jq -e --arg v "$version" '(if type == "array" then . else [.] end) | index($v) != null' <<<"$versions" >/dev/null; then
+            echo "publish=false" >>"$GITHUB_OUTPUT"
+            echo "GATE: publish=false - $name@$version is already on npm; bump its version to publish."
+            echo "**SDK not published.** \`$name@$version\` is already on npm; bump its version to publish." >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "publish=true" >>"$GITHUB_OUTPUT"
+            echo "GATE: publish=true - $name@$version is not on npm yet."
+          fi
+          echo "name=$name" >>"$GITHUB_OUTPUT"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+      - name: Publish
+        if: steps.gate.outputs.publish == 'true'
+        env:
+          NAME: ${{ steps.gate.outputs.name }}
+          VERSION: ${{ steps.gate.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # Said here, not discovered as an authentication error: an older npm
+          # does not know trusted publishing and asks for a token instead.
+          npm_version=$(npm --version)
+          if [[ $(printf '%s\n' 11.5.1 "$npm_version" | sort -V | head -n1) != 11.5.1 ]]; then
+            echo "::error::npm $npm_version cannot use trusted publishing; it needs 11.5.1 or later"
+            exit 1
+          fi
+
+          npm publish --provenance --access public
+          echo "**Published [\`$NAME@$VERSION\`](https://www.npmjs.com/package/$NAME/v/$VERSION)** with provenance." >>"$GITHUB_STEP_SUMMARY"

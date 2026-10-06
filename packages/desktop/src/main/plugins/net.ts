@@ -1,6 +1,6 @@
 import { net, session, type Session } from 'electron'
 import { isLoopbackUrl } from '@helm/core/types'
-import { originMatches, PLACEHOLDER_PATTERN, type NormalizedManifest } from '@helm/plugin-sdk/manifest'
+import { originMatches, PLACEHOLDER_PATTERN, type NormalizedManifest } from '@coledtaylor/helm-plugin-sdk/manifest'
 import type { PluginFetchRequest, PluginFetchResponse } from '../../shared/ipc'
 import { PluginCallError } from './errors'
 import type { SecretStore } from './secrets'

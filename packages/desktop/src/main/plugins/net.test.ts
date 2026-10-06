@@ -3,7 +3,7 @@ import { createServer, request as httpRequest, type IncomingHttpHeaders, type Se
 import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openStore, type Store } from '@helm/core'
-import { validateManifest, type NormalizedManifest } from '@helm/plugin-sdk/manifest'
+import { validateManifest, type NormalizedManifest } from '@coledtaylor/helm-plugin-sdk/manifest'
 import type { PluginFetchRequest } from '../../shared/ipc'
 import type { FetchContext, Hop, SendHop } from './net'
 import type { SecretStore } from './secrets'

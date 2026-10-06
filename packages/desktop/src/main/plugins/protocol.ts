@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { extname, sep } from 'node:path'
 import { protocol } from 'electron'
-import { RESERVED_PREFIX } from '@helm/plugin-sdk/manifest'
+import { RESERVED_PREFIX } from '@coledtaylor/helm-plugin-sdk/manifest'
 import { PLUGIN_SCHEME } from '../../shared/ipc'
 import { MIME } from '../content'
 import { resolveInside } from './loader'

@@ -1,2 +1,2 @@
 /// <reference types="vite/client" />
-/// <reference types="@helm/plugin-sdk/global" />
+/// <reference types="@coledtaylor/helm-plugin-sdk/global" />

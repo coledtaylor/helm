@@ -5,7 +5,7 @@ import {
   manifestFiles,
   validateManifest,
   type NormalizedManifest
-} from '@helm/plugin-sdk/manifest'
+} from '@coledtaylor/helm-plugin-sdk/manifest'
 import { isInside } from '../content'
 
 /**

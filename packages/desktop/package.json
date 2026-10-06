@@ -38,7 +38,7 @@
   },
   "dependencies": {
     "@helm/core": "workspace:*",
-    "@helm/plugin-sdk": "workspace:*",
+    "@coledtaylor/helm-plugin-sdk": "workspace:*",
     "@helm/ui": "workspace:*",
     "@shikijs/langs": "^4.4.3",
     "@shikijs/themes": "^4.4.3",

@@ -1,4 +1,4 @@
-import type { HelmTheme } from '@helm/plugin-sdk'
+import type { HelmTheme } from '@coledtaylor/helm-plugin-sdk'
 import type { AppSettings } from '../types'
 import { THEME_TOKENS, type AppliedTheme } from '../theme/themes'
 

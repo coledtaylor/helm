@@ -6,20 +6,22 @@
  *   helm-plugin create <folder> [--id <id>] [--name <name>]
  *   helm-plugin validate [folder]
  *
- * Plain JavaScript and Node's own modules only, so it runs straight from the
- * SDK's folder - linked by path or installed - with nothing to build first.
+ * Plain JavaScript and Node's own modules only, so it runs as published -
+ * through npx, from a plugin's own node_modules, or from a clone of Helm -
+ * with nothing to build first.
  * `validate` runs the validator Helm itself runs (`src/manifest.js`), plus the
  * checks Helm makes on the folder when it loads it (`src/folder.js`).
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { basename, extname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { checkPluginFolder, MANIFEST_FILE } from '../src/folder.js'
 import { ID_PATTERN } from '../src/manifest.js'
 
 const SDK = fileURLToPath(new URL('..', import.meta.url))
 const TEMPLATE = join(SDK, 'template')
-const SCHEMA = join(SDK, 'helm-plugin.schema.json')
+/** This SDK's own name and version: what a new plugin depends on. */
+const PACKAGE = /** @type {{ name: string, version: string }} */ (JSON.parse(readFileSync(join(SDK, 'package.json'), 'utf8')))
 /** What the template is called, replaced by what the new plugin is called. */
 const TEMPLATE_ID = 'my-plugin'
 const TEMPLATE_NAME = 'My plugin'
@@ -120,17 +122,32 @@ function walk(dir, prefix = '') {
 }
 
 /**
- * Where the new manifest's `$schema` points: this SDK's schema, relative to
- * the plugin so the pair can move together, or by URL when no relative path
- * exists (another drive).
- *
- * @param {string} target
+ * Where the new manifest's `$schema` points: the schema in the plugin's own
+ * `node_modules`, once `npm install` has put the SDK there. Never this copy's
+ * path - run through npx, that is a cache folder that can be emptied at any
+ * time - and never a URL, so an editor needs no network to check a manifest.
  */
-function schemaReference(target) {
-  const rel = relative(target, SCHEMA)
-  if (rel === '' || isAbsolute(rel)) return pathToFileURL(SCHEMA).href
-  return rel.split(sep).join('/')
+const SCHEMA_REFERENCE = `./node_modules/${PACKAGE.name}/helm-plugin.schema.json`
+
+/**
+ * The new plugin's `package.json`: the SDK as a development dependency, which
+ * is where its schema, types and `helm-plugin` come from. Private, so an
+ * `npm publish` in the wrong folder cannot put the plugin on npm. No version:
+ * the manifest's is the one Helm shows.
+ *
+ * @param {string} id
+ */
+function packageJson(id) {
+  return {
+    name: id,
+    private: true,
+    scripts: { validate: 'helm-plugin validate' },
+    devDependencies: { [PACKAGE.name]: `^${PACKAGE.version}` }
+  }
 }
+
+/** npm leaves `.gitignore` out of every package it packs, so the template cannot carry one. */
+const GITIGNORE = 'node_modules/\n'
 
 /**
  * @param {readonly string[]} argv
@@ -182,7 +199,7 @@ function create(argv) {
         JSON.parse(JSON.stringify(manifest), (_key, value) => (value === TEMPLATE_NAME ? name : value))
       )
       renamed['id'] = id
-      writeFileSync(to, `${JSON.stringify({ $schema: schemaReference(target), ...renamed }, null, 2)}\n`)
+      writeFileSync(to, `${JSON.stringify({ $schema: SCHEMA_REFERENCE, ...renamed }, null, 2)}\n`)
       continue
     }
     const extension = extname(rel).toLowerCase()
@@ -194,6 +211,8 @@ function create(argv) {
       writeFileSync(to, readFileSync(from))
     }
   }
+  writeFileSync(join(target, 'package.json'), `${JSON.stringify(packageJson(id), null, 2)}\n`)
+  writeFileSync(join(target, '.gitignore'), GITIGNORE)
 
   const check = checkPluginFolder(target)
   if (!check.ok) {
@@ -205,7 +224,8 @@ function create(argv) {
   out('Next:')
   out(`  1. In Helm, open Settings > Plugins > Add folder and pick ${target}`)
   out('  2. Edit pages/panel.html and pages/panel.js. Helm reloads the plugin when you save.')
-  out(`  3. helm-plugin validate "${target}" checks it as Helm will.`)
+  out('  3. Run npm install there, for the manifest schema in your editor. Then')
+  out('     npm run validate checks the plugin as Helm will.')
   return 0
 }
 
