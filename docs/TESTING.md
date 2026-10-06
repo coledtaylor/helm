@@ -66,10 +66,9 @@ it (`CodeEditor.testkit.ts` has them).
 
 `pnpm test` measures coverage over `packages/*/src` (the diagnostic drivers and
 their spike page excepted), prints a summary and writes an HTML report to
-`reports/coverage`. The thresholds in `vitest.config.ts` are a floor that only
-goes up: a full run that beats them rewrites them, rounded down to a whole
-percent, and commits with the change; a run below them fails. A targeted
-`vitest run` measures nothing, so it never trips them.
+`reports/coverage`. The thresholds in `vitest.config.ts` are a fixed floor of
+70% (branches 68%); a run below them fails, and nothing raises them
+automatically. A targeted `vitest run` measures nothing, so it never trips them.
 
 ## End-to-end tests
 
