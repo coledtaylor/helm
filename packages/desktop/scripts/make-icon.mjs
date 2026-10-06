@@ -1,5 +1,5 @@
 /**
- * Draws the placeholder ship's-wheel icon and packs it into `build/icon.ico`.
+ * Draws the ship's-wheel icon and packs it into `build/icon.ico`.
  *
  * Run with `pnpm icon`. The .ico is committed, so this is not part of the
  * build - run it when the artwork changes and commit the result.
@@ -41,6 +41,16 @@
  * hub's ring stays open between them; at the rim's weight they close it into
  * a blot.
  *
+ * ## Why there is no tile behind it
+ *
+ * The wheel is the icon, on a transparent ground, as VS Code's mark is. It
+ * used to sit on a navy rounded square, which on the taskbar read as a generic
+ * app tile with a picture on it rather than as Helm. Without the tile the
+ * wheel fills the icon, and it is drawn in the purple the title-bar mark
+ * wears, so the window and the taskbar button show the same thing.
+ * `build/preview.png` shows it on a dark and a light taskbar, since a
+ * transparent icon is only ever seen on one of the two.
+ *
  * When real artwork replaces this, none of the above applies - export a
  * 1024px PNG from a vector tool and use an icon generator. See the README of
  * this directory or ask; this file is a placeholder's scaffolding, not a
@@ -59,10 +69,20 @@ const BUILD = join(dirname(fileURLToPath(import.meta.url)), '..', 'build')
 /** 256 must be present - electron-builder rejects an icon without it. */
 const SIZES = [16, 24, 32, 48, 64, 128, 256]
 
-const NAVY = [0x0f, 0x18, 0x26]
-const BRASS = [0xe3, 0xa9, 0x4c]
+/**
+ * Nocturne's `accent` (core/theme/themes.ts), the colour the title-bar mark is
+ * drawn in out of the box. Fixed rather than following the theme: there is one
+ * icon file for every user, and the taskbar is not themed by Helm.
+ */
+const PURPLE = [0x91, 0x84, 0xd9]
 
-/** The 16-unit box as a share of the icon: the handles' caps end 8px inside a 256 icon's edge. */
+/**
+ * The 16-unit box as a share of the icon: the handles' caps end 18px inside a
+ * 256 icon's edge. The pixel snapping below was tuned at this share. At the
+ * whole box, 24 and 32px land on the wrong side of a rounding - a two-pixel
+ * spoke and a hub with no hole - and close up into a cross, and the 16px
+ * handles run off the edge.
+ */
 const FILL = 0.92
 
 // ---------------------------------------------------------------------------
@@ -82,12 +102,6 @@ function sdCapsule(px, py, ax, ay, bx, by, r) {
   return Math.hypot(pax - bax * h, pay - bay * h) - r
 }
 
-function sdRoundedRect(px, py, w, h, r) {
-  const qx = Math.abs(px - w / 2) - (w / 2 - r)
-  const qy = Math.abs(py - h / 2) - (h / 2 - r)
-  return Math.min(Math.max(qx, qy), 0) + Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) - r
-}
-
 /**
  * Coverage from a distance, anti-aliased across one pixel.
  *
@@ -96,18 +110,6 @@ function sdRoundedRect(px, py, w, h, r) {
  */
 const coverage = (d) => Math.max(0, Math.min(1, 0.5 - d))
 
-/** Source-over, with both sides straight (non-premultiplied) alpha. */
-function over(dst, i, rgb, a) {
-  if (a <= 0) return
-  const da = dst[i + 3] / 255
-  const outA = a + da * (1 - a)
-  if (outA <= 0) return
-  for (let c = 0; c < 3; c++) {
-    dst[i + c] = Math.round((rgb[c] * a + dst[i + c] * da * (1 - a)) / outA)
-  }
-  dst[i + 3] = Math.round(outA * 255)
-}
-
 // ---------------------------------------------------------------------------
 // The mark
 // ---------------------------------------------------------------------------
@@ -115,7 +117,6 @@ function over(dst, i, rgb, a) {
 function draw(size) {
   const px = new Uint8Array(size * size * 4)
   const unit = (size * FILL) / 16
-  const corner = (56 * size) / 256
 
   // Up to 48px the drawing is snapped to the pixel grid. Every width is a
   // whole number of pixels, the centre sits where the spokes' width needs it -
@@ -169,21 +170,22 @@ function draw(size) {
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const i = (y * size + x) * 4
       const cx = x + 0.5
       const cy = y + 0.5
 
-      over(px, i, NAVY, coverage(sdRoundedRect(cx, cy, size, size, corner)))
-
-      let brass = 0
+      let ink = 0
       for (const { inside, hub, rim, end } of spokes) {
-        if (inside) brass = Math.max(brass, coverage(sdCapsule(cx, cy, hub[0], hub[1], rim[0], rim[1], spokeHalf)))
-        brass = Math.max(brass, coverage(sdCapsule(cx, cy, rim[0], rim[1], end[0], end[1], handleHalf)))
+        if (inside) ink = Math.max(ink, coverage(sdCapsule(cx, cy, hub[0], hub[1], rim[0], rim[1], spokeHalf)))
+        ink = Math.max(ink, coverage(sdCapsule(cx, cy, rim[0], rim[1], end[0], end[1], handleHalf)))
       }
       // A ring is the circle's distance folded about its own edge.
-      brass = Math.max(brass, coverage(Math.abs(sdCircle(cx, cy, c, c, rimR)) - rimHalf))
-      brass = Math.max(brass, coverage(Math.abs(sdCircle(cx, cy, c, c, hubR)) - hubHalf))
-      over(px, i, BRASS, brass)
+      ink = Math.max(ink, coverage(Math.abs(sdCircle(cx, cy, c, c, rimR)) - rimHalf))
+      ink = Math.max(ink, coverage(Math.abs(sdCircle(cx, cy, c, c, hubR)) - hubHalf))
+
+      // One colour on a transparent ground: the coverage is the alpha.
+      const i = (y * size + x) * 4
+      px.set(PURPLE, i)
+      px[i + 3] = Math.round(ink * 255)
     }
   }
 
@@ -284,45 +286,51 @@ const entries = SIZES.map((size) => {
 })
 
 /**
- * A strip of the small sizes, nearest-neighbour magnified.
+ * The small sizes, nearest-neighbour magnified, on a dark taskbar and a light
+ * one.
  *
  * Not shipped - it exists so the sizes that actually get looked at can be
  * looked at. Judging a 16px icon by opening the 256px one is how the small
- * version ended up reading as a flower.
+ * version ended up reading as a flower, and an icon with no ground of its own
+ * has to hold up on both of the grounds Windows puts under it.
  */
 function writePreview() {
   const shown = [16, 24, 32, 48]
+  // Windows 11's taskbar, dark and light.
+  const grounds = [
+    [0x20, 0x20, 0x20],
+    [0xf3, 0xf3, 0xf3]
+  ]
   const zoom = 8
   const pad = 12
   const cell = 48 * zoom
   const w = shown.length * cell + (shown.length + 1) * pad
-  const h = cell + pad * 2
+  const h = grounds.length * cell + (grounds.length + 1) * pad
   const out = new Uint8Array(w * h * 4)
-  for (let i = 0; i < out.length; i += 4) {
-    out[i] = 0x2a
-    out[i + 1] = 0x2a
-    out[i + 2] = 0x30
-    out[i + 3] = 0xff
-  }
 
-  shown.forEach((size, n) => {
-    const src = draw(size)
-    const scale = (48 * zoom) / size
-    const ox = pad + n * (cell + pad)
-    const oy = pad
-    for (let y = 0; y < cell; y++) {
-      for (let x = 0; x < cell; x++) {
-        const sx = Math.min(size - 1, Math.floor(x / scale))
-        const sy = Math.min(size - 1, Math.floor(y / scale))
-        const si = (sy * size + sx) * 4
-        const di = ((oy + y) * w + (ox + x)) * 4
-        const a = src[si + 3] / 255
-        for (let ch = 0; ch < 3; ch++) {
-          out[di + ch] = Math.round(src[si + ch] * a + out[di + ch] * (1 - a))
-        }
-        out[di + 3] = 0xff
-      }
+  grounds.forEach((ground, row) => {
+    const top = row * (cell + pad)
+    for (let y = top; y < top + cell + 2 * pad; y++) {
+      for (let x = 0; x < w; x++) out.set([...ground, 0xff], (y * w + x) * 4)
     }
+    shown.forEach((size, n) => {
+      const src = draw(size)
+      const scale = (48 * zoom) / size
+      const ox = pad + n * (cell + pad)
+      const oy = top + pad
+      for (let y = 0; y < cell; y++) {
+        for (let x = 0; x < cell; x++) {
+          const sx = Math.min(size - 1, Math.floor(x / scale))
+          const sy = Math.min(size - 1, Math.floor(y / scale))
+          const si = (sy * size + sx) * 4
+          const di = ((oy + y) * w + (ox + x)) * 4
+          const alpha = src[si + 3] / 255
+          for (let ch = 0; ch < 3; ch++) {
+            out[di + ch] = Math.round(src[si + ch] * alpha + ground[ch] * (1 - alpha))
+          }
+        }
+      }
+    })
   })
 
   writeFileSync(join(BUILD, 'preview.png'), encodePng(out, w, h))
