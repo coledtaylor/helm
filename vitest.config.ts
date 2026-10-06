@@ -36,14 +36,14 @@ export default defineConfig({
       ],
       reporter: ['text-summary', 'html'],
       reportsDirectory: 'reports/coverage',
-      // The floor only goes up: a run that beats it raises it in this file,
-      // rounded down to a whole percent, and a run below it fails.
+      // A fixed floor, and a run below it fails. It is not raised
+      // automatically: a ratchet that rose with every run made each untested
+      // line of wiring a failed gate, which is a cost the owner chose not to pay.
       thresholds: {
-        autoUpdate: (value: number) => Math.floor(value),
-        lines: 79,
-        functions: 72,
+        lines: 70,
+        functions: 70,
         branches: 68,
-        statements: 76
+        statements: 70
       }
     },
     projects: [

@@ -14,6 +14,52 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.1.0
+
+Helm 2.1 adds plugins: folders you add that put their own panels, tabs and
+status items into the window. It also adds terminal tabs, plain shells in a
+folder with no Claude in them, and moves pull requests out of Helm and into
+plugin territory.
+
+**Plugins**
+
+- Add a plugin folder in Settings > Plugins. A plugin can add a rail icon with
+  a sidebar panel, tabs in any pane, status bar items, rail badges and commands
+  in a palette on Ctrl+Shift+P. Edits to a plugin's files reload it.
+- Each plugin runs in its own sandboxed page. It reaches only the web
+  addresses its manifest lists, and runs only the programs it names. Settings
+  names both, because those programs run with your rights.
+- A plugin can keep a secret you type into it, such as an API token. Helm
+  stores it encrypted, and fills it in only for the addresses you allowed.
+- A plugin that crashes or fails to load says so in its own panel or tab.
+  Helm itself keeps running.
+- Turning a plugin off or reloading it ends anything it had running.
+- To write one, run `npx @coledtaylor/helm-plugin-sdk create`. The authoring
+  guide and the manifest checker come with it.
+
+**Terminal tabs**
+
+- A tab can be a plain terminal: a shell in a folder, with no `claude` started
+  in it. Press Alt+Enter in the Ctrl+N launcher, or pick Terminal from a
+  pane's +. Ctrl+Alt+Enter opens it in the pane beside.
+- Each terminal tab is its own shell, even on the same folder, and closing
+  the tab ends it. It runs the shell your Shell setting names. Terminal tabs
+  do not count as sessions and do not reopen after a restart.
+
+**Sessions**
+
+- Ctrl+click opens a link in a session in your browser, once, every time. Links
+  Claude Code prints are styled as links, and the hand cursor shows while Ctrl
+  is held.
+
+**Removed**
+
+- Pull requests are no longer part of Helm: the Pulls rail item and tabs,
+  Review with Claude, the project page's pull request panel and Settings >
+  GitHub are gone. Helm no longer runs `gh` on a timer. A plugin can bring
+  pull requests back for anyone who wants them. Saved layouts that held a pull
+  request tab open without it.
+
 ## 2.0.0
 
 Helm 2.0 is a new window built around your sessions. Your projects and the

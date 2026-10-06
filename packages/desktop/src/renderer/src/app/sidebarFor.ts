@@ -16,6 +16,7 @@ export type SidebarView = 'sessions' | 'files' | 'profiles' | 'settings' | `plug
 export function sidebarFor(ref: PaneRef): SidebarView | null {
   switch (ref.kind) {
     case 'session':
+    case 'terminal':
     case 'project':
     case 'sessions':
     case 'restore':

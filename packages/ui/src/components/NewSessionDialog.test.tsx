@@ -237,6 +237,24 @@ describe('NewSessionDialog', () => {
     )
   })
 
+  it('opens a terminal in the highlighted folder with Alt+Enter or its button, beside with Ctrl', async () => {
+    const onTerminal = vi.fn()
+    const props = renderDialog({ onTerminal })
+    await userEvent.click(within(list()).getByRole('option', { name: 'TimeClick-Builder' }))
+    await userEvent.keyboard('{Alt>}{Enter}{/Alt}')
+    expect(onTerminal).toHaveBeenLastCalledWith(builder, false)
+    await userEvent.keyboard('{Control>}{Alt>}{Enter}{/Alt}{/Control}')
+    expect(onTerminal).toHaveBeenLastCalledWith(builder, true)
+    await userEvent.click(within(dialog()).getByRole('button', { name: /Terminal$/ }))
+    expect(onTerminal).toHaveBeenCalledTimes(3)
+    expect(props.onStart).not.toHaveBeenCalled()
+  })
+
+  it('offers no terminal when nothing handles one', () => {
+    renderDialog()
+    expect(within(dialog()).queryByRole('button', { name: /Terminal$/ })).toBeNull()
+  })
+
   it('says what is already running in the folder, and why a launch failed', () => {
     const live = [
       { pid: 41, cwd: timeclick.path.toUpperCase(), name: 'accruals report', helmSessionId: 3 },

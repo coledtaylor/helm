@@ -15,8 +15,13 @@ import { onTerminalPrefs, terminalPrefs } from './termprefs'
  * with it.
  *
  * Keyed by project path: one shell per project, created the first time its
- * pane mounts and killed when the project's tab closes.
+ * pane mounts and killed when the project's tab closes. A terminal tab's shell
+ * is keyed by the tab instead (`terminalShellKey`) and opened `separate`, so
+ * two of them on one folder are two shells.
  */
+
+/** The registry key of a terminal tab's shell. No folder path looks like it. */
+export const terminalShellKey = (id: number): string => `terminal:${String(id)}`
 
 interface ShellPane {
   id: number
@@ -65,6 +70,11 @@ export interface MountShellOptions {
    * until someone picks otherwise in its header.
    */
   shell?: string | null
+  /**
+   * The registry key, for a shell that is not the project's own: a terminal
+   * tab's (`terminalShellKey`). Absent means the path, and the project shell.
+   */
+  key?: string
 }
 
 /** What a mounted shell turned out to be, for the pane header to caption. */
@@ -116,14 +126,16 @@ export async function mountShell(
   container: HTMLElement,
   opts: MountShellOptions
 ): Promise<MountedShell | null> {
-  const existing = panes.get(path.toLowerCase())
+  const key = (opts.key ?? path).toLowerCase()
+  const existing = panes.get(key)
   if (existing) return park(container, existing)
 
   const opened = await helm.invoke('pterm:open', {
     path,
     cols: opts.cols,
     rows: opts.rows,
-    ...(opts.shell != null && opts.shell !== '' ? { shell: opts.shell } : {})
+    ...(opts.shell != null && opts.shell !== '' ? { shell: opts.shell } : {}),
+    ...(opts.key === undefined ? {} : { separate: true })
   })
   // The pane that asked may be gone by now - a tab closed, or a project
   // switched away from while the pty was opening. Parking into a box React has
@@ -131,7 +143,7 @@ export async function mountShell(
   if (!container.isConnected) return null
   // Two panes racing for one path (a fast tab close-and-reopen): the second
   // await lands after the first built the pane. Reattach rather than double up.
-  const raced = panes.get(path.toLowerCase())
+  const raced = panes.get(key)
   if (raced) return park(container, raced)
 
   const element = document.createElement('div')
@@ -188,19 +200,20 @@ export async function mountShell(
     },
     detachExit
   }
-  panes.set(path.toLowerCase(), pane)
+  panes.set(key, pane)
   return described(pane)
 }
 
-export function getShell(path: string): TerminalHost | undefined {
-  return panes.get(path.toLowerCase())?.host
+/** A project shell by its path, or a terminal tab's by `terminalShellKey`. */
+export function getShell(key: string): TerminalHost | undefined {
+  return panes.get(key.toLowerCase())?.host
 }
 
-/** Kills the shell for good. Called when the project's tab closes. */
-export function disposeShell(path: string): Promise<void> {
-  const pane = panes.get(path.toLowerCase())
+/** Kills the shell for good. Called when its project's tab, or its own, closes. */
+export function disposeShell(key: string): Promise<void> {
+  const pane = panes.get(key.toLowerCase())
   if (!pane) return Promise.resolve()
-  panes.delete(path.toLowerCase())
+  panes.delete(key.toLowerCase())
   pane.detachData()
   pane.detachExit()
   pane.host.dispose()
@@ -221,7 +234,7 @@ export async function reopenShell(
   container: HTMLElement,
   opts: MountShellOptions
 ): Promise<MountedShell | null> {
-  await disposeShell(path)
+  await disposeShell(opts.key ?? path)
   return mountShell(path, container, opts)
 }
 

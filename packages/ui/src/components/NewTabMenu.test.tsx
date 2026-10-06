@@ -101,6 +101,7 @@ function renderMenu(overrides: Partial<NewTabMenuProps> = {}) {
     onStart: vi.fn(),
     onProfile: vi.fn(),
     onBrowser: vi.fn(),
+    onTerminal: vi.fn(),
     onDismiss: vi.fn(),
     ...overrides
   }
@@ -120,6 +121,7 @@ describe('NewTabMenu: the kinds', () => {
     expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
       'SessionCtrl N',
       'Profile session',
+      'Terminal',
       'Browser tab'
     ])
   })
@@ -156,6 +158,31 @@ describe('NewTabMenu: profile session', () => {
     await userEvent.click(within(menu).getByText('dev', { selector: 'span.truncate' }))
     expect(props.onProfile).toHaveBeenCalledWith(devProfile)
     expect(props.onDismiss).toHaveBeenCalledOnce()
+  })
+})
+
+describe('NewTabMenu: terminal', () => {
+  it('lists the pane’s folder first, then the rest by recency, and one click opens a terminal there', async () => {
+    const { props } = renderMenu({ initialPath: dev.path })
+    await userEvent.click(screen.getByText('Terminal'))
+    const menu = screen.getByRole('menu', { name: 'Open a terminal in' })
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'dev',
+      'timeclick',
+      'helm',
+      'notes'
+    ])
+    await userEvent.click(within(menu).getByText('helm'))
+    expect(props.onTerminal).toHaveBeenCalledWith(helm)
+    expect(props.onStart).not.toHaveBeenCalled()
+  })
+
+  it('offers no terminal when there are no folders', async () => {
+    renderMenu({ projects: [] })
+    const item = screen.getByText('Terminal').closest('[role="menuitem"]')!
+    expect(item.getAttribute('aria-disabled')).toBe('true')
+    await userEvent.click(item)
+    expect(screen.queryByRole('menu', { name: 'Open a terminal in' })).toBeNull()
   })
 })
 

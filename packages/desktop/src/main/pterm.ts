@@ -47,6 +47,12 @@ export interface OpenShellRequest {
   rows: number
   /** This pane only. Absent means the default shell. */
   shell?: string | null | undefined
+  /**
+   * A shell of its own rather than the project's one. A terminal tab asks for
+   * this: two terminal tabs on one folder are two shells, where reopening a
+   * project tab reattaches to the shell it had.
+   */
+  separate?: boolean | undefined
 }
 
 export interface OpenedShell {
@@ -353,7 +359,7 @@ export function createPtermHost(deps: PtermDeps): PtermHost {
 
   return {
     open: (request) => {
-      const existing = byPath.get(request.path.toLowerCase())
+      const existing = request.separate === true ? undefined : byPath.get(request.path.toLowerCase())
       if (existing) {
         return { id: existing.id, shell: existing.shell, requested: null, problem: null }
       }
@@ -400,7 +406,7 @@ export function createPtermHost(deps: PtermDeps): PtermHost {
         opened: { cols: request.cols, rows: request.rows }
       }
       byId.set(id, record)
-      byPath.set(request.path.toLowerCase(), record)
+      if (request.separate !== true) byPath.set(request.path.toLowerCase(), record)
       return { id, shell, requested, problem }
     },
 

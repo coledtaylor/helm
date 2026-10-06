@@ -134,6 +134,7 @@ import {
   TabBar,
   TemplateManager,
   TerminalIcon,
+  ConsoleIcon,
   TitleBar,
   VersionBanner,
   WelcomePane,
@@ -154,9 +155,10 @@ import type { PanelActionIcon } from '@coledtaylor/helm-plugin-sdk'
 import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
 import { helm } from './bridge'
 import { ProjectColumn } from './ProjectColumn'
-import { disposeShell } from './pterms'
+import { disposeShell, terminalShellKey } from './pterms'
 import { estimateGrid } from './terminals'
 import { TerminalPane } from './TerminalPane'
+import { TerminalTabPane } from './TerminalTabPane'
 import { terminalFontStack } from '../terminal'
 import { crumbStatus, indicatorOf, sessionNote, useNow } from './sessionView'
 import { useConfig } from './useConfig'
@@ -256,7 +258,7 @@ const truncate = (text: string, max: number): string =>
  * was recorded against, such as a profile's at a harness root.
  */
 function folderOf(ref: PaneRef | null, sessionsById: ReadonlyMap<number, SessionRecord>): string | null {
-  if (ref?.kind === 'project') return ref.path
+  if (ref?.kind === 'project' || ref?.kind === 'terminal') return ref.path
   if (ref?.kind === 'file') return ref.root
   if (ref?.kind !== 'session') return null
   const session = sessionsById.get(ref.id)
@@ -766,7 +768,7 @@ export function App(): JSX.Element {
   const frontProject = useMemo(() => {
     const group = groupById(open, open.focused)
     const ref = group === undefined ? null : activeRef(group)
-    if (ref?.kind === 'project') return ref.path
+    if (ref?.kind === 'project' || ref?.kind === 'terminal') return ref.path
     if (ref?.kind === 'file') return ref.root
     if (ref?.kind === 'session') return sessionsById.get(ref.id)?.projectPath ?? null
     return null
@@ -895,6 +897,30 @@ export function App(): JSX.Element {
   const placeSession = useCallback(
     (id: number, beside = false, into?: number) => {
       const ref = { kind: 'session', id } as const
+      commit((current) =>
+        into !== undefined
+          ? placeIn(current, ref, into)
+          : beside
+            ? placeBeside(current, ref)
+            : openTab(current, ref)
+      )
+      const landing = into ?? open.focused
+      setMaximized((current) =>
+        (into === undefined && beside) || (current !== null && current !== landing) ? null : current
+      )
+    },
+    [commit, open.focused]
+  )
+
+  /**
+   * A terminal tab in `path`: a plain shell, no `claude`. It lands where a
+   * launched session would - the focused pane, the pane beside it, or `into`.
+   * The id is this window's; the shell is opened when the tab first draws.
+   */
+  const nextTerminalId = useRef(1)
+  const openTerminal = useCallback(
+    (path: string, beside = false, into?: number) => {
+      const ref = { kind: 'terminal', id: nextTerminalId.current++, path } as const
       commit((current) =>
         into !== undefined
           ? placeIn(current, ref, into)
@@ -1128,6 +1154,7 @@ export function App(): JSX.Element {
       // The shell dies with its tab, not with a render: hiding the page keeps
       // it, closing the project ends it.
       if (ref.kind === 'project') void disposeShell(ref.path)
+      if (ref.kind === 'terminal') void disposeShell(terminalShellKey(ref.id))
       // Hiding the pane keeps the page; closing the tab destroys the view.
       if (ref.kind === 'browser') browsers.close(ref.id)
       // Closing the offer is "not now", the same as its button.
@@ -1678,6 +1705,17 @@ export function App(): JSX.Element {
           }
         ]
       }
+      case 'terminal': {
+        const name = projectsByPath.get(ref.path)?.name ?? folderName(ref.path)
+        return [
+          {
+            id: paneId(ref),
+            title: truncate(name, 30),
+            hint: `Terminal · ${ref.path}`,
+            icon: <ConsoleIcon width={13} height={13} />
+          }
+        ]
+      }
       case 'sessions':
         return [
           {
@@ -1805,6 +1843,14 @@ export function App(): JSX.Element {
               />
             )
           }
+        />
+      )
+    }
+    if (ref?.kind === 'terminal') {
+      return (
+        <PaneCrumb
+          place={projectsByPath.get(ref.path)?.name ?? folderName(ref.path)}
+          hint={ref.path}
         />
       )
     }
@@ -2426,9 +2472,10 @@ export function App(): JSX.Element {
           />
         )
       case 'session':
+      case 'terminal':
       case 'file':
-        // Neither is a page: a session is its terminal and a file its view,
-        // both drawn edge to edge by `renderGroup`.
+        // None is a page: a session or a terminal tab is its terminal and a
+        // file its view, all drawn edge to edge by `renderGroup`.
         return null
     }
   }
@@ -2579,6 +2626,23 @@ export function App(): JSX.Element {
             shown. The terminal itself lives in terminals.ts and outlives any
             render, but a pane that is not mounted has nowhere to put it. */}
         {group.tabs.map((ref) => {
+          if (ref.kind === 'terminal') {
+            const isFront = groupFrontId === paneId(ref)
+            return (
+              <div
+                key={paneId(ref)}
+                className={cn('absolute inset-0', isFront ? 'block' : 'hidden')}
+                aria-hidden={!isFront}
+              >
+                <TerminalTabPane
+                  id={ref.id}
+                  path={ref.path}
+                  active={isFront}
+                  windowsBuild={info?.windowsBuild ?? null}
+                />
+              </div>
+            )
+          }
           if (ref.kind !== 'session') return null
           const session = sessionsById.get(ref.id)
           if (!session) return null
@@ -2599,7 +2663,10 @@ export function App(): JSX.Element {
           )
         })}
         {groupFront?.kind === 'file' && <div className="absolute inset-0">{renderFile(groupFront)}</div>}
-        {groupFront !== null && groupFront.kind !== 'session' && groupFront.kind !== 'file' && (
+        {groupFront !== null &&
+          groupFront.kind !== 'session' &&
+          groupFront.kind !== 'terminal' &&
+          groupFront.kind !== 'file' && (
           // On the pane itself: the pane is the island, and a page says what it
           // has in sections with hairlines rather than islands of its own.
           <div className="absolute inset-0">{renderPage(groupFront, narrow.has(id))}</div>
@@ -3193,6 +3260,10 @@ export function App(): JSX.Element {
             error={newSession.error}
             now={now}
             onStart={(choice) => void startChosen(choice)}
+            onTerminal={(project, beside) => {
+              openTerminal(project.path, beside)
+              newSession.hide()
+            }}
             onDismiss={newSession.hide}
           />
         )}
@@ -3215,6 +3286,10 @@ export function App(): JSX.Element {
             onStart={(choice) => void startChosen(choice, newTab.group)}
             onProfile={(profile) => void launchProfile(profile, newTab.group)}
             onBrowser={() => openBrowser({ project: null, into: newTab.group, focusAddress: true })}
+            onTerminal={(project) => {
+              openTerminal(project.path, false, newTab.group)
+              setNewTab(null)
+            }}
             onDismiss={closeNewTab}
           />
         )}

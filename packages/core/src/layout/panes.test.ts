@@ -10,6 +10,7 @@ import {
   findTab,
   focusGroup,
   fromSaved,
+  isPersistable,
   isSplit,
   moveTab,
   neighbourAt,
@@ -42,6 +43,7 @@ const session = (id: number): PaneRef => ({ kind: 'session', id })
 const project = (path: string): PaneRef => ({ kind: 'project', path })
 const browser = (id: number): PaneRef => ({ kind: 'browser', id })
 const HISTORY: PaneRef = { kind: 'history' }
+const ALPHA_DIR = 'C:\\work\\alpha'
 const SETTINGS: PaneRef = { kind: 'settings' }
 const CONFIG: PaneRef = { kind: 'config' }
 const SESSIONS: PaneRef = { kind: 'sessions' }
@@ -95,6 +97,12 @@ describe('paneId', () => {
     expect(paneId(project('C:\\work\\a#b:c'))).toBe('project:C:\\work\\a#b:c')
     expect(paneId(browser(3))).toBe('browser:3')
     expect(paneId(HISTORY)).toBe('history')
+    expect(paneId({ kind: 'terminal', id: 4, path: ALPHA_DIR })).toBe('terminal:4')
+  })
+
+  it('writes down no terminal tab: its shell dies with it', () => {
+    expect(isPersistable({ kind: 'terminal', id: 4, path: ALPHA_DIR })).toBe(false)
+    expect(isPersistable(session(12))).toBe(true)
   })
 
   it('names a plugin tab by its parameters, in one spelling whatever order they were given in', () => {

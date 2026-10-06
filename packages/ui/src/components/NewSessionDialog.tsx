@@ -59,6 +59,11 @@ export interface NewSessionDialogProps {
   error: string | null
   now: number
   onStart: (choice: LaunchChoice) => void
+  /**
+   * A plain terminal in the highlighted folder instead of a session (Alt+Enter),
+   * beside the focused pane with Ctrl. Absent, the launcher offers none.
+   */
+  onTerminal?: ((project: Project, beside: boolean) => void) | undefined
   onDismiss: () => void
 }
 
@@ -120,6 +125,7 @@ export function NewSessionDialog({
   error,
   now,
   onStart,
+  onTerminal,
   onDismiss
 }: NewSessionDialogProps): JSX.Element {
   const ids = useId()
@@ -217,6 +223,11 @@ export function NewSessionDialog({
     })
   }
 
+  const terminal = (beside: boolean): void => {
+    if (busy || selected === null || onTerminal === undefined) return
+    onTerminal(selected, beside)
+  }
+
   const move = (step: 1 | -1): void => {
     if (rows.length === 0) return
     const at = highlighted === null ? -1 : rows.indexOf(highlighted)
@@ -231,6 +242,11 @@ export function NewSessionDialog({
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     const target = event.target as HTMLElement
+    if (event.key === 'Enter' && event.altKey && !event.shiftKey && target.tagName !== 'BUTTON') {
+      event.preventDefault()
+      terminal(event.ctrlKey)
+      return
+    }
     if (event.key === 'Enter' && !event.altKey && !event.shiftKey && target.tagName !== 'BUTTON') {
       event.preventDefault()
       start(event.ctrlKey)
@@ -392,6 +408,11 @@ export function NewSessionDialog({
         <KeyButton keys="Ctrl ↵" onClick={() => start(true)} disabled={busy || selected === null}>
           Start beside
         </KeyButton>
+        {onTerminal !== undefined && (
+          <KeyButton keys="Alt ↵" onClick={() => terminal(false)} disabled={busy || selected === null}>
+            Terminal
+          </KeyButton>
+        )}
         <span className="px-1.5">
           <span className="font-mono text-fg-muted">Tab</span> Profile
         </span>
