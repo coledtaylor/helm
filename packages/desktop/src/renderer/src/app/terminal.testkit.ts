@@ -145,6 +145,8 @@ export class Terminal {
   rows: number
   /** The container `open` was given. */
   parent: HTMLElement | null = null
+  /** xterm's own root, which holds the screen; here the container itself. */
+  element: HTMLElement | undefined
   disposed = false
   readonly written: string[] = []
   readonly unicode = { activeVersion: '6' }
@@ -166,6 +168,7 @@ export class Terminal {
 
   open(container: HTMLElement): void {
     this.parent = container
+    this.element = container
     const screen = document.createElement('div')
     screen.className = 'xterm-screen'
     container.appendChild(screen)
@@ -255,6 +258,31 @@ export class Unicode11Addon implements Addon {
 export class SerializeAddon implements Addon {
   activate(): void {}
   dispose(): void {}
+}
+
+type LinkCallback = (event: MouseEvent, text: string) => void
+
+/**
+ * The web links addon, keeping what it was handed. A test plays xterm with it:
+ * `options.hover` and `options.leave` are what xterm calls as the pointer
+ * crosses a web address on screen, and `handler` is xterm following one.
+ */
+export class WebLinksAddon implements Addon {
+  static instances: WebLinksAddon[] = []
+
+  disposed = false
+
+  constructor(
+    readonly handler: LinkCallback | undefined,
+    readonly options: { hover?: LinkCallback; leave?: LinkCallback } = {}
+  ) {
+    WebLinksAddon.instances.push(this)
+  }
+
+  activate(): void {}
+  dispose(): void {
+    this.disposed = true
+  }
 }
 
 /** jsdom has no WebGL, so the real addon would throw on load; this one loads. */

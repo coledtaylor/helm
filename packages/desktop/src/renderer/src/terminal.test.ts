@@ -9,6 +9,7 @@ vi.mock('@xterm/addon-fit', () => import('./app/terminal.testkit'))
 vi.mock('@xterm/addon-unicode11', () => import('./app/terminal.testkit'))
 vi.mock('@xterm/addon-webgl', () => import('./app/terminal.testkit'))
 vi.mock('@xterm/addon-serialize', () => import('./app/terminal.testkit'))
+vi.mock('@xterm/addon-web-links', () => import('./app/terminal.testkit'))
 
 /**
  * `createTerminal` and `applyPrefs`: the preferences a terminal is built with,
@@ -23,7 +24,8 @@ function hooks(): TerminalHooks & { onResize: Mock<(cols: number, rows: number) 
     onInput: vi.fn(),
     onResize: vi.fn<(cols: number, rows: number) => void>(),
     readClipboard: () => Promise.resolve(''),
-    writeClipboard: () => Promise.resolve()
+    writeClipboard: () => Promise.resolve(),
+    openLink: vi.fn()
   }
 }
 

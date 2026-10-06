@@ -49,6 +49,8 @@ export interface FakeClaudeLog {
   resumed: boolean
   received: string[]
   resized: { cols: number; rows: number }[]
+  /** SGR mouse reports (`ESC [ < b ; x ; y M|m`) it was sent, after `/links` asked for them. */
+  mouse: string[]
   exitCode: number | null
 }
 

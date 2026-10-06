@@ -47,6 +47,7 @@ helm.on('term:create', (opts) => {
     onResize: (cols, rows) => helm.send('pty:resize', { cols, rows }),
     readClipboard: () => helm.invoke('clipboard:read'),
     writeClipboard: (text) => helm.invoke('clipboard:write', text),
+    openLink: (url) => void helm.invoke('shell:openExternal', { url }),
     onKeyDown: (at) => latency.keyDown(at)
   })
   helm.send('term:created', {

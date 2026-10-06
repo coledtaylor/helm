@@ -12,6 +12,7 @@ vi.mock('@xterm/addon-fit', () => import('./terminal.testkit'))
 vi.mock('@xterm/addon-unicode11', () => import('./terminal.testkit'))
 vi.mock('@xterm/addon-webgl', () => import('./terminal.testkit'))
 vi.mock('@xterm/addon-serialize', () => import('./terminal.testkit'))
+vi.mock('@xterm/addon-web-links', () => import('./terminal.testkit'))
 vi.mock('./bridge', () => import('./bridge.testkit'))
 
 /**

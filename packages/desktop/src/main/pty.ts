@@ -45,6 +45,15 @@ export function ptyEnv(extra: Record<string, string> = {}): Record<string, strin
   delete env.NO_COLOR
   env.TERM = 'xterm-256color'
   env.COLORTERM = 'truecolor'
+  // Hyperlinks likewise. The pane opens OSC 8 links on Ctrl+click
+  // (`terminalLinks.ts`), but Claude Code only writes them for a terminal it
+  // recognises - Windows Terminal's WT_SESSION, a TERM_PROGRAM on its list - and
+  // otherwise prints a link as plain text, unstyled. FORCE_HYPERLINK is the
+  // convention for saying so without claiming to be another terminal. Unlike
+  // those it holds when output is piped, so a CLI that honours it writes OSC 8
+  // into a Bash tool result too, where Claude Code strips the ESC bytes and
+  // keeps the rest as text.
+  env.FORCE_HYPERLINK = '1'
   return { ...env, ...extra }
 }
 

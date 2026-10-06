@@ -62,6 +62,7 @@ vi.mock('@xterm/addon-fit', () => ({
 }))
 vi.mock('@xterm/addon-unicode11', () => ({ Unicode11Addon: class {} }))
 vi.mock('@xterm/addon-serialize', () => ({ SerializeAddon: class {} }))
+vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: class { dispose(): void {} } }))
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: class {
     constructor() {
@@ -100,7 +101,13 @@ describe('a session terminal’s fit', () => {
     const host = createTerminal(
       pane(),
       { cols: 100, rows: 30, fit: true },
-      { onInput: vi.fn(), onResize, readClipboard: () => Promise.resolve(''), writeClipboard: () => Promise.resolve() }
+      {
+        onInput: vi.fn(),
+        onResize,
+        readClipboard: () => Promise.resolve(''),
+        writeClipboard: () => Promise.resolve(),
+        openLink: vi.fn()
+      }
     )
     expect(stage.fits).toBe(0)
     expect(onResize).not.toHaveBeenCalled()

@@ -23,6 +23,11 @@
 //   /child       start a long-running child process, for process-tree tests
 //   /clear       move to a new conversation id under the same process, and
 //                register under it, as the real CLI does
+//   /links       ask for mouse and focus reports, as the real CLI's fullscreen
+//                interface does, and print a link two ways: as an OSC 8
+//                hyperlink when FORCE_HYPERLINK says the terminal shows them
+//                (plain text otherwise), and as a bare web address. Mouse
+//                reports received from then on are logged in `mouse`.
 //   anything else  is a prompt: recorded in history and the transcript, answered
 
 import { spawn } from 'node:child_process'
@@ -135,6 +140,7 @@ const log = {
   resumed: resume !== undefined,
   received: [],
   resized: [],
+  mouse: [],
   exitCode: null
 }
 const children = []
@@ -260,6 +266,17 @@ function submit(line) {
     }, Number(arg) || 1000)
     return
   }
+  if (command === '/links') {
+    // The real CLI's rule, from `supports-hyperlinks`: a non-empty value other
+    // than 0 turns them on.
+    const forced = process.env.FORCE_HYPERLINK ?? ''
+    const hyperlinks = forced !== '' && Number.parseInt(forced, 10) !== 0
+    const docs = 'https://example.test/docs'
+    // SGR mouse reports (1000, 1006) and focus reports (1004).
+    out('\x1b[?1000h\x1b[?1006h\x1b[?1004h')
+    out(`\r\n${hyperlinks ? `\x1b]8;;${docs}\x1b\\Read the docs\x1b]8;;\x1b\\` : `Read the docs (${docs})`}`)
+    return answer('Or see https://example.test/bare for more.')
+  }
   if (command === '/child') {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], { stdio: 'ignore' })
     children.push(child)
@@ -327,9 +344,13 @@ if (process.stdin.isTTY) process.stdin.setRawMode(true)
 process.stdin.setEncoding('utf8')
 process.stdin.on('data', (chunk) => {
   // Escape sequences (arrows, focus reports) are dropped whole; matching ESC is
-  // the point of the pattern.
+  // the point of the pattern. Mouse reports (`ESC [ <`) are logged first.
   // eslint-disable-next-line no-control-regex
-  for (const part of chunk.split(/(\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b.)/)) {
+  for (const part of chunk.split(/(\x1b\[[0-?]*[ -/]*[@-~]|\x1b.)/)) {
+    if (part.startsWith('\x1b[<')) {
+      log.mouse.push(part)
+      saveLog()
+    }
     if (part === '' || part.startsWith('\x1b')) continue
     for (const key of part) onKey(key)
   }

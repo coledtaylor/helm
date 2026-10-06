@@ -78,7 +78,7 @@ tier above, so keep this one small.
 
 | spec | workflows |
 |---|---|
-| `sessions` | a session from start to end; renaming a tab and closing it with confirmation; quitting ends every session and what it started |
+| `sessions` | a session from start to end; renaming a tab and closing it with confirmation; quitting ends every session and what it started; a link Ctrl+clicked in a session that has the mouse |
 | `panes` | two panes, the waiting one marked |
 | `settings` | a setting survives a restart; the gear opens Settings and Ctrl+Tab walks every tab |
 | `history` | an ended session is in history and resumes where it ran |
@@ -131,8 +131,9 @@ It also answers `mcp add-json` and `mcp remove` by writing `.mcp.json` or
 
 At its prompt: `/exit` and `/crash` end it with 0 and 3, `/wait` reports
 "waiting" until `y` or `n`, `/busy <ms>` reports "busy", `/child` starts a
-long-running child process, and anything else is a prompt it records and
-answers.
+long-running child process, `/links` asks for the mouse as the fullscreen CLI
+does and prints a hyperlink and a bare address (logging the mouse reports it
+is sent), and anything else is a prompt it records and answers.
 
 ## Rules for every test
 
