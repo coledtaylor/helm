@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HelmTheme } from '@coledtaylor/helm-plugin-sdk'
-import type { HelmBridge, PluginCallOutcome, PluginCallRequest, PluginDelivery } from '../../../shared/ipc'
+import type { HelmBridge, PluginCallOutcome, PluginCallRequest, PluginDelivery, PluginToolCall } from '../../../shared/ipc'
 import { CONNECT, HELLO, type ConnectMessage, type HelmMessage } from '../../plugin-runtime/wire'
 import { CRASH_GRACE_MS, LOAD_GRACE_MS, createPluginRelay, type PluginRelay, type SurfaceSpec } from './relay'
 
@@ -488,5 +488,83 @@ describe("the frame's life", () => {
     const post = vi.spyOn(window, 'postMessage')
     window.dispatchEvent(windowMessage({ data: { type: HELLO }, origin: 'helm-plugin://sample', source: element.contentWindow }))
     expect(post).not.toHaveBeenCalled()
+  })
+})
+
+describe('tool calls', () => {
+  const BACKGROUND: Partial<SurfaceSpec> = {
+    key: 'background:sample',
+    surface: 'background',
+    name: 'background',
+    url: 'helm-plugin://sample/dist/background/index.html'
+  }
+  const SESSION = { id: 'a1b2c3', name: 'alpha', cwd: 'C:/work/alpha' }
+  const tool = (id: string, plugin = 'sample'): PluginToolCall => ({ id, plugin, name: 'list_items', args: { all: true }, session: SESSION })
+  const answers = (): unknown[] => main.send.mock.calls.filter(([channel]) => channel === 'plugins:toolResult').map(([, payload]) => payload)
+
+  it("reach the plugin's background page, and its answer goes back to main under the call's id", () => {
+    const { port } = connect(open(BACKGROUND))
+    const panel = connect(open({ key: 'panel:sample/main' }), 'helm-plugin://sample').port
+    main.emit('plugins:tool', tool('c1'))
+    expect(got(port)).toEqual([{ t: 'tool', id: 'c1', name: 'list_items', args: { all: true }, session: SESSION }])
+    expect(got(panel)).toEqual([])
+    port.postMessage({ t: 'tool-result', id: 'c1', ok: true, text: 'two items' })
+    port.postMessage({ t: 'tool-result', id: 'c1', ok: true, text: 'again' })
+    expect(answers()).toEqual([{ id: 'c1', ok: true, text: 'two items' }])
+  })
+
+  it('carry a failure through, and take no answer for a call the page was not handed', () => {
+    const { port } = connect(open(BACKGROUND))
+    const panel = connect(open({ key: 'panel:sample/main' }), 'helm-plugin://sample').port
+    main.emit('plugins:tool', tool('c1'))
+    panel.postMessage({ t: 'tool-result', id: 'c1', ok: true, text: 'from the panel' })
+    port.postMessage({ t: 'tool-result', id: 'c2', ok: true, text: 'never asked' })
+    port.postMessage({ t: 'tool-result', id: 'c1', ok: false, message: 'The board is locked.' })
+    expect(answers()).toEqual([{ id: 'c1', ok: false, message: 'The board is locked.' }])
+  })
+
+  it('are answered at once when the plugin has no background page connected', () => {
+    open(BACKGROUND)
+    main.emit('plugins:tool', tool('c1'))
+    main.emit('plugins:tool', tool('c2', 'other'))
+    expect(answers()).toEqual([
+      { id: 'c1', ok: false, message: "The plugin's background page is not running." },
+      { id: 'c2', ok: false, message: "The plugin's background page is not running." }
+    ])
+  })
+
+  it('are cancelled at the page when main says so', () => {
+    const { port } = connect(open(BACKGROUND))
+    main.emit('plugins:tool', tool('c1'))
+    main.emit('plugins:toolCancel', { id: 'c1' })
+    main.emit('plugins:toolCancel', { id: 'c9' })
+    expect(got(port).at(-1)).toEqual({ t: 'tool-cancel', id: 'c1' })
+    // An answer for a cancelled call goes nowhere.
+    port.postMessage({ t: 'tool-result', id: 'c1', ok: true, text: 'late' })
+    expect(answers()).toEqual([])
+  })
+
+  it('fail for the session when the page stops before answering: a crash, a reload, or the frame going', () => {
+    const crashed = connect(open(BACKGROUND)).port
+    main.emit('plugins:tool', tool('c1'))
+    crashed.close()
+    connect(relay.open(spec(BACKGROUND)))
+    main.emit('plugins:tool', tool('c2'))
+    relay.reload('background:sample')
+    connect(relay.open(spec(BACKGROUND)))
+    main.emit('plugins:tool', tool('c3'))
+    relay.dispose('background:sample')
+    const stopped = { ok: false, message: "The plugin's background page stopped before it answered." }
+    expect(answers()).toEqual([
+      { id: 'c1', ...stopped },
+      { id: 'c2', ...stopped },
+      { id: 'c3', ...stopped }
+    ])
+  })
+
+  it('stop being listened for when the relay is destroyed', () => {
+    relay.destroy()
+    expect(main.listening('plugins:tool')).toBe(0)
+    expect(main.listening('plugins:toolCancel')).toBe(0)
   })
 })

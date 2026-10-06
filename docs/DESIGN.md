@@ -1022,7 +1022,9 @@ a website inside it.
   said by name there), then its settings form drawn from the manifest's
   schema with Settings' own rows, the secrets it uses, the hosts it may reach
   and the programs and service it runs - all three in mono, because the user
-  is being told exactly what this plugin can do - memory and CPU, its log
+  is being told exactly what this plugin can do - the tools it offers
+  sessions, each name in mono with its description, under one "Offer to
+  sessions" checkbox, memory and CPU, its log
   (Helm's own notes in `fg-subtle`, the plugin's lines in `fg`), and turn off,
   reload and remove. **Settings > Secrets** lists every secret by key, with its
   hosts and plugins, and never its value.

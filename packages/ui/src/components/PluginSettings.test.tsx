@@ -35,6 +35,7 @@ const plugin = (overrides: Partial<PluginInfo> = {}): PluginInfo => ({
   exec: [],
   service: null,
   runsPrograms: false,
+  agent: null,
   status: null,
   badge: null,
   ...overrides
@@ -205,6 +206,55 @@ describe('PluginPage: what it may reach', () => {
   })
 })
 
+describe('PluginPage: its tools for sessions', () => {
+  const agent: NonNullable<PluginInfo['agent']> = {
+    enabled: true,
+    server: 'helm-plugin-sample',
+    instructions: 'Use these for items.',
+    tools: [
+      { name: 'list_items', description: 'Lists the items.' },
+      { name: 'create_item', description: 'Adds an item.' }
+    ]
+  }
+
+  it('lists each tool with what it does, and says sessions get them under the server name', () => {
+    renderPage({ plugin: plugin({ agent }) })
+    const tools = group('plugin-tools')
+    expect([...tools.querySelectorAll('[data-plugin-tools] li')].map((li) => li.textContent)).toEqual([
+      'list_itemsLists the items.',
+      'create_itemAdds an item.'
+    ])
+    expect(tools.querySelector('[data-plugin-tools-state]')?.textContent).toBe(
+      'Sessions Helm starts get them as helm-plugin-sample. Turning this off takes them from sessions already running.'
+    )
+    expect(within(tools).getByRole<HTMLInputElement>('checkbox', { name: 'Offer to sessions' }).checked).toBe(true)
+  })
+
+  it('turns them off and on from its switch', () => {
+    const props = renderPage({ plugin: plugin({ agent }) })
+    fireEvent.click(within(group('plugin-tools')).getByRole('checkbox', { name: 'Offer to sessions' }))
+    expect(props.onSetTools).toHaveBeenCalledWith(false)
+  })
+
+  it('says no session has them when they are off, or when the plugin is', () => {
+    renderPage({ plugin: plugin({ agent: { ...agent, enabled: false } }) })
+    expect(document.querySelector('[data-plugin-tools-state]')?.textContent).toBe('No session gets them.')
+    document.body.innerHTML = ''
+    renderPage({ plugin: plugin({ enabled: false, agent }) })
+    expect(document.querySelector('[data-plugin-tools-state]')?.textContent).toBe(
+      'The plugin is turned off, so no session has them.'
+    )
+  })
+
+  it('has no tools group for a plugin that offers none, or one that did not load', () => {
+    renderPage()
+    expect(document.querySelector('[data-settings-group="plugin-tools"]')).toBeNull()
+    document.body.innerHTML = ''
+    renderPage({ plugin: plugin({ agent, error: 'no manifest' }) })
+    expect(document.querySelector('[data-settings-group="plugin-tools"]')).toBeNull()
+  })
+})
+
 describe('PluginPage: its settings', () => {
   const settings: PluginInfo['settings'] = [
     { key: 'server', type: 'text', label: 'Server', default: 'http://127.0.0.1:4790' },
@@ -354,6 +404,7 @@ function pageProps(overrides: Partial<PluginPageProps>): PluginPageProps {
     log: [],
     secrets: { available: true, secrets: [] },
     onSetEnabled: vi.fn(),
+    onSetTools: vi.fn(),
     onReload: vi.fn(),
     ownSecrets: vi.fn(async () => []),
     onRemove: vi.fn(),

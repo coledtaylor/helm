@@ -7,6 +7,7 @@ import {
   readPluginSettings,
   removePluginFolder,
   setPluginEnabled,
+  setPluginToolsEnabled,
   writePluginSetting
 } from './plugins'
 import { deleteSecret, readSecret, readSecrets, writeSecret } from './secrets'
@@ -44,6 +45,15 @@ describe('plugin folders', () => {
     expect(readPluginFolders(store)[0]!.enabled).toBe(false)
     removePluginFolder(store, 'C:\\PLUGINS\\FACTORY')
     expect(readPluginFolders(store)).toEqual([])
+  })
+
+  it('offer their tools to sessions until that is turned off, by any spelling of their path, and apart from the plugin', () => {
+    expect(addPluginFolder(store, 'C:\\Plugins\\Factory').toolsEnabled).toBe(true)
+    setPluginToolsEnabled(store, 'c:\\plugins\\factory', false)
+    expect(readPluginFolders(store)[0]).toMatchObject({ enabled: true, toolsEnabled: false })
+    setPluginEnabled(store, 'C:\\Plugins\\Factory', false)
+    setPluginToolsEnabled(store, 'C:\\Plugins\\Factory', true)
+    expect(readPluginFolders(store)[0]).toMatchObject({ enabled: false, toolsEnabled: true })
   })
 })
 

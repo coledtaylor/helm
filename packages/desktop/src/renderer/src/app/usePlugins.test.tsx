@@ -29,6 +29,7 @@ const plugin = (overrides: Partial<PluginInfo> = {}): PluginInfo => ({
   exec: [],
   service: null,
   runsPrograms: false,
+  agent: null,
   status: null,
   badge: null,
   ...overrides

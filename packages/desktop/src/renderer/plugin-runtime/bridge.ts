@@ -10,9 +10,10 @@ import type {
   PluginParams,
   SecretState,
   SettingValue,
-  StatusItem
+  StatusItem,
+  ToolHandler
 } from '@coledtaylor/helm-plugin-sdk'
-import type { PluginFetchRequest, PluginFetchResponse } from '../../shared/ipc'
+import { PLUGIN_TOOL_ANSWER_MAX_CHARS as TOOL_ANSWER_MAX_CHARS, type PluginFetchRequest, type PluginFetchResponse } from '../../shared/ipc'
 import {
   CONNECT,
   CONTEXT_PREFIX,
@@ -40,6 +41,13 @@ const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'AltGraph', 'O
 /** Responses that may not have a body, which `new Response` refuses one for. */
 const NULL_BODY = new Set([101, 103, 204, 205, 304])
 
+/**
+ * How long a tool call waits for its handler. A page registers its handlers as
+ * it starts, and a session can call the moment the page has connected, so the
+ * first call may arrive while the page's own scripts are still loading.
+ */
+export const TOOL_HANDLER_WAIT_MS = 5000
+
 export function installBridge(win: Window, bootText: string | null): HelmBridge {
   const doc = win.document
   let theme = readBoot(bootText) ?? fallbackTheme()
@@ -52,6 +60,11 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
   let nextId = 1
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: unknown) => void }>()
   const listeners = new Map<string, Set<(data: never) => void>>()
+  /** Tool handlers by name, and the calls waiting for one to be registered. */
+  const handlers = new Map<string, ToolHandler>()
+  const awaitingHandler = new Map<string, Set<() => void>>()
+  /** Tool calls being answered, so a cancel can abort the one it names. */
+  const answering = new Map<string, AbortController>()
 
   const post = (message: FrameMessage): void => {
     if (port === null) queue.push(message)
@@ -98,6 +111,49 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
     }
   }
 
+  /** The handler for `name`, once one is registered; null when none is within the wait or the call is aborted. */
+  const handlerFor = (name: string, signal: AbortSignal): Promise<ToolHandler | null> => {
+    const now = handlers.get(name)
+    if (now !== undefined) return Promise.resolve(now)
+    return new Promise((resolve) => {
+      const waiters = awaitingHandler.get(name) ?? new Set<() => void>()
+      const done = (): void => {
+        win.clearTimeout(timer)
+        signal.removeEventListener('abort', done)
+        waiters.delete(done)
+        if (waiters.size === 0) awaitingHandler.delete(name)
+        resolve(signal.aborted ? null : (handlers.get(name) ?? null))
+      }
+      const timer = win.setTimeout(done, TOOL_HANDLER_WAIT_MS)
+      signal.addEventListener('abort', done, { once: true })
+      waiters.add(done)
+      awaitingHandler.set(name, waiters)
+    })
+  }
+
+  const answerTool = async (message: Extract<HelmMessage, { t: 'tool' }>): Promise<void> => {
+    const controller = new AbortController()
+    answering.set(message.id, controller)
+    let answer: FrameMessage
+    try {
+      const handler = await handlerFor(message.name, controller.signal)
+      if (controller.signal.aborted) return
+      if (handler === null) {
+        throw new Error(
+          `The plugin's background page has no handler for ${message.name}. It registers one with helm.tools.handle('${message.name}', ...) as it starts.`
+        )
+      }
+      const value: unknown = await handler(message.args, { session: message.session, signal: controller.signal })
+      answer = { t: 'tool-result', id: message.id, ok: true, text: toolText(value) }
+    } catch (error) {
+      answer = { t: 'tool-result', id: message.id, ok: false, message: messageOf(error) }
+    } finally {
+      answering.delete(message.id)
+    }
+    // Nobody is waiting for it: the call was cancelled while the handler ran.
+    if (!controller.signal.aborted) post(answer)
+  }
+
   const receive = (message: HelmMessage): void => {
     if (message.t === 'result') {
       const waiting = pending.get(message.id)
@@ -105,6 +161,14 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
       pending.delete(message.id)
       if (message.ok) waiting.resolve(message.value)
       else waiting.reject(message.code === 'aborted' ? abortError(message.message) : helmError(message.code, message.message))
+      return
+    }
+    if (message.t === 'tool') {
+      void answerTool(message)
+      return
+    }
+    if (message.t === 'tool-cancel') {
+      answering.get(message.id)?.abort()
       return
     }
     switch (message.name) {
@@ -235,6 +299,24 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
       request: (key: string) => call<SecretState>('secrets.request', [key])
     },
 
+    tools: {
+      handle(name: string, handler: ToolHandler): () => void {
+        // Said where the mistake is made, rather than as a call that never
+        // arrives: only the background page is running whenever a session
+        // might call, so only it is ever handed one.
+        if (context.surface !== 'background') {
+          throw helmError('invalid', 'helm.tools.handle works in the background page only')
+        }
+        if (typeof name !== 'string' || name === '') throw helmError('invalid', 'helm.tools.handle needs the name of a tool')
+        if (typeof handler !== 'function') throw helmError('invalid', 'helm.tools.handle needs a function to answer the tool')
+        handlers.set(name, handler)
+        for (const wake of [...(awaitingHandler.get(name) ?? [])]) wake()
+        return () => {
+          if (handlers.get(name) === handler) handlers.delete(name)
+        }
+      }
+    },
+
     on(event, listener) {
       const set = listeners.get(event) ?? new Set()
       set.add(listener as (data: never) => void)
@@ -268,6 +350,36 @@ function toResponse(answer: PluginFetchResponse): Response {
   Object.defineProperty(response, 'url', { value: answer.url })
   Object.defineProperty(response, 'redirected', { value: answer.redirected })
   return response
+}
+
+/**
+ * A handler's answer as the text a session reads: a string as it is, nothing
+ * as `Done.` - a model given an empty answer cannot tell it from a failure -
+ * and anything else as JSON.
+ */
+function toolText(value: unknown): string {
+  let text: string | undefined
+  if (typeof value === 'string') text = value
+  else if (value === undefined) text = 'Done.'
+  else {
+    try {
+      text = JSON.stringify(value, null, 2)
+    } catch (error) {
+      throw new Error(`The tool's answer could not be written as JSON: ${messageOf(error)}`, { cause: error })
+    }
+    if (text === undefined) throw new Error(`The tool answered with a ${typeof value}, which is not text or JSON.`)
+  }
+  if (text.length > TOOL_ANSWER_MAX_CHARS) {
+    throw new Error(
+      `The tool's answer is ${String(text.length)} characters, and a tool may answer with ${String(TOOL_ANSWER_MAX_CHARS)} at most.`
+    )
+  }
+  return text
+}
+
+function messageOf(error: unknown): string {
+  if (error instanceof Error) return error.message
+  return typeof error === 'string' ? error : String(error)
 }
 
 function helmError(code: HelmErrorCode, message: string): HelmError {

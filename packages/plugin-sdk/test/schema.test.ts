@@ -14,6 +14,7 @@ import {
   SETTING_KEY_PATTERN,
   SETTING_TYPES,
   SUPPORTED_API_VERSIONS,
+  TOOL_NAME_PATTERN,
   validateManifest
 } from '../src/manifest.js'
 import { MINIMAL, SAMPLE, SDK_DIR, TEMPLATE } from './fixtures'
@@ -32,6 +33,7 @@ const schema = JSON.parse(readFileSync(join(SDK_DIR, 'helm-plugin.schema.json'),
 const properties = schema['properties'] as Record<string, Schema>
 const defs = schema['$defs'] as Record<string, Schema>
 const prop = (name: string): Schema => properties[name] as Schema
+const agentTools = (): Schema => (prop('agent')['properties'] as Record<string, Schema>)['tools'] as Schema
 
 /** Helm loads it, and says nothing about it. */
 const helmAccepts = (manifest: unknown): boolean => {
@@ -66,10 +68,19 @@ describe('the schema names what the validator names', () => {
     expect((prop('secrets')['items'] as Schema)['pattern']).toBe(SECRET_KEY_PATTERN.source)
     expect((prop('network')['items'] as Schema)['pattern']).toBe(ORIGIN_PATTERN.source)
     expect(((defs['env'] as Schema)['propertyNames'] as Schema)['pattern']).toBe(ENV_NAME_PATTERN.source)
+    expect((agentTools()['propertyNames'] as Schema)['pattern']).toBe(TOOL_NAME_PATTERN.source)
     const setting = defs['setting'] as Schema
     expect((setting['properties'] as Record<string, Schema>)['key']?.['pattern']).toBe(SETTING_KEY_PATTERN.source)
     // None of them carries a flag the schema would lose.
-    for (const pattern of [ID_PATTERN, NAME_PATTERN, SECRET_KEY_PATTERN, ORIGIN_PATTERN, ENV_NAME_PATTERN, SETTING_KEY_PATTERN]) {
+    for (const pattern of [
+      ID_PATTERN,
+      NAME_PATTERN,
+      SECRET_KEY_PATTERN,
+      ORIGIN_PATTERN,
+      ENV_NAME_PATTERN,
+      SETTING_KEY_PATTERN,
+      TOOL_NAME_PATTERN
+    ]) {
       expect(pattern.flags).toBe('')
     }
   })
@@ -84,6 +95,7 @@ describe('the schema names what the validator names', () => {
     expect(prop('secrets')['maxItems']).toBe(MANIFEST_LIMITS.secrets)
     expect(defs['args']?.['maxItems']).toBe(MANIFEST_LIMITS.args)
     expect(defs['env']?.['maxProperties']).toBe(MANIFEST_LIMITS.env)
+    expect(agentTools()['maxProperties']).toBe(MANIFEST_LIMITS.tools)
   })
 })
 
@@ -114,7 +126,17 @@ describe('the schema and the validator agree on manifests', () => {
     network: ['https://api.example.com', 'https://*.example.org', 'http://127.0.0.1:8080/'],
     secrets: ['token'],
     exec: { git: 'git', tool: { command: 'bin/tool.cmd', args: ['--json'], env: { TOKEN: '{{token}}' } } },
-    service: { node: 'service/main.mjs', args: ['--quiet'], env: { TOKEN: '{{token}}' }, start: 'enable' }
+    service: { node: 'service/main.mjs', args: ['--quiet'], env: { TOKEN: '{{token}}' }, start: 'enable' },
+    agent: {
+      instructions: 'Runs are in the panel; start one with start-run.',
+      tools: {
+        list_runs: { description: 'Lists the runs.' },
+        'start-run': {
+          description: 'Starts a run.',
+          inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }
+        }
+      }
+    }
   }
 
   const valid: Array<[string, unknown]> = [
@@ -162,7 +184,15 @@ describe('the schema and the validator agree on manifests', () => {
     ['a service with both kinds', { ...MINIMAL, service: { command: 'a', node: 'b.mjs' } }],
     ['a service with neither kind', { ...MINIMAL, service: {} }],
     ['a python node service', { ...MINIMAL, service: { node: 'srv.py' } }],
-    ['a service start Helm lacks', { ...MINIMAL, service: { node: 'srv.mjs', start: 'boot' } }]
+    ['a service start Helm lacks', { ...MINIMAL, service: { node: 'srv.mjs', start: 'boot' } }],
+    ['an agent with no tools', { ...MINIMAL, background: 'bg.html', agent: { instructions: 'x' } }],
+    ['a tool name with capitals', { ...MINIMAL, background: 'bg.html', agent: { tools: { Go: { description: 'Go.' } } } }],
+    ['a tool with no description', { ...MINIMAL, background: 'bg.html', agent: { tools: { go: {} } } }],
+    [
+      'a tool whose arguments are not an object',
+      { ...MINIMAL, background: 'bg.html', agent: { tools: { go: { description: 'Go.', inputSchema: { type: 'array' } } } } }
+    ],
+    ['blank instructions', { ...MINIMAL, background: 'bg.html', agent: { instructions: ' ', tools: { go: { description: 'Go.' } } } }]
   ]
 
   it.each(invalid)('both refuse %s', (_what, manifest) => {
@@ -225,7 +255,18 @@ describe('the schema and the validator agree on manifests', () => {
     ['a wildcard over an address', { ...MINIMAL, network: ['https://*.127.0.0.1'] }],
     ['a port past 65535', { ...MINIMAL, network: ['http://127.0.0.1:70000'] }],
     ['a wildcard inside a host', { ...MINIMAL, network: ['https://api.*.example.com'] }],
-    ['a repeated command id', { ...MINIMAL, background: 'bg.html', commands: [{ id: 'a', title: 'A' }, { id: 'a', title: 'B' }] }]
+    ['a repeated command id', { ...MINIMAL, background: 'bg.html', commands: [{ id: 'a', title: 'A' }, { id: 'a', title: 'B' }] }],
+    ['tools with no background page', { ...MINIMAL, agent: { tools: { go: { description: 'Go.' } } } }],
+    ['an empty tools object', { ...MINIMAL, background: 'bg.html', agent: { tools: {} } }],
+    [
+      'a tool name a session would see past 64 characters',
+      {
+        ...MINIMAL,
+        id: 'a-plugin-with-a-rather-long-id',
+        background: 'bg.html',
+        agent: { tools: { list_every_single_thing: { description: 'Go.' } } }
+      }
+    ]
   ])('leaves %s to the validator', (_what, manifest) => {
     expect(helmAccepts(manifest)).toBe(false)
     expect(schemaErrors(schema, manifest)).toEqual([])

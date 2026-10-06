@@ -85,8 +85,20 @@ export interface PluginInfo {
   service: PluginServiceInfo | null
   /** It declares a program or a service: what it runs, runs with the user's rights. */
   runsPrograms: boolean
+  /** The tools it offers sessions; null when its manifest declares none. */
+  agent: PluginAgentInfo | null
   status: StatusItem | null
   badge: number | null
+}
+
+/** What a plugin offers the Claude Code sessions Helm starts. */
+export interface PluginAgentInfo {
+  /** The user's switch: whether new sessions are offered these tools. */
+  enabled: boolean
+  /** The MCP server they appear under in a session: `helm-plugin-<id>`. */
+  server: string
+  instructions: string | null
+  tools: Array<{ name: string; description: string }>
 }
 
 export interface PluginMetrics {

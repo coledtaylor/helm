@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  agentServerName,
+  agentToolName,
   MANIFEST_LIMITS,
   normalizeEntry,
   originMatches,
@@ -65,7 +67,8 @@ describe('validateManifest - what a manifest leaves out', () => {
       network: [],
       secrets: [],
       exec: {},
-      service: null
+      service: null,
+      agent: null
     })
   })
 
@@ -204,6 +207,85 @@ describe('validateManifest - every problem, in one pass', () => {
     ['a service with neither', { service: {} }, 'service must have exactly one of command and node'],
     ['a node service that is not a script', { service: { node: 'srv.py' } }, 'service.node must be a .js or .mjs or .cjs file'],
     ['a service start Helm does not know', { service: { node: 'srv.mjs', start: 'boot' } }, 'service.start must be "enable" or "demand"']
+  ])('refuses %s', (_what, patch, message) => {
+    const errors = errorsFor(patch)
+    expect(errors.length).toBeGreaterThan(0)
+    expect(errors.join('\n')).toContain(message)
+  })
+})
+
+describe('validateManifest - tools for sessions', () => {
+  const tool = { description: 'Lists the things.' }
+
+  it('reads the tools in the order the manifest lists them, with an empty object schema where it wrote none', () => {
+    const schema = { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }
+    const manifest = accepted(
+      validateManifest({
+        ...MINIMAL,
+        background: 'bg.html',
+        agent: {
+          instructions: '  Use these for the list.  ',
+          tools: { list_things: tool, 'add-thing': { description: 'Adds one.', inputSchema: schema } }
+        }
+      })
+    )
+    expect(manifest.agent).toEqual({
+      instructions: 'Use these for the list.',
+      tools: [
+        { name: 'list_things', description: 'Lists the things.', inputSchema: { type: 'object', properties: {} } },
+        { name: 'add-thing', description: 'Adds one.', inputSchema: schema }
+      ]
+    })
+  })
+
+  it('names the server and every tool the way a session sees them', () => {
+    expect(agentServerName('sample')).toBe('helm-plugin-sample')
+    expect(agentToolName('sample', 'list_items')).toBe('mcp__helm-plugin-sample__list_items')
+  })
+
+  it('takes no instructions as none', () => {
+    const manifest = accepted(validateManifest({ ...MINIMAL, background: 'bg.html', agent: { tools: { go: tool } } }))
+    expect(manifest.agent?.instructions).toBeNull()
+  })
+
+  it.each([
+    ['an agent that is not an object', { background: 'bg.html', agent: [] }, 'agent must be an object'],
+    ['no tools', { background: 'bg.html', agent: { instructions: 'x' } }, 'agent.tools must be an object with at least one tool'],
+    ['an empty tools object', { background: 'bg.html', agent: { tools: {} } }, 'agent.tools must be an object with at least one tool'],
+    ['tools with no background page to answer them', { agent: { tools: { go: tool } } }, 'needs a background'],
+    ['a tool name with capitals', { background: 'bg.html', agent: { tools: { ListThings: tool } } }, 'agent.tools key "ListThings"'],
+    ['a tool name starting with a digit', { background: 'bg.html', agent: { tools: { '1go': tool } } }, 'agent.tools key "1go"'],
+    ['a tool with no description', { background: 'bg.html', agent: { tools: { go: {} } } }, 'agent.tools.go.description must be a non-empty string'],
+    ['a tool that is not an object', { background: 'bg.html', agent: { tools: { go: 'Lists.' } } }, 'agent.tools.go must be an object'],
+    [
+      'a description too long',
+      { background: 'bg.html', agent: { tools: { go: { description: 'd'.repeat(2001) } } } },
+      'agent.tools.go.description must be at most 2000 characters'
+    ],
+    ['instructions too long', { background: 'bg.html', agent: { instructions: 'i'.repeat(2001), tools: { go: tool } } }, 'at most 2000'],
+    [
+      'an input schema that is not an object schema',
+      { background: 'bg.html', agent: { tools: { go: { ...tool, inputSchema: { type: 'string' } } } } },
+      'agent.tools.go.inputSchema must be a JSON Schema whose type is "object"'
+    ],
+    [
+      'an input schema too large',
+      { background: 'bg.html', agent: { tools: { go: { ...tool, inputSchema: { type: 'object', description: 'x'.repeat(17_000) } } } } },
+      'agent.tools.go.inputSchema must be at most 16 KB'
+    ],
+    [
+      'more tools than a session should be handed',
+      {
+        background: 'bg.html',
+        agent: { tools: Object.fromEntries(Array.from({ length: MANIFEST_LIMITS.tools + 1 }, (_, n) => [`t${String(n)}`, tool])) }
+      },
+      'agent.tools may hold at most 50'
+    ],
+    [
+      'a name a session would be handed past 64 characters',
+      { id: 'a-plugin-with-a-rather-long-id', background: 'bg.html', agent: { tools: { list_every_single_thing: tool } } },
+      'a session sees it as mcp__helm-plugin-a-plugin-with-a-rather-long-id__list_every_single_thing, which is 72 characters'
+    ]
   ])('refuses %s', (_what, patch, message) => {
     const errors = errorsFor(patch)
     expect(errors.length).toBeGreaterThan(0)

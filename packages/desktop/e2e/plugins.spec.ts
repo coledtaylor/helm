@@ -2,7 +2,8 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Frame, Locator, Page } from '@playwright/test'
 import type { HelmBridge } from '@coledtaylor/helm-plugin-sdk'
-import { expect, test as base, type Helm } from './helm'
+import { bearerOf, callTool, readMcpConfig, rpc, rpcResult, toolNames } from '../test/mcp-client'
+import { claudeRunIn, expect, startSession, test as base, type Helm } from './helm'
 import { TOKEN, installSample, pluginFrame, registerPlugin, startServer, type SampleFixture } from './plugin-fixture'
 
 /**
@@ -314,4 +315,56 @@ test('a theme change reaches plugin pages without reloading them', async ({ helm
   expect(after.bg).not.toBe(before.bg)
   // The same page: what it held in memory is still there.
   expect(after.marked).toBe(true)
+})
+
+test("a session calls the plugin's tools, its background page answers, and turning them off in Settings takes them away", async ({
+  helm,
+  sample,
+  world
+}) => {
+  const ui = helm.window
+  await storeToken(ui, sample.server.url)
+  await startSession(ui, 'alpha')
+
+  // What the session was told: the plugin's own server, beside Helm's.
+  const run = await claudeRunIn(world, world.projects.alpha)
+  const config = readMcpConfig(run.argv[run.argv.indexOf('--mcp-config') + 1] ?? '')
+  const tools = config.mcpServers['helm-plugin-sample']
+  if (tools === undefined) throw new Error(`no plugin server among ${Object.keys(config.mcpServers).join(', ')}`)
+  const token = bearerOf(tools)
+  expect(await toolNames(tools.url, token)).toEqual(['list_items', 'create_item'])
+  const init = await rpcResult<{ instructions: string }>(tools.url, token, 'initialize', {})
+  expect(init.instructions).toContain('"Sample", a plugin the user added to Helm')
+  expect(init.instructions).toContain('List them before adding one')
+
+  // The background page answers, through the plugin's own network and secret.
+  const unread = await callTool(tools.url, token, 'list_items', { unreadOnly: true })
+  expect(unread.isError).toBe(false)
+  expect(JSON.parse(unread.text)).toEqual([
+    { id: '2', title: 'Second item', read: false },
+    { id: '1', title: 'Welcome', read: false }
+  ])
+  const created = await callTool(tools.url, token, 'create_item', { title: 'From a session' })
+  expect(created.isError).toBe(false)
+  expect(JSON.parse(created.text)).toMatchObject({ title: 'From a session', read: false })
+  expect(sample.server.items.map((item) => item.title)).toContain('From a session')
+  expect(await callTool(tools.url, token, 'create_item', {})).toMatchObject({ isError: true, text: 'create_item needs a title.' })
+
+  // The plugin's own surfaces show what the session did.
+  await expect(statusItem(ui)).toHaveText('3 unread')
+  const panel = await openPanel(ui)
+  await expect(panel.getByText('From a session')).toBeVisible()
+
+  // Turned off in Settings: gone from the running session at once.
+  await rail(ui).getByRole('button', { name: 'Settings' }).click()
+  await ui.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Sample', exact: true }).click()
+  const group = ui.locator('[data-settings-group="plugin-tools"]')
+  await expect(group.locator('[data-plugin-tools] li')).toHaveCount(2)
+  await group.getByRole('checkbox', { name: 'Offer to sessions' }).click()
+  await expect(group.locator('[data-plugin-tools-state]')).toHaveText('No session gets them.')
+  expect((await rpc(tools.url, token, 'tools/list')).status).toBe(404)
+  // Helm's own tools are another family, and stay.
+  const browser = config.mcpServers['helm-browser']
+  if (browser === undefined) throw new Error('no browser server')
+  expect((await rpc(browser.url, token, 'tools/list')).status).toBe(200)
 })

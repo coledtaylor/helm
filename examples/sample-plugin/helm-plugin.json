@@ -61,5 +61,25 @@
       "env": { "SAMPLE_TOKEN": "{{sample-token}}" }
     }
   },
-  "service": { "node": "service/main.mjs", "start": "demand" }
+  "service": { "node": "service/main.mjs", "start": "demand" },
+  "agent": {
+    "instructions": "The user's Sample items: short notes on the sample server, each read or unread. List them before adding one, so you do not add one that is already there.",
+    "tools": {
+      "list_items": {
+        "description": "Lists the Sample items, newest first, each with its id, title and whether it has been read.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "unreadOnly": { "type": "boolean", "description": "Only the items not read yet." } }
+        }
+      },
+      "create_item": {
+        "description": "Adds an item to the Sample list, unread, and answers with it.",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "title": { "type": "string", "description": "The item's title." } },
+          "required": ["title"]
+        }
+      }
+    }
+  }
 }

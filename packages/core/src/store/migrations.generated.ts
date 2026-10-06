@@ -126,5 +126,11 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "DROP TABLE `pr_repos`;",
       "DROP TABLE `pull_requests`;"
     ]
+  },
+  {
+    "tag": "0015_motionless_prism",
+    "statements": [
+      "ALTER TABLE `plugins` ADD `tools_enabled` integer DEFAULT true NOT NULL;"
+    ]
   }
 ]

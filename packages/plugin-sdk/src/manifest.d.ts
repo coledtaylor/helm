@@ -23,6 +23,7 @@ export const MANIFEST_LIMITS: Readonly<{
   args: number
   env: number
   options: number
+  tools: number
 }>
 export const SETTING_TYPES: readonly SettingSpec['type'][]
 export const SERVICE_START_MODES: readonly ('enable' | 'demand')[]
@@ -36,6 +37,16 @@ export const ENV_NAME_PATTERN: RegExp
 /** Global: reset `lastIndex`, or use `placeholders()`. */
 export const PLACEHOLDER_PATTERN: RegExp
 export const ICON_MAX_BYTES: number
+/** A key of `agent.tools`. */
+export const TOOL_NAME_PATTERN: RegExp
+/** `helm-plugin-`: what a plugin's MCP server is called, before its id. */
+export const AGENT_SERVER_PREFIX: string
+/** The longest `mcp__<server>__<tool>` a session can be given. */
+export const AGENT_TOOL_NAME_MAX: number
+/** `agent.instructions` and a tool's description, in characters. */
+export const AGENT_TEXT_MAX: number
+/** A tool's `inputSchema`, as JSON, in characters. */
+export const INPUT_SCHEMA_MAX_CHARS: number
 /** The path prefix Helm serves its own runtime under on every plugin's origin. */
 export const RESERVED_PREFIX: string
 export const PANEL_ACTION_ICONS: readonly PanelActionIcon[]
@@ -65,6 +76,19 @@ export interface NormalizedService {
   start: 'enable' | 'demand'
 }
 
+export interface NormalizedAgentTool {
+  name: string
+  description: string
+  /** As the manifest wrote it; `{ type: 'object', properties: {} }` when it wrote none. */
+  inputSchema: Record<string, unknown>
+}
+
+export interface NormalizedAgent {
+  instructions: string | null
+  /** In the order the manifest lists them. Never empty. */
+  tools: NormalizedAgentTool[]
+}
+
 /** A manifest that passed, with every optional part filled in and every path in one spelling. */
 export interface NormalizedManifest {
   apiVersion: 1
@@ -83,6 +107,7 @@ export interface NormalizedManifest {
   secrets: string[]
   exec: Record<string, NormalizedExec>
   service: NormalizedService | null
+  agent: NormalizedAgent | null
 }
 
 export type ManifestResult =
@@ -103,6 +128,12 @@ export function originMatches(pattern: OriginPattern, url: URL): boolean
 
 /** A path inside the plugin folder in one spelling, or null when it is not one. */
 export function normalizeEntry(path: string): string | null
+
+/** The MCP server name a plugin's tools appear under in a session: `helm-plugin-<id>`. */
+export function agentServerName(id: string): string
+
+/** What a session calls one of a plugin's tools: `mcp__helm-plugin-<id>__<tool>`. */
+export function agentToolName(id: string, tool: string): string
 
 /** Every file the manifest names, for the caller to check exists. */
 export function manifestFiles(manifest: NormalizedManifest): Array<{ field: string; path: string }>

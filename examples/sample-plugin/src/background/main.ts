@@ -1,9 +1,10 @@
-import { CHANNEL, listItems, messageOf, optionsOf } from '../lib/api'
+import { CHANNEL, createItem, listItems, messageOf, optionsOf } from '../lib/api'
 
 /**
  * The background page: always running while the plugin is on, whether or not
  * any of its surfaces are on screen. It keeps the rail badge and the status
- * bar item current, and tells the open pages when there is something new.
+ * bar item current, tells the open pages when there is something new, and
+ * answers the tools the manifest offers Claude Code sessions (`agent`).
  */
 
 const POLL_MS = 60_000
@@ -29,6 +30,25 @@ async function refresh(): Promise<void> {
     await helm.status.set({ text: 'Sample: offline', tone: 'danger', tooltip: messageOf(failure) })
   }
 }
+
+// Registered as the page starts, before anything it awaits: a session can
+// call as soon as the page is up. What a handler returns is what the session
+// reads, and what it throws is a failed call with its message.
+helm.tools.handle('list_items', async (args) => {
+  const options = optionsOf(await helm.settings.get())
+  const list = await listItems({ ...options, unreadOnly: args['unreadOnly'] === true })
+  return list.items.map(({ id, title, read }) => ({ id, title, read }))
+})
+
+helm.tools.handle('create_item', async (args) => {
+  const title = typeof args['title'] === 'string' ? args['title'].trim() : ''
+  if (title === '') throw new Error('create_item needs a title.')
+  const item = await createItem(optionsOf(await helm.settings.get()), title)
+  // The panel and any tab show it now, and the badge counts it.
+  channel.postMessage('changed')
+  void refresh()
+  return item
+})
 
 helm.on('command', ({ id }) => {
   if (id === 'refresh') void refresh()

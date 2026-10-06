@@ -459,9 +459,10 @@ export function createSessionHost({
    * half a credential.
    */
   const registerBrowserTools = (
-    name: string
+    name: string,
+    cwd: string
   ): { token: string; mcp: { dir: string; servers: SessionMcpServer[] } } | null => {
-    const registration = browserMcp?.()?.register(name) ?? null
+    const registration = browserMcp?.()?.register({ name, cwd }) ?? null
     return registration === null ? null : { token: registration.token, mcp: registration.launch }
   }
 
@@ -665,7 +666,7 @@ export function createSessionHost({
     // the normal case, and `/resume` shows only the name.
     const name = uniqueSessionName(base, takenNames())
 
-    const tools = registerBrowserTools(name)
+    const tools = registerBrowserTools(name, cwd)
     let plan: LaunchPlan
     try {
       plan = prepareLaunch({

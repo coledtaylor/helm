@@ -11,8 +11,19 @@ import { pluginSettings, plugins } from './schema'
 export interface PluginFolder {
   path: string
   enabled: boolean
+  /** Whether the sessions Helm starts are offered the tools its manifest declares. */
+  toolsEnabled: boolean
   addedAt: string
 }
+
+type PluginRow = typeof plugins.$inferSelect
+
+const folderOf = (row: PluginRow): PluginFolder => ({
+  path: row.path,
+  enabled: row.enabled,
+  toolsEnabled: row.toolsEnabled,
+  addedAt: row.addedAt
+})
 
 /** A value a plugin's settings page can hold. */
 export type PluginSettingValue = string | number | boolean
@@ -28,11 +39,11 @@ export function readPluginFolders(store: Store): PluginFolder[] {
     .from(plugins)
     .orderBy(sql`rowid`)
     .all()
-    .map((row) => ({ path: row.path, enabled: row.enabled, addedAt: row.addedAt }))
+    .map(folderOf)
 }
 
 /**
- * Registers a folder, enabled. Two spellings of one Windows path are one
+ * Registers a folder, enabled and with its tools offered. Two spellings of one Windows path are one
  * folder, so the comparison ignores case; a folder already registered is
  * returned as it is rather than added twice.
  */
@@ -40,14 +51,20 @@ export function addPluginFolder(store: Store, path: string): PluginFolder {
   const existing = findFolder(store, path)
   if (existing !== null) return existing
   const addedAt = new Date().toISOString()
-  store.db.insert(plugins).values({ path, enabled: true, addedAt }).run()
-  return { path, enabled: true, addedAt }
+  store.db.insert(plugins).values({ path, enabled: true, toolsEnabled: true, addedAt }).run()
+  return { path, enabled: true, toolsEnabled: true, addedAt }
 }
 
 export function setPluginEnabled(store: Store, path: string, enabled: boolean): void {
   const existing = findFolder(store, path)
   if (existing === null) return
   store.db.update(plugins).set({ enabled }).where(eq(plugins.path, existing.path)).run()
+}
+
+export function setPluginToolsEnabled(store: Store, path: string, toolsEnabled: boolean): void {
+  const existing = findFolder(store, path)
+  if (existing === null) return
+  store.db.update(plugins).set({ toolsEnabled }).where(eq(plugins.path, existing.path)).run()
 }
 
 export function removePluginFolder(store: Store, path: string): void {
@@ -62,7 +79,7 @@ function findFolder(store: Store, path: string): PluginFolder | null {
     .from(plugins)
     .where(sql`lower(${plugins.path}) = lower(${path})`)
     .get()
-  return row === undefined ? null : { path: row.path, enabled: row.enabled, addedAt: row.addedAt }
+  return row === undefined ? null : folderOf(row)
 }
 
 /** What the user set for one plugin. Keys the manifest no longer declares are the caller's to ignore. */

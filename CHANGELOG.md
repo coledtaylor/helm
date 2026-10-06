@@ -14,6 +14,57 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.2.0
+
+Helm 2.2 lets plugins give your Claude Code sessions tools of their own,
+gathers browser pages into one Browser tab that behaves like a real browser,
+and lets you share a page with a session.
+
+**Plugins**
+
+- A plugin can offer tools to the Claude Code sessions Helm starts, so a
+  session can read what the plugin holds, change it, or start its work, and
+  the plugin answers. The plugin's page in Settings lists its tools, and
+  turning off "Offer to sessions" takes them away, from sessions already
+  running too.
+- Each call is noted in the plugin's log with the session that made it. A
+  plugin learns a session's name and folder, never its conversation.
+- Plugin authors: the `agent` field in the manifest and `helm.tools.handle`
+  in the background page, in plugin SDK 1.2.0.
+
+**Browser**
+
+- Pages live in one Browser tab with its own strip of pages. The tab moves,
+  splits and maximizes like any other tab.
+- A link that opens a new tab, and a sign-in that opens a window, keep their
+  connection to the page that opened them, so sign-ins that used to fail or
+  open tab after tab now finish.
+- The bar is slimmer: zoom, page width, DevTools and clearing site data are in
+  a More menu, and a zoom other than 100% shows in the address bar.
+- Browser keys work with the caret in a page: Ctrl+T, Ctrl+W, Ctrl+Shift+T,
+  Ctrl+F, Ctrl+L, F5, Alt+Left and Alt+Right, Ctrl+=, Ctrl+-, Ctrl+0 and F12.
+- The address bar searches when you press Enter, with Google, DuckDuckGo or
+  Bing, chosen in Settings, or not at all.
+- The page you are using can copy to the clipboard and go full screen.
+  Everything else a page asks for is still refused.
+- Find in page keeps the caret in the find field, and a new word starts a new
+  search.
+- A menu or dialog over a page shows the page behind it instead of a gap.
+
+**Sessions**
+
+- Share, in the browser bar, lets one running session read and drive a page
+  of yours. A note above the page names the session; take it back there or
+  from the menu, and it ends with the session. The page stays yours to close.
+- A session's browser tools can now go to an address in a tab, read a page's
+  text, hover, pick from a list, scroll and wait for something to appear.
+
+**Look**
+
+- Rail icons are larger, plugin icons included.
+- The app icon is the wheel alone, in purple, redrawn to read clearly at the
+  title bar's and the taskbar's small sizes.
+
 ## 2.1.0
 
 Helm 2.1 adds plugins: folders you add that put their own panels, tabs and

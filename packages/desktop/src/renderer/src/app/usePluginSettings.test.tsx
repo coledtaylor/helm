@@ -153,6 +153,7 @@ describe('usePluginSettings - folders and settings', () => {
 
   it('hands turning on and off, reloading and removing to main as they were asked for', async () => {
     bridge.answer('plugins:setEnabled', () => [])
+    bridge.answer('plugins:setTools', () => [])
     bridge.answer('plugins:reload', () => [])
     bridge.answer('plugins:remove', () => [])
     const { result } = renderHook(() => usePluginSettings(null))
@@ -161,6 +162,7 @@ describe('usePluginSettings - folders and settings', () => {
     act(() => {
       result.current.setEnabled(SAMPLE, false)
       result.current.setEnabled(SAMPLE, true)
+      result.current.setTools(OTHER, false)
       result.current.reload(OTHER)
       result.current.remove(SAMPLE, ['sample-token'])
     })
@@ -169,6 +171,7 @@ describe('usePluginSettings - folders and settings', () => {
       { path: SAMPLE, enabled: false },
       { path: SAMPLE, enabled: true }
     ])
+    expect(bridge.invoked('plugins:setTools')).toEqual([{ path: OTHER, enabled: false }])
     expect(bridge.invoked('plugins:reload')).toEqual([{ path: OTHER }])
     expect(bridge.invoked('plugins:remove')).toEqual([{ path: SAMPLE, deleteSecrets: ['sample-token'] }])
   })

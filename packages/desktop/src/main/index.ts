@@ -388,20 +388,6 @@ function startApp(options: AppOptions = {}): void {
       if (folder.trim() !== '' && isAbsolute(folder.trim())) addPluginFolder(services.store, folder.trim())
     }
   }
-  const plugins = createPluginHost({
-    store: services.store,
-    window: () => win,
-    theme: () => pluginThemeOf(windowTheme(), services.settings),
-    bridge: pluginBridge,
-    stylesheet: pluginStylesheet
-  })
-  plugins.start()
-  registerPluginProtocol((id) => plugins.served(id), plugins.runtime)
-  installPluginPermissions()
-  pluginFrameHosts = (id) => plugins.framesPlugins(id)
-
-  win = createWindow('index', services.settings.windowBounds ?? null, windowTheme())
-
   /**
    * Helm's own MCP endpoint, reached through a getter.
    *
@@ -410,9 +396,27 @@ function startApp(options: AppOptions = {}): void {
    * created after it, because the browser host's `writeSettings` and this
    * file's shutdown order both already depend on the order these three are in.
    * So the session host is handed a *function*, which is the shape it already
-   * uses for the window for the same reason.
+   * uses for the window for the same reason - and so is the plugin host, whose
+   * tools the endpoint serves.
    */
   let browserMcp: BrowserMcpHost | null = null
+
+  const plugins = createPluginHost({
+    store: services.store,
+    window: () => win,
+    theme: () => pluginThemeOf(windowTheme(), services.settings),
+    bridge: pluginBridge,
+    stylesheet: pluginStylesheet,
+    // A plugin's tools coming or going can be the difference between a
+    // listener and none.
+    onToolsChanged: () => void browserMcp?.sync()
+  })
+  plugins.start()
+  registerPluginProtocol((id) => plugins.served(id), plugins.runtime)
+  installPluginPermissions()
+  pluginFrameHosts = (id) => plugins.framesPlugins(id)
+
+  win = createWindow('index', services.settings.windowBounds ?? null, windowTheme())
 
   /**
    * And what the session-awareness tools read, reached the same way.
@@ -527,7 +531,11 @@ function startApp(options: AppOptions = {}): void {
     browsers,
     settings: () => services.settings,
     dir: mcpConfigDir,
-    sessions: () => sessionTools
+    sessions: () => sessionTools,
+    plugins: {
+      servers: () => plugins.toolServers(),
+      call: (request, signal) => plugins.callTool(request, signal)
+    }
   })
   void browserMcp.start().then(({ started, problem }) => {
     if (started) {
@@ -537,7 +545,7 @@ function startApp(options: AppOptions = {}): void {
           bound?.port ?? 0
         )} (loopback, token-gated)`
       )
-    } else if (services.settings.browserMcp || services.settings.sessionMcp) {
+    } else if (services.settings.browserMcp || services.settings.sessionMcp || plugins.toolServers().length > 0) {
       console.warn(`Helm's tools are not available: ${problem ?? 'unknown'}`)
     }
   })
