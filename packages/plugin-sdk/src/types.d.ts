@@ -55,6 +55,11 @@ export interface PluginManifest {
   exec?: Record<string, ExecSpec>
   /** A long-running process Helm starts, supervises and stops. */
   service?: ServiceSpec | null
+  /**
+   * Tools Helm offers the Claude Code sessions it starts, answered by the
+   * background page with `helm.tools.handle`. Needs `background`.
+   */
+  agent?: AgentSpec
 }
 
 export interface RailSpec {
@@ -172,6 +177,37 @@ export interface ServiceSpec {
   env?: Record<string, string>
   /** `demand` (the default) starts it on the first `service:` fetch; `enable` starts it with the plugin. */
   start?: 'enable' | 'demand'
+}
+
+/**
+ * What a Claude Code session is offered: an MCP server of the plugin's own,
+ * `helm-plugin-<id>`, in every session Helm starts while the plugin is on and
+ * the user has not turned its tools off in Settings.
+ */
+export interface AgentSpec {
+  /**
+   * Put in the session's system prompt, after a line saying the tools come
+   * from this plugin: when to reach for them, and how they fit together.
+   * 2000 characters at most.
+   */
+  instructions?: string
+  /**
+   * By name: lower-case letters, digits, `_` and `-`, starting with a letter.
+   * A session calls `list_items` as `mcp__helm-plugin-<id>__list_items`, and
+   * that whole name may be 64 characters at most.
+   */
+  tools: Record<string, AgentToolSpec>
+}
+
+export interface AgentToolSpec {
+  /** What the model reads to decide when to call it, and what it does. 2000 characters at most. */
+  description: string
+  /**
+   * The arguments, as JSON Schema with `type: "object"`. Passed to the session
+   * as written. Helm does not hold a call's arguments to it, so a handler
+   * treats them as untrusted input.
+   */
+  inputSchema?: { type: 'object'; [keyword: string]: unknown }
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +338,32 @@ export interface HelmError extends Error {
   code: HelmErrorCode
 }
 
+/** The session calling a tool. */
+export interface ToolSession {
+  /** The same for every call the session makes, for as long as it runs. It means nothing outside Helm. */
+  id: string
+  /** The session's name, as its tab shows it. */
+  name: string
+  /** The folder it is working in. */
+  cwd: string
+}
+
+export interface ToolCall {
+  session: ToolSession
+  /**
+   * Aborted when nobody is waiting for the answer any more: the user
+   * interrupted the session, it ended, or the plugin was turned off or reloaded.
+   */
+  signal: AbortSignal
+}
+
+/**
+ * Answers one tool. What it returns is what the session reads: a string as it
+ * is, `undefined` as `Done.`, and anything else as JSON. What it throws is a
+ * failed call, and the error's message is what the session reads. 1 MB at most.
+ */
+export type ToolHandler = (args: Record<string, unknown>, call: ToolCall) => unknown
+
 /**
  * `window.helm`: everything a plugin page can ask of Helm.
  *
@@ -364,6 +426,16 @@ export interface HelmBridge {
     state(key: string): Promise<SecretState>
     /** Opens Helm's dialog for adding the key, scoped to this plugin. Resolves with the state after it closes. */
     request(key: string): Promise<SecretState>
+  }
+
+  /** The tools `agent.tools` declares, answered. Background page only. */
+  tools: {
+    /**
+     * The handler for one tool. Registering a name again replaces its handler.
+     * A call that arrives before its handler is registered waits a few seconds
+     * for it. Returns the function that removes the handler.
+     */
+    handle(name: string, handler: ToolHandler): () => void
   }
 
   /** Subscribes to an event. Returns the function that unsubscribes. */

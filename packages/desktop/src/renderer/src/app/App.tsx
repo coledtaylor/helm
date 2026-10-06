@@ -2220,6 +2220,7 @@ export function App(): JSX.Element {
           log={pluginSettings.log}
           secrets={pluginSettings.secrets}
           onSetEnabled={(enabled) => pluginSettings.setEnabled(path, enabled)}
+          onSetTools={(enabled) => pluginSettings.setTools(path, enabled)}
           onReload={() => pluginSettings.reload(path)}
           ownSecrets={() => pluginSettings.ownSecrets(path)}
           onRemove={(deleteSecrets) => {

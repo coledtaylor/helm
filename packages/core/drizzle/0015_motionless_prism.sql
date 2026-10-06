@@ -1,0 +1,1 @@
+ALTER TABLE `plugins` ADD `tools_enabled` integer DEFAULT true NOT NULL;

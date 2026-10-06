@@ -1,12 +1,14 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { request } from 'node:http'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, writeSessionMcpConfig, type AppSettings } from '@helm/core'
 import { callTool, rpc, rpcResult, send, toolNames } from '../../test/mcp-client'
 import type { BrowserHost, BrowserOpener } from './browser'
 import { createBrowserMcp, type BrowserMcpHost, type BrowserMcpRegistration } from './browser-mcp'
+import type { ToolAnswer, ToolCallRequest, ToolServer } from './plugins/tools'
 import type { BrowserConsoleEntry, BrowserState } from '../shared/ipc'
 
 /**
@@ -228,7 +230,7 @@ describe('the tool endpoint', () => {
 
   /** A registration and the two URLs it was handed. */
   const register = (name: string): BrowserMcpRegistration & { browser: string; sessions: string } => {
-    const registration = endpoint.register(name)
+    const registration = endpoint.register({ name, cwd: `C:/work/${name}` })
     if (registration === null) throw new Error('the endpoint registered nobody')
     const url = (server: string): string => registration.launch.servers.find((s) => s.name === server)?.url ?? ''
     return { ...registration, browser: url('helm-browser'), sessions: url('helm-sessions') }
@@ -401,7 +403,7 @@ describe('the tool endpoint', () => {
       expect(answer.problem).toContain('both off')
       expect(endpoint.running()).toBe(false)
       expect(endpoint.address()).toBeNull()
-      expect(endpoint.register('alpha')).toBeNull()
+      expect(endpoint.register({ name: 'alpha', cwd: 'C:/work/alpha' })).toBeNull()
       expect(endpoint.servedNames()).toEqual([])
     })
 
@@ -956,6 +958,188 @@ describe('the tool endpoint', () => {
       expect((await callTool(alpha.browser, alpha.token, 'browser_wait_for', {})).text).toMatch(/^Loaded after /)
       expect((await callTool(alpha.browser, alpha.token, 'browser_wait_for', { text: 'a', seconds: 1 })).isError).toBe(true)
       expect((await callTool(alpha.browser, alpha.token, 'browser_wait_for', { seconds: 0.05 })).text).toBe('Waited 0.05s.')
+    })
+  })
+
+  describe("a plugin's tools", () => {
+    const TRACKER: ToolServer = {
+      plugin: 'tracker',
+      name: 'Tracker',
+      server: 'helm-plugin-tracker',
+      instructions: 'Cards live on the board.',
+      tools: [
+        { name: 'list_cards', description: 'Lists the cards.', inputSchema: { type: 'object', properties: {} } },
+        {
+          name: 'add_card',
+          description: 'Adds a card.',
+          inputSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }
+        }
+      ]
+    }
+
+    let servers: ToolServer[]
+    let calls: Array<{ request: ToolCallRequest; signal: AbortSignal }>
+    let answerWith: (request: ToolCallRequest, signal: AbortSignal) => Promise<ToolAnswer>
+
+    beforeEach(() => {
+      servers = [TRACKER]
+      calls = []
+      answerWith = () => Promise.resolve({ ok: true, text: 'two cards' })
+      endpoint = createBrowserMcp({
+        browsers: browsers.host,
+        settings: () => settings,
+        dir,
+        sessions: () => null,
+        plugins: {
+          servers: () => servers,
+          call: (request, signal) => {
+            calls.push({ request, signal })
+            return answerWith(request, signal)
+          }
+        }
+      })
+    })
+
+    const trackerUrl = (registration: BrowserMcpRegistration): string =>
+      registration.launch.servers.find((server) => server.name === 'helm-plugin-tracker')?.url ?? ''
+
+    it("serves a plugin's tools on a route of its own, named for the plugin, with the plugin's instructions after Helm's", async () => {
+      await endpoint.start()
+      const alpha = register('alpha')
+      const port = endpoint.address()?.port ?? 0
+      expect(alpha.launch.servers.map((server) => server.name)).toEqual(['helm-browser', 'helm-sessions', 'helm-plugin-tracker'])
+      expect(trackerUrl(alpha)).toBe(`http://127.0.0.1:${String(port)}/mcp/plugin/tracker`)
+
+      const { tools } = await rpcResult<{ tools: Array<{ name: string; description: string; inputSchema: unknown }> }>(
+        trackerUrl(alpha),
+        alpha.token,
+        'tools/list'
+      )
+      expect(tools).toEqual(TRACKER.tools)
+      const init = await rpcResult<{ serverInfo: { name: string }; instructions: string }>(trackerUrl(alpha), alpha.token, 'initialize', {})
+      expect(init.serverInfo.name).toBe('helm-plugin-tracker')
+      expect(init.instructions).toMatch(/^These tools come from "Tracker", a plugin the user added to Helm/)
+      expect(init.instructions.endsWith('\n\nCards live on the board.')).toBe(true)
+      expect(endpoint.servedNames()).toEqual(['helm-browser', 'helm-sessions', 'helm-plugin-tracker'])
+    })
+
+    it('hands the plugin the call, its arguments and who made it - an id, a name and a folder, never the token', async () => {
+      await endpoint.start()
+      const alpha = register('alpha')
+      const beta = register('beta')
+      expect(await callTool(trackerUrl(alpha), alpha.token, 'add_card', { title: 'Ship it' })).toEqual({
+        text: 'two cards',
+        isError: false,
+        images: []
+      })
+      await callTool(trackerUrl(alpha), alpha.token, 'list_cards')
+      await callTool(trackerUrl(beta), beta.token, 'list_cards')
+
+      const [first, second, third] = calls.map((call) => call.request)
+      expect(first).toEqual({
+        plugin: 'tracker',
+        tool: 'add_card',
+        args: { title: 'Ship it' },
+        session: { id: expect.stringMatching(/^[0-9a-f]{32}$/) as string, name: 'alpha', cwd: 'C:/work/alpha' }
+      })
+      // The same session is the same id; another session is another.
+      expect(second?.session.id).toBe(first?.session.id)
+      expect(third?.session).toMatchObject({ name: 'beta', cwd: 'C:/work/beta' })
+      expect(third?.session.id).not.toBe(first?.session.id)
+      for (const call of calls) {
+        const said = JSON.stringify(call.request)
+        expect(said).not.toContain(alpha.token)
+        expect(said).not.toContain(beta.token)
+      }
+    })
+
+    it('says what the plugin said when it could not answer, as a failed call', async () => {
+      await endpoint.start()
+      const alpha = register('alpha')
+      answerWith = () => Promise.resolve({ ok: false, message: 'The board is locked.' })
+      expect(await callTool(trackerUrl(alpha), alpha.token, 'add_card', { title: 'x' })).toMatchObject({
+        isError: true,
+        text: 'The board is locked.'
+      })
+    })
+
+    it('takes the route away the moment the plugin stops offering tools, and a session started after gets none', async () => {
+      await endpoint.start()
+      const alpha = register('alpha')
+      servers = []
+      expect((await rpc(trackerUrl(alpha), alpha.token, 'tools/list')).status).toBe(404)
+      expect(endpoint.servedNames()).toEqual(['helm-browser', 'helm-sessions'])
+      expect(register('beta').launch.servers.map((server) => server.name)).toEqual(['helm-browser', 'helm-sessions'])
+
+      servers = [TRACKER]
+      expect((await rpc(trackerUrl(alpha), alpha.token, 'tools/list')).status).toBe(200)
+    })
+
+    it("binds for a plugin's tools alone, and lets go of the port when the last plugin stops offering them", async () => {
+      settings = { ...settings, browserMcp: false, sessionMcp: false }
+      servers = []
+      expect((await endpoint.start()).problem).toContain('no plugin offers tools')
+
+      servers = [TRACKER]
+      await endpoint.sync()
+      expect(endpoint.running()).toBe(true)
+      const alpha = register('alpha')
+      expect(alpha.launch.servers.map((server) => server.name)).toEqual(['helm-plugin-tracker'])
+      expect((await rpc(trackerUrl(alpha), alpha.token, 'ping')).status).toBe(200)
+
+      // A sync that changes nothing leaves the listener and its tokens alone.
+      await endpoint.sync()
+      expect((await rpc(trackerUrl(alpha), alpha.token, 'ping')).status).toBe(200)
+
+      const port = endpoint.address()?.port ?? 0
+      servers = []
+      await endpoint.sync()
+      expect(endpoint.running()).toBe(false)
+      expect(await accepts('127.0.0.1', port)).toBe(false)
+    })
+
+    it('aborts the call when the session cancels it or hangs up, and lets no other session cancel it', async () => {
+      await endpoint.start()
+      const alpha = register('alpha')
+      const beta = register('beta')
+      answerWith = (_request, signal) =>
+        new Promise((resolve) => signal.addEventListener('abort', () => resolve({ ok: false, message: 'stopped' })))
+      const auth = (who: BrowserMcpRegistration): Record<string, string> => ({ Authorization: `Bearer ${who.token}` })
+      const cancel = (who: BrowserMcpRegistration, requestId: unknown): Promise<{ status: number }> =>
+        send(trackerUrl(who), {
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId, reason: 'interrupted' } }),
+          headers: auth(who)
+        })
+
+      // Cancelled: the client says so with a notification naming its request.
+      const waiting = send(trackerUrl(alpha), {
+        body: JSON.stringify({ jsonrpc: '2.0', id: 77, method: 'tools/call', params: { name: 'list_cards', arguments: {} } }),
+        headers: auth(alpha)
+      })
+      await vi.waitFor(() => expect(calls).toHaveLength(1))
+      expect((await cancel(beta, 77)).status).toBe(202)
+      expect((await cancel(alpha, 78)).status).toBe(202)
+      expect(calls[0]?.signal.aborted).toBe(false)
+      expect((await cancel(alpha, 77)).status).toBe(202)
+      expect(calls[0]?.signal.aborted).toBe(true)
+      expect((await waiting).json).toMatchObject({ id: 77, result: { isError: true } })
+
+      // Hung up: the connection closes with the call unanswered.
+      const req = request(trackerUrl(alpha), { method: 'POST', agent: false, headers: { 'content-type': 'application/json', ...auth(alpha) } })
+      req.on('error', () => undefined)
+      req.end(JSON.stringify({ jsonrpc: '2.0', id: 'x', method: 'tools/call', params: { name: 'list_cards', arguments: {} } }))
+      await vi.waitFor(() => expect(calls).toHaveLength(2))
+      req.destroy()
+      await vi.waitFor(() => expect(calls[1]?.signal.aborted).toBe(true))
+
+      // Released: the session ended with a call in flight.
+      void send(trackerUrl(beta), {
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_cards', arguments: {} } }),
+        headers: auth(beta)
+      }).catch(() => undefined)
+      await vi.waitFor(() => expect(calls).toHaveLength(3))
+      endpoint.release(beta.token)
+      expect(calls[2]?.signal.aborted).toBe(true)
     })
   })
 })

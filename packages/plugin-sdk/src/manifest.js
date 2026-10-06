@@ -44,6 +44,48 @@ export const ORIGIN_PATTERN = /^([Hh][Tt][Tt][Pp][Ss]?):\/\/(\*\.)?([^/?#@\s]+?)
 /** `{{key}}`, wherever a secret may be referenced. */
 export const PLACEHOLDER_PATTERN = /\{\{([A-Za-z0-9][A-Za-z0-9_.-]{0,63})\}\}/g
 
+/**
+ * A tool's name, as a key of `agent.tools`. Lower-case and the separators MCP
+ * allows, so the name a session sees is the name the manifest wrote.
+ */
+export const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_-]{0,47}$/
+
+/** The MCP server a plugin's tools are served under: `helm-plugin-<id>`. */
+export const AGENT_SERVER_PREFIX = 'helm-plugin-'
+
+/**
+ * The longest name a session can be given for a tool. Claude Code calls an
+ * MCP tool `mcp__<server>__<tool>`, and the model's API takes 64 characters.
+ */
+export const AGENT_TOOL_NAME_MAX = 64
+
+/** Instructions and a tool's description: read by the model in every session that has the tools. */
+export const AGENT_TEXT_MAX = 2000
+
+/** A tool's `inputSchema`, as JSON. */
+export const INPUT_SCHEMA_MAX_CHARS = 16 * 1024
+
+/**
+ * The MCP server name a plugin's tools appear under in a session.
+ *
+ * @param {string} id
+ * @returns {string}
+ */
+export function agentServerName(id) {
+  return `${AGENT_SERVER_PREFIX}${id}`
+}
+
+/**
+ * What a session calls one of a plugin's tools.
+ *
+ * @param {string} id
+ * @param {string} tool
+ * @returns {string}
+ */
+export function agentToolName(id, tool) {
+  return `mcp__${agentServerName(id)}__${tool}`
+}
+
 /** Past this an icon is not an icon. */
 export const ICON_MAX_BYTES = 64 * 1024
 
@@ -87,7 +129,8 @@ export const MANIFEST_LIMITS = Object.freeze({
   exec: 50,
   args: 64,
   env: 64,
-  options: 100
+  options: 100,
+  tools: 50
 })
 
 const LIMITS = MANIFEST_LIMITS
@@ -110,7 +153,8 @@ export const MANIFEST_FIELDS = Object.freeze([
   'network',
   'secrets',
   'exec',
-  'service'
+  'service',
+  'agent'
 ])
 const KNOWN_FIELDS = new Set(MANIFEST_FIELDS)
 
@@ -478,6 +522,24 @@ export function validateManifest(value) {
     }
   }
 
+  // --- agent: what the Claude Code sessions Helm starts are offered
+  /** @type {import('./manifest').NormalizedAgent | null} */
+  let agent = null
+  const rawAgent = value['agent']
+  if (rawAgent !== undefined) {
+    if (!isRecord(rawAgent)) fail('agent must be an object')
+    else {
+      const instructions = optionalText(rawAgent['instructions'], 'agent.instructions', AGENT_TEXT_MAX, fail)
+      const tools = readTools(rawAgent['tools'], typeof id === 'string' && ID_PATTERN.test(id) ? id : null, fail)
+      // The background page is the only code a plugin has running whenever a
+      // session might call: panels and tabs come and go with the screen.
+      if (background === null && value['background'] === undefined) {
+        fail('agent.tools are answered by the background page, so the manifest needs a background')
+      }
+      if (tools !== null) agent = { instructions, tools }
+    }
+  }
+
   if (errors.length > 0 || typeof id !== 'string' || name === null) {
     return { ok: false, errors: errors.length > 0 ? errors : ['the manifest is incomplete'], warnings }
   }
@@ -499,7 +561,8 @@ export function validateManifest(value) {
       network,
       secrets,
       exec,
-      service
+      service,
+      agent
     },
     warnings
   }
@@ -681,6 +744,80 @@ function environment(value, field, fail, declaredSecret) {
     out[name] = entry
   }
   return good ? out : null
+}
+
+/**
+ * `agent.tools`: a tool per key, in the order the manifest wrote them.
+ *
+ * @param {unknown} value
+ * @param {string | null} id the plugin's id, when it is one, for the name a session sees
+ * @param {(message: string) => void} fail
+ * @returns {import('./manifest').NormalizedAgentTool[] | null}
+ */
+function readTools(value, id, fail) {
+  if (!isRecord(value) || Object.keys(value).length === 0) {
+    fail('agent.tools must be an object with at least one tool')
+    return null
+  }
+  const all = Object.entries(value)
+  if (all.length > LIMITS.tools) fail(`agent.tools may hold at most ${String(LIMITS.tools)}`)
+  /** @type {import('./manifest').NormalizedAgentTool[]} */
+  const tools = []
+  let good = true
+  for (const [name, spec] of all) {
+    const where = `agent.tools.${name}`
+    if (!TOOL_NAME_PATTERN.test(name)) {
+      fail(`agent.tools key "${name}" must be 1-48 lower-case letters, digits, dashes and underscores, starting with a letter`)
+      good = false
+      continue
+    }
+    if (id !== null) {
+      const seen = agentToolName(id, name)
+      if (seen.length > AGENT_TOOL_NAME_MAX) {
+        fail(
+          `${where}: a session sees it as ${seen}, which is ${String(seen.length)} characters; Claude takes at most ${String(AGENT_TOOL_NAME_MAX)}. Shorten the tool's name or the plugin's id`
+        )
+        good = false
+      }
+    }
+    if (!isRecord(spec)) {
+      fail(`${where} must be an object`)
+      good = false
+      continue
+    }
+    const description = text(spec['description'], `${where}.description`, AGENT_TEXT_MAX, fail)
+    const inputSchema = readInputSchema(spec['inputSchema'], `${where}.inputSchema`, fail)
+    if (description === null || inputSchema === null) {
+      good = false
+      continue
+    }
+    tools.push({ name, description, inputSchema })
+  }
+  return good ? tools : null
+}
+
+/**
+ * A tool's arguments, as JSON Schema. Only its shape is checked - an object
+ * whose `type` is `"object"`, which MCP requires - and its size: Helm passes
+ * it to the session as written and does not hold arguments to it.
+ *
+ * @param {unknown} value
+ * @param {string} field
+ * @param {(message: string) => void} fail
+ * @returns {Record<string, unknown> | null}
+ */
+function readInputSchema(value, field, fail) {
+  if (value === undefined) return { type: 'object', properties: {} }
+  if (!isRecord(value) || value['type'] !== 'object') {
+    fail(`${field} must be a JSON Schema whose type is "object"`)
+    return null
+  }
+  const json = JSON.stringify(value)
+  if (json.length > INPUT_SCHEMA_MAX_CHARS) {
+    fail(`${field} must be at most ${String(INPUT_SCHEMA_MAX_CHARS / 1024)} KB as JSON`)
+    return null
+  }
+  return /** @type {Record<string, unknown>} */ (JSON.parse(json))
 }
 
 /**

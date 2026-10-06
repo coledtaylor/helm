@@ -24,8 +24,8 @@ import { Action, Divider, Fact, Group, Row, Select, SettingsPage, Verdict, useDr
  * A plugin is a folder on this computer, registered by its path. The list says
  * which are on and which failed to load; a plugin's own page is everything
  * Helm knows about it - its settings, the secrets and hosts and programs its
- * manifest asks for, what it is costing, and its log - and the controls that
- * switch it off, reload it and remove it.
+ * manifest asks for, the tools it offers sessions, what it is costing, and its
+ * log - and the controls that switch it off, reload it and remove it.
  */
 
 type SettingSpec = PluginInfo['settings'][number]
@@ -130,6 +130,8 @@ export interface PluginPageProps {
   log: PluginLogLine[] | null
   secrets: SecretsState | null
   onSetEnabled: (enabled: boolean) => void
+  /** Whether the sessions Helm starts are offered the plugin's tools. */
+  onSetTools: (enabled: boolean) => void
   onReload: () => void
   /** The secrets only this plugin may use, for the remove dialog to offer. */
   ownSecrets: () => Promise<string[]>
@@ -147,6 +149,7 @@ export function PluginPage({
   log,
   secrets,
   onSetEnabled,
+  onSetTools,
   onReload,
   ownSecrets,
   onRemove,
@@ -329,6 +332,10 @@ export function PluginPage({
         </Group>
       )}
 
+      {loaded && plugin.agent !== null && (
+        <SessionTools agent={plugin.agent} pluginOn={plugin.enabled} onSetTools={onSetTools} />
+      )}
+
       <Group name="plugin-log" title="Log" hint="What its programs and service printed, and what Helm noted. The last 500 lines.">
         <PluginLog log={log} />
       </Group>
@@ -368,6 +375,55 @@ export function PluginPage({
         />
       )}
     </SettingsPage>
+  )
+}
+
+/**
+ * The tools the plugin offers the sessions Helm starts, and the switch for them.
+ * Said with what follows from them: what the plugin answers is read by the
+ * session, so it reaches the conversation the way anything the session reads
+ * does.
+ */
+function SessionTools({
+  agent,
+  pluginOn,
+  onSetTools
+}: {
+  agent: NonNullable<PluginInfo['agent']>
+  pluginOn: boolean
+  onSetTools: (enabled: boolean) => void
+}): JSX.Element {
+  const state = !pluginOn
+    ? 'The plugin is turned off, so no session has them.'
+    : agent.enabled
+      ? `Sessions Helm starts get them as ${agent.server}. Turning this off takes them from sessions already running.`
+      : 'No session gets them.'
+  return (
+    <Group
+      name="plugin-tools"
+      title="Tools for sessions"
+      hint="Claude Code sessions can call these. Its background page answers, and the answer goes into the session's conversation."
+    >
+      <label className="flex items-center justify-between gap-4 py-1.5" data-plugin-tools-switch>
+        <span className="min-w-[220px] flex-1">
+          <span className="block text-[12.5px] text-fg">Offer to sessions</span>
+          <span className="mt-0.5 block text-[11px] leading-[1.5] text-fg-subtle" data-plugin-tools-state>
+            {state}
+          </span>
+        </span>
+        <Checkbox checked={agent.enabled} onChange={() => onSetTools(!agent.enabled)} label="Offer to sessions" />
+      </label>
+      <ul className="mt-2 flex flex-col gap-1.5 pl-6" data-plugin-tools>
+        {agent.tools.map((tool) => (
+          <li key={tool.name} className="flex min-w-0 items-baseline gap-3 text-[11px] select-text">
+            <span className="shrink-0 font-mono text-fg">{tool.name}</span>
+            <span className="min-w-0 flex-1 truncate text-fg-muted" title={tool.description}>
+              {tool.description}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Group>
   )
 }
 

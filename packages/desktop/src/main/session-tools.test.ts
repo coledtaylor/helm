@@ -322,7 +322,7 @@ describe('the session tools', () => {
   })
 
   it('lets a token with no session behind it list, unmarked, and gives it no detail of its own', async () => {
-    const stray = endpoint.register('stray')
+    const stray = endpoint.register({ name: 'stray', cwd: 'C:/work/stray' })
     if (stray === null) throw new Error('the endpoint registered nobody')
     const url = stray.launch.servers.find((server) => server.name === 'helm-sessions')?.url ?? ''
     try {

@@ -234,19 +234,19 @@ export function registerIpc(ctx: IpcContext): void {
        * is the honest consequence of turning them off and is what the sentence
        * in the pane says.
        *
-       * **Two ticks, one socket**, so the question is whether *anything* is
-       * still on rather than whether this one is. Unticking one family with the
-       * other still on takes that family's route away - the endpoint reads both
-       * settings per request - and leaves the listener up for the other, which
-       * is what makes them independent capabilities rather than one with two
-       * switches.
+       * **Several families, one socket**, so the question is whether *anything*
+       * is still on rather than whether this one is - a plugin offering tools
+       * counts too, which is why the endpoint decides (`sync`). Unticking one
+       * family with another still on takes that family's route away - the
+       * endpoint reads the settings per request - and leaves the listener up
+       * for the rest, which is what makes them independent capabilities rather
+       * than one with several switches.
        */
       if (
         (patch.browserMcp !== undefined || patch.sessionMcp !== undefined) &&
         ctx.browserMcp !== null
       ) {
-        if (next.browserMcp || next.sessionMcp) void ctx.browserMcp.start()
-        else void ctx.browserMcp.stop()
+        void ctx.browserMcp.sync()
       }
       if (patch.theme !== undefined) nativeTheme.themeSource = patch.theme
       if (
@@ -649,6 +649,7 @@ export function registerIpc(ctx: IpcContext): void {
     },
     'plugins:remove': ({ path, deleteSecrets }) => ctx.plugins.remove(path, deleteSecrets),
     'plugins:setEnabled': ({ path, enabled }) => ctx.plugins.setEnabled(path, enabled),
+    'plugins:setTools': ({ path, enabled }) => ctx.plugins.setTools(path, enabled),
     'plugins:reload': ({ path }) => ctx.plugins.reload(path),
     'plugins:setSetting': ({ plugin, key, value }) => ctx.plugins.setSetting(plugin, key, value),
     // The sender is part of the call's name, so two Helm pages relaying calls
@@ -716,6 +717,7 @@ export function registerIpc(ctx: IpcContext): void {
     'plugins:answer': ({ requestId }) => ctx.plugins.answer(requestId),
     'plugins:backgroundState': ({ plugin, revision, state, error }) =>
       ctx.plugins.backgroundState(plugin, revision, state, error),
+    'plugins:toolResult': (outcome, event) => ctx.plugins.toolResult(outcome, event.sender.id),
 
     // Consumed by one-shot `ipcMain.once` listeners in the spike drivers, which
     // register alongside these. A no-op here keeps the contract exhaustive

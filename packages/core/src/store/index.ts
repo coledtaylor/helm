@@ -50,6 +50,7 @@ export {
   readPluginSettings,
   removePluginFolder,
   setPluginEnabled,
+  setPluginToolsEnabled,
   writePluginSetting,
   type PluginFolder,
   type PluginSettingValue

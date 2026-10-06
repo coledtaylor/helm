@@ -99,13 +99,14 @@ under `__helm/`, where Helm serves its runtime.
 | `secrets` | The secret keys the plugin uses as `{{key}}`. |
 | `exec` | Programs `helm.exec` may run, by name. |
 | `service` | One long-running process Helm supervises. |
+| `agent` | Tools Claude Code sessions can call, answered by the background page. See [Tools for sessions](#tools-for-sessions). |
 
 Names - panel and tab keys, action, command and program names - are 1-32
 lower-case letters, digits and dashes.
 
 Limits: 20 panels, 50 tabs, 5 actions a panel, 100 commands, 100 settings, 50
 origins, 50 secrets, 50 programs, 64 arguments and 64 environment variables a
-program.
+program, 50 tools.
 
 Helm warns about a top-level field it does not know, and loads the plugin
 anyway. Everything else it refuses, and lists every problem at once:
@@ -267,6 +268,7 @@ SyntaxError and stops the whole file.
 | `settings.get()` | Every setting's value. |
 | `secrets.state(key)` | `ready` or `missing`. |
 | `secrets.request(key)` | Opens Helm's dialog for adding the key, scoped to this plugin. Resolves with the state once it closes. |
+| `tools.handle(name, handler)` | Answers one of the tools `agent` declares. Background page only. See [Tools for sessions](#tools-for-sessions). |
 | `on(event, listener)` | Subscribes; returns the function that unsubscribes. |
 
 Events:
@@ -458,6 +460,81 @@ createServer((req, res) => {
 ```
 
 Its output goes to the plugin's log in Settings.
+
+## Tools for sessions
+
+A plugin can give the Claude Code sessions Helm starts tools to call: read its
+state, change it, start its work. Helm serves them to each session as an MCP
+server of the plugin's own, `helm-plugin-<id>`, the way it serves its own
+browser tools. The background page answers every call.
+
+```json
+"background": "dist/background/index.html",
+"agent": {
+  "instructions": "The user's items. List them before adding one, so you do not add one that is already there.",
+  "tools": {
+    "list_items": {
+      "description": "Lists the items, newest first, each with its id, title and whether it has been read.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "unreadOnly": { "type": "boolean", "description": "Only the unread ones." } }
+      }
+    },
+    "create_item": {
+      "description": "Adds an item, unread, and answers with it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "title": { "type": "string" } },
+        "required": ["title"]
+      }
+    }
+  }
+}
+```
+
+```js
+// The background page. Register as the page starts, before anything it awaits.
+helm.tools.handle('list_items', async (args) => {
+  const items = await listItems({ unreadOnly: args.unreadOnly === true })
+  return items.map(({ id, title, read }) => ({ id, title, read }))
+})
+
+helm.tools.handle('create_item', async (args, { session, signal }) => {
+  if (typeof args.title !== 'string' || args.title.trim() === '') throw new Error('create_item needs a title.')
+  return createItem(args.title.trim(), { createdBy: session.name, signal })
+})
+```
+
+- `agent` needs `background`: the background page is the one page running
+  whenever a session might call.
+- `instructions` go into the session's system prompt, after a line saying the
+  tools come from this plugin. Say when to reach for them and how they fit
+  together. 2000 characters at most, as is each `description`.
+- Tool names are lower-case letters, digits, `_` and `-`, starting with a
+  letter. A session calls `list_items` as `mcp__helm-plugin-<id>__list_items`,
+  and that whole name may be 64 characters at most.
+- `inputSchema` is JSON Schema with `type: "object"`; without one a tool takes
+  no arguments. Helm passes it to the session as written and does **not** check
+  a call's arguments against it, so a handler treats them as untrusted input.
+- What a handler returns is what the session reads: a string as it is,
+  `undefined` as `Done.`, anything else as JSON. 1 MB at most. What it throws
+  is a failed call, and the error's message is what the session reads.
+- The second argument says who is calling: `session.id` (the same for every
+  call one session makes, and meaningless outside Helm), `session.name` (as
+  its tab shows it) and `session.cwd` (its working directory). The session's
+  conversation is never shared with a plugin.
+- `signal` aborts when nobody is waiting any more: the user interrupted the
+  session, it ended, or the plugin was turned off or reloaded. Hand it to
+  `helm.fetch` so the request stops too.
+- A call that arrives before its handler is registered waits up to 5 seconds
+  for it. A call answers within 10 minutes or fails.
+- Claude Code asks the user before a session runs a tool, as it does for any
+  MCP tool, unless the user has allowed it.
+
+The tools are on while the plugin is, for sessions started after that. The
+user can turn them off on the plugin's page in Settings, which takes them from
+sessions already running too. Each call is noted in the plugin's log with the
+session that made it.
 
 ## Theme and styling
 
@@ -667,6 +744,7 @@ AltGr combinations, which many keyboards type characters with.
 - **Open windows or dialogs.** No popups, no `alert`, `confirm` or `prompt`,
   no downloads. Writing text to the clipboard is the one browser permission a
   page has.
-- **Post notifications**, or act in Claude Code sessions: plugins have no
-  agent tools.
+- **Post notifications**, or reach into a Claude Code session: a session can
+  call a plugin's tools, but a plugin cannot send a session anything, read its
+  conversation, or start one.
 - **See a secret's value**, or another plugin's anything.

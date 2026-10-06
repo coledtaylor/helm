@@ -295,6 +295,57 @@
           }
         }
       ]
+    },
+    "agent": {
+      "type": "object",
+      "description": "Tools Helm offers the Claude Code sessions it starts, as an MCP server named helm-plugin-<id>. The background page answers them with helm.tools.handle, so the manifest needs a background.",
+      "required": [
+        "tools"
+      ],
+      "properties": {
+        "instructions": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "pattern": "\\S",
+          "description": "Put in the session's system prompt: when to reach for these tools, and how they fit together."
+        },
+        "tools": {
+          "type": "object",
+          "maxProperties": 50,
+          "description": "By name. A session calls list_items as mcp__helm-plugin-<id>__list_items, and that whole name may be 64 characters at most.",
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_-]{0,47}$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "description"
+            ],
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000,
+                "pattern": "\\S",
+                "description": "What the model reads to decide when to call it, and what it does."
+              },
+              "inputSchema": {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "object"
+                  }
+                },
+                "description": "The arguments, as JSON Schema. Passed to the session as written; Helm does not check a call's arguments against it."
+              }
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {

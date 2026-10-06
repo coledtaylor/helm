@@ -61,7 +61,14 @@ import type {
   WriteConfigRequest,
   WriteConfigResult
 } from '@helm/core'
-import type { HelmErrorCode, HelmTheme, PluginParams, SettingValue, SurfaceKind } from '@coledtaylor/helm-plugin-sdk'
+import type {
+  HelmErrorCode,
+  HelmTheme,
+  PluginParams,
+  SettingValue,
+  SurfaceKind,
+  ToolSession
+} from '@coledtaylor/helm-plugin-sdk'
 import type {
   PluginInfo,
   PluginLogLine,
@@ -1354,6 +1361,11 @@ export interface IpcRequests {
   /** `deleteSecrets`: keys only this plugin could use, which the user chose to delete with it. */
   'plugins:remove': { request: { path: string; deleteSecrets: string[] }; response: PluginInfo[] }
   'plugins:setEnabled': { request: { path: string; enabled: boolean }; response: PluginInfo[] }
+  /**
+   * Whether the sessions Helm starts are offered the plugin's tools. Off takes
+   * them from running sessions too; on reaches the sessions started after it.
+   */
+  'plugins:setTools': { request: { path: string; enabled: boolean }; response: PluginInfo[] }
   /** Reads the folder again. Every page of the plugin reloads and its service restarts. */
   'plugins:reload': { request: { path: string }; response: PluginInfo[] }
   /** One value on a plugin's settings page, or null to go back to the manifest's default. */
@@ -1389,6 +1401,7 @@ export const PLUGIN_SCHEME = 'helm-plugin'
 // What the window draws of a plugin, and of the secrets: in core so the ui
 // package's Settings pages can be typed by them (`core/plugins/info.ts`).
 export type {
+  PluginAgentInfo,
   PluginBackgroundInfo,
   PluginBackgroundState,
   PluginInfo,
@@ -1467,6 +1480,27 @@ export interface PluginDelivery {
   to: 'all' | 'background'
 }
 
+/** A session called one of a plugin's tools: main to the background host, for the plugin's background page. */
+export interface PluginToolCall {
+  /** Main's, for the answer and a cancel to name the call by. */
+  id: string
+  plugin: string
+  /** A tool the manifest declares; main checked. */
+  name: string
+  args: Record<string, unknown>
+  session: ToolSession
+}
+
+/**
+ * The most a plugin's tool may answer with, in characters: the session's
+ * context is what it fills, and it crosses three processes to get there. The
+ * bridge refuses past it and main checks again.
+ */
+export const PLUGIN_TOOL_ANSWER_MAX_CHARS = 1_000_000
+
+/** The background page's answer, or the background host's word that there is no page to give one. */
+export type PluginToolOutcome = { id: string; ok: true; text: string } | { id: string; ok: false; message: string }
+
 /** The kind of theme on screen - what `.dark` on `<html>` says. */
 export type ResolvedTheme = 'light' | 'dark'
 
@@ -1536,6 +1570,8 @@ export interface IpcSends {
   'plugins:answer': { requestId: string }
   /** The background host's word on a background page: it connected, or it crashed. */
   'plugins:backgroundState': { plugin: string; revision: number; state: 'running' | 'crashed'; error: string | null }
+  /** A tool call answered, from the background host. Main takes it from that window only. */
+  'plugins:toolResult': PluginToolOutcome
 }
 
 // ---------------------------------------------------------------------------
@@ -1708,6 +1744,10 @@ export interface IpcEvents {
   'plugins:ui': PluginUiRequest
   /** An event for a plugin's pages; see `PluginDelivery`. */
   'plugins:deliver': PluginDelivery
+  /** A session called a plugin's tool. To the background host only, answered on `plugins:toolResult`. */
+  'plugins:tool': PluginToolCall
+  /** Nobody waits for that call's answer any more. */
+  'plugins:toolCancel': { id: string }
   /** The secrets list moved - a save, a removal - from any window. No values, ever. */
   'secrets:changed': SecretsState
   /**
@@ -1880,6 +1920,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'plugins:add': true,
   'plugins:remove': true,
   'plugins:setEnabled': true,
+  'plugins:setTools': true,
   'plugins:reload': true,
   'plugins:setSetting': true,
   'plugins:call': true,
@@ -1909,7 +1950,8 @@ export const SEND_CHANNELS = Object.keys({
   'browser:bounds': true,
   'plugins:cancel': true,
   'plugins:answer': true,
-  'plugins:backgroundState': true
+  'plugins:backgroundState': true,
+  'plugins:toolResult': true
 } satisfies Record<SendChannel, true>) as SendChannel[]
 
 export const EVENT_CHANNELS = Object.keys({
@@ -1948,6 +1990,8 @@ export const EVENT_CHANNELS = Object.keys({
   'plugins:changed': true,
   'plugins:ui': true,
   'plugins:deliver': true,
+  'plugins:tool': true,
+  'plugins:toolCancel': true,
   'secrets:changed': true,
   'plugins:theme': true
 } satisfies Record<EventChannel, true>) as EventChannel[]

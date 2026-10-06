@@ -13,12 +13,13 @@ import {
   readSecrets,
   removePluginFolder,
   setPluginEnabled,
+  setPluginToolsEnabled,
   writePluginSetting,
   type PluginFolder,
   type Store
 } from '@helm/core'
 import type { HelmTheme, SettingSpec, SettingValue, StatusItem, StatusTone, SurfaceKind } from '@coledtaylor/helm-plugin-sdk'
-import { NAME_PATTERN } from '@coledtaylor/helm-plugin-sdk/manifest'
+import { agentServerName, NAME_PATTERN, type NormalizedAgentTool } from '@coledtaylor/helm-plugin-sdk/manifest'
 import {
   PLUGIN_SCHEME,
   type EventChannel,
@@ -31,6 +32,7 @@ import {
   type PluginInfo,
   type PluginLogLine,
   type PluginMetrics,
+  type PluginToolOutcome,
   type SecretInput,
   type SecretsState
 } from '../../shared/ipc'
@@ -43,6 +45,7 @@ import type { PluginRuntime, ServedPlugin } from './protocol'
 import { createSecretStore, safeStorageCrypto, type SecretCrypto, type SecretStore } from './secrets'
 import { createServiceSupervisor, electronServiceLauncher, type ServiceLauncher, type ServiceSupervisor } from './service'
 import { substituteEnv } from './substitute'
+import { createToolCalls, type ToolAnswer, type ToolCallRequest, type ToolServer } from './tools'
 
 /**
  * Plugins: the folders the user registered, what each one is, and everything
@@ -75,6 +78,11 @@ export interface PluginHostOptions {
   background?: BackgroundHost | undefined
   /** Watch plugin folders and reload on change. On in the app; a test turns it off. */
   watch?: boolean | undefined
+  /**
+   * The plugins offering tools changed: one was turned on or off, reloaded,
+   * or had its tools switched. The MCP endpoint binds or lets go on this.
+   */
+  onToolsChanged?: (() => void) | undefined
 }
 
 export interface PluginHost {
@@ -84,6 +92,8 @@ export interface PluginHost {
   add(path: string): PluginAddResult
   remove(path: string, deleteSecrets: readonly string[]): PluginInfo[]
   setEnabled(path: string, enabled: boolean): PluginInfo[]
+  /** Whether the sessions Helm starts are offered the plugin's tools. Off ends its calls in flight. */
+  setTools(path: string, enabled: boolean): PluginInfo[]
   reload(path: string): PluginInfo[]
   setSetting(plugin: string, key: string, value: SettingValue): PluginInfo[]
   call(request: PluginCallRequest, sender: number): Promise<PluginCallOutcome>
@@ -91,6 +101,12 @@ export interface PluginHost {
   command(plugin: string, id: string): void
   answer(requestId: string): void
   backgroundState(plugin: string, revision: number, state: 'running' | 'crashed', error: string | null): void
+  /** Every plugin offering tools now: on, loaded, declaring tools, and not switched off in Settings. */
+  toolServers(): ToolServer[]
+  /** A session's call to a plugin's tool, answered by the plugin's background page. Never throws. */
+  callTool(request: ToolCallRequest, signal: AbortSignal): Promise<ToolAnswer>
+  /** The background host's answer to a tool call. Taken from that window only. */
+  toolResult(outcome: PluginToolOutcome, sender: number): void
   metrics(): PluginMetrics[]
   log(path: string): PluginLogLine[]
   ownSecrets(path: string): string[]
@@ -119,6 +135,8 @@ const STATUS_TOOLTIP_MAX = 300
 const BADGE_MAX = 99_999
 const TONES: readonly StatusTone[] = ['neutral', 'accent', 'success', 'warn', 'danger']
 const SURFACES: readonly SurfaceKind[] = ['panel', 'tab', 'background']
+/** How long a tool call waits for a background page that is still starting: a plugin just turned on, or reloaded. */
+const BACKGROUND_START_WAIT_MS = 15_000
 
 interface Entry {
   folder: PluginFolder
@@ -178,6 +196,21 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
       }
     })
 
+  /** Sessions' calls to plugins' tools, in flight to the background host and back. */
+  const tools = createToolCalls({
+    send: (call) => {
+      const contents = background.contents()
+      if (contents === null || contents.isDestroyed()) return false
+      contents.send('plugins:tool', call)
+      return true
+    },
+    cancel: (id) => emitTo(background.contents(), 'plugins:toolCancel', { id })
+  })
+  /** Tool calls waiting for a background page to finish starting; woken at every change. */
+  const backgroundWaiters = new Set<() => void>()
+  /** The plugins offering tools at the last change, so the endpoint hears only when that moves. */
+  let offering = ''
+
   // ---------------------------------------------------------------------------
   // Pushing to the windows
   // ---------------------------------------------------------------------------
@@ -210,6 +243,14 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
       if (stopped) return
       syncBackground()
       emitAll('plugins:changed', list())
+      for (const wake of [...backgroundWaiters]) wake()
+      const now = toolServers()
+        .map((server) => server.plugin)
+        .join('\n')
+      if (now !== offering) {
+        offering = now
+        options.onToolsChanged?.()
+      }
     })
   }
 
@@ -282,6 +323,7 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
     // A program it runs ends with it, rather than when its page notices or its
     // timeout comes round: the pages are the renderer's, the processes are ours.
     for (const call of calls.values()) if (call.entry === entry) call.controller.abort()
+    tools.end(entry, 'The plugin stopped before it answered: it was turned off, reloaded or removed.')
     entry.service?.stop(sync)
     entry.service = null
     entry.watcher?.close()
@@ -398,7 +440,8 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
         secrets: [],
         exec: [],
         service: null,
-        runsPrograms: false
+        runsPrograms: false,
+        agent: null
       }
     }
     const { manifest, icon, warnings } = entry.load.plugin
@@ -437,12 +480,80 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
               start: service.start,
               ...(entry.service?.info() ?? { state: 'stopped', pid: null, port: null, restarts: 0, error: null })
             },
-      runsPrograms: Object.keys(manifest.exec).length > 0 || service !== null
+      runsPrograms: Object.keys(manifest.exec).length > 0 || service !== null,
+      agent:
+        manifest.agent === null
+          ? null
+          : {
+              enabled: entry.folder.toolsEnabled,
+              server: agentServerName(manifest.id),
+              instructions: manifest.agent.instructions,
+              tools: manifest.agent.tools.map((tool) => ({ name: tool.name, description: tool.description }))
+            }
     }
   }
 
   function list(): PluginInfo[] {
     return entries.map(info)
+  }
+
+  function toolServers(): ToolServer[] {
+    return entries.flatMap((entry) => {
+      const plugin = live(entry)
+      const agent = plugin?.manifest.agent ?? null
+      if (plugin === null || agent === null || !entry.folder.toolsEnabled) return []
+      const { id, name } = plugin.manifest
+      return [{ plugin: id, name, server: agentServerName(id), instructions: agent.instructions, tools: agent.tools }]
+    })
+  }
+
+  /** The plugin and the tool a call names, while it is still offered; why not, as the sentence a session reads, otherwise. */
+  function offered(request: ToolCallRequest): { entry: Entry; tool: NormalizedAgentTool } | string {
+    const entry = byId(request.plugin)
+    const plugin = entry === null ? null : live(entry)
+    const agent = plugin?.manifest.agent ?? null
+    if (entry === null || plugin === null || agent === null || !entry.folder.toolsEnabled) {
+      return 'The plugin is not offering tools any more: it was turned off, removed, or had its tools turned off in Helm.'
+    }
+    const tool = agent.tools.find((candidate) => candidate.name === request.tool)
+    if (tool === undefined) {
+      return `${plugin.manifest.name} has no tool called "${request.tool}". It has: ${agent.tools.map((candidate) => candidate.name).join(', ')}.`
+    }
+    return { entry, tool }
+  }
+
+  /**
+   * Null once the plugin's background page is running, and why a call cannot
+   * be answered otherwise. A page still starting - the plugin was just turned
+   * on or reloaded - is waited for, briefly.
+   */
+  async function backgroundReady(entry: Entry, signal: AbortSignal): Promise<string | null> {
+    const deadline = Date.now() + BACKGROUND_START_WAIT_MS
+    while (entry.background.state === 'starting' && !signal.aborted && Date.now() < deadline) {
+      await new Promise<void>((resolve) => {
+        const wake = (): void => {
+          clearTimeout(timer)
+          backgroundWaiters.delete(wake)
+          signal.removeEventListener('abort', wake)
+          resolve()
+        }
+        const timer = setTimeout(wake, Math.max(0, deadline - Date.now()))
+        backgroundWaiters.add(wake)
+        signal.addEventListener('abort', wake, { once: true })
+      })
+    }
+    if (signal.aborted) return 'The call was cancelled.'
+    const { state, error } = entry.background
+    switch (state) {
+      case 'running':
+        return null
+      case 'starting':
+        return `The plugin's background page did not start within ${String(BACKGROUND_START_WAIT_MS / 1000)} seconds.`
+      case 'crashed':
+        return `The plugin's background page stopped${error === null ? '' : ` (${error})`}. Reloading the plugin in Helm's Settings > Plugins starts it again.`
+      case 'stopped':
+        return "The plugin's background page is not running."
+    }
   }
 
   function entryAt(path: string): Entry {
@@ -638,6 +749,17 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
       return list()
     },
 
+    setTools(path, enabled) {
+      const entry = entryAt(path)
+      if (entry.folder.toolsEnabled === enabled) return list()
+      setPluginToolsEnabled(store, entry.folder.path, enabled)
+      entry.folder = { ...entry.folder, toolsEnabled: enabled }
+      if (!enabled) tools.end(entry, "The user turned this plugin's tools off in Helm.")
+      note(entry, enabled ? 'tools offered to new sessions' : 'tools turned off for every session')
+      changed()
+      return list()
+    },
+
     reload(path) {
       const entry = entryAt(path)
       note(entry, 'reloaded from Settings')
@@ -720,6 +842,33 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
       }
       entry.background = { state, error: state === 'crashed' ? (error ?? 'it stopped responding') : null }
       changed()
+    },
+
+    toolServers,
+
+    async callTool(request, signal) {
+      if (stopped) return { ok: false, message: 'Helm is shutting down.' }
+      const first = offered(request)
+      if (typeof first === 'string') return { ok: false, message: first }
+      const problem = await backgroundReady(first.entry, signal)
+      if (problem !== null) return { ok: false, message: problem }
+      // Asked again: the plugin may have been turned off or reloaded while its page started.
+      const target = offered(request)
+      if (typeof target === 'string') return { ok: false, message: target }
+      const { entry, tool } = target
+      note(entry, `${tool.name} called by session "${request.session.name}"`)
+      const answer = await tools.call(
+        { plugin: request.plugin, name: tool.name, args: request.args, session: request.session },
+        entry,
+        signal
+      )
+      if (!answer.ok) note(entry, `${tool.name} failed: ${answer.message}`)
+      return answer
+    },
+
+    toolResult(outcome, sender) {
+      if (background.contents()?.id !== sender) return
+      tools.answer(outcome)
     },
 
     metrics() {
@@ -817,6 +966,8 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
       calls.clear()
       for (const request of secretRequests.values()) request.resolve('missing')
       secretRequests.clear()
+      tools.shutdown()
+      for (const wake of [...backgroundWaiters]) wake()
       for (const entry of entries) stopRuntime(entry, true)
       background.shutdown()
     }

@@ -1,4 +1,4 @@
-import type { HelmContext, HelmErrorCode, HelmTheme } from '@coledtaylor/helm-plugin-sdk'
+import type { HelmContext, HelmErrorCode, HelmTheme, ToolSession } from '@coledtaylor/helm-plugin-sdk'
 
 /**
  * The messages between a plugin page's bridge and the Helm page framing it.
@@ -42,11 +42,18 @@ export type FrameMessage =
   | { t: 'cancel'; id: number }
   | { t: 'key'; key: KeyInit }
   | { t: 'title'; title: string | null }
+  /** A background page's answer to a `tool` message. */
+  | { t: 'tool-result'; id: string; ok: true; text: string }
+  | { t: 'tool-result'; id: string; ok: false; message: string }
 
 export type HelmMessage =
   | { t: 'result'; id: number; ok: true; value: unknown }
   | { t: 'result'; id: number; ok: false; code: HelmErrorCode; message: string }
   | { t: 'event'; name: string; data: unknown }
+  /** A session called one of the plugin's tools. Background pages only. */
+  | { t: 'tool'; id: string; name: string; args: Record<string, unknown>; session: ToolSession }
+  /** Nobody is waiting for that answer any more. */
+  | { t: 'tool-cancel'; id: string }
 
 /** The frame's `name`: how a page knows where it is before it has said anything. */
 export const CONTEXT_PREFIX = 'helm:'

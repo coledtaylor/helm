@@ -11,6 +11,7 @@ import {
   type SessionMcpServer
 } from '@helm/core'
 import type { BrowserHost, BrowserOpener } from './browser'
+import type { PluginToolProvider, ToolServer } from './plugins/tools'
 import {
   createSessionTools,
   SESSION_TOOLS_INSTRUCTIONS,
@@ -49,17 +50,24 @@ import type { BrowserConsoleEntry } from '../shared/ipc'
  *   `Origin` is refused - the token already stops it, and this stops it a step
  *   earlier and without a timing side channel.
  *
- * **Two named servers, one listener.** The browser tools are one family and the
- * session-awareness tools (`session-tools.ts`) are another: one route each, one
- * name each, one `instructions` block each - and one port, one token, one
- * process. A tick per family decides whether its route exists at all, which is
- * what makes each family's "off" three separate facts rather than a promise:
- * the route answers 404, the name is absent from the `--mcp-config` document,
- * and the tools are in no list. Folding them into one server would have made
- * the second family's off unassertable in the argv, because the first family's
- * `--mcp-config` is there either way.
+ * **Named servers, one listener.** The browser tools are one family, the
+ * session-awareness tools (`session-tools.ts`) another, and each plugin that
+ * declares tools (`plugins/tools.ts`) one more: one route each, one name each,
+ * one `instructions` block each - and one port, one token, one process. A
+ * switch per family decides whether its route exists at all - a setting for
+ * Helm's own two, the plugin being on and its tools not turned off in Settings
+ * for a plugin's - which is what makes each family's "off" three separate facts
+ * rather than a promise: the route answers 404, the name is absent from the
+ * `--mcp-config` document, and the tools are in no list. Folding them into one
+ * server would have made a family's off unassertable in the argv, because the
+ * others' `--mcp-config` is there either way.
  *
- * Nothing about the six rules moves. A second route is not a second listener,
+ * A plugin's route only carries the call: Helm checks the token, then hands
+ * the plugin the call and who made it - an id minted for the session, its name
+ * and its working directory, never the token - and passes back whatever the
+ * plugin's background page answers.
+ *
+ * Nothing about the six rules moves. Another route is not another listener,
  * it is not unauthenticated - the token gate is in front of every route and the
  * route table is consulted first only so that a switched-off family is a 404
  * rather than a 401 - and both families are identified by the same token.
@@ -139,10 +147,28 @@ interface ToolResult {
 /** One live session's identity and the tab it is working in. */
 interface AgentSession {
   opener: BrowserOpener
+  /**
+   * What a plugin knows the session by. Minted with the token and nothing like
+   * it: the token is a credential for this endpoint, and a plugin is handed
+   * only what it needs to tell one session from another.
+   */
+  id: string
+  /** Where the session runs, for a plugin's tools. */
+  cwd: string
   /** The last tab this session opened or acted on. What `tab` defaults to. */
   lastTab: number | null
   /** The ephemeral config file, so `stop()` can take it away. */
   file: string | null
+  /** Requests being answered, by JSON-RPC id, so `notifications/cancelled` can abort the one it names. */
+  inFlight: Map<string, AbortController>
+}
+
+/** The session a registration is for. */
+export interface McpSessionIdentity {
+  /** What the tab strip shows against every tab the session opens, and what a plugin is told. */
+  name: string
+  /** Its working directory, for a plugin's tools. */
+  cwd: string
 }
 
 export interface BrowserMcpRegistration {
@@ -160,6 +186,12 @@ export interface BrowserMcpRegistration {
 export interface BrowserMcpHost {
   /** Binds, if any tool family is on. Idempotent; answers what happened. */
   start(): Promise<{ started: boolean; problem: string | null }>
+  /**
+   * Binds when any family is on and lets go when none is, after whatever
+   * `sync` was already doing. What a switch calls: a setting, or a plugin's
+   * tools coming or going.
+   */
+  sync(): Promise<void>
   /** Revokes every token, removes every ephemeral file, closes the listener. */
   stop(): Promise<void>
   running(): boolean
@@ -177,7 +209,7 @@ export interface BrowserMcpHost {
    * `name` is the session's own name, and it is what the tab strip will show
    * against every tab this session opens.
    */
-  register(name: string): BrowserMcpRegistration | null
+  register(session: McpSessionIdentity): BrowserMcpRegistration | null
   /**
    * The families a session would be given right now, by name.
    *
@@ -215,6 +247,17 @@ export interface BrowserMcpOptions {
    * is only ever the browser's.
    */
   sessions?: (() => SessionToolsWorld | null) | undefined
+  /** The plugins offering tools, and a way to call one; absent for an endpoint without them. */
+  plugins?: PluginToolProvider | undefined
+}
+
+/** A plugin's route: `/mcp/plugin/<id>`. An id is lower-case letters, digits and dashes, so it needs no escaping. */
+const PLUGIN_PATH_PREFIX = '/mcp/plugin/'
+
+/** What a session is told about a plugin's tools before the plugin's own words. */
+function pluginInstructions(server: ToolServer): string {
+  const provenance = `These tools come from "${server.name}", a plugin the user added to Helm, the app hosting this session. The plugin answers every call; Helm passes it on.`
+  return server.instructions === null ? provenance : `${provenance}\n\n${server.instructions}`
 }
 
 // ---------------------------------------------------------------------------
@@ -1014,7 +1057,8 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     instructions: string
     enabled: () => boolean
     listed: () => Array<{ name: string; description: string; inputSchema: unknown }>
-    call: (session: AgentSession, name: string, args: Args) => Promise<ToolResult>
+    /** `signal` is aborted when nobody is waiting for the answer any more. */
+    call: (session: AgentSession, name: string, args: Args, signal: AbortSignal) => Promise<ToolResult>
   }
 
   const sessionTools = createSessionTools(() => options.sessions?.() ?? null)
@@ -1068,6 +1112,39 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       }
     }
   ]
+
+  /**
+   * A route per plugin offering tools, read from the plugin host at every
+   * request rather than kept: a plugin turned off, or its tools switched off,
+   * is a route that no longer exists for the next request.
+   */
+  const pluginRoutes = (): Route[] => {
+    const provider = options.plugins
+    if (provider === undefined) return []
+    return provider.servers().map((server) => ({
+      name: server.server,
+      path: `${PLUGIN_PATH_PREFIX}${server.plugin}`,
+      instructions: pluginInstructions(server),
+      enabled: () => true,
+      listed: () =>
+        server.tools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })),
+      async call(session, name, args, signal) {
+        const answer = await provider.call(
+          {
+            plugin: server.plugin,
+            tool: name,
+            args,
+            session: { id: session.id, name: session.opener.name, cwd: session.cwd }
+          },
+          signal
+        )
+        return answer.ok ? ok(answer.text) : fail(answer.message)
+      }
+    }))
+  }
+
+  /** Every family, Helm's own first. */
+  const routes = (): Route[] => [...ROUTES, ...pluginRoutes()]
 
   // -------------------------------------------------------------------------
   // Small helpers the tools share
@@ -1293,7 +1370,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     }
 
     const path = (req.url ?? '/').split('?')[0]
-    const route = ROUTES.find((entry) => entry.path === path && entry.enabled()) ?? null
+    const route = routes().find((entry) => entry.path === path && entry.enabled()) ?? null
     if (route === null) {
       send(res, 404, { error: 'Not found.' })
       return
@@ -1333,13 +1410,29 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     // makes a client hang waiting for a reply to something it did not ask
     // about.
     if (id === undefined || id === null) {
+      // The one notification acted on: a client that stopped waiting for a
+      // request it sent (the user interrupted the session). It names its own
+      // request only - the map is the session's.
+      if (method === 'notifications/cancelled') {
+        const params = message.params as { requestId?: unknown } | null | undefined
+        session.inFlight.get(JSON.stringify(params?.requestId ?? null))?.abort()
+      }
       res.writeHead(202)
       res.end()
       return
     }
 
+    // Aborted when nobody is waiting for the answer: the client hung up, or
+    // said it no longer wants it. Only a plugin's tools act on it.
+    const controller = new AbortController()
+    const key = JSON.stringify(id)
+    session.inFlight.set(key, controller)
+    res.on('close', () => {
+      if (!res.writableEnded) controller.abort()
+    })
+
     try {
-      const result = await dispatch(route, session, method, message.params)
+      const result = await dispatch(route, session, method, message.params, controller.signal)
       if (result === undefined) {
         rpcError(res, id, -32601, `Helm's ${route.name} server has no method "${method}".`)
         return
@@ -1347,6 +1440,8 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       send(res, 200, { jsonrpc: '2.0', id, result })
     } catch (err) {
       rpcError(res, id, -32603, err instanceof Error ? err.message : String(err))
+    } finally {
+      if (session.inFlight.get(key) === controller) session.inFlight.delete(key)
     }
   }
 
@@ -1354,7 +1449,8 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     route: Route,
     session: AgentSession,
     method: string,
-    params: unknown
+    params: unknown,
+    signal: AbortSignal
   ): Promise<unknown> => {
     if (method === 'initialize') {
       const asked =
@@ -1379,7 +1475,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
           ? (call.arguments as Args)
           : {}
       try {
-        return await route.call(session, name, args)
+        return await route.call(session, name, args, signal)
       } catch (err) {
         // A thrown tool is still an answer to the model, not a transport
         // failure: it can read the sentence and try something else.
@@ -1393,16 +1489,30 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
 
   // -------------------------------------------------------------------------
 
-  return {
+  /** Revokes a session: its token, its file, its requests in flight and the pages shared with it. */
+  const forget = (token: string, session: AgentSession): void => {
+    removeSessionMcpConfig(session.file)
+    sessions.delete(token)
+    for (const controller of session.inFlight.values()) controller.abort()
+    session.inFlight.clear()
+    // The token is the session's identity, and a page shared with that
+    // identity is shared with nobody once it is gone.
+    browsers.revoke(token)
+  }
+
+  /** `sync` calls, one after another: a start still binding is not a stopped endpoint. */
+  let syncing: Promise<void> = Promise.resolve()
+
+  const host: BrowserMcpHost = {
     async start() {
       if (server !== null) return { started: true, problem: null }
       // Every family off is no listener at all, which is the state the app was
       // in before any of this existed. One family on is one route.
-      if (!ROUTES.some((route) => route.enabled())) {
+      if (!routes().some((route) => route.enabled())) {
         return {
           started: false,
           problem:
-            'browserMcp and sessionMcp are both off, so Helm binds no port and passes no --mcp-config.'
+            'browserMcp and sessionMcp are both off and no plugin offers tools, so Helm binds no port and passes no --mcp-config.'
         }
       }
       // Whatever a run that ended without tidying up left behind, and only what
@@ -1434,14 +1544,18 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       return { started: true, problem: null }
     },
 
+    sync() {
+      syncing = syncing.then(async () => {
+        if (routes().some((route) => route.enabled())) await host.start()
+        else await host.stop()
+      })
+      return syncing
+    },
+
     async stop() {
       // Tokens first. From this point nothing that arrives is authenticated,
       // whatever is still in flight.
-      for (const session of sessions.values()) {
-        removeSessionMcpConfig(session.file)
-        browsers.revoke(session.opener.key)
-      }
-      sessions.clear()
+      for (const [token, session] of [...sessions]) forget(token, session)
       const current = server
       server = null
       if (current === null) return
@@ -1461,21 +1575,28 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       return { address: info.address, port: info.port, family: info.family }
     },
 
-    servedNames: () => ROUTES.filter((route) => route.enabled()).map((route) => route.name),
+    servedNames: () => routes().filter((route) => route.enabled()).map((route) => route.name),
 
-    register(name) {
+    register({ name, cwd }) {
       const info = server?.address()
       if (server === null || info === null || info === undefined || typeof info === 'string') {
         return null
       }
-      const on = ROUTES.filter((route) => route.enabled())
+      const on = routes().filter((route) => route.enabled())
       // No family is on: no token is minted at all. A registration that handed
       // back a token and an empty list would be a live credential for nothing.
       if (on.length === 0) return null
 
       const token = randomBytes(32).toString('hex')
       const opener: BrowserOpener = { key: token, name }
-      const session: AgentSession = { opener, lastTab: null, file: null }
+      const session: AgentSession = {
+        opener,
+        id: randomBytes(16).toString('hex'),
+        cwd,
+        lastTab: null,
+        file: null,
+        inFlight: new Map()
+      }
       sessions.set(token, session)
       return {
         token,
@@ -1500,14 +1621,10 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     release(token) {
       if (token === null) return
       const session = sessions.get(token)
-      if (session === undefined) return
-      removeSessionMcpConfig(session.file)
-      sessions.delete(token)
-      // The token is the session's identity, and a page shared with that
-      // identity is shared with nobody once it is gone.
-      browsers.revoke(token)
+      if (session !== undefined) forget(token, session)
     }
   }
+  return host
 }
 
 // ---------------------------------------------------------------------------

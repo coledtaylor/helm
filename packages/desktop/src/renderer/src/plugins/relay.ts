@@ -5,7 +5,9 @@ import {
   type HelmBridge as Ipc,
   type PluginCallOutcome,
   type PluginDelivery,
-  type PluginFetchResponse
+  type PluginFetchResponse,
+  type PluginToolCall,
+  type PluginToolOutcome
 } from '../../../shared/ipc'
 import {
   CONNECT,
@@ -106,6 +108,8 @@ interface Frame {
   hellosAtLoad: number
   /** In-flight calls of the current connection: the page's id to the call id main knows. */
   calls: Map<number, string>
+  /** Tool calls handed to the page and not answered yet. Each is answered for, whatever becomes of the page. */
+  tools: Set<string>
   queue: HelmMessage[]
   visible: boolean
   timer: ReturnType<typeof setTimeout> | null
@@ -134,10 +138,23 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
     frame.timer = null
   }
 
+  const toolResult = (outcome: PluginToolOutcome): void => {
+    ipc.send('plugins:toolResult', outcome)
+  }
+
+  /** Every tool call the page was handed and will now never answer, failed for the session waiting on it. */
+  const failTools = (frame: Frame): void => {
+    for (const id of frame.tools) {
+      toolResult({ id, ok: false, message: "The plugin's background page stopped before it answered." })
+    }
+    frame.tools.clear()
+  }
+
   /** Ends the current connection: its calls are cancelled in main and its port closed. */
   const disconnect = (frame: Frame): void => {
     for (const callId of frame.calls.values()) ipc.send('plugins:cancel', { callId })
     frame.calls.clear()
+    failTools(frame)
     if (frame.port !== null) {
       frame.port.onmessage = null
       frame.port.close()
@@ -196,6 +213,7 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
       frame.port = null
       for (const callId of frame.calls.values()) ipc.send('plugins:cancel', { callId })
       frame.calls.clear()
+      failTools(frame)
       clearTimer(frame)
       frame.timer = setTimeout(() => {
         frame.timer = null
@@ -277,6 +295,17 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
         else if (typeof title === 'string' && title.trim() !== '') hooks.title?.(frame.spec, title.trim().slice(0, TITLE_MAX))
         return
       }
+      case 'tool-result': {
+        // Only an answer to a call this frame was handed: a page cannot answer
+        // for another page's tools, or answer twice.
+        const id = message['id']
+        if (typeof id !== 'string' || !frame.tools.delete(id)) return
+        const text = message['text']
+        const said = message['message']
+        if (message['ok'] === true && typeof text === 'string') toolResult({ id, ok: true, text })
+        else toolResult({ id, ok: false, message: typeof said === 'string' && said !== '' ? said : 'The tool failed.' })
+        return
+      }
       default:
         return
     }
@@ -331,6 +360,28 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
     }
   })
 
+  // A session's tool call, for the plugin's background page. Main sends these
+  // to the background host only, and every one is answered: by the page, or
+  // here when there is no page connected to answer it.
+  const offTool = ipc.on('plugins:tool', (call: PluginToolCall) => {
+    let frame: Frame | undefined
+    for (const candidate of frames.values()) {
+      if (candidate.spec.plugin === call.plugin && candidate.spec.surface === 'background') frame = candidate
+    }
+    if (frame === undefined || frame.port === null) {
+      toolResult({ id: call.id, ok: false, message: "The plugin's background page is not running." })
+      return
+    }
+    frame.tools.add(call.id)
+    post(frame, { t: 'tool', id: call.id, name: call.name, args: call.args, session: call.session })
+  })
+
+  const offToolCancel = ipc.on('plugins:toolCancel', ({ id }) => {
+    for (const frame of frames.values()) {
+      if (frame.tools.delete(id)) post(frame, { t: 'tool-cancel', id })
+    }
+  })
+
   // The first theme, for frames that connect before anything changes it. An
   // event that beat this read is newer, and stays.
   void Promise.all([ipc.invoke('theme:current'), ipc.invoke('settings:read')]).then(
@@ -368,6 +419,7 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
       hellos: 0,
       hellosAtLoad: 0,
       calls: new Map(),
+      tools: new Set(),
       queue: [],
       visible: false,
       timer: null
@@ -469,6 +521,8 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
       win.removeEventListener('message', onWindowMessage)
       offTheme()
       offDeliver()
+      offTool()
+      offToolCancel()
       for (const frame of [...frames.values()]) drop(frame)
       listeners.clear()
     }

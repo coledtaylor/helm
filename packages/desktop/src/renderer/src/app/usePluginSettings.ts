@@ -14,6 +14,7 @@ export interface PluginSettingsState {
   addError: string | null
   add: () => void
   setEnabled: (path: string, enabled: boolean) => void
+  setTools: (path: string, enabled: boolean) => void
   reload: (path: string) => void
   remove: (path: string, deleteSecrets: string[]) => void
   ownSecrets: (path: string) => Promise<string[]>
@@ -96,6 +97,10 @@ export function usePluginSettings(watching: string | null): PluginSettingsState 
     void helm.invoke('plugins:setEnabled', { path, enabled })
   }, [])
 
+  const setTools = useCallback((path: string, enabled: boolean) => {
+    void helm.invoke('plugins:setTools', { path, enabled })
+  }, [])
+
   const reload = useCallback((path: string) => {
     void helm.invoke('plugins:reload', { path })
   }, [])
@@ -145,6 +150,7 @@ export function usePluginSettings(watching: string | null): PluginSettingsState 
     addError,
     add,
     setEnabled,
+    setTools,
     reload,
     remove,
     ownSecrets,

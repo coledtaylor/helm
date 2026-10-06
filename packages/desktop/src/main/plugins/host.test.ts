@@ -5,8 +5,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { BrowserWindow, WebContents } from 'electron'
 import { addPluginFolder, openStore, readPluginFolders, readSecrets, setPluginEnabled, type Store } from '@helm/core'
 import type { HelmTheme } from '@coledtaylor/helm-plugin-sdk'
-import type { PluginCallOutcome, PluginInfo } from '../../shared/ipc'
-import type { PluginHost } from './host'
+import type { PluginCallOutcome, PluginInfo, PluginToolCall } from '../../shared/ipc'
+import type { PluginHost, PluginHostOptions } from './host'
 import type { BackgroundHost } from './background'
 import type { SendHop } from './net'
 import type { ServiceLauncher } from './service'
@@ -160,9 +160,10 @@ const launcher: ServiceLauncher = () => {
   return { pid: () => 4300, onOutput: () => undefined, onExit: () => undefined, kill: () => (killed += 1) }
 }
 
-function start(folders: string[] = [sampleDir]): PluginHost {
+function start(folders: string[] = [sampleDir], extra: Partial<PluginHostOptions> = {}): PluginHost {
   for (const folder of folders) addPluginFolder(store, folder)
   host = createPluginHost({
+    ...extra,
     store,
     window: () => fakeWindow,
     theme: () => THEME,
@@ -515,6 +516,172 @@ describe('the pages that frame plugins', () => {
     start()
     host.pushTheme(THEME)
     expect(sent.filter((one) => one.channel === 'plugins:theme').map((one) => one.to)).toEqual(['window', 'background'])
+  })
+})
+
+describe('tools for sessions', () => {
+  const SESSION = { id: 'a1b2c3', name: 'alpha', cwd: 'C:/work/alpha' }
+  let trackerDir: string
+
+  beforeAll(() => {
+    trackerDir = plugin('tracker plugin', {
+      apiVersion: 1,
+      id: 'tracker',
+      name: 'Tracker',
+      background: 'dist/bg.html',
+      agent: {
+        instructions: 'Cards are on the board.',
+        tools: {
+          list_cards: { description: 'Lists the cards.' },
+          add_card: { description: 'Adds a card.', inputSchema: { type: 'object', properties: { title: { type: 'string' } } } }
+        }
+      }
+    })
+  })
+
+  /** The background host's word that the tracker's page connected. */
+  const running = (): void => host.backgroundState('tracker', info(trackerDir).revision, 'running', null)
+  const toolCalls = (): PluginToolCall[] => events('plugins:tool', 'background') as PluginToolCall[]
+  const callTool = (tool = 'list_cards', signal = new AbortController().signal): ReturnType<PluginHost['callTool']> =>
+    host.callTool({ plugin: 'tracker', tool, args: { all: true }, session: SESSION }, signal)
+
+  it("offers a plugin's tools while it is on and they are not switched off, and says so in what the window draws", () => {
+    start([sampleDir, trackerDir])
+    expect(host.toolServers()).toEqual([
+      {
+        plugin: 'tracker',
+        name: 'Tracker',
+        server: 'helm-plugin-tracker',
+        instructions: 'Cards are on the board.',
+        tools: [
+          { name: 'list_cards', description: 'Lists the cards.', inputSchema: { type: 'object', properties: {} } },
+          { name: 'add_card', description: 'Adds a card.', inputSchema: { type: 'object', properties: { title: { type: 'string' } } } }
+        ]
+      }
+    ])
+    expect(info(trackerDir).agent).toEqual({
+      enabled: true,
+      server: 'helm-plugin-tracker',
+      instructions: 'Cards are on the board.',
+      tools: [
+        { name: 'list_cards', description: 'Lists the cards.' },
+        { name: 'add_card', description: 'Adds a card.' }
+      ]
+    })
+    expect(info().agent).toBeNull()
+
+    expect(info(host.setTools(trackerDir, false).find((entry) => entry.path === trackerDir)?.path).agent?.enabled).toBe(false)
+    expect(host.toolServers()).toEqual([])
+    expect(readPluginFolders(store).find((folder) => folder.path === trackerDir)?.toolsEnabled).toBe(false)
+    host.setTools(trackerDir, true)
+    expect(host.toolServers()).toHaveLength(1)
+    host.setEnabled(trackerDir, false)
+    expect(host.toolServers()).toEqual([])
+  })
+
+  it('tells the endpoint when the plugins offering tools change, and not when anything else does', async () => {
+    const onToolsChanged = vi.fn()
+    start([sampleDir, trackerDir], { onToolsChanged })
+    running()
+    await tick()
+    // The first word is what they are at all.
+    expect(onToolsChanged).toHaveBeenCalledTimes(1)
+    host.setSetting('sample', 'limit', 7)
+    await call('badge.set', [3])
+    await tick()
+    expect(onToolsChanged).toHaveBeenCalledTimes(1)
+    host.setTools(trackerDir, false)
+    await tick()
+    expect(onToolsChanged).toHaveBeenCalledTimes(2)
+    host.setTools(trackerDir, true)
+    await tick()
+    expect(onToolsChanged).toHaveBeenCalledTimes(3)
+  })
+
+  it('hands a call to the background host and answers with what came back from there, and only from there', async () => {
+    start([trackerDir])
+    running()
+    const answer = callTool('add_card')
+    await vi.waitFor(() => expect(toolCalls()).toHaveLength(1))
+    const sentCall = toolCalls()[0]!
+    expect(sentCall).toEqual({ id: expect.any(String) as string, plugin: 'tracker', name: 'add_card', args: { all: true }, session: SESSION })
+
+    let settled = false
+    void answer.then(() => (settled = true))
+    host.toolResult({ id: sentCall.id, ok: true, text: 'from the window' }, 1)
+    await tick()
+    expect(settled).toBe(false)
+    host.toolResult({ id: sentCall.id, ok: true, text: 'added' }, 2)
+    await expect(answer).resolves.toEqual({ ok: true, text: 'added' })
+    expect(host.log(trackerDir).map((line) => line.text)).toContain('add_card called by session "alpha"')
+  })
+
+  it('refuses a tool the manifest does not declare, and a plugin not offering tools, before anything reaches a page', async () => {
+    start([trackerDir])
+    running()
+    expect(await callTool('remove_card')).toEqual({
+      ok: false,
+      message: 'Tracker has no tool called "remove_card". It has: list_cards, add_card.'
+    })
+    host.setTools(trackerDir, false)
+    expect(await callTool()).toMatchObject({ ok: false, message: expect.stringContaining('not offering tools any more') as string })
+    expect(await host.callTool({ plugin: 'nobody', tool: 'x', args: {}, session: SESSION }, new AbortController().signal)).toMatchObject({
+      ok: false
+    })
+    expect(toolCalls()).toEqual([])
+  })
+
+  it('waits for a background page that is starting, and says when it has stopped', async () => {
+    start([trackerDir])
+    expect(info(trackerDir).background?.state).toBe('starting')
+    const answer = callTool()
+    await tick()
+    expect(toolCalls()).toEqual([])
+    running()
+    await vi.waitFor(() => expect(toolCalls()).toHaveLength(1))
+    host.toolResult({ id: toolCalls()[0]!.id, ok: true, text: 'two cards' }, 2)
+    await expect(answer).resolves.toEqual({ ok: true, text: 'two cards' })
+
+    host.backgroundState('tracker', info(trackerDir).revision, 'crashed', 'it threw on start')
+    expect(await callTool()).toEqual({
+      ok: false,
+      message:
+        "The plugin's background page stopped (it threw on start). Reloading the plugin in Helm's Settings > Plugins starts it again."
+    })
+    expect(toolCalls()).toHaveLength(1)
+  })
+
+  it('ends a call in flight when the tools are switched off, or the plugin is reloaded, and tells the page to stop', async () => {
+    start([trackerDir])
+    running()
+    const first = callTool()
+    await vi.waitFor(() => expect(toolCalls()).toHaveLength(1))
+    host.setTools(trackerDir, false)
+    await expect(first).resolves.toEqual({ ok: false, message: "The user turned this plugin's tools off in Helm." })
+    expect(events('plugins:toolCancel', 'background')).toEqual([{ id: toolCalls()[0]!.id }])
+
+    host.setTools(trackerDir, true)
+    const second = callTool()
+    await vi.waitFor(() => expect(toolCalls()).toHaveLength(2))
+    host.reload(trackerDir)
+    await expect(second).resolves.toMatchObject({ ok: false, message: expect.stringContaining('stopped before it answered') as string })
+  })
+
+  it('cancels at the page when the session stops waiting, and ends every call at shutdown', async () => {
+    start([trackerDir])
+    running()
+    const controller = new AbortController()
+    const cancelled = callTool('list_cards', controller.signal)
+    await vi.waitFor(() => expect(toolCalls()).toHaveLength(1))
+    controller.abort()
+    await expect(cancelled).resolves.toEqual({ ok: false, message: 'The call was cancelled.' })
+    expect(events('plugins:toolCancel', 'background')).toEqual([{ id: toolCalls()[0]!.id }])
+
+    const waiting = callTool()
+    await vi.waitFor(() => expect(toolCalls()).toHaveLength(2))
+    host.shutdown()
+    await expect(waiting).resolves.toEqual({ ok: false, message: 'Helm is shutting down.' })
+    expect(await callTool()).toEqual({ ok: false, message: 'Helm is shutting down.' })
   })
 })
 

@@ -442,3 +442,134 @@ describe('the surface title', () => {
     ])
   })
 })
+
+describe('tools', () => {
+  const BACKGROUND: HelmContext = { plugin: 'sample', surface: 'background', name: 'background', params: {} }
+  const SESSION = { id: 'a1b2c3', name: 'alpha', cwd: 'C:/work/alpha' }
+
+  /** A background page, connected. */
+  const background = (): { win: Page['win']; helm: HelmBridge; port: FakePort } => {
+    const { win, helm } = page(BACKGROUND)
+    return { win, helm, port: connect(win, { context: BACKGROUND }) }
+  }
+  const call = (port: FakePort, id: string, name: string, args: Record<string, unknown> = {}): void =>
+    port.postMessage({ t: 'tool', id, name, args, session: SESSION })
+  const results = (port: FakePort): FrameMessage[] =>
+    sent(port)
+      .filter((entry) => entry.t === 'tool-result')
+      .sort((a, b) => ((a as { id: string }).id < (b as { id: string }).id ? -1 : 1))
+
+  it('answer with what the handler returned: text as it is, nothing as Done., anything else as JSON', async () => {
+    const { helm, port } = background()
+    const seen: unknown[] = []
+    helm.tools.handle('echo', (args, { session, signal }) => {
+      seen.push({ args, session, aborted: signal.aborted })
+      return 'hello'
+    })
+    helm.tools.handle('nothing', () => undefined)
+    helm.tools.handle('json', () => Promise.resolve({ items: [1, 2] }))
+    call(port, 't1', 'echo', { a: 1 })
+    call(port, 't2', 'nothing')
+    call(port, 't3', 'json')
+    await flush()
+    expect(seen).toEqual([{ args: { a: 1 }, session: SESSION, aborted: false }])
+    expect(results(port)).toEqual([
+      { t: 'tool-result', id: 't1', ok: true, text: 'hello' },
+      { t: 'tool-result', id: 't2', ok: true, text: 'Done.' },
+      { t: 'tool-result', id: 't3', ok: true, text: JSON.stringify({ items: [1, 2] }, null, 2) }
+    ])
+  })
+
+  it('fail with the reason when the handler threw, or answered with what a session cannot read', async () => {
+    const { helm, port } = background()
+    const cycle: Record<string, unknown> = {}
+    cycle['self'] = cycle
+    helm.tools.handle('boom', () => {
+      throw new Error('The board is locked.')
+    })
+    helm.tools.handle('fn', () => () => 1)
+    helm.tools.handle('big', () => 'x'.repeat(1_000_001))
+    helm.tools.handle('cycle', () => cycle)
+    for (const [id, name] of [['t1', 'boom'], ['t2', 'fn'], ['t3', 'big'], ['t4', 'cycle']] as const) call(port, id, name)
+    await flush()
+    const said = results(port).map((entry) => (entry as { ok: boolean; message?: string }).message)
+    expect(results(port).every((entry) => (entry as { ok: boolean }).ok === false)).toBe(true)
+    expect(said[0]).toBe('The board is locked.')
+    expect(said[1]).toBe('The tool answered with a function, which is not text or JSON.')
+    expect(said[2]).toBe("The tool's answer is 1000001 characters, and a tool may answer with 1000000 at most.")
+    expect(said[3]).toMatch(/^The tool's answer could not be written as JSON: /)
+  })
+
+  it('hold a call that arrives before its handler, and answer it once the handler is registered', async () => {
+    const { helm, port } = background()
+    call(port, 't1', 'late')
+    await flush()
+    expect(results(port)).toEqual([])
+    helm.tools.handle('late', () => 'here now')
+    await flush()
+    expect(results(port)).toEqual([{ t: 'tool-result', id: 't1', ok: true, text: 'here now' }])
+  })
+
+  it('fail a call no handler is registered for within the wait, saying how to register one', async () => {
+    const { win, port } = background()
+    const timers: Array<() => void> = []
+    vi.spyOn(win, 'setTimeout').mockImplementation(((callback: () => void) => {
+      timers.push(callback)
+      return timers.length
+    }) as unknown as typeof win.setTimeout)
+    call(port, 't1', 'missing')
+    await flush()
+    expect(results(port)).toEqual([])
+    for (const fire of timers) fire()
+    await flush()
+    expect(results(port)).toEqual([
+      {
+        t: 'tool-result',
+        id: 't1',
+        ok: false,
+        message:
+          "The plugin's background page has no handler for missing. It registers one with helm.tools.handle('missing', ...) as it starts."
+      }
+    ])
+  })
+
+  it("abort the handler's signal when Helm cancels the call, and send no answer for it", async () => {
+    const { helm, port } = background()
+    let signal: AbortSignal | null = null
+    let finish: (value: string) => void = () => undefined
+    helm.tools.handle('slow', (_args, { signal: given }) => {
+      signal = given
+      return new Promise<string>((resolve) => {
+        finish = resolve
+      })
+    })
+    call(port, 't1', 'slow')
+    await flush()
+    expect(signal!.aborted).toBe(false)
+    port.postMessage({ t: 'tool-cancel', id: 't1' })
+    expect(signal!.aborted).toBe(true)
+    finish('too late')
+    await flush()
+    expect(results(port)).toEqual([])
+  })
+
+  it('take the newest handler for a name, and removing an older one leaves it', async () => {
+    const { helm, port } = background()
+    const removeFirst = helm.tools.handle('pick', () => 'first')
+    helm.tools.handle('pick', () => 'second')
+    removeFirst()
+    call(port, 't1', 'pick')
+    await flush()
+    expect(results(port)).toEqual([{ t: 'tool-result', id: 't1', ok: true, text: 'second' }])
+  })
+
+  it('are handled in the background page only, by a name and a function', () => {
+    const panel = page().helm
+    expect(() => panel.tools.handle('pick', () => 'x')).toThrow(
+      expect.objectContaining({ code: 'invalid', message: 'helm.tools.handle works in the background page only' }) as Error
+    )
+    const { helm } = background()
+    expect(() => helm.tools.handle('', () => 'x')).toThrow('helm.tools.handle needs the name of a tool')
+    expect(() => helm.tools.handle('pick', 'x' as never)).toThrow('helm.tools.handle needs a function to answer the tool')
+  })
+})

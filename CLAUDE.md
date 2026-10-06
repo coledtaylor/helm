@@ -150,6 +150,12 @@ export TypeScript source, so there is one build step.
   is the identity. `before-quit` stops the endpoint before sessions end.
 - A tool family switched off has no route (404), no entry in `--mcp-config` and
   no tool. Every family off means no bind, no token and no `--mcp-config`.
+- Each plugin offering tools is a family: `helm-plugin-<id>` at
+  `/mcp/plugin/<id>`, on while the plugin is on and its tools are not switched
+  off in Settings. Helm checks the token, then hands the plugin the call with an
+  id minted for the session, its name and its working directory - never the
+  token, never anything of the conversation. Turning them on reaches sessions
+  started after; turning them off reaches running ones at once.
 - Registration is a per-session `--mcp-config` file under the data directory,
   never `claude mcp add-json`. Leftover files are removed only when their owning
   pid is provably dead.
@@ -201,7 +207,10 @@ folder: run through npx, that folder is a cache.
 - Background pages are iframes in the hidden `plugin-host.html` window, not
   top-level pages: Chromium partitions an iframe's storage by its top-level
   site, and a top-level page would share nothing with the plugin's panels.
-- A plugin adds no tools to a session and sends no notifications.
+- A plugin's tools (`agent` in its manifest) are answered by its background
+  page, through `main/plugins/tools.ts`, and served as one more family on the
+  inbound listener. A plugin sends no notifications and never sends a session
+  anything: a session calls it, not the other way round.
 - `HELM_PLUGINS` registers folders in a dev build only.
 
 ## Overlays and templates
