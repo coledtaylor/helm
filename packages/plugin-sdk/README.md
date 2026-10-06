@@ -1,7 +1,7 @@
 # Writing a Helm plugin
 
-`@coledtaylor/helm-plugin-sdk` holds the types, the manifest validator and schema, React
-hooks and the `helm-plugin` command for building Helm plugins. The runtime
+`@coledtaylor/helm-plugin-sdk` holds the types, the manifest validator and schema,
+helpers for any framework and the `helm-plugin` command for building Helm plugins. The runtime
 itself - `window.helm`, the theme and the primitives stylesheet - comes from
 the Helm that runs the plugin, so a plugin never ships a copy of it.
 
@@ -506,9 +506,96 @@ order is declared as `theme, base, helm, components, utilities`: Tailwind's
 reset does not undo the primitives, and its utilities override them, so
 `class="helm-button px-4"` gets the padding.
 
-## React
+## Frameworks
 
-`@coledtaylor/helm-plugin-sdk/react` has hooks over the bridge:
+A plugin page is a web page, so any framework that builds one works, or none.
+The SDK has helpers that keep Helm's state current in a page: stores that work
+anywhere, and React hooks and Vue composables built on them. Each is optional.
+
+### Stores
+
+`@coledtaylor/helm-plugin-sdk/stores` has Helm's state as stores:
+
+| store | value |
+| --- | --- |
+| `theme` | The current `HelmTheme`. |
+| `visible` | Whether the surface is on screen. |
+| `settings` | Every setting's value: null until read, then kept current. |
+| `secret(key)` | A declared key's state, `ready` or `missing`: null until read. `request()` opens Helm's dialog for adding the key and resolves with the state once it closes. The same key is always the same store. |
+
+A store's `subscribe(run)` calls `run` with the value at once and again on
+every change, and returns the function that unsubscribes. `current` is the
+value now. However many subscribe, a store reads once and listens once; when
+the last subscriber leaves it forgets the value, so the next one starts from
+null rather than from something nothing kept current.
+
+```js
+import { settings } from '@coledtaylor/helm-plugin-sdk/stores'
+
+const stop = settings.subscribe((values) => {
+  if (values !== null) render(values)
+})
+```
+
+`command` and `action` are events, not state, so they have no store:
+`helm.on` already returns the function that unsubscribes, which is what every
+framework's cleanup takes.
+
+### Svelte
+
+The stores are Svelte stores, so there is no Svelte entry. Read them with `$`:
+
+```svelte
+<script>
+  import { onMount } from 'svelte'
+  import { secret, settings } from '@coledtaylor/helm-plugin-sdk/stores'
+
+  const token = secret('github-token')
+  onMount(() =>
+    helm.on('action', ({ id }) => {
+      if (id === 'refresh') reload()
+    })
+  )
+</script>
+
+{#if $token === 'missing'}
+  <button class="helm-button" onclick={() => token.request()}>Add token</button>
+{:else if $settings !== null}
+  <!-- ... -->
+{/if}
+```
+
+`get` and `derived` from `svelte/store` take them too, and in a `.svelte.js`
+module `fromStore(settings).current` reads one as state.
+
+### Vue
+
+`@coledtaylor/helm-plugin-sdk/vue` has composables that return refs:
+
+```vue
+<script setup>
+import { useHelmEvent, useHelmSettings, useHelmTheme, useHelmVisible, useSecret } from '@coledtaylor/helm-plugin-sdk/vue'
+
+const settings = useHelmSettings() // null until read, then kept current
+const visible = useHelmVisible()
+const theme = useHelmTheme()
+const [token, requestToken] = useSecret('github-token') // 'ready' | 'missing' | null
+useHelmEvent('action', ({ id }) => {
+  if (id === 'refresh') reload()
+})
+</script>
+
+<template>
+  <button v-if="token === 'missing'" class="helm-button" @click="requestToken()">Add token</button>
+</template>
+```
+
+Each subscription ends with the `setup()` or `effectScope()` it was made in.
+`useSecret` also takes a ref or a getter, and follows the key when it changes.
+
+### React
+
+`@coledtaylor/helm-plugin-sdk/react` has hooks:
 
 ```tsx
 import { useHelmEvent, useHelmSettings, useHelmTheme, useHelmVisible, useSecret } from '@coledtaylor/helm-plugin-sdk/react'
@@ -526,7 +613,8 @@ function Panel() {
 }
 ```
 
-React is an optional peer dependency; nothing else in the SDK needs it.
+React 18 or later and Vue 3.3 or later are optional peer dependencies; the
+stores need neither, and nothing else in the SDK needs them.
 
 ## TypeScript
 

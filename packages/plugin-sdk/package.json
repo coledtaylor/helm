@@ -1,6 +1,6 @@
 {
   "name": "@coledtaylor/helm-plugin-sdk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Types, the manifest schema and helpers for building Helm plugins. The runtime - the window.helm bridge, theme tokens and primitives stylesheet - comes from the running Helm.",
   "keywords": [
     "helm-plugin",
@@ -44,9 +44,17 @@
       "types": "./src/folder.d.ts",
       "default": "./src/folder.js"
     },
+    "./stores": {
+      "types": "./src/stores.d.ts",
+      "default": "./src/stores.js"
+    },
     "./react": {
       "types": "./src/react.d.ts",
       "default": "./src/react.js"
+    },
+    "./vue": {
+      "types": "./src/vue.d.ts",
+      "default": "./src/vue.js"
     },
     "./helm-plugin.schema.json": "./helm-plugin.schema.json",
     "./package.json": "./package.json"
@@ -61,15 +69,22 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "peerDependencies": {
-    "react": ">=18"
+    "react": ">=18",
+    "vue": ">=3.3"
   },
   "peerDependenciesMeta": {
     "react": {
+      "optional": true
+    },
+    "vue": {
       "optional": true
     }
   },
   "devDependencies": {
     "@types/react": "^19.2.7",
-    "react": "^19.2.0"
+    "react": "^19.2.0",
+    "react-dom": "^19.2.8",
+    "svelte": "^5.57.2",
+    "vue": "^3.5.43"
   }
 }

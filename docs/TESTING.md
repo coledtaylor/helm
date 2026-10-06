@@ -16,7 +16,7 @@ and releases the app.
 
 ```bash
 pnpm test                          # every vitest project, with coverage
-pnpm vitest run --project ui       # one of core, ui, desktop
+pnpm vitest run --project ui       # one of core, ui, desktop, sdk, sdk-svelte
 pnpm vitest run <file>             # one file, while building
 pnpm test:e2e                      # builds, then runs every workflow
 pnpm --filter @helm/desktop exec playwright test -c e2e panes   # one spec, after a build
@@ -24,7 +24,7 @@ pnpm --filter @helm/desktop exec playwright test -c e2e panes   # one spec, afte
 
 ## Unit and integration tests
 
-vitest runs three projects (`vitest.config.ts`):
+vitest runs five projects (`vitest.config.ts`):
 
 - **core** - pure logic in `packages/core`, in Node.
 - **ui** - components in `packages/ui` and modules in the renderer, in jsdom
@@ -34,6 +34,11 @@ vitest runs three projects (`vitest.config.ts`):
 - **desktop** - main-process services, in Node. `vi.mock('electron')` with
   `test/electron.ts` stands in for Electron; ptys are real and run the fake
   `claude`. `sessions.test.ts` is the example.
+- **sdk** - the plugin SDK in `packages/plugin-sdk/test`: its validator,
+  schema and command in Node, the package as npm publishes it, and its React
+  and Vue helpers in jsdom against the fake bridge in `test/bridge.ts`.
+- **sdk-svelte** - a compiled Svelte component reading the SDK's stores, in
+  jsdom. Apart from `sdk` because it resolves Svelte's browser build.
 
 Tests live beside the code as `*.test.ts` or `*.test.tsx`. Logic tangled with
 Electron or React moves into a module that can be tested on its own, as

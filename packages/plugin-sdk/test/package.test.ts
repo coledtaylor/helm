@@ -74,10 +74,12 @@ describe(`${NAME} as published`, () => {
     expect(packed).toContain('helm-plugin.schema.json')
     expect(packed).toContain('template/helm-plugin.json')
     expect(packed).toContain('template/pages/panel.js')
-    for (const file of ['folder', 'manifest', 'react']) {
+    for (const file of ['folder', 'manifest', 'react', 'stores', 'vue']) {
       expect(packed).toContain(`src/${file}.js`)
       expect(packed).toContain(`src/${file}.d.ts`)
     }
+    // Imported by the framework helpers, and no export of its own.
+    expect(packed).toContain('src/bridge.js')
     expect(packed.filter((file) => file.startsWith('test/') || file === 'tsconfig.json')).toEqual([])
     // The repository's licence, not a copy that has drifted from it.
     expect(readFileSync(join(SDK_DIR, 'LICENSE'), 'utf8')).toBe(readFileSync(join(SDK_DIR, '..', '..', 'LICENSE'), 'utf8'))
@@ -112,12 +114,14 @@ describe(`${NAME} as published`, () => {
           `import { checkPluginFolder } from '${NAME}/folder'`,
           `import schema from '${NAME}/helm-plugin.schema.json' with { type: 'json' }`,
           `import pkg from '${NAME}/package.json' with { type: 'json' }`,
-          `console.log(typeof validateManifest, checkPluginFolder('.').ok, typeof schema.properties, pkg.name)`
+          // No framework and no window.helm here: the stores import, and read nothing until subscribed.
+          `import { secret, settings } from '${NAME}/stores'`,
+          `console.log(typeof validateManifest, checkPluginFolder('.').ok, typeof schema.properties, pkg.name, typeof settings.subscribe, typeof secret)`
         ].join('\n')
       ],
       { cwd: folder, encoding: 'utf8' }
     )
     expect(exports.stderr).toBe('')
-    expect(exports.stdout.trim()).toBe(`function true object ${NAME}`)
+    expect(exports.stdout.trim()).toBe(`function true object ${NAME} function function`)
   })
 })
