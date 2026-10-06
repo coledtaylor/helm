@@ -147,7 +147,7 @@ export {
   PANES_MOVED_EVENT,
   type PaneDropZone
 } from './lib/paneGeometry'
-export { Rail, type RailItem, type RailProps } from './components/Rail'
+export { Rail, RAIL_ICON, type RailItem, type RailProps } from './components/Rail'
 export { SessionTree, type SessionTreeProps, type TreeReveal, type TreeSession } from './components/SessionTree'
 export {
   SessionEndedBar,

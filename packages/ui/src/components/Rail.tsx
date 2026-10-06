@@ -35,6 +35,18 @@ export interface RailItem {
   hooks?: Record<`data-${string}`, string | boolean> | undefined
 }
 
+/**
+ * How a rail icon is drawn: Helm's glyphs spread these, a plugin's icon takes
+ * the width, so the two cannot drift apart.
+ *
+ * 20px in a 40px button, half the button as at every size the rail has had.
+ * The stroke is thinned to match: the glyphs are drawn on a 16-unit grid with
+ * a 1.5 stroke, which at 20px would be 1.9px of line - heavier than the 1.6 of
+ * every other glyph in the chrome. 1.3 keeps it at 1.6 and lets the icons grow
+ * without getting bolder.
+ */
+export const RAIL_ICON = { width: 20, height: 20, strokeWidth: 1.3 } as const
+
 export interface RailProps {
   /** Grouped by how often each is reached for; a rule is drawn between groups. */
   groups: readonly (readonly RailItem[])[]
@@ -97,7 +109,7 @@ export function Rail({ groups, footer, hidden, onToggleHidden }: RailProps): JSX
               setMenuAt({ x: event.clientX, y: event.clientY })
             }
       }
-      className="flex w-11 shrink-0 flex-col items-center gap-0.5 pb-1.5"
+      className="flex w-12 shrink-0 flex-col items-center gap-0.5 pb-1.5"
     >
       {shown.map((items, index) => (
         <div key={items[0]?.id ?? index} className="contents">
@@ -134,7 +146,7 @@ function RailButton({ item }: { item: RailItem }): JSX.Element {
       data-rail={item.id}
       {...item.hooks}
       className={cn(
-        'relative grid size-[34px] shrink-0 place-items-center rounded-well transition-colors',
+        'relative grid size-10 shrink-0 place-items-center rounded-well transition-colors',
         // A current item still answers the pointer, a step further along the
         // same ramp - the selected-row rule (lib/rows.ts), applied here.
         item.current ? 'bg-hover text-fg hover:bg-active' : 'text-fg-subtle hover:bg-hover hover:text-fg'
@@ -144,7 +156,7 @@ function RailButton({ item }: { item: RailItem }): JSX.Element {
           the same 2px mark a selected sidebar row carries, so a view and the
           sidebar showing it read as one thing. */}
       {item.current && item.kind === 'view' && (
-        <span aria-hidden className="absolute inset-y-2 -left-[5px] w-[2px] rounded-full bg-accent" />
+        <span aria-hidden className="absolute inset-y-2.5 -left-1 w-[2px] rounded-full bg-accent" />
       )}
       {item.icon}
       {item.badge != null && item.badge > 0 && (
@@ -165,7 +177,7 @@ function RailButton({ item }: { item: RailItem }): JSX.Element {
         <span
           aria-hidden
           data-rail-attention
-          className="absolute top-[5px] right-[5px] size-[7px] rounded-full bg-warn ring-2 ring-bg"
+          className="absolute top-1.5 right-1.5 size-[7px] rounded-full bg-warn ring-2 ring-bg"
         />
       )}
     </button>

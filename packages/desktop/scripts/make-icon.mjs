@@ -19,22 +19,27 @@
  * anti-aliases better than a supersampled scanline fill and needs nothing
  * outside `node:zlib`.
  *
- * ## Why each size is drawn rather than downscaled
+ * ## Why it is one drawing at every size
  *
  * A 16px icon downscaled from 256 turns to mush, and 16px is the size Windows
- * shows most often - the taskbar, the title bar, Explorer's list view. Every
- * size is drawn at its own resolution, and the strokes have a floor in device
- * pixels so they cannot thin out to nothing: at 16px the wheel's spokes would
- * otherwise be four tenths of a pixel wide.
+ * shows most often - the taskbar, the title bar, Explorer's list view. So every
+ * size is drawn at its own resolution, with a floor of one device pixel on
+ * every stroke so nothing thins out to nothing.
  *
- * The small sizes are their own drawings rather than the big one shrunk, which
- * is ordinary practice for icons. What survives is chosen by what the mark
- * needs to stay legible: the spokes are the wheel, so they are the last thing
- * to go. Dropping them below 32px and keeping the round knobs was tried first
- * and produced a flower. Below 24px it is four spokes, a wider rim and no hub,
- * because eight spokes and a hub inside a four-pixel radius merge into a blob.
- * `build/preview.png` shows 16 through 48 magnified, so this is a thing that
- * can be looked at rather than assumed.
+ * It is the same drawing at each of them, though, and that is what the
+ * proportions are for. A wheel at 16px is a rim, a hub and handles, and the
+ * rim has to be most of it: the first version drew a small rim with long
+ * knobbed handles, which at 256 is a fine ship's wheel and at 16 to 20 is a
+ * snowflake, and the 2026-08 fix for that - four spokes below 24px - read as
+ * a crosshair. A rim at two thirds of the radius, short round-capped handles
+ * and a hollow hub stay a wheel from 16px up, so no size needs a drawing of
+ * its own. `build/preview.png` shows 16 through 48 magnified, so this is a
+ * thing that can be looked at rather than assumed.
+ *
+ * `HelmMarkIcon` (packages/ui) draws the same wheel as a vector, from the
+ * same `wheel.json`. Its spokes are thinner than the rim and handles so the
+ * hub's ring stays open between them; at the rim's weight they close it into
+ * a blot.
  *
  * When real artwork replaces this, none of the above applies - export a
  * 1024px PNG from a vector tool and use an icon generator. See the README of
@@ -45,6 +50,9 @@ import { deflateSync } from 'node:zlib'
 import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+// The wheel on the 16-unit grid `HelmMarkIcon` draws on: radii from the
+// centre, widths across. One file for both, so the two cannot drift apart.
+import WHEEL from '../../ui/src/components/wheel.json' with { type: 'json' }
 
 const BUILD = join(dirname(fileURLToPath(import.meta.url)), '..', 'build')
 
@@ -53,7 +61,9 @@ const SIZES = [16, 24, 32, 48, 64, 128, 256]
 
 const NAVY = [0x0f, 0x18, 0x26]
 const BRASS = [0xe3, 0xa9, 0x4c]
-const BRASS_DARK = [0xb9, 0x82, 0x2f]
+
+/** The 16-unit box as a share of the icon: the handles' caps end 8px inside a 256 icon's edge. */
+const FILL = 0.92
 
 // ---------------------------------------------------------------------------
 // Signed distance fields. Negative inside, positive outside, in pixels.
@@ -103,44 +113,59 @@ function over(dst, i, rgb, a) {
 // ---------------------------------------------------------------------------
 
 function draw(size) {
-  const s = size / 256
   const px = new Uint8Array(size * size * 4)
+  const unit = (size * FILL) / 16
+  const corner = (56 * size) / 256
 
-  // Stroke weights carry a floor in device pixels so the small sizes survive.
-  //
-  // Detail is shed in order of what the mark can spare. The knobs go first and
-  // the spokes last: radiating lines crossing a rim are what read as a wheel,
-  // and a ring of round knobs without them is a flower - which is what shipped
-  // on 2026-08-10 and was immediately spotted as one.
-  //
-  // Below 24px even eight spokes are too many, and a hub closes the gaps into a
-  // solid blob, so that size gets four spokes, a proportionally wider rim, and
-  // no hub at all.
-  const tiny = size < 24
-  const knobbed = size >= 48
-  const hubDetail = size >= 64
-  const spokeCount = tiny ? 4 : 8
-  const corner = 56 * s
-  const rimR = tiny ? size * 0.29 : 62 * s
-  const rimHalf = tiny ? 0.9 : Math.max(8 * s, 1.1)
-  const spokeHalf = tiny ? 0.75 : Math.max(6.5 * s, 0.9)
-  // Without knobs the spokes have to reach where the knobs would have been, or
-  // the mark loses the handles that make it a ship's wheel rather than a gear.
-  const spokeLen = tiny ? size * 0.45 : (knobbed ? 101 : 104) * s
-  const knobR = Math.max(13 * s, 2.2)
-  const hubR = hubDetail ? Math.max(21 * s, 3) : tiny ? 0 : Math.max(16 * s, 1.4)
-  const hubDarkR = 8 * s
-
-  const c = size / 2
-  const spokes = []
-  const knobs = []
-  for (let i = 0; i < spokeCount; i++) {
-    const a = (i * 2 * Math.PI) / spokeCount
-    const ex = c + spokeLen * Math.cos(a)
-    const ey = c + spokeLen * Math.sin(a)
-    spokes.push([ex, ey])
-    knobs.push([ex, ey])
+  // Up to 48px the drawing is snapped to the pixel grid. Every width is a
+  // whole number of pixels, the centre sits where the spokes' width needs it -
+  // on a pixel's centre for an odd width, on the line between two for an even
+  // one - and each ring's radius puts its line on whole pixels where it crosses
+  // the axes. Unsnapped, a one-pixel upright spoke is two half-strength pixels
+  // and a small wheel is a smudge. Half a pixel off centre is invisible; the
+  // smudge is not.
+  const snap = unit < 3
+  /**
+   * A width in pixels, never under `floor`. The rim and handles take a floor
+   * of two: they are the outline, and the outline is what is left of a wheel
+   * at 16px. At one pixel the diagonal handles are a single pixel each, lost
+   * against the rim, and what is left is a crosshair in a circle.
+   */
+  const width = (w, floor = 1) => (snap ? Math.max(floor, Math.round(w * unit)) : Math.max(w * unit, floor))
+  const spokeWidth = width(WHEEL.spokeWidth)
+  const c = snap && Math.round(spokeWidth) % 2 === 1 ? size / 2 - 0.5 : size / 2
+  const radius = (r, w) => {
+    if (!snap) return r * unit
+    // Where the ring's line should fall: a pixel's centre for an odd width,
+    // the line between two for an even one.
+    const target = w % 2 === 1 ? 0.5 : 0
+    return Math.round(c + r * unit - target) + target - c
   }
+
+  const rimWidth = width(WHEEL.rimWidth, 2)
+  const hubWidth = width(WHEEL.hubWidth)
+  const rimR = radius(WHEEL.rim, rimWidth)
+  const hubR = radius(WHEEL.hub, hubWidth)
+  const rimHalf = rimWidth / 2
+  const hubHalf = hubWidth / 2
+  const spokeHalf = spokeWidth / 2
+  const handleHalf = width(WHEEL.handleWidth, 2) / 2
+
+  // Eight spokes need room between them inside the rim, or the diagonals and
+  // the rim close into four solid corners - which is the 16px wheel. Where the
+  // clear space between two spokes halfway out is under two pixels, only the
+  // upright and level spokes are drawn inside; all eight handles still are,
+  // and they are what say "wheel" from outside.
+  const gap = (2 * Math.PI * ((hubR + rimR) / 2)) / 8 - spokeWidth
+  const inner = gap < 2 ? 4 : 8
+
+  // Each spoke runs from the hub's ring to the rim, and its handle on from the
+  // rim to a round cap - two widths, so they are two capsules.
+  const spokes = Array.from({ length: 8 }, (_, n) => {
+    const a = (n * 2 * Math.PI) / 8
+    const at = (r) => [c + r * Math.cos(a), c + r * Math.sin(a)]
+    return { inside: inner === 8 || n % 2 === 0, hub: at(hubR), rim: at(rimR), end: at(WHEEL.handleEnd * unit) }
+  })
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -151,22 +176,14 @@ function draw(size) {
       over(px, i, NAVY, coverage(sdRoundedRect(cx, cy, size, size, corner)))
 
       let brass = 0
-      for (const [ex, ey] of spokes) {
-        brass = Math.max(brass, coverage(sdCapsule(cx, cy, c, c, ex, ey, spokeHalf)))
-      }
-      if (knobbed) {
-        for (const [kx, ky] of knobs) {
-          brass = Math.max(brass, coverage(sdCircle(cx, cy, kx, ky, knobR)))
-        }
+      for (const { inside, hub, rim, end } of spokes) {
+        if (inside) brass = Math.max(brass, coverage(sdCapsule(cx, cy, hub[0], hub[1], rim[0], rim[1], spokeHalf)))
+        brass = Math.max(brass, coverage(sdCapsule(cx, cy, rim[0], rim[1], end[0], end[1], handleHalf)))
       }
       // A ring is the circle's distance folded about its own edge.
       brass = Math.max(brass, coverage(Math.abs(sdCircle(cx, cy, c, c, rimR)) - rimHalf))
-      if (hubR > 0) brass = Math.max(brass, coverage(sdCircle(cx, cy, c, c, hubR)))
+      brass = Math.max(brass, coverage(Math.abs(sdCircle(cx, cy, c, c, hubR)) - hubHalf))
       over(px, i, BRASS, brass)
-
-      if (hubR > 0 && hubDetail) {
-        over(px, i, BRASS_DARK, coverage(sdCircle(cx, cy, c, c, hubDarkR)))
-      }
     }
   }
 

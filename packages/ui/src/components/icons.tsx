@@ -1,4 +1,5 @@
 import type { JSX, SVGProps } from 'react'
+import WHEEL from './wheel.json'
 
 /**
  * Hand-rolled rather than an icon package: the shell needs eight glyphs, and
@@ -261,11 +262,11 @@ export function GearIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>
       {/* A cog with its teeth cut into the rim, drawn on a 24-unit grid and
-          scaled onto this one - the stroke is 2.25 there so it lands on the
-          same 1.5 as every other glyph here. The ring-and-spokes it replaces
-          read as a blob at rail size: spokes off a circle are a sun, not a
-          gear. */}
-      <g transform="scale(0.6667)" strokeWidth="2.25">
+          scaled onto this one - the stroke is 1.5x there so it lands on the
+          same weight as every other glyph here, the rail's thinner one
+          included. The ring-and-spokes it replaces read as a blob at rail
+          size: spokes off a circle are a sun, not a gear. */}
+      <g transform="scale(0.6667)" strokeWidth={Number(props.strokeWidth ?? 1.5) * 1.5}>
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
         <circle cx="12" cy="12" r="3" />
       </g>
@@ -493,27 +494,39 @@ export function ListIcon(props: IconProps): JSX.Element {
 }
 
 
+/** The eight spokes as one path, hub to rim, and their handles as another, rim to cap. */
+const [SPOKES, HANDLES] = (() => {
+  const at = (r: number, a: number): string => `${(8 + r * Math.cos(a)).toFixed(2)} ${(8 + r * Math.sin(a)).toFixed(2)}`
+  const angles = Array.from({ length: 8 }, (_, i) => (i * 2 * Math.PI) / 8)
+  return [
+    angles.map((a) => `M${at(WHEEL.hub, a)}L${at(WHEEL.rim, a)}`).join(''),
+    angles.map((a) => `M${at(WHEEL.rim, a)}L${at(WHEEL.handleEnd, a)}`).join('')
+  ]
+})()
+
 /**
  * The brand mark: the ship's wheel the app icon is drawn from.
  *
- * Same proportions as `scripts/make-icon.mjs`, converted from its 256 grid to
- * this 16 one (rim 62, spokes 101, knobs 13, hub 21, all x 16/256) - so the
- * mark in the window and the icon on the taskbar are the same drawing, not two
- * that resemble each other.
+ * `wheel.json` holds its radii and widths on this 16-unit grid, and
+ * `scripts/make-icon.mjs` draws the .ico from the same file, so the mark in
+ * the window and the icon on the taskbar are one drawing, not two that
+ * resemble each other.
+ *
+ * Most of it is rim: a rim at two thirds of the radius, short round-capped
+ * handles and a hollow hub. The wheel it replaced had a small rim and long
+ * knobbed handles, a fine ship's wheel at 256px and a snowflake at the 16-20px
+ * the title bar draws it.
  *
  * Vector rather than the .ico the window itself is given: this renders at
  * whatever the display's pixel ratio is, and a 16px bitmap on a 150% monitor is
  * the one place that artwork visibly softens.
  *
- * Filled, not stroked, because it inherits `currentColor` and sits at 13-15px:
- * a 0.8-wide stroke at that size lands under one device pixel on a 1x display
- * and drops out.
+ * Stroked in `currentColor`. At the rail's 20px the rim and handles are the
+ * 1.6px line every rail glyph is drawn with, so the mark heading the column
+ * reads as part of it. The spokes are thinner, so the hub's ring stays open
+ * between them.
  */
 export function HelmMarkIcon(props: IconProps): JSX.Element {
-  const spokes = Array.from({ length: 8 }, (_, i) => {
-    const a = (i * 2 * Math.PI) / 8
-    return { x: 8 + 6.31 * Math.cos(a), y: 8 + 6.31 * Math.sin(a) }
-  })
   return (
     <svg
       viewBox="0 0 16 16"
@@ -521,27 +534,15 @@ export function HelmMarkIcon(props: IconProps): JSX.Element {
       height="14"
       fill="none"
       stroke="currentColor"
+      strokeLinecap="round"
       aria-hidden="true"
       focusable="false"
       {...props}
     >
-      {/* Spokes first, so the rim and hub paint over their inner ends. */}
-      {spokes.map((p, i) => (
-        <line
-          key={i}
-          x1="8"
-          y1="8"
-          x2={p.x.toFixed(2)}
-          y2={p.y.toFixed(2)}
-          strokeWidth="0.85"
-          strokeLinecap="round"
-        />
-      ))}
-      {spokes.map((p, i) => (
-        <circle key={`k${String(i)}`} cx={p.x.toFixed(2)} cy={p.y.toFixed(2)} r="0.95" fill="currentColor" stroke="none" />
-      ))}
-      <circle cx="8" cy="8" r="3.88" strokeWidth="1" />
-      <circle cx="8" cy="8" r="1.31" fill="currentColor" stroke="none" />
+      <path d={SPOKES} strokeWidth={WHEEL.spokeWidth} />
+      <path d={HANDLES} strokeWidth={WHEEL.handleWidth} />
+      <circle cx="8" cy="8" r={WHEEL.rim} strokeWidth={WHEEL.rimWidth} />
+      <circle cx="8" cy="8" r={WHEEL.hub} strokeWidth={WHEEL.hubWidth} />
     </svg>
   )
 }

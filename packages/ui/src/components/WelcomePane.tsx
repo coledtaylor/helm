@@ -40,12 +40,13 @@ export function WelcomePane({
             splash screen.
 
             The alpha is on the **element**, not in the colour, and that is the
-            part to leave alone. `HelmMarkIcon` is eight spokes, eight knobs, a
-            rim and a hub painted as separate shapes, so a semi-transparent
+            part to leave alone. `HelmMarkIcon` is spokes, handles, a rim and
+            a hub painted as separate shapes, so a semi-transparent
             `currentColor` composites each one over the last: measured at
             `text-border-strong`, a spoke came out at R=59 as intended, the rim
             at 87 where two shapes cross, and the hub - where all eight spokes
-            converge under the knob - at **188**, three times the value asked
+            converged under a solid boss, in the wheel before this one - at
+            **188**, three times the value asked
             for, and near-black on white the other way. The mark had a hot bead
             in the middle of it. CSS `opacity` renders the subtree to a buffer
             first and composites it once, so the wheel is flat at any size.
