@@ -62,13 +62,16 @@ test('a session drives a browser tab of its own through its tools, and loses the
 
     expect((await rpc(browser.url, null, 'tools/list')).status).toBe(401)
 
-    // It opens a tab, which appears in the window under the session's name.
+    // It opens a tab, which appears in the Browser tab under the session's
+    // name - behind the user's page, which stays in front.
     const opened = await callTool(browser.url, token, 'browser_open', { url: `${pages.origin}/agent` })
     expect(opened.isError).toBe(false)
     expect(opened.text).toContain('title: Agent fixture')
     const agentTab = window.getByRole('tab', { name: /^Agent fixture/ })
     await expect(agentTab).toBeVisible()
     await expect(agentTab.getByText('alpha', { exact: true })).toBeVisible()
+    await expect(agentTab).toHaveAttribute('aria-selected', 'false')
+    await expect(window.getByRole('tab', { name: 'User page' })).toHaveAttribute('aria-selected', 'true')
 
     /** A PNG of the page: its pixel size read from the PNG itself, and the size the tool said. */
     const screenshot = async (): Promise<{ png: Buffer; size: number[]; said: number[] }> => {
@@ -131,6 +134,7 @@ test('a session drives a browser tab of its own through its tools, and loses the
     await expect(window.getByRole('tab', { name: 'alpha, ended' })).toBeVisible()
     await expect.poll(async () => (await rpc(browser.url, token, 'tools/list')).status).toBe(401)
     expect((await rpc(sessions.url, token, 'tools/list')).status).toBe(401)
+    await window.getByRole('tab', { name: 'Browser', exact: true }).click()
     const kept = window.getByRole('tab', { name: /^Clicked/ })
     await expect(kept).toBeVisible()
     await expect(kept.getByText('alpha', { exact: true })).toBeVisible()

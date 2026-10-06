@@ -107,6 +107,18 @@ export interface TabBarProps {
    * A **toast** deliberately does not do this. See `App.tsx`.
    */
   onDragging?: ((tab: string | null) => void) | undefined
+  /** What the strip is called, for a pane that holds a second one. */
+  label?: string | undefined
+  /** The `+`'s name. "New tab" unless the strip holds something more specific. */
+  newTabLabel?: string | undefined
+  /** Whether the `+` opens a menu (the pane's) or does the one thing it says (a browser's). */
+  newTabMenu?: boolean | undefined
+  /**
+   * The drag payload's type, so two kinds of strip never trade tabs: a page
+   * dropped on the panes' strip, or a pane's tab on a browser's, is a drop
+   * neither could do anything with. `TAB_MIME` unless said otherwise.
+   */
+  dragType?: string | undefined
 }
 
 /**
@@ -151,7 +163,11 @@ export function TabBar({
   actions,
   onNewTab,
   newTabOpen = false,
-  onDragging
+  onDragging,
+  label = 'Open tabs',
+  newTabLabel = 'New tab',
+  newTabMenu = true,
+  dragType = TAB_MIME
 }: TabBarProps): JSX.Element | null {
   /** The tab this strip is dragging, if the drag started here. */
   const [dragging, setDragging] = useState<string | null>(null)
@@ -213,13 +229,13 @@ export function TabBar({
   }, [dragging, onDragging])
 
   const carriesTab = (event: DragEvent<HTMLElement>): boolean =>
-    canMove && event.dataTransfer.types.includes(TAB_MIME)
+    canMove && event.dataTransfer.types.includes(dragType)
 
   const dropAt = (index: number, event: DragEvent<HTMLElement>): void => {
     if (!carriesTab(event)) return
     event.preventDefault()
     event.stopPropagation()
-    const id = event.dataTransfer.getData(TAB_MIME)
+    const id = event.dataTransfer.getData(dragType)
     setDropIndex(null)
     if (id === '') return
     const from = tabs.findIndex((t) => t.id === id)
@@ -279,7 +295,7 @@ export function TabBar({
       >
         <div
           role="tablist"
-          aria-label="Open tabs"
+          aria-label={label}
           ref={stripRef}
           // Grows to its tabs and no further, so the `+` after it follows the
           // last tab, and shrinks to scroll when they overflow.
@@ -301,7 +317,7 @@ export function TabBar({
                   setDragging(tab.id)
                   onDragging?.(tab.id)
                   event.dataTransfer.effectAllowed = 'move'
-                  event.dataTransfer.setData(TAB_MIME, tab.id)
+                  event.dataTransfer.setData(dragType, tab.id)
                   // Chromium refuses to start a drag with no plain payload.
                   event.dataTransfer.setData('text/plain', tab.id)
                 }}
@@ -457,10 +473,10 @@ export function TabBar({
           <button
             type="button"
             data-new-tab
-            aria-label="New tab"
-            title="New tab"
-            aria-haspopup="menu"
-            aria-expanded={newTabOpen}
+            aria-label={newTabLabel}
+            title={newTabLabel}
+            aria-haspopup={newTabMenu ? 'menu' : undefined}
+            aria-expanded={newTabMenu ? newTabOpen : undefined}
             onClick={(event) => onNewTab(event.currentTarget)}
             className={cn(
               'grid size-[26px] shrink-0 place-items-center rounded-raised transition-colors hover:bg-hover hover:text-fg',

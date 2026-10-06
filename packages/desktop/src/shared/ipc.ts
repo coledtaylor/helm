@@ -570,6 +570,25 @@ export interface BrowserBounds {
   visible: boolean
 }
 
+/**
+ * A page the window did not ask for, and where it goes in the Browser tab's
+ * strip.
+ *
+ * Placement travels with the page because main is the only side that knows
+ * which page opened it: a renderer that appended every page at the end would
+ * put a sign-in's page five tabs away from the page that is waiting for it.
+ */
+export interface BrowserOpened {
+  state: BrowserState
+  /** The page that opened it, which it goes right after. Null for an agent's `browser_open`: the end. */
+  after: number | null
+  /**
+   * Whether the page in front stays in front: a middle click, and every page
+   * an agent opens. A `target="_blank"` or `window.open` comes to the front.
+   */
+  background: boolean
+}
+
 /** How many browser tabs may be open at once. `window.open` is capped by it. */
 export const BROWSER_TABS_MAX = 10
 
@@ -1602,11 +1621,12 @@ export interface IpcEvents {
   'browser:changed': BrowserState
 
   /**
-   * A view Helm made that the window did not ask for: `window.open` inside a
-   * page. The strip adopts it as a tab, and the cap is enforced in main - a
-   * page that opens eleven windows gets ten tabs and a console line, not eleven.
+   * A page Helm made that the window did not ask for: a page's `window.open`,
+   * `target="_blank"` or middle click, or one an agent opened. The Browser tab
+   * puts it in its strip, and the cap is enforced in main - a page that opens
+   * eleven windows gets ten tabs and a console line, not eleven.
    */
-  'browser:opened': BrowserState
+  'browser:opened': BrowserOpened
 
   /**
    * A view is gone. Sent when main destroyed it for a reason the window did not

@@ -6,6 +6,7 @@ import {
   type BrowserWindow,
   type Session,
   type WebContents,
+  type WebPreferences,
   type WindowOpenHandlerResponse
 } from 'electron'
 import {
@@ -19,7 +20,12 @@ import {
   type BrowserReach
 } from '@helm/core'
 import { TITLEBAR_HEIGHT } from './chrome'
-import { BROWSER_TABS_MAX, type BrowserConsoleEntry, type BrowserState } from '../shared/ipc'
+import {
+  BROWSER_TABS_MAX,
+  type BrowserConsoleEntry,
+  type BrowserOpened,
+  type BrowserState
+} from '../shared/ipc'
 
 /**
  * The browser pane's main-process half: a dev-server viewport, not a browser.
@@ -339,7 +345,8 @@ export interface BrowserHostOptions {
   /** Writes the remembered addresses. Main owns them, like the view. */
   writeSettings: (patch: Partial<AppSettings>) => void
   onChanged: (state: BrowserState) => void
-  onOpened: (state: BrowserState) => void
+  /** A page the window did not ask for: a page's `window.open`, or an agent's. */
+  onOpened: (opened: BrowserOpened) => void
   onClosed: (id: number) => void
   onLogged: (id: number, entry: BrowserConsoleEntry) => void
 }
@@ -394,23 +401,24 @@ export function browserWillNavigate(webContentsId: number, url: string): boolean
  * What a browser view gets is one of two answers, chosen by what the page
  * actually asked for:
  *
- *   - a **tab**, for `target="_blank"` and a middle click - the dispositions
- *     Chromium calls `foreground-tab` and `background-tab`. That is what those
- *     mean in every browser, and a Helm tab is a better one than a bare window;
- *   - a **window**, for `window.open` with features - disposition `new-window`
- *     - because that is the only shape in which a popup sign-in can work.
+ *   - a **page in the Browser tab**, for `target="_blank"`, a plain
+ *     `window.open` and a middle click. The page adopts the web contents
+ *     Chromium made for it, so `window.open` returns a live handle and the new
+ *     page keeps `window.opener` - see `adoptPage`;
+ *   - a **window**, for a `window.open` that asked for one - disposition
+ *     `new-window` with features, a size or `popup` - because a sign-in dialog
+ *     is a window in every browser.
  *
- * The second is a deliberate amendment to "no Chromium window is ever created",
- * and `BR-40` is what holds it to its terms. The whole of a popup OAuth flow is
- * two things a tab cannot have: `window.open` must return a live handle, and
- * the opened page must reach the opener through `window.opener.postMessage` to
- * hand back the code. Re-routed into a tab, the page gets `null` and reports a
- * blocked popup, and the tab that opens has no opener to answer - measured, and
- * the reason this changed. Nothing else about the posture moves: the popup is
- * on the same partition with the same denied permissions, refused downloads and
- * loopback-only certificate rule, it is exempted through the same registry by
- * id, and every navigation it makes goes through `browserReachAllows` exactly
- * as the pane's do.
+ * Both keep the opener, and that is the point of both. A popup OAuth flow is
+ * two things: `window.open` must return a live handle, and the opened page
+ * must reach the opener through `window.opener.postMessage` to hand back the
+ * code. A page loaded fresh into a new tab had neither - the library reported
+ * a blocked popup or never heard back, and the next attempt opened another
+ * tab. Nothing else about the posture moves: the popup and the page are on
+ * the same partition with the same permissions, refused downloads and
+ * loopback-only certificate rule, they are exempted through the same registry
+ * by id, and every navigation they make goes through `browserReachAllows`
+ * exactly as the pane's do.
  */
 export function browserWindowOpen(
   webContentsId: number,
@@ -512,6 +520,35 @@ export function browserSession(): Session {
 
   configured = partition
   return partition
+}
+
+/**
+ * The web preferences of every page Helm hosts: a view, a page a view opened,
+ * and a popup window.
+ *
+ * Every one is stated, and the ones that are Electron's default are stated
+ * *because* they are: this is the one place in Helm that renders somebody
+ * else's HTML with a network behind it, and a posture made of defaults is a
+ * posture that moves when Electron does. One list, so a page opened from
+ * another page cannot end up with a second posture.
+ */
+function viewPreferences(): WebPreferences {
+  return {
+    // The partition is the one thing that must match exactly: a popup on a
+    // different partition could not see the sign-in it was opened to complete.
+    session: browserSession(),
+    // No preload. Nothing of Helm's runs in a page, so there is no bridge to
+    // abuse and nothing for a hostile page to find.
+    contextIsolation: true,
+    nodeIntegration: false,
+    nodeIntegrationInSubFrames: false,
+    sandbox: true,
+    webviewTag: false,
+    webSecurity: true,
+    allowRunningInsecureContent: false,
+    experimentalFeatures: false,
+    spellcheck: false
+  }
 }
 
 /**
@@ -838,29 +875,19 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     if (tellTheWindow) options.onClosed(entry.id)
   }
 
-  const create = (project: string | null, openedBy: BrowserOpener | null = null): View => {
-    const view = new WebContentsView({
-      webPreferences: {
-        // Every one of these is stated, and the ones that are Electron's
-        // default are stated *because* they are: this is the one place in Helm
-        // that renders somebody else's HTML with a network behind it, and a
-        // posture made of defaults is a posture that moves when Electron does.
-        session: browserSession(),
-        // No preload. Nothing of Helm's runs in a page, so there is no bridge
-        // to abuse and nothing for a hostile page to find.
-        contextIsolation: true,
-        nodeIntegration: false,
-        nodeIntegrationInSubFrames: false,
-        sandbox: true,
-        webviewTag: false,
-        // A page that could open another `<webview>`-shaped thing, or reach the
-        // window through `window.opener`, would be a page with a route out.
-        webSecurity: true,
-        allowRunningInsecureContent: false,
-        experimentalFeatures: false,
-        spellcheck: false
-      }
-    })
+  /**
+   * A view, on new web contents or - `adopt` - on the ones Chromium made for a
+   * page's `window.open`. Adopted contents were made with `viewPreferences()`
+   * too: `windowOpen` hands them over as the override.
+   */
+  const create = (
+    project: string | null,
+    openedBy: BrowserOpener | null = null,
+    adopt?: WebContents
+  ): View => {
+    const view = new WebContentsView(
+      adopt === undefined ? { webPreferences: viewPreferences() } : { webContents: adopt }
+    )
     // Registered here, in the constructor path, so that by the time the guard in
     // `index.ts` runs its listener - which is when a navigation is attempted,
     // not when it was attached - this id is known.
@@ -1179,38 +1206,56 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
   }
 
   /**
-   * A page's `window.open` turned into a Helm tab.
+   * A page's `target="_blank"`, plain `window.open` or middle click, as a page
+   * in the Browser tab.
    *
-   * What every disposition except `new-window` gets, and what an agent's tab
-   * gets for all of them. Unchanged from when it was the only answer.
+   * Electron hands over the web contents Chromium already made for the new
+   * page (`createWindow`), and the view **adopts** them rather than loading
+   * the address into new ones. That is what keeps a sign-in working: the new
+   * page has `window.opener`, and the `window.open` that made it got a live
+   * handle back. Loading the address fresh - what this did before - gave the
+   * page neither, so a library reported a blocked popup or never heard back,
+   * and its next attempt opened another tab. Measured on Electron 43.3.0.
+   *
+   * A middle click arrives with no web contents: Chromium opens those from
+   * the link itself, with no opener to keep, so that one is loaded here.
+   *
+   * The page belongs to whoever the opening one belonged to. A page an agent
+   * opened that opens another has produced another of the agent's pages, in
+   * the background, and the agent is the one that can tidy it up.
    */
-  const spawnTab = (entry: View, url: string): void => {
-    if (views.size >= BROWSER_TABS_MAX) {
-      entry.problem = `A page tried to open another window and Helm is already holding ${String(
-        BROWSER_TABS_MAX
-      )} browser tabs. Close one, or open the address in your own browser.`
-      log(entry, {
-        level: 'warning',
-        message: `window.open(${url}) refused: ${String(BROWSER_TABS_MAX)} tabs is the cap`,
-        source: url,
-        line: 0
-      })
-      announce(entry)
-      return
-    }
-    // The new tab belongs to whoever the opening one belonged to. A page an
-    // agent opened that opens another window has produced another of the
-    // agent's tabs, and the agent is the one that can tidy it up.
-    const opened = create(entry.project, entry.openedBy)
-    if (entry.openedBy === null) {
-      load(opened, url)
-      options.onOpened(state(opened))
-    } else {
-      showAgentView(opened)
-      load(opened, url)
-      options.onOpened(state(opened))
-      void primeAgentView(opened)
-    }
+  const adoptPage = (
+    opener: View,
+    url: string,
+    background: boolean,
+    guest: WebContents | undefined
+  ): WebContents => {
+    const entry = create(opener.project, opener.openedBy, guest)
+    const agent = opener.openedBy !== null
+    if (agent) showAgentView(entry)
+    // Placed before anything is loaded: the load announces the page, and a
+    // window that heard of it that way first would draw it at the end of the
+    // strip for a frame.
+    options.onOpened({ state: state(entry), after: opener.id, background: background || agent })
+    if (guest === undefined) load(entry, url)
+    if (agent) void primeAgentView(entry)
+    // Electron checks that what comes back is the contents it handed over.
+    return entry.view.webContents
+  }
+
+  /** The cap, said on the page that tried to open one more. */
+  const refuseOverCap = (entry: View, url: string): WindowOpenHandlerResponse => {
+    entry.problem = `A page tried to open another tab and Helm is already holding ${String(
+      BROWSER_TABS_MAX
+    )} browser tabs. Close one, or open the address in your own browser.`
+    log(entry, {
+      level: 'warning',
+      message: `window.open(${url}) refused: ${String(BROWSER_TABS_MAX)} tabs is the cap`,
+      source: url,
+      line: 0
+    })
+    announce(entry)
+    return { action: 'deny' }
   }
 
   const host: BrowserHost & InternalHost = {
@@ -1288,22 +1333,39 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       /*
        * A window, but only for what a window means.
        *
-       * `new-window` is the disposition Chromium reports for `window.open` with
-       * features, which is a popup and nothing else - a sign-in dialog, a
-       * picker, a payment sheet. `target="_blank"` and a middle click arrive as
-       * `foreground-tab` and `background-tab`, and those *are* tabs: turning
-       * them into windows would be worse than what Helm did before, not better.
+       * `new-window` with features is a `window.open` that asked for a size or
+       * for `popup`, which is a popup and nothing else - a sign-in dialog, a
+       * picker, a payment sheet. `target="_blank"`, a plain `window.open` and a
+       * middle click arrive as `foreground-tab` and `background-tab`, and those
+       * *are* tabs. A shift-click is `new-window` with no features: a page,
+       * because nothing in it asked for a dialog's shape.
        *
-       * And never for a tab an agent opened. The reach rules already say an
+       * And never for a page an agent opened. The reach rules already say an
        * agent may not go anywhere the pane could not; this says it may not put
-       * a window on the user's screen either. An agent-opened tab that calls
-       * `window.open` gets another agent tab, exactly as it did before, which
-       * is the surface `browser_tabs` and `browser_close` already describe.
+       * a window on the user's screen either. Its `window.open` gets another
+       * of its pages, with the opener kept, which is the surface `browser_tabs`
+       * and `browser_close` already describe.
        */
-      const wantsWindow = disposition === 'new-window' && entry.openedBy === null
+      const wantsWindow =
+        disposition === 'new-window' && details.features.trim() !== '' && entry.openedBy === null
       if (!wantsWindow) {
-        spawnTab(entry, url)
-        return { action: 'deny' }
+        if (views.size >= BROWSER_TABS_MAX) return refuseOverCap(entry, url)
+        return {
+          action: 'allow',
+          // A page outlives the page that opened it, as a tab does in any
+          // browser. A popup does not - see below.
+          outlivesOpener: true,
+          overrideBrowserWindowOptions: { webPreferences: viewPreferences() },
+          createWindow: (made) =>
+            adoptPage(
+              entry,
+              url,
+              disposition === 'background-tab',
+              // Not in Electron's type, and documented: the contents Chromium
+              // made for the page, absent for a middle click.
+              (made as { webContents?: WebContents }).webContents
+            )
+        }
       }
 
       if (popupsOf(entry.id) >= BROWSER_POPUPS_MAX) {
@@ -1336,24 +1398,9 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
           minimizable: false,
           maximizable: false,
           fullscreenable: false,
-          webPreferences: {
-            // The same list `create` states, and stated again here for the same
-            // reason it is stated there: a popup that inherited its posture
-            // from a default would be a second posture, moving when Electron
-            // moves. The session is the one thing that must match exactly - a
-            // popup on a different partition could not see the sign-in it was
-            // opened to complete.
-            session: browserSession(),
-            contextIsolation: true,
-            nodeIntegration: false,
-            nodeIntegrationInSubFrames: false,
-            sandbox: true,
-            webviewTag: false,
-            webSecurity: true,
-            allowRunningInsecureContent: false,
-            experimentalFeatures: false,
-            spellcheck: false
-          }
+          // The list every page gets: a popup that inherited its posture from
+          // a default would be a second posture, moving when Electron moves.
+          webPreferences: viewPreferences()
         }
       }
     },
@@ -1616,8 +1663,11 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       }
       const entry = create(null, opener)
       showAgentView(entry)
+      // At the end of the strip and behind the page in front: an agent opening
+      // a page is no reason to take the user's page away from them. Placed
+      // before the load announces it, as `adoptPage` does.
+      options.onOpened({ state: state(entry), after: null, background: true })
       const next = load(entry, url)
-      options.onOpened(next)
       await primeAgentView(entry)
       return { state: next, problem: next.problem }
     },

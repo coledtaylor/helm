@@ -41,7 +41,7 @@ import {
 
 const session = (id: number): PaneRef => ({ kind: 'session', id })
 const project = (path: string): PaneRef => ({ kind: 'project', path })
-const browser = (id: number): PaneRef => ({ kind: 'browser', id })
+const BROWSER: PaneRef = { kind: 'browser' }
 const HISTORY: PaneRef = { kind: 'history' }
 const ALPHA_DIR = 'C:\\work\\alpha'
 const SETTINGS: PaneRef = { kind: 'settings' }
@@ -95,7 +95,7 @@ describe('paneId', () => {
   it('keeps the shapes the drivers address tabs by', () => {
     expect(paneId(session(12))).toBe('session:12')
     expect(paneId(project('C:\\work\\a#b:c'))).toBe('project:C:\\work\\a#b:c')
-    expect(paneId(browser(3))).toBe('browser:3')
+    expect(paneId(BROWSER)).toBe('browser')
     expect(paneId(HISTORY)).toBe('history')
     expect(paneId({ kind: 'terminal', id: 4, path: ALPHA_DIR })).toBe('terminal:4')
   })
@@ -430,9 +430,9 @@ describe('reconcile', () => {
     const reconciled = reconcile(
       layout,
       (ref) => ref.kind !== 'session' || ref.id !== 1,
-      [session(2), session(3), browser(4)]
+      [session(2), session(3), BROWSER]
     )
-    expect(shape(reconciled)).toEqual(['>history session:3 *browser:4', ' *session:2'])
+    expect(shape(reconciled)).toEqual(['>history session:3 *browser', ' *session:2'])
   })
 
   it('appends each extra once, however often it is offered', () => {
@@ -495,10 +495,10 @@ describe('toSaved and fromSaved', () => {
   it('writes down the tree, its shares, and pages and sessions in their groups', () => {
     const layout = activateTab(
       layoutOf(
-        row([g(project('C:\\a'), session(4), browser(9)), column([g(HISTORY, { kind: 'restore' }), g(SETTINGS)], [0.4, 0.6])], [0.7, 0.3]),
+        row([g(project('C:\\a'), session(4), BROWSER), column([g(HISTORY, { kind: 'restore' }), g(SETTINGS)], [0.4, 0.6])], [0.7, 0.3]),
         0
       ),
-      'browser:9'
+      'browser'
     )
     expect(toSaved(layout)).toEqual({
       root: {
@@ -521,7 +521,7 @@ describe('toSaved and fromSaved', () => {
   })
 
   it('writes down no group with nothing in it worth keeping, its room and focus going beside it', () => {
-    const layout = layoutOf(row([g(HISTORY), g(browser(1)), g(SETTINGS)], [0.2, 0.3, 0.5]), 1)
+    const layout = layoutOf(row([g(HISTORY), g(BROWSER), g(SETTINGS)], [0.2, 0.3, 0.5]), 1)
     expect(toSaved(layout)).toEqual({
       root: {
         axis: 'row',
@@ -537,7 +537,7 @@ describe('toSaved and fromSaved', () => {
 
   it('writes the empty window as one empty group', () => {
     expect(toSaved(EMPTY_LAYOUT)).toEqual({ root: { panes: [], activeId: null }, focused: 0 })
-    expect(toSaved(layoutOf(g(browser(1))))).toEqual({ root: { panes: [], activeId: null }, focused: 0 })
+    expect(toSaved(layoutOf(g(BROWSER)))).toEqual({ root: { panes: [], activeId: null }, focused: 0 })
   })
 
   it('reads back what it wrote, and writes that again unchanged', () => {

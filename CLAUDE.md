@@ -104,10 +104,15 @@ export TypeScript source, so there is one build step.
 - `will-navigate` and `setWindowOpenHandler` are denied on every web-contents
   in `main/index.ts`. Browser views are exempted by a `webContents.id` registry
   read inside those guards. Widen the registry, never the guard.
-- From a browser view, `window.open` with features opens a real popup window
-  (OAuth needs `window.opener`); `_blank` and middle-click open Helm tabs. A
-  popup shares the partition, permissions, reach rule and exemption registry,
-  shows its host in its title bar, and is never an agent's.
+- Pages live in one Browser tab, in its own strip (`browserStrip.ts`), never
+  among a pane's tabs.
+- From a browser view, a `window.open` with features opens a real popup
+  window; `_blank`, a plain `window.open` and middle-click open a page in the
+  Browser tab that adopts the web contents Chromium made (`createWindow`), so
+  both keep `window.opener` (OAuth needs it). Both share the partition,
+  permissions, reach rule and exemption registry. A popup shows its host in
+  its title bar and is never an agent's: an agent page's opens are more of its
+  pages.
 - A view can lose its web contents (a page that called `window.close()`). Reach
   them only through `contentsOf` in `browser.ts`. `registerIpc` wraps every
   send handler, because a throw there is an uncaught main-process exception.

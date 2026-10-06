@@ -499,6 +499,7 @@ describe('settings validation', () => {
         { root: { panes: [{ kind: 'session', id: 0 }], activeId: null }, focused: 0 },
         { root: { panes: [{ kind: 'session', id: 1.5 }], activeId: null }, focused: 0 },
         { root: { panes: [{ kind: 'browser', id: 1 }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'browser' }], activeId: null }, focused: 0 },
         { root: { panes: [{ kind: 'restore' }], activeId: null }, focused: 0 },
         { root: { panes: [{ kind: 'project' }], activeId: null }, focused: 0 },
         // A file is read inside its project, so it is written down with both.

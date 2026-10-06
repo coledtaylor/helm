@@ -28,6 +28,13 @@ const view = (id: number): BrowserState => ({
   openedBy: null
 })
 
+/** A page main made, as `browser:opened` says it. */
+const opened = (id: number, after: number | null = null, background = false) => ({
+  state: view(id),
+  after,
+  background
+})
+
 /** Every `browser:bounds` the hook has sent since the last clear. */
 const bounds = (): BrowserBounds[] => bridge.sent('browser:bounds')
 
@@ -127,7 +134,7 @@ describe('useBrowsers - whether the native view paints', () => {
 describe('useBrowsers - the mirror of what main holds', () => {
   it('adds a tab main opened and drops one main closed, rectangle and all', () => {
     const { result } = renderHook(() => useBrowsers([]))
-    act(() => bridge.emit('browser:opened', view(5)))
+    act(() => bridge.emit('browser:opened', opened(5)))
     expect([...result.current.views.keys()]).toEqual([5])
     act(() => result.current.sendBounds(5, RECT, true))
 
@@ -140,7 +147,7 @@ describe('useBrowsers - the mirror of what main holds', () => {
 
   it('puts a failed call on the tab problem line rather than nowhere', async () => {
     const { result } = renderHook(() => useBrowsers([]))
-    act(() => bridge.emit('browser:opened', view(5)))
+    act(() => bridge.emit('browser:opened', opened(5)))
     bridge.answer('browser:navigate', () => {
       throw new Error('the main process said no')
     })
@@ -148,5 +155,51 @@ describe('useBrowsers - the mirror of what main holds', () => {
     await waitFor(() =>
       expect(result.current.views.get(5)?.problem).toBe('Helm could not navigate this tab: the main process said no')
     )
+  })
+})
+
+describe('useBrowsers - the Browser tab strip', () => {
+  it('puts a page beside the page that opened it, in front unless it was a middle click', () => {
+    const { result } = renderHook(() => useBrowsers([]))
+    act(() => {
+      bridge.emit('browser:opened', opened(1))
+      bridge.emit('browser:opened', opened(2))
+    })
+    expect(result.current.pages).toEqual([1, 2])
+    expect(result.current.active).toBe(2)
+
+    act(() => bridge.emit('browser:opened', opened(3, 1)))
+    expect(result.current.pages).toEqual([1, 3, 2])
+    expect(result.current.active).toBe(3)
+
+    act(() => bridge.emit('browser:opened', opened(4, 1, true)))
+    expect(result.current.pages).toEqual([1, 3, 4, 2])
+    expect(result.current.active).toBe(3)
+  })
+
+  it('hands the front back to the opener when a page in front closes itself', () => {
+    const { result } = renderHook(() => useBrowsers([]))
+    act(() => {
+      bridge.emit('browser:opened', opened(1))
+      bridge.emit('browser:opened', opened(2))
+      result.current.activate(1)
+      bridge.emit('browser:opened', opened(3, 1))
+    })
+    expect(result.current.pages).toEqual([1, 3, 2])
+    act(() => bridge.emit('browser:closed', { id: 3 }))
+    expect(result.current.active).toBe(1)
+  })
+
+  it('adopts what main holds after a reload, and closes every page with the tab', () => {
+    bridge.answer('browser:state', () => [view(7), view(8)])
+    const { result } = renderHook(() => useBrowsers([]))
+    return waitFor(() => expect(result.current.pages).toEqual([7, 8])).then(() => {
+      expect(result.current.active).toBe(8)
+      act(() => result.current.move(8, 0))
+      expect(result.current.pages).toEqual([8, 7])
+      act(() => result.current.closeAll())
+      expect(result.current.pages).toEqual([])
+      expect(bridge.invoked('browser:close').map((call) => call.id).sort()).toEqual([7, 8])
+    })
   })
 })

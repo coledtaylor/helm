@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { BrowserWindow } from 'electron'
+import type { BrowserWindow, BrowserWindowConstructorOptions, WebContents } from 'electron'
 import { DEFAULT_SETTINGS, type AppSettings } from '@helm/core'
 import {
   FakeBrowserWindow,
+  FakeWebContents,
   FakeWebContentsView,
   fakeBrowser,
-  type FakeSession,
-  type FakeWebContents
+  type FakeSession
 } from '../../test/browser-electron'
 import {
   browserWillNavigate,
@@ -15,7 +15,7 @@ import {
   exemptedWebContents,
   type BrowserHost
 } from './browser'
-import type { BrowserConsoleEntry, BrowserState } from '../shared/ipc'
+import type { BrowserConsoleEntry, BrowserOpened, BrowserState } from '../shared/ipc'
 
 vi.mock('electron', async () => ({
   ...(await import('../../test/electron')).electronFake(),
@@ -37,7 +37,7 @@ interface Harness {
   window: FakeBrowserWindow
   settings: () => AppSettings
   patch: (next: Partial<AppSettings>) => void
-  opened: BrowserState[]
+  opened: BrowserOpened[]
   closed: number[]
 }
 
@@ -46,7 +46,7 @@ let current: Harness | null = null
 function harness(patch: Partial<AppSettings> = {}): Harness {
   let settings: AppSettings = { ...DEFAULT_SETTINGS, browserRecentUrls: [], browserProjectUrls: {}, ...patch }
   const window = new FakeBrowserWindow()
-  const opened: BrowserState[] = []
+  const opened: BrowserOpened[] = []
   const closed: number[] = []
   const host = createBrowserHost({
     window: () => window as unknown as BrowserWindow,
@@ -55,7 +55,7 @@ function harness(patch: Partial<AppSettings> = {}): Harness {
       settings = { ...settings, ...next }
     },
     onChanged: () => undefined,
-    onOpened: (state) => opened.push(state),
+    onOpened: (page) => opened.push(page),
     onClosed: (id) => closed.push(id),
     onLogged: (_id: number, _entry: BrowserConsoleEntry) => undefined
   })
@@ -93,6 +93,13 @@ const stateOf = (h: Harness, id: number): BrowserState => {
 }
 
 const messages = (h: Harness, id: number): string[] => h.host.entries(id).map((entry) => entry.message)
+
+/**
+ * What Electron hands `createWindow`: the window options, with the web contents
+ * Chromium made for the page - or none, for a middle click.
+ */
+const handedOver = (guest?: FakeWebContents): BrowserWindowConstructorOptions =>
+  (guest === undefined ? {} : { webContents: guest as unknown as WebContents }) as BrowserWindowConstructorOptions
 
 const partition = (): FakeSession => {
   const found = fakeBrowser.partitions.get('persist:helm-browser')
@@ -630,21 +637,63 @@ describe('browser host - popups and pages that close themselves', () => {
     expect(() => h.host.stopFind(id)).not.toThrow()
   })
 
-  it('turns target=_blank and a middle click into Helm tabs, never windows', () => {
+  it('opens target=_blank, a plain window.open and a middle click as pages that keep their opener, never windows', () => {
     const h = harness()
-    const { wc } = openTab(h, 'http://127.0.0.1:8080/opener')
-    wc.commit('http://127.0.0.1:8080/opener')
+    const opener = openTab(h, 'http://127.0.0.1:8080/opener')
+    opener.wc.commit('http://127.0.0.1:8080/opener')
     const made = FakeWebContentsView.created.length
+    const attached = h.window.children.length
 
-    for (const disposition of ['foreground-tab', 'background-tab']) {
-      expect(
-        browserWindowOpen(wc.id, { url: 'http://127.0.0.1:8080/two', disposition, features: '' })
-      ).toEqual({ action: 'deny' })
-    }
-    const spawned = FakeWebContentsView.created.slice(made)
-    expect(spawned).toHaveLength(2)
-    for (const view of spawned) expect(view.webContents?.loads).toEqual(['http://127.0.0.1:8080/two'])
-    expect(h.opened.map((state) => state.openedBy)).toEqual([null, null])
+    // A plain window.open: Chromium has already made the page's web contents,
+    // and the view adopts them rather than loading the address afresh.
+    const answer = browserWindowOpen(opener.wc.id, {
+      url: 'http://127.0.0.1:8080/two',
+      disposition: 'foreground-tab',
+      features: ''
+    })
+    if (answer.action !== 'allow' || answer.createWindow === undefined) throw new Error('the page was refused')
+    expect(answer.outlivesOpener).toBe(true)
+    expect(answer.overrideBrowserWindowOptions?.webPreferences).toMatchObject({
+      session: partition(),
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false
+    })
+    const guest = new FakeWebContents()
+    expect(answer.createWindow(handedOver(guest))).toBe(guest)
+    expect(FakeWebContentsView.created.at(-1)!.webContents).toBe(guest)
+    expect(guest.loads).toEqual([])
+    expect(exemptedWebContents()).toContain(guest.id)
+    expect(h.window.children.length).toBe(attached + 1)
+    const page = h.opened.at(-1)!
+    expect(page).toMatchObject({ after: opener.id, background: false })
+    expect(page.state.openedBy).toBeNull()
+
+    // A middle click: no contents to adopt, so the address is loaded here, and
+    // the page in front stays in front.
+    const middle = browserWindowOpen(opener.wc.id, {
+      url: 'http://127.0.0.1:8080/three',
+      disposition: 'background-tab',
+      features: ''
+    })
+    if (middle.action !== 'allow' || middle.createWindow === undefined) throw new Error('the page was refused')
+    middle.createWindow(handedOver())
+    expect(FakeWebContentsView.created.at(-1)!.webContents?.loads).toEqual(['http://127.0.0.1:8080/three'])
+    expect(h.opened.at(-1)).toMatchObject({ after: opener.id, background: true })
+
+    // A shift-click is new-window with nothing asked of the window: a page too.
+    const shifted = browserWindowOpen(opener.wc.id, {
+      url: 'http://127.0.0.1:8080/four',
+      disposition: 'new-window',
+      features: ''
+    })
+    expect(shifted.action === 'allow' && shifted.createWindow !== undefined).toBe(true)
+    expect(shifted.action === 'allow' && shifted.overrideBrowserWindowOptions?.parent).toBeFalsy()
+
+    // Pages, not windows, and they outlive the page that opened them.
+    expect(FakeWebContentsView.created.length).toBe(made + 2)
+    h.host.close(opener.id)
+    expect(h.host.states().map((state) => state.id)).toEqual([page.state.id, page.state.id + 1])
   })
 
   it('gives window.open with features a real popup, held to the posture and the reach of the tab that opened it', () => {
@@ -706,7 +755,7 @@ describe('browser host - popups and pages that close themselves', () => {
     expect(stateOf(h, id).problem).toContain('127.0.0.2')
   })
 
-  it("gives window.open from a session's tab another of that session's tabs, never a window", async () => {
+  it("gives window.open from a session's tab another of that session's pages, never a window", async () => {
     vi.useFakeTimers()
     const h = harness()
     const opener = { key: 'token-alpha', name: 'agent alpha' }
@@ -717,19 +766,26 @@ describe('browser host - popups and pages that close themselves', () => {
     const agentTab = (await pending).state!
     expect(agentTab.openedBy).toBe('agent alpha')
 
-    expect(
-      browserWindowOpen(agentPage.id, {
-        url: 'http://127.0.0.1:8080/popup',
-        disposition: 'new-window',
-        features: 'width=480,height=640'
-      })
-    ).toEqual({ action: 'deny' })
+    // At the end of the strip, behind the page in front.
+    expect(h.opened.at(-1)).toMatchObject({ after: null, background: true })
+
+    const answer = browserWindowOpen(agentPage.id, {
+      url: 'http://127.0.0.1:8080/popup',
+      disposition: 'new-window',
+      features: 'width=480,height=640'
+    })
+    if (answer.action !== 'allow' || answer.createWindow === undefined) throw new Error('the page was refused')
+    // Not a window: nothing was handed to Electron to make one with.
+    expect(answer.overrideBrowserWindowOptions?.parent).toBeUndefined()
+    const guest = new FakeWebContents()
+    answer.createWindow(handedOver(guest))
     const spawned = h.opened.at(-1)!
-    expect(spawned.id).not.toBe(agentTab.id)
-    expect(spawned.openedBy).toBe('agent alpha')
-    expect(h.host.openerOf(spawned.id)).toEqual(opener)
-    expect(FakeWebContentsView.created.at(-1)!.webContents?.loads).toEqual(['http://127.0.0.1:8080/popup'])
-    FakeWebContentsView.created.at(-1)!.webContents!.commit('http://127.0.0.1:8080/popup')
+    expect(spawned.state.id).not.toBe(agentTab.id)
+    expect(spawned).toMatchObject({ after: agentTab.id, background: true })
+    expect(spawned.state.openedBy).toBe('agent alpha')
+    expect(h.host.openerOf(spawned.state.id)).toEqual(opener)
+    expect(FakeWebContentsView.created.at(-1)!.webContents).toBe(guest)
+    guest.commit('http://127.0.0.1:8080/popup')
     await vi.advanceTimersByTimeAsync(1000)
   })
 })

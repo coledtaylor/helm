@@ -67,7 +67,10 @@ function respond(path: string, elsewhere: string): { headers: Record<string, str
     /*
      * A sign-in in the shape every OAuth popup has: `window.open` must hand back
      * a live window, the popup must reach `window.opener` to hand back a code,
-     * and then it closes itself. Neither half works through a tab.
+     * and then it closes itself. Both halves have to hold whether the page
+     * opens as a window (`Sign in`) or as a tab (`Sign in in a tab`): a tab
+     * Helm loaded fresh had neither, which is what left a sign-in opening tab
+     * after tab.
      */
     case '/posture':
       return {
@@ -76,6 +79,7 @@ function respond(path: string, elsewhere: string): { headers: Record<string, str
           'Helm fixture posture',
           `<a href="/two" target="_blank">Open two in a new tab</a>
            <button id="signin" type="button">Sign in</button>
+           <button id="tab" type="button">Sign in in a tab</button>
            <button id="elsewhere" type="button">Sign in elsewhere</button>
            <p id="status" role="status">signed out</p>`,
           `const status = document.getElementById('status')
@@ -89,17 +93,23 @@ function respond(path: string, elsewhere: string): { headers: Record<string, str
              window.__popup = window.open('/popup', 'signin', 'width=480,height=640')
              status.textContent = window.__popup ? 'popup open' : 'popup refused'
            })
+           document.getElementById('tab').addEventListener('click', () => {
+             window.__tab = window.open('/opened')
+             status.textContent = window.__tab ? 'tab open' : 'tab refused'
+           })
            document.getElementById('elsewhere').addEventListener('click', () => {
              const opened = window.open(${JSON.stringify(`${elsewhere}/popup`)}, 'elsewhere', 'width=480,height=640')
              status.textContent = opened ? 'popup open' : 'popup refused'
            })`
         )
       }
+    // The same sign-in, opened with a plain `window.open`: a tab, not a window.
+    case '/opened':
     case '/popup':
       return {
         headers: HTML,
         body: page(
-          'Helm fixture popup',
+          path === '/opened' ? 'Helm fixture opened' : 'Helm fixture popup',
           '<p>Signing in</p>',
           `if (window.opener) window.opener.postMessage({ code: ${JSON.stringify(POPUP_CODE)} }, '*')
            window.addEventListener('message', (event) => { if (event.data === 'done') window.close() })`

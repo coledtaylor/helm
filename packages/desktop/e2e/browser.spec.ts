@@ -23,6 +23,12 @@ test.afterAll(async () => {
 
 const address = (ui: Page): Locator => ui.getByRole('textbox', { name: 'Address' })
 
+/** The Browser tab's own strip of pages. */
+const pages = (ui: Page): Locator => ui.getByRole('tablist', { name: 'Browser tabs' })
+
+/** A pane's strip of tabs - sessions, projects, the Browser tab. */
+const paneTabs = (scope: Page | Locator): Locator => scope.getByRole('tablist', { name: 'Open tabs' })
+
 /** The rail's Browser: the existing browser tab, or a new one. */
 async function showBrowser(ui: Page): Promise<void> {
   await ui.getByRole('navigation', { name: 'Destinations' }).getByRole('button', { name: 'Browser' }).click()
@@ -79,9 +85,28 @@ test('browsing: a page loads in a browser tab, and back and forward move through
   await ui.getByRole('button', { name: 'Forward' }).click()
   await expect(address(ui)).toHaveValue(two)
   await expect(page).toHaveTitle('Helm fixture two')
+
+  // Ctrl+T: another page in the same Browser tab, with the caret in its address bar.
+  await address(ui).press('Control+t')
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Helm fixture two', 'New tab'])
+  await expect(pages(ui).getByRole('tab', { name: 'New tab' })).toHaveAttribute('aria-selected', 'true')
+  await expect(address(ui)).toBeFocused()
+  await expect(paneTabs(ui).getByRole('tab')).toHaveText(['Browser'])
+
+  // Closing the Browser tab closes every page in it.
+  await ui.getByRole('button', { name: 'Close Browser' }).click()
+  await expect(paneTabs(ui).getByRole('tab', { name: 'Browser' })).toHaveCount(0)
+  await expect
+    .poll(() =>
+      helm.app.evaluate(
+        ({ webContents }, origin) => webContents.getAllWebContents().filter((wc) => wc.getURL().startsWith(origin)).length,
+        fixture.http
+      )
+    )
+    .toBe(0)
 })
 
-test('posture: a page has no Node and no Helm, _blank makes a tab, a sign-in popup is a real window, and the app window stays put', async ({
+test('posture: a page has no Node and no Helm, _blank and window.open make pages that keep their opener, a sign-in popup is a real window, and the app window stays put', async ({
   helm
 }) => {
   const ui = helm.window
@@ -94,14 +119,28 @@ test('posture: a page has no Node and no Helm, _blank makes a tab, a sign-in pop
   ).toEqual(['undefined', 'undefined', 'undefined'])
   const windows = await windowCount(helm)
 
-  // target=_blank: a Helm tab, not a window.
+  // target=_blank: a page in the Browser tab - not a window, and not a tab
+  // among the panes' own.
   await page.getByRole('link', { name: 'Open two in a new tab' }).click()
-  await expect(ui.getByRole('tab', { name: /Helm fixture two/ })).toBeVisible()
+  await expect(pages(ui).getByRole('tab', { name: /Helm fixture two/ })).toBeVisible()
+  await expect(paneTabs(ui).getByRole('tab')).toHaveText(['Browser'])
+  expect(await windowCount(helm)).toBe(windows)
+
+  // A plain window.open: a page too, with a live handle and window.opener, so a
+  // sign-in run in a tab hands back its code and closes itself - and the page
+  // that was waiting for it comes back to the front.
+  await pages(ui).getByRole('tab', { name: /Helm fixture posture/ }).click()
+  await page.getByRole('button', { name: 'Sign in in a tab' }).click()
+  await expect(page.getByRole('status')).toHaveText(`signed in with ${POPUP_CODE}`)
+  await expect(pages(ui).getByRole('tab', { name: /Helm fixture opened/ })).toHaveCount(0)
+  await expect(pages(ui).getByRole('tab', { name: /Helm fixture posture/ })).toHaveAttribute('aria-selected', 'true')
   expect(await windowCount(helm)).toBe(windows)
 
   // window.open with features: a real popup with a live handle and a working
   // window.opener, which hands back a code and closes itself.
-  await ui.getByRole('tab', { name: /Helm fixture posture/ }).click()
+  await page.evaluate(() => {
+    document.getElementById('status')!.textContent = 'signed out'
+  })
   const opening = helm.app.waitForEvent('window')
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   const popup = await opening
@@ -267,7 +306,7 @@ test('find in page: the caret stays in the find field while typing, and the coun
   await expect(count).toHaveText('no matches')
 })
 
-test('dragging: the page stands down while its tab is dragged, and is drawn where the tab lands', async ({
+test('dragging: the page stands down while the Browser tab is dragged, and is drawn where the tab lands', async ({
   helm
 }) => {
   const ui = helm.window
@@ -284,8 +323,8 @@ test('dragging: the page stands down while its tab is dragged, and is drawn wher
   await ui.locator('[data-rail="settings"]').click()
   await showBrowser(ui)
   await go(ui, `${fixture.http}/`)
-  const tab = ui.getByRole('tab', { name: /Helm fixture one/ })
-  await expect(tab).toBeVisible()
+  await expect(pages(ui).getByRole('tab', { name: /Helm fixture one/ })).toBeVisible()
+  const tab = paneTabs(ui).getByRole('tab', { name: 'Browser' })
   await expect.poll(viewShown).toEqual([true])
 
   // By hand, to look while it is held over the first pane's right side: the
@@ -297,7 +336,8 @@ test('dragging: the page stands down while its tab is dragged, and is drawn wher
   await expect(first.locator('[data-pane-drop-preview]')).toHaveAttribute('data-pane-drop-preview', 'right')
   await expect.poll(viewShown).toEqual([false])
   await ui.mouse.up()
-  await expect(second.getByRole('tab')).toHaveCount(1)
+  await expect(paneTabs(second).getByRole('tab')).toHaveText(['Browser'])
+  await expect(second.getByRole('tab', { name: /Helm fixture one/ })).toBeVisible()
   await expect.poll(viewShown).toEqual([true])
 
   // Back into the first pane's middle: the second, emptied, goes - its strip
@@ -307,7 +347,9 @@ test('dragging: the page stands down while its tab is dragged, and is drawn wher
   await expect.poll(viewShown).toEqual([true])
   // The drag is over, so nothing is left lying over the pane to catch a click.
   await first.getByRole('tab', { name: 'Settings' }).click()
-  await first.getByRole('tab', { name: /Helm fixture one/ }).click()
+  await expect.poll(viewShown).toEqual([false])
+  await first.getByRole('tab', { name: 'Browser' }).click()
+  await expect.poll(viewShown).toEqual([true])
   await address(ui).click()
   await expect(address(ui)).toBeFocused()
 })

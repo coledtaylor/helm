@@ -54,6 +54,7 @@ import {
 } from '@helm/core/types'
 import {
   AppShell,
+  BrowserPages,
   BrowserPane,
   cn,
   CodeIcon,
@@ -213,6 +214,8 @@ const helmOpenExternal = (url: string): Promise<{ opened: boolean }> =>
 /** A stable empty list, so a view with no console entries does not hand
  * `BrowserPane` a fresh array to re-render against on every render. */
 const EMPTY_CONSOLE: ConsoleEntry[] = []
+/** The Browser tab: one, however many pages it holds. */
+const BROWSER_TAB = { kind: 'browser' } as const
 
 /** The same, for a project with nothing running in it - which is most of them. */
 const EMPTY_LIVE: LiveSession[] = []
@@ -521,7 +524,9 @@ export function App(): JSX.Element {
   const keep = useCallback(
     (ref: PaneRef): boolean => {
       if (ref.kind === 'project') return !discovery || projectsByPath.has(ref.path)
-      if (ref.kind === 'browser') return browserViews.has(ref.id)
+      // The Browser tab is there while it holds a page. Its last page closing
+      // closes it, as closing a browser's last tab closes the window.
+      if (ref.kind === 'browser') return browserViews.size > 0
       if (ref.kind === 'session') return sessionsById.has(ref.id)
       // Answered, it has nothing left to show.
       if (ref.kind === 'restore') return restoreOffer !== null
@@ -537,16 +542,17 @@ export function App(): JSX.Element {
 
   /**
    * What must have a tab whether or not anything placed it: every session main
-   * is hosting and every view it holds. After a renderer reload the processes
-   * outlive the panes that were showing them, and a page's `window.open` makes a
-   * view nothing in this window asked for.
+   * is hosting, and the Browser tab while main holds a page. After a renderer
+   * reload the processes outlive the panes that were showing them, and an agent
+   * opens pages nothing in this window asked for.
    */
+  const hasPages = browserViews.size > 0
   const extra = useMemo<PaneRef[]>(
     () => [
       ...sessions.map((session) => ({ kind: 'session' as const, id: session.id })),
-      ...[...browserViews.keys()].map((id) => ({ kind: 'browser' as const, id }))
+      ...(hasPages ? [BROWSER_TAB] : [])
     ],
-    [sessions, browserViews]
+    [sessions, hasPages]
   )
 
   const open = useMemo(
@@ -736,16 +742,17 @@ export function App(): JSX.Element {
   }, [sessionsPaneOpen, watchResources])
 
   /**
-   * Which browser views are in front of a pane, told to every view. A pane
-   * reports its own rectangle while it is mounted; one that goes behind another
-   * tab, or into a pane the maximized one hides, has to be stood down by
-   * something that is still rendering.
+   * Which page is on screen, told to every view: the one in front of the
+   * Browser tab, while that tab is in front of a pane. A page reports its own
+   * rectangle while it is mounted; one that goes behind another page, or a
+   * Browser tab that goes behind another tab or into a pane the maximized one
+   * hides, has to be stood down by something that is still rendering.
    */
-  const { setShowing: setBrowserShowing } = browsers
+  const { setShowing: setBrowserShowing, active: frontPage } = browsers
+  const browserShown = visible.some((ref) => ref.kind === 'browser')
   useEffect(() => {
-    const shown = new Set(visible.flatMap((ref) => (ref.kind === 'browser' ? [ref.id] : [])))
-    for (const id of browserViews.keys()) setBrowserShowing(id, shown.has(id))
-  }, [browserViews, visible, setBrowserShowing])
+    for (const id of browserViews.keys()) setBrowserShowing(id, browserShown && id === frontPage)
+  }, [browserViews, browserShown, frontPage, setBrowserShowing])
 
   // Main decides whether an exiting session is worth a notification, and that
   // turns on which sessions are actually on screen - which only this side knows.
@@ -827,14 +834,14 @@ export function App(): JSX.Element {
   const [focusAddressAt, setFocusAddressAt] = useState(0)
 
   /**
-   * A new browser tab, on whichever project the focused pane is about, so it
-   * arrives on that project's last address rather than empty. Main decides
-   * that from `browserProjectUrls`; nothing here reads it.
+   * A new page in the Browser tab, on whichever project the focused pane is
+   * about, so it arrives on that project's last address rather than empty.
+   * Main decides that from `browserProjectUrls`; nothing here reads it.
    *
-   * A `project` of null asks for an empty tab on purpose - the `+`'s - and
-   * `into` puts it in that pane rather than the focused one. `focusAddress`
-   * gives the address bar the caret once the tab is up, which is what a new
-   * empty tab is for.
+   * A `project` of null asks for an empty page on purpose - the `+`'s - and
+   * `into` puts the Browser tab in that pane rather than the focused one.
+   * `focusAddress` gives the address bar the caret once the page is up, which
+   * is what a new empty page is for.
    */
   const openBrowser = useCallback(
     (
@@ -850,8 +857,9 @@ export function App(): JSX.Element {
         .open({ ...(url === undefined ? {} : { url }), project: project === undefined ? frontProject : project })
         .then((state) => {
           if (state === null) return
-          const ref = { kind: 'browser', id: state.id } as const
-          commit((current) => (into === undefined ? openTab(current, ref) : placeIn(current, ref, into)))
+          commit((current) =>
+            into === undefined ? openTab(current, BROWSER_TAB) : placeIn(current, BROWSER_TAB, into)
+          )
           if (focusAddress === true) setFocusAddressAt((at) => at + 1)
         })
     },
@@ -859,19 +867,14 @@ export function App(): JSX.Element {
   )
 
   /**
-   * The rail's Browser: go to the browser, opening one only if there is none.
-   * A destination that made a new tab on every press would pile tabs up to the
-   * cap; Ctrl+T in a browser tab is how a second one is asked for.
+   * The rail's Browser: go to the Browser tab, opening a page only if it holds
+   * none. A destination that made a new page on every press would pile pages
+   * up to the cap; Ctrl+T and the strip's `+` are how another is asked for.
    */
   const showBrowser = useCallback(() => {
-    const inFocused = focusedGroup?.tabs.filter((ref) => ref.kind === 'browser') ?? []
-    const anywhere = open.groups.flatMap((group) =>
-      group.tabs.filter((ref) => ref.kind === 'browser')
-    )
-    const target = inFocused.at(-1) ?? anywhere.at(-1)
-    if (target === undefined) openBrowser()
-    else focusTab(paneId(target))
-  }, [focusedGroup, open, openBrowser, focusTab])
+    if (findTab(open, paneId(BROWSER_TAB)) === null) openBrowser()
+    else focusTab(paneId(BROWSER_TAB))
+  }, [open, openBrowser, focusTab])
 
   /**
    * A link in rendered content. A loopback URL is by definition a thing running
@@ -1155,8 +1158,8 @@ export function App(): JSX.Element {
       // it, closing the project ends it.
       if (ref.kind === 'project') void disposeShell(ref.path)
       if (ref.kind === 'terminal') void disposeShell(terminalShellKey(ref.id))
-      // Hiding the pane keeps the page; closing the tab destroys the view.
-      if (ref.kind === 'browser') browsers.close(ref.id)
+      // Hiding the pane keeps the pages; closing the tab destroys them all.
+      if (ref.kind === 'browser') browsers.closeAll()
       // Closing the offer is "not now", the same as its button.
       if (ref.kind === 'restore') dismissRestore()
       // The page ends with its tab, not with a render.
@@ -1222,10 +1225,11 @@ export function App(): JSX.Element {
   // ---------------------------------------------------------------------------
 
   /**
-   * Ctrl+L and Ctrl+T, only while a browser tab is in front of the focused
-   * pane. In capture so a focused terminal does not eat them - but gated,
-   * because Ctrl+L is *clear the screen* in every shell Helm hosts and stealing
-   * it from a session would be a worse bug than not having the shortcut.
+   * Ctrl+L and Ctrl+T, only while the Browser tab is in front of the focused
+   * pane: the address bar, and a new page with the caret in it. In capture so
+   * a focused terminal does not eat them - but gated, because Ctrl+L is *clear
+   * the screen* in every shell Helm hosts and stealing it from a session would
+   * be a worse bug than not having the shortcut.
    */
   const browserInFront = front?.kind === 'browser'
   useEffect(() => {
@@ -1237,7 +1241,7 @@ export function App(): JSX.Element {
       event.preventDefault()
       event.stopPropagation()
       if (event.key === 'l') setFocusAddressAt((at) => at + 1)
-      else openBrowser()
+      else openBrowser({ project: null, focusAddress: true })
     }
     window.addEventListener('keydown', onKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
@@ -1767,21 +1771,18 @@ export function App(): JSX.Element {
         ]
       }
       case 'browser': {
-        const view = browserViews.get(ref.id)
-        if (!view) return []
-        // The page's own title, and the session that opened it beside that
-        // where one did - the one tab whose provenance somebody will want. The
-        // address, which tells three tabs on one dev server apart, is in the
-        // hint. An empty page is "New tab": a tab with no label is a tab you
-        // cannot aim at.
-        const where = view.url === '' ? 'A browser tab with no address yet' : view.url
+        // One tab, named for what it is. The pages, their titles and the
+        // sessions that opened them are in its own strip; the hint says what
+        // is in front, for a Browser tab that is not.
+        const front = frontPage === null ? undefined : browserViews.get(frontPage)
+        const count = browserViews.size
+        const showing =
+          front === undefined ? '' : front.url === '' ? 'a new tab' : front.title === '' ? front.url : front.title
         return [
           {
             id: paneId(ref),
-            title: view.title === '' ? 'New tab' : truncate(view.title, 30),
-            ...(view.openedBy === null ? {} : { badge: view.openedBy }),
-            hint:
-              view.openedBy === null ? where : `${where}\nOpened by the session “${view.openedBy}”`,
+            title: 'Browser',
+            hint: `${String(count)} ${count === 1 ? 'tab' : 'tabs'}${showing === '' ? '' : `, showing ${showing}`}`,
             icon: <GlobeIcon width={13} height={13} />
           }
         ]
@@ -2406,33 +2407,52 @@ export function App(): JSX.Element {
           </ConfigConsole>
         )
       case 'browser': {
-        const view = browserViews.get(ref.id)
-        if (!view) return null
+        const view = frontPage === null ? undefined : browserViews.get(frontPage)
+        const holder = findTab(open, paneId(ref))
         return (
-          <BrowserPane
-            // Keyed on the view, so switching between two browser tabs rebuilds
-            // the bar rather than leaving one page's address in the other's box.
-            key={view.id}
-            state={view}
-            entries={browsers.entries.get(view.id) ?? EMPTY_CONSOLE}
-            recent={browsers.recent}
-            focusAddressAt={focusAddressAt}
-            onBounds={(rect) => browsers.sendBounds(view.id, rect, true)}
-            onNavigate={(input) => browsers.navigate(view.id, input)}
-            onBack={() => browsers.back(view.id)}
-            onForward={() => browsers.forward(view.id)}
-            onReload={(hard) => browsers.reload(view.id, hard)}
-            onDevTools={() => browsers.devtools(view.id)}
-            onOpenExternal={(url) => void helmOpenExternal(url)}
-            onFind={(query, forward) => browsers.find(view.id, query, forward)}
-            onStopFind={() => browsers.stopFind(view.id)}
-            onZoom={(level) => browsers.zoom(view.id, level)}
-            onClearStorage={() => browsers.clearStorage(view.id)}
-            onEvaluate={(source) => browsers.evaluate(view.id, source)}
-            // The address dropdown hangs over the page; the view stands down
-            // for it, the same way it does for a tab drag.
-            onCovering={(covering) => browsers.setSuppressed('address-list', covering)}
-          />
+          <div className="flex h-full min-h-0 flex-col">
+            <BrowserPages
+              pages={browsers.pages.flatMap((id) => {
+                const page = browserViews.get(id)
+                return page === undefined ? [] : [page]
+              })}
+              activeId={frontPage}
+              focused={holder !== null && holder.group === open.focused}
+              onActivate={browsers.activate}
+              onClose={browsers.close}
+              onMove={browsers.move}
+              onNew={() => openBrowser({ project: null, focusAddress: true })}
+            />
+            {view !== undefined && (
+              <div className="min-h-0 flex-1">
+                <BrowserPane
+                  // Keyed on the page, so switching between two pages rebuilds
+                  // the bar rather than leaving one page's address in the
+                  // other's box.
+                  key={view.id}
+                  state={view}
+                  entries={browsers.entries.get(view.id) ?? EMPTY_CONSOLE}
+                  recent={browsers.recent}
+                  focusAddressAt={focusAddressAt}
+                  onBounds={(rect) => browsers.sendBounds(view.id, rect, true)}
+                  onNavigate={(input) => browsers.navigate(view.id, input)}
+                  onBack={() => browsers.back(view.id)}
+                  onForward={() => browsers.forward(view.id)}
+                  onReload={(hard) => browsers.reload(view.id, hard)}
+                  onDevTools={() => browsers.devtools(view.id)}
+                  onOpenExternal={(url) => void helmOpenExternal(url)}
+                  onFind={(query, forward) => browsers.find(view.id, query, forward)}
+                  onStopFind={() => browsers.stopFind(view.id)}
+                  onZoom={(level) => browsers.zoom(view.id, level)}
+                  onClearStorage={() => browsers.clearStorage(view.id)}
+                  onEvaluate={(source) => browsers.evaluate(view.id, source)}
+                  // The address dropdown hangs over the page; the view stands
+                  // down for it, the same way it does for a tab drag.
+                  onCovering={(covering) => browsers.setSuppressed('address-list', covering)}
+                />
+              </div>
+            )}
+          </div>
         )
       }
       case 'settings':

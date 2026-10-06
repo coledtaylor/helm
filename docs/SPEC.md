@@ -1229,6 +1229,17 @@ about the user's own `gh`: Helm no longer runs it.
   > here alters what Helm contacts on its own initiative, which is still only
   > the update check.
 
+  > [!note] Amended 2026-10-06 - a page's tab keeps its opener
+  > `target="_blank"`, a plain `window.open` and a middle click are no longer
+  > Helm tabs loaded fresh. They are pages in the one Browser tab's own strip,
+  > and the page adopts the web contents Chromium made for it (`createWindow`),
+  > so `window.open` returns a live handle and the page keeps `window.opener`.
+  > A sign-in that opened in a tab got `null` back and no opener, and its
+  > library tried again in another tab - the reported "a tab for every
+  > redirect". Measured on Electron 43.3.0; the E2E `posture` test signs in
+  > through a tab and fails with "tab refused" against the old answer. A
+  > `window.open` with features is still the popup window above.
+
 ### Portability
 
 - **Harness-agnostic** - detects `harness.yaml`, falls back to plain folders. No

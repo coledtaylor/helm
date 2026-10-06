@@ -207,13 +207,15 @@ export class FakeWebContentsView {
   /** Every view constructed, newest last. */
   static readonly created: FakeWebContentsView[] = []
 
-  webContents: FakeWebContents | undefined = new FakeWebContents()
+  webContents: FakeWebContents | undefined
   readonly webPreferences: Record<string, unknown>
   visible = true
   private bounds: Bounds = { x: 0, y: 0, width: 0, height: 0 }
 
-  constructor(options: { webPreferences?: Record<string, unknown> } = {}) {
+  /** `webContents` is Electron's adopt: the view shows contents somebody else made. */
+  constructor(options: { webPreferences?: Record<string, unknown>; webContents?: FakeWebContents } = {}) {
     this.webPreferences = options.webPreferences ?? {}
+    this.webContents = options.webContents ?? new FakeWebContents()
     FakeWebContentsView.created.push(this)
   }
 

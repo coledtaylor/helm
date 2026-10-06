@@ -688,7 +688,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       name: MCP_SERVER_NAME,
       path: MCP_PATH,
       instructions:
-        "These tools drive the browser pane inside Helm, the app hosting this session. Tabs you open appear in the user's window labelled with this session's name, and stay there when the session ends. Read a page with browser_snapshot before clicking anything.",
+        "These tools drive the browser pane inside Helm, the app hosting this session. Tabs you open appear in the user's Browser tab, behind the page they are looking at, labelled with this session's name, and stay there when the session ends. Read a page with browser_snapshot before clicking anything.",
       enabled: () => options.settings().browserMcp,
       listed: () =>
         TOOLS.map((tool) => ({
