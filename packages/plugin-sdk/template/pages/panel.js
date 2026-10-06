@@ -1,7 +1,8 @@
-// The sidebar panel. `window.helm` is Helm's bridge, there before this runs.
-/* global window, document */
+// The sidebar panel. `helm` is Helm's bridge, a global there before this runs.
+// Use it as it is: in a classic script like this one, declaring a top-level
+// `helm` of your own is a SyntaxError beside it, and the whole file stops.
+/* global helm, document */
 
-const helm = window.helm
 const opened = document.getElementById('opened')
 let count = 0
 

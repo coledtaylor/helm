@@ -243,6 +243,9 @@ one. `secret` settings are not among the values: a page asks
 
 Helm puts `window.helm` on every page it serves, before the page's own scripts
 run. Calls made before it has connected to Helm wait for it rather than fail.
+It cannot be redefined, so in a classic (non-module) script use the global
+`helm` as it is: a top-level `const helm` or `let helm` of your own is a
+SyntaxError and stops the whole file.
 
 | member | what it does |
 | --- | --- |
