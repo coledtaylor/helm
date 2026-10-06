@@ -15,9 +15,6 @@ pnpm dev --drive    # also opens a remote debugging port for drive-dev.mjs
   from a `VACUUM INTO` copy of the real database. Anything changed in dev,
   settings included, is gone at the next launch. A second `pnpm dev` gets
   `dev-2`.
-- `gh` is synthetic (`scripts/fake-gh.mjs`): 0-3 stable pull requests per
-  repository, derived from the slug. `HELM_FAKE_GH_STATES=draft,failing,big-diff`
-  forces a set. It refuses `pr checkout`.
 - `~/.claude` and `claude` are the real ones, because `CLAUDE_CONFIG_DIR` moves
   credentials and a dev app that cannot sign in cannot host a session. Dev
   sessions land in the real `~/.claude/history.jsonl`.
@@ -33,9 +30,9 @@ With `pnpm dev --drive` running:
 ```bash
 node packages/desktop/scripts/drive-dev.mjs text             # what the window says
 node packages/desktop/scripts/drive-dev.mjs controls         # every button, by label
-node packages/desktop/scripts/drive-dev.mjs click "Pull requests"
+node packages/desktop/scripts/drive-dev.mjs click "Session history"
 node packages/desktop/scripts/drive-dev.mjs eval "window.helm.invoke('settings:write', {...})"
-node packages/desktop/scripts/drive-dev.mjs shot pulls.png
+node packages/desktop/scripts/drive-dev.mjs shot history.png
 ```
 
 `shot` captures the renderer's own pixels, so it works with the window covered.

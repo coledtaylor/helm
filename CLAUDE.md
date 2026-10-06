@@ -3,8 +3,8 @@
 Helm is a Windows desktop shell for the Claude Code CLI. It hosts `claude` in
 terminal tabs and adds what the CLI does not have around it: project discovery,
 profiles, session history, a config console, a Files view that renders notes
-and artifacts, pull requests and a browser pane. Electron and React. It shells out to the `claude` CLI and never
-reimplements it.
+and artifacts, and a browser pane. Electron and React. It shells out to the
+`claude` CLI and never reimplements it.
 
 - [docs/DESIGN.md](docs/DESIGN.md) - the design system. All UI work follows it.
 - [docs/TESTING.md](docs/TESTING.md) - how the app is tested.
@@ -18,7 +18,7 @@ at the code it governs, and in git history.
 
 ```
 packages/
-├── core/     # headless logic: discovery, launch, config, content, github, usage, archive, store, layout
+├── core/     # headless logic: discovery, launch, config, content, usage, archive, store, layout
 ├── ui/       # React components
 ├── desktop/  # Electron main, preload and renderer
 └── plugin-sdk/ # manifest validator, bridge types, helm-plugin CLI, authoring guide
@@ -81,13 +81,11 @@ export TypeScript source, so there is one build step.
 
 - Never handle or store a credential, Claude's or GitHub's. A sign-in is
   detected only from an artefact existing (`.credentials.json`,
-  `ANTHROPIC_API_KEY`, the onboarding record in `.claude.json`) or from what
-  `gh` prints. Never open those, `hosts.yml`, the keyring or `GH_TOKEN`. The
-  remedy for "not signed in" is a sentence naming `claude` or `gh auth login`.
+  `ANTHROPIC_API_KEY`, the onboarding record in `.claude.json`). Never open
+  those, `hosts.yml`, the keyring or `GH_TOKEN`. The remedy for "not signed
+  in" is a sentence naming `claude`.
 - `~/.claude/sessions` keeps a `<pid>.<sha256>.key` credential beside every
   `<pid>.json`. `readSessionRegistry` reads `.json` files only; never widen it.
-- Pull requests go through the user's `gh`, never the API. `parseGitHubRemote`
-  strips userinfo from a remote URL before anything is stored.
 - The `persist:helm-browser` partition holds the user's cookies and logins.
   Nothing reads it; the only call against it is `clearStorageData`.
 - The plugin secret store (`main/plugins/secrets.ts`) is the one place Helm
@@ -203,7 +201,7 @@ one; anything else is an error in Settings, never a crash.
 |---|---|
 | installed | `%APPDATA%\Helm` |
 | portable | `helm-data` beside the exe |
-| `pnpm dev` | `%LOCALAPPDATA%\Helm\dev\helm-data`, seeded each launch from a copy of the real database, with a synthetic `gh`. `--fresh` for the first-run state. |
+| `pnpm dev` | `%LOCALAPPDATA%\Helm\dev\helm-data`, seeded each launch from a copy of the real database. `--fresh` for the first-run state. |
 | `pnpm dev:live` | `%APPDATA%\Helm`, the installed app's own |
 
 Templates are `helm-data/templates` when `PORTABLE_EXECUTABLE_DIR` is set, and
@@ -218,10 +216,6 @@ Templates are `helm-data/templates` when `PORTABLE_EXECUTABLE_DIR` is set, and
 - Usage figures paint nothing rather than a wrong number. A stale reading of a
   window that is still running paints lower bounds. Roll-over is judged before
   age. Dollar figures are estimates and say so.
-- Pull requests keep cached rows, with their age. Only a missing `gh` binary
-  stops a pass; `gh auth status` never gates one, and nothing on the offline
-  branch mentions `gh auth login`. Ignored repositories are skipped before the
-  fetch.
 - `~/.claude` is read-only to Helm, except that the config console writes,
   through `writeConfigFile`, which snapshots the file first and aborts if it
   cannot. The transcript archive copies into `helm.db` and never writes there.

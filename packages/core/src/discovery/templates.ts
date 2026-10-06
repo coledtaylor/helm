@@ -469,9 +469,8 @@ export function templatePathValue(dir: string): string {
  * cannot express is a thing the harness's own agents can do afterwards, in the
  * harness, where they can see the result.
  *
- * An unrecognised `{{...}}` survives exactly as written. The same rule the
- * pull-request prompt template follows, and for the same reason: a typo should
- * show up in the file as a typo, not as a word that quietly went missing.
+ * An unrecognised `{{...}}` survives exactly as written, so a typo shows up in
+ * the file as a typo, not as a word that quietly went missing.
  */
 export function substituteTemplate(text: string, values: TemplateValues): string {
   return text

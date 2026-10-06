@@ -19,7 +19,6 @@ import {
   startSession,
   uniqueSessionName,
   type HistorySession,
-  type LaunchedReviewPlan,
   type LaunchPlan,
   type LostSession,
   type PermissionMode,
@@ -223,18 +222,6 @@ export interface SessionHost {
    * own profile and permission mode, under the name its tab had.
    */
   restore: (lost: LostSession, grid: { cols: number; rows: number }) => Promise<LaunchedSession>
-  /**
-   * Starts a session on a pull request, with a prompt composed by the caller.
-   *
-   * Takes the whole plan rather than a pull request number, because deciding
-   * what the prompt says needs the cache, the settings and possibly a `gh pr
-   * checkout` - all of which belong to `pulls.ts`. What this file owns is what
-   * it owns for every other launch: turning a plan into argv and a process.
-   */
-  review: (
-    plan: LaunchedReviewPlan,
-    grid: { cols: number; rows: number }
-  ) => Promise<SessionRecord>
   close: (req: CloseSessionRequest) => Promise<CloseSessionResult>
   /** Helm's own label for a tab. Never rewrites the `-n` name. */
   rename: (req: RenameSessionRequest) => SessionRecord
@@ -625,7 +612,7 @@ export function createSessionHost({
   }
 
   /**
-   * Every launch but a review: a folder, a profile or none, a permission mode,
+   * Every launch: a folder, a profile or none, a permission mode,
    * and optionally a conversation to reopen. `start`, `launchProfile`,
    * `resume` and the launcher's `launch` are this with some of those fixed,
    * so there is one way a composition becomes argv.
@@ -827,42 +814,6 @@ export function createSessionHost({
           ...launched.warnings
         ]
       }
-    },
-
-    /**
-     * A review is an ordinary session that happens to open with a prompt.
-     *
-     * Which is the whole design. There is no review mode, no second kind of
-     * pty and nothing watching what comes back: `prepareLaunch` puts the prompt
-     * where the CLI expects a bare positional (`core/launch/plan.ts` -
-     * `buildLaunchArgs`, last), the shared `spawn` starts it, and from that
-     * moment it is a tab like any other, which the user can talk to, interrupt
-     * or close. Helm never parses a line of it - see SPEC 4.4 and the hard rule
-     * in CLAUDE.md.
-     *
-     * `projectPath` is the repository, so the session appears against the
-     * project it reviewed rather than as an orphan.
-     */
-    async review(plan, grid) {
-      const repo = plan.slug.split('/')[1] ?? basename(plan.repoPath)
-      // Named for what it is, and uniqued like every other launch: reviewing
-      // two pull requests at once is the normal case.
-      const name = uniqueSessionName(`PR #${String(plan.number)} review - ${repo}`, takenNames())
-      const tools = registerBrowserTools(name)
-      const launch = prepareLaunch({
-        root: plan.repoPath,
-        name,
-        shimRoot,
-        openingPrompt: plan.prompt,
-        // Null for either of these passes no flag at all, which is what keeps a
-        // Helm nobody has configured launching exactly what `claude` would.
-        model: plan.model,
-        effort: plan.effort,
-        mcp: tools?.mcp ?? null,
-        sessionId: await mintSessionId()
-      })
-      attachBrowserTools(tools?.token ?? null, launch.mcpConfigFile)
-      return spawn(launch, grid, { projectPath: plan.repoPath }, tools?.token ?? null)
     },
 
     /**

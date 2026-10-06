@@ -13,7 +13,7 @@ import {
 
 /**
  * A machine of Helm's own for one test: a home directory with its own
- * `.claude`, a fake `claude` and a fake `gh`, two git projects, and a data
+ * `.claude`, a fake `claude`, two git projects, and a data
  * directory for the app. Nothing in it touches the network, a real `~/.claude`,
  * a real CLI or the installed app.
  *
@@ -33,8 +33,6 @@ export interface World {
   projects: { alpha: string; beta: string }
   /** The fake `claude`, as a `.cmd` shim like an npm install. */
   claude: string
-  /** The fake `gh`, in its synthetic mode. */
-  gh: string
   /** The environment for any process that belongs to this world. */
   env: Record<string, string>
 }
@@ -90,18 +88,6 @@ export function createWorld(): World {
       '\r\n'
     )
   )
-  const gh = join(bin, 'gh.cmd')
-  writeFileSync(
-    gh,
-    [
-      '@echo off',
-      'setlocal',
-      'set "HELM_FAKE_GH_SYNTHETIC=1"',
-      `"${node}" "${join(desktopDir(), 'scripts', 'fake-gh.mjs')}" %*`,
-      'exit /b %ERRORLEVEL%',
-      ''
-    ].join('\r\n')
-  )
 
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
@@ -121,7 +107,6 @@ export function createWorld(): World {
     projectsDir,
     projects: { alpha, beta },
     claude,
-    gh,
     env
   }
 }

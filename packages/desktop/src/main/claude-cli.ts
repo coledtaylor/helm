@@ -67,8 +67,8 @@ export function claudeOverride(): string | null {
  * problem. Resolving first means a missing CLI is a sentence in the UI instead
  * of a pty that opens and immediately closes.
  *
- * Takes the program name because `gh-cli.ts` needs exactly this walk for
- * exactly this reason, and two copies of a PATHEXT loop would be two places for
+ * Takes the program name because a plugin's `helm.exec` (`plugins/exec.ts`)
+ * needs exactly this walk for exactly this reason, and two copies of a PATHEXT loop would be two places for
  * a machine's `.cmd` shim to stop being found.
  */
 export function searchPath(name: string): string | null {

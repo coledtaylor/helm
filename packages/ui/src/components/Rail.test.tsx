@@ -16,7 +16,7 @@ const item = (id: string, extra: Partial<RailItem> = {}): RailItem => ({
 
 const GROUPS = [
   [item('sessions'), item('profiles'), item('files'), item('history')],
-  [item('browser'), item('pulls'), item('config')]
+  [item('browser'), item('config')]
 ]
 const FOOTER = [item('settings', { hideable: false })]
 
@@ -49,7 +49,7 @@ const rules = (): number => screen.getByRole('navigation', { name: 'Destinations
 describe('Rail', () => {
   it('draws the destinations in the order given, with a rule between groups and Settings at the foot', () => {
     render(<Harness />)
-    expect(buttons()).toEqual(['sessions', 'profiles', 'files', 'history', 'browser', 'pulls', 'config', 'settings'])
+    expect(buttons()).toEqual(['sessions', 'profiles', 'files', 'history', 'browser', 'config', 'settings'])
     expect(rules()).toBe(1)
   })
 
@@ -64,7 +64,6 @@ describe('Rail', () => {
       'Files',
       'History',
       'Browser',
-      'Pulls',
       'Config',
       'Settings'
     ])
@@ -95,7 +94,7 @@ describe('Rail', () => {
   })
 
   it('drops a group’s rule along with its last destination, so two rules never touch', () => {
-    render(<Harness initial={['browser', 'pulls', 'config']} />)
+    render(<Harness initial={['browser', 'config']} />)
     expect(buttons()).toEqual(['sessions', 'profiles', 'files', 'history', 'settings'])
     expect(rules()).toBe(0)
   })

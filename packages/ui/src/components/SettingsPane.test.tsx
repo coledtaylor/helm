@@ -123,23 +123,6 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onSessionMcpChange: vi.fn(),
     restoreWithoutAsking: false,
     onRestoreWithoutAskingChange: vi.fn(),
-    gh: null,
-    onLocateGh: vi.fn(),
-    onClearGhOverride: vi.fn(),
-    prPollMinutes: 15,
-    onPrPollMinutesChange: vi.fn(),
-    prStaleDays: 3,
-    onPrStaleDaysChange: vi.fn(),
-    prRepos: [],
-    onPrIgnoredReposChange: vi.fn(),
-    prReviewPrompt: DEFAULT_SETTINGS.prReviewPrompt,
-    onPrReviewPromptChange: vi.fn(),
-    prCheckout: DEFAULT_SETTINGS.prCheckout,
-    onPrCheckoutChange: vi.fn(),
-    prReviewModel: null,
-    onPrReviewModelChange: vi.fn(),
-    prReviewEffort: null,
-    onPrReviewEffortChange: vi.fn(),
     ...overrides
   }
   const view = render(<SettingsPane {...props} />)
@@ -165,7 +148,6 @@ describe('SettingsPane', () => {
       ['workspace', 'Workspace', ['Workspace', 'Harness templates']],
       ['files', 'Files', ['Files']],
       ['browser', 'Browser', ['Browser']],
-      ['github', 'GitHub', ['GitHub']],
       ['archive', 'Archive', ['Transcript archive']],
       ['updates', 'Updates', ['Updates']]
     ]
@@ -220,11 +202,7 @@ describe('SettingsPane', () => {
         ['radiogroup', 'Cursor style'],
         ['checkbox', 'Blink the terminal cursor']
       ],
-      'Transcript archive': [['combobox', 'How much of the database the archive may use']],
-      GitHub: [
-        ['combobox', 'How often to check for pull requests'],
-        ['combobox', 'When the Pulls pane calls a pull request stale']
-      ]
+      'Transcript archive': [['combobox', 'How much of the database the archive may use']]
     }
     for (const [section, title, groups] of sections) {
       rerender({ section })

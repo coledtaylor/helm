@@ -136,7 +136,6 @@ describe('settings over IPC', () => {
       history: {} as never,
       archive: {} as never,
       usage: {} as never,
-      pulls: { rearm: vi.fn(), refresh: vi.fn(() => Promise.resolve()), republish: vi.fn() } as never,
       plugins: { pushTheme: vi.fn() } as never,
       config: {} as never,
       content: {} as never,

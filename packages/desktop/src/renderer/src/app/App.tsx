@@ -33,7 +33,6 @@ import {
   splitWith,
   toSaved,
   withProjectPinned,
-  withRepoIgnored,
   isPluginRailId,
   pluginRailId,
   retitleTab,
@@ -116,11 +115,7 @@ import {
   ProfileEditor,
   ProfileList,
   ProjectPane,
-  PullRequestIcon,
-  PullsPane,
   QuickOpenDialog,
-  pullRepoChoices,
-  pullsSummaryLine,
   Rail,
   RefreshIcon,
   RepoIcon,
@@ -159,7 +154,6 @@ import type { PanelActionIcon } from '@helm/plugin-sdk'
 import type { AppMode, PluginInfo, PluginUiRequest, SessionConfirmRequest } from '../../../shared/ipc'
 import { helm } from './bridge'
 import { ProjectColumn } from './ProjectColumn'
-import { PullRequestTab } from './PullRequestTab'
 import { disposeShell } from './pterms'
 import { estimateGrid } from './terminals'
 import { TerminalPane } from './TerminalPane'
@@ -171,8 +165,6 @@ import { fileKey, joinRoot, relativeTo, useFiles } from './useFiles'
 import { sessionHistoryProps, useHistory } from './useHistory'
 import { useLauncher } from './useLauncher'
 import { useProfiles } from './useProfiles'
-import { forgetPullDetail } from './usePullDetail'
-import { usePulls } from './usePulls'
 import { useLiveSessions } from './useLiveSessions'
 import { useNewSession } from './useNewSession'
 import { useRestore } from './useRestore'
@@ -399,7 +391,6 @@ export function App(): JSX.Element {
   const restoreState = useRestore()
   const { offer: restoreOffer, restore: restoreLost, dismiss: dismissRestore } = restoreState
   const historyState = useHistory()
-  const pullsState = usePulls()
   const configState = useConfig()
   const usage = useUsage()
   const check = useUpdate()
@@ -474,37 +465,9 @@ export function App(): JSX.Element {
   )
 
   /**
-   * Point Helm at a `gh` it did not find. Written straight through
-   * `settings:write`, whose ladder re-resolves the binary and re-arms the
-   * poller - so what the GitHub group reports afterwards is the executable
-   * actually in force rather than the file that was picked.
-   */
-  const locateGh = useCallback(() => {
-    void helm
-      .invoke('path:chooseFile', { title: 'Locate the gh executable' })
-      .then(({ path }) => {
-        if (path !== null) writeSettings({ ghPath: path })
-      })
-  }, [writeSettings])
-
-  /**
-   * Puts one repository back on the pull-request surface. The whole list is
-   * written, composed from `settings` rather than from the snapshot, so a chip
-   * clicked while a fetch is in flight cannot write a list assembled from a
-   * half-built view.
-   */
-  const unignoreRepo = useCallback(
-    (slug: string) => {
-      const held = settings?.prIgnoredRepos ?? DEFAULT_SETTINGS.prIgnoredRepos
-      writeSettings({ prIgnoredRepos: withRepoIgnored(held, slug, false) })
-    },
-    [settings, writeSettings]
-  )
-
-  /**
    * The tree's star, both directions. Composed from `settings` rather than from
-   * what the tree is holding, the rule `unignoreRepo` follows, so two stars
-   * pressed in quick succession cannot each write the other away.
+   * what the tree is holding, so two stars pressed in quick succession cannot
+   * each write the other away.
    */
   const togglePin = useCallback(
     (path: string) => {
@@ -550,13 +513,12 @@ export function App(): JSX.Element {
 
   /**
    * Whether a tab's thing still exists. A rescan that no longer sees a project
-   * closes its tab and the pull request tabs opened from it; a view main has
-   * dropped takes its tab; a session main no longer hosts takes its tab.
+   * closes its tab; a view main has dropped takes its tab; a session main no
+   * longer hosts takes its tab.
    */
   const keep = useCallback(
     (ref: PaneRef): boolean => {
       if (ref.kind === 'project') return !discovery || projectsByPath.has(ref.path)
-      if (ref.kind === 'pr') return !discovery || projectsByPath.has(ref.repoPath)
       if (ref.kind === 'browser') return browserViews.has(ref.id)
       if (ref.kind === 'session') return sessionsById.has(ref.id)
       // Answered, it has nothing left to show.
@@ -822,7 +784,6 @@ export function App(): JSX.Element {
   )
   const openSessions = useCallback(() => openPane({ kind: 'sessions' }), [openPane])
   const openHistory = useCallback(() => openPane({ kind: 'history' }), [openPane])
-  const openPulls = useCallback(() => openPane({ kind: 'pulls' }), [openPane])
   const openConfig = useCallback(() => openPane({ kind: 'config' }), [openPane])
   /**
    * Settings is a tab like any other rather than a modal: it is a place, worth
@@ -837,13 +798,6 @@ export function App(): JSX.Element {
       setSidebarHidden(false)
       openPane({ kind: 'settings' })
     },
-    [openPane]
-  )
-
-  /** A row in the Pulls pane opens the pull request in a tab of its own. */
-  const openPull = useCallback(
-    (repo: { path: string }, pull: { number: number }) =>
-      openPane({ kind: 'pr', repoPath: repo.path, number: pull.number }),
     [openPane]
   )
 
@@ -1090,24 +1044,6 @@ export function App(): JSX.Element {
     else commit((current) => openTab(current, { kind: 'restore' }))
   }, [restoreOffer, restoreUnasked, resumeLost, commit])
 
-  /**
-   * "Review with Claude", from a pull request tab. The prompt is composed in
-   * main from the cached pull request and the stored template, so this sends a
-   * repository path, a number and the grid - argv assembled in a window is argv
-   * that can drift from what was saved. Re-thrown, because the pull request's
-   * own pane is where a dirty tree or a missing `gh` has to be read.
-   */
-  const reviewPull = useCallback(
-    async (repoPath: string, number: number) => {
-      const { cols, rows } = estimateGrid(bodyRefs.current.get(open.focused) ?? null)
-      const launched = await helm.invoke('pr:review', { repoPath, number, cols, rows })
-      sessionState.adopt(launched.session)
-      placeSession(launched.session.id)
-      return launched
-    },
-    [sessionState, placeSession, open.focused]
-  )
-
   const blankProfile = useCallback(
     (root: string, name: string): ProfileDraft => ({
       name,
@@ -1192,9 +1128,6 @@ export function App(): JSX.Element {
       // The shell dies with its tab, not with a render: hiding the page keeps
       // it, closing the project ends it.
       if (ref.kind === 'project') void disposeShell(ref.path)
-      // What the pane last painted outlives an unmount so a tab switch does not
-      // flash, and a *closed* tab is the point nobody is coming back to it.
-      if (ref.kind === 'pr') forgetPullDetail(ref.repoPath, ref.number)
       // Hiding the pane keeps the page; closing the tab destroys the view.
       if (ref.kind === 'browser') browsers.close(ref.id)
       // Closing the offer is "not now", the same as its button.
@@ -1763,33 +1696,6 @@ export function App(): JSX.Element {
             icon: <HistoryIcon width={13} height={13} />
           }
         ]
-      case 'pulls':
-        return [
-          {
-            id: paneId(ref),
-            title: 'Pull requests',
-            hint: pullsSummaryLine(pullsState.snapshot),
-            icon: <PullRequestIcon width={13} height={13} />
-          }
-        ]
-      case 'pr': {
-        // The title comes from the list snapshot - the row the tab was opened
-        // from. A pull request that has closed since keeps its number, which
-        // is the honest label for a tab whose pane is about to say the same.
-        const repo = pullsState.snapshot?.repos.find(
-          (candidate) => candidate.path.toLowerCase() === ref.repoPath.toLowerCase()
-        )
-        const pull = repo?.pulls.find((candidate) => candidate.number === ref.number)
-        const label = `#${String(ref.number)}`
-        return [
-          {
-            id: paneId(ref),
-            title: pull ? `${label} ${truncate(pull.title, 30)}` : label,
-            hint: pull ? `${pull.title}\n${repo?.name ?? ''} - ${ref.repoPath}` : ref.repoPath,
-            icon: <PullRequestIcon width={13} height={13} />
-          }
-        ]
-      }
       case 'config':
         return [
           {
@@ -2166,12 +2072,6 @@ export function App(): JSX.Element {
                 }
               }
             : {})}
-          // The whole snapshot: the page reduces it itself (`projectPulls`), so
-          // the project page and the Pulls pane read one answer rather than two.
-          pulls={pullsState.snapshot}
-          onOpenPull={openPull}
-          onRefreshPulls={pullsState.refresh}
-          onUnignoreRepo={unignoreRepo}
         />
       </ProjectColumn>
     )
@@ -2311,30 +2211,6 @@ export function App(): JSX.Element {
       onTranscriptArchiveMaxBytesChange={(transcriptArchiveMaxBytes) =>
         writeSettings({ transcriptArchiveMaxBytes })
       }
-      // What `gh` actually resolved to, from the snapshot the Pulls pane paints,
-      // so the pane cannot report one executable while the fetches use another.
-      gh={pullsState.snapshot?.gh ?? null}
-      onLocateGh={locateGh}
-      onClearGhOverride={() => writeSettings({ ghPath: null })}
-      prPollMinutes={settings?.prPollMinutes ?? DEFAULT_SETTINGS.prPollMinutes}
-      onPrPollMinutesChange={(prPollMinutes) => writeSettings({ prPollMinutes })}
-      prStaleDays={settings?.prStaleDays ?? DEFAULT_SETTINGS.prStaleDays}
-      onPrStaleDaysChange={(prStaleDays) => writeSettings({ prStaleDays })}
-      // Built from the snapshot rather than from the setting, because the
-      // choices are the repositories discovery found.
-      prRepos={pullRepoChoices(
-        pullsState.snapshot?.repos ?? [],
-        pullsState.snapshot?.ignored ?? []
-      )}
-      onPrIgnoredReposChange={(prIgnoredRepos) => writeSettings({ prIgnoredRepos })}
-      prReviewPrompt={settings?.prReviewPrompt ?? DEFAULT_SETTINGS.prReviewPrompt}
-      onPrReviewPromptChange={(prReviewPrompt) => writeSettings({ prReviewPrompt })}
-      prCheckout={settings?.prCheckout ?? DEFAULT_SETTINGS.prCheckout}
-      onPrCheckoutChange={(prCheckout) => writeSettings({ prCheckout })}
-      prReviewModel={settings?.prReviewModel ?? DEFAULT_SETTINGS.prReviewModel}
-      onPrReviewModelChange={(prReviewModel) => writeSettings({ prReviewModel })}
-      prReviewEffort={settings?.prReviewEffort ?? DEFAULT_SETTINGS.prReviewEffort}
-      onPrReviewEffortChange={(prReviewEffort) => writeSettings({ prReviewEffort })}
     />
   )
 
@@ -2367,39 +2243,6 @@ export function App(): JSX.Element {
             // *to* a session: the pane is for looking, the tab is for working.
             onOpenSession={(id) => focusTab(`session:${String(id)}`)}
             onReveal={launcher.reveal}
-            compact={compact}
-          />
-        )
-      case 'pulls':
-        return (
-          <PullsPane
-            snapshot={pullsState.snapshot}
-            onRefresh={pullsState.refresh}
-            refreshing={pullsState.refreshing}
-            error={pullsState.error}
-            onOpenPull={openPull}
-            // The reveal direction only. Ignoring is done in Settings, where the
-            // setting lives; this is the undo standing beside the thing it undoes.
-            onUnignoreRepo={unignoreRepo}
-            staleDays={settings?.prStaleDays ?? DEFAULT_SETTINGS.prStaleDays}
-            compact={compact}
-          />
-        )
-      case 'pr':
-        return (
-          <PullRequestTab
-            // Keyed on the tab, so switching between two pull request tabs
-            // rebuilds the pane rather than leaving one PR's view selected over
-            // another's conversation.
-            key={paneId(ref)}
-            repoPath={ref.repoPath}
-            number={ref.number}
-            reviewTemplate={settings?.prReviewPrompt ?? DEFAULT_SETTINGS.prReviewPrompt}
-            checkout={settings?.prCheckout ?? DEFAULT_SETTINGS.prCheckout}
-            reviewModel={settings?.prReviewModel ?? DEFAULT_SETTINGS.prReviewModel}
-            reviewEffort={settings?.prReviewEffort ?? DEFAULT_SETTINGS.prReviewEffort}
-            onReview={reviewPull}
-            onOpenExternal={(url) => void helmOpenExternal(url)}
             compact={compact}
           />
         )
@@ -2961,14 +2804,6 @@ export function App(): JSX.Element {
             showBrowser,
             inFront('browser'),
             'data-open-browser'
-          ),
-          page(
-            'pulls',
-            'Pull requests',
-            <PullRequestIcon width={17} height={17} />,
-            openPulls,
-            inFront('pulls', 'pr'),
-            'data-open-pulls'
           ),
           page(
             'config',

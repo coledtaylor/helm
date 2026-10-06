@@ -20,7 +20,7 @@ export interface Helm {
 export async function launchHelm(world: World): Promise<Helm> {
   const desktop = join(repoRoot(), 'packages', 'desktop')
   const app = await electron.launch({
-    args: [desktop, `--gh=${world.gh}`],
+    args: [desktop],
     cwd: desktop,
     env: world.env
   })

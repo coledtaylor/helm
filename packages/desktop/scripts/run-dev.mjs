@@ -1,5 +1,4 @@
-// `pnpm dev`, against a data directory of its own and a `gh` that answers
-// offline.
+// `pnpm dev`, against a data directory of its own.
 //
 // Why this exists at all: `package.json` sets `productName: Helm`, so an
 // unpackaged Electron run resolves `app.getPath('userData')` to
@@ -40,7 +39,6 @@ import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { isolate, realDataDir } from './isolate.mjs'
-import { writeDevGh } from './dev-gh.mjs'
 
 const desktopDir = resolve(import.meta.dirname, '..')
 const require = createRequire(import.meta.url)
@@ -50,8 +48,7 @@ const fresh = argv.includes('--fresh')
 const driveArg = argv.find((arg) => arg === '--drive' || arg.startsWith('--drive='))
 const passthrough = argv.filter((arg) => arg !== '--fresh' && arg !== driveArg)
 
-const { root, dataDir, env } = isolate('dev', { seed: !fresh, concurrent: true, group: null })
-const gh = writeDevGh(root)
+const { dataDir, env } = isolate('dev', { seed: !fresh, concurrent: true, group: null })
 const templates = seedTemplates(dataDir, fresh)
 
 /**
@@ -73,7 +70,6 @@ if (drivePort !== null) env.REMOTE_DEBUGGING_PORT = drivePort
 console.log('')
 console.log(`Helm dev is isolated: ${dataDir}`)
 console.log(`  database   ${fresh ? 'none - this is the first-run state' : 'a copy of the real one, taken just now'}`)
-console.log(`  gh         ${gh} (synthetic; no network, and it refuses pr checkout)`)
 console.log(`  templates  ${templates}`)
 console.log(`  ~/.claude  the real one, so sessions are real sessions`)
 if (drivePort !== null) {
@@ -108,7 +104,7 @@ const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
 const cli = resolve(manifestPath, '..', manifest.bin['electron-vite'])
 const { status } = spawnSync(
   process.execPath,
-  [cli, 'dev', '--watch', '--', `--gh=${gh}`, ...passthrough],
+  [cli, 'dev', '--watch', '--', ...passthrough],
   { cwd: desktopDir, stdio: 'inherit', env }
 )
 

@@ -39,8 +39,6 @@ import type {
   Profile,
   RestoreOffer,
   ProfileDraft,
-  PullDetailView,
-  PullsSnapshot,
   FolderTemplateKind,
   FolderTemplatePreview,
   RenameConfigRequest,
@@ -361,40 +359,6 @@ export interface RestoreSessionsResult {
   /** `from` is the lost row the session reopened. */
   restored: { from: number; launched: LaunchedSession }[]
   failed: { id: number; name: string; reason: string }[]
-}
-
-/**
- * Reviewing a pull request: which one, and how big the pane is.
- *
- * The same shape and the same reasoning as `LaunchProfileRequest` and
- * `ResumeSessionRequest`. Everything else about the launch - the working
- * directory, the session's name, whether the tree gets checked out, and the
- * opening prompt itself - is decided in the main process from the cached pull
- * request and the stored settings.
- */
-export interface ReviewPullRequest {
-  /** The project directory whose origin remote the pull request belongs to. */
-  repoPath: string
-  number: number
-  /** Initial grid, from the pane that will host the session. */
-  cols: number
-  rows: number
-}
-
-/** What a review launch composed, for the pane to report before the TUI paints. */
-export interface LaunchedReview {
-  session: SessionRecord
-  /**
-   * The opening prompt the session was actually started with - the trailing
-   * positional argument in `session.argv`. Sent back so the pane reports what
-   * happened rather than re-rendering the template and reporting its own
-   * arithmetic.
-   */
-  prompt: string
-  /** The branch `gh pr checkout` moved the tree to, or null when it did not run. */
-  checkedOut: string | null
-  /** Non-fatal notes from the launch: a missing overlay, what the checkout said. */
-  warnings: string[]
 }
 
 export interface CloseSessionRequest {
@@ -774,9 +738,8 @@ export interface IpcRequests {
    *
    * **Helm contacts nothing on its own initiative except the update check.
    * Everything else on the network happens because you asked for it: the
-   * pull-request surface goes through your own `gh`, the browser pane fetches
-   * the page you navigate to, and a plugin you added reaches the hosts its
-   * manifest names.**
+   * browser pane fetches the page you navigate to, and a plugin you added
+   * reaches the hosts its manifest names.**
    *
    * That is the whole network posture, and it is written identically here, in
    * the README, in docs/PACKAGING.md and in SPEC 5. If it moves again, all four
@@ -807,6 +770,10 @@ export interface IpcRequests {
    * the user's rights and are not confined, and a service listens on loopback
    * for its own plugin; the four places say both.
    *
+   * The pull-request surface left Helm for a plugin, and took its clause with
+   * it: it reached GitHub through the user's own `gh` on a timer, which is now
+   * a plugin's business and covered by the clause above.
+   *
    * The app asks on its own too: once per launch, at most once a day, when
    * `updateCheck` is on - see `maybeCheckForUpdate`. Neither path downloads
    * anything. No artefact is fetched, nothing is replaced, nothing restarts.
@@ -816,12 +783,6 @@ export interface IpcRequests {
    * that silently did nothing would be worse than no button. It is also the
    * only route to an answer when `updateCheck` is off: the setting governs
    * whether Helm asks by itself, not whether the user may.
-   *
-   * The pull-request surface reaches GitHub as well, but through the user's own
-   * `gh` CLI on a schedule the user sets (default every 5 minutes, `0` turns it
-   * off), so bytes can leave the machine without this channel being invoked.
-   * Helm opens no socket of its own for that either, and stores no GitHub
-   * credential. See `pr:snapshot` and docs/PACKAGING.md.
    */
   'update:check': { request: void; response: UpdateCheck }
 
@@ -1116,54 +1077,6 @@ export interface IpcRequests {
    * rolls over without any file having changed.
    */
   'usage:read': { request: void; response: UsageSnapshot }
-
-  /**
-   * Open pull requests across the discovered repositories.
-   *
-   * `pr:snapshot` is the cache and nothing else - it runs no subprocess, so the
-   * pane paints from SQLite on the first frame and the fetch that follows
-   * arrives as `pr:changed`. `pr:refresh` is the button: it fetches now, for one
-   * repository or all of them, and resolves with what it found.
-   *
-   * Helm holds no GitHub credential on either path. Every fetch behind these two
-   * channels is the user's own `gh` CLI, run on the user's own token.
-   */
-  'pr:snapshot': { request: void; response: PullsSnapshot }
-  'pr:refresh': { request: { repoPath?: string }; response: PullsSnapshot }
-  /**
-   * One pull request, for its own tab.
-   *
-   * Answers from the cached detail when there is one, running no `gh` at all in
-   * that case - which is what makes reopening a tab instant. `refresh` is the
-   * button: it fetches again and rewrites the cache.
-   *
-   * The markdown - the description, every comment, every review body - is
-   * rendered **here**, in main, through the same sanitising pipeline the
-   * content viewer uses. The window receives HTML it never evaluates, and
-   * shiki's grammars stay out of the browser bundle.
-   */
-  'pr:detail': {
-    request: { repoPath: string; number: number; refresh?: boolean }
-    response: PullDetailView
-  }
-  /**
-   * Start a Claude Code session that reviews this pull request.
-   *
-   * Four fields, and the absence of a fifth is the point: **the prompt is not
-   * one of them**. Main looks the pull request up in its own cache, reads the
-   * template out of settings and renders it there, exactly as `profile:launch`
-   * sends an id rather than an argv. A window that composed the prompt would be
-   * a window whose idea of the template could drift from the stored one, and
-   * argv assembled in a renderer is argv nothing in the main process checked.
-   *
-   * Rejects with a whole sentence: no `gh`, not signed in, a pull request the
-   * list no longer has, a dirty tree in `checkout` mode, or no `claude` CLI.
-   * The pane shows it as it is.
-   *
-   * What comes back is a session like any other - it lands in the strip through
-   * the same adopt flow a resume uses, and Helm reads nothing it prints.
-   */
-  'pr:review': { request: ReviewPullRequest; response: LaunchedReview }
 
   /**
    * Notes and artifacts opened from the Files view, and Ctrl+P's text search.
@@ -1609,17 +1522,6 @@ export interface IpcEvents {
   'update:checked': UpdateCheck
 
   /**
-   * A fetch pass found something different, or one started.
-   *
-   * Pushed rather than polled for the reason every other event here is: the
-   * timer that drives this lives in the main process, and the window would
-   * otherwise have to poll a service that is itself polling. Sent only when the
-   * snapshot's signature has changed - which includes the fetch age, because
-   * that is what the pane's caption is made of.
-   */
-  'pr:changed': PullsSnapshot
-
-  /**
    * The file the config editor has open changed on disk, and Helm was not the
    * one who changed it. Pushed rather than discovered at save time: by then the
    * user has typed a screen of text they are about to lose, and the point of
@@ -1859,10 +1761,6 @@ export const REQUEST_CHANNELS = Object.keys({
   'config:mcpList': true,
   'config:doctor': true,
   'usage:read': true,
-  'pr:snapshot': true,
-  'pr:refresh': true,
-  'pr:detail': true,
-  'pr:review': true,
   'content:scopes': true,
   'content:document': true,
   'content:render': true,
@@ -1944,7 +1842,6 @@ export const EVENT_CHANNELS = Object.keys({
   'archive:changed': true,
   'usage:changed': true,
   'update:checked': true,
-  'pr:changed': true,
   'config:externalChange': true,
   'content:artifactConsole': true,
   'term:create': true,

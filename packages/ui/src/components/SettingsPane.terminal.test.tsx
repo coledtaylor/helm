@@ -97,23 +97,6 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
     onSessionMcpChange: vi.fn(),
     restoreWithoutAsking: false,
     onRestoreWithoutAskingChange: vi.fn(),
-    gh: null,
-    onLocateGh: vi.fn(),
-    onClearGhOverride: vi.fn(),
-    prPollMinutes: DEFAULT_SETTINGS.prPollMinutes,
-    onPrPollMinutesChange: vi.fn(),
-    prStaleDays: DEFAULT_SETTINGS.prStaleDays,
-    onPrStaleDaysChange: vi.fn(),
-    prRepos: [],
-    onPrIgnoredReposChange: vi.fn(),
-    prReviewPrompt: DEFAULT_SETTINGS.prReviewPrompt,
-    onPrReviewPromptChange: vi.fn(),
-    prCheckout: DEFAULT_SETTINGS.prCheckout,
-    onPrCheckoutChange: vi.fn(),
-    prReviewModel: null,
-    onPrReviewModelChange: vi.fn(),
-    prReviewEffort: null,
-    onPrReviewEffortChange: vi.fn(),
     ...overrides
   }
 }

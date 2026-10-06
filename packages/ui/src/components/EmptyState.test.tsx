@@ -9,22 +9,22 @@ describe('EmptyState', () => {
     const onRefresh = vi.fn()
     const { container } = render(
       <EmptyState
-        name="pulls"
+        name="sessions"
         icon={<HistoryIcon />}
-        title="No pull requests open"
+        title="No sessions running"
         actions={
           <button type="button" onClick={onRefresh}>
             Check again
           </button>
         }
       >
-        Nothing is open in the 3 repositories Helm scans.
+        Nothing is running in the 3 folders Helm scans.
       </EmptyState>
     )
 
-    expect(container.querySelector('[data-empty-state="pulls"]')).not.toBeNull()
-    expect(screen.getByText('No pull requests open')).toBeTruthy()
-    expect(screen.getByText('Nothing is open in the 3 repositories Helm scans.')).toBeTruthy()
+    expect(container.querySelector('[data-empty-state="sessions"]')).not.toBeNull()
+    expect(screen.getByText('No sessions running')).toBeTruthy()
+    expect(screen.getByText('Nothing is running in the 3 folders Helm scans.')).toBeTruthy()
     await userEvent.setup().click(screen.getByRole('button', { name: 'Check again' }))
     expect(onRefresh).toHaveBeenCalledOnce()
   })

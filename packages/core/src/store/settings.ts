@@ -10,15 +10,8 @@ import {
   CORNER_RADIUS,
   DEFAULT_SETTINGS,
   DENSITY_MODES,
-  EFFORT_LEVELS,
-  isRepoSlug,
   PANE_GAP,
   PINNED_PROJECTS_MAX,
-  PR_CHECKOUT_MODES,
-  PR_IGNORED_REPOS_MAX,
-  PR_POLL_MINUTES,
-  PR_REVIEW_PROMPT_MAX_LENGTH,
-  PR_STALE_DAYS,
   PROJECT_SHELL_HEIGHT_PCT,
   RAIL_DESTINATIONS,
   TERMINAL_CURSOR_STYLES,
@@ -149,8 +142,8 @@ function paneProblem(pane: unknown): string | null {
   if (typeof pane !== 'object' || pane === null || Array.isArray(pane)) {
     return `expected a pane, got ${describe(pane)}`
   }
-  const { kind, path, repoPath, number, id } = pane as Record<string, unknown>
-  if (kind === 'history' || kind === 'pulls' || kind === 'config') return null
+  const { kind, path, id } = pane as Record<string, unknown>
+  if (kind === 'history' || kind === 'config') return null
   if (kind === 'session') {
     // A row id. Never reopened from here - only read after a crash, to find
     // where the session that is being reopened was.
@@ -187,15 +180,6 @@ function paneProblem(pane: unknown): string | null {
     if (problem !== null) return problem
     if (title !== null && (typeof title !== 'string' || title.trim() === '' || title.length > PLUGIN_TITLE_MAX)) {
       return `expected a tab title or null, got ${describe(title)}`
-    }
-    return null
-  }
-  if (kind === 'pr') {
-    if (typeof repoPath !== 'string' || repoPath.trim() === '') {
-      return `expected a repository path, got ${describe(repoPath)}`
-    }
-    if (!isFiniteNumber(number) || !Number.isInteger(number) || number <= 0) {
-      return `expected a pull request number, got ${describe(number)}`
     }
     return null
   }
@@ -292,9 +276,8 @@ export const SETTING_VALIDATORS: SettingValidators = {
    * Projects in the sidebar's Pinned section, as a *set* of absolute paths.
    *
    * **Keyed by path, and a moved or re-cloned checkout therefore loses its
-   * pin.** That is the decision, not an oversight found later: `prIgnoredRepos`
-   * next door learned to key by slug precisely so an entry would survive a
-   * re-clone into a different directory, and a project has no slug to key by.
+   * pin.** That is the decision, not an oversight found later: a project has
+   * nothing steadier than its path to key by.
    * It is not a repository - a plain folder and a harness root are both
    * pinnable and neither has a remote - and it is not a database row, because
    * this list has to be readable and writable before the first scan finishes.
@@ -492,138 +475,12 @@ export const SETTING_VALIDATORS: SettingValidators = {
   /**
    * The transcript archive's ceiling, in bytes.
    *
-   * A plain bounded integer, with no "off" value beside it - unlike
-   * `prPollMinutes`, where zero is a real state. Turning the archive off is not
+   * A plain bounded integer, with no "off" value beside it. Turning the archive off is not
    * something this key expresses, because the archive is not optional: see the
    * field's comment in `types.ts`. The floor is low enough for a check to drive
    * eviction, which is the whole reason it is not something respectable.
    */
   transcriptArchiveMaxBytes: boundedInteger(TRANSCRIPT_ARCHIVE_BYTES),
-
-  /** Null means "find it"; anything else is absolute, exactly as `claudePath`. */
-  ghPath: (value) => {
-    if (value === null) return null
-    if (typeof value !== 'string' || value.trim() === '') {
-      return `expected an absolute path or null, got ${describe(value)}`
-    }
-    if (!isAbsolute(value)) return `expected an absolute path, got ${JSON.stringify(value)}`
-    return null
-  },
-
-  /**
-   * Minutes, or zero for off.
-   *
-   * Zero is deliberately outside the range rather than the bottom of it: the
-   * interval and "no interval at all" are different states, and a validator
-   * that accepted 1 through 1440 plus 0 as a special case would let a
-   * one-minute sweep over a dozen repositories through as well. Off is off, and
-   * anything on is at least `PR_POLL_MINUTES.min` apart.
-   */
-  prPollMinutes: (value) => {
-    if (value === PR_POLL_MINUTES.off) return null
-    const problem = boundedInteger(PR_POLL_MINUTES)(value)
-    return problem === null
-      ? null
-      : `${problem} (or ${String(PR_POLL_MINUTES.off)} to poll not at all)`
-  },
-
-  /**
-   * Days, or zero for no split at all.
-   *
-   * The same two-step as `prPollMinutes` above, for the same reason: zero is
-   * not the bottom of the range, it is the absence of one. A cutoff of a day
-   * and no cutoff at all are different states - the second is the Open section
-   * reverting to the single flat list it was before ACTIVE/STALE existed - and
-   * a validator that accepted `0` as an ordinary member of the range would also
-   * have to accept the half-day cutoffs the unit cannot express.
-   */
-  prStaleDays: (value) => {
-    if (value === PR_STALE_DAYS.off) return null
-    const problem = boundedInteger(PR_STALE_DAYS)(value)
-    return problem === null ? null : `${problem} (or ${String(PR_STALE_DAYS.off)} for no split)`
-  },
-
-  /**
-   * A template with something in it.
-   *
-   * Empty is refused rather than treated as "no prompt": this value becomes the
-   * trailing positional argument of a launch, and `buildLaunchArgs` drops an
-   * empty one - so a blank template would silently start an ordinary session
-   * from a button labelled "Review with Claude". The remedy for not wanting a
-   * prompt is not to press it.
-   *
-   * The placeholders are deliberately *not* checked. An unknown one survives
-   * into the prompt as written (see `renderPullPrompt`), which is what makes a
-   * typo visible in the pane's disclosure sentence instead of invisible in the
-   * argv, and refusing the write would make a template naming a placeholder a
-   * later version adds unwritable.
-   */
-  prReviewPrompt: (value) => {
-    if (typeof value !== 'string' || value.trim() === '') {
-      return `expected a prompt template, got ${describe(value)}`
-    }
-    if (value.length > PR_REVIEW_PROMPT_MAX_LENGTH) {
-      return `expected at most ${String(PR_REVIEW_PROMPT_MAX_LENGTH)} characters, got ${String(value.length)}`
-    }
-    return null
-  },
-
-  /**
-   * A set of `owner/name` slugs, and validated as a *set*.
-   *
-   * The duplicate check is case-insensitive and it is the interesting half. The
-   * matcher this list is read through is case-insensitive too, so
-   * `["Owner/Repo", "owner/repo"]` would behave as one entry while presenting
-   * as two - a settings row that could not be un-ticked because removing one
-   * spelling leaves the other. Refusing the write is what keeps the list and
-   * its meaning the same length.
-   */
-  prIgnoredRepos: (value) => {
-    if (!Array.isArray(value)) {
-      return `expected an array of owner/name slugs, got ${describe(value)}`
-    }
-    if (value.length > PR_IGNORED_REPOS_MAX) {
-      return `expected at most ${String(PR_IGNORED_REPOS_MAX)} repositories, got ${String(value.length)}`
-    }
-    const seen = new Set<string>()
-    for (const entry of value) {
-      if (typeof entry !== 'string' || entry.trim() === '') {
-        return `expected an owner/name slug, got ${describe(entry)}`
-      }
-      if (!isRepoSlug(entry)) {
-        return `expected an owner/name slug, got ${JSON.stringify(entry)}`
-      }
-      const key = entry.toLowerCase()
-      if (seen.has(key)) return `expected each repository once, got ${JSON.stringify(entry)} twice`
-      seen.add(key)
-    }
-    return null
-  },
-
-  prCheckout: oneOf(PR_CHECKOUT_MODES),
-
-  /**
-   * One argv word, or null for the CLI's own default.
-   *
-   * Deliberately **not** checked against a list of model names - see the field's
-   * comment in `types.ts`. What is checked is that the value can be an argument:
-   * a leading dash would arrive at the CLI as another flag, whitespace would
-   * split into two words at the point where nothing is looking, and a hundred
-   * characters is not a model name whatever else it is.
-   */
-  prReviewModel: (value) => {
-    if (value === null) return null
-    if (typeof value !== 'string' || value.trim() === '') {
-      return `expected a model name or null, got ${describe(value)}`
-    }
-    if (value !== value.trim()) return `expected no surrounding whitespace, got ${JSON.stringify(value)}`
-    if (/\s/.test(value)) return `expected one word, got ${JSON.stringify(value)}`
-    if (value.startsWith('-')) return `expected a model name, got the flag ${JSON.stringify(value)}`
-    if (value.length > 100) return `expected a model name, got ${String(value.length)} characters`
-    return null
-  },
-
-  prReviewEffort: (value) => (value === null ? null : oneOf(EFFORT_LEVELS)(value)),
 
   updateCheck: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
 
@@ -720,6 +577,9 @@ export function validateSetting(key: keyof AppSettings, value: unknown): string 
   return problem === null ? null : `${key}: ${problem}`
 }
 
+/** Rail ids an older build could hide that name nothing now. See `readSettings`. */
+const RETIRED_RAIL_DESTINATIONS: ReadonlySet<string> = new Set(['pulls'])
+
 export function readSettings(store: Store): AppSettings {
   const rows = store.db.select().from(appSettings).all()
   const result: AppSettings = { ...DEFAULT_SETTINGS }
@@ -733,6 +593,13 @@ export function readSettings(store: Store): AppSettings {
     } catch {
       continue
     }
+  }
+
+  // A rail destination an older build drew and this one does not, dropped
+  // rather than kept: the list is validated against `RAIL_DESTINATIONS` on
+  // the way back in, so one stale id would refuse every later change to it.
+  if (Array.isArray(result.railHidden)) {
+    result.railHidden = result.railHidden.filter((entry) => !RETIRED_RAIL_DESTINATIONS.has(entry))
   }
 
   // A layout written before panes were a tree, read as the row it was with the

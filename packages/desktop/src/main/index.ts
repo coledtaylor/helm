@@ -27,7 +27,6 @@ import { createThemeService } from './themes'
 import { activePty, killAllSessionsSync, killPty, spawnPty, windowsBuildNumber } from './pty'
 import {
   adoptExistingProfile,
-  cachedProjects,
   createServices,
   refreshGit,
   runScan,
@@ -60,7 +59,6 @@ import {
 import { createBrowserMcp, type BrowserMcpHost } from './browser-mcp'
 import { sessionToolsWorld, type SessionToolsWorld } from './session-tools'
 import { createHistoryIndex } from './history'
-import { createPullsService } from './pulls'
 import { createUsageService } from './usage'
 import { maybeCheckForUpdate } from './update'
 import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
@@ -75,7 +73,6 @@ import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
 import { findClaudeExecutable, setClaudeOverride } from './claude-cli'
-import { setGhOverride } from './gh-cli'
 import { pickerAnswer, runPackagingChecks } from './packagingcheck'
 import { screenshot } from './bridge'
 
@@ -304,18 +301,6 @@ export interface AppOptions {
    */
   claudeHome?: string | undefined
   /**
-   * Fetch pull requests through this `gh` instead of the discovered one.
-   *
-   * `pnpm dev` passes the synthetic gh here, and it is a launch argument rather
-   * than the `ghPath` setting for two reasons. A setting would be written into
-   * the database, and the dev database is a copy somebody may one day copy back
-   * - so dev's fake binary would end up pointed at by the real app, on a path
-   * that no longer exists. And which binary the pull requests come from is not
-   * the window's to choose, which is why there is no IPC channel for it either;
-   * it reaches the service through `pointGh`.
-   */
-  gh?: string | undefined
-  /**
    * Stand-ins for the native pickers, so `--packaging-firstrun` can drive "add a
    * folder" and "locate claude" through the real handlers. Same shape and same
    * reasoning as `confirm`.
@@ -360,9 +345,6 @@ function startApp(options: AppOptions = {}): void {
   // over discovery in every caller, and the session host does not read
   // settings.
   setClaudeOverride(services.settings.claudePath)
-  // Same reason, same shape: the pull-request surface resolves `gh` through a
-  // module-level override, and it must be in place before the first pass.
-  setGhOverride(services.settings.ghPath)
   // Before the window exists: an install from before the setup pane has roots
   // and no completion stamp, and stamping it after the first paint would flash
   // a setup pane over a working launcher.
@@ -474,31 +456,6 @@ function startApp(options: AppOptions = {}): void {
     ...(options.claudeHome !== undefined ? { home: options.claudeHome } : {}),
     onChange: (snapshot) => emit(win, 'usage:changed', snapshot)
   })
-
-  /**
-   * The projects the PR sweep considers, read through a function.
-   *
-   * The last scan when there has been one, the cache before that - so a cold
-   * start sweeps the repositories the previous run knew about rather than
-   * waiting for discovery, and a rescan that adds a repository is picked up on
-   * the next pass without anything having to tell this service about it.
-   */
-  const pulls = createPullsService({
-    store: services.store,
-    settings: () => services.settings,
-    projects: () =>
-      (services.lastScan?.projects ?? cachedProjects(services)).map((project) => ({
-        path: project.path,
-        name: project.name
-      })),
-    onChange: (snapshot) => emit(win, 'pr:changed', snapshot)
-  })
-  // Before the first pass, and through the service's own hook rather than the
-  // setting - see `AppOptions.gh`.
-  if (options.gh !== undefined) {
-    pulls.pointGh(options.gh)
-    console.log(`pull requests are coming from ${options.gh}`)
-  }
 
   const config = createConfigService({
     services,
@@ -648,7 +605,6 @@ function startApp(options: AppOptions = {}): void {
     history,
     archive,
     usage,
-    pulls,
     config,
     content,
     files,
@@ -680,17 +636,6 @@ function startApp(options: AppOptions = {}): void {
             error: err instanceof Error ? err.message : String(err)
           })
         })
-        // The first pull-request sweep waits for the scan, because the scan is
-        // what it sweeps. Started beside it, it read the project cache - empty
-        // on a fresh install, and missing anything cloned since the last run -
-        // so every repository the scan then found went unfetched until the next
-        // tick, with the pane saying it was checking them. The pane paints from
-        // SQLite in the meantime either way.
-        .finally(() => {
-          void pulls.refresh().catch((err: unknown) => {
-            console.warn(`pull requests could not be fetched: ${String(err)}`)
-          })
-        })
       emit(win, 'scan:status', { running: true })
 
       // Off the renderer's critical path: the first pass reads 875 KB and
@@ -714,12 +659,6 @@ function startApp(options: AppOptions = {}): void {
           console.warn(`usage figures could not be read: ${String(err)}`)
         }
         usage.start()
-
-        // Last, and deliberately: a sweep spawns `git` per repository and `gh`
-        // per remote. The first one runs when the scan lands (above); the timer
-        // is armed either way - a fetch that fails is not a reason to stop
-        // trying every five minutes.
-        pulls.start()
 
         // And the one request Helm's own process makes. Here rather than at
         // startup for the reason everything else in this block is: it is worth
@@ -784,11 +723,6 @@ function startApp(options: AppOptions = {}): void {
    */
   let gitRefreshInFlight = false
   win.on('focus', () => {
-    // The PR sweep takes the same moment for the same reason, and guards itself
-    // harder: git is local and a fetch is not, so `refreshOnFocus` also refuses
-    // to run more than once every few minutes (see `pulls.ts`).
-    pulls.refreshOnFocus()
-
     if (gitRefreshInFlight || services.lastScan === null) return
     gitRefreshInFlight = true
     void refreshGit(services)
@@ -846,7 +780,6 @@ function startApp(options: AppOptions = {}): void {
     // firing after `will-quit`, would write to a closed connection.
     historyIndex.stop()
     usage.stop()
-    pulls.stop()
     config.stop()
     files.stop()
     // Plugins' services are processes like a session's, ended the same way:
@@ -1152,10 +1085,8 @@ app.whenReady().then(() => {
     return
   }
 
-  // The ordinary app. `--gh=` is the only flag it takes, threaded the way
-  // `--claude-home=` is; `pnpm dev` is what passes one.
-  const ghArg = process.argv.find((a) => a.startsWith('--gh='))
-  startApp(ghArg ? { gh: ghArg.slice('--gh='.length) } : {})
+  // The ordinary app.
+  startApp()
 })
 
 app.on('window-all-closed', () => {

@@ -8,7 +8,6 @@ import {
   text,
   uniqueIndex
 } from 'drizzle-orm/sqlite-core'
-import type { PullDetail, PullPatch, PullSummary } from '../github/types'
 
 /**
  * `profiles` and `config_snapshots` are not read by any surface yet - they exist
@@ -510,71 +509,6 @@ export const appSettings = sqliteTable('app_settings', {
   value: text('value').notNull(),
   updatedAt: text('updated_at').notNull().default(now)
 })
-
-/**
- * What each discovered project's `origin` remote turned out to be.
- *
- * Keyed by path rather than by slug, because the question this answers is
- * "which of the directories on this machine are GitHub repositories" - and two
- * checkouts of the same repository are two rows with one slug between them,
- * which is exactly the shape a fetch wants to deduplicate against.
- *
- * A `slug` of null is an answer, not a gap: it means the remote was read and is
- * not github.com. `checked_at` is what separates that from "not yet looked at",
- * so a machine full of non-GitHub folders is asked once rather than every pass.
- */
-export const prRepos = sqliteTable('pr_repos', {
-  path: text('path').primaryKey(),
-  /** `git remote get-url origin`, credentials stripped. Null: no origin. */
-  url: text('url'),
-  /** `owner/name`, or null when the origin is not a github.com remote. */
-  slug: text('slug'),
-  /** When the remote was last read. Null means never. */
-  checkedAt: text('checked_at'),
-  /** When a fetch last **succeeded**; what the pane's age caption reports. */
-  fetchedAt: text('fetched_at'),
-  /** Why the last attempt failed. Cached pull requests outlive it. */
-  error: text('error')
-})
-
-/**
- * Open pull requests, cached so the pane paints before any `gh` has run.
- *
- * Keyed by (slug, number) rather than by repository path: a pull request
- * belongs to a repository on GitHub, not to a directory, and two checkouts of
- * the same repository must not hold two copies of the same list.
- *
- * `summary` is what the list needs and `detail` is the conversation behind it,
- * fetched only when a pull request is opened and null until then - two columns
- * because they cost two very different requests and go stale on different
- * schedules.
- */
-export const pullRequests = sqliteTable(
-  'pull_requests',
-  {
-    slug: text('slug').notNull(),
-    number: integer('number').notNull(),
-    /** JSON `PullSummary`. */
-    summary: text('summary', { mode: 'json' }).$type<PullSummary>().notNull(),
-    /** JSON `PullDetail`, or null until the pull request has been opened. */
-    detail: text('detail', { mode: 'json' }).$type<PullDetail>(),
-    /**
-     * JSON `PullPatch`: `gh pr diff`, capped at `MAX_DIFF_BYTES`.
-     *
-     * The patch and not the parse, which is the call the rendered markdown makes
-     * and for the same reason: what git said is a fact that keeps, and a column
-     * of parsed hunks would be this month's shape of `PullDiffLine` frozen into
-     * a database that outlives it. Null means no patch has been fetched - a pull
-     * request cached before Helm fetched patches at all, or one whose `pr diff`
-     * failed - and is a different fact from an empty `text`, which is a pull
-     * request that genuinely changed nothing.
-     */
-    diff: text('diff', { mode: 'json' }).$type<PullPatch>(),
-    fetchedAt: text('fetched_at').notNull().default(now),
-    detailFetchedAt: text('detail_fetched_at')
-  },
-  (t) => [primaryKey({ columns: [t.slug, t.number] })]
-)
 
 /**
  * The plugin folders Helm loads, registered by path (Settings > Plugins).

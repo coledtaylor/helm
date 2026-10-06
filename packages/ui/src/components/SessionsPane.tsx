@@ -440,8 +440,7 @@ function Detail({
         />
         <h2 className="min-w-0 truncate text-[15px] font-medium tracking-tight text-fg">{name}</h2>
         {/* A hairline outline in a semantic tone, never a fill - DESIGN.md 4's
-            state chip, the same one a pull request's open/merged/closed uses.
-            One word carrying the whole status of the thing on screen is exactly
+            state chip. One word carrying the whole status of the thing on screen is exactly
             what that pill is for. */}
         <StateChip state={state} waitingFor={session.waitingFor} />
         {helmSessionId === null && (
@@ -526,8 +525,7 @@ function Detail({
           {/* Wrapped rather than scrolled, and `wrap-anywhere` because an argv
               is mostly one unbreakable Windows path: with `overflow-x-auto`
               alone a 171px pane got a tall wrapped block *and* a horizontal
-              scrollbar under it, which is both degradations at once. The
-              pull-request pane's diff rows settled this the same way. */}
+              scrollbar under it, which is both degradations at once. */}
           <pre className="rounded-raised border border-border bg-surface-raised px-3 py-2 font-mono text-[11px] leading-[1.7] wrap-anywhere whitespace-pre-wrap text-fg-muted select-text">
             {record.argv.join(' ')}
           </pre>

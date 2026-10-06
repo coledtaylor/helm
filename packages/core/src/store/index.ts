@@ -44,18 +44,6 @@ export {
   type CachedProject
 } from './projects'
 export {
-  forgetPrRepos,
-  readPrRepos,
-  readPull,
-  readPullsBySlug,
-  recordPrFetch,
-  replaceRepoPulls,
-  upsertPrRepo,
-  writePullDetail,
-  type PrRepoRow,
-  type PullRow
-} from './pulls'
-export {
   addPluginFolder,
   forgetPluginSettings,
   readPluginFolders,

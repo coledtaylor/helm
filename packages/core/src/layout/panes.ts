@@ -144,8 +144,6 @@ export function paneId(ref: PaneRef): string {
   switch (ref.kind) {
     case 'project':
       return `project:${ref.path}`
-    case 'pr':
-      return `pr:${ref.repoPath}#${String(ref.number)}`
     case 'browser':
       return `browser:${String(ref.id)}`
     case 'session':
@@ -155,7 +153,7 @@ export function paneId(ref: PaneRef): string {
     case 'plugin':
       return pluginTabId(ref.plugin, ref.tab, ref.params)
     default:
-      // history, sessions, pulls, config, content, settings: one of each, so
+      // history, sessions, config, settings: one of each, so
       // the kind is the identity.
       return ref.kind
   }
@@ -868,10 +866,11 @@ export function savedGroups(saved: SavedPaneLayout | null): SavedPaneGroup[] {
 
 /**
  * Tab kinds an older build wrote down that open nothing now. The content
- * viewer's tab went when it merged into Files: a layout naming it still loads,
- * without it.
+ * viewer's tab went when it merged into Files, and the pull request list and
+ * its per-PR tabs went when pull requests left Helm for a plugin: a layout
+ * naming any of them still loads, without them.
  */
-export const RETIRED_TAB_KINDS: ReadonlySet<string> = new Set(['content'])
+export const RETIRED_TAB_KINDS: ReadonlySet<string> = new Set(['content', 'pulls', 'pr'])
 
 /**
  * The saved layout as a live one, its groups numbered in reading order. A

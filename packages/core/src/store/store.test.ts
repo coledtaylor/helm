@@ -131,8 +131,7 @@ describe('settings', () => {
               panes: [
                 { kind: 'project', path: dir },
                 { kind: 'history' },
-                { kind: 'pulls' },
-                { kind: 'pr', repoPath: dir, number: 42 },
+                { kind: 'sessions' },
                 { kind: 'session', id: 7 }
               ],
               activeId: `project:${dir}`
@@ -161,16 +160,8 @@ describe('settings', () => {
       terminalShell: join(dir, 'pwsh.exe'),
       projectShellHeightPct: 42,
       filesWrap: true,
-      railHidden: ['pulls', 'config'],
+      railHidden: ['files', 'config'],
       transcriptArchiveMaxBytes: 256 * 1024 * 1024,
-      ghPath: join(dir, 'gh.exe'),
-      prPollMinutes: 15,
-      prStaleDays: 7,
-      prIgnoredRepos: ['acme/noisy', 'other/quiet'],
-      prReviewPrompt: 'review {slug}#{number} on {branch}',
-      prCheckout: 'checkout',
-      prReviewModel: 'opus',
-      prReviewEffort: 'high',
       updateCheck: false,
       lastUpdateCheckAt: '2026-08-11T20:04:06.641Z',
       browserReach: 'local',
@@ -208,6 +199,22 @@ describe('settings', () => {
       .run()
 
     expect(readSettings(store)).toEqual(DEFAULT_SETTINGS)
+  })
+
+  it('reads what an older build wrote for pull requests, and takes the next write', () => {
+    const raw = store.raw.prepare('INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)')
+    raw.run('railHidden', JSON.stringify(['pulls', 'config']), '')
+    raw.run('prPollMinutes', JSON.stringify(15), '')
+    raw.run('ghPath', JSON.stringify('C:\\tools\\gh.exe'), '')
+
+    const settings = readSettings(store)
+    // The rail no longer has a Pulls destination, and a list naming one would
+    // be refused the next time anything on the rail was hidden.
+    expect(settings.railHidden).toEqual(['config'])
+    expect(settings).not.toHaveProperty('prPollMinutes')
+    expect(settings).not.toHaveProperty('ghPath')
+    expect(() => writeSettings(store, { railHidden: [...settings.railHidden, 'history'] })).not.toThrow()
+    expect(readSettings(store).railHidden).toEqual(['config', 'history'])
   })
 
   describe('a pane layout written before panes were a tree', () => {
@@ -340,8 +347,7 @@ describe('settings validation', () => {
     {
       key: 'pinnedProjects',
       // Absolute paths, as a set. Two spellings of one path is the interesting
-      // rejection and it is the same shape as `prIgnoredRepos`': the comparison
-      // is case-insensitive, so `C:\Repos\Api` and `c:\repos\api` would present
+      // rejection: the comparison is case-insensitive, so `C:\Repos\Api` and `c:\repos\api` would present
       // as two rows in a section where un-pinning either removes both. Mixed
       // case across *different* paths is fine and is in the good column.
       good: [
@@ -500,8 +506,6 @@ describe('settings validation', () => {
         { root: { panes: [{ kind: 'file', root: 'C:\\a' }], activeId: null }, focused: 0 },
         { root: { panes: [{ kind: 'file', root: '', path: 'C:\\a\\b.ts' }], activeId: null }, focused: 0 },
         { root: { panes: [{ kind: 'project', path: '' }], activeId: null }, focused: 0 },
-        { root: { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm' }], activeId: null }, focused: 0 },
-        { root: { panes: [{ kind: 'pr', repoPath: 'C:\\work\\helm', number: 0 }], activeId: null }, focused: 0 },
         { root: { panes: ['history'], activeId: null }, focused: 0 },
         // An id is compared against tabs, never parsed, so anything that is not
         // a string cannot match one.
@@ -593,7 +597,7 @@ describe('settings validation', () => {
       good: [
         [],
         ['history'],
-        ['sessions', 'profiles', 'files', 'history', 'browser', 'pulls', 'config'],
+        ['sessions', 'profiles', 'files', 'history', 'browser', 'config'],
         // A plugin's rail icon, by its prefixed id.
         ['plugin:sample', 'history']
       ],
@@ -602,6 +606,8 @@ describe('settings validation', () => {
         'history',
         ['settings'],
         ['content'],
+        // Retired with the pull request surface; `readSettings` drops it.
+        ['pulls'],
         ['history', 'history'],
         [1],
         [''],
@@ -618,78 +624,6 @@ describe('settings validation', () => {
       key: 'transcriptArchiveMaxBytes',
       good: [1024, 1024 ** 3, 64 * 1024 ** 3],
       bad: [1023, 0, -1, 64 * 1024 ** 3 + 1, 1024.5, '1073741824', null, {}]
-    },
-    {
-      key: 'ghPath',
-      good: [null, join(tmpdir(), 'gh.exe')],
-      bad: ['gh', 'bin\\gh.exe', '', 42, {}]
-    },
-    {
-      key: 'prPollMinutes',
-      // 0 is off; everything else is at least five minutes apart, because a
-      // pass is one `gh` per remote against the user's own rate limit.
-      good: [0, 5, 60, 1440],
-      bad: [1, 4, 1441, -5, 5.5, '5', null, Number.NaN]
-    },
-    {
-      key: 'prStaleDays',
-      // 0 is off - one Open list and no split - and it is outside the range
-      // rather than at the bottom of it, so 1 is the smallest cutoff there is.
-      good: [0, 1, 2, 90],
-      // A day and a half is the interesting rejection: the unit is days, the
-      // pane's caption says "days", and a fractional cutoff would put a row in
-      // a bucket no sentence on the surface describes.
-      bad: [-1, 91, 1.5, '2', null, {}, Number.NaN, Number.POSITIVE_INFINITY]
-    },
-    {
-      key: 'prIgnoredRepos',
-      // A set of `owner/name`. The duplicate cases are the interesting ones:
-      // the matcher is case-insensitive, so two spellings of one repository
-      // would present as two rows that cannot be unticked independently.
-      good: [[], ['acme/widget'], ['acme/widget', 'Acme/Other'], ['a.b/c-d_e']],
-      bad: [
-        ['acme/widget', 'ACME/Widget'],
-        ['acme/widget', 'acme/widget'],
-        ['acme'],
-        ['acme/widget/extra'],
-        ['/widget'],
-        ['acme/'],
-        ['acme widget/x'],
-        [' acme/widget'],
-        ['https://github.com/acme/widget'],
-        [''],
-        [42],
-        [null],
-        'acme/widget',
-        null,
-        {}
-      ]
-    },
-    {
-      key: 'prReviewPrompt',
-      // A placeholder this build does not know is deliberately valid: it
-      // survives into the prompt exactly as written, which is what makes a
-      // typo visible in the pane rather than a word missing from the argv.
-      good: ['/code-review {number}', 'look at {url}', 'review {whatever}', 'x'.repeat(2000)],
-      bad: ['', '   ', 'x'.repeat(2001), null, 42, {}, ['/code-review']]
-    },
-    {
-      key: 'prCheckout',
-      good: ['none', 'checkout'],
-      bad: ['worktree', 'None', '', true, null, 0]
-    },
-    {
-      key: 'prReviewModel',
-      // Null is "pass no --model", and a full model id is as valid as an alias:
-      // this deliberately does not police the CLI's naming, only the shape of
-      // an argv word (see the validator).
-      good: [null, 'opus', 'sonnet', 'fable', 'claude-opus-5', 'claude-haiku-4-5-20251001'],
-      bad: ['', '   ', ' opus', 'opus ', 'claude opus', '--model', '-o', 'x'.repeat(101), 42, {}]
-    },
-    {
-      key: 'prReviewEffort',
-      good: [null, 'low', 'medium', 'high', 'xhigh', 'max'],
-      bad: ['none', 'High', '', 'maximum', 3, true, ['high']]
     },
     {
       key: 'updateCheck',
@@ -889,14 +823,6 @@ describe('settings validation', () => {
       filesWrap: true,
       railHidden: ['browser'],
       transcriptArchiveMaxBytes: 512 * 1024 * 1024,
-      ghPath: join(dir, 'gh.exe'),
-      prPollMinutes: 0,
-      prStaleDays: 3,
-      prIgnoredRepos: ['acme/noisy'],
-      prReviewPrompt: '/code-review {number}',
-      prCheckout: 'none',
-      prReviewModel: 'sonnet',
-      prReviewEffort: null,
       updateCheck: true,
       lastUpdateCheckAt: null,
       browserReach: 'local',
@@ -942,14 +868,6 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   filesWrap: true,
   railHidden: ['browser'],
   transcriptArchiveMaxBytes: 512 * 1024 * 1024,
-  ghPath: join(dir, 'gh.exe'),
-  prPollMinutes: 0,
-  prStaleDays: 3,
-  prIgnoredRepos: ['acme/noisy'],
-  prReviewPrompt: '/code-review {number}',
-  prCheckout: 'none',
-  prReviewModel: 'sonnet',
-  prReviewEffort: null,
   updateCheck: true,
   lastUpdateCheckAt: null,
   browserReach: 'local',

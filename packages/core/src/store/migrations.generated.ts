@@ -119,5 +119,12 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
       "CREATE TABLE `plugins` (\n\t`path` text PRIMARY KEY NOT NULL,\n\t`enabled` integer DEFAULT true NOT NULL,\n\t`added_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL\n);",
       "CREATE TABLE `secrets` (\n\t`key` text PRIMARY KEY NOT NULL,\n\t`value` blob NOT NULL,\n\t`hosts` text DEFAULT '[]' NOT NULL,\n\t`plugins` text DEFAULT '[]' NOT NULL,\n\t`created_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL,\n\t`updated_at` text DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')) NOT NULL\n);"
     ]
+  },
+  {
+    "tag": "0014_cultured_shinobi_shaw",
+    "statements": [
+      "DROP TABLE `pr_repos`;",
+      "DROP TABLE `pull_requests`;"
+    ]
   }
 ]
