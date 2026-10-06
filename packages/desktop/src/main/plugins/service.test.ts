@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import type { NormalizedService } from '@helm/plugin-sdk/manifest'
+import type { NormalizedService } from '@coledtaylor/helm-plugin-sdk/manifest'
 import type { PluginLogLine } from '../../shared/ipc'
 import type { ServiceLauncher, ServiceSupervisor } from './service'
 

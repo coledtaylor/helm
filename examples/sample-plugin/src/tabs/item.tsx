@@ -1,7 +1,7 @@
 import { StrictMode, useEffect, useMemo, useState, type JSX } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ExecResult } from '@helm/plugin-sdk'
-import { useHelmSettings } from '@helm/plugin-sdk/react'
+import type { ExecResult } from '@coledtaylor/helm-plugin-sdk'
+import { useHelmSettings } from '@coledtaylor/helm-plugin-sdk/react'
 import { CHANNEL, createItem, getItem, markRead, messageOf, optionsOf, type Item, type Options } from '../lib/api'
 import '../styles.css'
 

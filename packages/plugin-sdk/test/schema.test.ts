@@ -89,7 +89,7 @@ describe('the schema names what the validator names', () => {
 
 describe('the schema and the validator agree on manifests', () => {
   const FULL = {
-    $schema: './node_modules/@helm/plugin-sdk/helm-plugin.schema.json',
+    $schema: './node_modules/@coledtaylor/helm-plugin-sdk/helm-plugin.schema.json',
     apiVersion: 1,
     id: 'full',
     name: 'Full',

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { HelmTheme } from '@helm/plugin-sdk'
+import type { HelmTheme } from '@coledtaylor/helm-plugin-sdk'
 import type { HelmBridge, PluginCallOutcome, PluginCallRequest, PluginDelivery } from '../../../shared/ipc'
 import { CONNECT, HELLO, type ConnectMessage, type HelmMessage } from '../../plugin-runtime/wire'
 import { CRASH_GRACE_MS, LOAD_GRACE_MS, createPluginRelay, type PluginRelay, type SurfaceSpec } from './relay'

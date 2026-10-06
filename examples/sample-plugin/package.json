@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "@helm/plugin-sdk": "workspace:*",
+    "@coledtaylor/helm-plugin-sdk": "workspace:*",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^5.2.0",

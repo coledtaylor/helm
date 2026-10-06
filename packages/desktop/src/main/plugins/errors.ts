@@ -1,4 +1,4 @@
-import type { HelmErrorCode } from '@helm/plugin-sdk'
+import type { HelmErrorCode } from '@coledtaylor/helm-plugin-sdk'
 
 /**
  * A bridge call that failed for a reason the plugin should be told.

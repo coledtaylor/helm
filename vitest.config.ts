@@ -8,8 +8,8 @@ import { defineConfig } from 'vitest/config'
  *   Library.
  * - `desktop`: main-process services in Node, with Electron faked and real
  *   ptys running the fake `claude` (`packages/desktop/test`).
- * - `sdk`: the plugin SDK - its manifest validator, its schema and its
- *   `helm-plugin` command - in Node.
+ * - `sdk`: the plugin SDK - its manifest validator, its schema, its
+ *   `helm-plugin` command and the package as npm publishes it - in Node.
  */
 export default defineConfig({
   test: {

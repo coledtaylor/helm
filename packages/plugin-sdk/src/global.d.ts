@@ -1,7 +1,7 @@
 /**
  * `window.helm`, typed. Reference it once in a plugin:
  *
- *   /// <reference types="@helm/plugin-sdk/global" />
+ *   /// <reference types="@coledtaylor/helm-plugin-sdk/global" />
  */
 import type { HelmBridge } from './types'
 

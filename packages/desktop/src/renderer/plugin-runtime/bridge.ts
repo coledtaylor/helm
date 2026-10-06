@@ -11,7 +11,7 @@ import type {
   SecretState,
   SettingValue,
   StatusItem
-} from '@helm/plugin-sdk'
+} from '@coledtaylor/helm-plugin-sdk'
 import type { PluginFetchRequest, PluginFetchResponse } from '../../shared/ipc'
 import {
   CONNECT,

@@ -61,7 +61,7 @@ import type {
   WriteConfigRequest,
   WriteConfigResult
 } from '@helm/core'
-import type { HelmErrorCode, HelmTheme, PluginParams, SettingValue, SurfaceKind } from '@helm/plugin-sdk'
+import type { HelmErrorCode, HelmTheme, PluginParams, SettingValue, SurfaceKind } from '@coledtaylor/helm-plugin-sdk'
 import type {
   PluginInfo,
   PluginLogLine,

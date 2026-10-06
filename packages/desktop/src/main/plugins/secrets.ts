@@ -6,7 +6,7 @@ import {
   writeSecret,
   type Store
 } from '@helm/core'
-import { ID_PATTERN, originMatches, parseOrigin, SECRET_KEY_PATTERN } from '@helm/plugin-sdk/manifest'
+import { ID_PATTERN, originMatches, parseOrigin, SECRET_KEY_PATTERN } from '@coledtaylor/helm-plugin-sdk/manifest'
 import { PluginCallError } from './errors'
 import type { Reveal } from './substitute'
 

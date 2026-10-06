@@ -1,6 +1,6 @@
 # Writing a Helm plugin
 
-`@helm/plugin-sdk` holds the types, the manifest validator and schema, React
+`@coledtaylor/helm-plugin-sdk` holds the types, the manifest validator and schema, React
 hooks and the `helm-plugin` command for building Helm plugins. The runtime
 itself - `window.helm`, the theme and the primitives stylesheet - comes from
 the Helm that runs the plugin, so a plugin never ships a copy of it.
@@ -25,7 +25,7 @@ folder to its pages.
 ## Quick start
 
 ```
-node <path-to-helm>/packages/plugin-sdk/bin/helm-plugin.mjs create my-plugin
+npx @coledtaylor/helm-plugin-sdk create my-plugin
 ```
 
 writes a working plugin into `my-plugin/`: a rail icon, a sidebar panel and a
@@ -36,23 +36,27 @@ tab, in plain HTML and JavaScript with nothing to build. Then, in Helm:
 3. Edit `pages/panel.html` or `pages/panel.js` and save. Helm reloads the
    plugin.
 
-`helm-plugin validate` checks a plugin the way Helm does when it loads it -
-the manifest, then every file the manifest names - and exits 1 when Helm would
-refuse it:
+The new plugin's `package.json` has this SDK as a development dependency.
+`npm install` puts it in the plugin's `node_modules`, where the manifest's
+`$schema` points, and `npm run validate` then runs `helm-plugin validate`. It
+checks a plugin the way Helm does when it loads it - the manifest, then every
+file the manifest names - and exits 1 when Helm would refuse it:
 
 ```
 cd my-plugin
-node <path-to-helm>/packages/plugin-sdk/bin/helm-plugin.mjs validate
+npm install
+npm run validate
 ```
 
-The SDK is not published. A plugin that wants its types or hooks links it by
-path, for example in `package.json`:
+Helm needs none of this to run the plugin; it is for your editor and for
+checking. To add the SDK to a plugin you already have:
 
-```json
-{ "devDependencies": { "@helm/plugin-sdk": "file:../helm/packages/plugin-sdk" } }
+```
+npm install --save-dev @coledtaylor/helm-plugin-sdk
 ```
 
-after which `npx helm-plugin validate` works too.
+Keep it current (`npm update @coledtaylor/helm-plugin-sdk`) so `validate`
+agrees with the Helm you run.
 
 ### Reloading
 
@@ -67,10 +71,11 @@ Settings > Plugins > the plugin > **Reload** reads the folder again by hand.
 ## The manifest
 
 `helm-plugin.json`. Every surface is optional; a plugin with none loads and
-does nothing. For editor completion, point `$schema` at the SDK's schema:
+does nothing. For editor completion, `$schema` points at the SDK's schema in
+the plugin's `node_modules`, as `helm-plugin create` writes it:
 
 ```json
-{ "$schema": "./node_modules/@helm/plugin-sdk/helm-plugin.schema.json" }
+{ "$schema": "./node_modules/@coledtaylor/helm-plugin-sdk/helm-plugin.schema.json" }
 ```
 
 Paths (`icon`, every `entry`, `background`, `service.node`) are relative to the
@@ -503,10 +508,10 @@ reset does not undo the primitives, and its utilities override them, so
 
 ## React
 
-`@helm/plugin-sdk/react` has hooks over the bridge:
+`@coledtaylor/helm-plugin-sdk/react` has hooks over the bridge:
 
 ```tsx
-import { useHelmEvent, useHelmSettings, useHelmTheme, useHelmVisible, useSecret } from '@helm/plugin-sdk/react'
+import { useHelmEvent, useHelmSettings, useHelmTheme, useHelmVisible, useSecret } from '@coledtaylor/helm-plugin-sdk/react'
 
 function Panel() {
   const settings = useHelmSettings() // null until read, then kept current
@@ -526,16 +531,16 @@ React is an optional peer dependency; nothing else in the SDK needs it.
 ## TypeScript
 
 ```ts
-import type { HelmBridge, HelmContext, PluginManifest } from '@helm/plugin-sdk'
+import type { HelmBridge, HelmContext, PluginManifest } from '@coledtaylor/helm-plugin-sdk'
 ```
 
 and, once in the project (a `.d.ts`, or `types` in `tsconfig.json`):
 
 ```ts
-/// <reference types="@helm/plugin-sdk/global" />
+/// <reference types="@coledtaylor/helm-plugin-sdk/global" />
 ```
 
-which types `window.helm` and the global `helm`. `@helm/plugin-sdk/manifest`
+which types `window.helm` and the global `helm`. `@coledtaylor/helm-plugin-sdk/manifest`
 is the validator itself, for a build that wants to check the manifest.
 
 ## Keyboard

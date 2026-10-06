@@ -17,7 +17,7 @@
     "db:generate": "drizzle-kit generate && node scripts/embed-migrations.mjs"
   },
   "dependencies": {
-    "@helm/plugin-sdk": "workspace:*",
+    "@coledtaylor/helm-plugin-sdk": "workspace:*",
     "@shikijs/langs": "^4.4.3",
     "@shikijs/themes": "^4.4.3",
     "better-sqlite3": "^13.0.3",

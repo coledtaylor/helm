@@ -158,8 +158,9 @@ in a harness is yours to decide.
   tabs, a status bar item, commands for Ctrl+Shift+P and a settings page, all
   drawn in Helm's theme. Each runs in a process of its own, so one that hangs
   or crashes takes nothing else with it. Add one in **Settings → Plugins**;
-  [the SDK](packages/plugin-sdk/README.md) has `helm-plugin create`,
-  `helm-plugin validate` and the authoring guide.
+  [the SDK](packages/plugin-sdk/README.md), `@coledtaylor/helm-plugin-sdk` on
+  npm, has `helm-plugin create`, `helm-plugin validate` and the authoring
+  guide.
 
 ### The version guard warns; it never gates
 

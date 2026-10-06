@@ -1,11 +1,33 @@
 {
-  "name": "@helm/plugin-sdk",
+  "name": "@coledtaylor/helm-plugin-sdk",
   "version": "1.0.0",
   "description": "Types, the manifest schema and helpers for building Helm plugins. The runtime - the window.helm bridge, theme tokens and primitives stylesheet - comes from the running Helm.",
+  "keywords": [
+    "helm-plugin",
+    "claude-code",
+    "plugin",
+    "sdk"
+  ],
+  "homepage": "https://github.com/coledtaylor/helm/wiki/Plugins-Overview",
+  "bugs": "https://github.com/coledtaylor/helm/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coledtaylor/helm.git",
+    "directory": "packages/plugin-sdk"
+  },
   "license": "MIT",
-  "//private": "Not published yet: a plugin repository links it by path (`helm-plugin create` writes that dependency). It has no build step, so the folder is the package.",
-  "private": true,
+  "author": "Cole Taylor",
+  "//publish": "Published to npm by release.yml when this version is not on the registry yet. It has no build step: the folder is the package, and `files` is what ships.",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "bin",
+    "src",
+    "template",
+    "helm-plugin.schema.json"
+  ],
   "types": "./src/types.d.ts",
   "exports": {
     ".": {
@@ -26,10 +48,14 @@
       "types": "./src/react.d.ts",
       "default": "./src/react.js"
     },
-    "./helm-plugin.schema.json": "./helm-plugin.schema.json"
+    "./helm-plugin.schema.json": "./helm-plugin.schema.json",
+    "./package.json": "./package.json"
   },
   "bin": {
-    "helm-plugin": "./bin/helm-plugin.mjs"
+    "helm-plugin": "bin/helm-plugin.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

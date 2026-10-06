@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Helm plugin manifest",
-  "description": "helm-plugin.json, at the root of a Helm plugin folder. Helm validates it with @helm/plugin-sdk/manifest when it loads the plugin; this schema says the same for an editor. Checks that span fields - rail.panel naming a panel, a command tab naming a tab, {{key}} naming a declared secret - are made by Helm and `helm-plugin validate`, not here.",
+  "description": "helm-plugin.json, at the root of a Helm plugin folder. Helm validates it with @coledtaylor/helm-plugin-sdk/manifest when it loads the plugin; this schema says the same for an editor. Checks that span fields - rail.panel naming a panel, a command tab naming a tab, {{key}} naming a declared secret - are made by Helm and `helm-plugin validate`, not here.",
   "type": "object",
   "required": [
     "apiVersion",

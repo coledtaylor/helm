@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { checkPluginFolder } from '../src/folder.js'
 import { SDK_DIR } from './fixtures'
@@ -12,6 +12,7 @@ import { SDK_DIR } from './fixtures'
  */
 
 const BIN = join(SDK_DIR, 'bin', 'helm-plugin.mjs')
+const SDK = JSON.parse(readFileSync(join(SDK_DIR, 'package.json'), 'utf8')) as { name: string; version: string }
 
 interface Run {
   status: number | null
@@ -45,16 +46,25 @@ describe('helm-plugin create', () => {
     expect(manifest['id']).toBe('issue-tracker')
     expect(manifest['name']).toBe('Issue tracker')
     expect(manifest['rail']).toEqual({ title: 'Issue tracker', panel: 'main' })
-    // The schema reference is relative, and points at this SDK's schema.
-    const schema = manifest['$schema'] as string
-    expect(schema).not.toMatch(/^[A-Za-z]:|^\//)
-    expect(existsSync(resolve(folder, schema))).toBe(true)
+    // The schema the plugin installs, never this copy's path: run through npx,
+    // that is a cache folder.
+    expect(manifest['$schema']).toBe(`./node_modules/${SDK.name}/helm-plugin.schema.json`)
     expect(Object.keys(manifest)[0]).toBe('$schema')
+
+    // The SDK is a development dependency, at this version or later.
+    expect(JSON.parse(readFileSync(join(folder, 'package.json'), 'utf8'))).toEqual({
+      name: 'issue-tracker',
+      private: true,
+      scripts: { validate: 'helm-plugin validate' },
+      devDependencies: { [SDK.name]: `^${SDK.version}` }
+    })
+    expect(readFileSync(join(folder, '.gitignore'), 'utf8')).toBe('node_modules/\n')
 
     for (const file of ['icon.svg', 'README.md', 'pages/panel.html', 'pages/panel.js', 'pages/tab.html', 'pages/tab.js', 'pages/style.css']) {
       expect(existsSync(join(folder, file)), file).toBe(true)
     }
     expect(readFileSync(join(folder, 'README.md'), 'utf8')).toMatch(/^# Issue tracker\n/)
+    expect(created.stdout).toContain('npm run validate')
 
     const validated = run(['validate'], folder)
     expect(validated.status).toBe(0)
