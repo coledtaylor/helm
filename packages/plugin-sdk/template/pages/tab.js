@@ -1,7 +1,7 @@
-// A tab. Its parameters arrive with it, in `helm.context`.
-/* global window, document */
+// A tab. Its parameters arrive with it, in `helm.context`. `helm` is the global
+// bridge, as in panel.js.
+/* global helm, document */
 
-const helm = window.helm
 const { params } = helm.context
 const title = typeof params.n === 'number' ? `Page ${params.n}` : 'Page'
 
