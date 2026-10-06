@@ -158,10 +158,9 @@ Code-signing the build would retire reason 1. It would not touch 2 or 3.
 ## Network posture
 
 **Helm contacts nothing on its own initiative except the update check.
-Everything else on the network happens because you asked for it: the
-pull-request surface goes through your own `gh`, the browser pane fetches the
-page you navigate to, and a plugin you added reaches the hosts its manifest
-names.**
+Everything else on the network happens because you asked for it: the browser
+pane fetches the page you navigate to, and a plugin you added reaches the hosts
+its manifest names.**
 
 There is no telemetry, no crash reporting, no fonts and no CDN. With
 `updateCheck` off, Helm asks nothing by itself at all; the one remaining route
@@ -178,19 +177,6 @@ one session and revoked when that session ends; and each set has its own setting
 bound at all when both are off. Worth knowing for a packaged build in
 particular: an installer that a firewall prompt follows is a bad first
 impression, and a loopback bind produces no prompt on Windows.
-
-The pull-request pane reaches GitHub as well, but through the user's own `gh`
-CLI: `gh pr list` per repository on a timer (`prPollMinutes`, five minutes by
-default, `0` disables it), `gh pr view` when a pull request is opened, and `gh
-pr checkout` when a review is configured to check one out. Bytes leave the
-machine without `update:check` being involved.
-
-Helm stores no GitHub credential. `gh` owns the token and every fetch runs on
-it; nothing in Helm opens `hosts.yml`, the keyring or `GH_TOKEN`, and a sign-in
-is read only from what `gh` reports on its own streams. A remote URL carrying an
-embedded token is a credential too, so `parseGitHubRemote` strips the userinfo
-before anything reaches the database. A machine with no `gh` gets a sentence
-naming where to get one, and everything else in Helm works unchanged.
 
 **Plugins reach the hosts their manifests name.** A plugin page has no network
 of its own (`connect-src 'none'`); `helm.fetch` sends its requests from the

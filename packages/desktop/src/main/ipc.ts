@@ -24,13 +24,11 @@ import type { TemplateService } from './templates'
 import type { RestoreService } from './restore'
 import type { ArchiveService } from './archive'
 import type { HistoryService } from './history'
-import type { PullsService } from './pulls'
 import type { UsageService } from './usage'
 import { applyWindowTheme } from './chrome'
 import type { ThemeService } from './themes'
 import type { PtermHost } from './pterm'
 import { readClaudeVersion, setClaudeOverride } from './claude-cli'
-import { setGhOverride } from './gh-cli'
 import { readClaudeStatus, verifyClaudeAt } from './setup'
 import { checkForUpdate, RELEASES_PAGE } from './update'
 import { appMode, dataDir, dbFile, templatesDir } from './paths'
@@ -134,8 +132,6 @@ export interface IpcContext {
   archive: ArchiveService
   /** Mirrors Claude Code's cached plan-limit figures; see `usage.ts`. */
   usage: UsageService
-  /** Sweeps the discovered repositories for open pull requests; see `pulls.ts`. */
-  pulls: PullsService
   /** The one surface that writes to a `.claude` tree; see `config.ts`. */
   config: ConfigService
   /** Reads, renders and searches what Claude writes; see `content.ts`. */
@@ -223,25 +219,6 @@ export function registerIpc(ctx: IpcContext): void {
       // written through this channel has to reach it too - otherwise sessions
       // launch from one path and `claude mcp add` from another.
       if (patch.claudePath !== undefined) setClaudeOverride(next.claudePath)
-      // The pulls service resolves `gh` through the same module-level override,
-      // and holds its own cached answer about which one it is - so a new path
-      // has to reach both, and the poller has to be re-armed when the interval
-      // moves or a change to it would not take effect until the next restart.
-      if (patch.ghPath !== undefined) {
-        setGhOverride(next.ghPath)
-        ctx.pulls.rearm()
-        void ctx.pulls.refresh()
-      }
-      if (patch.prPollMinutes !== undefined) ctx.pulls.rearm()
-      // The snapshot is built in main, so the pane cannot hide or reveal a
-      // repository on its own: `republish` repaints from the cache at once, and
-      // the fetch behind it is for whatever was just un-ignored - a repository
-      // Helm has been skipping has no rows, or has rows from before it was
-      // ignored, and either way the sweep is what makes it current.
-      if (patch.prIgnoredRepos !== undefined) {
-        ctx.pulls.republish()
-        void ctx.pulls.refresh()
-      }
       /*
        * The endpoint follows its own tick, immediately.
        *
@@ -610,42 +587,6 @@ export function registerIpc(ctx: IpcContext): void {
     // current, and a status bar that hit the disk every time it repainted
     // would be the one surface in the app that does.
     'usage:read': () => ctx.usage.snapshot(),
-
-    // The cache, deliberately: this runs no `gh`, so the pane paints on the
-    // first frame and whatever the fetch finds arrives as `pr:changed`.
-    'pr:snapshot': () => ctx.pulls.snapshot(),
-    'pr:refresh': (request) =>
-      ctx.pulls.refresh(request?.repoPath !== undefined ? { repoPath: request.repoPath } : {}),
-    // Cached unless asked otherwise, and the markdown comes back rendered - the
-    // window has no pipeline of its own to run it through.
-    'pr:detail': ({ repoPath, number, refresh }) =>
-      ctx.pulls.detail({ repoPath, number, ...(refresh === true ? { refresh: true } : {}) }),
-
-    /**
-     * The two halves of a review launch, in the order they have to happen.
-     *
-     * `prepareReview` is where the decisions are: it reads the pull request out
-     * of the cache, reads the template and the checkout mode out of settings,
-     * runs `gh pr checkout` if that is what was asked for, and renders the
-     * prompt. Only then does the session host spawn - so a checkout that was
-     * refused is a rejection with a sentence in it rather than a tab that
-     * opened onto the wrong revision.
-     *
-     * Awaited by the renderer for the same reason `session:start` is: the pane
-     * has nowhere else to learn that there is no `gh`, or that the tree is
-     * dirty, and a tab holding a terminal that never started is worse than no
-     * tab.
-     */
-    'pr:review': async ({ repoPath, number, cols, rows }) => {
-      const plan = await ctx.pulls.prepareReview({ repoPath, number })
-      const session = await ctx.sessions.review(plan, { cols, rows })
-      return {
-        session,
-        prompt: plan.prompt,
-        checkedOut: plan.checkedOut,
-        warnings: plan.warnings
-      }
-    },
 
     'content:scopes': () => ctx.content.scopes(),
     'content:document': ({ scopePath, path }) => ctx.content.document(scopePath, path),

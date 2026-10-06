@@ -96,9 +96,7 @@ export {
 } from './components/SetupPane'
 export {
   SettingsPane,
-  pullRepoChoices,
   updateOutcome,
-  type PrRepoChoice,
   type SettingsPaneProps,
   type TerminalSettings,
   type UpdateCheckResult,
@@ -123,8 +121,7 @@ export {
   type ProfilePrediction
 } from './components/ProfileEditor'
 export { ProfileList, type ProfileListProps } from './components/ProfileList'
-export { ProjectPane, projectPulls, type ProjectPaneProps } from './components/ProjectPane'
-export { PullRow, useNow, type PullRowProps } from './components/PullRow'
+export { ProjectPane, type ProjectPaneProps } from './components/ProjectPane'
 export {
   ProjectRow,
   SessionRow,
@@ -150,19 +147,6 @@ export {
 } from './lib/paneGeometry'
 export { Rail, type RailItem, type RailProps } from './components/Rail'
 export { SessionTree, type SessionTreeProps, type TreeReveal, type TreeSession } from './components/SessionTree'
-export {
-  PullsPane,
-  fetchedCaption,
-  pullsSummaryLine,
-  type PullsPaneProps
-} from './components/PullsPane'
-export {
-  PullRequestPane,
-  pullState,
-  type LaunchedReviewNote,
-  type PullRequestPaneProps,
-  type PullView
-} from './components/PullRequestPane'
 export {
   SessionEndedBar,
   formatDuration,

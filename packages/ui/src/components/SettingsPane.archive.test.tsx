@@ -100,23 +100,6 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onSessionMcpChange: vi.fn(),
     restoreWithoutAsking: false,
     onRestoreWithoutAskingChange: vi.fn(),
-    gh: null,
-    onLocateGh: vi.fn(),
-    onClearGhOverride: vi.fn(),
-    prPollMinutes: s.prPollMinutes,
-    onPrPollMinutesChange: vi.fn(),
-    prStaleDays: s.prStaleDays,
-    onPrStaleDaysChange: vi.fn(),
-    prRepos: [],
-    onPrIgnoredReposChange: vi.fn(),
-    prReviewPrompt: s.prReviewPrompt,
-    onPrReviewPromptChange: vi.fn(),
-    prCheckout: s.prCheckout,
-    onPrCheckoutChange: vi.fn(),
-    prReviewModel: null,
-    onPrReviewModelChange: vi.fn(),
-    prReviewEffort: null,
-    onPrReviewEffortChange: vi.fn(),
     ...overrides
   }
   render(<SettingsPane {...props} />)

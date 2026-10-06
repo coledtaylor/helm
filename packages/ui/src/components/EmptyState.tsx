@@ -4,7 +4,7 @@ import { cn } from '../lib/cn'
 export interface EmptyStateProps {
   /** The destination's own icon, 18px. */
   icon: ReactNode
-  /** What is empty, in a few words: "No pull requests open". */
+  /** What is empty, in a few words: "No sessions running". */
   title: string
   /** One sentence on what fills it, or why it is empty. */
   children?: ReactNode | undefined

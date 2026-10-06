@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import type { PortRow, ProcessRow, ProcessSnapshot, SessionRecord } from '@helm/core'
+import { createProfile, type PortRow, type ProcessRow, type ProcessSnapshot, type SessionRecord } from '@helm/core'
 import { bearerOf, callTool, readMcpConfig, rpc, type ToolAnswer } from '../../test/mcp-client'
 import { createWorld, disposeWorld, fakeClaudeLogs, type FakeClaudeLog, type World } from '../../test/world'
 import type { ActivityService } from './activity'
@@ -54,7 +54,7 @@ describe('the session tools', () => {
 
   let alpha: Hosted
   let beta: Hosted
-  let review: Hosted
+  let prompted: Hosted
   const openingPrompt = `opening-prompt-${randomUUID()}`
   const firstMessage = `first-message-${randomUUID()}`
   const outside = { pid: process.pid, sessionId: randomUUID() }
@@ -182,25 +182,28 @@ describe('the session tools', () => {
       })
     )
 
+    // A profile with an opening prompt, so one session's argv carries a prompt
+    // the tools must never repeat to another.
+    const profile = createProfile(services.store, {
+      name: 'prompted',
+      root: world.projects.alpha,
+      overlays: [],
+      access: [],
+      model: null,
+      effort: null,
+      permissionMode: null,
+      agent: null,
+      mcp: [],
+      openingPrompt,
+      pinnedOrder: null
+    })
     const grid = { cols: 100, rows: 30 }
     const records = await Promise.all([
       host.start({ cwd: world.projects.alpha, projectPath: world.projects.alpha, name: 'alpha', ...grid }),
       host.start({ cwd: world.projects.beta, projectPath: world.projects.beta, name: 'beta', ...grid }),
-      host.review(
-        {
-          repoPath: world.projects.alpha,
-          slug: 'helm-tests/alpha',
-          number: 7,
-          prompt: openingPrompt,
-          model: null,
-          effort: null,
-          checkedOut: null,
-          warnings: []
-        },
-        grid
-      )
+      host.launchProfile({ profileId: profile.id, ...grid }).then((launched) => launched.session)
     ])
-    ;[alpha, beta, review] = await Promise.all([hosted(records[0]), hosted(records[1]), hosted(records[2])])
+    ;[alpha, beta, prompted] = await Promise.all([hosted(records[0]), hosted(records[1]), hosted(records[2])])
     await Promise.all(records.map(ready))
 
     // Beta's first message, which is now in its transcript and in history.jsonl.
@@ -233,7 +236,7 @@ describe('the session tools', () => {
   })
 
   it('hands each session a token of its own, in a file under the data directory, and writes nothing of the user’s', () => {
-    for (const session of [alpha, beta, review]) {
+    for (const session of [alpha, beta, prompted]) {
       expect(resolve(session.configFile).toLowerCase().startsWith(`${resolve(world.dataDir).toLowerCase()}${sep}`)).toBe(
         true
       )
@@ -246,7 +249,7 @@ describe('the session tools', () => {
         expect(server.headers).toEqual({ Authorization: `Bearer ${session.token}` })
       }
     }
-    expect(new Set([alpha.token, beta.token, review.token]).size).toBe(3)
+    expect(new Set([alpha.token, beta.token, prompted.token]).size).toBe(3)
 
     expect(claudeJson.toString('utf8')).toContain('hasCompletedOnboarding')
     expect(readFileSync(join(world.home, '.claude.json'))).toEqual(claudeJson)
@@ -265,7 +268,7 @@ describe('the session tools', () => {
     const listing = (await list(alpha)).text
     expect(listing).toContain('4 Claude Code sessions running on this machine, 3 of them hosted by Helm.')
 
-    for (const session of [alpha, beta, review]) {
+    for (const session of [alpha, beta, prompted]) {
       const block = blockFor(listing, session.run.pid)
       expect(block).toContain(`working in   ${session.record.cwd}`)
       expect(block).toMatch(/\n {4}status {7}\S/)
@@ -347,9 +350,9 @@ describe('the session tools', () => {
 
   it('never answers with any part of another session’s conversation or launch', async () => {
     // What is planted, checked first: an empty expectation would pass on nothing.
-    expect(review.run.argv).toContain(openingPrompt)
+    expect(prompted.run.argv).toContain(openingPrompt)
     expect(readFileSync(join(world.claudeDir, 'history.jsonl'), 'utf8')).toContain(firstMessage)
-    for (const session of [alpha, beta, review]) {
+    for (const session of [alpha, beta, prompted]) {
       expect(session.run.sessionId).toBe(session.record.claudeSessionId)
       expect(session.record.argv).toContain(session.configFile)
     }
@@ -362,7 +365,7 @@ describe('the session tools', () => {
       outside.sessionId,
       '--mcp-config',
       '--session-id',
-      ...[alpha, beta, review].flatMap((session) => [
+      ...[alpha, beta, prompted].flatMap((session) => [
         session.token,
         session.configFile,
         session.run.sessionId
@@ -370,8 +373,8 @@ describe('the session tools', () => {
     ]
 
     const answers: string[] = []
-    const pids = [alpha, beta, review].map((session) => session.run.pid).concat(outside.pid)
-    for (const caller of [alpha, beta, review]) {
+    const pids = [alpha, beta, prompted].map((session) => session.run.pid).concat(outside.pid)
+    for (const caller of [alpha, beta, prompted]) {
       answers.push((await list(caller)).text, (await detail(caller)).text)
       for (const pid of pids) answers.push((await detail(caller, { pid })).text)
     }
@@ -382,20 +385,20 @@ describe('the session tools', () => {
   })
 
   it('forgets a session that has ended: no list entry, no detail, no token and no config file', async () => {
-    host.input(review.record.id, '/exit\r')
-    await vi.waitFor(() => expect(host.list().find((s) => s.id === review.record.id)?.status).toBe('exited'), {
+    host.input(prompted.record.id, '/exit\r')
+    await vi.waitFor(() => expect(host.list().find((s) => s.id === prompted.record.id)?.status).toBe('exited'), {
       timeout: 10_000
     })
 
-    expect(existsSync(review.configFile)).toBe(false)
-    expect((await rpc(review.url, review.token, 'tools/list')).status).toBe(401)
+    expect(existsSync(prompted.configFile)).toBe(false)
+    expect((await rpc(prompted.url, prompted.token, 'tools/list')).status).toBe(401)
 
     const listing = (await list(alpha)).text
     expect(listing).toContain('3 Claude Code sessions running on this machine, 2 of them hosted by Helm.')
-    expect(blockFor(listing, review.run.pid)).toBe('')
-    const gone = await detail(alpha, { pid: review.run.pid })
+    expect(blockFor(listing, prompted.run.pid)).toBe('')
+    const gone = await detail(alpha, { pid: prompted.run.pid })
     expect(gone.isError).toBe(true)
-    expect(gone.text.split('\n')[0]).toBe(`No Claude Code session with pid ${String(review.run.pid)} is running on this machine.`)
+    expect(gone.text.split('\n')[0]).toBe(`No Claude Code session with pid ${String(prompted.run.pid)} is running on this machine.`)
   })
 
   it('launches with the browser tools only while sessionMcp is off, and with no --mcp-config once both are off', async () => {

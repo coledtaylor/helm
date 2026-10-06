@@ -18,7 +18,6 @@ export type SettingsSectionId =
   | 'workspace'
   | 'files'
   | 'browser'
-  | 'github'
   | 'plugins'
   | 'secrets'
   | 'archive'
@@ -46,7 +45,6 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'workspace', label: 'Workspace', hint: 'The folders Helm scans, and what a new harness is written from.' },
   { id: 'files', label: 'Files' },
   { id: 'browser', label: 'Browser' },
-  { id: 'github', label: 'GitHub' },
   { id: 'plugins', label: 'Plugins' },
   { id: 'secrets', label: 'Secrets' },
   { id: 'archive', label: 'Archive' },

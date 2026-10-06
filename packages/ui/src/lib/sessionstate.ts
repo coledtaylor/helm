@@ -35,7 +35,7 @@ export const SESSION_STATE_DOT: Record<SessionState, string> = {
   ended: 'bg-fg-subtle',
   failed: 'bg-danger',
   // The one live state, and the accent is Helm's tone for the thing currently
-  // happening - the same reading a merged pull request gets. A 6px dot is a
+  // happening. A 6px dot is a
   // mark, not an area fill, so "the accent never floods" is intact.
   busy: 'bg-accent',
   // Blocked on you. `warn` is the system's attention tone and nothing else on

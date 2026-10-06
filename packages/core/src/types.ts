@@ -15,10 +15,6 @@
 import type { UsageDisplayMode } from './usage/shape'
 // The same, for `CreateConfigRequest` below.
 import type { CreatableKind } from './config/names'
-// The same, for a value: `DEFAULT_SETTINGS` reads the polling default off it.
-import { PR_POLL_MINUTES, PR_STALE_DAYS, type PrCheckoutMode } from './github/types'
-// And for the review template's default, which is the prompt module's to state.
-import { DEFAULT_PR_REVIEW_PROMPT } from './github/prompt'
 // The same again: `AppSettings.browserReach` names it.
 import type { BrowserReach } from './browser/reach'
 import type { SavedPaneLayout } from './layout/panes'
@@ -27,7 +23,7 @@ import type { PluginParams, PluginRailId } from './plugins/tabs'
 
 /**
  * The browser pane's URL rules, re-exported here rather than from the package
- * root for the reason `PR_CHECKOUT_MODES` and `USAGE_DISPLAY_MODES` are: the
+ * root for the reason `USAGE_DISPLAY_MODES` is: the
  * address bar and the settings pane are *renderer* code, and a value import
  * from `@helm/core` reaches the filesystem through `launch/` and `store/`,
  * which fails at rollup rather than at typecheck. These are pure by
@@ -167,89 +163,6 @@ export {
   type ModelPrice,
   type TokenPrice
 } from './usage/prices'
-/**
- * The pull-request vocabulary, re-exported for the same reason: the Pulls pane
- * and the sidebar are renderer code, and `github/types.ts` is pure by
- * construction while the rest of `github/` spawns a subprocess.
- */
-export {
-  isRepoIgnored,
-  isRepoSlug,
-  withRepoIgnored,
-  PR_CHECKOUT_MODES,
-  PR_IGNORED_REPOS_MAX,
-  PR_POLL_MINUTES,
-  PR_STALE_DAYS,
-  type GhProblem,
-  type GhProblemKind,
-  type GhStatus,
-  type IgnoredRepo,
-  type LaunchedReviewPlan,
-  type PrCheckoutMode,
-  type PullChecks,
-  type PullComment,
-  type PullCommit,
-  type PullConversationEntry,
-  type PullConversationItem,
-  type PullDetail,
-  type PullDetailView,
-  type PullDiff,
-  type PullDiffHunk,
-  type PullDiffLine,
-  type PullFile,
-  type PullFileDiff,
-  type PullFileStatus,
-  type PullFileView,
-  type PullPatch,
-  type PullRepo,
-  type PullReview,
-  type PullReviewDecision,
-  type PullReviewThread,
-  type PullSummary,
-  type PullsSnapshot,
-  type PullThreadComment,
-  type PullThreadEntry,
-  type RenderedPullEntry,
-  type RenderedPullItem,
-  type RenderedPullThread,
-  type RenderedThreadComment,
-  type RepoRemote
-} from './github/types'
-/**
- * The per-file line ceiling, re-exported because the pane that stops painting
- * at it is the pane that has to name it: the sentence under a cut-short file
- * says how many lines it kept, and a renderer holding its own copy of the
- * number would eventually say a number the parser does not use. Pure - `diff.ts`
- * imports nothing but types.
- */
-export { MAX_FILE_LINES } from './github/diff'
-/**
- * The thread-to-diff-row join, re-exported for the same reason and under the
- * same guarantee: `diff.ts` is pure and imports nothing but types, so this
- * reaches the browser bundle without dragging `launch/` or `store/` into it.
- *
- * In core rather than in the pane because it is the one part of the Files
- * view's thread markers that is a *decision* rather than a rendering - what to
- * do when the patch and the threads, fetched separately, disagree about where a
- * line is - and a decision belongs where it can be unit-tested.
- */
-export { anchorThreadsToFile } from './github/diff'
-export type { AnchoredThreads, ThreadLooseReason, ThreadPosition } from './github/diff'
-/**
- * The review prompt's template renderer, re-exported for the same reason again:
- * the detail pane's disclosure sentence names the exact prompt the button will
- * run, so it renders the template itself. The prompt that is actually launched
- * is composed in the main process - see `desktop/src/main/pulls.ts` - and this
- * side never sends one.
- */
-export {
-  renderPullPrompt,
-  DEFAULT_PR_REVIEW_PROMPT,
-  PR_PROMPT_PLACEHOLDERS,
-  PR_REVIEW_PROMPT_MAX_LENGTH,
-  type PullPromptFacts,
-  type PullPromptPlaceholder
-} from './github/prompt'
 
 /**
  * What the editors do when you press a key.
@@ -1221,7 +1134,7 @@ export const PROJECT_SHELL_HEIGHT_PCT = { min: 10, max: 50, default: 30 } as con
  * `railHidden` is validated against it, so no write can hide the one way back
  * to un-hiding everything else. The ids are the rail's own (`data-rail`).
  */
-export const RAIL_DESTINATIONS = ['sessions', 'profiles', 'history', 'files', 'browser', 'pulls', 'config'] as const
+export const RAIL_DESTINATIONS = ['sessions', 'profiles', 'history', 'files', 'browser', 'config'] as const
 
 export type RailDestination = (typeof RAIL_DESTINATIONS)[number]
 
@@ -1286,8 +1199,6 @@ export type WorkspaceTab =
   | { kind: 'project'; path: string }
   | { kind: 'history' }
   | { kind: 'sessions' }
-  | { kind: 'pulls' }
-  | { kind: 'pr'; repoPath: string; number: number }
   | { kind: 'config' }
   | { kind: 'settings' }
   /**
@@ -1312,7 +1223,7 @@ export const WORKSPACE_TABS_MAX = 100
  * How many projects the pinned list may name.
  *
  * A ceiling on a value that is JSON in one row and is rewritten whole on every
- * toggle, exactly as `PR_IGNORED_REPOS_MAX` is - not a statement about how many
+ * toggle - not a statement about how many
  * anybody pins. A list past a screenful has stopped being a shortlist and the
  * tree is what it wanted, but that is the user's call and not a validator's.
  */
@@ -1573,110 +1484,6 @@ export interface AppSettings {
    * ceiling is adjustable and the eviction rule is not.
    */
   transcriptArchiveMaxBytes: number
-  /**
-   * A `gh` executable the user picked by hand, for the machine where it is not
-   * on PATH and not in the usual install directory. Null means "find it".
-   *
-   * A path, never a credential - the exact parity with `claudePath`, and the
-   * same hard rule behind it: Helm locates the CLI and runs it, and the GitHub
-   * sign-in stays entirely between the user and `gh auth login`.
-   */
-  ghPath: string | null
-  /**
-   * How often Helm sweeps the discovered repositories for open pull requests,
-   * in minutes. `0` is off - manual and focus refreshes still work.
-   *
-   * On by default, which is a deliberate change to Helm's network posture and
-   * not an oversight: periodic scanning is what the surface is for. Helm itself
-   * still makes no direct request; `gh` does, on the user's own token, on this
-   * schedule. Bounded by `PR_POLL_MINUTES`.
-   */
-  prPollMinutes: number
-  /**
-   * How long a pull request may go untouched before the Pulls pane files it
-   * under STALE rather than ACTIVE, in days. `0` is off - one flat Open list,
-   * exactly as that section rendered before the split existed.
-   *
-   * A **preference** rather than a constant, and it is the only piece of that
-   * pane's triage controls that is one: where a pull request stops being work
-   * in flight is a judgement about the user's own working rhythm, and a week's
-   * silence on a repository with one contributor means something different from
-   * a week's silence on a busy one. The filter and the grouping beside it are
-   * the opposite - reactions to a list that changes hourly - so they live in
-   * the pane's own state and deliberately not here. Bounded by `PR_STALE_DAYS`,
-   * whose comment argues the default.
-   */
-  prStaleDays: number
-  /**
-   * Repositories whose pull requests Helm does not fetch or show, as
-   * `owner/name` slugs.
-   *
-   * A denylist rather than an allowlist, because a repository appearing on this
-   * surface is what discovery already means - a new clone should show up
-   * without anybody enrolling it, and going quiet should take a deliberate act.
-   *
-   * Keyed by **slug**, not by directory. The slug is what the surface fetches
-   * by (one `gh` per distinct remote, however many checkouts of it are on the
-   * machine), it is what the user is actually choosing about, and it survives a
-   * repository being re-cloned somewhere else. Matching is case-insensitive -
-   * see `isRepoIgnored`.
-   *
-   * An ignored repository is skipped **before the fetch**, so this is a smaller
-   * network posture rather than a filter over the same calls. Its cached rows
-   * are left in the database untouched: they are true facts about the last time
-   * anybody looked, and deleting them would make un-ignoring a repository show
-   * an empty list rather than a stale one with its age on it - which is the
-   * opposite of how the rest of this surface degrades.
-   */
-  prIgnoredRepos: string[]
-  /**
-   * The opening prompt a "Review with Claude" launch starts its session with.
-   *
-   * A template - `{number} {url} {branch} {title} {slug}` are substituted and
-   * anything else in braces is left as written. Rendered in the **main
-   * process** from the cached pull request; the window renders the same
-   * template only to show what the button will run.
-   *
-   * `{branch}` names `headRefName`, which on a pull request opened from a fork
-   * does not exist in the local checkout unless `prCheckout` is `'checkout'`.
-   * The default uses `{number}` alone for exactly that reason.
-   */
-  prReviewPrompt: string
-  /**
-   * Whether a review launch checks the pull request out first.
-   *
-   * `'none'` reviews from the pull request's refs and never touches the working
-   * tree. `'checkout'` runs `gh pr checkout <n>` in the repository before
-   * spawning, and is refused with a count of the changed files when the tree is
-   * dirty - Helm does not stash. See `PR_CHECKOUT_MODES`.
-   */
-  prCheckout: PrCheckoutMode
-  /**
-   * The model a review launch runs on; null is the CLI's own default.
-   *
-   * A setting rather than a fixed choice because a review is the one launch
-   * Helm composes on the user's behalf, and reading a diff is not the task they
-   * necessarily want their default model spent on - in either direction. Null
-   * passes **no** `--model` at all rather than passing a name Helm decided,
-   * which keeps a Helm nobody has configured launching exactly what `claude`
-   * would have launched.
-   *
-   * Not validated against a list of names. The CLI's aliases and its full model
-   * ids both move faster than a desktop app's release does, and a setting that
-   * refused `claude-opus-5` on the day it shipped would be a setting the user
-   * cannot use for exactly as long as it takes Helm to catch up. What is
-   * enforced is the shape - one bare token, no spaces or dashes to lead with -
-   * because this becomes an argv word.
-   */
-  prReviewModel: string | null
-  /**
-   * The reasoning effort a review launch runs at; null is the CLI's default.
-   *
-   * Bounded by `EFFORT_LEVELS`, unlike the model: these five are the CLI's own
-   * flag values rather than a naming scheme that moves, and a select is a better
-   * control than a text field for a closed set of five.
-   */
-  prReviewEffort: EffortLevel | null
 
   /**
    * Whether Helm asks GitHub, once per launch, if there is a newer release.
@@ -1857,14 +1664,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   filesWrap: false,
   railHidden: [],
   transcriptArchiveMaxBytes: TRANSCRIPT_ARCHIVE_BYTES.default,
-  ghPath: null,
-  prPollMinutes: PR_POLL_MINUTES.default,
-  prStaleDays: PR_STALE_DAYS.default,
-  prIgnoredRepos: [],
-  prReviewPrompt: DEFAULT_PR_REVIEW_PROMPT,
-  prCheckout: 'none',
-  prReviewModel: null,
-  prReviewEffort: null,
   updateCheck: true,
   lastUpdateCheckAt: null,
   // `web` rather than `local`, and it is a decision. The pane is framed as a

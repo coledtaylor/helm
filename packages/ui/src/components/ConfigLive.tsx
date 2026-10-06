@@ -11,8 +11,7 @@ import { cn } from '../lib/cn'
  * Helm cannot speak for gets no mark at all rather than a confident grey one.
  *
  * The chip follows DESIGN.md's state-chip rule: a hairline outline in the
- * tone's own colour, never a fill. It is the second user of that rule after the
- * pull request's open/draft/merged/closed, and it earns it for the same reason
+ * tone's own colour, never a fill. It earns it for the reason that rule gives
  * - one word carrying the whole status of the thing on screen.
  */
 

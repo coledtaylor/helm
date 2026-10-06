@@ -178,8 +178,9 @@ Profiles live in SQLite, exportable to YAML so they travel with a harness.
 Three of them are the product - the launcher, the config console and the content
 viewer - and the terminal is what they all point at. Settings (4.5) is the app's
 own, added late because every surface above it had a setting with nowhere to
-live. Pull requests (4.6) is the first surface added after v1, and the first
-that shows something that is not on this machine.
+live. Pull requests (4.6) was the first surface added after v1, and the first
+that showed something that is not on this machine; it has since been removed in
+favour of a plugin.
 
 ### 4.1 Launcher
 
@@ -758,6 +759,10 @@ the theme toggle, laid out as one scrolling page of titled groups:
 
 ### 4.6 Pull requests
 
+> **Removed (2026-10-05): taken out of Helm in favour of a plugin.** Helm no
+> longer runs `gh`, caches pull requests or has a GitHub settings group. What
+> follows is the record of what was built and why.
+
 The first surface whose subject is not on this machine: the open pull requests
 of every scanned repository whose `origin` is on github.com, a GitHub-shaped
 detail tab for any one of them, and a button that starts a Claude Code session
@@ -1109,10 +1114,9 @@ option open and is what makes the app genuinely portable.
 ### Network posture
 
 **Helm contacts nothing on its own initiative except the update check.
-Everything else on the network happens because you asked for it: the
-pull-request surface goes through your own `gh`, the browser pane fetches the
-page you navigate to, and a plugin you added reaches the hosts its manifest
-names.**
+Everything else on the network happens because you asked for it: the browser
+pane fetches the page you navigate to, and a plugin you added reaches the hosts
+its manifest names.**
 
 That replaced "Helm's own process opens exactly one outbound connection"
 (decided 2026-08-15). The browser pane made the old claim false, and the answer
@@ -1128,6 +1132,9 @@ so leaving the sentence alone would have been the old false claim again. The
 clause names the limit rather than hiding the fact - the user added the
 plugin, and its pages reach only what its manifest lists.
 
+Removing the pull-request surface (2026-10-05, see 4.6) took out the clause
+about the user's own `gh`: Helm no longer runs it.
+
 - **The update check** reaches the GitHub releases API for a version number and
   a URL. It happens two ways and no
   others, and never on a timer - at launch, at most once a day
@@ -1139,19 +1146,10 @@ plugin, and its pages reach only what its manifest lists.
   whole outcome is a version number and a line in the status bar. See
   [PACKAGING.md](PACKAGING.md) for why there is no auto-updater; every reason is
   about replacing the installed app, which this does not do.
-- **The pull-request surface reaches GitHub through the user's own `gh` CLI**,
-  on a schedule the user sets - `prPollMinutes`, five minutes by default, `0` to
-  turn it off - plus a fetch when a pull request is opened and one when a review
-  checks a branch out. Bytes therefore leave the machine without `update:check`
-  being invoked, and Helm opens no socket of its own for any of it.
 - **No Claude or GitHub credential is stored, read or handled.** Claude's sign-in is
-  detected from the *existence* of an artefact, and GitHub's from what `gh`
-  prints when it is asked to do something - its `auth status` exit code as an
-  opinion, and its fetch failures as the verdict that overrules it. Nothing
-  opens either. A remote URL carrying an embedded token is a credential too, and
-  it is stripped before anything is written to the database. The one secret
-  store Helm has is the plugins' (below), and it holds only what the user typed
-  into it.
+  detected from the *existence* of an artefact, and nothing opens it. The one
+  secret store Helm has is the plugins' (below), and it holds only what the user
+  typed into it.
 - **A plugin you added reaches the hosts its manifest names**, and its pages
   reach nothing else. A plugin page has no network of its own
   (`connect-src 'none'`); `helm.fetch` sends its requests from the main
@@ -1192,8 +1190,8 @@ plugin, and its pages reach only what its manifest lists.
   reach further than the pane it is driving. The session tools are read-only and
   return **no part of any session's conversation**: no transcript, no prompt, no
   output, and not the argv a session was launched with, which carries both a
-  review session's opening prompt and the path to that session's own bearer
-  token. See 4.7 and CLAUDE.md's rules.
+  session's opening prompt and the path to that session's own bearer token. See
+  4.7 and CLAUDE.md's rules.
 - **The browser partition holds credentials, and Helm reads none of them.**
   It holds whatever cookies the sites you visit set, exactly as a browser
   profile does: nothing in the app opens that cookie jar, and the only thing

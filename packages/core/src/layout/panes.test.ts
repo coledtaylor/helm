@@ -44,7 +44,7 @@ const browser = (id: number): PaneRef => ({ kind: 'browser', id })
 const HISTORY: PaneRef = { kind: 'history' }
 const SETTINGS: PaneRef = { kind: 'settings' }
 const CONFIG: PaneRef = { kind: 'config' }
-const PULLS: PaneRef = { kind: 'pulls' }
+const SESSIONS: PaneRef = { kind: 'sessions' }
 const plugin = (tab: string, params: Record<string, string | number | boolean> = {}, title: string | null = null): PaneRef => ({
   kind: 'plugin',
   plugin: 'sample',
@@ -93,7 +93,6 @@ describe('paneId', () => {
   it('keeps the shapes the drivers address tabs by', () => {
     expect(paneId(session(12))).toBe('session:12')
     expect(paneId(project('C:\\work\\a#b:c'))).toBe('project:C:\\work\\a#b:c')
-    expect(paneId({ kind: 'pr', repoPath: 'C:\\r', number: 7 })).toBe('pr:C:\\r#7')
     expect(paneId(browser(3))).toBe('browser:3')
     expect(paneId(HISTORY)).toBe('history')
   })
@@ -316,8 +315,8 @@ describe('sendBeside', () => {
   })
 
   it('goes to the pane on the right of the middle one of three', () => {
-    const layout = layoutOf(row([g(HISTORY), g(SETTINGS, PULLS), g(CONFIG)]), 1)
-    expect(shape(sendBeside(layout))).toEqual([' *history', ' *settings', '>config *pulls'])
+    const layout = layoutOf(row([g(HISTORY), g(SETTINGS, SESSIONS), g(CONFIG)]), 1)
+    expect(shape(sendBeside(layout))).toEqual([' *history', ' *settings', '>config *sessions'])
   })
 
   it('does nothing to a lone tab in a lone pane', () => {
@@ -443,7 +442,7 @@ describe('reconcile', () => {
 
 describe('cycleTab', () => {
   it('walks every group in reading order as one ring and takes the focus with it', () => {
-    const layout = layoutOf(row([g(HISTORY, SETTINGS), column([g(CONFIG), g(PULLS)])]), 0)
+    const layout = layoutOf(row([g(HISTORY, SETTINGS), column([g(CONFIG), g(SESSIONS)])]), 0)
     const steps = [1, 1, 1, 1] as const
     const seen = steps.reduce<PaneLayout[]>((acc, step) => [...acc, cycleTab(acc.at(-1)!, step)], [
       activateTab(layout, 'history')
@@ -452,10 +451,10 @@ describe('cycleTab', () => {
       'history',
       'settings',
       'config',
-      'pulls',
+      'sessions',
       'history'
     ])
-    expect(paneId(activeRef(cycleTab(seen[0]!, -1).groups[2]!)!)).toBe('pulls')
+    expect(paneId(activeRef(cycleTab(seen[0]!, -1).groups[2]!)!)).toBe('sessions')
   })
 
   it('does nothing with fewer than two tabs', () => {
@@ -466,9 +465,9 @@ describe('cycleTab', () => {
 
 describe('visibleTabs and findTab', () => {
   it('reports the front tab of each group and where any tab is, by group id', () => {
-    const layout = layoutOf(row([g(HISTORY, SETTINGS), column([g(CONFIG), g(PULLS)])]))
-    expect(visibleTabs(layout).map(paneId)).toEqual(['settings', 'config', 'pulls'])
-    expect(findTab(layout, 'pulls')).toEqual({ group: 3, index: 0 })
+    const layout = layoutOf(row([g(HISTORY, SETTINGS), column([g(CONFIG), g(SESSIONS)])]))
+    expect(visibleTabs(layout).map(paneId)).toEqual(['settings', 'config', 'sessions'])
+    expect(findTab(layout, 'sessions')).toEqual({ group: 3, index: 0 })
     expect(findTab(layout, 'history')).toEqual({ group: 1, index: 0 })
     expect(findTab(layout, 'nothing')).toBeNull()
   })
@@ -535,7 +534,7 @@ describe('toSaved and fromSaved', () => {
 
   it('reads back what it wrote, and writes that again unchanged', () => {
     const layout = layoutOf(
-      row([g(HISTORY, PULLS), column([g(SETTINGS), row([g(CONFIG), g(project('C:\\b'))], [0.3, 0.7])], [0.45, 0.55])], [0.37, 0.63]),
+      row([g(HISTORY, SESSIONS), column([g(SETTINGS), row([g(CONFIG), g(project('C:\\b'))], [0.3, 0.7])], [0.45, 0.55])], [0.37, 0.63]),
       3
     )
     const saved = toSaved(layout)
@@ -568,9 +567,14 @@ describe('toSaved and fromSaved', () => {
     expect(sizes(layout.root)).toEqual([[0.5, 0.5]])
   })
 
-  it('drops a tab kind an older build wrote and keeps the rest of its group', () => {
+  it('drops tab kinds an older build wrote and keeps the rest of its group', () => {
+    const retired = [
+      { kind: 'content' },
+      { kind: 'pulls' },
+      { kind: 'pr', repoPath: 'C:\\r', number: 7 }
+    ] as unknown as SavedPane[]
     const layout = fromSaved({
-      root: { panes: [HISTORY, { kind: 'content' } as unknown as SavedPane, SETTINGS], activeId: 'content' },
+      root: { panes: [HISTORY, ...retired, SETTINGS], activeId: 'pulls' },
       focused: 0
     })
     expect(shape(layout)).toEqual(['>history *settings'])

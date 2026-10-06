@@ -37,9 +37,8 @@ vitest runs three projects (`vitest.config.ts`):
 
 Tests live beside the code as `*.test.ts` or `*.test.tsx`. Logic tangled with
 Electron or React moves into a module that can be tested on its own, as
-`core/layout/panes.ts` was for the pane layout and `ui/lib/pullTriage.ts` for
-the pull-request triage. The tier runs in seconds and touches no network, no
-real `~/.claude` and no real `claude` or `gh`.
+`core/layout/panes.ts` was for the pane layout. The tier runs in seconds and
+touches no network, no real `~/.claude` and no real `claude`.
 
 Helpers for the desktop project live in `packages/desktop/test/`:
 
@@ -49,7 +48,6 @@ Helpers for the desktop project live in `packages/desktop/test/`:
 | `electron.ts` | the `electron` module, with windows, dialogs and the network inert |
 | `browser-electron.ts` | WebContentsView, its web contents and the browser partition, whose events the test raises |
 | `hosted.ts` | a session host running in a world |
-| `gh-fixture.ts` | the fake `gh` serving fixtures, and a PATH with no real `gh` on it |
 | `history-fixture.ts` | `history.jsonl` and transcripts written as the CLI writes them |
 | `overlay-world.ts` | a harness with overlays, and shims held by live or exited processes |
 | `mcp-client.ts` | a minimal MCP client for the agent endpoint |
@@ -87,7 +85,6 @@ tier above, so keep this one small.
 | `profiles` | a profile made in the form starts with its overlay when saved |
 | `launcher` | Ctrl+N, a folder typed, a profile and mode picked there; a conversation reopened in the pane beside; a new harness and a new profile each end in a session |
 | `restore` | the main process killed outright, then started again: the sessions come back in their panes, folders, profile and mode, a `/clear`ed one in the conversation it moved to; not now reopens nothing and is not asked again; ticked to resume without asking, the next crash is put back unasked |
-| `pulls` | a project's pull requests, one opened, and a review started |
 | `config` | an edit saved to disk and undone byte for byte |
 | `content` | a wikilink followed; an HTML artifact framed with no reach |
 | `files` | a file opened from the tree beside its session, its changed lines counted, its line numbers to the bottom, and the view following the session's next edit; Ctrl+P, and the hand-offs to VS Code, Explorer and the clipboard |
@@ -97,7 +94,7 @@ tier above, so keep this one small.
 
 - **Each test gets a world** (`test/world.ts`): a temporary root with a space in
   its path, holding a home directory with its own `.claude`, the fake `claude`
-  and the fake `gh` as `.cmd` shims, two git projects, and the app's data
+  as a `.cmd` shim, two git projects, and the app's data
   directory (`PORTABLE_EXECUTABLE_DIR`). Settings are seeded through the app's
   own store before it starts: the projects folder scanned, the fake `claude`
   chosen, first run done, the update check off. Nothing reaches the network, a

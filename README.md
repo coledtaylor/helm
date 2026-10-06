@@ -185,10 +185,9 @@ has heard of, and a Release notes link that works offline, because it is a link
 rather than a request.
 
 **Helm contacts nothing on its own initiative except the update check.
-Everything else on the network happens because you asked for it: the
-pull-request surface goes through your own `gh`, the browser pane fetches the
-page you navigate to, and a plugin you added reaches the hosts its manifest
-names.** There is no telemetry, no crash reporting, no
+Everything else on the network happens because you asked for it: the browser
+pane fetches the page you navigate to, and a plugin you added reaches the hosts
+its manifest names.** There is no telemetry, no crash reporting, no
 fonts and no CDN, and with the tick off Helm asks nothing at all unless you
 press something.
 
@@ -209,15 +208,6 @@ tools may go: they can never reach further than the pane itself may, and can be
 held to this machine while the pane is not. The session tools are read-only:
 they say what is running and give an agent no way to affect it, and they never
 return any part of another session's conversation.
-
-The pull-request pane reaches GitHub too, but through **your own `gh` CLI**, on
-a schedule you set - every five minutes by default, and `0` in Settings turns it
-off entirely. Helm opens no socket of its own for it and stores no GitHub
-credential: `gh` owns the token, every fetch runs on it, and the only thing Helm
-reads about your sign-in is what `gh` itself prints when it runs. When a fetch
-fails, Helm tells you whether GitHub refused your token or could not be reached
-at all, and it only suggests `gh auth login` for the first - a dropped
-connection is not something a new sign-in fixes.
 
 A **plugin** you add reaches the network on the terms its manifest states.
 Its pages have none of their own: every request goes through Helm, to the
@@ -285,15 +275,14 @@ pnpm dist:win          # portable exe + NSIS installer
 ```
 
 `pnpm dev` keeps its data in `%LOCALAPPDATA%\Helm\dev`: its own database - a
-copy of the real one, taken at launch - its own Chromium profile, its own
-overlay shims, and a synthetic `gh` that answers offline so the pull-request
-pane has something to show without the network. It can therefore run beside an
-installed Helm, and a second `pnpm dev` gets a directory of its own rather than
-failing on a held database. What it does **not** isolate is `~/.claude`:
-`CLAUDE_CONFIG_DIR` moves credentials too, and a dev build that cannot sign in
-cannot host a session. `pnpm dev:live` is the old behaviour, kept because it is
-the only way to see the real database in a dev build - it says so on the console
-at startup, and the status bar names the mode.
+copy of the real one, taken at launch - its own Chromium profile and its own
+overlay shims. It can therefore run beside an installed Helm, and a second
+`pnpm dev` gets a directory of its own rather than failing on a held database.
+What it does **not** isolate is `~/.claude`: `CLAUDE_CONFIG_DIR` moves
+credentials too, and a dev build that cannot sign in cannot host a session.
+`pnpm dev:live` is the old behaviour, kept because it is the only way to see the
+real database in a dev build - it says so on the console at startup, and the
+status bar names the mode.
 
 `pnpm check` and `pnpm test:e2e` run the tests, locally; CI builds and releases
 the app and runs none of them. [docs/TESTING.md](docs/TESTING.md) describes the

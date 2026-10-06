@@ -131,20 +131,18 @@ a body and a footer that belong to the same subject are separated by
 `.island-rule`s inside a single surface, not floated as three islands with
 gutters between them: the gutters buy nothing, cost two of them out of the
 reading width, and make the header read as a summary card sitting above some
-other pane's contents. The pull request tab is the worked example - header, view,
-review row - and it was three islands before this rule was written down.
+other pane's contents.
 
 **A page draws no island at all.** The pane it sits in is already one - its
-hairline, its surface, its tab strip - so every page (history, pull requests,
-config, content, settings, a project, the browser) is drawn on the pane's own
-surface, edge to edge. Its bar is a row under the tab strip with a hairline
-below it; a list beside its detail is split by a hairline on the list's right
-edge; a long page such as Settings or a project is sections under
-`.island-rule`s, each with its caps label, not a card per section. Cards stay
-for what is a thing in itself - a comment in a pull request, a theme to pick,
-a stat - never as the way a page groups its own parts. `lib/page.ts` holds the
-bar and the list edge. The one page that is still an island is the welcome
-page, because it stands in for a pane when there is none.
+hairline, its surface, its tab strip - so every page (history, config, content,
+settings, a project, the browser) is drawn on the pane's own surface, edge to
+edge. Its bar is a row under the tab strip with a hairline below it; a list
+beside its detail is split by a hairline on the list's right edge; a long page
+such as Settings or a project is sections under `.island-rule`s, each with its
+caps label, not a card per section. Cards stay for what is a thing in itself - a
+theme to pick, a stat - never as the way a page groups its own parts.
+`lib/page.ts` holds the bar and the list edge. The one page that is still an
+island is the welcome page, because it stands in for a pane when there is none.
 
 ### Shape
 
@@ -320,40 +318,26 @@ overrides the gate; keep it.
 - **Tags / badges**: pills - hairline `border-strong` outline for neutral
   ones, `bg-accent-soft text-accent-text` for scope/kind badges. No borders on
   chips at row density; tone carries them (see `Chip`).
-- **State chip**: one pill saying what something *is* rather than what it has -
-  a pull request's open/draft/merged/closed. A hairline outline in a semantic
-  tone at 40% alpha with the tone's own text colour, never a fill. This is the
-  one pill that is allowed a coloured border, because it is the only place a
-  single word carries the whole status of the thing on screen; everything else
-  at that density stays borderless.
+- **State chip**: one pill saying what something *is* rather than what it has.
+  A hairline outline in a semantic tone at 40% alpha with the tone's own text
+  colour, never a fill. This is the one pill that is allowed a coloured border,
+  because it is the only place a single word carries the whole status of the
+  thing on screen; everything else at that density stays borderless. It is
+  never a solid badge, for the reason the accent never floods: a filled badge is
+  the loudest object on the pane and a state is not the loudest fact about the
+  thing it describes.
 
-  GitHub paints these as solid green, grey, purple and red badges, and Helm
-  does not, for the reason the accent never floods: a filled badge is the
-  loudest object on the pane and a pull request's state is not the loudest fact
-  about it. The mapping `PullRequestPane` uses:
+  **The user is the config console's live state** (`ConfigLive`): whether a
+  file in a `.claude` tree reaches a session. Live is `success`, outranked or
+  partly outranked is `warn`, and read-but-empty or not-in-this-resolution take
+  no tone at all - neither is a problem, so neither gets a colour.
 
-  | state | tone | why |
-  | --- | --- | --- |
-  | open | `success` | the live one - the state anything can still be done to |
-  | draft | `border-strong` / `fg-muted` | not yet a claim about anything, so no tone at all |
-  | merged | `accent` (`accent-text`) | the outcome the app treats as the accent moment |
-  | closed | `danger` | the one negative outcome, and the only one |
-
-  Draft is checked *after* the closed states: a draft that was closed is
-  closed, and GitHub leaves the draft flag set on it.
-
-  **The second user is the config console's live state** (`ConfigLive`), and it
-  is the same rule with a different vocabulary: whether a file in a `.claude`
-  tree reaches a session. Live is `success`, outranked or partly outranked is
-  `warn`, and read-but-empty or not-in-this-resolution take no tone at all -
-  neither is a problem, so neither gets a colour.
-
-  It adds one thing the pull request's states do not need: **a state that paints
-  nothing**. Helm has no claim to make about most of what sits in a `.claude`
-  directory - a `rules/` file is a convention some instruction file may
-  reference, and nothing in the resolution can see that reference - so those get
-  no chip and no dot rather than a confident grey "not loaded". Same rule as the
-  usage figures: paint nothing rather than a wrong number.
+  It also has **a state that paints nothing**. Helm has no claim to make about
+  most of what sits in a `.claude` directory - a `rules/` file is a convention
+  some instruction file may reference, and nothing in the resolution can see
+  that reference - so those get no chip and no dot rather than a confident grey
+  "not loaded". Same rule as the usage figures: paint nothing rather than a
+  wrong number.
 
 ## 5. Patterns
 
@@ -377,11 +361,10 @@ overrides the gate; keep it.
   which belongs on the pane it opens.
 
   **A row carries no buttons: the row itself is the action.** Everything else
-  about the thing on it is inside it, one click away, on a pane with room to
-  say it. `PullRow` states this at its own call site and it is the rule for
-  every list here. A row with three glyphs down its right edge is a row whose
-  own click target is a guess, and it puts the rare actions in front of the
-  common one.
+  about the thing on it is inside it, one click away, on a pane with room to say
+  it. It is the rule for every list here. A row with three glyphs down its right
+  edge is a row whose own click target is a guess, and it puts the rare actions
+  in front of the common one.
 
   **The exception is a control that changes which list the row is in**, and it
   is an exception rather than a loophole because such a control is not one of
@@ -410,12 +393,11 @@ overrides the gate; keep it.
   action behind the rare one. The row's own click still opens the page.
 - **Source pills**: a list that draws rows from more than one place carries the
   place on the row, as a hairline `border-strong` pill at the head of the second
-  line - the repository on a pull request row is the one so far. This is the one
-  outlined pill allowed at row density, and it earns the exception by not being
-  one of the row's facts: everything else on that line is *about* the pull
-  request, and this says which list it came out of. It appears only where the
-  rows have been flattened out of their groups; under a heading that already
-  names the source it would be the heading said twice.
+  line. This is the one outlined pill allowed at row density, and it earns the
+  exception by not being one of the row's facts: everything else on that line is
+  *about* the thing on the row, and this says which list it came out of. It
+  appears only where the rows have been flattened out of their groups; under a
+  heading that already names the source it would be the heading said twice.
 - **Diff rows**: two line-number gutters, a sign column, then the line. The left
   gutter is where a line was and the right is where it is, so an added line has
   no left number and a removed one has no right. The row carries the tone as an
@@ -479,11 +461,10 @@ overrides the gate; keep it.
   outranked by nothing - a session either is blocked on you or is not.
 
   **`busy` takes the accent, and a 6px dot is a mark rather than a flood.** It
-  is the same reading merged gets on a pull request's state chip: the accent is
-  the tone for the thing the app is currently about. §1's rule bounds the accent
-  to "2px marks, outlines, checkbox fills and text", and a dot the size of a
-  checkbox's tick is on the near side of that line - it is also exactly the area
-  every other state on this tab already fills solid.
+  is the tone for the thing the app is currently about. §1's rule bounds the
+  accent to "2px marks, outlines, checkbox fills and text", and a dot the size
+  of a checkbox's tick is on the near side of that line - it is also exactly the
+  area every other state on this tab already fills solid.
 
   **`shell` is a ring, not a fifth colour.** "Done" and "done but something is
   still running" are two answers to one question - can I close this tab - so
@@ -569,8 +550,8 @@ overrides the gate; keep it.
 - **Page bars**: a page's own controls sit in one row directly under the tab
   strip, as tall as the strip, with a hairline below - scope switcher, what is
   being looked at, counts, the page's controls and a refresh (`PaneHeader` for
-  the config console, `PAGE_BAR` for history, pull
-  requests and the sessions pane). **No mark and no title**: the tab directly
+  the config console, `PAGE_BAR` for history and the
+  sessions pane). **No mark and no title**: the tab directly
   above already says "Config", and a second one a row down is what made the
   header read as a card on top of somebody else's pane. It **measures itself,
   not the window**: any of these may be one of two panes, so a `lg:` media
@@ -615,14 +596,11 @@ overrides the gate; keep it.
   beside it naming what will run, in 11px `fg-subtle` with the machine parts
   in mono - the program, the working directory, and the argv Helm supplies
   that the user did not type. `ProjectPane`'s "Runs `claude` with this folder
-  as the working directory" is the short case; the pull request pane's review
-  row is the long one, and it names the exact opening prompt because there
-  the argv is composed from a template the user can get wrong. Written down
-  once there were two of them. The sentence is not a tooltip and not a
-  confirmation: it is on screen *before* the button is pressed, which is also
-  what makes a mistyped placeholder visible rather than invisible.
+  as the working directory" is the short case. The sentence is not a tooltip
+  and not a confirmation: it is on screen *before* the button is pressed, which
+  is also what makes a wrong flag visible rather than invisible.
 
-  The launcher's sentence is the third, and the one that changes as you move:
+  The launcher's sentence is the long one, and the one that changes as you move:
   it describes the highlighted row, so arrowing to a conversation turns "Runs"
   into "Reopens", and picking a profile names what it composes and every flag
   it adds.
@@ -745,8 +723,8 @@ overrides the gate; keep it.
   went to Appearance, and Settings to the rail.
 - **The rail**: 44px of 34px icon buttons on the canvas, `rounded-well`,
   ordered by how often each is reached for rather than by feature - Sessions,
-  Profiles and session history, a hairline, then Files, the browser, pull
-  requests and Config, and Settings pinned to the foot. The order is a fact
+  Profiles and session history, a hairline, then Files, the browser and
+  Config, and Settings pinned to the foot. The order is a fact
   about how Helm is used, so it is fixed rather than learned: a rail that
   reordered itself would move under muscle memory.
 
@@ -769,14 +747,14 @@ overrides the gate; keep it.
   pointed at the tab's own row: a session's or a project page's tab brings
   Sessions with its row unfolded and scrolled to, a file's tab brings Files on
   its project with every folder down to it open, and Settings' tab brings its
-  sections. A tab with its list inside it - History, Pull requests, Config -
+  sections. A tab with its list inside it - History, Config -
   or none at all (Browser) leaves the sidebar alone. Only a click on a tab does
   this: focus moving between two panes does not, or a session beside a file
   would flip the sidebar on every click across. A maximized pane keeps the
   window, and the view still switches for when it is given back.
 
   **Settings is a view with a page.** The sidebar lists its sections (General,
-  Appearance, Terminal, Sessions, Workspace, Files, Browser, GitHub, Archive,
+  Appearance, Terminal, Sessions, Workspace, Files, Browser, Archive,
   Updates) as sidebar rows, and the pane shows the one picked - a 17px title,
   then its groups. A section that is one group is that group: the title is
   the page's and its hint is the line under it, with no caps heading of its
@@ -1127,7 +1105,7 @@ Don't:
 - No text weight past 500 (600 only on ≤11px caps labels)
 - No borders on chips at row density - tone carries them
 - No solid status badges - a state chip is a hairline outline in its tone, not
-  GitHub's filled green and purple
+  a filled badge
 - No theming foreign grounds - terminal and embedded documents keep their own
 - No raw hex in components; tokens only
 - No literal radius or gutter (`rounded-[5px]`, `gap-2` between islands) -

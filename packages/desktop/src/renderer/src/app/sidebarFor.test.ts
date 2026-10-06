@@ -12,8 +12,6 @@ describe('sidebarFor', () => {
       [{ kind: 'file', root: 'C:\\p', path: 'C:\\p\\a.ts' }, 'files'],
       [{ kind: 'settings' }, 'settings'],
       [{ kind: 'history' }, null],
-      [{ kind: 'pulls' }, null],
-      [{ kind: 'pr', repoPath: 'C:\\p', number: 1 }, null],
       [{ kind: 'config' }, null],
       [{ kind: 'browser', id: 1 }, null]
     ]

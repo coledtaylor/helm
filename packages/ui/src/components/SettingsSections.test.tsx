@@ -12,8 +12,8 @@ describe('SettingsSections', () => {
     expect(rows.filter((row) => row.getAttribute('aria-current') === 'page').map((row) => row.textContent)).toEqual([
       'Terminal'
     ])
-    fireEvent.click(screen.getByRole('button', { name: 'GitHub' }))
-    expect(onSelect).toHaveBeenCalledWith('github')
+    fireEvent.click(screen.getByRole('button', { name: 'Browser' }))
+    expect(onSelect).toHaveBeenCalledWith('browser')
   })
 })
 
