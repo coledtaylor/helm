@@ -140,8 +140,9 @@ describe('the session tools', () => {
     // the endpoint exists before what its session tools read.
     let tools: SessionToolsWorld | null = null
     endpoint = createBrowserMcp({
-      // The browser half is `browser-mcp.test.ts`'s; nothing here calls it.
-      browsers: {} as BrowserHost,
+      // The browser half is `browser-mcp.test.ts`'s. All that reaches it from
+      // here is a session ending, which takes back what was shared with it.
+      browsers: { revoke: () => undefined } as unknown as BrowserHost,
       settings: () => services.settings,
       dir: mcpConfigDir,
       sessions: () => tools

@@ -26,6 +26,7 @@ import {
   type SessionMcpServer,
   type SessionRecord
 } from '@helm/core'
+import type { BrowserOpener } from './browser'
 import type { BrowserMcpHost } from './browser-mcp'
 import {
   claudePtyArgs,
@@ -37,6 +38,7 @@ import { shimRoot } from './paths'
 import { killAllSessionsSync, killSession, spawnSession, type SessionHandle } from './pty'
 import type { Services } from './services'
 import type {
+  BrowserShare,
   CloseSessionRequest,
   CloseSessionResult,
   LaunchedProfile,
@@ -254,6 +256,18 @@ export interface SessionHost {
    * this", which is the only honest answer to a token it does not know.
    */
   tokenHolder: (token: string) => SessionRecord | null
+  /**
+   * A running session's identity at the browser endpoint, for the user to
+   * share a page with - or null for one that has ended or was started without
+   * the browser tools.
+   *
+   * The other direction from `tokenHolder`, and the token goes no further than
+   * the browser host it is handed to: the window names a session by its id,
+   * and this is where an id becomes the identity the tools check.
+   */
+  browserOpener: (id: number) => BrowserOpener | null
+  /** Every session `browserOpener` answers for, by id and label: the share menu. */
+  browserSessions: () => BrowserShare[]
   /**
    * Called whenever the set of hosted sessions changes - a spawn, an exit, a
    * close - so the activity poller re-reads at once instead of on its next tick.
@@ -904,6 +918,17 @@ export function createSessionHost({
       }
       return null
     },
+
+    browserOpener(id) {
+      const entry = hosted.get(id)
+      if (entry === undefined || entry.closed || !isRunning(entry) || entry.mcpToken === null) return null
+      return { key: entry.mcpToken, name: sessionLabel(entry.record) }
+    },
+
+    browserSessions: () =>
+      running()
+        .filter((entry) => entry.mcpToken !== null)
+        .map((entry) => ({ session: entry.record.id, name: sessionLabel(entry.record) })),
 
     onChanged(listener) {
       changed.add(listener)

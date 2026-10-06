@@ -24,6 +24,17 @@ let nextContentsId = 1000
 /** The event object Electron passes first. Helm calls `preventDefault` on some. */
 const electronEvent = (): { preventDefault: () => void } => ({ preventDefault: () => undefined })
 
+/** A key as `before-input-event` reports it. */
+export interface FakeKey {
+  key: string
+  control?: boolean
+  shift?: boolean
+  alt?: boolean
+  meta?: boolean
+  type?: 'keyDown' | 'keyUp'
+  isAutoRepeat?: boolean
+}
+
 /** The handlers `browserSession()` installs, kept so a test can call them. */
 export class FakeSession extends EventEmitter {
   permissionRequest: ((contents: unknown, permission: string, callback: (granted: boolean) => void) => void) | null =
@@ -59,6 +70,8 @@ export class FakeWebContents extends EventEmitter {
   readonly finds: Array<{ query: string; forward: boolean; findNext: boolean }> = []
   readonly stoppedFinding: string[] = []
   readonly evaluated: Array<{ source: string; userGesture: boolean }> = []
+  /** Every input event Helm sent, in order: the pointer and the wheel as well as keys. */
+  readonly inputs: Array<Record<string, unknown>> = []
   /** What `executeJavaScript` resolves with, or throws. */
   answer: (source: string) => unknown = () => undefined
   zoomFactor = 1
@@ -120,7 +133,22 @@ export class FakeWebContents extends EventEmitter {
   closeDevTools(): void {
     this.devtools = false
   }
-  focus(): void {}
+  /** How many times Helm moved keyboard focus into this page. */
+  focused = 0
+  /** Whether the page holds the keyboard, for `isFocused`. Set by the test. */
+  hasFocus = false
+  focus(): void {
+    this.focused += 1
+  }
+  isFocused(): boolean {
+    return this.hasFocus
+  }
+  /** What `capturePage` paints, as `toDataURL` would give it. Empty means an empty image. */
+  picture = 'data:image/png;base64,cGFnZQ=='
+  capturePage(): Promise<{ isEmpty: () => boolean; toDataURL: () => string }> {
+    const picture = this.picture
+    return Promise.resolve({ isEmpty: () => picture === '', toDataURL: () => picture })
+  }
   findInPage(query: string, options: { forward?: boolean; findNext?: boolean }): number {
     this.finds.push({ query, forward: options.forward ?? true, findNext: options.findNext ?? false })
     return this.finds.length
@@ -136,7 +164,27 @@ export class FakeWebContents extends EventEmitter {
       return Promise.reject(err instanceof Error ? err : new Error(String(err)))
     }
   }
-  sendInputEvent(): void {}
+  /**
+   * Electron raises `before-input-event` for a key sent this way, synchronously
+   * (measured on 43.3.0), so the fake does too - which is what lets a test see
+   * that an agent's Ctrl+W is the page's.
+   */
+  sendInputEvent(event: { type: string; keyCode?: string; modifiers?: string[] } & Record<string, unknown>): void {
+    this.inputs.push({ ...event })
+    if ((event.type !== 'keyDown' && event.type !== 'keyUp') || event.keyCode === undefined) return
+    const mods = event.modifiers ?? []
+    const shift = mods.includes('shift')
+    const key =
+      event.keyCode.length === 1 ? (shift ? event.keyCode.toUpperCase() : event.keyCode.toLowerCase()) : event.keyCode
+    this.press({
+      key,
+      type: event.type,
+      control: mods.includes('control'),
+      shift,
+      alt: mods.includes('alt'),
+      meta: mods.includes('meta')
+    })
+  }
   /** Helm closing the page. Electron reports the contents destroyed. */
   close(): void {
     if (this.destroyed) return
@@ -167,6 +215,34 @@ export class FakeWebContents extends EventEmitter {
     if (options.errorPage === false) return
     this.url = url
     this.emit('did-navigate', electronEvent(), url, -1)
+  }
+
+  /**
+   * A key pressed with the page holding the keyboard. True when Helm swallowed
+   * it (`preventDefault`), which is to say the page never saw it.
+   */
+  press(key: FakeKey): boolean {
+    let prevented = false
+    const input = {
+      type: key.type ?? 'keyDown',
+      key: key.key,
+      control: key.control ?? false,
+      shift: key.shift ?? false,
+      alt: key.alt ?? false,
+      meta: key.meta ?? false,
+      isAutoRepeat: key.isAutoRepeat ?? false
+    }
+    this.emit('before-input-event', { preventDefault: () => (prevented = true) }, input)
+    return prevented
+  }
+
+  /** The page called `requestFullscreen` and was granted it: Electron has made the window fullscreen. */
+  enterFullscreen(): void {
+    this.emit('enter-html-full-screen')
+  }
+  /** Escape, or `document.exitFullscreen()`. */
+  leaveFullscreen(): void {
+    this.emit('leave-html-full-screen')
   }
 
   /** A line the page wrote to its console, in Electron's event shape. */
@@ -203,13 +279,15 @@ export class FakeWebContentsView {
   /** Every view constructed, newest last. */
   static readonly created: FakeWebContentsView[] = []
 
-  webContents: FakeWebContents | undefined = new FakeWebContents()
+  webContents: FakeWebContents | undefined
   readonly webPreferences: Record<string, unknown>
   visible = true
   private bounds: Bounds = { x: 0, y: 0, width: 0, height: 0 }
 
-  constructor(options: { webPreferences?: Record<string, unknown> } = {}) {
+  /** `webContents` is Electron's adopt: the view shows contents somebody else made. */
+  constructor(options: { webPreferences?: Record<string, unknown>; webContents?: FakeWebContents } = {}) {
     this.webPreferences = options.webPreferences ?? {}
+    this.webContents = options.webContents ?? new FakeWebContents()
     FakeWebContentsView.created.push(this)
   }
 
@@ -222,7 +300,11 @@ export class FakeWebContentsView {
   setVisible(visible: boolean): void {
     this.visible = visible
   }
-  setBackgroundColor(): void {}
+  /** The ground last set, as Electron takes it. */
+  background = ''
+  setBackgroundColor(color: string): void {
+    this.background = color
+  }
 
   /**
    * The page called `window.close()`. Electron leaves `webContents` undefined
@@ -246,7 +328,10 @@ export class FakeBrowserWindow extends EventEmitter {
   readonly webContents = new FakeWebContents()
   readonly children: unknown[] = []
   readonly contentView = {
+    // A view the window already holds is raised to the top, as Electron's is.
     addChildView: (view: unknown): void => {
+      const at = this.children.indexOf(view)
+      if (at >= 0) this.children.splice(at, 1)
       this.children.push(view)
     },
     removeChildView: (view: unknown): void => {
@@ -256,7 +341,15 @@ export class FakeBrowserWindow extends EventEmitter {
   }
   title = ''
   contentBounds: Bounds = { x: 0, y: 0, width: 1600, height: 1000 }
+  fullScreen = false
   private destroyed = false
+
+  isFullScreen(): boolean {
+    return this.fullScreen
+  }
+  setFullScreen(on: boolean): void {
+    this.fullScreen = on
+  }
 
   isDestroyed(): boolean {
     return this.destroyed

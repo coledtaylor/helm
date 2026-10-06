@@ -114,6 +114,8 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     filesWrap: false,
     onFilesWrapChange: vi.fn(),
     browserReach: 'web',
+    browserSearch: 'google',
+    onBrowserSearchChange: vi.fn(),
     onBrowserReachChange: vi.fn(),
     browserMcp: true,
     onBrowserMcpChange: vi.fn(),
@@ -186,6 +188,7 @@ describe('SettingsPane', () => {
       Files: [['checkbox', 'Wrap long lines in files']],
       Browser: [
         ['combobox', 'Where the browser pane may go'],
+        ['combobox', 'Search from the address bar'],
         ['checkbox', 'Let Claude drive the browser'],
         ['checkbox', 'Confine Claude’s browser tools to this machine']
       ],
@@ -223,6 +226,21 @@ describe('SettingsPane', () => {
         }
       }
     }
+  })
+
+  it('sets what the address bar searches with, and says what Off means', async () => {
+    const user = userEvent.setup()
+    const { props } = renderPane({ section: 'browser' })
+    const search = screen.getByRole('combobox', { name: 'Search from the address bar' })
+    expect([...search.querySelectorAll('option')].map((option) => option.textContent)).toEqual([
+      'Google',
+      'DuckDuckGo',
+      'Bing',
+      'Off'
+    ])
+    expect(group('Browser').textContent).toContain('goes to Google when you press Enter')
+    await user.selectOptions(search, 'off')
+    expect(props.onBrowserSearchChange).toHaveBeenCalledWith('off')
   })
 
   it('never shows the state Helm keeps for itself, in any section', () => {

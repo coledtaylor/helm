@@ -16,7 +16,7 @@ import type { UsageDisplayMode } from './usage/shape'
 // The same, for `CreateConfigRequest` below.
 import type { CreatableKind } from './config/names'
 // The same again: `AppSettings.browserReach` names it.
-import type { BrowserReach } from './browser/reach'
+import type { BrowserReach, BrowserSearch } from './browser/reach'
 import type { SavedPaneLayout } from './layout/panes'
 // A plugin's tab is a `WorkspaceTab`, and its rail id may be in `railHidden`.
 import type { PluginParams, PluginRailId } from './plugins/tabs'
@@ -32,10 +32,13 @@ import type { PluginParams, PluginRailId } from './plugins/tabs'
 export {
   agentReach,
   BROWSER_REACH_MODES,
+  BROWSER_SEARCH_ENGINES,
   browserReachAllows,
   isLoopbackUrl,
   resolveBrowserAddress,
+  browserSearchName,
   type BrowserReach,
+  type BrowserSearch,
   type ReachDecision
 } from './browser/reach'
 
@@ -1526,6 +1529,16 @@ export interface AppSettings {
    */
   browserReach: BrowserReach
   /**
+   * What the address bar does with a phrase: hand it to this engine on Enter,
+   * or (`off`) say it is not an address.
+   *
+   * Only the address bar searches - a link, a remembered address and every
+   * agent tool pass URLs - and nothing is sent while typing, so the one request
+   * a search makes is the one Enter asked for. The results page is held to
+   * `browserReach` like any other, so `local` refuses it with a sentence.
+   */
+  browserSearch: BrowserSearch
+  /**
    * Whether Helm serves its browser tools to the sessions it hosts.
    *
    * On by default, because the stated purpose is that Claude can open things in
@@ -1672,6 +1685,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // people would turn off on the first afternoon. `local` is one click away for
   // the run where nothing should leave the machine.
   browserReach: 'web',
+  // Google, because a browser that refuses a phrase is the "not first class"
+  // feeling this replaced, and it is the engine most people expect there.
+  browserSearch: 'google',
   // On, because the whole point of the endpoint is that a session can open a
   // page in the app that is hosting it; off is one tick away and removes the
   // listener entirely.

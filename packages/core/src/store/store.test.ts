@@ -165,6 +165,7 @@ describe('settings', () => {
       updateCheck: false,
       lastUpdateCheckAt: '2026-08-11T20:04:06.641Z',
       browserReach: 'local',
+      browserSearch: 'duckduckgo',
       browserMcp: false,
       browserMcpLocalOnly: true,
       restoreWithoutAsking: true,
@@ -499,6 +500,7 @@ describe('settings validation', () => {
         { root: { panes: [{ kind: 'session', id: 0 }], activeId: null }, focused: 0 },
         { root: { panes: [{ kind: 'session', id: 1.5 }], activeId: null }, focused: 0 },
         { root: { panes: [{ kind: 'browser', id: 1 }], activeId: null }, focused: 0 },
+        { root: { panes: [{ kind: 'browser' }], activeId: null }, focused: 0 },
         { root: { panes: [{ kind: 'restore' }], activeId: null }, focused: 0 },
         { root: { panes: [{ kind: 'project' }], activeId: null }, focused: 0 },
         // A file is read inside its project, so it is written down with both.
@@ -643,6 +645,11 @@ describe('settings validation', () => {
       key: 'browserReach',
       good: ['web', 'local'],
       bad: ['none', 'Web', 'loopback', '', null, true, ['web']]
+    },
+    {
+      key: 'browserSearch',
+      good: ['google', 'duckduckgo', 'bing', 'off'],
+      bad: ['Google', 'yahoo', '', null, false, ['google']]
     },
     {
       // `'false'` is the interesting rejection for both, and it is the same one
@@ -826,6 +833,7 @@ describe('settings validation', () => {
       updateCheck: true,
       lastUpdateCheckAt: null,
       browserReach: 'local',
+      browserSearch: 'duckduckgo',
       browserMcp: false,
       browserMcpLocalOnly: true,
       restoreWithoutAsking: true,
@@ -871,6 +879,7 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   updateCheck: true,
   lastUpdateCheckAt: null,
   browserReach: 'local',
+  browserSearch: 'duckduckgo',
   browserMcp: false,
   browserMcpLocalOnly: true,
   restoreWithoutAsking: true,

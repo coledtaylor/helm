@@ -24,12 +24,18 @@ const BROWSER_TOOLS = [
   'browser_close',
   'browser_console',
   'browser_evaluate',
+  'browser_hover',
+  'browser_navigate',
   'browser_open',
   'browser_press',
   'browser_screenshot',
+  'browser_scroll',
+  'browser_select',
   'browser_snapshot',
   'browser_tabs',
-  'browser_type'
+  'browser_text',
+  'browser_type',
+  'browser_wait_for'
 ]
 
 /** What the endpoint reaches into the host for, and nothing it does not. */
@@ -42,6 +48,13 @@ type AgentSurface = Pick<
   | 'navigateFor'
   | 'closeFor'
   | 'openerOf'
+  | 'sharedWith'
+  | 'revoke'
+  | 'back'
+  | 'forward'
+  | 'reload'
+  | 'hover'
+  | 'scroll'
   | 'viewport'
   | 'capturePng'
   | 'pointer'
@@ -59,7 +72,10 @@ type Evaluator = (id: number, source: string) => { ok: boolean; value: string; e
 
 /** A browser host holding tabs in a map, recording every call that reaches a page. */
 function fakeBrowsers() {
-  const tabs = new Map<number, { state: BrowserState; opener: BrowserOpener | null; console: BrowserConsoleEntry[] }>()
+  const tabs = new Map<
+    number,
+    { state: BrowserState; opener: BrowserOpener | null; shared: BrowserOpener | null; console: BrowserConsoleEntry[] }
+  >()
   const calls: Call[] = []
   let next = 1
   let zoom = 1
@@ -83,10 +99,25 @@ function fakeBrowsers() {
       devtoolsOpen: false,
       find: null,
       project: null,
-      openedBy: opener?.name ?? null
+      openedBy: opener?.name ?? null,
+      openerRunning: opener !== null,
+      sharedWith: null
     }
-    tabs.set(id, { state, opener, console: [] })
+    tabs.set(id, { state, opener, shared: null, console: [] })
     return id
+  }
+
+  /** The user sharing a tab with a session, or taking it back. */
+  const share = (id: number, to: BrowserOpener | null): void => {
+    const tab = tabs.get(id)!
+    tab.shared = to
+    tab.state = { ...tab.state, sharedWith: to === null ? null : { session: 1, name: to.name } }
+  }
+
+  /** Moves a tab through its history, as the host would. */
+  const travel = (id: number, method: string): BrowserState | null => {
+    calls.push({ method, id })
+    return tabs.get(id)?.state ?? null
   }
 
   const host: AgentSurface = {
@@ -111,12 +142,30 @@ function fakeBrowsers() {
       tab.state = { ...tab.state, url }
       return { state: tab.state, problem: null }
     },
-    closeFor: (_opener, id) => {
+    closeFor: (opener, id) => {
       calls.push({ method: 'closeFor', id })
+      // The host's own rule, which a shared tab reaches: only the opener closes.
+      if (tabs.get(id)?.opener?.key !== opener.key) return { closed: false, problem: "closing it is theirs" }
       tabs.delete(id)
       return { closed: true, problem: null }
     },
     openerOf: (id) => tabs.get(id)?.opener ?? null,
+    sharedWith: (id) => tabs.get(id)?.shared ?? null,
+    revoke: (key) => {
+      calls.push({ method: 'revoke', id: 0, detail: key })
+      for (const [id, tab] of tabs) if (tab.shared?.key === key) share(id, null)
+    },
+    back: (id) => travel(id, 'back'),
+    forward: (id) => travel(id, 'forward'),
+    reload: (id) => travel(id, 'reload'),
+    hover: (id, x, y) => {
+      calls.push({ method: 'hover', id, detail: { x, y } })
+      return Promise.resolve()
+    },
+    scroll: (id, x, y, dx, dy) => {
+      calls.push({ method: 'scroll', id, detail: { x, y, dx, dy } })
+      return Promise.resolve()
+    },
     viewport: () => ({ width: 1280, height: 800, zoom }),
     capturePng: (id) => {
       calls.push({ method: 'capturePng', id })
@@ -142,6 +191,7 @@ function fakeBrowsers() {
     tabs,
     calls,
     add,
+    share,
     evaluateWith: (next: Evaluator) => {
       evaluator = next
     },
@@ -477,7 +527,13 @@ describe('the tool endpoint', () => {
         ['browser_type', { text: 'x' }],
         ['browser_press', { key: 'Enter' }],
         ['browser_close', {}],
-        ['browser_open', { url: 'http://127.0.0.1:5173/elsewhere' }]
+        ['browser_open', { url: 'http://127.0.0.1:5173/elsewhere' }],
+        ['browser_navigate', { url: 'http://127.0.0.1:5173/elsewhere' }],
+        ['browser_text', {}],
+        ['browser_hover', { x: 10, y: 10 }],
+        ['browser_select', { selector: 'select', values: ['a'] }],
+        ['browser_scroll', { dy: 100 }],
+        ['browser_wait_for', { text: 'x', timeout: 0.1 }]
       ]
       for (const [name, args] of attempts) {
         const answer = await callTool(alpha.browser, alpha.token, name, { ...args, tab: user })
@@ -678,6 +734,228 @@ describe('the tool endpoint', () => {
       const gone = await callTool(alpha.browser, alpha.token, 'browser_snapshot', { tab: 99 })
       expect(gone.isError).toBe(true)
       expect(gone.text).toContain('There is no browser tab 99')
+    })
+
+    describe('a tab the user shares', () => {
+      const opener = (who: typeof alpha, name: string): BrowserOpener => ({ key: who.token, name })
+
+      it('is driven by the session it is shared with, and listed as such to every session', async () => {
+        const user = browsers.add('http://127.0.0.1:5173/mine', null)
+        browsers.share(user, opener(alpha, 'alpha'))
+
+        // With no tab named and none used yet, the shared one is the one meant.
+        const read = await callTool(alpha.browser, alpha.token, 'browser_evaluate', { expression: '1' })
+        expect(read.isError).toBe(false)
+        expect(browsers.calls.at(-1)).toMatchObject({ method: 'evaluate', id: user })
+
+        expect(blockFor((await callTool(alpha.browser, alpha.token, 'browser_tabs')).text, user)).toMatch(
+          /opened by the user, shared with you: read and drive it, but it is theirs to close$/
+        )
+        expect(blockFor((await callTool(beta.browser, beta.token, 'browser_tabs')).text, user)).toMatch(
+          /opened by the user, shared with the session "alpha"$/
+        )
+
+        const moved = await callTool(alpha.browser, alpha.token, 'browser_navigate', { url: 'http://127.0.0.1:5173/next' })
+        expect(moved.isError).toBe(false)
+        expect(browsers.calls.find((call) => call.method === 'navigateFor')).toMatchObject({ id: user })
+      })
+
+      it('is not driven by any other session, and not closed by the one it is shared with', async () => {
+        const user = browsers.add('http://127.0.0.1:5173/mine', null)
+        browsers.share(user, opener(alpha, 'alpha'))
+        const before = browsers.calls.length
+
+        const other = await callTool(beta.browser, beta.token, 'browser_snapshot', { tab: user })
+        expect(other.isError).toBe(true)
+        expect(other.text).toBe(
+          `Browser tab ${String(user)} was opened by the user and is shared with the session "alpha", not this one.`
+        )
+        expect(browsers.calls.slice(before)).toEqual([])
+
+        const closing = await callTool(alpha.browser, alpha.token, 'browser_close', { tab: user })
+        expect(closing.isError).toBe(true)
+        expect(browsers.tabs.has(user)).toBe(true)
+      })
+
+      it('stops being driven when the user takes it back, and when the session ends', async () => {
+        const user = browsers.add('http://127.0.0.1:5173/mine', null)
+        browsers.share(user, opener(alpha, 'alpha'))
+        expect((await callTool(alpha.browser, alpha.token, 'browser_evaluate', { tab: user, expression: '1' })).isError).toBe(false)
+
+        browsers.share(user, null)
+        const unshared = await callTool(alpha.browser, alpha.token, 'browser_text', { tab: user })
+        expect(unshared.isError).toBe(true)
+        expect(unshared.text).toContain("ask the user to share this one from the Share button in Helm's browser bar")
+
+        // The token is the identity a share is made to, so ending the session revokes it.
+        browsers.share(user, opener(alpha, 'alpha'))
+        endpoint.release(alpha.token)
+        expect(browsers.calls.filter((call) => call.method === 'revoke').map((call) => call.detail)).toEqual([
+          alpha.token
+        ])
+        expect(browsers.tabs.get(user)?.shared).toBeNull()
+
+        await endpoint.stop()
+        expect(browsers.calls.filter((call) => call.method === 'revoke').map((call) => call.detail)).toEqual([
+          alpha.token,
+          beta.token
+        ])
+      })
+
+      it('is held to the tools\' reach: off the machine is refused while they are confined to it', async () => {
+        const away = browsers.add('https://example.com/account', null)
+        browsers.share(away, opener(alpha, 'alpha'))
+        settings = { ...settings, browserMcpLocalOnly: true }
+        const refused = await callTool(alpha.browser, alpha.token, 'browser_screenshot', { tab: away })
+        expect(refused.isError).toBe(true)
+        expect(refused.text).toBe(
+          `Browser tab ${String(away)} is at https://example.com/account. Helm's browser tools are held to this machine in Settings > Browser, so this session may not read or drive a page anywhere else.`
+        )
+        expect(browsers.calls.filter((call) => call.id === away)).toEqual([])
+
+        settings = { ...settings, browserMcpLocalOnly: false }
+        expect((await callTool(alpha.browser, alpha.token, 'browser_screenshot', { tab: away })).isError).toBe(false)
+      })
+    })
+
+    it('navigates a tab to a URL, or back, forward or reloads it - one or the other', async () => {
+      const tab = await open(alpha, 'http://127.0.0.1:5173/one')
+      const to = await callTool(alpha.browser, alpha.token, 'browser_navigate', { url: '5173' })
+      expect(to.text).toBe(`tab: ${String(tab)}\nurl: http://localhost:5173/\ntitle: Page at 127.0.0.1:5173`)
+
+      const nowhere = await callTool(alpha.browser, alpha.token, 'browser_navigate', { go: 'back' })
+      expect(nowhere).toMatchObject({ isError: true, text: `Tab #${String(tab)} has nothing to go back to.` })
+      browsers.tabs.get(tab)!.state = { ...browsers.tabs.get(tab)!.state, canGoBack: true }
+      expect((await callTool(alpha.browser, alpha.token, 'browser_navigate', { go: 'back' })).isError).toBe(false)
+      expect((await callTool(alpha.browser, alpha.token, 'browser_navigate', { go: 'reload' })).isError).toBe(false)
+      expect(browsers.calls.filter((call) => ['back', 'forward', 'reload'].includes(call.method))).toEqual([
+        { method: 'back', id: tab },
+        { method: 'reload', id: tab }
+      ])
+
+      for (const args of [{}, { url: '5173', go: 'back' }]) {
+        const both = await callTool(alpha.browser, alpha.token, 'browser_navigate', args)
+        expect(both.isError).toBe(true)
+        expect(both.text).toContain('one of the two')
+      }
+    })
+
+    it("reads the page's text in pieces, with the blank runs a layout leaves cut down", async () => {
+      const tab = await open(alpha, 'http://127.0.0.1:5173/')
+      let text = 'Title\r\n\n\n\nFirst line   \nSecond'
+      browsers.evaluateWith(() => ({ ok: true, value: JSON.stringify({ text, url: 'http://127.0.0.1:5173/' }), error: null }))
+      expect((await callTool(alpha.browser, alpha.token, 'browser_text')).text).toBe(
+        `tab: ${String(tab)}\nurl: http://127.0.0.1:5173/\ncharacters: 0-24 of 24\n\nTitle\n\nFirst line\nSecond`
+      )
+
+      text = 'x'.repeat(450)
+      const first = await callTool(alpha.browser, alpha.token, 'browser_text', { maxChars: 200 })
+      expect(first.text).toContain('characters: 0-200 of 450')
+      expect(first.text.endsWith('(more: pass offset 200)')).toBe(true)
+      const last = await callTool(alpha.browser, alpha.token, 'browser_text', { maxChars: 200, offset: 400 })
+      expect(last.text).toContain('characters: 400-450 of 450')
+      expect(last.text).not.toContain('(more')
+
+      browsers.evaluateWith(() => ({ ok: true, value: JSON.stringify({ missing: true }), error: null }))
+      const missing = await callTool(alpha.browser, alpha.token, 'browser_text', { ref: '4.4' })
+      expect(missing).toMatchObject({ isError: true })
+      expect(missing.text).toContain('Nothing is at [ref=4.4] any more')
+    })
+
+    it('hovers over the middle of the element it names, pressing nothing', async () => {
+      const tab = await open(alpha, 'http://127.0.0.1:5173/')
+      browsers.evaluateWith(() => ({ ok: true, value: JSON.stringify({ x: 110, y: 55, width: 20, height: 10 }), error: null }))
+      expect((await callTool(alpha.browser, alpha.token, 'browser_hover', { ref: '1.0' })).text).toBe(
+        'The pointer is over [ref=1.0] at (110, 55).'
+      )
+      expect(browsers.calls.filter((call) => call.method === 'hover')).toEqual([
+        { method: 'hover', id: tab, detail: { x: 110, y: 55 } }
+      ])
+      expect(browsers.calls.filter((call) => call.method === 'pointer')).toEqual([])
+      const nowhere = await callTool(alpha.browser, alpha.token, 'browser_hover', {})
+      expect(nowhere.text).toBe(
+        'browser_hover needs somewhere to point at: a ref from browser_snapshot, a CSS selector, or both x and y.'
+      )
+    })
+
+    it('chooses options in a select by value or label, and says which exist when one does not', async () => {
+      await open(alpha, 'http://127.0.0.1:5173/')
+      browsers.evaluateWith(() => ({ ok: true, value: JSON.stringify({ chosen: ['Two'] }), error: null }))
+      expect(await callTool(alpha.browser, alpha.token, 'browser_select', { selector: '#pick', values: ['2'] })).toMatchObject({
+        isError: false,
+        text: 'Chose "Two" in "#pick".'
+      })
+      expect(browsers.calls.at(-1)?.detail).toContain('["2"]')
+
+      browsers.evaluateWith(() => ({
+        ok: true,
+        value: JSON.stringify({ unknown: 'Nine', options: [{ value: '1', label: 'One' }, { value: 'two', label: 'two' }], more: 3 }),
+        error: null
+      }))
+      expect((await callTool(alpha.browser, alpha.token, 'browser_select', { selector: '#pick', values: ['Nine'] })).text).toBe(
+        '"#pick" has no option "Nine". It has: "One" (value "1"), "two", and 3 more.'
+      )
+      browsers.evaluateWith(() => ({ ok: true, value: JSON.stringify({ notSelect: 'div' }), error: null }))
+      expect((await callTool(alpha.browser, alpha.token, 'browser_select', { ref: '1.2', values: ['a'] })).text).toContain(
+        'is a <div>, not a <select>'
+      )
+      const unnamed = await callTool(alpha.browser, alpha.token, 'browser_select', { values: ['a'] })
+      expect(unnamed).toMatchObject({ isError: true })
+      expect(unnamed.text).toContain('needs the select')
+    })
+
+    it('scrolls with the wheel at the middle of the page, at the page zoom, and says what moved', async () => {
+      const tab = await open(alpha, 'http://127.0.0.1:5173/')
+      const place = (y: number, what = 'page'): string =>
+        JSON.stringify({ what, x: 0, y, width: 1280, height: 2400, viewWidth: 1280, viewHeight: 800 })
+      const answers = [place(0), place(400)]
+      browsers.evaluateWith(() => ({ ok: true, value: answers.shift() ?? place(400), error: null }))
+      expect((await callTool(alpha.browser, alpha.token, 'browser_scroll', { dy: 400 })).text).toBe(
+        'Scrolled the page down 400px. It is at 400 of 2400 down (800 showing).'
+      )
+      expect(browsers.calls.filter((call) => call.method === 'scroll').at(-1)).toEqual({
+        method: 'scroll',
+        id: tab,
+        detail: { x: 640, y: 400, dx: 0, dy: 400 }
+      })
+
+      browsers.zoomTo(1.5)
+      answers.push(place(400, 'div#list'), place(400, 'div#list'))
+      expect((await callTool(alpha.browser, alpha.token, 'browser_scroll', { dy: 100, x: 10, y: 20 })).text).toBe(
+        'Nothing moved. <div#list> is already at its end, or nothing under (10, 20) scrolls that way.'
+      )
+      expect(browsers.calls.filter((call) => call.method === 'scroll').at(-1)?.detail).toEqual({
+        x: 15,
+        y: 30,
+        dx: 0,
+        dy: 150
+      })
+
+      const still = await callTool(alpha.browser, alpha.token, 'browser_scroll', {})
+      expect(still).toMatchObject({ isError: true })
+    })
+
+    it('waits for text, its going, a selector or the load, and says when it never came', async () => {
+      const tab = await open(alpha, 'http://127.0.0.1:5173/')
+      const looks = ['no', 'no', 'yes']
+      browsers.evaluateWith(() => ({ ok: true, value: looks.shift() ?? 'yes', error: null }))
+      const came = await callTool(alpha.browser, alpha.token, 'browser_wait_for', { text: 'Ready' })
+      expect(came.text).toMatch(/^"Ready" appeared after \d+\.\ds\.$/)
+      expect(browsers.calls.filter((call) => call.method === 'evaluate')).toHaveLength(3)
+
+      browsers.evaluateWith(() => ({ ok: true, value: 'no', error: null }))
+      expect(await callTool(alpha.browser, alpha.token, 'browser_wait_for', { textGone: 'Saving', timeout: 0.2 })).toMatchObject({
+        isError: true,
+        text: `Waited 0.2s, and "Saving" was still there in tab #${String(tab)}.`
+      })
+
+      browsers.evaluateWith(() => ({ ok: true, value: 'bad:not a valid selector', error: null }))
+      expect((await callTool(alpha.browser, alpha.token, 'browser_wait_for', { selector: '##' })).text).toBe(
+        '"##" is not a selector the page accepts: not a valid selector'
+      )
+      expect((await callTool(alpha.browser, alpha.token, 'browser_wait_for', {})).text).toMatch(/^Loaded after /)
+      expect((await callTool(alpha.browser, alpha.token, 'browser_wait_for', { text: 'a', seconds: 1 })).isError).toBe(true)
+      expect((await callTool(alpha.browser, alpha.token, 'browser_wait_for', { seconds: 0.05 })).text).toBe('Waited 0.05s.')
     })
   })
 })

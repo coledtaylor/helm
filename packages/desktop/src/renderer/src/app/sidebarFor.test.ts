@@ -14,7 +14,7 @@ describe('sidebarFor', () => {
       [{ kind: 'settings' }, 'settings'],
       [{ kind: 'history' }, null],
       [{ kind: 'config' }, null],
-      [{ kind: 'browser', id: 1 }, null]
+      [{ kind: 'browser' }, null]
     ]
     for (const [ref, view] of cases) expect([ref.kind, sidebarFor(ref)]).toEqual([ref.kind, view])
   })

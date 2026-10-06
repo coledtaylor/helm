@@ -1054,6 +1054,22 @@ user opened is a page they chose to be on, in a partition holding their cookies,
 so it is not screenshot, scripted or closed by any tool. A session ending leaves
 its tabs standing: the page is the user's then.
 
+  > [!note] Amended 2026-10-06 - a tab the user shares, and six more tools
+  > "Not screenshot, scripted or closed by any tool" now holds until the user
+  > says otherwise. The Share button in the browser bar lets one running
+  > session read and drive one page of the user's - the explicit share chosen
+  > over an agent being able to see every page, because the partition holds
+  > the user's logins. The window names the session by its id and main turns
+  > that into the token, so no token reaches the window; the share is taken
+  > back from the bar, or with the token when the session ends. A shared page
+  > says so above itself, and in the strip. It stays the user's to close, a
+  > page it opens is not shared, and a tool acts on it only while its address
+  > is within `agentReach` - so a share does not get round
+  > `browserMcpLocalOnly`. The tools grew `browser_navigate` (a URL, back,
+  > forward, reload), `browser_text`, `browser_hover`, `browser_select`,
+  > `browser_scroll` (a real wheel, so whatever is under the pointer scrolls)
+  > and `browser_wait_for`: sixteen in all.
+
 **Two reach controls that intersect.** `browserReach` (`web` | `local`,
 default `web`) is where the pane may go at all. `browserMcpLocalOnly` (default
 off) is where Claude's tools may go. An agent navigation is allowed only where
@@ -1228,6 +1244,31 @@ about the user's own `gh`: Helm no longer runs it.
   > What did not change: the app's own renderers still get `null`, and nothing
   > here alters what Helm contacts on its own initiative, which is still only
   > the update check.
+
+  > [!note] Amended 2026-10-06 - a page's tab keeps its opener
+  > `target="_blank"`, a plain `window.open` and a middle click are no longer
+  > Helm tabs loaded fresh. They are pages in the one Browser tab's own strip,
+  > and the page adopts the web contents Chromium made for it (`createWindow`),
+  > so `window.open` returns a live handle and the page keeps `window.opener`.
+  > A sign-in that opened in a tab got `null` back and no opener, and its
+  > library tried again in another tab - the reported "a tab for every
+  > redirect". Measured on Electron 43.3.0; the E2E `posture` test signs in
+  > through a tab and fails with "tab refused" against the old answer. A
+  > `window.open` with features is still the popup window above.
+
+  > [!note] Amended 2026-10-06 - two permissions, and the address bar searches
+  > The browser pane bullet above said every permission is denied and the
+  > address bar never hands anything to a search engine. Both moved, for the
+  > same reason the pane became a Browser tab: it felt locked down rather than
+  > like a browser. A page in the Browser tab that has the keyboard may write
+  > the clipboard (`clipboard-sanitized-write`) and take the whole screen
+  > (`fullscreen`); popups, background pages and reading the clipboard are
+  > still refused, and everything else is still denied by name. The address
+  > bar searches a phrase on Enter with the engine in `browserSearch`
+  > (Google by default, `off` restores the refusal); nothing is sent while
+  > typing, and the results page is held to `browserReach` like any address.
+  > The network sentence did not move: a search is a page the user navigated
+  > to by pressing Enter, and Helm still contacts nothing on its own.
 
 ### Portability
 

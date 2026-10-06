@@ -1,7 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { subscribeOverlay, overlayOpen, type ConsoleEntry } from '@helm/ui'
-import type { BrowserState } from '../../../shared/ipc'
+import type { BrowserShare, BrowserState } from '../../../shared/ipc'
 import { helm } from './bridge'
+import {
+  activatePage,
+  addPage,
+  EMPTY_STRIP,
+  movePage,
+  pagesOf,
+  removePage,
+  type PageStrip
+} from './browserStrip'
 
 /**
  * The window's half of the browser pane.
@@ -11,18 +20,58 @@ import { helm } from './bridge'
  * holds a mirror of what main last said and a route to ask it for something. It
  * is the same relationship `useSessions` has to the pty host.
  *
+ * What it does own is the Browser tab's strip: which pages, in what order,
+ * and which is in front (`browserStrip.ts`). Main says where a page it made
+ * belongs (`browser:opened`); the window arranges it.
+ *
  * The one piece of real logic is `sendBounds`, and it is the only place in the
  * app that answers the question "should the native view be on screen right
  * now". Four things can make the answer no and none of them is visible from
  * inside `BrowserPane`:
  *
- *   - the tab is not the one in front (the pane is not even mounted then)
+ *   - the page is not the one in front, or the Browser tab is not (the pane
+ *     is not even mounted then)
  *   - a modal overlay is up - `lib/overlay.ts`, subscribed **once**, here
  *   - the workspace column is collapsed behind a maximised session
  *   - a workspace tab is being dragged
  *
  * So the pane reports its rectangle and this decides whether it paints.
+ *
+ * **A view that stands down for something drawn over it leaves a still of
+ * itself behind** (`stills`). Without one, the page vanished whenever a menu
+ * opened over it - the overflow menu, the address list, a dialog - and an
+ * empty hole under a menu is the least browser-like thing the pane did. So the
+ * page in front is captured first (`browser:snapshot`), the picture is painted
+ * in the hole, and only then does the view go; coming back, the view returns
+ * first and the picture lingers under it until the page has painted over it.
  */
+
+/** The longest a view stays up over something newly drawn, waiting for its still. */
+const STILL_WAIT_MS = 250
+/** How long a still stays under a view that has just come back, so nothing flashes between them. */
+const STILL_LINGER_MS = 200
+/** Closed pages Ctrl+Shift+T can bring back, newest last. */
+const CLOSED_PAGES_MAX = 25
+
+const NO_STILLS: ReadonlyMap<number, string> = new Map()
+
+/** A picture decoded before it is drawn, so the frame it is first painted in already has it. */
+function decoded(url: string): Promise<void> {
+  const image = new Image()
+  image.src = url
+  return typeof image.decode === 'function' ? image.decode().catch(() => undefined) : Promise.resolve()
+}
+
+/** After `count` frames have been drawn. */
+function frames(count: number): Promise<void> {
+  return new Promise((resolve) => {
+    const step = (left: number): void => {
+      if (left === 0) resolve()
+      else requestAnimationFrame(() => step(left - 1))
+    }
+    step(count)
+  })
+}
 
 /** Why every view is off the screen: a tab being dragged, or the address bar's list hanging over the page. */
 export type SuppressReason = 'tab-drag' | 'address-list'
@@ -30,6 +79,23 @@ export type SuppressReason = 'tab-drag' | 'address-list'
 export interface BrowserPanesState {
   /** Every live view, keyed by id. Adopted from main on mount. */
   views: Map<number, BrowserState>
+  /** The Browser tab's pages, in strip order. Every id is in `views`. */
+  pages: number[]
+  /** The page in front of the Browser tab, or null when it holds none. */
+  active: number | null
+  activate: (id: number) => void
+  /** A page moved along the strip, to `toIndex` counted after it has left its place. */
+  move: (id: number, toIndex: number) => void
+  /** Every page, closed: the Browser tab closing. */
+  closeAll: () => void
+  /**
+   * The page closed by hand most recently, opened again where it was in the
+   * strip: Ctrl+Shift+T. Its address comes back, not its history. Null when
+   * nothing closed by hand is left to bring back.
+   */
+  reopen: () => Promise<BrowserState | null>
+  /** A picture of each page whose view is standing down for something drawn over it. */
+  stills: ReadonlyMap<number, string>
   entries: Map<number, ConsoleEntry[]>
   open: (request: { url?: string; project?: string | null }) => Promise<BrowserState | null>
   close: (id: number) => void
@@ -42,6 +108,10 @@ export interface BrowserPanesState {
   stopFind: (id: number) => void
   zoom: (id: number, level: number) => void
   clearStorage: (id: number) => void
+  /** The sessions a page can be shared with now. Asked as the Share menu opens. */
+  shareTargets: () => Promise<BrowserShare[]>
+  /** Let a session read and drive a page, or (`null`) take it back. */
+  share: (id: number, session: number | null) => void
   evaluate: (id: number, source: string) => Promise<{ ok: boolean; value: string; error: string | null }>
   /** Report where the placeholder is. `showing` is the caller's half of "visible". */
   sendBounds: (
@@ -82,6 +152,21 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
   const [views, setViews] = useState<Map<number, BrowserState>>(() => new Map())
   const [entries, setEntries] = useState<Map<number, ConsoleEntry[]>>(() => new Map())
   const [error, setError] = useState<string | null>(null)
+  const [strip, setStrip] = useState<PageStrip>(EMPTY_STRIP)
+  /** The strip against the pages main holds, so a page is never drawn that is not there. */
+  const shown = useMemo(() => pagesOf(strip, new Set(views.keys())), [strip, views])
+  const [stills, setStills] = useState<ReadonlyMap<number, string>>(NO_STILLS)
+  /**
+   * The pages and the strip as of the last render, for `close`: it records
+   * where a page was, and a callback that read state would be rebuilt on every
+   * change to it - which is every page title.
+   */
+  const latest = useRef({ views, order: shown.order })
+  useLayoutEffect(() => {
+    latest.current = { views, order: shown.order }
+  }, [views, shown.order])
+  /** Pages closed by hand, for Ctrl+Shift+T. */
+  const closedPages = useRef<Array<{ url: string; project: string | null; at: number }>>([])
 
   /**
    * What the panes last reported, so a reason to hide that is not a resize can
@@ -95,6 +180,14 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
     new Map<number, { x: number; y: number; width: number; height: number; showing: boolean }>()
   )
   const suppressed = useRef(new Set<SuppressReason>())
+  /** Whether the views are standing down right now - once their stills are up. */
+  const standingDown = useRef(false)
+  /**
+   * Bumped each time whether anything covers the views changes, so a capture
+   * that comes back after the cover has gone - or after a newer one - knows it
+   * is stale.
+   */
+  const coverTurn = useRef(0)
 
   const push = useCallback((id: number): void => {
     const rect = rects.current.get(id)
@@ -105,17 +198,65 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
       y: rect.y,
       width: rect.width,
       height: rect.height,
-      // The single boolean, and every reason folded into it. `overlayOpen()` is
-      // read rather than subscribed to *here* because this runs on every frame
-      // of a drag; the subscription below is what makes a dialog opening move
-      // the view without waiting for the next resize.
-      visible: rect.showing && suppressed.current.size === 0 && !overlayOpen()
+      // The single boolean, and every reason folded into it: `standingDown` is
+      // every cover - a dialog, a menu, a drag - once its still is up (`cover`).
+      // Read rather than recomputed because this runs on every frame of a drag.
+      visible: rect.showing && !standingDown.current
     })
   }, [])
 
   const pushAll = useCallback((): void => {
     for (const id of rects.current.keys()) push(id)
   }, [push])
+
+  /**
+   * Something was drawn over the views, or taken away: stand them down behind
+   * a still of themselves, or bring them back.
+   *
+   * Standing down waits for the pictures - captured, decoded, painted, two
+   * frames - and never longer than `STILL_WAIT_MS`: a page that will not
+   * capture still gets out of the way of the menu over it. Coming back is
+   * immediate, and the still is taken away a moment later, under the view.
+   */
+  const cover = useCallback((): void => {
+    const turn = ++coverTurn.current
+    if (suppressed.current.size === 0 && !overlayOpen()) {
+      standingDown.current = false
+      pushAll()
+      setTimeout(() => {
+        if (coverTurn.current === turn) setStills(NO_STILLS)
+      }, STILL_LINGER_MS)
+      return
+    }
+    // Already down for something else: a second cover changes nothing.
+    if (standingDown.current) return
+    const standDown = (): void => {
+      if (coverTurn.current !== turn || standingDown.current) return
+      standingDown.current = true
+      pushAll()
+    }
+    const onScreen = [...rects.current].filter(([, rect]) => rect.showing).map(([id]) => id)
+    if (onScreen.length === 0) {
+      standDown()
+      return
+    }
+    setTimeout(standDown, STILL_WAIT_MS)
+    void Promise.all(
+      onScreen.map((id) =>
+        helm.invoke('browser:snapshot', { id }).then(
+          (url) => [id, url] as const,
+          () => [id, null] as const
+        )
+      )
+    ).then(async (shots) => {
+      const ready = shots.filter((shot): shot is readonly [number, string] => shot[1] !== null)
+      await Promise.all(ready.map(([, url]) => decoded(url)))
+      if (coverTurn.current !== turn) return
+      setStills(new Map(ready))
+      await frames(2)
+      standDown()
+    })
+  }, [pushAll])
 
   /**
    * The overlay subscription. **Once**, for the whole app.
@@ -125,7 +266,7 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
    * has to remember. Nothing here knows which dialog, or that there are
    * dialogs at all.
    */
-  useEffect(() => subscribeOverlay(pushAll), [pushAll])
+  useEffect(() => subscribeOverlay(cover), [cover])
 
   // Adopt whatever main is already holding. A renderer reload - dev HMR, or a
   // render process that died - leaves views with no tab, exactly as it leaves
@@ -136,6 +277,7 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
       .then((states) => {
         if (states.length === 0) return
         setViews(new Map(states.map((state) => [state.id, state])))
+        setStrip({ order: states.map((state) => state.id), active: states.at(-1)!.id, openers: new Map() })
       })
       .catch(() => undefined)
   }, [])
@@ -144,8 +286,9 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
     const offChanged = helm.on('browser:changed', (state) => {
       setViews((current) => new Map(current).set(state.id, state))
     })
-    const offOpened = helm.on('browser:opened', (state) => {
+    const offOpened = helm.on('browser:opened', ({ state, after, background }) => {
       setViews((current) => new Map(current).set(state.id, state))
+      setStrip((current) => addPage(current, state.id, { after, background }))
     })
     const offClosed = helm.on('browser:closed', ({ id }) => {
       setViews((current) => {
@@ -153,6 +296,7 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
         next.delete(id)
         return next
       })
+      setStrip((current) => removePage(current, id))
       rects.current.delete(id)
     })
     const offLogged = helm.on('browser:logged', ({ id, entry }) => {
@@ -173,8 +317,9 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
     }
   }, [])
 
-  const open = useCallback(
-    async (request: { url?: string; project?: string | null }): Promise<BrowserState | null> => {
+  /** A page asked for from the window, put at the end of the strip - or at `at` - and in front. */
+  const openPage = useCallback(
+    async (request: { url?: string; project?: string | null }, at?: number): Promise<BrowserState | null> => {
       let answer: { state: BrowserState | null; problem: string | null }
       try {
         answer = await helm.invoke('browser:open', request)
@@ -187,6 +332,10 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
       }
       if (answer.state !== null) {
         setViews((current) => new Map(current).set(answer.state!.id, answer.state!))
+        // At the end of the strip, or where it was, and in front: a page somebody asked for.
+        setStrip((current) =>
+          addPage(current, answer.state!.id, { after: null, background: false, ...(at === undefined ? {} : { at }) })
+        )
         // Whatever main already has for this view - a `window.open` tab, or one
         // adopted after a reload - rather than an empty panel.
         void helm
@@ -201,6 +350,10 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
       return answer.state
     },
     []
+  )
+  const open = useCallback(
+    (request: { url?: string; project?: string | null }) => openPage(request),
+    [openPage]
   )
 
   const remember = useCallback((state: BrowserState | null): void => {
@@ -240,7 +393,19 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
     []
   )
 
+  /**
+   * A page closed by hand: the strip's close button, Ctrl+W, the Browser tab
+   * closing. Remembered for Ctrl+Shift+T unless it never went anywhere. A page
+   * main closes - one that closed itself, an agent's, one whose process died -
+   * arrives on `browser:closed` instead and is not offered back: nobody chose
+   * to close it.
+   */
   const close = useCallback((id: number) => {
+    const page = latest.current.views.get(id)
+    if (page !== undefined && page.url !== '' && page.url !== 'about:blank') {
+      closedPages.current.push({ url: page.url, project: page.project, at: latest.current.order.indexOf(id) })
+      if (closedPages.current.length > CLOSED_PAGES_MAX) closedPages.current.shift()
+    }
     void helm.invoke('browser:close', { id }).catch(() => undefined) // the tab is gone from this map either way
     setViews((current) => {
       const next = new Map(current)
@@ -252,8 +417,26 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
       next.delete(id)
       return next
     })
+    setStrip((current) => removePage(current, id))
     rects.current.delete(id)
   }, [])
+
+  const closeAll = useCallback(() => {
+    // In strip order, so Ctrl+Shift+T brings the last of them back first.
+    for (const id of latest.current.order) close(id)
+  }, [close])
+
+  const reopen = useCallback(async (): Promise<BrowserState | null> => {
+    const last = closedPages.current.pop()
+    if (last === undefined) return null
+    return openPage({ url: last.url, project: last.project }, last.at)
+  }, [openPage])
+
+  const activate = useCallback((id: number) => setStrip((current) => activatePage(current, id)), [])
+  const move = useCallback(
+    (id: number, toIndex: number) => setStrip((current) => movePage(current, id, toIndex)),
+    []
+  )
 
   const navigate = useCallback(
     (id: number, input: string) => {
@@ -322,6 +505,13 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
     },
     [remember, failed]
   )
+  const shareTargets = useCallback(() => helm.invoke('browser:shareTargets'), [])
+  const share = useCallback(
+    (id: number, session: number | null) => {
+      void helm.invoke('browser:share', { id, session }).then(remember).catch(failed(id, 'share'))
+    },
+    [remember, failed]
+  )
   const evaluate = useCallback(
     (id: number, source: string) => helm.invoke('browser:eval', { id, source }),
     []
@@ -354,13 +544,20 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
       if (suppressed.current.has(reason) === next) return
       if (next) suppressed.current.add(reason)
       else suppressed.current.delete(reason)
-      pushAll()
+      cover()
     },
-    [pushAll]
+    [cover]
   )
 
   return {
     views,
+    pages: shown.order,
+    active: shown.active,
+    activate,
+    move,
+    closeAll,
+    reopen,
+    stills,
     entries,
     open,
     close,
@@ -373,6 +570,8 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
     stopFind,
     zoom,
     clearStorage,
+    shareTargets,
+    share,
     evaluate,
     sendBounds,
     setShowing,

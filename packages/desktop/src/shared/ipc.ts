@@ -69,6 +69,7 @@ import type {
   SecretInput,
   SecretsState
 } from '@helm/core'
+import type { BrowserCommand } from './browserKeys'
 import type { ProbeOp, TermCreateOptions } from './protocol'
 
 /**
@@ -530,6 +531,31 @@ export interface BrowserState {
    * will close.
    */
   openedBy: string | null
+  /**
+   * Whether the session in `openedBy` is still running. Its name stays on the
+   * tab after it ends - who opened a page is history - but only a running
+   * session can drive anything, so only then does the page say it can.
+   */
+  openerRunning: boolean
+  /**
+   * The session the user has let read and drive this tab, or null.
+   *
+   * Only ever a tab the user opened: an agent's own tab is already its
+   * session's. Taken back when the user says so and when that session ends,
+   * which is when its token dies.
+   */
+  sharedWith: BrowserShare | null
+}
+
+/**
+ * A session a page is shared with, or could be: its id and what it is called.
+ *
+ * Never its token. The token is what the tools check a share against, and it
+ * stays in the main process; the window names a session by its id.
+ */
+export interface BrowserShare {
+  session: number
+  name: string
 }
 
 /**
@@ -561,6 +587,15 @@ export interface BrowserConsoleEntry {
  * up, the workspace column is collapsed, a tab is being dragged. Main does not
  * reason about any of them; it calls `setVisible`.
  */
+/**
+ * A Browser tab key pressed with the caret in a page (`shared/browserKeys.ts`).
+ * Main swallowed it before the page saw it; the window does what it says.
+ */
+export interface BrowserCommandEvent {
+  id: number
+  command: BrowserCommand
+}
+
 export interface BrowserBounds {
   id: number
   x: number
@@ -568,6 +603,25 @@ export interface BrowserBounds {
   width: number
   height: number
   visible: boolean
+}
+
+/**
+ * A page the window did not ask for, and where it goes in the Browser tab's
+ * strip.
+ *
+ * Placement travels with the page because main is the only side that knows
+ * which page opened it: a renderer that appended every page at the end would
+ * put a sign-in's page five tabs away from the page that is waiting for it.
+ */
+export interface BrowserOpened {
+  state: BrowserState
+  /** The page that opened it, which it goes right after. Null for an agent's `browser_open`: the end. */
+  after: number | null
+  /**
+   * Whether the page in front stays in front: a middle click, and every page
+   * an agent opens. A `target="_blank"` or `window.open` comes to the front.
+   */
+  background: boolean
 }
 
 /** How many browser tabs may be open at once. `window.open` is capped by it. */
@@ -1265,6 +1319,24 @@ export interface IpcRequests {
   'browser:clearStorage': { request: { id: number }; response: BrowserState | null }
   /** The ring buffer, for a panel that has just been opened on an old tab. */
   'browser:console': { request: { id: number }; response: BrowserConsoleEntry[] }
+  /**
+   * The page as a picture (PNG data URL), or null. Painted where the view is
+   * while the view stands down for a menu or a dialog, so the page does not
+   * vanish from under it.
+   */
+  'browser:snapshot': { request: { id: number }; response: string | null }
+  /**
+   * The sessions a page can be shared with: running, and given Helm's browser
+   * tools when they started. Empty while the tools are switched off.
+   */
+  'browser:shareTargets': { request: void; response: BrowserShare[] }
+  /**
+   * Let one session read and drive a page the user opened, or (`session:
+   * null`) take it back. A tab holds one share at a time; a new one replaces
+   * it. Refused, answering the tab as it is, for a page an agent opened and
+   * for a session that is not one of `browser:shareTargets`.
+   */
+  'browser:share': { request: { id: number; session: number | null }; response: BrowserState | null }
 
   /**
    * Plugins (`main/plugins/host.ts`). The list is all the window draws plugins
@@ -1602,11 +1674,12 @@ export interface IpcEvents {
   'browser:changed': BrowserState
 
   /**
-   * A view Helm made that the window did not ask for: `window.open` inside a
-   * page. The strip adopts it as a tab, and the cap is enforced in main - a
-   * page that opens eleven windows gets ten tabs and a console line, not eleven.
+   * A page Helm made that the window did not ask for: a page's `window.open`,
+   * `target="_blank"` or middle click, or one an agent opened. The Browser tab
+   * puts it in its strip, and the cap is enforced in main - a page that opens
+   * eleven windows gets ten tabs and a console line, not eleven.
    */
-  'browser:opened': BrowserState
+  'browser:opened': BrowserOpened
 
   /**
    * A view is gone. Sent when main destroyed it for a reason the window did not
@@ -1617,6 +1690,9 @@ export interface IpcEvents {
 
   /** A line a page wrote, or a load that failed. Feeds the console panel. */
   'browser:logged': { id: number; entry: BrowserConsoleEntry }
+
+  /** A Browser tab key pressed inside a page. Keyboard focus is already back in the window when it needs to be. */
+  'browser:command': BrowserCommandEvent
 
   /**
    * Files changed under a root the window is watching - project-relative and
@@ -1797,6 +1873,9 @@ export const REQUEST_CHANNELS = Object.keys({
   'browser:zoom': true,
   'browser:clearStorage': true,
   'browser:console': true,
+  'browser:snapshot': true,
+  'browser:shareTargets': true,
+  'browser:share': true,
   'plugins:list': true,
   'plugins:add': true,
   'plugins:remove': true,
@@ -1864,6 +1943,7 @@ export const EVENT_CHANNELS = Object.keys({
   'browser:opened': true,
   'browser:closed': true,
   'browser:logged': true,
+  'browser:command': true,
   'files:changed': true,
   'plugins:changed': true,
   'plugins:ui': true,

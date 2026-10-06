@@ -181,14 +181,15 @@ protocol.registerSchemesAsPrivileged([
  * The window-open side answers `deny` for everything that is not a browser
  * view, and that is still the whole of the app's own posture - the window, the
  * spike page and an artifact frame cannot open anything, ever. A browser view
- * gets its answer from `browserWindowOpen`, which turns `target="_blank"` into
- * a Helm tab and `window.open` with features into a real popup window on the
- * same partition, under the same reach rule, in the same registry.
+ * gets its answer from `browserWindowOpen`, which turns `target="_blank"` and a
+ * plain `window.open` into a page in the Browser tab and a sized `window.open`
+ * into a real popup window - both keeping `window.opener`, on the same
+ * partition, under the same reach rule, in the same registry.
  *
- * The popup is the one deliberate widening in this file and it was measured
- * into existence: denied, `window.open` returns `null` and every OAuth library
- * reports a blocked popup, and the tab Helm opened instead has no
- * `window.opener` for the sign-in to hand its code back through. See
+ * Allowing those opens is the one deliberate widening in this file and it was
+ * measured into existence: denied, `window.open` returns `null` and every
+ * OAuth library reports a blocked popup, and a page Helm loaded fresh instead
+ * has no `window.opener` for the sign-in to hand its code back through. See
  * `browserWindowOpen` for the terms it is held to.
  *
  * Both hooks are read at *navigation* time rather than at creation time, which
@@ -501,9 +502,13 @@ function startApp(options: AppOptions = {}): void {
       emit(win, 'settings:changed', next)
     },
     onChanged: (state) => emit(win, 'browser:changed', state),
-    onOpened: (state) => emit(win, 'browser:opened', state),
+    onOpened: (opened) => emit(win, 'browser:opened', opened),
     onClosed: (id) => emit(win, 'browser:closed', { id }),
-    onLogged: (id, entry) => emit(win, 'browser:logged', { id, entry })
+    onCommand: (command) => emit(win, 'browser:command', command),
+    onLogged: (id, entry) => emit(win, 'browser:logged', { id, entry }),
+    // With the tools off there is nobody to share a page with.
+    sessionOpener: (session) => (services.settings.browserMcp ? sessions.browserOpener(session) : null),
+    shareTargets: () => (services.settings.browserMcp ? sessions.browserSessions() : [])
   })
 
   /**

@@ -2,8 +2,10 @@ export { AppShell, type AppShellProps } from './components/AppShell'
 export {
   BrowserPane,
   BROWSER_WIDTHS,
+  BROWSER_ZOOM,
   type BrowserPaneProps,
-  type BrowserPaneState
+  type BrowserPaneState,
+  type BrowserShareTarget
 } from './components/BrowserPane'
 export { Chip, type ChipProps, type ChipTone } from './components/Chip'
 export { EmptyState, type EmptyStateProps } from './components/EmptyState'
@@ -161,6 +163,12 @@ export { SessionsPane, type SessionsPaneProps } from './components/SessionsPane'
 export { Sidebar, SidebarAction, type SidebarProps } from './components/Sidebar'
 export { StatusBar, type StatusBarProps, type StatusPluginItem } from './components/StatusBar'
 export { TabBar, type Tab, type TabBarProps, type TabIndicator } from './components/TabBar'
+export {
+  BROWSER_PAGE_MIME,
+  BrowserPages,
+  type BrowserPage,
+  type BrowserPagesProps
+} from './components/BrowserPages'
 export { UsageStatus, type UsageStatusProps } from './components/UsageStatus'
 export { TitleBar } from './components/TitleBar'
 export { RestorePane, type RestorePaneProps } from './components/RestorePane'

@@ -91,6 +91,8 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     filesWrap: s.filesWrap,
     onFilesWrapChange: vi.fn(),
     browserReach: s.browserReach,
+    browserSearch: s.browserSearch,
+    onBrowserSearchChange: vi.fn(),
     onBrowserReachChange: vi.fn(),
     browserMcp: s.browserMcp,
     onBrowserMcpChange: vi.fn(),

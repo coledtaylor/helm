@@ -681,7 +681,10 @@ export function registerIpc(ctx: IpcContext): void {
     'browser:stopFind': ({ id }) => ctx.browsers.stopFind(id),
     'browser:zoom': ({ id, level }) => ctx.browsers.zoom(id, level),
     'browser:clearStorage': ({ id }) => ctx.browsers.clearStorage(id),
-    'browser:console': ({ id }) => ctx.browsers.entries(id)
+    'browser:console': ({ id }) => ctx.browsers.entries(id),
+    'browser:snapshot': ({ id }) => ctx.browsers.snapshot(id),
+    'browser:shareTargets': () => ctx.browsers.shareTargets(),
+    'browser:share': ({ id, session }) => ctx.browsers.share(id, session)
   }
 
   const sends: SendHandlers = {

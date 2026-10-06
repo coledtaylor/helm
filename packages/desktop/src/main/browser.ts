@@ -6,6 +6,7 @@ import {
   type BrowserWindow,
   type Session,
   type WebContents,
+  type WebPreferences,
   type WindowOpenHandlerResponse
 } from 'electron'
 import {
@@ -19,7 +20,15 @@ import {
   type BrowserReach
 } from '@helm/core'
 import { TITLEBAR_HEIGHT } from './chrome'
-import { BROWSER_TABS_MAX, type BrowserConsoleEntry, type BrowserState } from '../shared/ipc'
+import { browserKeyCommand, COMMANDS_FOR_THE_WINDOW, COMMANDS_THAT_REPEAT } from '../shared/browserKeys'
+import {
+  BROWSER_TABS_MAX,
+  type BrowserCommandEvent,
+  type BrowserConsoleEntry,
+  type BrowserOpened,
+  type BrowserShare,
+  type BrowserState
+} from '../shared/ipc'
 
 /**
  * The browser pane's main-process half: a dev-server viewport, not a browser.
@@ -111,6 +120,12 @@ export const BROWSER_PARTITION = 'persist:helm-browser'
 export interface BrowserOpener {
   key: string
   name: string
+}
+
+/** A share: the session's identity for the tools, and its id for the window. */
+export interface BrowserShareTo {
+  opener: BrowserOpener
+  session: number
 }
 
 /**
@@ -239,8 +254,18 @@ interface View {
   /** The address a retry is trying to reach, and when it gives up. */
   retry: { url: string; until: number; step: number; timer: NodeJS.Timeout | null } | null
   find: { query: string; matches: number; active: number } | null
+  /** The id `findInPage` returned for the newest search. Results for any other are stale. */
+  findRequest: number | null
   /** The session that opened this tab, or null when the user did. */
   openedBy: BrowserOpener | null
+  /** Set once the session in `openedBy` has ended (`revoke`). Its name stays; its reach does not. */
+  openerEnded: boolean
+  /**
+   * The session the user let read and drive this tab, and that session's id
+   * for the window. Only ever on a tab the user opened, and gone the moment
+   * that session ends.
+   */
+  sharedWith: BrowserShareTo | null
   /** Whether this view is attached to the window's content view right now. */
   attached: boolean
   /**
@@ -249,6 +274,22 @@ interface View {
    * user has not brought to the front; `bounds()` clears it for good.
    */
   parked: boolean
+  /**
+   * How many of an agent's key events are being delivered right now.
+   * `sendInputEvent` raises `before-input-event` synchronously (measured on
+   * Electron 43.3.0), so a key an agent presses arrives while this is above
+   * zero - and it is the page's, never a Browser tab command: an agent pressing
+   * Ctrl+T must not open the user a page, nor Ctrl+W close one.
+   */
+  agentInput: number
+  /**
+   * Set while the page has the whole screen (`requestFullscreen`): what sizes
+   * the view to the window, kept so it can be unhooked from the window's
+   * `resize` when the page lets go.
+   */
+  fullscreen: (() => void) | null
+  /** Where the pane last put this view, and whether it showed. Fullscreen puts it back here. */
+  placed: { x: number; y: number; width: number; height: number; visible: boolean } | null
 }
 
 export interface BrowserHost {
@@ -268,6 +309,8 @@ export interface BrowserHost {
   stopFind(id: number): void
   zoom(id: number, level: number): BrowserState | null
   clearStorage(id: number): Promise<BrowserState | null>
+  /** The page as a picture (a PNG data URL), for the window to show while the view stands down. */
+  snapshot(id: number): Promise<string | null>
   entries(id: number): BrowserConsoleEntry[]
   bounds(payload: {
     id: number
@@ -299,7 +342,10 @@ export interface BrowserHost {
     opener: BrowserOpener,
     url: string
   ): Promise<{ state: BrowserState | null; problem: string | null }>
-  /** Navigate a tab the session opened. Refuses anything else, in a sentence. */
+  /**
+   * Navigate a tab the session opened or the user shared with it. Refuses
+   * anything else, in a sentence.
+   */
   navigateFor(
     opener: BrowserOpener,
     id: number,
@@ -309,6 +355,22 @@ export interface BrowserHost {
   closeFor(opener: BrowserOpener, id: number): { closed: boolean; problem: string | null }
   /** Who opened a view, or null. The comparison behind `closeFor`. */
   openerOf(id: number): BrowserOpener | null
+  /** The session the user shared a view with, or null. */
+  sharedWith(id: number): BrowserOpener | null
+  /**
+   * Let a session read and drive a tab the user opened, or (`null`) take it
+   * back. One share at a time; a new one replaces the old. Answered unchanged
+   * for a tab an agent opened, which is its session's already, and for a
+   * session `sessionOpener` does not answer for.
+   */
+  share(id: number, session: number | null): BrowserState | null
+  /** The sessions a tab can be shared with right now. */
+  shareTargets(): BrowserShare[]
+  /**
+   * A session has ended and its token with it: every tab shared with it is
+   * taken back, and the tabs it opened stop saying it can drive them.
+   */
+  revoke(key: string): void
   /** The view's rectangle and page-side size, for aiming input at it. */
   viewport(id: number): { width: number; height: number; zoom: number } | null
   /** The view's own frame as PNG bytes. What `browser_screenshot` returns. */
@@ -320,6 +382,14 @@ export interface BrowserHost {
     y: number,
     options?: { button?: 'left' | 'right' | 'middle'; clickCount?: number }
   ): Promise<void>
+  /** A real pointer move to a point in the view, and nothing pressed: a hover. */
+  hover(id: number, x: number, y: number): Promise<void>
+  /**
+   * A real wheel turn at a point in the view, by `dx` and `dy` pixels -
+   * positive is right and down. Whatever is under the point scrolls, as it
+   * would under a person's wheel.
+   */
+  scroll(id: number, x: number, y: number, dx: number, dy: number): Promise<void>
   /** Real key events for each character. Goes wherever the page's focus is. */
   typeInto(id: number, text: string): Promise<void>
   /** One key, with modifiers. `Enter`, `Tab`, `ArrowDown`, `a`. */
@@ -337,8 +407,20 @@ export interface BrowserHostOptions {
   /** Writes the remembered addresses. Main owns them, like the view. */
   writeSettings: (patch: Partial<AppSettings>) => void
   onChanged: (state: BrowserState) => void
-  onOpened: (state: BrowserState) => void
+  /** A page the window did not ask for: a page's `window.open`, or an agent's. */
+  onOpened: (opened: BrowserOpened) => void
   onClosed: (id: number) => void
+  /** A Browser tab key pressed with the caret in a page - see `before-input-event` in `create`. */
+  onCommand: (command: BrowserCommandEvent) => void
+  /**
+   * A session's identity at the tool endpoint, by the id the window names it
+   * by - or null for one that cannot take a share: ended, started without the
+   * tools, or the tools switched off. The token comes in here and goes no
+   * further than the tab it is shared on.
+   */
+  sessionOpener: (session: number) => BrowserOpener | null
+  /** Every session `sessionOpener` answers for. */
+  shareTargets: () => BrowserShare[]
   onLogged: (id: number, entry: BrowserConsoleEntry) => void
 }
 
@@ -392,23 +474,24 @@ export function browserWillNavigate(webContentsId: number, url: string): boolean
  * What a browser view gets is one of two answers, chosen by what the page
  * actually asked for:
  *
- *   - a **tab**, for `target="_blank"` and a middle click - the dispositions
- *     Chromium calls `foreground-tab` and `background-tab`. That is what those
- *     mean in every browser, and a Helm tab is a better one than a bare window;
- *   - a **window**, for `window.open` with features - disposition `new-window`
- *     - because that is the only shape in which a popup sign-in can work.
+ *   - a **page in the Browser tab**, for `target="_blank"`, a plain
+ *     `window.open` and a middle click. The page adopts the web contents
+ *     Chromium made for it, so `window.open` returns a live handle and the new
+ *     page keeps `window.opener` - see `adoptPage`;
+ *   - a **window**, for a `window.open` that asked for one - disposition
+ *     `new-window` with features, a size or `popup` - because a sign-in dialog
+ *     is a window in every browser.
  *
- * The second is a deliberate amendment to "no Chromium window is ever created",
- * and `BR-40` is what holds it to its terms. The whole of a popup OAuth flow is
- * two things a tab cannot have: `window.open` must return a live handle, and
- * the opened page must reach the opener through `window.opener.postMessage` to
- * hand back the code. Re-routed into a tab, the page gets `null` and reports a
- * blocked popup, and the tab that opens has no opener to answer - measured, and
- * the reason this changed. Nothing else about the posture moves: the popup is
- * on the same partition with the same denied permissions, refused downloads and
- * loopback-only certificate rule, it is exempted through the same registry by
- * id, and every navigation it makes goes through `browserReachAllows` exactly
- * as the pane's do.
+ * Both keep the opener, and that is the point of both. A popup OAuth flow is
+ * two things: `window.open` must return a live handle, and the opened page
+ * must reach the opener through `window.opener.postMessage` to hand back the
+ * code. A page loaded fresh into a new tab had neither - the library reported
+ * a blocked popup or never heard back, and the next attempt opened another
+ * tab. Nothing else about the posture moves: the popup and the page are on
+ * the same partition with the same permissions, refused downloads and
+ * loopback-only certificate rule, they are exempted through the same registry
+ * by id, and every navigation they make goes through `browserReachAllows`
+ * exactly as the pane's do.
  */
 export function browserWindowOpen(
   webContentsId: number,
@@ -440,6 +523,8 @@ interface InternalHost {
   ): WindowOpenHandlerResponse
   /** A download this partition refused, so every open pane can say so. */
   noteDownload(url: string): void
+  /** Whether these are a page in the Browser tab: a view's contents, not a popup's. */
+  isPage(webContentsId: number): boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -465,14 +550,30 @@ export function browserSession(): Session {
   const partition = session.fromPartition(BROWSER_PARTITION)
 
   /*
-   * Every permission, denied. Named rather than filtered, because a list of
-   * permissions to allow is a list somebody extends, and there is nothing in a
-   * dev-server viewport that wants a camera.
+   * Two permissions, for the page somebody is in, and nothing else.
+   *
+   * Writing to the clipboard, for the Copy buttons every docs site and
+   * dashboard has, and the whole screen, for a video or a slide deck. Both go
+   * only to a page in the Browser tab that has the keyboard: Chromium already
+   * wants a click for either, and the focus test is what keeps them from a
+   * page an agent is clicking in the background, and from popups, which are
+   * sign-in windows and need neither. Measured on Electron 43.3.0: a Copy
+   * button asks for `clipboard-sanitized-write`, `requestFullscreen` for
+   * `fullscreen`.
+   *
+   * Reading the clipboard stays denied. Chrome asks before a page may read it,
+   * Helm has nowhere to ask, and a clipboard holds passwords; Ctrl+V still
+   * pastes, because a paste the user made needs no permission. Everything
+   * else - camera, microphone, location, notifications - stays denied, and the
+   * two are named rather than filtered, because a list of permissions to allow
+   * is a list somebody extends.
    */
-  partition.setPermissionRequestHandler((_contents, _permission, callback) => {
-    callback(false)
+  partition.setPermissionRequestHandler((contents, permission, callback) => {
+    callback(pageMay(contents, permission))
   })
-  partition.setPermissionCheckHandler(() => false)
+  partition.setPermissionCheckHandler(
+    (contents, permission) => contents !== null && BROWSER_PERMISSIONS.has(permission) && isPage(contents.id)
+  )
   partition.setDevicePermissionHandler(() => false)
 
   /*
@@ -510,6 +611,54 @@ export function browserSession(): Session {
 
   configured = partition
   return partition
+}
+
+/** What a page in the Browser tab may be granted. See `browserSession`. */
+const BROWSER_PERMISSIONS: ReadonlySet<string> = new Set(['clipboard-sanitized-write', 'fullscreen'])
+
+/** Whether these web contents are a page in some host's Browser tab. */
+function isPage(webContentsId: number): boolean {
+  for (const host of hosts) if (host.isPage(webContentsId)) return true
+  return false
+}
+
+/** One of the two permissions, asked for by a page in the Browser tab that has the keyboard. */
+function pageMay(contents: WebContents, permission: string): boolean {
+  return (
+    BROWSER_PERMISSIONS.has(permission) &&
+    !contents.isDestroyed() &&
+    isPage(contents.id) &&
+    contents.isFocused()
+  )
+}
+
+/**
+ * The web preferences of every page Helm hosts: a view, a page a view opened,
+ * and a popup window.
+ *
+ * Every one is stated, and the ones that are Electron's default are stated
+ * *because* they are: this is the one place in Helm that renders somebody
+ * else's HTML with a network behind it, and a posture made of defaults is a
+ * posture that moves when Electron does. One list, so a page opened from
+ * another page cannot end up with a second posture.
+ */
+function viewPreferences(): WebPreferences {
+  return {
+    // The partition is the one thing that must match exactly: a popup on a
+    // different partition could not see the sign-in it was opened to complete.
+    session: browserSession(),
+    // No preload. Nothing of Helm's runs in a page, so there is no bridge to
+    // abuse and nothing for a hostile page to find.
+    contextIsolation: true,
+    nodeIntegration: false,
+    nodeIntegrationInSubFrames: false,
+    sandbox: true,
+    webviewTag: false,
+    webSecurity: true,
+    allowRunningInsecureContent: false,
+    experimentalFeatures: false,
+    spellcheck: false
+  }
 }
 
 /**
@@ -645,7 +794,12 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       project: entry.project,
       // The name, never the key. This crosses to the renderer and is painted
       // in the tab strip; the token it is derived from stays in this process.
-      openedBy: entry.openedBy?.name ?? null
+      openedBy: entry.openedBy?.name ?? null,
+      openerRunning: entry.openedBy !== null && !entry.openerEnded,
+      sharedWith:
+        entry.sharedWith === null
+          ? null
+          : { session: entry.sharedWith.session, name: entry.sharedWith.opener.name }
     }
   }
 
@@ -777,6 +931,60 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
   }
 
   /**
+   * A page that asked for the whole screen, given it.
+   *
+   * Electron makes the **window** fullscreen and leaves the view where it was:
+   * measured on 43.3.0, the view kept its 800x500 inside a 2560x1440 window.
+   * So the view is sized to the window here, raised above every other view,
+   * and kept the window's size while it stays; the pane's own reports are set
+   * aside until the page lets go (`bounds`). The top 36px are the page's too:
+   * a fullscreen window has no title bar for the window controls to sit in.
+   * Escape is Chromium's and needs nothing here.
+   */
+  const enterFullscreen = (entry: View): void => {
+    const win = options.window()
+    if (win === null || win.isDestroyed() || entry.fullscreen !== null) return
+    const fill = (): void => {
+      if (win.isDestroyed()) return
+      const { width, height } = win.getContentBounds()
+      // Adding a view its parent already holds raises it to the top.
+      if (entry.attached) win.contentView.addChildView(entry.view)
+      entry.view.setBounds({ x: 0, y: 0, width, height })
+      entry.view.setVisible(true)
+    }
+    entry.fullscreen = fill
+    win.on('resize', fill)
+    fill()
+  }
+
+  /** The page let go of the screen, or is going: the view goes back where the pane had it. */
+  const leaveFullscreen = (entry: View): void => {
+    const fill = entry.fullscreen
+    if (fill === null) return
+    entry.fullscreen = null
+    const win = options.window()
+    if (win === null || win.isDestroyed()) return
+    win.off('resize', fill)
+    const placed = entry.placed
+    if (placed === null) {
+      entry.view.setVisible(false)
+      return
+    }
+    entry.view.setBounds({ x: placed.x, y: placed.y, width: placed.width, height: placed.height })
+    entry.view.setVisible(placed.visible)
+  }
+
+  /** An agent's key events, delivered so that none of them is read as a Browser tab key. */
+  const asAgent = (entry: View, send: () => void): void => {
+    entry.agentInput += 1
+    try {
+      send()
+    } finally {
+      entry.agentInput -= 1
+    }
+  }
+
+  /**
    * The popup windows browser views have open, keyed by their `webContents.id`.
    *
    * A popup is not a tab and deliberately has no entry in `views`: it has no
@@ -817,6 +1025,13 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     // that is already gone.
     if (!views.has(entry.id)) return
     stopRetry(entry)
+    if (entry.fullscreen !== null) {
+      leaveFullscreen(entry)
+      // A page closed while it had the screen - Ctrl+W, or the page closing
+      // itself - would leave the window fullscreen with nothing in it.
+      const win = options.window()
+      if (win !== null && !win.isDestroyed() && win.isFullScreen()) win.setFullScreen(false)
+    }
     views.delete(entry.id)
     exempt.delete(entry.webContentsId)
     const win = options.window()
@@ -836,29 +1051,19 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     if (tellTheWindow) options.onClosed(entry.id)
   }
 
-  const create = (project: string | null, openedBy: BrowserOpener | null = null): View => {
-    const view = new WebContentsView({
-      webPreferences: {
-        // Every one of these is stated, and the ones that are Electron's
-        // default are stated *because* they are: this is the one place in Helm
-        // that renders somebody else's HTML with a network behind it, and a
-        // posture made of defaults is a posture that moves when Electron does.
-        session: browserSession(),
-        // No preload. Nothing of Helm's runs in a page, so there is no bridge
-        // to abuse and nothing for a hostile page to find.
-        contextIsolation: true,
-        nodeIntegration: false,
-        nodeIntegrationInSubFrames: false,
-        sandbox: true,
-        webviewTag: false,
-        // A page that could open another `<webview>`-shaped thing, or reach the
-        // window through `window.opener`, would be a page with a route out.
-        webSecurity: true,
-        allowRunningInsecureContent: false,
-        experimentalFeatures: false,
-        spellcheck: false
-      }
-    })
+  /**
+   * A view, on new web contents or - `adopt` - on the ones Chromium made for a
+   * page's `window.open`. Adopted contents were made with `viewPreferences()`
+   * too: `windowOpen` hands them over as the override.
+   */
+  const create = (
+    project: string | null,
+    openedBy: BrowserOpener | null = null,
+    adopt?: WebContents
+  ): View => {
+    const view = new WebContentsView(
+      adopt === undefined ? { webPreferences: viewPreferences() } : { webContents: adopt }
+    )
     // Registered here, in the constructor path, so that by the time the guard in
     // `index.ts` runs its listener - which is when a navigation is attempted,
     // not when it was attached - this id is known.
@@ -873,22 +1078,34 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       problem: null,
       retry: null,
       find: null,
+      findRequest: null,
       openedBy,
       attached: false,
-      parked: openedBy !== null
+      parked: openedBy !== null,
+      openerEnded: false,
+      sharedWith: null,
+      agentInput: 0,
+      fullscreen: null,
+      placed: null
     }
     views.set(entry.id, entry)
 
     const wc = view.webContents
 
     /*
-     * The ground the page paints on before it has painted.
+     * The ground the page paints on.
      *
      * Foreign ground (DESIGN.md 6): the view's own ground is the page's, and
-     * Helm has no business tinting it. What it can do is not flash white on a
-     * dark canvas for the frame between attaching and the first paint.
+     * Helm has no business tinting it. Clear while the view is an empty new
+     * page, so it does not flash white on a dark canvas before anything has
+     * loaded - and white from the first navigation on, which is the ground
+     * every browser gives a page that sets none. Left clear, a page with no
+     * background of its own - plain HTML, a dev server's raw JSON - was Helm's
+     * canvas with black text on it, and a page in fullscreen had Helm's whole
+     * window showing through it.
      */
     view.setBackgroundColor('#00000000')
+    let grounded = false
     // A new view paints nothing until the window has said where it goes. The
     // alternative is a view at whatever bounds Electron defaults to, over
     // the app, for the frame between construction and the first report. An
@@ -917,6 +1134,10 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
      * had only asked "did it connect in the end" would have passed.
      */
     wc.on('did-navigate', (_event, url, httpResponseCode) => {
+      if (!grounded) {
+        grounded = true
+        view.setBackgroundColor('#ffffff')
+      }
       if (httpResponseCode <= 0) {
         announce(entry)
         return
@@ -983,6 +1204,8 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     })
 
     wc.on('found-in-page', (_event, result) => {
+      // A search typed over by the next keystroke can still answer after it.
+      if (entry.find === null || result.requestId !== entry.findRequest) return
       entry.find = {
         query: entry.find?.query ?? '',
         matches: result.matches,
@@ -993,6 +1216,35 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
 
     wc.on('devtools-opened', () => announce(entry))
     wc.on('devtools-closed', () => announce(entry))
+
+    /*
+     * The Browser tab's keys, pressed with the caret in the page.
+     *
+     * Keys typed into a page go to that page's process, so the window never
+     * sees them, and Ctrl+W in a page that did nothing was the clearest way the
+     * pane felt like something other than a browser. Main reads them here,
+     * before the page does, from the table both sides share
+     * (`shared/browserKeys.ts`), swallows the ones that are the browser's, and
+     * hands the command to the window, which owns the strip, the find field and
+     * the address bar - giving the window the keyboard first when the answer is
+     * drawn there. An agent's keys (`agentInput`) and every other key are the
+     * page's; a held key repeats only where repeating means something.
+     */
+    wc.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown' || entry.agentInput > 0) return
+      const command = browserKeyCommand(input)
+      if (command === null) return
+      event.preventDefault()
+      if (input.isAutoRepeat && !COMMANDS_THAT_REPEAT.has(command)) return
+      if (COMMANDS_FOR_THE_WINDOW.has(command)) {
+        const win = options.window()
+        if (win !== null && !win.isDestroyed()) win.webContents.focus()
+      }
+      options.onCommand({ id: entry.id, command })
+    })
+
+    wc.on('enter-html-full-screen', () => enterFullscreen(entry))
+    wc.on('leave-html-full-screen', () => leaveFullscreen(entry))
 
     // A page whose render process died leaves a view that paints nothing and
     // answers nothing. The tab goes with it rather than sitting there.
@@ -1174,38 +1426,56 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
   }
 
   /**
-   * A page's `window.open` turned into a Helm tab.
+   * A page's `target="_blank"`, plain `window.open` or middle click, as a page
+   * in the Browser tab.
    *
-   * What every disposition except `new-window` gets, and what an agent's tab
-   * gets for all of them. Unchanged from when it was the only answer.
+   * Electron hands over the web contents Chromium already made for the new
+   * page (`createWindow`), and the view **adopts** them rather than loading
+   * the address into new ones. That is what keeps a sign-in working: the new
+   * page has `window.opener`, and the `window.open` that made it got a live
+   * handle back. Loading the address fresh - what this did before - gave the
+   * page neither, so a library reported a blocked popup or never heard back,
+   * and its next attempt opened another tab. Measured on Electron 43.3.0.
+   *
+   * A middle click arrives with no web contents: Chromium opens those from
+   * the link itself, with no opener to keep, so that one is loaded here.
+   *
+   * The page belongs to whoever the opening one belonged to. A page an agent
+   * opened that opens another has produced another of the agent's pages, in
+   * the background, and the agent is the one that can tidy it up.
    */
-  const spawnTab = (entry: View, url: string): void => {
-    if (views.size >= BROWSER_TABS_MAX) {
-      entry.problem = `A page tried to open another window and Helm is already holding ${String(
-        BROWSER_TABS_MAX
-      )} browser tabs. Close one, or open the address in your own browser.`
-      log(entry, {
-        level: 'warning',
-        message: `window.open(${url}) refused: ${String(BROWSER_TABS_MAX)} tabs is the cap`,
-        source: url,
-        line: 0
-      })
-      announce(entry)
-      return
-    }
-    // The new tab belongs to whoever the opening one belonged to. A page an
-    // agent opened that opens another window has produced another of the
-    // agent's tabs, and the agent is the one that can tidy it up.
-    const opened = create(entry.project, entry.openedBy)
-    if (entry.openedBy === null) {
-      load(opened, url)
-      options.onOpened(state(opened))
-    } else {
-      showAgentView(opened)
-      load(opened, url)
-      options.onOpened(state(opened))
-      void primeAgentView(opened)
-    }
+  const adoptPage = (
+    opener: View,
+    url: string,
+    background: boolean,
+    guest: WebContents | undefined
+  ): WebContents => {
+    const entry = create(opener.project, opener.openedBy, guest)
+    const agent = opener.openedBy !== null
+    if (agent) showAgentView(entry)
+    // Placed before anything is loaded: the load announces the page, and a
+    // window that heard of it that way first would draw it at the end of the
+    // strip for a frame.
+    options.onOpened({ state: state(entry), after: opener.id, background: background || agent })
+    if (guest === undefined) load(entry, url)
+    if (agent) void primeAgentView(entry)
+    // Electron checks that what comes back is the contents it handed over.
+    return entry.view.webContents
+  }
+
+  /** The cap, said on the page that tried to open one more. */
+  const refuseOverCap = (entry: View, url: string): WindowOpenHandlerResponse => {
+    entry.problem = `A page tried to open another tab and Helm is already holding ${String(
+      BROWSER_TABS_MAX
+    )} browser tabs. Close one, or open the address in your own browser.`
+    log(entry, {
+      level: 'warning',
+      message: `window.open(${url}) refused: ${String(BROWSER_TABS_MAX)} tabs is the cap`,
+      source: url,
+      line: 0
+    })
+    announce(entry)
+    return { action: 'deny' }
   }
 
   const host: BrowserHost & InternalHost = {
@@ -1214,6 +1484,13 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     // prevented - which is every redirect of the sign-in it was opened for.
     owns(webContentsId) {
       return openerFor(webContentsId) !== null
+    },
+
+    isPage(webContentsId) {
+      for (const entry of views.values()) {
+        if (entry.webContentsId === webContentsId) return contentsOf(entry) !== null
+      }
+      return false
     },
 
     allowNavigation(webContentsId, url) {
@@ -1283,22 +1560,39 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       /*
        * A window, but only for what a window means.
        *
-       * `new-window` is the disposition Chromium reports for `window.open` with
-       * features, which is a popup and nothing else - a sign-in dialog, a
-       * picker, a payment sheet. `target="_blank"` and a middle click arrive as
-       * `foreground-tab` and `background-tab`, and those *are* tabs: turning
-       * them into windows would be worse than what Helm did before, not better.
+       * `new-window` with features is a `window.open` that asked for a size or
+       * for `popup`, which is a popup and nothing else - a sign-in dialog, a
+       * picker, a payment sheet. `target="_blank"`, a plain `window.open` and a
+       * middle click arrive as `foreground-tab` and `background-tab`, and those
+       * *are* tabs. A shift-click is `new-window` with no features: a page,
+       * because nothing in it asked for a dialog's shape.
        *
-       * And never for a tab an agent opened. The reach rules already say an
+       * And never for a page an agent opened. The reach rules already say an
        * agent may not go anywhere the pane could not; this says it may not put
-       * a window on the user's screen either. An agent-opened tab that calls
-       * `window.open` gets another agent tab, exactly as it did before, which
-       * is the surface `browser_tabs` and `browser_close` already describe.
+       * a window on the user's screen either. Its `window.open` gets another
+       * of its pages, with the opener kept, which is the surface `browser_tabs`
+       * and `browser_close` already describe.
        */
-      const wantsWindow = disposition === 'new-window' && entry.openedBy === null
+      const wantsWindow =
+        disposition === 'new-window' && details.features.trim() !== '' && entry.openedBy === null
       if (!wantsWindow) {
-        spawnTab(entry, url)
-        return { action: 'deny' }
+        if (views.size >= BROWSER_TABS_MAX) return refuseOverCap(entry, url)
+        return {
+          action: 'allow',
+          // A page outlives the page that opened it, as a tab does in any
+          // browser. A popup does not - see below.
+          outlivesOpener: true,
+          overrideBrowserWindowOptions: { webPreferences: viewPreferences() },
+          createWindow: (made) =>
+            adoptPage(
+              entry,
+              url,
+              disposition === 'background-tab',
+              // Not in Electron's type, and documented: the contents Chromium
+              // made for the page, absent for a middle click.
+              (made as { webContents?: WebContents }).webContents
+            )
+        }
       }
 
       if (popupsOf(entry.id) >= BROWSER_POPUPS_MAX) {
@@ -1331,24 +1625,9 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
           minimizable: false,
           maximizable: false,
           fullscreenable: false,
-          webPreferences: {
-            // The same list `create` states, and stated again here for the same
-            // reason it is stated there: a popup that inherited its posture
-            // from a default would be a second posture, moving when Electron
-            // moves. The session is the one thing that must match exactly - a
-            // popup on a different partition could not see the sign-in it was
-            // opened to complete.
-            session: browserSession(),
-            contextIsolation: true,
-            nodeIntegration: false,
-            nodeIntegrationInSubFrames: false,
-            sandbox: true,
-            webviewTag: false,
-            webSecurity: true,
-            allowRunningInsecureContent: false,
-            experimentalFeatures: false,
-            spellcheck: false
-          }
+          // The list every page gets: a popup that inherited its posture from
+          // a default would be a second posture, moving when Electron moves.
+          webPreferences: viewPreferences()
         }
       }
     },
@@ -1394,13 +1673,15 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     navigate(id, input) {
       const entry = viewFor(id)
       if (entry === null) return null
-      const resolved = resolveBrowserAddress(input)
+      // The address bar is the one caller that searches: a phrase becomes the
+      // engine's results address here, and `load` holds that to the reach rule
+      // like any other.
+      const resolved = resolveBrowserAddress(input, settings().browserSearch)
       if (resolved.url === null) {
         stopRetry(entry)
         entry.problem = resolved.problem
-        // Nothing was fetched, and that is the claim `BR-15` makes: the address
-        // bar never hands anything to a search engine, so a word produces a
-        // sentence and no request at all.
+        // Nothing was fetched: with searching off, a phrase produces a sentence
+        // and no request at all.
         return announce(entry)
       }
       return load(entry, resolved.url)
@@ -1481,18 +1762,20 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
         announce(entry)
         return
       }
-      entry.find = { query, matches: entry.find?.matches ?? 0, active: entry.find?.active ?? 0 }
       /*
-       * The page is focused first, and that is required rather than polite.
+       * `findNext: true` **starts** a search, despite the name, and `false`
+       * steps through the one already running (Electron's own docs). So a
+       * changed query is a new search and the same query again is a step.
+       * This was inverted once, and every first search was sent as a step
+       * through a search that never started: zero matches, always.
        *
-       * Chromium's find controller belongs to the focused web contents, and the
-       * caret is in the pane's find field - which is the *window's* contents,
-       * not the view's. Measured: without this, `findInPage` on a visible view
-       * showing text that plainly contains the word returns zero matches, which
-       * is indistinguishable from a page that does not contain it.
+       * And the page is **not** focused. The caret is in the pane's find field
+       * and has to stay there; focusing the view sent every keystroke after
+       * the first into the page instead.
        */
-      wc.focus()
-      wc.findInPage(query, { forward, findNext: entry.find.active > 0 })
+      const starting = entry.find?.query !== query
+      if (starting) entry.find = { query, matches: 0, active: 0 }
+      entry.findRequest = wc.findInPage(query, { forward, findNext: starting })
     },
 
     stopFind(id) {
@@ -1500,6 +1783,10 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       if (live === null) return
       live.wc.stopFindInPage('clearSelection')
       live.entry.find = null
+      // The find field is closing, and the caret goes back to the page it was
+      // searching, as it does in every browser. Never while searching - see
+      // `find` - only once the field is gone.
+      live.wc.focus()
       announce(live.entry)
     },
 
@@ -1521,6 +1808,24 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
         line: 0
       })
       return announce(entry)
+    },
+
+    /*
+     * The page as it is now, for the window to paint where the view was while
+     * something is drawn over it. A native view cannot sit under a menu, so it
+     * stands down for one (`useBrowsers`); without this the page vanished every
+     * time the overflow menu opened. PNG rather than JPEG, so text in the still
+     * is the page's text and not an approximation of it.
+     */
+    async snapshot(id) {
+      const live = liveFor(id)
+      if (live === null) return null
+      try {
+        const image = await live.wc.capturePage()
+        return image.isEmpty() ? null : image.toDataURL()
+      } catch {
+        return null
+      }
     },
 
     entries(id) {
@@ -1567,9 +1872,14 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       const y = Math.max(top, wantedY)
       const height = Math.max(0, wantedHeight - (y - wantedY))
 
+      // The page has the whole screen. What the pane says now is about a window
+      // laid out at that size; where the view goes back to is where it was.
+      if (entry.fullscreen !== null) return
+
       // The window has a pane for this tab, so it is no longer parked and never
       // will be again: from here it hides and shows like every other view.
       entry.parked = false
+      entry.placed = { x, y, width, height, visible: payload.visible }
       entry.view.setBounds({ x, y, width, height })
       /*
        * Hiding, and every reason for it, folded into one boolean by the window.
@@ -1609,8 +1919,11 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       }
       const entry = create(null, opener)
       showAgentView(entry)
+      // At the end of the strip and behind the page in front: an agent opening
+      // a page is no reason to take the user's page away from them. Placed
+      // before the load announces it, as `adoptPage` does.
+      options.onOpened({ state: state(entry), after: null, background: true })
       const next = load(entry, url)
-      options.onOpened(next)
       await primeAgentView(entry)
       return { state: next, problem: next.problem }
     },
@@ -1618,7 +1931,8 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     navigateFor(opener, id, url) {
       const entry = viewFor(id)
       if (entry === null) return { state: null, problem: unknownTab(id) }
-      if (entry.openedBy?.key !== opener.key) return { state: null, problem: notYours(id, entry) }
+      const drives = entry.openedBy?.key === opener.key || entry.sharedWith?.opener.key === opener.key
+      if (!drives) return { state: null, problem: notYours(id, entry, opener) }
       const next = load(entry, url)
       return { state: next, problem: next.problem }
     },
@@ -1626,7 +1940,9 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
     closeFor(opener, id) {
       const entry = viewFor(id)
       if (entry === null) return { closed: false, problem: unknownTab(id) }
-      if (entry.openedBy?.key !== opener.key) return { closed: false, problem: notYours(id, entry) }
+      // A shared tab is still the user's: it was shared to be read and
+      // driven, and closing it is theirs.
+      if (entry.openedBy?.key !== opener.key) return { closed: false, problem: notYours(id, entry, opener) }
       // `true`, so the window is told: an agent-opened tab is in the strip like
       // any other, and a tab left painting nothing would be one the user has to
       // close by hand.
@@ -1636,6 +1952,36 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
 
     openerOf(id) {
       return viewFor(id)?.openedBy ?? null
+    },
+
+    sharedWith(id) {
+      return viewFor(id)?.sharedWith?.opener ?? null
+    },
+
+    share(id, session) {
+      const entry = viewFor(id)
+      if (entry === null) return null
+      if (entry.openedBy !== null) return state(entry)
+      if (session === null) {
+        entry.sharedWith = null
+        return announce(entry)
+      }
+      const opener = options.sessionOpener(session)
+      if (opener === null) return state(entry)
+      entry.sharedWith = { opener, session }
+      return announce(entry)
+    },
+
+    shareTargets: () => options.shareTargets(),
+
+    revoke(key) {
+      for (const entry of views.values()) {
+        const shared = entry.sharedWith?.opener.key === key
+        const opened = entry.openedBy?.key === key && !entry.openerEnded
+        if (shared) entry.sharedWith = null
+        if (opened) entry.openerEnded = true
+        if (shared || opened) announce(entry)
+      }
     },
 
     viewport(id) {
@@ -1688,6 +2034,35 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       await settle()
     },
 
+    async hover(id, x, y) {
+      const live = liveFor(id)
+      if (live === null) return
+      live.wc.sendInputEvent({ type: 'mouseMove', x: Math.round(x), y: Math.round(y) })
+      await settle()
+    },
+
+    async scroll(id, x, y, dx, dy) {
+      const live = liveFor(id)
+      if (live === null) return
+      const at = { x: Math.round(x), y: Math.round(y) }
+      const wc = live.wc
+      // The pointer goes there first: a wheel scrolls what is under it.
+      wc.sendInputEvent({ type: 'mouseMove', ...at })
+      wc.sendInputEvent({
+        type: 'mouseWheel',
+        ...at,
+        // A wheel's delta is the wheel's direction, the opposite of the
+        // page's: a positive delta scrolls up and left. Precise, as a
+        // touchpad reports, so the page moves by exactly this much at once
+        // rather than easing through an animation the next read would race.
+        deltaX: -Math.round(dx),
+        deltaY: -Math.round(dy),
+        hasPreciseScrollingDeltas: true,
+        canScroll: true
+      })
+      await settle()
+    },
+
     async typeInto(id, text) {
       const live = liveFor(id)
       if (live === null) return
@@ -1698,9 +2073,11 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
         // and without the shift modifier a capital arrives lower-cased.
         const shifted = ch !== ch.toLowerCase() && ch === ch.toUpperCase()
         const modifiers = shifted ? (['shift'] as const) : ([] as const)
-        wc.sendInputEvent({ type: 'keyDown', keyCode: ch, modifiers: [...modifiers] })
-        wc.sendInputEvent({ type: 'char', keyCode: ch, modifiers: [...modifiers] })
-        wc.sendInputEvent({ type: 'keyUp', keyCode: ch, modifiers: [...modifiers] })
+        asAgent(live.entry, () => {
+          wc.sendInputEvent({ type: 'keyDown', keyCode: ch, modifiers: [...modifiers] })
+          wc.sendInputEvent({ type: 'char', keyCode: ch, modifiers: [...modifiers] })
+          wc.sendInputEvent({ type: 'keyUp', keyCode: ch, modifiers: [...modifiers] })
+        })
         await new Promise((resolve) => setTimeout(resolve, 8))
       }
       await settle()
@@ -1711,12 +2088,16 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
       if (live === null) return
       const wc = live.wc
       const mods = [...modifiers]
-      wc.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: mods })
-      // Only for an unmodified printable key, or Ctrl+A would insert an "a".
-      if (/^[\x20-\x7e]$/.test(key) && !mods.some((m) => m === 'control' || m === 'alt')) {
-        wc.sendInputEvent({ type: 'char', keyCode: key, modifiers: mods })
-      }
-      wc.sendInputEvent({ type: 'keyUp', keyCode: key, modifiers: mods })
+      // The page's key, even when it is one of the Browser tab's: an agent
+      // pressing Ctrl+W is driving the page, not closing the user's tab.
+      asAgent(live.entry, () => {
+        wc.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: mods })
+        // Only for an unmodified printable key, or Ctrl+A would insert an "a".
+        if (/^[\x20-\x7e]$/.test(key) && !mods.some((m) => m === 'control' || m === 'alt')) {
+          wc.sendInputEvent({ type: 'char', keyCode: key, modifiers: mods })
+        }
+        wc.sendInputEvent({ type: 'keyUp', keyCode: key, modifiers: mods })
+      })
       await settle()
     }
   }
@@ -1739,10 +2120,12 @@ const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve,
 const unknownTab = (id: number): string =>
   `There is no browser tab ${String(id)} in Helm. Call browser_tabs to see what is open.`
 
-const notYours = (id: number, entry: View): string =>
-  entry.openedBy === null
-    ? `Browser tab ${String(id)} was opened by the user, so it is not yours to drive. Open your own with browser_open.`
-    : `Browser tab ${String(id)} belongs to the session "${entry.openedBy.name}". A session may only drive the tabs it opened itself.`
+const notYours = (id: number, entry: View, asking: BrowserOpener): string =>
+  entry.openedBy !== null
+    ? `Browser tab ${String(id)} belongs to the session "${entry.openedBy.name}". A session may only drive the tabs it opened itself and the ones the user shares with it.`
+    : entry.sharedWith?.opener.key === asking.key
+      ? `Browser tab ${String(id)} is the user's. They shared it with this session to read and drive, and closing it is theirs.`
+      : `Browser tab ${String(id)} was opened by the user and is not shared with this session. Open your own with browser_open, or ask the user to share it from the Share button in Helm's browser bar.`
 
 /**
  * What a value evaluated to, as a string the panel can print.

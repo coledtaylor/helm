@@ -170,17 +170,42 @@ describe('resolveBrowserAddress', () => {
   })
 
   /**
-   * The posture, as a test. The address bar never hands anything to a search
-   * engine, so a word is a refusal rather than a query - and the message says
-   * so, because a bar that silently did nothing would be worse than one that
-   * searched.
+   * With searching off, a word is a refusal rather than a query - and the
+   * message says so, because a bar that silently did nothing would be worse
+   * than one that searched. Off is also what every caller but the address bar
+   * gets, by not passing an engine.
    */
-  it('never searches: a word is refused with a sentence', () => {
-    for (const typed of ['helm desktop shell', 'hello', 'what is a webcontentsview']) {
+  it('with searching off, a word is refused with a sentence', () => {
+    for (const typed of ['helm desktop shell', 'hello', 'what is a webcontentsview', 'c++: a tutorial']) {
       const answer = resolveBrowserAddress(typed)
       expect(answer.url, typed).toBeNull()
-      expect(answer.problem, typed).toContain('never searches')
+      expect(answer.problem, typed).toContain('searching from the address bar is off')
     }
+  })
+
+  it('searches a phrase or a bare word with the engine asked for, and nothing that is an address', () => {
+    expect(resolveBrowserAddress('helm desktop shell', 'google').url).toBe(
+      'https://www.google.com/search?q=helm%20desktop%20shell'
+    )
+    expect(resolveBrowserAddress('hello', 'duckduckgo').url).toBe('https://duckduckgo.com/?q=hello')
+    expect(resolveBrowserAddress('c++: a tutorial & more', 'bing').url).toBe(
+      'https://www.bing.com/search?q=c%2B%2B%3A%20a%20tutorial%20%26%20more'
+    )
+    expect(resolveBrowserAddress('what is 1+1?', 'google').problem).toBeNull()
+    // Addresses stay addresses with an engine set.
+    for (const [typed, url] of [
+      ['3000', 'http://localhost:3000/'],
+      ['localhost', 'http://localhost/'],
+      ['localhost:5173/app', 'http://localhost:5173/app'],
+      ['example.com', 'http://example.com/'],
+      ['https://example.com/a b', 'https://example.com/a%20b'],
+      ['intranet:8080', 'http://intranet:8080/']
+    ]) {
+      expect(resolveBrowserAddress(typed!, 'google').url, typed).toBe(url)
+    }
+    // And a scheme the pane cannot open is still refused, not searched.
+    expect(resolveBrowserAddress('file:///C:/tmp/x.html', 'google').url).toBeNull()
+    expect(resolveBrowserAddress('', 'google').problem).toContain('something to search for')
   })
 
   it('refuses a scheme the pane cannot open, naming it', () => {

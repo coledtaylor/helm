@@ -110,6 +110,12 @@ const MAX_BODY_BYTES = 4 * 1024 * 1024
 
 /** How many nodes a snapshot may carry before it says it was cut short. */
 const SNAPSHOT_MAX_NODES = 600
+/** What `browser_text` answers with at most, unless asked for more. */
+const TEXT_MAX_CHARS = 20_000
+/** `browser_wait_for`: how long by default, the longest it will, and how often it looks. */
+const WAIT_DEFAULT_S = 10
+const WAIT_MAX_S = 60
+const WAIT_POLL_MS = 150
 
 interface JsonRpcRequest {
   jsonrpc?: unknown
@@ -227,28 +233,35 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
    * The tab a call is about, or the sentence saying why there is not one.
    *
    * **Every tool that acts on a tab goes through this**, and the rule it
-   * enforces is the milestone's: a session drives the tabs it opened and no
-   * others. That is wider than "close only your own" on purpose. A tab the user
-   * opened is a page they chose to be on, in a partition that holds their
-   * cookies and their logins, and a tool that could screenshot or script it
-   * would be the feature CLAUDE.md's credential rule exists to prevent -
-   * reached sideways, through a picture instead of a cookie jar.
+   * enforces is explicit sharing: a session drives the tabs it opened, and a
+   * tab of the user's only once the user has shared it with that session. A
+   * tab the user opened is a page they chose to be on, in a partition that
+   * holds their cookies and their logins, and a tool that could screenshot or
+   * script it unasked would be the feature CLAUDE.md's credential rule exists
+   * to prevent - reached sideways, through a picture instead of a cookie jar.
+   * The Share button is the asking, one page and one session at a time.
+   *
+   * **And only while the page is somewhere the tools may reach.** An agent's
+   * own tab is held to `agentReach` by `will-navigate`, but a shared tab
+   * navigates as the user's, and going back through history is not a
+   * navigation `will-navigate` sees at all. So the page's address is put
+   * through the same rule here, on every call, and "Only this machine" for
+   * the tools stays true of whatever page a tool is pointed at.
    *
    * `browser_tabs` is the one exception and it is not a hole: listing is not
    * driving, and a session that cannot see the cap being reached cannot explain
    * why its next `browser_open` failed.
    */
-  const ownTab = (session: AgentSession, args: Args): { id: number } | { problem: string } => {
-    const asked = num(args.tab)
-    const id = asked ?? session.lastTab
+  const drivenTab = (session: AgentSession, args: Args): { id: number } | { problem: string } => {
+    const id = num(args.tab) ?? session.lastTab ?? newestShared(session)
     if (id === null) {
       return {
         problem:
-          'This session has no browser tab open. Call browser_open with a URL, then pass the id it gives you.'
+          'This session has no browser tab yet. Call browser_open with a URL, then pass the id it gives you. A tab the user shares with you is listed by browser_tabs.'
       }
     }
-    const exists = browsers.states(id).length > 0
-    if (!exists) {
+    const current = browsers.states(id)[0]
+    if (current === undefined) {
       return {
         problem: `There is no browser tab ${String(
           id
@@ -256,22 +269,55 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       }
     }
     const opener = browsers.openerOf(id)
-    if (opener === null) {
+    const shared = browsers.sharedWith(id)
+    const mine = opener?.key === session.opener.key
+    const sharedWithMe = opener === null && shared?.key === session.opener.key
+    if (!mine && !sharedWithMe) {
       return {
-        problem: `Browser tab ${String(
-          id
-        )} was opened by the user, so this session may not drive it. Open your own with browser_open.`
+        problem:
+          opener !== null
+            ? `Browser tab ${String(id)} belongs to the session "${
+                opener.name
+              }". A session may only drive the tabs it opened itself and the ones the user shares with it.`
+            : shared !== null
+              ? `Browser tab ${String(id)} was opened by the user and is shared with the session "${
+                  shared.name
+                }", not this one.`
+              : `Browser tab ${String(
+                  id
+                )} was opened by the user and is not shared with this session. Open your own with browser_open, or ask the user to share this one from the Share button in Helm's browser bar.`
       }
     }
-    if (opener.key !== session.opener.key) {
-      return {
-        problem: `Browser tab ${String(id)} belongs to the session "${
-          opener.name
-        }". A session may only drive the tabs it opened itself.`
-      }
-    }
+    const reach = toolsReach(current.url)
+    if (reach !== null) return { problem: `Browser tab ${String(id)} is at ${current.url}. ${reach}` }
     session.lastTab = id
     return { id }
+  }
+
+  /** The tab the user shared with this session most recently opened, or null. */
+  const newestShared = (session: AgentSession): number | null =>
+    browsers
+      .states()
+      .filter((state) => browsers.sharedWith(state.id)?.key === session.opener.key)
+      .at(-1)?.id ?? null
+
+  /**
+   * Why the tools may not act on a page at this address, or null when they may.
+   *
+   * The one rule, `browserReachAllows` composed by `agentReach`, for a page
+   * that is already somewhere. Only a web address is put to it: an empty tab,
+   * `about:blank` and an error page are nowhere a request goes.
+   */
+  const toolsReach = (url: string): string | null => {
+    if (!/^(https?|wss?):/i.test(url)) return null
+    const settings = options.settings()
+    const decision = browserReachAllows(url, ...agentReach(settings.browserReach, settings.browserMcpLocalOnly))
+    if (decision.allowed) return null
+    // The rule's own sentence is about the pane and a fetch. When the pane may
+    // be there and only the tools may not, the setting to name is the tools'.
+    return settings.browserMcpLocalOnly && browserReachAllows(url, settings.browserReach).allowed
+      ? "Helm's browser tools are held to this machine in Settings > Browser, so this session may not read or drive a page anywhere else."
+      : (decision.problem ?? "That is outside what Helm's browser tools may reach.")
   }
 
   /**
@@ -284,9 +330,9 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
    * would drift, and the drift would be silent because both would go on saying
    * yes to every URL anybody tested with.
    */
-  const allowedUrl = (input: unknown): { url: string } | { problem: string } => {
+  const allowedUrl = (input: unknown, tool: string): { url: string } | { problem: string } => {
     if (typeof input !== 'string' || input.trim() === '') {
-      return { problem: 'browser_open needs a url, for example "http://localhost:3000/".' }
+      return { problem: `${tool} needs a url, for example "http://localhost:3000/".` }
     }
     // The same resolver the address bar uses, so `3000` means the same thing to
     // an agent as it does to a person typing into the pane.
@@ -337,26 +383,25 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     {
       name: 'browser_open',
       description:
-        "Open a URL in a new tab of Helm's browser, or navigate one of this session's existing tabs. Returns the tab id, the URL it landed on and the page title. A bare port number means a dev server on this machine.",
+        "Open a URL in a new tab of Helm's browser. Returns the tab id, the URL it landed on and the page title. A bare port number means a dev server on this machine. To move a tab you already have, use browser_navigate.",
       inputSchema: {
         type: 'object',
         properties: {
           url: { type: 'string', description: 'An http or https URL, or a bare port number.' },
           tab: {
             type: 'number',
-            description:
-              'Navigate this tab instead of opening a new one. Must be a tab this session opened.'
+            description: 'Navigate this tab instead of opening a new one. The same as browser_navigate.'
           }
         },
         required: ['url'],
         additionalProperties: false
       },
       async run(session, args) {
-        const wanted = allowedUrl(args.url)
+        const wanted = allowedUrl(args.url, 'browser_open')
         if ('problem' in wanted) return fail(wanted.problem)
 
         if (num(args.tab) !== null) {
-          const tab = ownTab(session, args)
+          const tab = drivenTab(session, args)
           if ('problem' in tab) return fail(tab.problem)
           const answer = browsers.navigateFor(session.opener, tab.id, wanted.url)
           if (answer.state === null) return fail(answer.problem ?? 'That tab is gone.')
@@ -373,9 +418,52 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     },
 
     {
+      name: 'browser_navigate',
+      description:
+        'Send a tab you may drive to a URL, or go back, forward or reload it. Answers with where it landed and the page title. A new tab is browser_open.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ...TAB_ARG,
+          url: { type: 'string', description: 'An http or https URL, or a bare port number.' },
+          go: { type: 'string', enum: ['back', 'forward', 'reload'], description: 'Instead of a url.' }
+        },
+        additionalProperties: false
+      },
+      async run(session, args) {
+        const go = str(args.go)
+        if ((args.url === undefined) === (go === null)) {
+          return fail('browser_navigate needs a url, or go: "back", "forward" or "reload" - one of the two.')
+        }
+        const tab = drivenTab(session, args)
+        if ('problem' in tab) return fail(tab.problem)
+
+        if (go === null) {
+          const wanted = allowedUrl(args.url, 'browser_navigate')
+          if ('problem' in wanted) return fail(wanted.problem)
+          const answer = browsers.navigateFor(session.opener, tab.id, wanted.url)
+          if (answer.state === null) return fail(answer.problem ?? 'That tab is gone.')
+          return ok(describeTab((await settleTab(tab.id)) ?? answer.state))
+        }
+
+        const before = browsers.states(tab.id)[0]
+        if (before === undefined) return fail('That tab is gone.')
+        if (go === 'back' && !before.canGoBack) return fail(`Tab #${String(tab.id)} has nothing to go back to.`)
+        if (go === 'forward' && !before.canGoForward) {
+          return fail(`Tab #${String(tab.id)} has nothing to go forward to.`)
+        }
+        if (go === 'back') browsers.back(tab.id)
+        else if (go === 'forward') browsers.forward(tab.id)
+        else if (go === 'reload') browsers.reload(tab.id, false)
+        else return fail(`browser_navigate cannot go "${go}". It goes "back", "forward" or "reload".`)
+        return ok(describeTab((await settleMove(tab.id, before.url)) ?? before))
+      }
+    },
+
+    {
       name: 'browser_tabs',
       description:
-        "Every tab open in Helm's browser: id, URL, title, whether it is loading, and which session opened it. Tabs opened by the user are listed but cannot be driven by this session.",
+        "Every tab open in Helm's browser: id, URL, title, whether it is loading, and whose it is. You may drive your own tabs and the ones the user shares with you; the rest are listed so you can see them, not drive them.",
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       async run(session) {
         const states = browsers.states()
@@ -384,12 +472,17 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
         }
         const lines = states.map((state) => {
           const opener = browsers.openerOf(state.id)
+          const shared = browsers.sharedWith(state.id)
           const whose =
-            opener === null
-              ? 'opened by the user'
-              : opener.key === session.opener.key
+            opener !== null
+              ? opener.key === session.opener.key
                 ? 'yours'
                 : `opened by the session "${opener.name}"`
+              : shared === null
+                ? 'opened by the user'
+                : shared.key === session.opener.key
+                  ? 'opened by the user, shared with you: read and drive it, but it is theirs to close'
+                  : `opened by the user, shared with the session "${shared.name}"`
           return `#${String(state.id)}  ${state.url === '' ? '(blank)' : state.url}\n    title: ${
             state.title === '' ? '(none)' : state.title
           }\n    loading: ${String(state.loading)}   ${whose}${
@@ -416,7 +509,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
         additionalProperties: false
       },
       async run(session, args) {
-        const tab = ownTab(session, args)
+        const tab = drivenTab(session, args)
         if ('problem' in tab) return fail(tab.problem)
         const max = Math.max(20, Math.min(4000, num(args.maxNodes) ?? SNAPSHOT_MAX_NODES))
         const answer = await browsers.evaluate(tab.id, snapshotScript(max))
@@ -432,12 +525,65 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     },
 
     {
+      name: 'browser_text',
+      description:
+        "The page's text as a person reads it - what is rendered, without the markup - or one element's, named by ref or selector. Long text comes in pieces, and the answer says where the next one starts.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ...TAB_ARG,
+          ref: { type: 'string', description: 'A [ref=...] from browser_snapshot.' },
+          selector: { type: 'string', description: 'A CSS selector, if you have no ref.' },
+          offset: { type: 'number', description: 'Where to start, from the previous answer. Default 0.' },
+          maxChars: { type: 'number', description: `How much at most. Default ${String(TEXT_MAX_CHARS)}.` }
+        },
+        additionalProperties: false
+      },
+      async run(session, args) {
+        const tab = drivenTab(session, args)
+        if ('problem' in tab) return fail(tab.problem)
+        const answer = await browsers.evaluate(
+          tab.id,
+          onTarget(
+            args,
+            `const el = __helmTarget(); if (!el) return JSON.stringify({ missing: true });
+             return JSON.stringify({ text: el.innerText ?? el.textContent ?? '', url: location.href })`
+          )
+        )
+        if (!answer.ok) return fail(`Helm could not read that page: ${answer.error ?? 'unknown'}`)
+        let read: { missing?: boolean; text?: string; url?: string }
+        try {
+          read = JSON.parse(answer.value) as typeof read
+        } catch {
+          return fail(`Helm could not read that page; it answered: ${answer.value.slice(0, 200)}`)
+        }
+        if (read.missing === true) return fail(missingElement(args))
+        const text = tidyText(read.text ?? '')
+        const max = Math.max(200, Math.min(100_000, num(args.maxChars) ?? TEXT_MAX_CHARS))
+        const from = Math.max(0, Math.min(text.length, num(args.offset) ?? 0))
+        const to = Math.min(text.length, from + max)
+        return ok(
+          [
+            `tab: ${String(tab.id)}`,
+            `url: ${read.url ?? ''}`,
+            text.length === 0
+              ? 'characters: none'
+              : `characters: ${String(from)}-${String(to)} of ${String(text.length)}`,
+            '',
+            text.length === 0 ? '(no text is rendered there)' : text.slice(from, to),
+            ...(to < text.length ? ['', `(more: pass offset ${String(to)})`] : [])
+          ].join('\n')
+        )
+      }
+    },
+
+    {
       name: 'browser_screenshot',
       description:
         'A PNG of the page as it is rendered right now. Prefer browser_snapshot for finding elements; use this when the question is about what something looks like.',
       inputSchema: { type: 'object', properties: { ...TAB_ARG }, additionalProperties: false },
       async run(session, args) {
-        const tab = ownTab(session, args)
+        const tab = drivenTab(session, args)
         if ('problem' in tab) return fail(tab.problem)
         const shot = await browsers.capturePng(tab.id)
         if (shot === null) return fail('That browser tab is gone.')
@@ -476,7 +622,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
         additionalProperties: false
       },
       async run(session, args) {
-        const tab = ownTab(session, args)
+        const tab = drivenTab(session, args)
         if ('problem' in tab) return fail(tab.problem)
         const entries = browsers.entries(tab.id)
         const from = Math.max(0, Math.min(entries.length, num(args.cursor) ?? 0))
@@ -506,9 +652,9 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
         additionalProperties: false
       },
       async run(session, args) {
-        const tab = ownTab(session, args)
+        const tab = drivenTab(session, args)
         if ('problem' in tab) return fail(tab.problem)
-        const at = await pointFor(tab.id, args)
+        const at = await pointFor(tab.id, args, 'browser_click', 'click')
         if ('problem' in at) return fail(at.problem)
         const button = str(args.button)
         const clickCount = num(args.clickCount)
@@ -517,6 +663,33 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
           ...(clickCount === null ? {} : { clickCount })
         })
         return ok(`Clicked ${at.what} at (${String(Math.round(at.x))}, ${String(Math.round(at.y))}).`)
+      }
+    },
+
+    {
+      name: 'browser_hover',
+      description:
+        'Move a real mouse pointer over an element and leave it there, pressing nothing - for menus, tooltips and anything else that opens on hover. Name the element with ref or selector, or give x and y in the page.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ...TAB_ARG,
+          ref: { type: 'string', description: 'A [ref=...] from browser_snapshot.' },
+          selector: { type: 'string', description: 'A CSS selector, if you have no ref.' },
+          x: { type: 'number', description: 'Page x, when there is no element to name.' },
+          y: { type: 'number', description: 'Page y.' }
+        },
+        additionalProperties: false
+      },
+      async run(session, args) {
+        const tab = drivenTab(session, args)
+        if ('problem' in tab) return fail(tab.problem)
+        const at = await pointFor(tab.id, args, 'browser_hover', 'point at')
+        if ('problem' in at) return fail(at.problem)
+        await browsers.hover(tab.id, at.x, at.y)
+        return ok(
+          `The pointer is over ${at.what} at (${String(Math.round(at.x))}, ${String(Math.round(at.y))}).`
+        )
       }
     },
 
@@ -538,7 +711,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
         additionalProperties: false
       },
       async run(session, args) {
-        const tab = ownTab(session, args)
+        const tab = drivenTab(session, args)
         if ('problem' in tab) return fail(tab.problem)
         const text = str(args.text)
         if (text === null) return fail('browser_type needs text.')
@@ -595,7 +768,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
         additionalProperties: false
       },
       async run(session, args) {
-        const tab = ownTab(session, args)
+        const tab = drivenTab(session, args)
         if ('problem' in tab) return fail(tab.problem)
         const key = str(args.key)
         if (key === null) return fail('browser_press needs a key.')
@@ -615,6 +788,169 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     },
 
     {
+      name: 'browser_select',
+      description:
+        'Choose options in a <select>, by value or by the text shown, and fire the input and change events a person choosing them fires. Name the select with ref or selector. More than one value only for a select that takes several.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ...TAB_ARG,
+          ref: { type: 'string', description: 'A [ref=...] from browser_snapshot.' },
+          selector: { type: 'string', description: 'A CSS selector, if you have no ref.' },
+          values: { type: 'array', items: { type: 'string' }, description: 'Option values or the text they show.' }
+        },
+        required: ['values'],
+        additionalProperties: false
+      },
+      async run(session, args) {
+        const tab = drivenTab(session, args)
+        if ('problem' in tab) return fail(tab.problem)
+        if (str(args.ref) === null && str(args.selector) === null) {
+          return fail('browser_select needs the select: a ref from browser_snapshot, or a CSS selector.')
+        }
+        const values = Array.isArray(args.values)
+          ? args.values.filter((value): value is string => typeof value === 'string')
+          : []
+        if (values.length === 0) return fail('browser_select needs at least one value.')
+        const answer = await browsers.evaluate(tab.id, inPage(args, selectBody(values)))
+        if (!answer.ok) return fail(`Helm could not reach that element: ${answer.error ?? ''}`)
+        let picked: SelectResult
+        try {
+          picked = JSON.parse(answer.value) as SelectResult
+        } catch {
+          return fail(`Helm could not read that select; the page answered: ${answer.value.slice(0, 200)}`)
+        }
+        return picked.chosen === undefined ? fail(selectRefusal(args, picked)) : ok(
+          `Chose ${picked.chosen.map((label) => JSON.stringify(label)).join(', ')} in ${describeTarget(args)}.`
+        )
+      }
+    },
+
+    {
+      name: 'browser_scroll',
+      description:
+        "Scroll with a real mouse wheel: dy pixels down and dx right (negative for up and left), at x and y in the page or its middle by default - whatever is under that point scrolls, as under a person's wheel. Or name an element with ref or selector to bring it into view.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ...TAB_ARG,
+          dy: { type: 'number', description: 'Pixels down; negative is up.' },
+          dx: { type: 'number', description: 'Pixels right; negative is left.' },
+          x: { type: 'number', description: 'Where the wheel turns, in the page. Default the middle.' },
+          y: { type: 'number' },
+          ref: { type: 'string', description: 'Bring this [ref=...] into view instead.' },
+          selector: { type: 'string', description: 'Or this CSS selector.' }
+        },
+        additionalProperties: false
+      },
+      async run(session, args) {
+        const tab = drivenTab(session, args)
+        if ('problem' in tab) return fail(tab.problem)
+
+        if (str(args.ref) !== null || str(args.selector) !== null) {
+          const answer = await browsers.evaluate(
+            tab.id,
+            inPage(
+              args,
+              `const el = __helmTarget(); if (!el) return 'missing';
+               el.scrollIntoView({ block: 'center', inline: 'nearest' });
+               return JSON.stringify([Math.round(window.scrollX), Math.round(window.scrollY)])`
+            )
+          )
+          if (!answer.ok) return fail(`Helm could not reach that element: ${answer.error ?? ''}`)
+          if (answer.value === 'missing') return fail(missingElement(args))
+          return ok(`Brought ${describeTarget(args)} into view; the page is scrolled to (${answer.value.slice(1, -1).replace(',', ', ')}).`)
+        }
+
+        const dy = num(args.dy) ?? 0
+        const dx = num(args.dx) ?? 0
+        if (dy === 0 && dx === 0) {
+          return fail('browser_scroll needs dy or dx in pixels, or an element to bring into view.')
+        }
+        const view = browsers.viewport(tab.id)
+        if (view === null) return fail('That tab is gone.')
+        // The point in the page's pixels, for the page; in the view's for the
+        // wheel. The same conversion `pointFor` makes.
+        const page = {
+          x: num(args.x) ?? view.width / view.zoom / 2,
+          y: num(args.y) ?? view.height / view.zoom / 2
+        }
+        const before = await scrolled(tab.id, page)
+        await browsers.scroll(tab.id, page.x * view.zoom, page.y * view.zoom, dx * view.zoom, dy * view.zoom)
+        const after = await scrolled(tab.id, page)
+        if (before === null || after === null) return fail('Helm could not read where that page is scrolled to.')
+        return ok(describeScroll(before, after, dx, dy, page))
+      }
+    },
+
+    {
+      name: 'browser_wait_for',
+      description:
+        'Wait until text appears in the page, text goes away, or a CSS selector matches something visible - or, given none of those, until the page has finished loading. Or just wait some seconds. Answers when it happens, or says that it never did.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ...TAB_ARG,
+          text: { type: 'string', description: 'Wait for this text to appear.' },
+          textGone: { type: 'string', description: 'Wait for this text to go away.' },
+          selector: { type: 'string', description: 'Wait for something visible to match this.' },
+          seconds: { type: 'number', description: `Just wait this long, up to ${String(WAIT_MAX_S)}.` },
+          timeout: {
+            type: 'number',
+            description: `Give up after this many seconds. Default ${String(WAIT_DEFAULT_S)}, at most ${String(WAIT_MAX_S)}.`
+          }
+        },
+        additionalProperties: false
+      },
+      async run(session, args) {
+        const tab = drivenTab(session, args)
+        if ('problem' in tab) return fail(tab.problem)
+        const asked = (['text', 'textGone', 'selector'] as const).filter((key) => str(args[key]) !== null)
+        const seconds = num(args.seconds)
+        if (asked.length > 1 || (asked.length === 1 && seconds !== null)) {
+          return fail(
+            'browser_wait_for waits for one thing: text, textGone or selector - or seconds on its own. To wait at most so long for something, pass timeout.'
+          )
+        }
+        if (seconds !== null) {
+          const ms = Math.max(0, Math.min(WAIT_MAX_S, seconds)) * 1000
+          await pause(ms)
+          return ok(`Waited ${String(ms / 1000)}s.`)
+        }
+
+        const limit = Math.max(0.1, Math.min(WAIT_MAX_S, num(args.timeout) ?? WAIT_DEFAULT_S))
+        const started = Date.now()
+        const condition = asked[0]
+        const target = condition === undefined ? '' : String(args[condition])
+        const looking = condition === undefined ? null : { condition, script: waitScript(condition, target) }
+        const took = (): string => `${(Math.round((Date.now() - started) / 100) / 10).toFixed(1)}s`
+        for (;;) {
+          const state = browsers.states(tab.id)[0]
+          if (state === undefined) return fail(`Tab #${String(tab.id)} closed while this was waiting.`)
+          if (looking === null) {
+            if (!state.loading) return ok(`Loaded after ${took()}.\n${describeTab(state)}`)
+          } else {
+            const answer = await browsers.evaluate(tab.id, looking.script)
+            // A page between documents cannot be asked anything; that is "not
+            // yet", and the next look is in a moment.
+            if (answer.ok && answer.value.startsWith('bad:')) {
+              return fail(`${JSON.stringify(target)} is not a selector the page accepts: ${answer.value.slice(4)}`)
+            }
+            if (answer.ok && answer.value === 'yes') return ok(`${waited(looking.condition, target)} after ${took()}.`)
+          }
+          if (Date.now() - started >= limit * 1000) {
+            return fail(
+              `Waited ${String(limit)}s, and ${
+                looking === null ? 'the page was still loading' : notYet(looking.condition, target)
+              } in tab #${String(tab.id)}.`
+            )
+          }
+          await pause(WAIT_POLL_MS)
+        }
+      }
+    },
+
+    {
       name: 'browser_evaluate',
       description:
         'Run JavaScript in the page and answer with what it evaluated to. The escape hatch: prefer browser_snapshot, browser_click and browser_type, which are more legible in a transcript and do not depend on the page internals staying put.',
@@ -628,7 +964,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
         additionalProperties: false
       },
       async run(session, args) {
-        const tab = ownTab(session, args)
+        const tab = drivenTab(session, args)
         if ('problem' in tab) return fail(tab.problem)
         const source = str(args.expression)
         if (source === null) return fail('browser_evaluate needs an expression.')
@@ -641,7 +977,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     {
       name: 'browser_close',
       description:
-        'Close a tab this session opened. Tabs the user opened are theirs and stay. Your own tabs also stay when this session ends - the page is the user\'s then.',
+        "Close a tab this session opened. Tabs the user opened are theirs to close, shared with you or not. Your own tabs also stay when this session ends - the page is the user's then.",
       inputSchema: {
         type: 'object',
         properties: { tab: { type: 'number' } },
@@ -649,7 +985,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
         additionalProperties: false
       },
       async run(session, args) {
-        const tab = ownTab(session, args)
+        const tab = drivenTab(session, args)
         if ('problem' in tab) return fail(tab.problem)
         const answer = browsers.closeFor(session.opener, tab.id)
         if (!answer.closed) return fail(answer.problem ?? 'That tab could not be closed.')
@@ -688,7 +1024,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       name: MCP_SERVER_NAME,
       path: MCP_PATH,
       instructions:
-        "These tools drive the browser pane inside Helm, the app hosting this session. Tabs you open appear in the user's window labelled with this session's name, and stay there when the session ends. Read a page with browser_snapshot before clicking anything.",
+        "These tools drive the browser pane inside Helm, the app hosting this session. Tabs you open appear in the user's Browser tab, behind the page they are looking at, labelled with this session's name, and stay there when the session ends. The user can also share one of their own tabs with this session: browser_tabs lists it as shared with you, and you may read and drive it but not close it. Read a page with browser_snapshot or browser_text before clicking anything.",
       enabled: () => options.settings().browserMcp,
       listed: () =>
         TOOLS.map((tool) => ({
@@ -770,18 +1106,52 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     }
   }
 
+  /**
+   * The answer to a history move, once it has started and stopped.
+   *
+   * `settleTab` alone would answer before a back or a reload had begun - the
+   * tab is not loading yet, so it looks settled - and report the page being
+   * left. So this waits, briefly, for the move to show (the address changes or
+   * a load starts), and a move that never shows is a same-document one that has
+   * already happened.
+   */
+  const settleMove = async (
+    id: number,
+    from: string
+  ): Promise<{ id: number; url: string; title: string; problem: string | null } | null> => {
+    const deadline = Date.now() + 1500
+    for (;;) {
+      const state = browsers.states(id)[0]
+      if (state === undefined) return null
+      if (state.loading || state.url !== from || Date.now() > deadline) return settleTab(id)
+      await pause(60)
+    }
+  }
+
+  /** Where a scroll stands: what scrolls under a point, and how far it has gone. */
+  const scrolled = async (id: number, at: { x: number; y: number }): Promise<ScrollPlace | null> => {
+    const answer = await browsers.evaluate(id, scrollPlaceScript(at))
+    if (!answer.ok) return null
+    try {
+      return JSON.parse(answer.value) as ScrollPlace
+    } catch {
+      return null
+    }
+  }
+
   /** Where a click lands, in the view's own coordinates. */
   const pointFor = async (
     id: number,
-    args: Args
+    args: Args,
+    tool: string,
+    verb: string
   ): Promise<{ x: number; y: number; what: string } | { problem: string }> => {
     const x = num(args.x)
     const y = num(args.y)
     if (str(args.ref) === null && str(args.selector) === null) {
       if (x === null || y === null) {
         return {
-          problem:
-            'browser_click needs somewhere to click: a ref from browser_snapshot, a CSS selector, or both x and y.'
+          problem: `${tool} needs somewhere to ${verb}: a ref from browser_snapshot, a CSS selector, or both x and y.`
         }
       }
       return { x, y, what: 'that point' }
@@ -810,7 +1180,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       return {
         problem: `${describeTarget(
           args
-        )} is in the page but has no size on screen, so there is nowhere to click. It may be hidden, or its container may be collapsed.`
+        )} is in the page but has no size on screen, so there is nowhere to ${verb}. It may be hidden, or its container may be collapsed.`
       }
     }
     // CSS pixels to the view's device-independent pixels, the same conversion
@@ -1067,7 +1437,10 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     async stop() {
       // Tokens first. From this point nothing that arrives is authenticated,
       // whatever is still in flight.
-      for (const session of sessions.values()) removeSessionMcpConfig(session.file)
+      for (const session of sessions.values()) {
+        removeSessionMcpConfig(session.file)
+        browsers.revoke(session.opener.key)
+      }
       sessions.clear()
       const current = server
       server = null
@@ -1130,6 +1503,9 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       if (session === undefined) return
       removeSessionMcpConfig(session.file)
       sessions.delete(token)
+      // The token is the session's identity, and a page shared with that
+      // identity is shared with nobody once it is gone.
+      browsers.revoke(token)
     }
   }
 }
@@ -1190,6 +1566,179 @@ function inPage(args: Args, body: string): string {
           String(args.selector ?? '')
         )});`
   return `(() => { ${resolver}\n${body} })()`
+}
+
+/**
+ * `inPage` with the whole document as the target when nothing is named, for a
+ * tool where the page itself is the default.
+ */
+function onTarget(args: Args, body: string): string {
+  if (str(args.ref) !== null || str(args.selector) !== null) return inPage(args, body)
+  return `(() => { const __helmTarget = () => document.body ?? document.documentElement;\n${body} })()`
+}
+
+/** Rendered text, with the runs of blank lines a layout leaves cut to one. */
+const tidyText = (text: string): string =>
+  text
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+interface SelectResult {
+  chosen?: string[]
+  missing?: boolean
+  notSelect?: string
+  unknown?: string
+  options?: Array<{ value: string; label: string }>
+  more?: number
+  disabled?: string
+  single?: boolean
+}
+
+/**
+ * Choosing options the way a person's choice reaches the page: the options
+ * marked, then `input` and `change`, bubbling, which is what a framework's
+ * listener is waiting for. A value is matched as the option's value first and
+ * its shown text second, so either thing a snapshot shows works.
+ */
+function selectBody(values: string[]): string {
+  return `const el = __helmTarget(); if (!el) return JSON.stringify({ missing: true });
+    if (el.tagName !== 'SELECT') return JSON.stringify({ notSelect: el.tagName.toLowerCase() });
+    const options = Array.from(el.options);
+    const label = (o) => (o.label || o.text || '').trim();
+    const picked = [];
+    for (const wanted of ${JSON.stringify(values)}) {
+      const o = options.find((o) => o.value === wanted) || options.find((o) => label(o) === wanted.trim());
+      if (!o) return JSON.stringify({ unknown: wanted, more: Math.max(0, options.length - 40),
+        options: options.slice(0, 40).map((o) => ({ value: o.value, label: label(o) })) });
+      if (o.disabled) return JSON.stringify({ disabled: label(o) || o.value });
+      if (!picked.includes(o)) picked.push(o);
+    }
+    if (el.disabled) return JSON.stringify({ disabled: 'the select' });
+    if (picked.length > 1 && !el.multiple) return JSON.stringify({ single: true });
+    el.focus();
+    for (const o of options) o.selected = picked.includes(o);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return JSON.stringify({ chosen: picked.map((o) => label(o) || o.value) });`
+}
+
+/** Why `browser_select` chose nothing, as a sentence. */
+function selectRefusal(args: Args, result: SelectResult): string {
+  if (result.missing === true) return missingElement(args)
+  if (result.notSelect !== undefined) {
+    return `${describeTarget(args)} is a <${result.notSelect}>, not a <select>. A custom dropdown is clicked open with browser_click, and its option clicked the same way.`
+  }
+  if (result.single === true) return `${describeTarget(args)} takes one option at a time, so pass one value.`
+  if (result.disabled !== undefined) return `${JSON.stringify(result.disabled)} is disabled, so it cannot be chosen.`
+  const listed = (result.options ?? [])
+    .map((option) =>
+      option.label === option.value || option.label === ''
+        ? JSON.stringify(option.value)
+        : `${JSON.stringify(option.label)} (value ${JSON.stringify(option.value)})`
+    )
+    .join(', ')
+  return `${describeTarget(args)} has no option ${JSON.stringify(result.unknown ?? '')}. It has: ${
+    listed === '' ? 'no options at all' : listed
+  }${(result.more ?? 0) > 0 ? `, and ${String(result.more)} more` : ''}.`
+}
+
+/** One look at whether what `browser_wait_for` is waiting for has happened: `yes`, `no`, or `bad:` and why. */
+function waitScript(condition: 'text' | 'textGone' | 'selector', target: string): string {
+  const wanted = JSON.stringify(target)
+  if (condition === 'selector') {
+    return `(() => { let el; try { el = document.querySelector(${wanted}) } catch (e) { return 'bad:' + e.message }
+      if (!el) return 'no';
+      const box = el.getBoundingClientRect(); const style = getComputedStyle(el);
+      return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' ? 'yes' : 'no' })()`
+  }
+  const present = `(document.body ? document.body.innerText : '').includes(${wanted})`
+  return `(() => ${condition === 'text' ? present : `!${present}`} ? 'yes' : 'no')()`
+}
+
+const waited = (condition: 'text' | 'textGone' | 'selector', target: string): string =>
+  condition === 'text'
+    ? `${JSON.stringify(target)} appeared`
+    : condition === 'textGone'
+      ? `${JSON.stringify(target)} went away`
+      : `${JSON.stringify(target)} matched something visible`
+
+const notYet = (condition: 'text' | 'textGone' | 'selector', target: string): string =>
+  condition === 'text'
+    ? `${JSON.stringify(target)} never appeared`
+    : condition === 'textGone'
+      ? `${JSON.stringify(target)} was still there`
+      : `nothing visible matched ${JSON.stringify(target)}`
+
+/** What a wheel at a point would scroll, and where it is. */
+interface ScrollPlace {
+  /** `page`, or a short CSS-ish name for an element that scrolls on its own. */
+  what: string
+  x: number
+  y: number
+  width: number
+  height: number
+  /** How much of it shows. */
+  viewWidth: number
+  viewHeight: number
+}
+
+/**
+ * The scroller under a point: the nearest element there that scrolls, or the
+ * page. Read before and after a wheel turn, so the answer says what moved
+ * rather than what the page's own scroll position happens to be - a wheel over
+ * a sidebar moves the sidebar.
+ */
+function scrollPlaceScript(at: { x: number; y: number }): string {
+  return `(() => {
+    const page = document.scrollingElement || document.documentElement;
+    const scrolls = (el) => {
+      const style = getComputedStyle(el);
+      const can = (overflow) => overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay';
+      return (can(style.overflowY) && el.scrollHeight > el.clientHeight)
+        || (can(style.overflowX) && el.scrollWidth > el.clientWidth);
+    };
+    let el = document.elementFromPoint(${String(Math.round(at.x))}, ${String(Math.round(at.y))});
+    while (el && el !== page && el !== document.body && !scrolls(el)) el = el.parentElement;
+    const scroller = el && el !== document.body && el !== page ? el : page;
+    const name = scroller === page ? 'page'
+      : scroller.tagName.toLowerCase() + (scroller.id ? '#' + scroller.id : '')
+        + (typeof scroller.className === 'string' && scroller.className.trim() ? '.' + scroller.className.trim().split(/\\s+/)[0] : '');
+    return JSON.stringify({ what: name, x: Math.round(scroller.scrollLeft), y: Math.round(scroller.scrollTop),
+      width: scroller.scrollWidth, height: scroller.scrollHeight,
+      viewWidth: scroller.clientWidth, viewHeight: scroller.clientHeight });
+  })()`
+}
+
+/** What a wheel turn did, in a sentence. */
+function describeScroll(
+  before: ScrollPlace,
+  after: ScrollPlace,
+  dx: number,
+  dy: number,
+  at: { x: number; y: number }
+): string {
+  const name = after.what === 'page' ? 'the page' : `<${after.what}>`
+  const movedY = after.y - before.y
+  const movedX = after.x - before.x
+  if (movedY === 0 && movedX === 0 && before.what === after.what) {
+    const end = dy > 0 || dx > 0 ? 'end' : 'start'
+    return `Nothing moved. ${name} is already at its ${end}, or nothing under (${String(
+      Math.round(at.x)
+    )}, ${String(Math.round(at.y))}) scrolls that way.`
+  }
+  const parts = [
+    ...(movedY === 0 ? [] : [`${movedY > 0 ? 'down' : 'up'} ${String(Math.abs(movedY))}px`]),
+    ...(movedX === 0 ? [] : [`${movedX > 0 ? 'right' : 'left'} ${String(Math.abs(movedX))}px`])
+  ]
+  return `Scrolled ${name} ${parts.join(' and ')}. It is at ${String(after.y)} of ${String(
+    after.height
+  )} down (${String(after.viewHeight)} showing)${
+    after.width > after.viewWidth ? ` and ${String(after.x)} of ${String(after.width)} across` : ''
+  }.`
 }
 
 interface SnapshotNode {

@@ -31,16 +31,20 @@ import { pluginTabId } from '../plugins/tabs'
  * Anything a pane can show.
  *
  * `WorkspaceTab` is what reopens on its own at the next start. A session is a
- * process `before-quit` ends, a browser tab is a `WebContentsView` it
+ * process `before-quit` ends, the Browser tab holds `WebContentsView`s it
  * destroys, a terminal tab is a shell that dies with its tab, and the restore
  * offer is one start's question about the last.
+ *
+ * The Browser tab is one tab, however many pages it holds: the pages are a
+ * strip of its own (`useBrowsers`), not tabs among the sessions. So it has no
+ * id, and like history or settings its kind is its identity.
  *
  * A terminal tab's `id` is the window's own name for it, never a pty's: the
  * shell behind it is opened once the tab has somewhere to draw it.
  */
 export type PaneRef =
   | WorkspaceTab
-  | { kind: 'browser'; id: number }
+  | { kind: 'browser' }
   | { kind: 'session'; id: number }
   | { kind: 'terminal'; id: number; path: string }
   | { kind: 'restore' }
@@ -52,8 +56,8 @@ export type PaneRef =
  * A session is written down so that a crash can put its conversation back
  * where it was (`placeRestored`). It never reopens by itself: the next start
  * hosts no session with that id, so `reconcile` drops the tab before it is
- * drawn. A browser tab is not written down at all, because nothing could put
- * the page it was showing back.
+ * drawn. The Browser tab is not written down at all, because nothing could put
+ * the pages it was showing back.
  */
 export type SavedPane = WorkspaceTab | { kind: 'session'; id: number }
 
@@ -149,8 +153,6 @@ export function paneId(ref: PaneRef): string {
   switch (ref.kind) {
     case 'project':
       return `project:${ref.path}`
-    case 'browser':
-      return `browser:${String(ref.id)}`
     case 'session':
       return `session:${String(ref.id)}`
     case 'terminal':
@@ -160,7 +162,7 @@ export function paneId(ref: PaneRef): string {
     case 'plugin':
       return pluginTabId(ref.plugin, ref.tab, ref.params)
     default:
-      // history, sessions, config, settings: one of each, so
+      // history, sessions, config, settings, browser: one of each, so
       // the kind is the identity.
       return ref.kind
   }
@@ -781,7 +783,8 @@ export function resizeSplit(layout: PaneLayout, path: readonly number[], sizes: 
  * `keep` says whether a tab's thing still exists - a project discovery still
  * finds, a session main still hosts, a view main still holds. `extra` is what
  * exists and must have a tab whether or not anything placed it: every hosted
- * session and every browser view. Those land in the focused group.
+ * session, and the Browser tab while main holds a page. Those land in the
+ * focused group.
  *
  * Derived, rather than synced into state in an effect, for the reason the
  * strips always were: a session that appears after a renderer reload, or a
@@ -834,7 +837,7 @@ export function cycleTab(layout: PaneLayout, step: 1 | -1): PaneLayout {
 /**
  * What `AppSettings.paneLayout` keeps: the tree, with the persistable tabs in
  * their groups and which was in front. A group with nothing written down in it
- * - only browser tabs - is not written down either, and its room goes where it
+ * - only the Browser tab - is not written down either, and its room goes where it
  * would have gone had it closed. A group holding only sessions comes back
  * empty and disappears on an ordinary start, which is the honest restore of a
  * group whose every tab was a process that did not survive; after a crash,
