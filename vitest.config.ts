@@ -1,4 +1,7 @@
-import { defineConfig } from 'vitest/config'
+import { svelte } from '@sveltejs/vite-plugin-svelte'
+import { configDefaults, defineConfig } from 'vitest/config'
+
+const SDK_SVELTE = 'packages/plugin-sdk/test/svelte.test.ts'
 
 /**
  * The unit and integration tier (docs/TESTING.md), one project per runtime:
@@ -9,7 +12,13 @@ import { defineConfig } from 'vitest/config'
  * - `desktop`: main-process services in Node, with Electron faked and real
  *   ptys running the fake `claude` (`packages/desktop/test`).
  * - `sdk`: the plugin SDK - its manifest validator, its schema, its
- *   `helm-plugin` command and the package as npm publishes it - in Node.
+ *   `helm-plugin` command and the package as npm publishes it - in Node, and
+ *   its React and Vue helpers in jsdom, each test file naming that
+ *   environment.
+ * - `sdk-svelte`: a Svelte component the compiler built, mounted in jsdom to
+ *   show the SDK's stores need no adapter there. Svelte's `mount` is in its
+ *   browser build only, so this project resolves the `browser` condition and
+ *   the Node tests above do not.
  */
 export default defineConfig({
   test: {
@@ -66,7 +75,18 @@ export default defineConfig({
       },
       {
         extends: true,
-        test: { name: 'sdk', include: ['packages/plugin-sdk/test/**/*.test.ts'], environment: 'node' }
+        test: {
+          name: 'sdk',
+          include: ['packages/plugin-sdk/test/**/*.test.ts'],
+          exclude: [...configDefaults.exclude, SDK_SVELTE],
+          environment: 'node'
+        }
+      },
+      {
+        extends: true,
+        plugins: [svelte()],
+        resolve: { conditions: ['browser'] },
+        test: { name: 'sdk-svelte', include: [SDK_SVELTE], environment: 'jsdom' }
       }
     ]
   }

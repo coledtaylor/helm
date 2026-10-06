@@ -1,15 +1,23 @@
 // @ts-check
 /**
- * React hooks over `window.helm`. Optional: everything here is a few lines
- * over the bridge, which a plugin can use directly.
+ * React hooks over `window.helm`, built on the stores in `./stores.js`.
+ * Optional: everything here is a few lines over the bridge, which a plugin
+ * can use directly.
  */
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
+import { bridge } from './bridge.js'
+import { secret, settings, theme, visible } from './stores.js'
 
-/** @returns {import('./types').HelmBridge} */
-function bridge() {
-  const helm = /** @type {{ helm?: import('./types').HelmBridge }} */ (/** @type {unknown} */ (globalThis)).helm
-  if (helm === undefined) throw new Error('window.helm is missing: this page is not being served by Helm')
-  return helm
+/**
+ * A store's value, re-rendering when it changes. A store's `subscribe` reads
+ * no `this` and is the same function every render, so React holds it as it is.
+ *
+ * @template T
+ * @param {import('./stores').HelmStore<T>} store
+ * @returns {T}
+ */
+function useStore(store) {
+  return useSyncExternalStore(store.subscribe, () => store.current)
 }
 
 /**
@@ -34,10 +42,7 @@ export function useHelmEvent(event, listener) {
  * @returns {import('./types').HelmTheme}
  */
 export function useHelmTheme() {
-  return useSyncExternalStore(
-    (onChange) => bridge().on('theme', onChange),
-    () => bridge().theme
-  )
+  return useStore(theme)
 }
 
 /**
@@ -47,10 +52,7 @@ export function useHelmTheme() {
  * @returns {boolean}
  */
 export function useHelmVisible() {
-  return useSyncExternalStore(
-    (onChange) => bridge().on('visibility', onChange),
-    () => bridge().visible
-  )
+  return useStore(visible)
 }
 
 /**
@@ -59,21 +61,7 @@ export function useHelmVisible() {
  * @returns {Record<string, import('./types').SettingValue> | null}
  */
 export function useHelmSettings() {
-  const [values, setValues] = useState(/** @type {Record<string, import('./types').SettingValue> | null} */ (null))
-  useEffect(() => {
-    let live = true
-    const off = bridge().on('settings', setValues)
-    void bridge()
-      .settings.get()
-      .then((read) => {
-        if (live) setValues(read)
-      })
-    return () => {
-      live = false
-      off()
-    }
-  }, [])
-  return values
+  return useStore(settings)
 }
 
 /**
@@ -84,25 +72,10 @@ export function useHelmSettings() {
  * @returns {[import('./types').SecretState | null, () => Promise<void>]}
  */
 export function useSecret(key) {
-  const [state, setState] = useState(/** @type {import('./types').SecretState | null} */ (null))
-  useEffect(() => {
-    let live = true
-    const off = bridge().on('secrets', (states) => {
-      const next = states[key]
-      if (next !== undefined) setState(next)
-    })
-    void bridge()
-      .secrets.state(key)
-      .then((read) => {
-        if (live) setState(read)
-      })
-    return () => {
-      live = false
-      off()
-    }
-  }, [key])
+  const store = secret(key)
+  const state = useStore(store)
   const request = useCallback(async () => {
-    setState(await bridge().secrets.request(key))
-  }, [key])
+    await store.request()
+  }, [store])
   return [state, request]
 }
