@@ -52,7 +52,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "helm-plugin": "./bin/helm-plugin.mjs"
+    "helm-plugin": "bin/helm-plugin.mjs"
   },
   "publishConfig": {
     "access": "public"
