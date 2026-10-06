@@ -76,6 +76,14 @@ nsis:
   # cannot run on a machine they do not own.
   oneClick: true
   perMachine: false
+  # The setup exe, the uninstaller Windows lists under Installed apps, and the
+  # icon over a one-click install's progress bar. Each would fall back to
+  # `win.icon` - or to an `installerIcon.ico` that happened to be in `build/` -
+  # and is named for the same reason that one is: a missing file fails the
+  # build rather than shipping Electron's icon.
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
   # Explicit rather than inherited: with this false, a future config change that
   # would need elevation fails the silent install outright instead of quietly
   # putting a UAC prompt in front of every user.
