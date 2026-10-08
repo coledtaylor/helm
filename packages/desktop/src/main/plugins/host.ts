@@ -160,6 +160,9 @@ const SURFACES: readonly SurfaceKind[] = ['panel', 'tab', 'background']
 const BACKGROUND_START_WAIT_MS = 15_000
 const SESSION_PROMPT_MAX = 2000
 const SESSION_NAME_MAX = 60
+const LINK_URL_MAX = 2048
+/** How soon a plugin may open another link: one click, one page, and a double click is still one. */
+const LINK_SPACING_MS = 1000
 
 interface Entry {
   folder: PluginFolder
@@ -189,6 +192,8 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
   const secretRequests = new Map<string, { plugin: string; key: string; resolve: (state: 'ready' | 'missing') => void }>()
   /** Sessions plugins asked for, on screen and waiting for the user, by request id. */
   const sessionRequests = new Map<string, SessionAsk>()
+  /** When each plugin last opened a link, by plugin id. */
+  const linkOpened = new Map<string, number>()
   let revisions = 0
   let stopped = false
 
@@ -724,6 +729,30 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
       })
     },
 
+    /*
+     * An `https` address, in the Browser tab. The relay lets it through only on
+     * a click or key press the user just made. Main checks only that it is an
+     * address; the window opens it the way it opens any page, so the reach
+     * rule a typed address meets is the one this meets, and a refusal is said
+     * on the page's own tab.
+     */
+    open: (ctx, [url]) => {
+      const { manifest } = ctx.plugin
+      if (ctx.surface === 'background') {
+        throw new PluginCallError('not-allowed', 'only a panel or a tab can open a link, from a click')
+      }
+      const href = readLink(url)
+      const now = Date.now()
+      if (now - (linkOpened.get(manifest.id) ?? -Infinity) < LINK_SPACING_MS) {
+        throw new PluginCallError('busy', 'this plugin opened a link a moment ago')
+      }
+      const win = options.window()
+      if (win === null || win.isDestroyed()) throw new PluginCallError('unavailable', 'there is no window to open a link in')
+      linkOpened.set(manifest.id, now)
+      emitTo(win.webContents, 'plugins:ui', { kind: 'link', plugin: manifest.id, url: href })
+      return undefined
+    },
+
     'secrets.request': (ctx, [key]) => {
       declaredSecret(ctx.plugin, key)
       const id = ctx.plugin.manifest.id
@@ -1199,6 +1228,26 @@ function hasControl(text: string): boolean {
  * shim; no `"`, which a shim's command line cannot carry (`quoteForCmd`); and
  * no leading `-`, which `claude` would read as a flag rather than a message.
  */
+/** An absolute `https` address with no user name or password in it, as `URL` spells it. */
+function readLink(value: unknown): string {
+  if (typeof value !== 'string' || value.length > LINK_URL_MAX) {
+    throw new PluginCallError('invalid', `open needs an https address of at most ${String(LINK_URL_MAX)} characters`)
+  }
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new PluginCallError('invalid', `"${value}" is not an address`)
+  }
+  if (url.protocol !== 'https:') throw new PluginCallError('invalid', `open takes https addresses only, not ${url.protocol}`)
+  // A page reached with a name and password in its address is a sign-in the
+  // user never saw being made.
+  if (url.username !== '' || url.password !== '') {
+    throw new PluginCallError('invalid', 'an address with a user name or password in it cannot be opened')
+  }
+  return url.href
+}
+
 function readSessionRequest(value: unknown): { cwd: string; name: string; prompt: string } {
   if (value === null || typeof value !== 'object') {
     throw new PluginCallError('invalid', 'sessions.start takes { cwd, prompt, name? }')

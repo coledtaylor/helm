@@ -4,6 +4,7 @@ import type { Frame, Locator, Page } from '@playwright/test'
 import type { HelmBridge } from '@coledtaylor/helm-plugin-sdk'
 import { bearerOf, callTool, readMcpConfig, rpc, rpcResult, toolNames } from '../test/mcp-client'
 import { claudeRunIn, expect, startSession, test as base, type Helm } from './helm'
+import { startBrowserFixture } from './browser-fixture'
 import { TOKEN, installSample, pluginFrame, registerPlugin, startServer, type SampleFixture } from './plugin-fixture'
 
 /**
@@ -490,4 +491,63 @@ test('a plugin page starts a session from a click, once the user has seen what i
   const run = await claudeRunIn(world, world.projects.alpha)
   expect(run.argv[run.argv.indexOf('-n') + 1]).toBe('Second item')
   expect(run.argv.at(-1)).toBe('work on Second item')
+})
+
+test('a plugin page opens a link in the Browser tab from a click, held to the reach a typed address meets', async ({
+  helm,
+  sample
+}) => {
+  const fixture = await startBrowserFixture()
+  try {
+    const ui = helm.window
+    await storeToken(ui, sample.server.url)
+    const panel = await openPanel(ui)
+    await panel.locator('[data-sample-item="2"]').click()
+    const item = await pluginFrame(ui, 'dist/tabs/item.html')
+    const browserPages = ui.getByRole('tablist', { name: 'Browser tabs' })
+
+    // Without a click, nothing opens.
+    const unasked = await item.evaluate(
+      (url) =>
+        new Promise<string>((resolve) => {
+          setTimeout(() => {
+            ;(window as unknown as PluginWindow).helm.open(url).then(
+              () => resolve('opened'),
+              (error: { code: string }) => resolve(error.code)
+            )
+          }, 6000)
+        }),
+      `${fixture.httpsLoopback}/two`
+    )
+    expect(unasked).toBe('not-allowed')
+    await expect(browserPages).toHaveCount(0)
+
+    // Only https.
+    await item.locator('[data-sample-link-address]').fill(`${fixture.http}/two`)
+    await item.locator('[data-sample-link-open]').click()
+    await expect(item.locator('[data-sample-link-error]')).toHaveText('invalid: open takes https addresses only, not http:')
+    await expect(browserPages).toHaveCount(0)
+
+    // From a click, in the Browser tab, in front.
+    await item.locator('[data-sample-link-address]').fill(`${fixture.httpsLoopback}/two`)
+    await item.locator('[data-sample-link-open]').click()
+    await expect(ui.getByRole('tab', { name: /Helm fixture two/ })).toHaveAttribute('aria-selected', 'true')
+    await expect(ui.getByRole('textbox', { name: 'Address' })).toHaveValue(`${fixture.httpsLoopback}/two`)
+    await expect(item.locator('[data-sample-link-error]')).toHaveCount(0)
+
+    // "This machine only" refuses it on its own tab, as it would a typed address.
+    await ui.evaluate(() => (window as unknown as HelmWindow).helm.invoke('settings:write', { browserReach: 'local' }))
+    await ui.getByRole('tab', { name: /^Second item/ }).click()
+    await item.locator('[data-sample-link-address]').fill(`${fixture.httpsNamed}/two`)
+    // One link a second per plugin (a double click's second is refused; see host.test.ts).
+    await ui.waitForTimeout(1000)
+    await item.locator('[data-sample-link-open]').click()
+    await expect(ui.getByRole('status').filter({ hasText: 'This machine only' })).toContainText(
+      fixture.httpsNamed.replace('https://', '')
+    )
+    await expect(browserPages.getByRole('tab')).toHaveCount(2)
+    expect(fixture.requests.filter((request) => request.startsWith(fixture.httpsNamed))).toEqual([])
+  } finally {
+    await fixture.close()
+  }
 })

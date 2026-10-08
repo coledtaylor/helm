@@ -242,10 +242,12 @@ describe('calls', () => {
     expect(got(port)).toEqual([{ t: 'result', id: 1, ok: false, code: 'not-declared', message: 'not one of the programs' }])
   })
 
-  it('that open a dialog go to main only while the user has just acted, and are refused otherwise', async () => {
+  it.each([
+    ['sessions.start', { cwd: 'C:\\work', prompt: 'work on HELM-2' }],
+    ['open', 'https://github.com/owner/repo/pull/7']
+  ])('that put something in front of the user (%s) go to main only while the user has just acted', async (method, arg) => {
     const { port } = connect(open())
-    const request = { cwd: 'C:\\work', prompt: 'work on HELM-2' }
-    port.postMessage({ t: 'call', id: 1, method: 'sessions.start', args: [request] })
+    port.postMessage({ t: 'call', id: 1, method, args: [arg] })
     expect(main.calls).toHaveLength(0)
     await flush()
     expect(got(port)).toEqual([
@@ -254,19 +256,19 @@ describe('calls', () => {
         id: 1,
         ok: false,
         code: 'not-allowed',
-        message: 'helm.sessions.start needs a click or key press the user just made in the page'
+        message: `helm.${method} needs a click or key press the user just made in the page`
       }
     ])
 
     // jsdom has no user activation; a click in the page is what gives it.
     Object.defineProperty(window.navigator, 'userActivation', { configurable: true, value: { isActive: true, hasBeenActive: true } })
     try {
-      port.postMessage({ t: 'call', id: 2, method: 'sessions.start', args: [request] })
+      port.postMessage({ t: 'call', id: 2, method, args: [arg] })
     } finally {
       Reflect.deleteProperty(window.navigator, 'userActivation')
     }
     expect(main.calls).toHaveLength(1)
-    expect(main.calls[0]).toMatchObject({ plugin: 'sample', method: 'sessions.start', args: [request] })
+    expect(main.calls[0]).toMatchObject({ plugin: 'sample', method, args: [arg] })
   })
 
   it('come back as unavailable when the invoke itself fails', async () => {

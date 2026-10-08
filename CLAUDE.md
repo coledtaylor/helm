@@ -220,6 +220,10 @@ folder: run through npx, that folder is a cache.
   only once the user agrees in Helm's dialog, which shows the folder, name,
   first message and command. Main composes the launch from what it checked
   and holds; the window answers yes or no and never says what to run.
+- Any plugin may open an `https` link in the Browser tab (`open`), from a
+  click only (the same relay check), one a second. Main checks it is an
+  `https` address; the window opens it through `browser:open`, so it meets
+  the reach rule a typed address does. The plugin never reads or drives it.
 - `HELM_PLUGINS` registers folders in a dev build only.
 
 ## Overlays and templates

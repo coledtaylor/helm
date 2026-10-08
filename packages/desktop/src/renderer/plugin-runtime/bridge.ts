@@ -272,6 +272,16 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
       return call<ExecResult>('exec', [command, args === undefined ? [] : [...args], options ?? {}])
     },
 
+    open(url: string): Promise<void> {
+      // Said here, where the mistake is made: Helm refuses it too.
+      if (navigator.userActivation?.isActive !== true) {
+        return Promise.reject(
+          helmError('not-allowed', 'helm.open needs a click or key press the user just made in the page: call it from the handler')
+        )
+      }
+      return call<void>('open', [url])
+    },
+
     tabs: {
       open(tab: string, params?: PluginParams, options?: { title?: string }): Promise<void> {
         return call<void>('tabs.open', [tab, params ?? {}, options ?? {}])
