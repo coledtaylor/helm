@@ -302,9 +302,12 @@
       ]
     },
     "sessions": {
-      "type": "boolean",
-      "default": false,
-      "description": "Let the plugin's pages ask to start a Claude Code session in a folder with a first message, with helm.sessions.start. Helm shows each one to the user, who starts it or not."
+      "type": "array",
+      "uniqueItems": true,
+      "description": "What the plugin's pages may do with the Claude Code sessions Helm hosts. start: ask to start one in a folder with a first message, with helm.sessions.start; Helm shows each one to the user, who starts it or not. list: see them, with helm.sessions.list and the sessions event.",
+      "items": {
+        "enum": ["start", "list"]
+      }
     },
     "agent": {
       "type": "object",

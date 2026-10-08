@@ -355,6 +355,21 @@ describe('events', () => {
     expect((reported[0] as Error).message).toBe('plugin bug')
   })
 
+  it.each([
+    ['settings', { mode: 'all' }],
+    ['secrets', { token: 'ready' }],
+    ['command', { id: 'refresh' }],
+    ['action', { id: 'add' }],
+    ['sessions', [{ id: 'a1b2', name: 'HELM-3', state: 'running' }]]
+  ] as const)('pass Helm’s %s event to the page as it came', (name, data) => {
+    const { win, helm } = page()
+    const port = connect(win)
+    const heard = vi.fn()
+    helm.on(name, heard)
+    port.postMessage({ t: 'event', name, data })
+    expect(heard).toHaveBeenCalledWith(data)
+  })
+
   it('apply a new theme to the page before telling it', () => {
     const { win, helm } = page()
     const port = connect(win)

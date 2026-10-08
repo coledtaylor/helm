@@ -12,7 +12,8 @@ sample-plugin/
 ├── helm-plugin.json      the manifest: every surface, setting, host, program, the service and the tools
 ├── icon.svg              drawn as a mask, so it takes the rail's colours
 ├── src/
-│   ├── panels/main.*     the rail panel: the items, a token prompt, the service's hello
+│   ├── panels/main.*     the rail panel: the items, a token prompt, the service's hello,
+│   │                     and Helm's sessions (`helm.sessions.list`, the `sessions` event)
 │   ├── tabs/item.*       one item, or a form for a new one; runs the `echo` program
 │   │                     and asks to start a session about the item (`helm.sessions.start`);
 │   │                     opens an address in the Browser tab (`helm.open`)

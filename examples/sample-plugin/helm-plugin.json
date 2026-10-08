@@ -62,7 +62,7 @@
     }
   },
   "service": { "node": "service/main.mjs", "start": "demand" },
-  "sessions": true,
+  "sessions": ["start", "list"],
   "agent": {
     "instructions": "The user's Sample items: short notes on the sample server, each read or unread. List them before adding one, so you do not add one that is already there.",
     "tools": {

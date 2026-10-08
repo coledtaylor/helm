@@ -8,6 +8,7 @@ import type {
   HelmEvents,
   HelmTheme,
   PluginParams,
+  PluginSession,
   SecretState,
   SessionStartRequest,
   SessionStartResult,
@@ -188,6 +189,7 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
       case 'secrets':
       case 'command':
       case 'action':
+      case 'sessions':
         emit(message.name, message.data as never)
         return
       default:
@@ -321,7 +323,8 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
           )
         }
         return call<SessionStartResult>('sessions.start', [request])
-      }
+      },
+      list: () => call<PluginSession[]>('sessions.list', [])
     },
 
     tools: {

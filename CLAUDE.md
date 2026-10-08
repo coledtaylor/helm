@@ -215,11 +215,16 @@ folder: run through npx, that folder is a cache.
   page, through `main/plugins/tools.ts`, and served as one more family on the
   inbound listener. A plugin sends no notifications and never sends a running
   session anything: a session calls it, not the other way round.
-- A plugin with `sessions` may ask to start one (`sessions.start`): only from
+- A plugin whose `sessions` lists `start` may ask to start one (`sessions.start`): only from
   a click in its page (the relay checks the window's user activation), and
   only once the user agrees in Helm's dialog, which shows the folder, name,
   first message and command. Main composes the launch from what it checked
   and holds; the window answers yes or no and never says what to run.
+- A plugin whose `sessions` lists `list` sees Helm's sessions since it opened
+  (`sessions.list`, the `sessions` event), shaped by `describePluginSessions`
+  in core, whose input has no field for anything of a conversation: no argv,
+  conversation id or `waitingFor`. A session's id there is the one its tool
+  calls carry, minted at launch by the session host, never its row id.
 - Any plugin may open an `https` link in the Browser tab (`open`), from a
   click only (the same relay check), one a second. Main checks it is an
   `https` address; the window opens it through `browser:open`, so it meets

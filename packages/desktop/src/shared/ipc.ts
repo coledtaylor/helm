@@ -1503,7 +1503,7 @@ export type PluginUiRequest =
  */
 export interface PluginDelivery {
   plugin: string
-  event: 'settings' | 'secrets' | 'command'
+  event: 'settings' | 'secrets' | 'command' | 'sessions'
   data: unknown
   to: 'all' | 'background'
 }

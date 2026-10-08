@@ -28,6 +28,7 @@ const plugin = (overrides: Partial<PluginInfo> = {}): PluginInfo => ({
   tabs: {},
   pageStrip: false,
   startsSessions: false,
+  seesSessions: false,
   background: null,
   commands: [],
   settings: [],
@@ -173,12 +174,17 @@ describe('PluginPage: what it may reach', () => {
     expect(group('plugin-network').textContent).toContain('None. It makes no requests.')
   })
 
-  it('says it can ask to start sessions only when its manifest declares it', () => {
+  it('says what it may do with sessions only as far as its manifest declares', () => {
     renderPage({ plugin: plugin() })
-    expect(document.querySelector('[data-plugin-starts-sessions]')).toBeNull()
+    expect(document.querySelector('[data-settings-group="plugin-sessions"]')).toBeNull()
     cleanup()
     renderPage({ plugin: plugin({ startsSessions: true }) })
-    expect(group('plugin-sessions').textContent).toContain('Can ask to start Claude Code sessions.')
+    expect(group('plugin-sessions').textContent).toContain('Can ask to start sessions.')
+    expect(document.querySelector('[data-plugin-sees-sessions]')).toBeNull()
+    cleanup()
+    renderPage({ plugin: plugin({ seesSessions: true }) })
+    expect(group('plugin-sessions').textContent).toContain('Sees the sessions Helm starts')
+    expect(document.querySelector('[data-plugin-starts-sessions]')).toBeNull()
   })
 
   it('says it runs programs only when it does, with each program and its service', () => {

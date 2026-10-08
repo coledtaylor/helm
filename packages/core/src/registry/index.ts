@@ -20,3 +20,5 @@ export {
   type SessionDetailInput,
   type SessionListingInput
 } from './describe'
+
+export { describePluginSessions, type PluginSessionFacts } from './plugin-sessions'
