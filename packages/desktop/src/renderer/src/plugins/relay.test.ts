@@ -242,6 +242,33 @@ describe('calls', () => {
     expect(got(port)).toEqual([{ t: 'result', id: 1, ok: false, code: 'not-declared', message: 'not one of the programs' }])
   })
 
+  it('that open a dialog go to main only while the user has just acted, and are refused otherwise', async () => {
+    const { port } = connect(open())
+    const request = { cwd: 'C:\\work', prompt: 'work on HELM-2' }
+    port.postMessage({ t: 'call', id: 1, method: 'sessions.start', args: [request] })
+    expect(main.calls).toHaveLength(0)
+    await flush()
+    expect(got(port)).toEqual([
+      {
+        t: 'result',
+        id: 1,
+        ok: false,
+        code: 'not-allowed',
+        message: 'helm.sessions.start needs a click or key press the user just made in the page'
+      }
+    ])
+
+    // jsdom has no user activation; a click in the page is what gives it.
+    Object.defineProperty(window.navigator, 'userActivation', { configurable: true, value: { isActive: true, hasBeenActive: true } })
+    try {
+      port.postMessage({ t: 'call', id: 2, method: 'sessions.start', args: [request] })
+    } finally {
+      Reflect.deleteProperty(window.navigator, 'userActivation')
+    }
+    expect(main.calls).toHaveLength(1)
+    expect(main.calls[0]).toMatchObject({ plugin: 'sample', method: 'sessions.start', args: [request] })
+  })
+
   it('come back as unavailable when the invoke itself fails', async () => {
     const { port } = connect(open())
     main.invoke.mockImplementationOnce(() => Promise.reject(new Error('main went away')))

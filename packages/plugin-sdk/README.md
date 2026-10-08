@@ -101,6 +101,7 @@ under `__helm/`, where Helm serves its runtime.
 | `exec` | Programs `helm.exec` may run, by name. |
 | `service` | One long-running process Helm supervises. |
 | `agent` | Tools Claude Code sessions can call, answered by the background page. See [Tools for sessions](#tools-for-sessions). |
+| `sessions` | `true` lets the plugin's pages ask to start a Claude Code session. See [Starting a session](#starting-a-session). |
 
 Names - panel and tab keys, action, command and program names - are 1-32
 lower-case letters, digits and dashes.
@@ -278,6 +279,7 @@ SyntaxError and stops the whole file.
 | `settings.get()` | Every setting's value. |
 | `secrets.state(key)` | `ready` or `missing`. |
 | `secrets.request(key)` | Opens Helm's dialog for adding the key, scoped to this plugin. Resolves with the state once it closes. |
+| `sessions.start({ cwd, prompt, name? })` | Asks to start a Claude Code session, from a click. See [Starting a session](#starting-a-session). |
 | `tools.handle(name, handler)` | Answers one of the tools `agent` declares. Background page only. See [Tools for sessions](#tools-for-sessions). |
 | `on(event, listener)` | Subscribes; returns the function that unsubscribes. |
 
@@ -306,6 +308,8 @@ A call that fails rejects with an `Error` whose `code` says why:
 | `unavailable` | The plugin is turned off, or Helm is shutting down. |
 | `service` | The service is not running and could not be started. |
 | `not-found` | A program `exec` names is not on this computer. |
+| `not-allowed` | The call needs a click or key press the user just made in the page, and there was none. |
+| `busy` | The same request is already waiting on the user. |
 
 A call cancelled through an `AbortSignal` rejects with a `DOMException` named
 `AbortError`, as `fetch` does.
@@ -546,6 +550,33 @@ user can turn them off on the plugin's page in Settings, which takes them from
 sessions already running too. Each call is noted in the plugin's log with the
 session that made it.
 
+## Starting a session
+
+A plugin that declares `"sessions": true` can ask Helm to start a Claude Code
+session in a folder, with a first message:
+
+```js
+button.addEventListener('click', async () => {
+  const result = await helm.sessions.start({ cwd: 'C:\work\api', prompt: 'work on API-12', name: 'API-12' })
+  if (result === 'started') showStarted()
+})
+```
+
+- Only from a click or key press the user just made in a panel or tab: call it
+  from the handler. Anything else rejects with `not-allowed`, and the
+  background page cannot ask at all.
+- Helm shows the folder, the message and the command it will run, and the user
+  starts it or cancels. It resolves `started` once the session's tab is open,
+  and `cancelled` when the user said no, or the page went away first. One
+  request at a time: a second while the first is on screen rejects with `busy`.
+- `cwd` is an absolute path to a folder that exists. `prompt` is one line of
+  up to 2000 characters, with no `"` (a Windows command line cannot carry one
+  intact) and not starting with `-` (`claude` would read it as a flag). `name` names the tab and the
+  session, up to 60 characters; the folder's name when absent.
+- The message is the session's first, said once, as if typed when it opened.
+  After that the session is the user's: a plugin cannot type into it, read it,
+  or end it.
+
 ## Theme and styling
 
 Helm injects its primitives stylesheet at the top of every page's `<head>`,
@@ -755,6 +786,7 @@ AltGr combinations, which many keyboards type characters with.
   no downloads. Writing text to the clipboard is the one browser permission a
   page has.
 - **Post notifications**, or reach into a Claude Code session: a session can
-  call a plugin's tools, but a plugin cannot send a session anything, read its
-  conversation, or start one.
+  call a plugin's tools, but a plugin cannot send a running session anything
+  or read its conversation. It can ask to start one with a first message,
+  which the user sees and agrees to first.
 - **See a secret's value**, or another plugin's anything.

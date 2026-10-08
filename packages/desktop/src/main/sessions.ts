@@ -8,6 +8,7 @@ import {
   noteConversation as recordConversation,
   PERMISSION_MODES,
   prepareLaunch,
+  readCachedProjects,
   readGitBranch,
   readHistorySession,
   readProfile,
@@ -210,6 +211,11 @@ function nativeConfirm(window: () => BrowserWindow | null): Confirm {
 
 export interface SessionHost {
   start: (req: StartSessionRequest) => Promise<SessionRecord>
+  /**
+   * A session a plugin asked for and the user agreed to: a folder, a name and
+   * a first message, said once as the session's opening prompt.
+   */
+  startWithPrompt: (req: { cwd: string; name: string; prompt: string; cols: number; rows: number }) => Promise<SessionRecord>
   /**
    * The new-session launcher's launch: a folder, a profile or none, an explicit
    * permission mode, and optionally a conversation to reopen there.
@@ -646,6 +652,8 @@ export function createSessionHost({
       profile: Profile | null
       permissionMode: PermissionMode | null
       history: HistorySession | null
+      /** The first message, over the profile's opening prompt. Unused for a reopened conversation. */
+      openingPrompt?: string | undefined
     },
     grid: { cols: number; rows: number }
   ): Promise<{ session: SessionRecord; plan: LaunchPlan }> {
@@ -678,6 +686,7 @@ export function createSessionHost({
           resume: history?.sessionId ?? null,
           shimRoot
         }),
+        ...(composition.openingPrompt === undefined ? {} : { openingPrompt: composition.openingPrompt }),
         mcp: tools?.mcp ?? null,
         // A reopened conversation keeps the id it has; asserting it again with
         // `--session-id` is refused by the CLI as already in use.
@@ -703,6 +712,13 @@ export function createSessionHost({
     return { session, plan }
   }
 
+  /** The discovered project at `cwd`, by the path discovery spells it, or null. */
+  const knownProject = (cwd: string): string | null => {
+    const wanted = cwd.toLowerCase()
+    const projects = services.lastScan?.projects ?? readCachedProjects(services.store)
+    return projects.find((project) => project.path.toLowerCase() === wanted)?.path ?? null
+  }
+
   /** What a composed launch says about itself, for the window to report. */
   const composed = (session: SessionRecord, plan: LaunchPlan): LaunchedSession => ({
     session,
@@ -721,6 +737,24 @@ export function createSessionHost({
           profile: null,
           permissionMode: null,
           history: null
+        },
+        req
+      )
+      return session
+    },
+
+    async startWithPrompt(req) {
+      const { session } = await launchComposed(
+        {
+          cwd: req.cwd,
+          // A folder Helm knows as a project is recorded as one, so the
+          // session is that project's in the sidebar and its crumb.
+          projectPath: knownProject(req.cwd),
+          name: req.name,
+          profile: null,
+          permissionMode: null,
+          history: null,
+          openingPrompt: req.prompt
         },
         req
       )

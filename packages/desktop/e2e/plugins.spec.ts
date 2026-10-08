@@ -441,3 +441,53 @@ stripTest('a plugin with a page strip opens its tabs as pages in one tab, which 
   await expect(pages(ui)).toHaveCount(0)
   await expect(ui.getByRole('tab', { name: /^Sample$/ })).toHaveCount(0)
 })
+
+test('a plugin page starts a session from a click, once the user has seen what it will run', async ({ helm, sample, world }) => {
+  const ui = helm.window
+  await storeToken(ui, sample.server.url)
+  const panel = await openPanel(ui)
+  await panel.locator('[data-sample-item="2"]').click()
+  const item = await pluginFrame(ui, 'dist/tabs/item.html')
+  await expect(item.locator('h1')).toHaveText('Second item')
+
+  // Asked for without a click, it is refused before Helm draws anything.
+  // Long enough after any click that the page's activation has lapsed.
+  const unasked = await item.evaluate(
+    (cwd) =>
+      new Promise<string>((resolve) => {
+        setTimeout(() => {
+          ;(window as unknown as PluginWindow).helm.sessions
+            .start({ cwd, prompt: 'hello' })
+            .then(resolve, (error: { code: string }) => resolve(error.code))
+        }, 6000)
+      }),
+    world.projects.alpha
+  )
+  expect(unasked).toBe('not-allowed')
+
+  const dialog = ui.getByRole('alertdialog', { name: 'Sample wants to start a session' })
+  const field = (name: string): Locator => dialog.locator(`[data-plugin-session-field="${name}"] dd`)
+  await item.locator('[data-sample-session-folder]').fill(world.projects.alpha)
+  await item.locator('[data-sample-session-start]').click()
+
+  // Everything that will run is on screen, and Cancel has the focus.
+  await expect(field('folder')).toHaveText(world.projects.alpha)
+  await expect(field('name')).toHaveText('Second item')
+  await expect(field('prompt')).toHaveText('work on Second item')
+  await expect(field('command')).toHaveText('claude -n "Second item" "work on Second item"')
+  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused()
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(item.locator('[data-sample-session-result]')).toHaveText('Cancelled.')
+  await expect(ui.getByRole('tab', { name: /^Second item, / })).toHaveCount(0)
+
+  // Started, it is a session like any other, with the message as its first.
+  await item.locator('[data-sample-session-start]').click()
+  await dialog.getByRole('button', { name: 'Start session' }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(ui.getByRole('tab', { name: 'Second item, ready' })).toHaveAttribute('aria-selected', 'true')
+  await expect(item.locator('[data-sample-session-result]')).toHaveText('Started.')
+  const run = await claudeRunIn(world, world.projects.alpha)
+  expect(run.argv[run.argv.indexOf('-n') + 1]).toBe('Second item')
+  expect(run.argv.at(-1)).toBe('work on Second item')
+})

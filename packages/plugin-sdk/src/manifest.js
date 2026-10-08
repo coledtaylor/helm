@@ -155,7 +155,8 @@ export const MANIFEST_FIELDS = Object.freeze([
   'secrets',
   'exec',
   'service',
-  'agent'
+  'agent',
+  'sessions'
 ])
 const KNOWN_FIELDS = new Set(MANIFEST_FIELDS)
 
@@ -395,6 +396,18 @@ export function validateManifest(value) {
     warnings.push('pageStrip has no tabs to hold: it gathers the tabs the manifest declares, and this one declares none')
   }
 
+  // Whether its pages may ask to start a Claude Code session. Each one is
+  // shown to the user, who starts it or not; the plugin never types into it.
+  let sessions = false
+  const rawSessions = value['sessions']
+  if (rawSessions !== undefined) {
+    if (typeof rawSessions !== 'boolean') fail('sessions must be true or false')
+    else sessions = rawSessions
+  }
+  if (sessions && value['panels'] === undefined && value['tabs'] === undefined) {
+    warnings.push('sessions needs a panel or a tab: only a click in one of its pages can ask for a session, and this manifest declares neither')
+  }
+
   /** @type {import('./types').RailSpec | null} */
   let rail = null
   const rawRail = value['rail']
@@ -576,7 +589,8 @@ export function validateManifest(value) {
       secrets,
       exec,
       service,
-      agent
+      agent,
+      sessions
     },
     warnings
   }

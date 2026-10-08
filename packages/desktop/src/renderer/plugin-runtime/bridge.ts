@@ -9,6 +9,8 @@ import type {
   HelmTheme,
   PluginParams,
   SecretState,
+  SessionStartRequest,
+  SessionStartResult,
   SettingValue,
   StatusItem,
   ToolHandler
@@ -297,6 +299,19 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
     secrets: {
       state: (key: string) => call<SecretState>('secrets.state', [key]),
       request: (key: string) => call<SecretState>('secrets.request', [key])
+    },
+
+    sessions: {
+      start(request: SessionStartRequest): Promise<SessionStartResult> {
+        // Said here, where the mistake is made: a call from anything but the
+        // user's own click or key press in this page is refused by Helm too.
+        if (navigator.userActivation?.isActive !== true) {
+          return Promise.reject(
+            helmError('not-allowed', 'helm.sessions.start needs a click or key press the user just made in the page: call it from the handler')
+          )
+        }
+        return call<SessionStartResult>('sessions.start', [request])
+      }
     },
 
     tools: {

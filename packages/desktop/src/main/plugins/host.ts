@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from 'node:fs'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { app, type BrowserWindow, type WebContents } from 'electron'
@@ -16,6 +16,7 @@ import {
   setPluginToolsEnabled,
   writePluginSetting,
   type PluginFolder,
+  type SessionRecord,
   type Store
 } from '@helm/core'
 import type { HelmTheme, SettingSpec, SettingValue, StatusItem, StatusTone, SurfaceKind } from '@coledtaylor/helm-plugin-sdk'
@@ -83,6 +84,20 @@ export interface PluginHostOptions {
    * or had its tools switched. The MCP endpoint binds or lets go on this.
    */
   onToolsChanged?: (() => void) | undefined
+  /**
+   * Starts the session a plugin asked for, once the user has agreed to it. Main's
+   * session host; absent in a test that starts none.
+   */
+  startSession?: ((request: PluginSessionLaunch) => Promise<SessionRecord>) | undefined
+}
+
+/** A session a plugin asked for, as main checked it: what the user saw in the dialog, and the pane's grid. */
+export interface PluginSessionLaunch {
+  cwd: string
+  name: string
+  prompt: string
+  cols: number
+  rows: number
 }
 
 export interface PluginHost {
@@ -100,6 +115,12 @@ export interface PluginHost {
   cancel(callId: string, sender: number): void
   command(plugin: string, id: string): void
   answer(requestId: string): void
+  /**
+   * The user's answer to a plugin's `sessions.start`, from the window that drew
+   * it. Started, it launches what main holds for the request and answers with
+   * the session; cancelled, null. Rejects with a sentence otherwise.
+   */
+  session(answer: { requestId: string; start: boolean; cols: number; rows: number }, sender: number): Promise<SessionRecord | null>
   backgroundState(plugin: string, revision: number, state: 'running' | 'crashed', error: string | null): void
   /** Every plugin offering tools now: on, loaded, declaring tools, and not switched off in Settings. */
   toolServers(): ToolServer[]
@@ -137,6 +158,8 @@ const TONES: readonly StatusTone[] = ['neutral', 'accent', 'success', 'warn', 'd
 const SURFACES: readonly SurfaceKind[] = ['panel', 'tab', 'background']
 /** How long a tool call waits for a background page that is still starting: a plugin just turned on, or reloaded. */
 const BACKGROUND_START_WAIT_MS = 15_000
+const SESSION_PROMPT_MAX = 2000
+const SESSION_NAME_MAX = 60
 
 interface Entry {
   folder: PluginFolder
@@ -164,6 +187,8 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
   /** Calls in flight, by sender and call id, with the plugin each one turned out to be for. */
   const calls = new Map<string, { controller: AbortController; entry: Entry | null }>()
   const secretRequests = new Map<string, { plugin: string; key: string; resolve: (state: 'ready' | 'missing') => void }>()
+  /** Sessions plugins asked for, on screen and waiting for the user, by request id. */
+  const sessionRequests = new Map<string, SessionAsk>()
   let revisions = 0
   let stopped = false
 
@@ -442,7 +467,8 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
         exec: [],
         service: null,
         runsPrograms: false,
-        agent: null
+        agent: null,
+        startsSessions: false
       }
     }
     const { manifest, icon, warnings } = entry.load.plugin
@@ -491,7 +517,8 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
               server: agentServerName(manifest.id),
               instructions: manifest.agent.instructions,
               tools: manifest.agent.tools.map((tool) => ({ name: tool.name, description: tool.description }))
-            }
+            },
+      startsSessions: manifest.sessions
     }
   }
 
@@ -650,6 +677,51 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
     'secrets.state': (ctx, [key]) => {
       declaredSecret(ctx.plugin, key)
       return secretStates(ctx.plugin)[key as string]
+    },
+
+    /*
+     * A session in a folder with a first message, which the user starts or not.
+     *
+     * The relay lets it through only on a click or key press the user just
+     * made, so a page cannot put the dialog up on its own. What runs is
+     * composed here, from what the dialog showed: the window answers yes or
+     * no, and never says what to launch.
+     */
+    'sessions.start': (ctx, [request]) => {
+      const { manifest } = ctx.plugin
+      if (!manifest.sessions) throw new PluginCallError('not-declared', 'the manifest does not declare sessions')
+      if (ctx.surface === 'background') {
+        throw new PluginCallError('not-allowed', 'only a panel or a tab can ask for a session, from a click')
+      }
+      const asked = readSessionRequest(request)
+      if ([...sessionRequests.values()].some((ask) => ask.plugin === manifest.id)) {
+        throw new PluginCallError('busy', 'a session this plugin asked for is already waiting on the user')
+      }
+      const win = options.window()
+      if (win === null || win.isDestroyed()) throw new PluginCallError('unavailable', 'there is no window to ask in')
+      const requestId = randomUUID()
+      return new Promise<'started' | 'cancelled'>((resolveCall, rejectCall) => {
+        // The page went away, or the plugin was turned off or reloaded, while
+        // the dialog was up: the dialog goes too, rather than starting a
+        // session for a page that is not there to hear of it.
+        const withdraw = (): void => {
+          if (!sessionRequests.delete(requestId)) return
+          emitTo(win.webContents, 'plugins:ui', { kind: 'sessionWithdrawn', requestId })
+          resolveCall('cancelled')
+        }
+        ctx.signal.addEventListener('abort', withdraw, { once: true })
+        sessionRequests.set(requestId, {
+          plugin: manifest.id,
+          entry: ctx.entry,
+          ...asked,
+          settle: (outcome) => {
+            ctx.signal.removeEventListener('abort', withdraw)
+            if (outcome instanceof Error) rejectCall(outcome)
+            else resolveCall(outcome)
+          }
+        })
+        emitTo(win.webContents, 'plugins:ui', { kind: 'session', requestId, plugin: manifest.id, ...asked })
+      })
     },
 
     'secrets.request': (ctx, [key]) => {
@@ -831,6 +903,36 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
       request.resolve(secrets.status(request.plugin, request.key) === 'ready' ? 'ready' : 'missing')
     },
 
+    async session({ requestId, start, cols, rows }, sender) {
+      const win = options.window()
+      if (win === null || win.isDestroyed() || win.webContents.id !== sender) {
+        throw new Error('Only the window that asked can answer for a session.')
+      }
+      const ask = sessionRequests.get(requestId)
+      if (ask === undefined) {
+        throw new Error('That request has gone: the page that made it closed, or its plugin was turned off.')
+      }
+      sessionRequests.delete(requestId)
+      if (!start) {
+        ask.settle('cancelled')
+        return null
+      }
+      if (options.startSession === undefined) {
+        ask.settle(new PluginCallError('unavailable', 'Helm cannot start sessions here'))
+        throw new Error('Helm cannot start sessions here.')
+      }
+      try {
+        const record = await options.startSession({ cwd: ask.cwd, name: ask.name, prompt: ask.prompt, cols, rows })
+        note(ask.entry, `started a session in ${ask.cwd}, which the user agreed to`)
+        ask.settle('started')
+        return record
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        ask.settle(new PluginCallError('unavailable', message))
+        throw error
+      }
+    },
+
     backgroundState(plugin, revision, state, error) {
       const entry = byId(plugin)
       if (entry === null || entry.revision !== revision) return
@@ -968,6 +1070,8 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
       calls.clear()
       for (const request of secretRequests.values()) request.resolve('missing')
       secretRequests.clear()
+      for (const ask of sessionRequests.values()) ask.settle('cancelled')
+      sessionRequests.clear()
       tools.shutdown()
       for (const wake of [...backgroundWaiters]) wake()
       for (const entry of entries) stopRuntime(entry, true)
@@ -1068,6 +1172,57 @@ function relevantPaths(load: LoadResult): (rel: readonly string[]) => boolean {
     if (top !== undefined && top !== '' && top !== 'node_modules') roots.add(top)
   }
   return (rel) => rel[0] !== undefined && roots.has(rel[0])
+}
+
+interface SessionAsk {
+  plugin: string
+  entry: Entry
+  cwd: string
+  name: string
+  prompt: string
+  /** Answers the plugin's call: how it went, or why it failed. */
+  settle: (outcome: 'started' | 'cancelled' | PluginCallError) => void
+}
+
+/** Whether `text` holds a control character: a prompt or a name is one line, and shows in the dialog as it will run. */
+function hasControl(text: string): boolean {
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f) return true
+  }
+  return false
+}
+
+/**
+ * What a page asked to start, held to what the dialog can show truthfully and
+ * the command line can carry. One line, so it means the same through a `.cmd`
+ * shim; no `"`, which a shim's command line cannot carry (`quoteForCmd`); and
+ * no leading `-`, which `claude` would read as a flag rather than a message.
+ */
+function readSessionRequest(value: unknown): { cwd: string; name: string; prompt: string } {
+  if (value === null || typeof value !== 'object') {
+    throw new PluginCallError('invalid', 'sessions.start takes { cwd, prompt, name? }')
+  }
+  const { cwd, prompt, name } = value as Record<string, unknown>
+  if (typeof cwd !== 'string' || !isAbsolute(cwd)) throw new PluginCallError('invalid', 'cwd must be an absolute path')
+  if (!isDirectory(cwd)) throw new PluginCallError('invalid', `${cwd} is not a folder on this computer`)
+  if (typeof prompt !== 'string' || prompt.trim() === '') throw new PluginCallError('invalid', 'prompt must be a message to start with')
+  const message = prompt.trim()
+  if (message.length > SESSION_PROMPT_MAX) {
+    throw new PluginCallError('invalid', `a prompt is at most ${String(SESSION_PROMPT_MAX)} characters`)
+  }
+  if (hasControl(message)) throw new PluginCallError('invalid', 'a prompt is one line')
+  if (message.includes('"')) throw new PluginCallError('invalid', 'a prompt cannot hold a double quote')
+  if (message.startsWith('-')) throw new PluginCallError('invalid', 'a prompt cannot start with -')
+  const folder = resolve(cwd)
+  let called = basename(folder) || folder
+  if (name !== undefined && name !== null) {
+    if (typeof name !== 'string' || name.trim() === '' || name.trim().length > SESSION_NAME_MAX || hasControl(name)) {
+      throw new PluginCallError('invalid', `a session name is one line of 1-${String(SESSION_NAME_MAX)} characters`)
+    }
+    called = name.trim()
+  }
+  return { cwd: folder, name: called, prompt: message }
 }
 
 function readTitle(value: unknown): string | null {

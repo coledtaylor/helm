@@ -84,6 +84,7 @@ import {
   PluginPages,
   PluginsPage,
   SearchIcon,
+  PluginSessionDialog,
   SecretDialog,
   SecretsPage,
   TrashIcon,
@@ -175,6 +176,7 @@ import { helm } from './bridge'
 import { ProjectColumn } from './ProjectColumn'
 import { disposeShell, terminalShellKey } from './pterms'
 import { estimateGrid } from './terminals'
+import { readable } from './errors'
 import { TerminalPane } from './TerminalPane'
 import { TerminalTabPane } from './TerminalTabPane'
 import { terminalFontStack } from '../terminal'
@@ -392,6 +394,10 @@ export function App(): JSX.Element {
   const plugins = pluginState.live
   /** Plugins' secret requests, answered one dialog at a time, in order. */
   const [secretAsks, setSecretAsks] = useState<Extract<PluginUiRequest, { kind: 'secret' }>[]>([])
+  /** Sessions plugins asked to start, put to the user one dialog at a time, in order. */
+  const [sessionAsks, setSessionAsks] = useState<Extract<PluginUiRequest, { kind: 'session' }>[]>([])
+  /** The front one's launch: under way, or why it did not start. */
+  const [sessionAskState, setSessionAskState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null })
   /** Ctrl+Shift+P. */
   const [paletteOpen, setPaletteOpen] = useState(false)
   /** The rail's current view, pressed again, puts the sidebar away. */
@@ -731,6 +737,14 @@ export function App(): JSX.Element {
           setSecretAsks((current) => [...current, request])
           return
         }
+        if (request.kind === 'session') {
+          setSessionAsks((current) => [...current, request])
+          return
+        }
+        if (request.kind === 'sessionWithdrawn') {
+          setSessionAsks((current) => current.filter((ask) => ask.requestId !== request.requestId))
+          return
+        }
         openPluginTab(request.plugin, request.tab, request.params, request.title)
       }),
     [openPluginTab]
@@ -1005,6 +1019,44 @@ export function App(): JSX.Element {
       }
     },
     [sessionState, placeSession, open.focused]
+  )
+
+  /**
+   * The user's answer to the front session request. Main launches what it
+   * holds for the request; the window sends only the answer and the grid of
+   * the pane the session lands in, and places what comes back like any launch.
+   */
+  const frontSessionAsk = sessionAsks[0] ?? null
+  const answerSessionAsk = useCallback(
+    async (start: boolean) => {
+      if (frontSessionAsk === null) return
+      const { requestId } = frontSessionAsk
+      const next = (): void => {
+        setSessionAsks((current) => current.filter((ask) => ask.requestId !== requestId))
+        setSessionAskState({ busy: false, error: null })
+      }
+      // A failed launch has spent the request; closing is all that is left.
+      if (!start || sessionAskState.error !== null) {
+        if (sessionAskState.error === null) {
+          void helm.invoke('plugins:session', { requestId, start: false, cols: 0, rows: 0 }).catch(() => undefined)
+        }
+        next()
+        return
+      }
+      setSessionAskState({ busy: true, error: null })
+      try {
+        const { cols, rows } = estimateGrid(bodyRefs.current.get(open.focused) ?? null)
+        const record = await helm.invoke('plugins:session', { requestId, start: true, cols, rows })
+        if (record !== null) {
+          sessionState.adopt(record)
+          placeSession(record.id)
+        }
+        next()
+      } catch (err: unknown) {
+        setSessionAskState({ busy: false, error: readable(err) })
+      }
+    },
+    [frontSessionAsk, sessionAskState.error, sessionState, placeSession, open.focused]
   )
 
   /** A profile launch lands exactly the way a project launch does - or in the pane `into`. */
@@ -3476,6 +3528,19 @@ export function App(): JSX.Element {
             commands={paletteCommands}
             onRun={runPluginCommand}
             onDismiss={() => setPaletteOpen(false)}
+          />
+        )}
+        {frontSessionAsk !== null && (
+          <PluginSessionDialog
+            key={frontSessionAsk.requestId}
+            pluginName={plugins.get(frontSessionAsk.plugin)?.name ?? frontSessionAsk.plugin}
+            cwd={frontSessionAsk.cwd}
+            name={frontSessionAsk.name}
+            prompt={frontSessionAsk.prompt}
+            busy={sessionAskState.busy}
+            error={sessionAskState.error}
+            onStart={() => void answerSessionAsk(true)}
+            onCancel={() => void answerSessionAsk(false)}
           />
         )}
         {secretAsk !== null && (

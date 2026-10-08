@@ -1376,6 +1376,14 @@ export interface IpcRequests {
    * source (`pluginFrames.ts`); nothing the plugin wrote decides it.
    */
   'plugins:call': { request: PluginCallRequest; response: PluginCallOutcome }
+  /**
+   * The answer to a plugin's `sessions.start`: the user started the session or
+   * cancelled. Main holds what the plugin asked for and composes the launch
+   * from that, never from this request; a started one answers with its row,
+   * for the window to give a tab. Rejects with a sentence when the request has
+   * gone or the session could not start.
+   */
+  'plugins:session': { request: { requestId: string; start: boolean; cols: number; rows: number }; response: SessionRecord | null }
   /** A Quick Open command with no tab, for the plugin's background page. */
   'plugins:command': { request: { plugin: string; id: string }; response: void }
   /** Memory and CPU per plugin. Asked while a plugin's settings page is open, never polled otherwise. */
@@ -1467,6 +1475,20 @@ export type PluginUiRequest =
       /** The plugin's own origins, offered as the hosts the value may go to. */
       hosts: string[]
     }
+  | {
+      kind: 'session'
+      /** Answered on `plugins:session` when the user starts it or cancels. */
+      requestId: string
+      plugin: string
+      /** Checked by main: an absolute path to a folder that exists. */
+      cwd: string
+      /** One line, said as the session's first message. */
+      prompt: string
+      /** What the session is called, before it is made unique among the running ones. */
+      name: string
+    }
+  /** The request went away before it was answered: its page closed, or the plugin was turned off. */
+  | { kind: 'sessionWithdrawn'; requestId: string }
 
 /**
  * An event for a plugin's pages. Each Helm page framing the plugin delivers it
@@ -1924,6 +1946,7 @@ export const REQUEST_CHANNELS = Object.keys({
   'plugins:reload': true,
   'plugins:setSetting': true,
   'plugins:call': true,
+  'plugins:session': true,
   'plugins:command': true,
   'plugins:metrics': true,
   'plugins:log': true,

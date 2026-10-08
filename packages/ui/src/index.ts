@@ -18,6 +18,11 @@ export {
   type PluginsPageProps
 } from './components/PluginSettings'
 export {
+  PluginSessionDialog,
+  pluginSessionCommand,
+  type PluginSessionDialogProps
+} from './components/PluginSessionDialog'
+export {
   SecretDialog,
   SecretsPage,
   type SecretDialogProps,

@@ -409,7 +409,10 @@ function startApp(options: AppOptions = {}): void {
     stylesheet: pluginStylesheet,
     // A plugin's tools coming or going can be the difference between a
     // listener and none.
-    onToolsChanged: () => void browserMcp?.sync()
+    onToolsChanged: () => void browserMcp?.sync(),
+    // Called only once the user has agreed in the window, which is long after
+    // the session host below exists.
+    startSession: (request) => sessions.startWithPrompt(request)
   })
   plugins.start()
   registerPluginProtocol((id) => plugins.served(id), plugins.runtime)

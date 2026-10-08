@@ -301,6 +301,11 @@
         }
       ]
     },
+    "sessions": {
+      "type": "boolean",
+      "default": false,
+      "description": "Let the plugin's pages ask to start a Claude Code session in a folder with a first message, with helm.sessions.start. Helm shows each one to the user, who starts it or not."
+    },
     "agent": {
       "type": "object",
       "description": "Tools Helm offers the Claude Code sessions it starts, as an MCP server named helm-plugin-<id>. The background page answers them with helm.tools.handle, so the manifest needs a background.",
