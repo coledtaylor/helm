@@ -1,7 +1,13 @@
 import { isAbsolute } from 'node:path'
 import { sql } from 'drizzle-orm'
 import { RETIRED_TAB_KINDS, upgradeSavedLayout } from '../layout/panes'
-import { isPluginRailId, PLUGIN_TITLE_MAX, pluginParamsProblem, pluginTabNameProblem } from '../plugins/tabs'
+import {
+  isPluginRailId,
+  PLUGIN_PAGES_MAX,
+  PLUGIN_TITLE_MAX,
+  pluginParamsProblem,
+  pluginTabNameProblem
+} from '../plugins/tabs'
 import {
   BROWSER_PROJECT_URLS_MAX,
   BROWSER_REACH_MODES,
@@ -175,16 +181,37 @@ function paneProblem(pane: unknown): string | null {
   }
   if (kind === 'plugin') {
     const { plugin, tab, params, title } = pane as Record<string, unknown>
-    const named = pluginTabNameProblem(plugin, tab)
-    if (named !== null) return named
-    const problem = pluginParamsProblem(params)
-    if (problem !== null) return problem
-    if (title !== null && (typeof title !== 'string' || title.trim() === '' || title.length > PLUGIN_TITLE_MAX)) {
-      return `expected a tab title or null, got ${describe(title)}`
+    return pluginSurfaceProblem(plugin, tab, params, title)
+  }
+  if (kind === 'plugin-pages') {
+    const { plugin, pages, active } = pane as Record<string, unknown>
+    if (!Array.isArray(pages) || pages.length === 0 || pages.length > PLUGIN_PAGES_MAX) {
+      return `expected 1 to ${String(PLUGIN_PAGES_MAX)} plugin pages, got ${describe(pages)}`
     }
+    for (const page of pages as unknown[]) {
+      if (typeof page !== 'object' || page === null || Array.isArray(page)) {
+        return `expected a plugin page, got ${describe(page)}`
+      }
+      const { tab, params, title } = page as Record<string, unknown>
+      const problem = pluginSurfaceProblem(plugin, tab, params, title)
+      if (problem !== null) return problem
+    }
+    if (active !== null && typeof active !== 'string') return `expected the page in front or null, got ${describe(active)}`
     return null
   }
   return `expected a pane kind, got ${describe(kind)}`
+}
+
+/** Why a plugin tab, or a page in a plugin's strip, is not one a manifest could have opened. */
+function pluginSurfaceProblem(plugin: unknown, tab: unknown, params: unknown, title: unknown): string | null {
+  const named = pluginTabNameProblem(plugin, tab)
+  if (named !== null) return named
+  const problem = pluginParamsProblem(params)
+  if (problem !== null) return problem
+  if (title !== null && (typeof title !== 'string' || title.trim() === '' || title.length > PLUGIN_TITLE_MAX)) {
+    return `expected a tab title or null, got ${describe(title)}`
+  }
+  return null
 }
 
 /** Deeper than this is not a tree a person arranged; see `paneTreeProblem`. */

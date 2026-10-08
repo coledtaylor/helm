@@ -63,10 +63,54 @@ export function canonicalParams(params: PluginParams): string {
   return keys.length === 0 ? '' : JSON.stringify(Object.fromEntries(keys.map((key) => [key, params[key]])))
 }
 
+/** `<id>/<tab>`, with `?<parameters>` when it has any: what a tab or a page is named after. */
+function tabPath(plugin: string, tab: string, params: PluginParams): string {
+  const query = canonicalParams(params)
+  return `${plugin}/${tab}${query === '' ? '' : `?${query}`}`
+}
+
 /** The tab's identity in the layout: `plugin:<id>/<tab>`, with `?<parameters>` when it has any. */
 export function pluginTabId(plugin: string, tab: string, params: PluginParams): string {
-  const query = canonicalParams(params)
-  return `plugin:${plugin}/${tab}${query === '' ? '' : `?${query}`}`
+  return `plugin:${tabPath(plugin, tab, params)}`
+}
+
+/**
+ * One page in the strip of a plugin that declares `pageStrip`: one of its
+ * tabs, with what it was opened with and the title it was given (null for the
+ * manifest's) - a plugin tab's fields, held in the plugin's one tab rather
+ * than standing in the pane.
+ */
+export interface PluginPage {
+  tab: string
+  params: PluginParams
+  title: string | null
+}
+
+/**
+ * How many pages one plugin's strip keeps. Past this the strip is a runaway
+ * loop rather than somebody's reading, and the page opened longest ago that is
+ * not in front makes room for the new one.
+ */
+export const PLUGIN_PAGES_MAX = 50
+
+/**
+ * A page's identity: `plugin-page:<id>/<tab>`, with `?<parameters>` when it
+ * has any. Never shaped like `pluginTabId`, because it is also the key of the
+ * page's frame, and a plugin that turns `pageStrip` on while one of its tabs
+ * is open must not have that tab and a page share one frame.
+ */
+export function pluginPageId(plugin: string, page: Pick<PluginPage, 'tab' | 'params'>): string {
+  return `plugin-page:${tabPath(plugin, page.tab, page.params)}`
+}
+
+/** Whether a frame's key is a page's (`pluginPageId`) rather than a plugin tab's or a panel's. */
+export function isPluginPageId(key: string): boolean {
+  return key.startsWith('plugin-page:')
+}
+
+/** The plugin's one tab holding its pages: `plugin-pages:<id>`. */
+export function pluginPagesId(plugin: string): string {
+  return `plugin-pages:${plugin}`
 }
 
 /**

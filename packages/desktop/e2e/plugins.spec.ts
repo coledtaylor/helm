@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Frame, Locator, Page } from '@playwright/test'
 import type { HelmBridge } from '@coledtaylor/helm-plugin-sdk'
@@ -367,4 +367,77 @@ test("a session calls the plugin's tools, its background page answers, and turni
   const browser = config.mcpServers['helm-browser']
   if (browser === undefined) throw new Error('no browser server')
   expect((await rpc(browser.url, token, 'tools/list')).status).toBe(200)
+})
+
+/** The sample as a plugin that declares `pageStrip`: its tabs open as pages in one tab of its own. */
+const stripTest = test.extend({
+  world: async ({ world, sample }, use) => {
+    const file = join(sample.dir, 'helm-plugin.json')
+    const manifest = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    writeFileSync(file, JSON.stringify({ ...manifest, pageStrip: true }, null, 2))
+    await use(world)
+  }
+})
+
+stripTest('a plugin with a page strip opens its tabs as pages in one tab, which Ctrl+W closes page by page', async ({
+  helm,
+  sample,
+  relaunch
+}) => {
+  let ui = helm.window
+  await storeToken(ui, sample.server.url)
+  const panel = await openPanel(ui)
+  await expect(panel.locator('[data-sample-item]')).toHaveCount(3)
+  const pages = (page: Page): Locator => page.getByRole('tablist', { name: 'Sample pages' })
+
+  // The first page opens the plugin's one tab, named for the plugin.
+  await panel.locator('[data-sample-item="2"]').click()
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Second item'])
+  await expect(ui.getByRole('tab', { name: /^Sample$/ })).toHaveAttribute('aria-selected', 'true')
+  const second = await pluginFrame(ui, 'dist/tabs/item.html')
+  // Loaded, named and marked read by the page itself, so the name below is the last word.
+  await expect(statusItem(ui)).toHaveText('1 unread')
+  await second.evaluate(() => {
+    ;(window as unknown as { marker: string }).marker = 'kept'
+    ;(window as unknown as PluginWindow).helm.surface.setTitle('Second, renamed')
+  })
+  // setTitle names the page in the strip, not the plugin's tab.
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Second, renamed'])
+  await expect(ui.getByRole('tab', { name: /^Sample$/ })).toBeVisible()
+
+  // A second page joins the strip rather than the pane's tabs.
+  await panel.locator('[data-sample-item="1"]').click()
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Second, renamed', 'Welcome'])
+  await expect(ui.getByRole('tab', { name: /Welcome/ })).toHaveCount(1)
+  await expect(pages(ui).getByRole('tab', { name: /Welcome/ })).toHaveAttribute('aria-selected', 'true')
+
+  // The same item again brings its page forward, with the title asked for, and
+  // the page behind kept running all along.
+  await panel.locator('[data-sample-item="2"]').click()
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Second item', 'Welcome'])
+  await expect(pages(ui).getByRole('tab', { name: /Second item/ })).toHaveAttribute('aria-selected', 'true')
+  expect(await second.evaluate(() => (window as unknown as { marker?: string }).marker)).toBe('kept')
+
+  // Reordered as the Browser tab's pages are.
+  await pages(ui).getByRole('tab', { name: /Second item/ }).press('Control+Shift+ArrowRight')
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Welcome', 'Second item'])
+
+  // Written down with the panes, and back after a restart.
+  const saved = (): Promise<string> =>
+    ui.evaluate(async () => {
+      const settings = (await (window as unknown as HelmWindow).helm.invoke('settings:read')) as { paneLayout: unknown }
+      return JSON.stringify(settings.paneLayout)
+    })
+  await expect.poll(saved).toMatch(/"kind":"plugin-pages".*"params":\{"id":"1"\}.*"params":\{"id":"2"\}/)
+  ui = (await relaunch()).window
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Welcome', 'Second item'])
+  await expect(pages(ui).getByRole('tab', { name: /Second item/ })).toHaveAttribute('aria-selected', 'true')
+
+  // Ctrl+W closes the page in front, and the last page takes the tab with it.
+  await pages(ui).getByRole('tab', { name: /Second item/ }).click()
+  await ui.keyboard.press('Control+w')
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Welcome'])
+  await ui.keyboard.press('Control+w')
+  await expect(pages(ui)).toHaveCount(0)
+  await expect(ui.getByRole('tab', { name: /^Sample$/ })).toHaveCount(0)
 })

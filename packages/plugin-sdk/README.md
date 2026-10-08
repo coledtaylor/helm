@@ -92,6 +92,7 @@ under `__helm/`, where Helm serves its runtime.
 | `rail` | `{ "title", "panel" }`: a rail button with that tooltip, opening that panel in the sidebar. |
 | `panels` | Sidebar panels by name: `{ "title", "entry", "actions"? }`. |
 | `tabs` | Tabs by name: `{ "title", "entry" }`. |
+| `pageStrip` | `true` opens the tabs as pages in one tab of the plugin's own. See [Tabs](#tabs). |
 | `background` | A page that runs whenever the plugin is on. |
 | `commands` | Entries in the command palette: `{ "id", "title", "tab"? }`. |
 | `settings` | A settings page Helm draws: see [Settings](#settings). |
@@ -168,6 +169,15 @@ and the page reads them from `helm.context.params`. `title` names the tab until 
 ```js
 helm.surface.setTitle('Run 42 - passed') // null puts back the manifest's title
 ```
+
+A plugin that opens many tabs - a list, then an item, then another - can keep
+them out of the pane's strip with `"pageStrip": true`. Its tabs then open as
+pages in one tab of its own, named for the plugin, with a strip of pages inside
+it, the way Helm's Browser tab holds its pages. `helm.tabs.open` opens a page
+there, or brings forward the page with the same parameters; `setTitle` names
+the page in that strip. Pages switch, close (Ctrl+W) and reorder (drag, or
+Ctrl+Shift+Left and Right) as the Browser tab's do, and closing the last one
+closes the tab. Without it, each tab is a tab of its own in the pane.
 
 ### Background page
 

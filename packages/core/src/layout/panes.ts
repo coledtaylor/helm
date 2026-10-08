@@ -1,5 +1,5 @@
 import type { WorkspaceTab } from '../types'
-import { pluginTabId } from '../plugins/tabs'
+import { pluginPagesId, pluginTabId } from '../plugins/tabs'
 
 /**
  * The panes in the window and the tabs in each, as data.
@@ -161,6 +161,9 @@ export function paneId(ref: PaneRef): string {
       return `file:${ref.path}`
     case 'plugin':
       return pluginTabId(ref.plugin, ref.tab, ref.params)
+    case 'plugin-pages':
+      // One per plugin, whichever pages it holds.
+      return pluginPagesId(ref.plugin)
     default:
       // history, sessions, config, settings, browser: one of each, so
       // the kind is the identity.

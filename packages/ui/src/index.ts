@@ -169,6 +169,12 @@ export {
   type BrowserPage,
   type BrowserPagesProps
 } from './components/BrowserPages'
+export {
+  PLUGIN_PAGE_MIME,
+  PluginPages,
+  type PluginPageTab,
+  type PluginPagesProps
+} from './components/PluginPages'
 export { UsageStatus, type UsageStatusProps } from './components/UsageStatus'
 export { TitleBar } from './components/TitleBar'
 export { RestorePane, type RestorePaneProps } from './components/RestorePane'

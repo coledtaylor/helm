@@ -100,6 +100,8 @@ export interface NormalizedManifest {
   rail: RailSpec | null
   panels: Record<string, { title: string; entry: string; actions: PanelActionSpec[] }>
   tabs: Record<string, TabSpec>
+  /** Its tabs open as pages in one tab of its own, with their own strip, rather than a tab each in the pane. */
+  pageStrip: boolean
   background: string | null
   commands: Array<{ id: string; title: string; tab: string | null }>
   settings: SettingSpec[]
