@@ -432,6 +432,7 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
         rail: null,
         panels: {},
         tabs: {},
+        pageStrip: false,
         background: null,
         commands: [],
         settings: [],
@@ -461,6 +462,7 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
         Object.entries(manifest.panels).map(([key, panel]) => [key, { title: panel.title, url: page(panel.entry), actions: panel.actions }])
       ),
       tabs: Object.fromEntries(Object.entries(manifest.tabs).map(([key, tab]) => [key, { title: tab.title, url: page(tab.entry) }])),
+      pageStrip: manifest.pageStrip,
       background:
         manifest.background === null
           ? null

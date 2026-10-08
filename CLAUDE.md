@@ -204,6 +204,10 @@ folder: run through npx, that folder is a cache.
   (`renderer/src/plugins/relay.ts`) per page owns every frame's port.
 - A plugin's failure shows in its own surface (`PluginFrame`), never in Helm's
   chrome, and never takes Helm down.
+- A plugin with `pageStrip` has one `plugin-pages` tab whose ref holds its
+  pages (`core/layout/pluginPages.ts`), never a tab per page. A page's frame
+  key is its `pluginPageId`, never shaped like a plugin tab's, and a page's
+  frame ends when the page leaves the layout, whatever removed it.
 - Background pages are iframes in the hidden `plugin-host.html` window, not
   top-level pages: Chromium partitions an iframe's storage by its top-level
   site, and a top-level page would share nothing with the plugin's panels.

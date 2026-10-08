@@ -147,6 +147,7 @@ export const MANIFEST_FIELDS = Object.freeze([
   'rail',
   'panels',
   'tabs',
+  'pageStrip',
   'background',
   'commands',
   'settings',
@@ -382,6 +383,18 @@ export function validateManifest(value) {
     if (title !== null && entry !== null) tabs[key] = { title, entry }
   }
 
+  // Whether the tabs open as pages in one tab of the plugin's own, with a strip
+  // of their own inside it, rather than a tab each among a pane's tabs.
+  let pageStrip = false
+  const rawPageStrip = value['pageStrip']
+  if (rawPageStrip !== undefined) {
+    if (typeof rawPageStrip !== 'boolean') fail('pageStrip must be true or false')
+    else pageStrip = rawPageStrip
+  }
+  if (pageStrip && value['tabs'] === undefined) {
+    warnings.push('pageStrip has no tabs to hold: it gathers the tabs the manifest declares, and this one declares none')
+  }
+
   /** @type {import('./types').RailSpec | null} */
   let rail = null
   const rawRail = value['rail']
@@ -555,6 +568,7 @@ export function validateManifest(value) {
       rail,
       panels,
       tabs,
+      pageStrip,
       background,
       commands,
       settings,

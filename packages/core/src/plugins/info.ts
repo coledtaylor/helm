@@ -73,6 +73,8 @@ export interface PluginInfo {
   rail: { title: string; panel: string } | null
   panels: Record<string, PluginPanelInfo>
   tabs: Record<string, PluginTabInfo>
+  /** Its tabs open as pages in one tab of its own (`plugin-pages`), not a tab each. */
+  pageStrip: boolean
   background: PluginBackgroundInfo | null
   commands: Array<{ id: string; title: string; tab: string | null }>
   settings: SettingSpec[]

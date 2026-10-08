@@ -19,7 +19,7 @@ import type { CreatableKind } from './config/names'
 import type { BrowserReach, BrowserSearch } from './browser/reach'
 import type { SavedPaneLayout } from './layout/panes'
 // A plugin's tab is a `WorkspaceTab`, and its rail id may be in `railHidden`.
-import type { PluginParams, PluginRailId } from './plugins/tabs'
+import type { PluginPage, PluginParams, PluginRailId } from './plugins/tabs'
 
 /**
  * The browser pane's URL rules, re-exported here rather than from the package
@@ -58,6 +58,7 @@ export * from './theme/themes'
  * type from this file.
  */
 export * from './layout/panes'
+export * from './layout/pluginPages'
 
 /**
  * A plugin's tab and rail id, re-exported for the same reason: the renderer
@@ -1217,6 +1218,12 @@ export type WorkspaceTab =
    * or null for the manifest's.
    */
   | { kind: 'plugin'; plugin: string; tab: string; params: PluginParams; title: string | null }
+  /**
+   * The one tab of a plugin that declares `pageStrip`: its tabs, opened as
+   * pages in a strip of their own, in order, and the one in front by its
+   * `pluginPageId`. Kept across a restart as a plugin tab is.
+   */
+  | { kind: 'plugin-pages'; plugin: string; pages: PluginPage[]; active: string | null }
 
 /** How many tabs are worth writing down. Past this the list is a bug, not a
  * workspace, and a settings row nobody can shrink is worse than a truncation. */

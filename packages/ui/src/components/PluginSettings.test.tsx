@@ -26,6 +26,7 @@ const plugin = (overrides: Partial<PluginInfo> = {}): PluginInfo => ({
   rail: { title: 'Sample', panel: 'main' },
   panels: {},
   tabs: {},
+  pageStrip: false,
   background: null,
   commands: [],
   settings: [],

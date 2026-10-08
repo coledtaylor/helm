@@ -37,7 +37,19 @@ import {
   isPluginRailId,
   pluginRailId,
   retitleTab,
+  activatePluginPage,
+  closePluginPage,
+  frontPluginPage,
+  isPluginPageId,
+  movePluginPage,
+  openPluginPage,
+  openPluginPageIds,
+  pluginPageId,
+  pluginPagesId,
+  retitlePluginSurface,
   RAIL_DESTINATIONS,
+  type PluginParams,
+  type PluginPagesRef,
   type EditorHighlight,
   type FileRef,
   type HistorySession,
@@ -69,6 +81,7 @@ import {
   PinIcon,
   PluginIcon,
   PluginPage,
+  PluginPages,
   PluginsPage,
   SearchIcon,
   SecretDialog,
@@ -302,6 +315,11 @@ function railPanelSpec(id: string, plugin: PluginInfo): SurfaceSpec | null {
     params: {},
     title: panel.title
   }
+}
+
+/** What a page in a plugin's strip is called: the title it was given, or its tab's in the manifest. */
+function pluginPageTitle(page: PluginPagesRef['pages'][number], plugin: PluginInfo): string {
+  return page.title ?? plugin.tabs[page.tab]?.title ?? page.tab
 }
 
 /** The session id inside a `session:12` tab id. */
@@ -539,6 +557,13 @@ export function App(): JSX.Element {
       if (ref.kind === 'plugin') {
         return pluginState.list === null || plugins.get(ref.plugin)?.tabs[ref.tab] !== undefined
       }
+      // The same for a plugin's pages tab, kept while any page in it is one
+      // the plugin still declares.
+      if (ref.kind === 'plugin-pages') {
+        if (pluginState.list === null) return true
+        const plugin = plugins.get(ref.plugin)
+        return plugin !== undefined && ref.pages.some((page) => plugin.tabs[page.tab] !== undefined)
+      }
       return true
     },
     [discovery, projectsByPath, browserViews, sessionsById, restoreOffer, plugins, pluginState.list]
@@ -658,8 +683,9 @@ export function App(): JSX.Element {
   /**
    * What the window does with what a plugin page says to it: a key the page
    * did not take is pressed again here, on its frame, so Helm's shortcuts work
-   * from inside a plugin as from anywhere else; a tab's title goes on its tab.
-   * Set once - the relay outlives renders, and `commit` is stable.
+   * from inside a plugin as from anywhere else; a tab's title goes on its tab,
+   * or on its page in a plugin's strip. Set once - the relay outlives renders,
+   * and `commit` is stable.
    */
   useEffect(() => {
     setPluginFrameHooks({
@@ -667,10 +693,31 @@ export function App(): JSX.Element {
         element.dispatchEvent(new KeyboardEvent('keydown', { ...key, bubbles: true, cancelable: true }))
       },
       title: (spec, title) => {
-        if (spec.surface === 'tab') commit((current) => retitleTab(current, spec.key, title))
+        if (spec.surface === 'tab') commit((current) => retitlePluginSurface(current, spec.key, title))
       }
     })
   }, [commit])
+
+  /**
+   * Opens one of a plugin's tabs, or brings it forward: as a page in the
+   * plugin's own tab when it declares `pageStrip`, and as a tab of its own in
+   * the focused pane when it does not. Either way, the title it was asked for
+   * this time is the one it shows.
+   */
+  const openPluginTab = useCallback(
+    (plugin: string, tab: string, params: PluginParams, title: string | null) => {
+      if (plugins.get(plugin)?.pageStrip === true) {
+        const at = findTab(open, pluginPagesId(plugin))
+        commit((current) => openPluginPage(current, plugin, { tab, params, title }))
+        if (at !== null) setMaximized((current) => (current === null || current === at.group ? current : null))
+        return
+      }
+      const ref: PaneRef = { kind: 'plugin', plugin, tab, params, title }
+      openPane(ref)
+      if (title !== null) commit((current) => retitleTab(current, paneId(ref), title))
+    },
+    [plugins, open, commit, openPane]
+  )
 
   /**
    * What a plugin asked main for that needs the window: a tab of its own
@@ -684,19 +731,20 @@ export function App(): JSX.Element {
           setSecretAsks((current) => [...current, request])
           return
         }
-        const ref: PaneRef = {
-          kind: 'plugin',
-          plugin: request.plugin,
-          tab: request.tab,
-          params: request.params,
-          title: request.title
-        }
-        openPane(ref)
-        // Already open: the title it asked for this time is the one it shows.
-        if (request.title !== null) commit((current) => retitleTab(current, paneId(ref), request.title))
+        openPluginTab(request.plugin, request.tab, request.params, request.title)
       }),
-    [openPane, commit]
+    [openPluginTab]
   )
+
+  /**
+   * A page that left its plugin's strip ends - closed, closed with its tab,
+   * or let go to make room. Read off the layout rather than said at each of
+   * those, so no way of leaving can leave a page running with nowhere to be.
+   */
+  const openPages = useMemo(() => openPluginPageIds(open), [open])
+  useEffect(() => {
+    disposePluginFrames((spec) => isPluginPageId(spec.key) && !openPages.has(spec.key))
+  }, [openPages])
 
   /**
    * A plugin turned off or removed takes its pages with it, and a page from a
@@ -1320,6 +1368,33 @@ export function App(): JSX.Element {
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
   }, [browserInFront, frontPage, runBrowserCommand])
 
+  /**
+   * Ctrl+W and Ctrl+F4 close the page in front of a plugin's strip, as they
+   * close the Browser tab's - while that plugin's tab is in front of the
+   * focused pane, with the caret in Helm's chrome or in the page, which
+   * forwards a key it did not take. Gated as the browser's keys are, and never
+   * taken from a terminal.
+   */
+  const frontPages: PluginPagesRef | null = front?.kind === 'plugin-pages' ? front : null
+  const frontPagesPlugin = frontPages?.plugin ?? null
+  const frontStripPage = frontPages === null ? null : frontPluginPage(frontPages)
+  const frontStripPageId =
+    frontPagesPlugin === null || frontStripPage === null ? null : pluginPageId(frontPagesPlugin, frontStripPage)
+  useEffect(() => {
+    if (frontPagesPlugin === null || frontStripPageId === null) return undefined
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return
+      if (event.key.toLowerCase() !== 'w' && event.key !== 'F4') return
+      if (overlayOpen() || document.activeElement?.closest('.xterm')) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.repeat) return
+      commit((current) => closePluginPage(current, frontPagesPlugin, frontStripPageId))
+    }
+    window.addEventListener('keydown', onKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
+  }, [frontPagesPlugin, frontStripPageId, commit])
+
   /** The folder the focused pane is about, for the launcher to open on. */
   const frontFolder = useMemo(() => {
     const group = groupById(open, open.focused)
@@ -1843,6 +1918,24 @@ export function App(): JSX.Element {
           }
         ]
       }
+      case 'plugin-pages': {
+        // One tab, named for the plugin, as the Browser tab is named for what
+        // it is. The pages are in its own strip; the hint says what is in
+        // front, for a tab that is not.
+        const plugin = plugins.get(ref.plugin)
+        if (plugin === undefined) return []
+        const count = ref.pages.length
+        const page = frontPluginPage(ref)
+        const showing = page === null ? '' : `, showing ${pluginPageTitle(page, plugin)}`
+        return [
+          {
+            id: paneId(ref),
+            title: truncate(plugin.name, 30),
+            hint: `${plugin.name}: ${String(count)} ${count === 1 ? 'page' : 'pages'}${showing}`,
+            icon: <PluginIcon url={plugin.icon} size={13} />
+          }
+        ]
+      }
       case 'browser': {
         // One tab, named for what it is. The pages, their titles and the
         // sessions that opened them are in its own strip; the hint says what
@@ -2337,6 +2430,56 @@ export function App(): JSX.Element {
     />
   )
 
+  /**
+   * A plugin's one tab: its strip of pages, and the page in front under it.
+   * Pages behind keep running, parked by `pluginFrames.ts` as a tab behind
+   * another does. A page whose tab the plugin no longer declares is not drawn.
+   */
+  const renderPluginPages = (ref: PluginPagesRef): ReactNode => {
+    const plugin = plugins.get(ref.plugin)
+    if (plugin === undefined) return null
+    const pages = ref.pages.filter((page) => plugin.tabs[page.tab] !== undefined)
+    const shown = frontPluginPage({ ...ref, pages })
+    const surface = shown === null ? undefined : plugin.tabs[shown.tab]
+    const shownId = shown === null ? null : pluginPageId(ref.plugin, shown)
+    const holder = findTab(open, paneId(ref))
+    const icon = <PluginIcon url={plugin.icon} size={13} />
+    return (
+      <div className="absolute inset-0 flex flex-col">
+        <PluginPages
+          label={`${plugin.name} pages`}
+          pages={pages.map((page) => {
+            const title = pluginPageTitle(page, plugin)
+            return { id: pluginPageId(ref.plugin, page), title: truncate(title, 30), hint: `${title} - ${plugin.name}` }
+          })}
+          activeId={shownId}
+          icon={icon}
+          focused={holder !== null && holder.group === open.focused}
+          onActivate={(id) => commit((current) => activatePluginPage(current, ref.plugin, id))}
+          onClose={(id) => commit((current) => closePluginPage(current, ref.plugin, id))}
+          onMove={(id, toIndex) => commit((current) => movePluginPage(current, ref.plugin, id, toIndex))}
+        />
+        {shown !== null && shownId !== null && surface !== undefined && (
+          <PluginFrame
+            spec={{
+              key: shownId,
+              plugin: ref.plugin,
+              revision: plugin.revision,
+              url: surface.url,
+              surface: 'tab',
+              name: shown.tab,
+              params: shown.params,
+              title: shown.title ?? surface.title
+            }}
+            pluginName={plugin.name}
+            onOpenSettings={() => openSettings(pluginSection(plugin.path))}
+            className="min-h-0 flex-1"
+          />
+        )}
+      </div>
+    )
+  }
+
   /** Whatever a non-session tab shows, in a pane that is `compact` when it shares the width. */
   const renderPage = (ref: PaneRef, compact: boolean): ReactNode => {
     switch (ref.kind) {
@@ -2561,6 +2704,8 @@ export function App(): JSX.Element {
           />
         )
       }
+      case 'plugin-pages':
+        return renderPluginPages(ref)
       case 'restore':
         return restoreOffer === null ? null : (
           <RestorePane
@@ -2849,7 +2994,7 @@ export function App(): JSX.Element {
     const command = plugin?.commands.find((candidate) => candidate.id === key.slice(slash + 1))
     if (plugin === undefined || command === undefined) return
     if (command.tab !== null) {
-      openPane({ kind: 'plugin', plugin: id, tab: command.tab, params: {}, title: null })
+      openPluginTab(id, command.tab, {}, null)
       return
     }
     if (plugin.background !== null) {

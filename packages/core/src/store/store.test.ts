@@ -440,9 +440,44 @@ describe('settings validation', () => {
             activeId: null
           },
           focused: 0
+        },
+        // A plugin's one tab holding its pages, with the page in front named.
+        {
+          root: {
+            panes: [
+              {
+                kind: 'plugin-pages',
+                plugin: 'trackr',
+                pages: [
+                  { tab: 'view', params: {}, title: null },
+                  { tab: 'view', params: { id: 'HELM-13' }, title: 'HELM-13' }
+                ],
+                active: 'plugin-page:trackr/view?{"id":"HELM-13"}'
+              }
+            ],
+            activeId: 'plugin-pages:trackr'
+          },
+          focused: 0
         }
       ],
       bad: [
+        // A plugin's pages tab with no pages, a page that is not one a
+        // manifest could open, or a front page that is not a page id.
+        { root: { panes: [{ kind: 'plugin-pages', plugin: 'trackr', pages: [], active: null }], activeId: null }, focused: 0 },
+        {
+          root: {
+            panes: [{ kind: 'plugin-pages', plugin: 'trackr', pages: [{ tab: 'View', params: {}, title: null }], active: null }],
+            activeId: null
+          },
+          focused: 0
+        },
+        {
+          root: {
+            panes: [{ kind: 'plugin-pages', plugin: 'trackr', pages: [{ tab: 'view', params: {}, title: null }], active: 3 }],
+            activeId: null
+          },
+          focused: 0
+        },
         // A plugin's tab with an id no manifest could have, a tab name with
         // capitals, parameters that are not a flat record, or an empty title.
         { root: { panes: [{ kind: 'plugin', plugin: 'Sample', tab: 'detail', params: {}, title: null }], activeId: null }, focused: 0 },

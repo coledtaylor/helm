@@ -61,6 +61,7 @@ describe('validateManifest - what a manifest leaves out', () => {
       rail: null,
       panels: {},
       tabs: {},
+      pageStrip: false,
       background: null,
       commands: [],
       settings: [],
@@ -91,6 +92,19 @@ describe('validateManifest - what a manifest leaves out', () => {
     expect(manifest.network.map((pattern) => pattern.origin)).toEqual(['https://api.example.com', 'http://127.0.0.1:8080'])
     expect(manifest.exec['git']).toEqual({ command: 'git', args: [], env: {} })
     expect(manifest.service).toEqual({ kind: 'command', command: 'srv', args: [], env: {}, start: 'enable' })
+  })
+
+  it('gathers the tabs into one page strip only when asked, and says when there are no tabs to gather', () => {
+    const tabs = { run: { title: 'Run', entry: 'run.html' } }
+    const strip = validateManifest({ ...MINIMAL, tabs, pageStrip: true })
+    expect(accepted(strip).pageStrip).toBe(true)
+    expect(strip.warnings).toEqual([])
+    expect(accepted(validateManifest({ ...MINIMAL, tabs, pageStrip: false })).pageStrip).toBe(false)
+
+    expect(validateManifest({ ...MINIMAL, pageStrip: true }).warnings).toEqual([
+      'pageStrip has no tabs to hold: it gathers the tabs the manifest declares, and this one declares none'
+    ])
+    expect(errorsFor({ ...MINIMAL, tabs, pageStrip: 'yes' })).toEqual(['pageStrip must be true or false'])
   })
 
   it('starts a service on demand unless it says otherwise, and takes null for none', () => {
