@@ -101,7 +101,7 @@ under `__helm/`, where Helm serves its runtime.
 | `exec` | Programs `helm.exec` may run, by name. |
 | `service` | One long-running process Helm supervises. |
 | `agent` | Tools Claude Code sessions can call, answered by the background page. See [Tools for sessions](#tools-for-sessions). |
-| `sessions` | `true` lets the plugin's pages ask to start a Claude Code session. See [Starting a session](#starting-a-session). |
+| `sessions` | What the plugin may do with the Claude Code sessions Helm hosts: `"start"` lets its pages ask to start one ([Starting a session](#starting-a-session)), `"list"` lets them see them ([Seeing sessions](#seeing-sessions)). |
 
 Names - panel and tab keys, action, command and program names - are 1-32
 lower-case letters, digits and dashes.
@@ -281,6 +281,7 @@ SyntaxError and stops the whole file.
 | `secrets.state(key)` | `ready` or `missing`. |
 | `secrets.request(key)` | Opens Helm's dialog for adding the key, scoped to this plugin. Resolves with the state once it closes. |
 | `sessions.start({ cwd, prompt, name? })` | Asks to start a Claude Code session, from a click. See [Starting a session](#starting-a-session). |
+| `sessions.list()` | The sessions Helm started since it opened. See [Seeing sessions](#seeing-sessions). |
 | `tools.handle(name, handler)` | Answers one of the tools `agent` declares. Background page only. See [Tools for sessions](#tools-for-sessions). |
 | `on(event, listener)` | Subscribes; returns the function that unsubscribes. |
 
@@ -294,6 +295,7 @@ Events:
 | `secrets` | Every declared key's state, after one was stored, permitted or removed. |
 | `command` | `{ id }`: a command with no tab was chosen. |
 | `action` | `{ id }`: a panel header action was pressed. Panels only. |
+| `sessions` | Every session, as `sessions.list()` answers, after one started, ended, was renamed or changed what it is doing. Needs `"list"` in `sessions`. |
 
 ### Errors
 
@@ -553,7 +555,7 @@ session that made it.
 
 ## Starting a session
 
-A plugin that declares `"sessions": true` can ask Helm to start a Claude Code
+A plugin whose `sessions` lists `"start"` can ask Helm to start a Claude Code
 session in a folder, with a first message:
 
 ```js
@@ -577,6 +579,40 @@ button.addEventListener('click', async () => {
 - The message is the session's first, said once, as if typed when it opened.
   After that the session is the user's: a plugin cannot type into it, read it,
   or end it.
+
+## Seeing sessions
+
+A plugin whose `sessions` lists `"list"` can see the Claude Code sessions Helm
+started since it opened, running and ended, from any of its pages:
+
+```js
+const show = (sessions) => {
+  const mine = sessions.find((session) => session.id === task.sessionId)
+  status.textContent = mine === undefined ? 'Not running' : mine.state === 'ended' ? 'Ended' : mine.activity ?? 'Running'
+}
+show(await helm.sessions.list())
+helm.on('sessions', show)
+```
+
+Each session is:
+
+| field | |
+| --- | --- |
+| `id` | The id a tool call from this session carries as `session.id`, so a plugin that offers tools can tell which session is working on what. It means nothing outside Helm and does not survive a restart. |
+| `name` | What its tab is called now. |
+| `cwd` | The folder it is working in. |
+| `state` | `running` or `ended`. |
+| `activity` | What Claude Code says it is doing: `busy`, `idle` (finished, waiting for the user's next message), `waiting` (for the user to answer something) or `shell`. Null when it has ended, or when Helm cannot tell. |
+| `activitySince` | Epoch ms that activity has held since, or null. For an idle session, when it last finished working. |
+| `startedAt`, `endedAt` | Epoch ms; `endedAt` is null while it runs. |
+
+- The list is oldest first. An ended session stays in it after its tab
+  closes, for the rest of the run; Helm keeps the last 100 that ended.
+- The `sessions` event carries the whole list again whenever any of it
+  changes.
+- Nothing of a session's conversation is in it: no prompts, no output, no
+  transcript, and not what a waiting session is asking.
+- Only sessions Helm started. A `claude` run in another terminal is not listed.
 
 ## Opening a link
 
@@ -815,5 +851,6 @@ AltGr combinations, which many keyboards type characters with.
 - **Post notifications**, or reach into a Claude Code session: a session can
   call a plugin's tools, but a plugin cannot send a running session anything
   or read its conversation. It can ask to start one with a first message,
-  which the user sees and agrees to first.
+  which the user sees and agrees to first, and see which are running and
+  whether each is working.
 - **See a secret's value**, or another plugin's anything.

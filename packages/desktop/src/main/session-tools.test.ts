@@ -2,12 +2,21 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createProfile, type PortRow, type ProcessRow, type ProcessSnapshot, type SessionRecord } from '@helm/core'
+import type { PluginSession } from '@coledtaylor/helm-plugin-sdk'
+import {
+  createProfile,
+  describePluginSessions,
+  sessionLabel,
+  type PortRow,
+  type ProcessRow,
+  type ProcessSnapshot,
+  type SessionRecord
+} from '@helm/core'
 import { bearerOf, callTool, readMcpConfig, rpc, type ToolAnswer } from '../../test/mcp-client'
 import { createWorld, disposeWorld, fakeClaudeLogs, type FakeClaudeLog, type World } from '../../test/world'
 import type { ActivityService } from './activity'
 import type { BrowserHost } from './browser'
-import type { BrowserMcpHost } from './browser-mcp'
+import type { BrowserMcpHost, McpSessionIdentity } from './browser-mcp'
 import type { ResourcesService } from './resources'
 import type { SessionToolsWorld } from './session-tools'
 import type { SessionHost } from './sessions'
@@ -55,6 +64,8 @@ describe('the session tools', () => {
   let alpha: Hosted
   let beta: Hosted
   let prompted: Hosted
+  /** What the session host told the endpoint at each launch. */
+  const registered: McpSessionIdentity[] = []
   const openingPrompt = `opening-prompt-${randomUUID()}`
   const firstMessage = `first-message-${randomUUID()}`
   const outside = { pid: process.pid, sessionId: randomUUID() }
@@ -165,6 +176,11 @@ describe('the session tools', () => {
     })
     tools = sessionToolsWorld({ store: services.store, sessions: host, activity, resources })
     expect((await endpoint.start()).started).toBe(true)
+    const register = endpoint.register.bind(endpoint)
+    endpoint.register = (identity) => {
+      registered.push(identity)
+      return register(identity)
+    }
 
     // A session somebody started in a terminal: a live process with a record.
     mkdirSync(join(world.claudeDir, 'sessions'), { recursive: true })
@@ -322,7 +338,7 @@ describe('the session tools', () => {
   })
 
   it('lets a token with no session behind it list, unmarked, and gives it no detail of its own', async () => {
-    const stray = endpoint.register({ name: 'stray', cwd: 'C:/work/stray' })
+    const stray = endpoint.register({ id: 'plugin-id-stray', name: 'stray', cwd: 'C:/work/stray' })
     if (stray === null) throw new Error('the endpoint registered nobody')
     const url = stray.launch.servers.find((server) => server.name === 'helm-sessions')?.url ?? ''
     try {
@@ -385,6 +401,34 @@ describe('the session tools', () => {
     }
   })
 
+  it('lists the sessions for plugins by the id their tool calls carry, with what each is doing and nothing of its conversation', () => {
+    activity.refresh()
+    const listed = describePluginSessions(host.pluginSessions(), activity.overview().sessions)
+    const sessions = [alpha, beta, prompted]
+    // What each launch registered with the endpoint, which is what its tool calls carry.
+    const launched = registered.filter((identity) => sessions.some((session) => sessionLabel(session.record) === identity.name))
+    expect(listed.map((session) => session.id).sort()).toEqual(launched.map((identity) => identity.id).sort())
+    for (const session of sessions) {
+      const plugin = listed.find((one) => one.name === sessionLabel(session.record))
+      expect(plugin).toMatchObject({ cwd: session.record.cwd, state: 'running', endedAt: null })
+      expect(plugin?.id).toMatch(/^[0-9a-f]{32}$/)
+      // Joined to the registry: Helm can tell what it is doing.
+      expect(plugin?.activity).not.toBeNull()
+      expect(plugin?.activitySince).toEqual(expect.any(Number))
+    }
+
+    const said = JSON.stringify(listed)
+    for (const secret of [
+      openingPrompt,
+      firstMessage,
+      CHILD_SECRET,
+      '--mcp-config',
+      ...sessions.flatMap((session) => [session.token, session.configFile, session.run.sessionId, `"id":${String(session.record.id)}`])
+    ]) {
+      expect(said).not.toContain(secret)
+    }
+  })
+
   it('forgets a session that has ended: no list entry, no detail, no token and no config file', async () => {
     host.input(prompted.record.id, '/exit\r')
     await vi.waitFor(() => expect(host.list().find((s) => s.id === prompted.record.id)?.status).toBe('exited'), {
@@ -400,6 +444,17 @@ describe('the session tools', () => {
     const gone = await detail(alpha, { pid: prompted.run.pid })
     expect(gone.isError).toBe(true)
     expect(gone.text.split('\n')[0]).toBe(`No Claude Code session with pid ${String(prompted.run.pid)} is running on this machine.`)
+  })
+
+  it('keeps telling plugins about an ended session, after its tab has closed too', async () => {
+    const said = (): PluginSession | undefined =>
+      describePluginSessions(host.pluginSessions(), activity.overview().sessions).find(
+        (session) => session.name === sessionLabel(prompted.record)
+      )
+    expect(said()).toMatchObject({ state: 'ended', activity: null, activitySince: null, endedAt: expect.any(Number) })
+    expect(await host.close({ id: prompted.record.id })).toEqual({ closed: true })
+    expect(host.list().some((session) => session.id === prompted.record.id)).toBe(false)
+    expect(said()).toMatchObject({ state: 'ended' })
   })
 
   it('launches with the browser tools only while sessionMcp is off, and with no --mcp-config once both are off', async () => {

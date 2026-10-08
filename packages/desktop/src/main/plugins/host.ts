@@ -19,7 +19,7 @@ import {
   type SessionRecord,
   type Store
 } from '@helm/core'
-import type { HelmTheme, SettingSpec, SettingValue, StatusItem, StatusTone, SurfaceKind } from '@coledtaylor/helm-plugin-sdk'
+import type { HelmTheme, PluginSession, SettingSpec, SettingValue, StatusItem, StatusTone, SurfaceKind } from '@coledtaylor/helm-plugin-sdk'
 import { agentServerName, NAME_PATTERN, type NormalizedAgentTool } from '@coledtaylor/helm-plugin-sdk/manifest'
 import {
   PLUGIN_SCHEME,
@@ -89,6 +89,12 @@ export interface PluginHostOptions {
    * session host; absent in a test that starts none.
    */
   startSession?: ((request: PluginSessionLaunch) => Promise<SessionRecord>) | undefined
+  /**
+   * The sessions Helm started since it opened, as a plugin may see them. What
+   * `sessions.list` answers and the `sessions` event carries; absent in a test
+   * that lists none.
+   */
+  sessionList?: (() => PluginSession[]) | undefined
 }
 
 /** A session a plugin asked for, as main checked it: what the user saw in the dialog, and the pane's grid. */
@@ -121,6 +127,12 @@ export interface PluginHost {
    * the session; cancelled, null. Rejects with a sentence otherwise.
    */
   session(answer: { requestId: string; start: boolean; cols: number; rows: number }, sender: number): Promise<SessionRecord | null>
+  /**
+   * Something about Helm's sessions may have moved: one started, ended, was
+   * renamed or changed what it is doing. Plugins that list sessions are told,
+   * when the list they would read is not the one they were last given.
+   */
+  sessionsChanged(): void
   backgroundState(plugin: string, revision: number, state: 'running' | 'crashed', error: string | null): void
   /** Every plugin offering tools now: on, loaded, declaring tools, and not switched off in Settings. */
   toolServers(): ToolServer[]
@@ -194,6 +206,8 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
   const sessionRequests = new Map<string, SessionAsk>()
   /** When each plugin last opened a link, by plugin id. */
   const linkOpened = new Map<string, number>()
+  /** The session list as plugins were last told it, so an unchanged one is not sent again. */
+  let sessionsSaid: string | null = null
   let revisions = 0
   let stopped = false
 
@@ -473,7 +487,8 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
         service: null,
         runsPrograms: false,
         agent: null,
-        startsSessions: false
+        startsSessions: false,
+        seesSessions: false
       }
     }
     const { manifest, icon, warnings } = entry.load.plugin
@@ -523,7 +538,8 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
               instructions: manifest.agent.instructions,
               tools: manifest.agent.tools.map((tool) => ({ name: tool.name, description: tool.description }))
             },
-      startsSessions: manifest.sessions
+      startsSessions: manifest.sessions.start,
+      seesSessions: manifest.sessions.list
     }
   }
 
@@ -694,7 +710,7 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
      */
     'sessions.start': (ctx, [request]) => {
       const { manifest } = ctx.plugin
-      if (!manifest.sessions) throw new PluginCallError('not-declared', 'the manifest does not declare sessions')
+      if (!manifest.sessions.start) throw new PluginCallError('not-declared', 'the manifest\'s sessions does not list "start"')
       if (ctx.surface === 'background') {
         throw new PluginCallError('not-allowed', 'only a panel or a tab can ask for a session, from a click')
       }
@@ -751,6 +767,17 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
       linkOpened.set(manifest.id, now)
       emitTo(win.webContents, 'plugins:ui', { kind: 'link', plugin: manifest.id, url: href })
       return undefined
+    },
+
+    /*
+     * Helm's sessions, without anything of their conversations: the shape is
+     * `describePluginSessions`, whose input has no field that could carry one.
+     */
+    'sessions.list': (ctx) => {
+      if (!ctx.plugin.manifest.sessions.list) {
+        throw new PluginCallError('not-declared', 'the manifest\'s sessions does not list "list"')
+      }
+      return options.sessionList?.() ?? []
     },
 
     'secrets.request': (ctx, [key]) => {
@@ -930,6 +957,20 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
       if (request === undefined) return
       secretRequests.delete(requestId)
       request.resolve(secrets.status(request.plugin, request.key) === 'ready' ? 'ready' : 'missing')
+    },
+
+    sessionsChanged() {
+      if (stopped || options.sessionList === undefined) return
+      const sessions = options.sessionList()
+      const said = JSON.stringify(sessions)
+      if (said === sessionsSaid) return
+      sessionsSaid = said
+      for (const entry of entries) {
+        const plugin = live(entry)
+        if (plugin?.manifest.sessions.list === true) {
+          deliver({ plugin: plugin.manifest.id, event: 'sessions', data: sessions, to: 'all' })
+        }
+      }
     },
 
     async session({ requestId, start, cols, rows }, sender) {

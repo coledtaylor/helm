@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BrowserWindow, WebContents } from 'electron'
 import { addPluginFolder, openStore, readPluginFolders, readSecrets, setPluginEnabled, type Store } from '@helm/core'
-import type { HelmTheme } from '@coledtaylor/helm-plugin-sdk'
+import type { HelmTheme, PluginSession } from '@coledtaylor/helm-plugin-sdk'
 import type { PluginCallOutcome, PluginInfo, PluginToolCall } from '../../shared/ipc'
 import type { PluginHost, PluginHostOptions, PluginSessionLaunch } from './host'
 import type { BackgroundHost } from './background'
@@ -100,7 +100,7 @@ const SAMPLE = {
   secrets: ['token', 'shared'],
   exec: { echo: { command: process.execPath, args: ['-e', 'process.stdout.write(process.argv.slice(1).join("|"))'] } },
   service: { node: 'service.mjs', start: 'enable' },
-  sessions: true
+  sessions: ['start', 'list']
 }
 
 let sampleDir: string
@@ -799,6 +799,59 @@ describe('starting a session', () => {
     const args = request === null ? [] : [{ ...request, cwd: request.cwd.replace('ROOT', root) }]
     expect(await call('sessions.start', args, { plugin, surface })).toMatchObject({ ok: false, code })
     expect(asked()).toEqual([])
+  })
+})
+
+describe('the session list', () => {
+  const session = (over: Partial<PluginSession> = {}): PluginSession => ({
+    id: 'a1b2',
+    name: 'HELM-3',
+    cwd: 'C:\\work\\helm',
+    state: 'running',
+    activity: 'busy',
+    activitySince: 1_787_280_000_000,
+    startedAt: 1_787_279_000_000,
+    endedAt: null,
+    ...over
+  })
+  let listed: PluginSession[]
+  const startListing = (): void => {
+    listed = [session()]
+    start([sampleDir, otherDir], { sessionList: () => listed })
+  }
+  const told = (): unknown[] => (events('plugins:deliver', 'window') as Array<{ event: string }>).filter((one) => one.event === 'sessions')
+
+  it('answers a plugin that lists "list", from any of its pages, and refuses one that does not', async () => {
+    startListing()
+    expect(info().seesSessions).toBe(true)
+    expect(info(otherDir).seesSessions).toBe(false)
+    expect(await call('sessions.list')).toEqual({ ok: true, value: [session()] })
+    expect(await call('sessions.list', [], { surface: 'background' })).toEqual({ ok: true, value: [session()] })
+    expect(await call('sessions.list', [], { plugin: 'other' })).toMatchObject({ ok: false, code: 'not-declared' })
+  })
+
+  it('tells the plugins that list sessions when the list moves, and only then', () => {
+    startListing()
+    host.sessionsChanged()
+    expect(told()).toEqual([{ plugin: 'sample', event: 'sessions', data: [session()], to: 'all' }])
+    expect(events('plugins:deliver', 'background')).toHaveLength(1)
+
+    // Nothing moved: nobody is told again.
+    host.sessionsChanged()
+    expect(told()).toHaveLength(1)
+
+    listed = [session({ activity: 'idle' })]
+    host.sessionsChanged()
+    listed = [session({ state: 'ended', activity: null, activitySince: null, endedAt: 1_787_281_000_000 })]
+    host.sessionsChanged()
+    expect(told().map((one) => (one as { data: PluginSession[] }).data[0]?.state)).toEqual(['running', 'running', 'ended'])
+  })
+
+  it('tells a plugin that is off nothing', () => {
+    startListing()
+    host.setEnabled(sampleDir, false)
+    host.sessionsChanged()
+    expect(told()).toEqual([])
   })
 })
 

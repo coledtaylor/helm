@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import type { Frame, Locator, Page } from '@playwright/test'
 import type { HelmBridge } from '@coledtaylor/helm-plugin-sdk'
 import { bearerOf, callTool, readMcpConfig, rpc, rpcResult, toolNames } from '../test/mcp-client'
-import { claudeRunIn, expect, startSession, test as base, type Helm } from './helm'
+import { claudeRunIn, expect, startSession, terminalText, test as base, typeLine, type Helm } from './helm'
 import { startBrowserFixture } from './browser-fixture'
 import { TOKEN, installSample, pluginFrame, registerPlugin, startServer, type SampleFixture } from './plugin-fixture'
 
@@ -316,6 +316,48 @@ test('a theme change reaches plugin pages without reloading them', async ({ helm
   expect(after.bg).not.toBe(before.bg)
   // The same page: what it held in memory is still there.
   expect(after.marked).toBe(true)
+})
+
+test("a plugin panel sees Helm's sessions start, work and end, and nothing of what is said in them", async ({ helm, sample, world }) => {
+  const ui = helm.window
+  await storeToken(ui, sample.server.url)
+  let panel = await openPanel(ui)
+  await expect(panel.locator('[data-sample-sessions-empty]')).toHaveText('None yet.')
+
+  await rail(ui).getByRole('button', { name: 'Sessions' }).click()
+  const id = await startSession(ui, 'alpha')
+  const pane = ui.getByRole('region', { name: 'First pane' })
+  await expect.poll(() => terminalText(ui, id)).toContain('Claude Code v2.1.999 (fake)')
+  const secret = 'the plugin must never see this line'
+  await typeLine(pane, secret)
+  await expect.poll(() => terminalText(ui, id)).toContain(`You said: ${secret}`)
+
+  // Listed by name and folder, with what Claude Code says it is doing.
+  panel = await openPanel(ui)
+  const row = panel.locator('[data-sample-session="alpha"]')
+  await expect(row).toHaveAttribute('data-state', 'running')
+  await expect(row.locator('[data-sample-session-says]')).toHaveText(`idle · ${world.projects.alpha}`)
+
+  // Ended, it says so at once, without the page asking again.
+  await typeLine(pane, '/exit')
+  await expect(ui.getByRole('tab', { name: 'alpha, ended' })).toBeVisible()
+  await expect(row).toHaveAttribute('data-state', 'ended')
+  await expect(row.locator('[data-sample-session-says]')).toHaveText(`Ended · ${world.projects.alpha}`)
+
+  const listed = await panel.evaluate(() => (window as unknown as PluginWindow).helm.sessions.list())
+  expect(listed).toEqual([
+    {
+      id: expect.stringMatching(/^[0-9a-f]{32}$/),
+      name: 'alpha',
+      cwd: world.projects.alpha,
+      state: 'ended',
+      activity: null,
+      activitySince: null,
+      startedAt: expect.any(Number),
+      endedAt: expect.any(Number)
+    }
+  ])
+  expect(JSON.stringify(listed)).not.toContain(secret)
 })
 
 test("a session calls the plugin's tools, its background page answers, and turning them off in Settings takes them away", async ({

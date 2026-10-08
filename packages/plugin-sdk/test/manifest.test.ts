@@ -70,7 +70,7 @@ describe('validateManifest - what a manifest leaves out', () => {
       exec: {},
       service: null,
       agent: null,
-      sessions: false
+      sessions: { start: false, list: false }
     })
   })
 
@@ -108,17 +108,23 @@ describe('validateManifest - what a manifest leaves out', () => {
     expect(errorsFor({ ...MINIMAL, tabs, pageStrip: 'yes' })).toEqual(['pageStrip must be true or false'])
   })
 
-  it('lets its pages ask to start sessions only when asked, and says when it has no page to ask from', () => {
+  it('gives its pages what sessions lists and nothing more, and says when it has no page to ask from', () => {
     const panels = { main: { title: 'Main', entry: 'main.html' } }
-    const asking = validateManifest({ ...MINIMAL, panels, sessions: true })
-    expect(accepted(asking).sessions).toBe(true)
-    expect(asking.warnings).toEqual([])
-    expect(accepted(validateManifest({ ...MINIMAL, panels, sessions: false })).sessions).toBe(false)
+    const both = validateManifest({ ...MINIMAL, panels, sessions: ['start', 'list'] })
+    expect(accepted(both).sessions).toEqual({ start: true, list: true })
+    expect(both.warnings).toEqual([])
+    expect(accepted(validateManifest({ ...MINIMAL, panels, sessions: ['list'] })).sessions).toEqual({ start: false, list: true })
+    expect(accepted(validateManifest({ ...MINIMAL, panels, sessions: [] })).sessions).toEqual({ start: false, list: false })
 
-    expect(validateManifest({ ...MINIMAL, sessions: true }).warnings).toEqual([
-      'sessions needs a panel or a tab: only a click in one of its pages can ask for a session, and this manifest declares neither'
+    // Seeing the list needs no page of its own: the background page may read it.
+    expect(validateManifest({ ...MINIMAL, sessions: ['list'] }).warnings).toEqual([])
+    expect(validateManifest({ ...MINIMAL, sessions: ['start'] }).warnings).toEqual([
+      'sessions "start" needs a panel or a tab: only a click in one of its pages can ask for a session, and this manifest declares neither'
     ])
-    expect(errorsFor({ ...MINIMAL, panels, sessions: 'yes' })).toEqual(['sessions must be true or false'])
+    const shape = 'sessions must be a list of "start" and "list"'
+    expect(errorsFor({ ...MINIMAL, panels, sessions: true })).toEqual([shape])
+    expect(errorsFor({ ...MINIMAL, panels, sessions: ['start', 'stop'] })).toEqual([shape])
+    expect(errorsFor({ ...MINIMAL, panels, sessions: ['list', 'list'] })).toEqual(['sessions lists the same thing twice'])
   })
 
   it('starts a service on demand unless it says otherwise, and takes null for none', () => {
