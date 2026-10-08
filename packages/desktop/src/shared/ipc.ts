@@ -1489,6 +1489,12 @@ export type PluginUiRequest =
     }
   /** The request went away before it was answered: its page closed, or the plugin was turned off. */
   | { kind: 'sessionWithdrawn'; requestId: string }
+  /**
+   * An address to open in the Browser tab, from a click in the plugin's page.
+   * Main has checked it is an `https` address; `browser:open` holds it to the
+   * reach rule like any other.
+   */
+  | { kind: 'link'; plugin: string; url: string }
 
 /**
  * An event for a plugin's pages. Each Helm page framing the plugin delivers it

@@ -272,6 +272,7 @@ SyntaxError and stops the whole file.
 | `visible` | Whether the surface is on screen. Always false for the background page. |
 | `fetch(input, init?)` | `fetch`, sent by Helm. See [Network](#network). |
 | `exec(name, args?, options?)` | Runs a program from `exec`. See [Programs](#programs). |
+| `open(url)` | Opens an `https` address in Helm's Browser tab, from a click. See [Opening a link](#opening-a-link). |
 | `tabs.open(tab, params?, options?)` | Opens one of the plugin's tabs. |
 | `surface.setTitle(title)` | Names a tab in the strip; null puts back the manifest's. No effect outside a tab. |
 | `status.set(item)` | The status bar item, or null. |
@@ -309,7 +310,7 @@ A call that fails rejects with an `Error` whose `code` says why:
 | `service` | The service is not running and could not be started. |
 | `not-found` | A program `exec` names is not on this computer. |
 | `not-allowed` | The call needs a click or key press the user just made in the page, and there was none. |
-| `busy` | The same request is already waiting on the user. |
+| `busy` | The same request is already waiting on the user, or the plugin opened a link a moment ago. |
 
 A call cancelled through an `AbortSignal` rejects with a `DOMException` named
 `AbortError`, as `fetch` does.
@@ -557,7 +558,7 @@ session in a folder, with a first message:
 
 ```js
 button.addEventListener('click', async () => {
-  const result = await helm.sessions.start({ cwd: 'C:\work\api', prompt: 'work on API-12', name: 'API-12' })
+  const result = await helm.sessions.start({ cwd: 'C:\\work\\api', prompt: 'work on API-12', name: 'API-12' })
   if (result === 'started') showStarted()
 })
 ```
@@ -576,6 +577,31 @@ button.addEventListener('click', async () => {
 - The message is the session's first, said once, as if typed when it opened.
   After that the session is the user's: a plugin cannot type into it, read it,
   or end it.
+
+## Opening a link
+
+`helm.open(url)` opens a page in Helm's Browser tab, beside the user's own:
+
+```js
+link.addEventListener('click', (event) => {
+  event.preventDefault()
+  helm.open(link.href).catch(showProblem)
+})
+```
+
+- Only from a click or key press the user just made in a panel or tab: call it
+  from the handler. Anything else rejects with `not-allowed`.
+- `https` addresses only, with no user name or password in them, up to 2048
+  characters. Anything else rejects with `invalid`.
+- One link a second: a second call sooner, a double click's, rejects with
+  `busy`.
+- It resolves once Helm has the address, not once the page has loaded. The
+  page goes where any address typed in the Browser tab may go: when the user
+  has kept the Browser tab to this computer, it says so on the new tab instead
+  of loading.
+- The page is the user's, signed in wherever they are signed in. The plugin
+  cannot read it, drive it or close it, and nothing it does there reaches the
+  plugin. No manifest field is needed.
 
 ## Theme and styling
 
@@ -784,7 +810,8 @@ AltGr combinations, which many keyboards type characters with.
   off its own origin.
 - **Open windows or dialogs.** No popups, no `alert`, `confirm` or `prompt`,
   no downloads. Writing text to the clipboard is the one browser permission a
-  page has.
+  page has. A link goes to Helm's Browser tab through `helm.open`, from a
+  click.
 - **Post notifications**, or reach into a Claude Code session: a session can
   call a plugin's tools, but a plugin cannot send a running session anything
   or read its conversation. It can ask to start one with a first message,

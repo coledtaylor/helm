@@ -726,31 +726,6 @@ export function App(): JSX.Element {
   )
 
   /**
-   * What a plugin asked main for that needs the window: a tab of its own
-   * opened, or a secret it is missing typed in. Main has checked that the tab
-   * and the key are ones the plugin declares.
-   */
-  useEffect(
-    () =>
-      helm.on('plugins:ui', (request) => {
-        if (request.kind === 'secret') {
-          setSecretAsks((current) => [...current, request])
-          return
-        }
-        if (request.kind === 'session') {
-          setSessionAsks((current) => [...current, request])
-          return
-        }
-        if (request.kind === 'sessionWithdrawn') {
-          setSessionAsks((current) => current.filter((ask) => ask.requestId !== request.requestId))
-          return
-        }
-        openPluginTab(request.plugin, request.tab, request.params, request.title)
-      }),
-    [openPluginTab]
-  )
-
-  /**
    * A page that left its plugin's strip ends - closed, closed with its tab,
    * or let go to make room. Read off the layout rather than said at each of
    * those, so no way of leaving can leave a page running with nowhere to be.
@@ -958,6 +933,38 @@ export function App(): JSX.Element {
       else void helmOpenExternal(url)
     },
     [openBrowser]
+  )
+
+  /**
+   * What a plugin asked main for that needs the window: a tab of its own
+   * opened, a secret it is missing typed in, a session started or a link
+   * opened. Main has checked that the tab and the key are ones the plugin
+   * declares, and that a link is an `https` address.
+   */
+  useEffect(
+    () =>
+      helm.on('plugins:ui', (request) => {
+        if (request.kind === 'secret') {
+          setSecretAsks((current) => [...current, request])
+          return
+        }
+        if (request.kind === 'session') {
+          setSessionAsks((current) => [...current, request])
+          return
+        }
+        if (request.kind === 'sessionWithdrawn') {
+          setSessionAsks((current) => current.filter((ask) => ask.requestId !== request.requestId))
+          return
+        }
+        if (request.kind === 'link') {
+          // A project of null: a plugin's link is not the address a project's
+          // Browser tab should come back to.
+          openBrowser({ url: request.url, project: null })
+          return
+        }
+        openPluginTab(request.plugin, request.tab, request.params, request.title)
+      }),
+    [openPluginTab, openBrowser]
   )
 
   /**

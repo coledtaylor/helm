@@ -49,13 +49,13 @@ const QUEUE_MAX = 64
 const METHOD_MAX = 64
 const TITLE_MAX = 120
 /**
- * Calls that put Helm's own dialog in front of the user, so only the user can
- * cause one: each is let through only while this page has transient
+ * Calls that put something of Helm's in front of the user - its dialog, a
+ * page in the Browser tab - so only the user can cause one: each is let through only while this page has transient
  * activation. A click or key press in a plugin's frame activates the page
  * framing it too (Chromium's user activation v2), so this is a check the page
  * cannot answer for itself - its own bridge checks its own frame as well.
  */
-const NEEDS_ACTIVATION: ReadonlySet<string> = new Set(['sessions.start'])
+const NEEDS_ACTIVATION: ReadonlySet<string> = new Set(['sessions.start', 'open'])
 
 export interface SurfaceSpec {
   /** One frame per key, for as long as its surface is open. */

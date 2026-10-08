@@ -353,7 +353,7 @@ export type HelmErrorCode =
   | 'not-found'
   /** The call needs a click or key press the user just made in the page, and there was none. */
   | 'not-allowed'
-  /** The same request is already waiting on the user. */
+  /** The same request is already waiting on the user, or a link was opened a moment ago. */
   | 'busy'
 
 export interface HelmError extends Error {
@@ -414,6 +414,15 @@ export interface HelmBridge {
 
   /** Runs a program from `exec`, with no shell. Arguments are passed as they are. */
   exec(command: string, args?: readonly string[], options?: ExecOptions): Promise<ExecResult>
+
+  /**
+   * Opens an `https` address in Helm's Browser tab, where the user's own pages
+   * are. Needs a click or key press the user just made in the page: call it
+   * from the handler. Panels and tabs only, one link a second. Helm holds it to
+   * the same rule as an address typed in the Browser tab, and says on that tab
+   * when it will not go there.
+   */
+  open(url: string): Promise<void>
 
   tabs: {
     /**

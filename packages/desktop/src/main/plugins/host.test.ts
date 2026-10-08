@@ -802,6 +802,64 @@ describe('starting a session', () => {
   })
 })
 
+describe('opening a link', () => {
+  type LinkOpened = { kind: 'link'; plugin: string; url: string }
+  const links = (): LinkOpened[] => (events('plugins:ui', 'window') as LinkOpened[]).filter((ui) => ui.kind === 'link')
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('hands the window the address as URL spells it, for a plugin that declares nothing', async () => {
+    start([sampleDir, otherDir])
+    expect(await call('open', ['https://github.com/owner/repo/pull/7#files'], { plugin: 'other', surface: 'tab' })).toEqual({
+      ok: true,
+      value: undefined
+    })
+    expect(await call('open', ['HTTPS://Example.COM'])).toEqual({ ok: true, value: undefined })
+    expect(links()).toEqual([
+      { kind: 'link', plugin: 'other', url: 'https://github.com/owner/repo/pull/7#files' },
+      { kind: 'link', plugin: 'sample', url: 'https://example.com/' }
+    ])
+  })
+
+  it('opens one link a second per plugin, so a double click is one page', async () => {
+    start([sampleDir, otherDir])
+    expect(await call('open', ['https://example.com/a'])).toMatchObject({ ok: true })
+    expect(await call('open', ['https://example.com/b'])).toMatchObject({ ok: false, code: 'busy' })
+    expect(await call('open', ['https://example.com/c'], { plugin: 'other' })).toMatchObject({ ok: true })
+    vi.advanceTimersByTime(1000)
+    expect(await call('open', ['https://example.com/d'])).toMatchObject({ ok: true })
+    expect(links().map((link) => link.url)).toEqual(['https://example.com/a', 'https://example.com/c', 'https://example.com/d'])
+  })
+
+  it('does not count a refused link against the next', async () => {
+    start()
+    expect(await call('open', ['http://example.com/'])).toMatchObject({ ok: false, code: 'invalid' })
+    expect(await call('open', ['https://example.com/'])).toMatchObject({ ok: true })
+  })
+
+  it.each([
+    ['the background page', 'background', 'https://example.com/', 'not-allowed'],
+    ['no address', 'panel', undefined, 'invalid'],
+    ['something that is not an address', 'panel', 'example.com', 'invalid'],
+    ['http', 'panel', 'http://example.com/', 'invalid'],
+    ['a loopback http address', 'panel', 'http://localhost:3000/', 'invalid'],
+    ['file', 'panel', 'file:///C:/Windows/win.ini', 'invalid'],
+    ['javascript', 'panel', 'javascript:alert(1)', 'invalid'],
+    ['a plugin page', 'panel', 'helm-plugin://sample/index.html', 'invalid'],
+    ['a user name and password', 'panel', 'https://user:secret@example.com/', 'invalid'],
+    ['an address too long', 'panel', `https://example.com/${'x'.repeat(2048)}`, 'invalid']
+  ] as const)('refuses %s', async (_what, surface, url, code) => {
+    start()
+    expect(await call('open', url === undefined ? [] : [url], { surface })).toMatchObject({ ok: false, code })
+    expect(links()).toEqual([])
+  })
+})
+
 describe('shutdown', () => {
   it('answers a waiting secret request, stops the service and closes the background host', async () => {
     start()
