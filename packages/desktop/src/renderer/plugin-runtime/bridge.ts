@@ -8,7 +8,10 @@ import type {
   HelmEvents,
   HelmTheme,
   PluginParams,
+  PluginSession,
   SecretState,
+  SessionStartRequest,
+  SessionStartResult,
   SettingValue,
   StatusItem,
   ToolHandler
@@ -186,6 +189,7 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
       case 'secrets':
       case 'command':
       case 'action':
+      case 'sessions':
         emit(message.name, message.data as never)
         return
       default:
@@ -270,6 +274,16 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
       return call<ExecResult>('exec', [command, args === undefined ? [] : [...args], options ?? {}])
     },
 
+    open(url: string): Promise<void> {
+      // Said here, where the mistake is made: Helm refuses it too.
+      if (navigator.userActivation?.isActive !== true) {
+        return Promise.reject(
+          helmError('not-allowed', 'helm.open needs a click or key press the user just made in the page: call it from the handler')
+        )
+      }
+      return call<void>('open', [url])
+    },
+
     tabs: {
       open(tab: string, params?: PluginParams, options?: { title?: string }): Promise<void> {
         return call<void>('tabs.open', [tab, params ?? {}, options ?? {}])
@@ -297,6 +311,20 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
     secrets: {
       state: (key: string) => call<SecretState>('secrets.state', [key]),
       request: (key: string) => call<SecretState>('secrets.request', [key])
+    },
+
+    sessions: {
+      start(request: SessionStartRequest): Promise<SessionStartResult> {
+        // Said here, where the mistake is made: a call from anything but the
+        // user's own click or key press in this page is refused by Helm too.
+        if (navigator.userActivation?.isActive !== true) {
+          return Promise.reject(
+            helmError('not-allowed', 'helm.sessions.start needs a click or key press the user just made in the page: call it from the handler')
+          )
+        }
+        return call<SessionStartResult>('sessions.start', [request])
+      },
+      list: () => call<PluginSession[]>('sessions.list', [])
     },
 
     tools: {

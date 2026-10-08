@@ -92,6 +92,7 @@ under `__helm/`, where Helm serves its runtime.
 | `rail` | `{ "title", "panel" }`: a rail button with that tooltip, opening that panel in the sidebar. |
 | `panels` | Sidebar panels by name: `{ "title", "entry", "actions"? }`. |
 | `tabs` | Tabs by name: `{ "title", "entry" }`. |
+| `pageStrip` | `true` opens the tabs as pages in one tab of the plugin's own. See [Tabs](#tabs). |
 | `background` | A page that runs whenever the plugin is on. |
 | `commands` | Entries in the command palette: `{ "id", "title", "tab"? }`. |
 | `settings` | A settings page Helm draws: see [Settings](#settings). |
@@ -100,6 +101,7 @@ under `__helm/`, where Helm serves its runtime.
 | `exec` | Programs `helm.exec` may run, by name. |
 | `service` | One long-running process Helm supervises. |
 | `agent` | Tools Claude Code sessions can call, answered by the background page. See [Tools for sessions](#tools-for-sessions). |
+| `sessions` | What the plugin may do with the Claude Code sessions Helm hosts: `"start"` lets its pages ask to start one ([Starting a session](#starting-a-session)), `"list"` lets them see them ([Seeing sessions](#seeing-sessions)). |
 
 Names - panel and tab keys, action, command and program names - are 1-32
 lower-case letters, digits and dashes.
@@ -168,6 +170,15 @@ and the page reads them from `helm.context.params`. `title` names the tab until 
 ```js
 helm.surface.setTitle('Run 42 - passed') // null puts back the manifest's title
 ```
+
+A plugin that opens many tabs - a list, then an item, then another - can keep
+them out of the pane's strip with `"pageStrip": true`. Its tabs then open as
+pages in one tab of its own, named for the plugin, with a strip of pages inside
+it, the way Helm's Browser tab holds its pages. `helm.tabs.open` opens a page
+there, or brings forward the page with the same parameters; `setTitle` names
+the page in that strip. Pages switch, close (Ctrl+W) and reorder (drag, or
+Ctrl+Shift+Left and Right) as the Browser tab's do, and closing the last one
+closes the tab. Without it, each tab is a tab of its own in the pane.
 
 ### Background page
 
@@ -261,6 +272,7 @@ SyntaxError and stops the whole file.
 | `visible` | Whether the surface is on screen. Always false for the background page. |
 | `fetch(input, init?)` | `fetch`, sent by Helm. See [Network](#network). |
 | `exec(name, args?, options?)` | Runs a program from `exec`. See [Programs](#programs). |
+| `open(url)` | Opens an `https` address in Helm's Browser tab, from a click. See [Opening a link](#opening-a-link). |
 | `tabs.open(tab, params?, options?)` | Opens one of the plugin's tabs. |
 | `surface.setTitle(title)` | Names a tab in the strip; null puts back the manifest's. No effect outside a tab. |
 | `status.set(item)` | The status bar item, or null. |
@@ -268,6 +280,8 @@ SyntaxError and stops the whole file.
 | `settings.get()` | Every setting's value. |
 | `secrets.state(key)` | `ready` or `missing`. |
 | `secrets.request(key)` | Opens Helm's dialog for adding the key, scoped to this plugin. Resolves with the state once it closes. |
+| `sessions.start({ cwd, prompt, name? })` | Asks to start a Claude Code session, from a click. See [Starting a session](#starting-a-session). |
+| `sessions.list()` | The sessions Helm started since it opened. See [Seeing sessions](#seeing-sessions). |
 | `tools.handle(name, handler)` | Answers one of the tools `agent` declares. Background page only. See [Tools for sessions](#tools-for-sessions). |
 | `on(event, listener)` | Subscribes; returns the function that unsubscribes. |
 
@@ -281,6 +295,7 @@ Events:
 | `secrets` | Every declared key's state, after one was stored, permitted or removed. |
 | `command` | `{ id }`: a command with no tab was chosen. |
 | `action` | `{ id }`: a panel header action was pressed. Panels only. |
+| `sessions` | Every session, as `sessions.list()` answers, after one started, ended, was renamed or changed what it is doing. Needs `"list"` in `sessions`. |
 
 ### Errors
 
@@ -296,6 +311,8 @@ A call that fails rejects with an `Error` whose `code` says why:
 | `unavailable` | The plugin is turned off, or Helm is shutting down. |
 | `service` | The service is not running and could not be started. |
 | `not-found` | A program `exec` names is not on this computer. |
+| `not-allowed` | The call needs a click or key press the user just made in the page, and there was none. |
+| `busy` | The same request is already waiting on the user, or the plugin opened a link a moment ago. |
 
 A call cancelled through an `AbortSignal` rejects with a `DOMException` named
 `AbortError`, as `fetch` does.
@@ -536,6 +553,92 @@ user can turn them off on the plugin's page in Settings, which takes them from
 sessions already running too. Each call is noted in the plugin's log with the
 session that made it.
 
+## Starting a session
+
+A plugin whose `sessions` lists `"start"` can ask Helm to start a Claude Code
+session in a folder, with a first message:
+
+```js
+button.addEventListener('click', async () => {
+  const result = await helm.sessions.start({ cwd: 'C:\\work\\api', prompt: 'work on API-12', name: 'API-12' })
+  if (result === 'started') showStarted()
+})
+```
+
+- Only from a click or key press the user just made in a panel or tab: call it
+  from the handler. Anything else rejects with `not-allowed`, and the
+  background page cannot ask at all.
+- Helm shows the folder, the message and the command it will run, and the user
+  starts it or cancels. It resolves `started` once the session's tab is open,
+  and `cancelled` when the user said no, or the page went away first. One
+  request at a time: a second while the first is on screen rejects with `busy`.
+- `cwd` is an absolute path to a folder that exists. `prompt` is one line of
+  up to 2000 characters, with no `"` (a Windows command line cannot carry one
+  intact) and not starting with `-` (`claude` would read it as a flag). `name` names the tab and the
+  session, up to 60 characters; the folder's name when absent.
+- The message is the session's first, said once, as if typed when it opened.
+  After that the session is the user's: a plugin cannot type into it, read it,
+  or end it.
+
+## Seeing sessions
+
+A plugin whose `sessions` lists `"list"` can see the Claude Code sessions Helm
+started since it opened, running and ended, from any of its pages:
+
+```js
+const show = (sessions) => {
+  const mine = sessions.find((session) => session.id === task.sessionId)
+  status.textContent = mine === undefined ? 'Not running' : mine.state === 'ended' ? 'Ended' : mine.activity ?? 'Running'
+}
+show(await helm.sessions.list())
+helm.on('sessions', show)
+```
+
+Each session is:
+
+| field | |
+| --- | --- |
+| `id` | The id a tool call from this session carries as `session.id`, so a plugin that offers tools can tell which session is working on what. It means nothing outside Helm and does not survive a restart. |
+| `name` | What its tab is called now. |
+| `cwd` | The folder it is working in. |
+| `state` | `running` or `ended`. |
+| `activity` | What Claude Code says it is doing: `busy`, `idle` (finished, waiting for the user's next message), `waiting` (for the user to answer something) or `shell`. Null when it has ended, or when Helm cannot tell. |
+| `activitySince` | Epoch ms that activity has held since, or null. For an idle session, when it last finished working. |
+| `startedAt`, `endedAt` | Epoch ms; `endedAt` is null while it runs. |
+
+- The list is oldest first. An ended session stays in it after its tab
+  closes, for the rest of the run; Helm keeps the last 100 that ended.
+- The `sessions` event carries the whole list again whenever any of it
+  changes.
+- Nothing of a session's conversation is in it: no prompts, no output, no
+  transcript, and not what a waiting session is asking.
+- Only sessions Helm started. A `claude` run in another terminal is not listed.
+
+## Opening a link
+
+`helm.open(url)` opens a page in Helm's Browser tab, beside the user's own:
+
+```js
+link.addEventListener('click', (event) => {
+  event.preventDefault()
+  helm.open(link.href).catch(showProblem)
+})
+```
+
+- Only from a click or key press the user just made in a panel or tab: call it
+  from the handler. Anything else rejects with `not-allowed`.
+- `https` addresses only, with no user name or password in them, up to 2048
+  characters. Anything else rejects with `invalid`.
+- One link a second: a second call sooner, a double click's, rejects with
+  `busy`.
+- It resolves once Helm has the address, not once the page has loaded. The
+  page goes where any address typed in the Browser tab may go: when the user
+  has kept the Browser tab to this computer, it says so on the new tab instead
+  of loading.
+- The page is the user's, signed in wherever they are signed in. The plugin
+  cannot read it, drive it or close it, and nothing it does there reaches the
+  plugin. No manifest field is needed.
+
 ## Theme and styling
 
 Helm injects its primitives stylesheet at the top of every page's `<head>`,
@@ -743,8 +846,11 @@ AltGr combinations, which many keyboards type characters with.
   off its own origin.
 - **Open windows or dialogs.** No popups, no `alert`, `confirm` or `prompt`,
   no downloads. Writing text to the clipboard is the one browser permission a
-  page has.
+  page has. A link goes to Helm's Browser tab through `helm.open`, from a
+  click.
 - **Post notifications**, or reach into a Claude Code session: a session can
-  call a plugin's tools, but a plugin cannot send a session anything, read its
-  conversation, or start one.
+  call a plugin's tools, but a plugin cannot send a running session anything
+  or read its conversation. It can ask to start one with a first message,
+  which the user sees and agrees to first, and see which are running and
+  whether each is working.
 - **See a secret's value**, or another plugin's anything.

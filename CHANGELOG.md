@@ -14,6 +14,31 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.3.0
+
+Helm 2.3 lets plugins do more with your sessions and your browser: start a
+Claude Code session for you once you agree, see which sessions are running and
+whether each is working, and open a link in the Browser tab. A plugin's pages
+can also share one tab with a strip of their own.
+
+**Plugins**
+
+- A plugin can ask to start a Claude Code session in a folder with a first
+  message, from something you just clicked in it. Helm shows you the folder,
+  the name, the message and the command it will run, and starts nothing unless
+  you press Start.
+- A plugin can see the sessions Helm started since it opened: their names,
+  their folders, and whether each is working, idle, waiting on you or ended.
+  It never sees anything said in them.
+- A link you click in a plugin opens in Helm's Browser tab, held to the same
+  rule as an address you type there.
+- A plugin's pages can open in one tab of its own, with a strip of pages
+  inside it like the Browser tab's, instead of a tab each.
+- A plugin's page in Settings says when it can start sessions or see them.
+- Plugin authors: `sessions` and `pageStrip` in the manifest, and
+  `helm.sessions.start`, `helm.sessions.list`, the `sessions` event and
+  `helm.open`, in plugin SDK 1.3.0.
+
 ## 2.2.0
 
 Helm 2.2 lets plugins give your Claude Code sessions tools of their own,

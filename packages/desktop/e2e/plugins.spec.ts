@@ -1,9 +1,10 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Frame, Locator, Page } from '@playwright/test'
 import type { HelmBridge } from '@coledtaylor/helm-plugin-sdk'
 import { bearerOf, callTool, readMcpConfig, rpc, rpcResult, toolNames } from '../test/mcp-client'
-import { claudeRunIn, expect, startSession, test as base, type Helm } from './helm'
+import { claudeRunIn, expect, startSession, terminalText, test as base, typeLine, type Helm } from './helm'
+import { startBrowserFixture } from './browser-fixture'
 import { TOKEN, installSample, pluginFrame, registerPlugin, startServer, type SampleFixture } from './plugin-fixture'
 
 /**
@@ -317,6 +318,48 @@ test('a theme change reaches plugin pages without reloading them', async ({ helm
   expect(after.marked).toBe(true)
 })
 
+test("a plugin panel sees Helm's sessions start, work and end, and nothing of what is said in them", async ({ helm, sample, world }) => {
+  const ui = helm.window
+  await storeToken(ui, sample.server.url)
+  let panel = await openPanel(ui)
+  await expect(panel.locator('[data-sample-sessions-empty]')).toHaveText('None yet.')
+
+  await rail(ui).getByRole('button', { name: 'Sessions' }).click()
+  const id = await startSession(ui, 'alpha')
+  const pane = ui.getByRole('region', { name: 'First pane' })
+  await expect.poll(() => terminalText(ui, id)).toContain('Claude Code v2.1.999 (fake)')
+  const secret = 'the plugin must never see this line'
+  await typeLine(pane, secret)
+  await expect.poll(() => terminalText(ui, id)).toContain(`You said: ${secret}`)
+
+  // Listed by name and folder, with what Claude Code says it is doing.
+  panel = await openPanel(ui)
+  const row = panel.locator('[data-sample-session="alpha"]')
+  await expect(row).toHaveAttribute('data-state', 'running')
+  await expect(row.locator('[data-sample-session-says]')).toHaveText(`idle · ${world.projects.alpha}`)
+
+  // Ended, it says so at once, without the page asking again.
+  await typeLine(pane, '/exit')
+  await expect(ui.getByRole('tab', { name: 'alpha, ended' })).toBeVisible()
+  await expect(row).toHaveAttribute('data-state', 'ended')
+  await expect(row.locator('[data-sample-session-says]')).toHaveText(`Ended · ${world.projects.alpha}`)
+
+  const listed = await panel.evaluate(() => (window as unknown as PluginWindow).helm.sessions.list())
+  expect(listed).toEqual([
+    {
+      id: expect.stringMatching(/^[0-9a-f]{32}$/),
+      name: 'alpha',
+      cwd: world.projects.alpha,
+      state: 'ended',
+      activity: null,
+      activitySince: null,
+      startedAt: expect.any(Number),
+      endedAt: expect.any(Number)
+    }
+  ])
+  expect(JSON.stringify(listed)).not.toContain(secret)
+})
+
 test("a session calls the plugin's tools, its background page answers, and turning them off in Settings takes them away", async ({
   helm,
   sample,
@@ -367,4 +410,186 @@ test("a session calls the plugin's tools, its background page answers, and turni
   const browser = config.mcpServers['helm-browser']
   if (browser === undefined) throw new Error('no browser server')
   expect((await rpc(browser.url, token, 'tools/list')).status).toBe(200)
+})
+
+/** The sample as a plugin that declares `pageStrip`: its tabs open as pages in one tab of its own. */
+const stripTest = test.extend({
+  world: async ({ world, sample }, use) => {
+    const file = join(sample.dir, 'helm-plugin.json')
+    const manifest = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    writeFileSync(file, JSON.stringify({ ...manifest, pageStrip: true }, null, 2))
+    await use(world)
+  }
+})
+
+stripTest('a plugin with a page strip opens its tabs as pages in one tab, which Ctrl+W closes page by page', async ({
+  helm,
+  sample,
+  relaunch
+}) => {
+  let ui = helm.window
+  await storeToken(ui, sample.server.url)
+  const panel = await openPanel(ui)
+  await expect(panel.locator('[data-sample-item]')).toHaveCount(3)
+  const pages = (page: Page): Locator => page.getByRole('tablist', { name: 'Sample pages' })
+
+  // The first page opens the plugin's one tab, named for the plugin.
+  await panel.locator('[data-sample-item="2"]').click()
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Second item'])
+  await expect(ui.getByRole('tab', { name: /^Sample$/ })).toHaveAttribute('aria-selected', 'true')
+  const second = await pluginFrame(ui, 'dist/tabs/item.html')
+  // Loaded, named and marked read by the page itself, so the name below is the last word.
+  await expect(statusItem(ui)).toHaveText('1 unread')
+  await second.evaluate(() => {
+    ;(window as unknown as { marker: string }).marker = 'kept'
+    ;(window as unknown as PluginWindow).helm.surface.setTitle('Second, renamed')
+  })
+  // setTitle names the page in the strip, not the plugin's tab.
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Second, renamed'])
+  await expect(ui.getByRole('tab', { name: /^Sample$/ })).toBeVisible()
+
+  // A second page joins the strip rather than the pane's tabs.
+  await panel.locator('[data-sample-item="1"]').click()
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Second, renamed', 'Welcome'])
+  await expect(ui.getByRole('tab', { name: /Welcome/ })).toHaveCount(1)
+  await expect(pages(ui).getByRole('tab', { name: /Welcome/ })).toHaveAttribute('aria-selected', 'true')
+
+  // The same item again brings its page forward, with the title asked for, and
+  // the page behind kept running all along.
+  await panel.locator('[data-sample-item="2"]').click()
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Second item', 'Welcome'])
+  await expect(pages(ui).getByRole('tab', { name: /Second item/ })).toHaveAttribute('aria-selected', 'true')
+  expect(await second.evaluate(() => (window as unknown as { marker?: string }).marker)).toBe('kept')
+
+  // Reordered as the Browser tab's pages are.
+  await pages(ui).getByRole('tab', { name: /Second item/ }).press('Control+Shift+ArrowRight')
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Welcome', 'Second item'])
+
+  // Written down with the panes, and back after a restart.
+  const saved = (): Promise<string> =>
+    ui.evaluate(async () => {
+      const settings = (await (window as unknown as HelmWindow).helm.invoke('settings:read')) as { paneLayout: unknown }
+      return JSON.stringify(settings.paneLayout)
+    })
+  await expect.poll(saved).toMatch(/"kind":"plugin-pages".*"params":\{"id":"1"\}.*"params":\{"id":"2"\}/)
+  ui = (await relaunch()).window
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Welcome', 'Second item'])
+  await expect(pages(ui).getByRole('tab', { name: /Second item/ })).toHaveAttribute('aria-selected', 'true')
+
+  // Ctrl+W closes the page in front, and the last page takes the tab with it.
+  await pages(ui).getByRole('tab', { name: /Second item/ }).click()
+  await ui.keyboard.press('Control+w')
+  await expect(pages(ui).getByRole('tab')).toHaveText(['Welcome'])
+  await ui.keyboard.press('Control+w')
+  await expect(pages(ui)).toHaveCount(0)
+  await expect(ui.getByRole('tab', { name: /^Sample$/ })).toHaveCount(0)
+})
+
+test('a plugin page starts a session from a click, once the user has seen what it will run', async ({ helm, sample, world }) => {
+  const ui = helm.window
+  await storeToken(ui, sample.server.url)
+  const panel = await openPanel(ui)
+  await panel.locator('[data-sample-item="2"]').click()
+  const item = await pluginFrame(ui, 'dist/tabs/item.html')
+  await expect(item.locator('h1')).toHaveText('Second item')
+
+  // Asked for without a click, it is refused before Helm draws anything.
+  // Long enough after any click that the page's activation has lapsed.
+  const unasked = await item.evaluate(
+    (cwd) =>
+      new Promise<string>((resolve) => {
+        setTimeout(() => {
+          ;(window as unknown as PluginWindow).helm.sessions
+            .start({ cwd, prompt: 'hello' })
+            .then(resolve, (error: { code: string }) => resolve(error.code))
+        }, 6000)
+      }),
+    world.projects.alpha
+  )
+  expect(unasked).toBe('not-allowed')
+
+  const dialog = ui.getByRole('alertdialog', { name: 'Sample wants to start a session' })
+  const field = (name: string): Locator => dialog.locator(`[data-plugin-session-field="${name}"] dd`)
+  await item.locator('[data-sample-session-folder]').fill(world.projects.alpha)
+  await item.locator('[data-sample-session-start]').click()
+
+  // Everything that will run is on screen, and Cancel has the focus.
+  await expect(field('folder')).toHaveText(world.projects.alpha)
+  await expect(field('name')).toHaveText('Second item')
+  await expect(field('prompt')).toHaveText('work on Second item')
+  await expect(field('command')).toHaveText('claude -n "Second item" "work on Second item"')
+  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused()
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(item.locator('[data-sample-session-result]')).toHaveText('Cancelled.')
+  await expect(ui.getByRole('tab', { name: /^Second item, / })).toHaveCount(0)
+
+  // Started, it is a session like any other, with the message as its first.
+  await item.locator('[data-sample-session-start]').click()
+  await dialog.getByRole('button', { name: 'Start session' }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(ui.getByRole('tab', { name: 'Second item, ready' })).toHaveAttribute('aria-selected', 'true')
+  await expect(item.locator('[data-sample-session-result]')).toHaveText('Started.')
+  const run = await claudeRunIn(world, world.projects.alpha)
+  expect(run.argv[run.argv.indexOf('-n') + 1]).toBe('Second item')
+  expect(run.argv.at(-1)).toBe('work on Second item')
+})
+
+test('a plugin page opens a link in the Browser tab from a click, held to the reach a typed address meets', async ({
+  helm,
+  sample
+}) => {
+  const fixture = await startBrowserFixture()
+  try {
+    const ui = helm.window
+    await storeToken(ui, sample.server.url)
+    const panel = await openPanel(ui)
+    await panel.locator('[data-sample-item="2"]').click()
+    const item = await pluginFrame(ui, 'dist/tabs/item.html')
+    const browserPages = ui.getByRole('tablist', { name: 'Browser tabs' })
+
+    // Without a click, nothing opens.
+    const unasked = await item.evaluate(
+      (url) =>
+        new Promise<string>((resolve) => {
+          setTimeout(() => {
+            ;(window as unknown as PluginWindow).helm.open(url).then(
+              () => resolve('opened'),
+              (error: { code: string }) => resolve(error.code)
+            )
+          }, 6000)
+        }),
+      `${fixture.httpsLoopback}/two`
+    )
+    expect(unasked).toBe('not-allowed')
+    await expect(browserPages).toHaveCount(0)
+
+    // Only https.
+    await item.locator('[data-sample-link-address]').fill(`${fixture.http}/two`)
+    await item.locator('[data-sample-link-open]').click()
+    await expect(item.locator('[data-sample-link-error]')).toHaveText('invalid: open takes https addresses only, not http:')
+    await expect(browserPages).toHaveCount(0)
+
+    // From a click, in the Browser tab, in front.
+    await item.locator('[data-sample-link-address]').fill(`${fixture.httpsLoopback}/two`)
+    await item.locator('[data-sample-link-open]').click()
+    await expect(ui.getByRole('tab', { name: /Helm fixture two/ })).toHaveAttribute('aria-selected', 'true')
+    await expect(ui.getByRole('textbox', { name: 'Address' })).toHaveValue(`${fixture.httpsLoopback}/two`)
+    await expect(item.locator('[data-sample-link-error]')).toHaveCount(0)
+
+    // "This machine only" refuses it on its own tab, as it would a typed address.
+    await ui.evaluate(() => (window as unknown as HelmWindow).helm.invoke('settings:write', { browserReach: 'local' }))
+    await ui.getByRole('tab', { name: /^Second item/ }).click()
+    await item.locator('[data-sample-link-address]').fill(`${fixture.httpsNamed}/two`)
+    // One link a second per plugin (a double click's second is refused; see host.test.ts).
+    await ui.waitForTimeout(1000)
+    await item.locator('[data-sample-link-open]').click()
+    await expect(ui.getByRole('status').filter({ hasText: 'This machine only' })).toContainText(
+      fixture.httpsNamed.replace('https://', '')
+    )
+    await expect(browserPages.getByRole('tab')).toHaveCount(2)
+    expect(fixture.requests.filter((request) => request.startsWith(fixture.httpsNamed))).toEqual([])
+  } finally {
+    await fixture.close()
+  }
 })

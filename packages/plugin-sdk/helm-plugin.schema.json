@@ -161,6 +161,11 @@
         }
       }
     },
+    "pageStrip": {
+      "type": "boolean",
+      "default": false,
+      "description": "Open the tabs as pages in one tab of the plugin's own, with a strip of pages inside it, rather than a tab each among the pane's tabs."
+    },
     "background": {
       "$ref": "#/$defs/htmlEntry",
       "description": "A page that runs from the moment the plugin is turned on, with no surface open."
@@ -295,6 +300,14 @@
           }
         }
       ]
+    },
+    "sessions": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "What the plugin's pages may do with the Claude Code sessions Helm hosts. start: ask to start one in a folder with a first message, with helm.sessions.start; Helm shows each one to the user, who starts it or not. list: see them, with helm.sessions.list and the sessions event.",
+      "items": {
+        "enum": ["start", "list"]
+      }
     },
     "agent": {
       "type": "object",

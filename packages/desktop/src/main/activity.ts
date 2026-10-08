@@ -75,6 +75,8 @@ export interface ActivityDeps {
    * which is what lets a check point this at a fixture home.
    */
   claudeHome?: string | undefined
+  /** After a pass that moved anything, for what else reads `overview` - plugins listing sessions. */
+  onChange?: (() => void) | undefined
 }
 
 /**
@@ -93,7 +95,8 @@ type Pin = { pid: number; procStart: string | null }
 export function createActivityService({
   sessions,
   window,
-  claudeHome
+  claudeHome,
+  onChange
 }: ActivityDeps): ActivityService {
   const dir = sessionRegistryDir(claudeHome ?? homeDir())
   const pins = new Map<number, Pin>()
@@ -293,10 +296,14 @@ export function createActivityService({
       // timer or to fail a launch.
       return
     }
-    if (listingSignature(listing) !== before) emit(window(), 'sessions:overview', listing)
-    if (signature(next) === signature(current)) return
-    current = next
-    emit(window(), 'session:activity', current)
+    const listed = listingSignature(listing) !== before
+    if (listed) emit(window(), 'sessions:overview', listing)
+    const moved = signature(next) !== signature(current)
+    if (moved) {
+      current = next
+      emit(window(), 'session:activity', current)
+    }
+    if (listed || moved) onChange?.()
   }
 
   const timer = setInterval(refresh, POLL_MS)

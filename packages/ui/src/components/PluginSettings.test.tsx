@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { PluginInfo, PluginLogLine, PluginMetrics } from '@helm/core/types'
 import { PluginPage, PluginsPage, type PluginPageProps } from './PluginSettings'
@@ -26,6 +26,9 @@ const plugin = (overrides: Partial<PluginInfo> = {}): PluginInfo => ({
   rail: { title: 'Sample', panel: 'main' },
   panels: {},
   tabs: {},
+  pageStrip: false,
+  startsSessions: false,
+  seesSessions: false,
   background: null,
   commands: [],
   settings: [],
@@ -169,6 +172,19 @@ describe('PluginPage: what it may reach', () => {
   it('says None when it has no origins', () => {
     renderPage({ plugin: plugin({ network: [] }) })
     expect(group('plugin-network').textContent).toContain('None. It makes no requests.')
+  })
+
+  it('says what it may do with sessions only as far as its manifest declares', () => {
+    renderPage({ plugin: plugin() })
+    expect(document.querySelector('[data-settings-group="plugin-sessions"]')).toBeNull()
+    cleanup()
+    renderPage({ plugin: plugin({ startsSessions: true }) })
+    expect(group('plugin-sessions').textContent).toContain('Can ask to start sessions.')
+    expect(document.querySelector('[data-plugin-sees-sessions]')).toBeNull()
+    cleanup()
+    renderPage({ plugin: plugin({ seesSessions: true }) })
+    expect(group('plugin-sessions').textContent).toContain('Sees the sessions Helm starts')
+    expect(document.querySelector('[data-plugin-starts-sessions]')).toBeNull()
   })
 
   it('says it runs programs only when it does, with each program and its service', () => {

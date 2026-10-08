@@ -332,6 +332,27 @@ export function PluginPage({
         </Group>
       )}
 
+      {loaded && (plugin.startsSessions || plugin.seesSessions) && (
+        <Group name="plugin-sessions" title="Sessions">
+          <div className="flex flex-col gap-2.5">
+            {plugin.seesSessions && (
+              <Verdict
+                tone="warn"
+                text="Sees the sessions Helm starts: names, folders and whether each is working. Never what is said in them."
+                data-plugin-sees-sessions
+              />
+            )}
+            {plugin.startsSessions && (
+              <Verdict
+                tone="warn"
+                text="Can ask to start sessions. You see the folder and first message of each, and start it or not."
+                data-plugin-starts-sessions
+              />
+            )}
+          </div>
+        </Group>
+      )}
+
       {loaded && plugin.agent !== null && (
         <SessionTools agent={plugin.agent} pluginOn={plugin.enabled} onSetTools={onSetTools} />
       )}

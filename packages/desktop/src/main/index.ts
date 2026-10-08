@@ -11,6 +11,7 @@ import {
 import {
   addPluginFolder,
   claudeHome,
+  describePluginSessions,
   pluginThemeOf,
   readSessionRegistry,
   sessionRegistryDir,
@@ -18,6 +19,7 @@ import {
   type AppliedTheme,
   type AppSettings
 } from '@helm/core'
+import type { PluginSession } from '@coledtaylor/helm-plugin-sdk'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -400,6 +402,12 @@ function startApp(options: AppOptions = {}): void {
    * tools the endpoint serves.
    */
   let browserMcp: BrowserMcpHost | null = null
+  /**
+   * Helm's sessions as plugins see them, which needs the session host and the
+   * activity service made below. Until then there are none, which was true a
+   * moment ago; the first `sessions` event corrects a page that asked early.
+   */
+  let pluginSessionList = (): PluginSession[] => []
 
   const plugins = createPluginHost({
     store: services.store,
@@ -409,7 +417,11 @@ function startApp(options: AppOptions = {}): void {
     stylesheet: pluginStylesheet,
     // A plugin's tools coming or going can be the difference between a
     // listener and none.
-    onToolsChanged: () => void browserMcp?.sync()
+    onToolsChanged: () => void browserMcp?.sync(),
+    // Called only once the user has agreed in the window, which is long after
+    // the session host below exists.
+    startSession: (request) => sessions.startWithPrompt(request),
+    sessionList: () => pluginSessionList()
   })
   plugins.start()
   registerPluginProtocol((id) => plugins.served(id), plugins.runtime)
@@ -560,9 +572,17 @@ function startApp(options: AppOptions = {}): void {
   const activity = createActivityService({
     sessions,
     window: () => win,
-    ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {})
+    ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
+    onChange: () => plugins.sessionsChanged()
   })
-  sessions.onChanged(() => activity.refresh())
+  // A pass after every spawn, exit, close and rename, and the plugins told
+  // after it whatever it found: a session that started is listed even before
+  // the registry knows what it is doing.
+  sessions.onChanged(() => {
+    activity.refresh()
+    plugins.sessionsChanged()
+  })
+  pluginSessionList = () => describePluginSessions(sessions.pluginSessions(), activity.overview().sessions)
 
   const restore = createRestoreService({
     lost: services.lost,

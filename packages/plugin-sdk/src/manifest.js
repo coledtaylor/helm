@@ -147,6 +147,7 @@ export const MANIFEST_FIELDS = Object.freeze([
   'rail',
   'panels',
   'tabs',
+  'pageStrip',
   'background',
   'commands',
   'settings',
@@ -154,9 +155,12 @@ export const MANIFEST_FIELDS = Object.freeze([
   'secrets',
   'exec',
   'service',
-  'agent'
+  'agent',
+  'sessions'
 ])
 const KNOWN_FIELDS = new Set(MANIFEST_FIELDS)
+/** What `sessions` may list. */
+const SESSION_ACCESS = ['start', 'list']
 
 /**
  * Every `{{key}}` in a string, in order, repeats kept.
@@ -382,6 +386,37 @@ export function validateManifest(value) {
     if (title !== null && entry !== null) tabs[key] = { title, entry }
   }
 
+  // Whether the tabs open as pages in one tab of the plugin's own, with a strip
+  // of their own inside it, rather than a tab each among a pane's tabs.
+  let pageStrip = false
+  const rawPageStrip = value['pageStrip']
+  if (rawPageStrip !== undefined) {
+    if (typeof rawPageStrip !== 'boolean') fail('pageStrip must be true or false')
+    else pageStrip = rawPageStrip
+  }
+  if (pageStrip && value['tabs'] === undefined) {
+    warnings.push('pageStrip has no tabs to hold: it gathers the tabs the manifest declares, and this one declares none')
+  }
+
+  // What it may do with the Claude Code sessions Helm hosts: ask to start one
+  // (shown to the user, who starts it or not), and see the list of them. It
+  // never types into one or reads its conversation.
+  const sessions = { start: false, list: false }
+  const rawSessions = value['sessions']
+  if (rawSessions !== undefined) {
+    if (!Array.isArray(rawSessions) || rawSessions.some((entry) => !SESSION_ACCESS.includes(entry))) {
+      fail(`sessions must be a list of ${SESSION_ACCESS.map((entry) => `"${entry}"`).join(' and ')}`)
+    } else if (new Set(rawSessions).size !== rawSessions.length) {
+      fail('sessions lists the same thing twice')
+    } else {
+      sessions.start = rawSessions.includes('start')
+      sessions.list = rawSessions.includes('list')
+    }
+  }
+  if (sessions.start && value['panels'] === undefined && value['tabs'] === undefined) {
+    warnings.push('sessions "start" needs a panel or a tab: only a click in one of its pages can ask for a session, and this manifest declares neither')
+  }
+
   /** @type {import('./types').RailSpec | null} */
   let rail = null
   const rawRail = value['rail']
@@ -555,6 +590,7 @@ export function validateManifest(value) {
       rail,
       panels,
       tabs,
+      pageStrip,
       background,
       commands,
       settings,
@@ -562,7 +598,8 @@ export function validateManifest(value) {
       secrets,
       exec,
       service,
-      agent
+      agent,
+      sessions
     },
     warnings
   }

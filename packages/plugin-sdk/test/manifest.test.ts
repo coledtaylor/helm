@@ -61,6 +61,7 @@ describe('validateManifest - what a manifest leaves out', () => {
       rail: null,
       panels: {},
       tabs: {},
+      pageStrip: false,
       background: null,
       commands: [],
       settings: [],
@@ -68,7 +69,8 @@ describe('validateManifest - what a manifest leaves out', () => {
       secrets: [],
       exec: {},
       service: null,
-      agent: null
+      agent: null,
+      sessions: { start: false, list: false }
     })
   })
 
@@ -91,6 +93,38 @@ describe('validateManifest - what a manifest leaves out', () => {
     expect(manifest.network.map((pattern) => pattern.origin)).toEqual(['https://api.example.com', 'http://127.0.0.1:8080'])
     expect(manifest.exec['git']).toEqual({ command: 'git', args: [], env: {} })
     expect(manifest.service).toEqual({ kind: 'command', command: 'srv', args: [], env: {}, start: 'enable' })
+  })
+
+  it('gathers the tabs into one page strip only when asked, and says when there are no tabs to gather', () => {
+    const tabs = { run: { title: 'Run', entry: 'run.html' } }
+    const strip = validateManifest({ ...MINIMAL, tabs, pageStrip: true })
+    expect(accepted(strip).pageStrip).toBe(true)
+    expect(strip.warnings).toEqual([])
+    expect(accepted(validateManifest({ ...MINIMAL, tabs, pageStrip: false })).pageStrip).toBe(false)
+
+    expect(validateManifest({ ...MINIMAL, pageStrip: true }).warnings).toEqual([
+      'pageStrip has no tabs to hold: it gathers the tabs the manifest declares, and this one declares none'
+    ])
+    expect(errorsFor({ ...MINIMAL, tabs, pageStrip: 'yes' })).toEqual(['pageStrip must be true or false'])
+  })
+
+  it('gives its pages what sessions lists and nothing more, and says when it has no page to ask from', () => {
+    const panels = { main: { title: 'Main', entry: 'main.html' } }
+    const both = validateManifest({ ...MINIMAL, panels, sessions: ['start', 'list'] })
+    expect(accepted(both).sessions).toEqual({ start: true, list: true })
+    expect(both.warnings).toEqual([])
+    expect(accepted(validateManifest({ ...MINIMAL, panels, sessions: ['list'] })).sessions).toEqual({ start: false, list: true })
+    expect(accepted(validateManifest({ ...MINIMAL, panels, sessions: [] })).sessions).toEqual({ start: false, list: false })
+
+    // Seeing the list needs no page of its own: the background page may read it.
+    expect(validateManifest({ ...MINIMAL, sessions: ['list'] }).warnings).toEqual([])
+    expect(validateManifest({ ...MINIMAL, sessions: ['start'] }).warnings).toEqual([
+      'sessions "start" needs a panel or a tab: only a click in one of its pages can ask for a session, and this manifest declares neither'
+    ])
+    const shape = 'sessions must be a list of "start" and "list"'
+    expect(errorsFor({ ...MINIMAL, panels, sessions: true })).toEqual([shape])
+    expect(errorsFor({ ...MINIMAL, panels, sessions: ['start', 'stop'] })).toEqual([shape])
+    expect(errorsFor({ ...MINIMAL, panels, sessions: ['list', 'list'] })).toEqual(['sessions lists the same thing twice'])
   })
 
   it('starts a service on demand unless it says otherwise, and takes null for none', () => {

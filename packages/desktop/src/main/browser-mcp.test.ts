@@ -230,7 +230,7 @@ describe('the tool endpoint', () => {
 
   /** A registration and the two URLs it was handed. */
   const register = (name: string): BrowserMcpRegistration & { browser: string; sessions: string } => {
-    const registration = endpoint.register({ name, cwd: `C:/work/${name}` })
+    const registration = endpoint.register({ id: `plugin-id-${name}`, name, cwd: `C:/work/${name}` })
     if (registration === null) throw new Error('the endpoint registered nobody')
     const url = (server: string): string => registration.launch.servers.find((s) => s.name === server)?.url ?? ''
     return { ...registration, browser: url('helm-browser'), sessions: url('helm-sessions') }
@@ -403,7 +403,7 @@ describe('the tool endpoint', () => {
       expect(answer.problem).toContain('both off')
       expect(endpoint.running()).toBe(false)
       expect(endpoint.address()).toBeNull()
-      expect(endpoint.register({ name: 'alpha', cwd: 'C:/work/alpha' })).toBeNull()
+      expect(endpoint.register({ id: 'plugin-id-alpha', name: 'alpha', cwd: 'C:/work/alpha' })).toBeNull()
       expect(endpoint.servedNames()).toEqual([])
     })
 
@@ -1040,12 +1040,12 @@ describe('the tool endpoint', () => {
         plugin: 'tracker',
         tool: 'add_card',
         args: { title: 'Ship it' },
-        session: { id: expect.stringMatching(/^[0-9a-f]{32}$/) as string, name: 'alpha', cwd: 'C:/work/alpha' }
+        session: { id: 'plugin-id-alpha', name: 'alpha', cwd: 'C:/work/alpha' }
       })
-      // The same session is the same id; another session is another.
-      expect(second?.session.id).toBe(first?.session.id)
-      expect(third?.session).toMatchObject({ name: 'beta', cwd: 'C:/work/beta' })
-      expect(third?.session.id).not.toBe(first?.session.id)
+      // The id the session host minted at launch, the one a plugin's session
+      // list carries too: the same session is the same id, another is another.
+      expect(second?.session.id).toBe('plugin-id-alpha')
+      expect(third?.session).toEqual({ id: 'plugin-id-beta', name: 'beta', cwd: 'C:/work/beta' })
       for (const call of calls) {
         const said = JSON.stringify(call.request)
         expect(said).not.toContain(alpha.token)

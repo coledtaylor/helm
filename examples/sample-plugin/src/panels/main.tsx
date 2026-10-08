@@ -1,5 +1,6 @@
 import { StrictMode, useEffect, useMemo, useState, type JSX } from 'react'
 import { createRoot } from 'react-dom/client'
+import type { PluginSession } from '@coledtaylor/helm-plugin-sdk'
 import { useHelmEvent, useHelmSettings, useSecret } from '@coledtaylor/helm-plugin-sdk/react'
 import { CHANNEL, listItems, messageOf, optionsOf, type ItemList } from '../lib/api'
 import '../styles.css'
@@ -115,7 +116,58 @@ function Panel(): JSX.Element {
       <p className="helm-meta pad" data-sample-service>
         {service ?? 'Asking the service…'}
       </p>
+      <Sessions />
     </main>
+  )
+}
+
+/**
+ * The sessions Helm started, kept current by the `sessions` event. What a
+ * tracker would show as "who is on this": a name, a folder, and whether it is
+ * working.
+ */
+function Sessions(): JSX.Element {
+  const [sessions, setSessions] = useState<PluginSession[] | null>(null)
+  useEffect(() => {
+    let live = true
+    helm.sessions.list().then(
+      (listed) => {
+        if (live) setSessions(listed)
+      },
+      () => {
+        if (live) setSessions([])
+      }
+    )
+    return () => {
+      live = false
+    }
+  }, [])
+  useHelmEvent('sessions', setSessions)
+
+  return (
+    <>
+      <hr className="helm-rule" />
+      <p className="helm-meta pad">Sessions</p>
+      {sessions !== null && sessions.length === 0 ? (
+        <p className="helm-meta pad" data-sample-sessions-empty>
+          None yet.
+        </p>
+      ) : (
+        <ul className="helm-list" data-sample-sessions>
+          {(sessions ?? []).map((session) => (
+            <li key={session.id} className="helm-row item" data-sample-session={session.name} data-state={session.state}>
+              <span className="helm-dot" data-tone={session.activity === 'busy' || session.activity === 'waiting' ? 'accent' : undefined} />
+              <span className="grow">
+                <span className="title">{session.name}</span>
+                <span className="helm-meta" data-sample-session-says>
+                  {session.state === 'ended' ? 'Ended' : (session.activity ?? 'Running')} · {session.cwd}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   )
 }
 

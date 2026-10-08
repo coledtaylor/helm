@@ -204,13 +204,31 @@ folder: run through npx, that folder is a cache.
   (`renderer/src/plugins/relay.ts`) per page owns every frame's port.
 - A plugin's failure shows in its own surface (`PluginFrame`), never in Helm's
   chrome, and never takes Helm down.
+- A plugin with `pageStrip` has one `plugin-pages` tab whose ref holds its
+  pages (`core/layout/pluginPages.ts`), never a tab per page. A page's frame
+  key is its `pluginPageId`, never shaped like a plugin tab's, and a page's
+  frame ends when the page leaves the layout, whatever removed it.
 - Background pages are iframes in the hidden `plugin-host.html` window, not
   top-level pages: Chromium partitions an iframe's storage by its top-level
   site, and a top-level page would share nothing with the plugin's panels.
 - A plugin's tools (`agent` in its manifest) are answered by its background
   page, through `main/plugins/tools.ts`, and served as one more family on the
-  inbound listener. A plugin sends no notifications and never sends a session
-  anything: a session calls it, not the other way round.
+  inbound listener. A plugin sends no notifications and never sends a running
+  session anything: a session calls it, not the other way round.
+- A plugin whose `sessions` lists `start` may ask to start one (`sessions.start`): only from
+  a click in its page (the relay checks the window's user activation), and
+  only once the user agrees in Helm's dialog, which shows the folder, name,
+  first message and command. Main composes the launch from what it checked
+  and holds; the window answers yes or no and never says what to run.
+- A plugin whose `sessions` lists `list` sees Helm's sessions since it opened
+  (`sessions.list`, the `sessions` event), shaped by `describePluginSessions`
+  in core, whose input has no field for anything of a conversation: no argv,
+  conversation id or `waitingFor`. A session's id there is the one its tool
+  calls carry, minted at launch by the session host, never its row id.
+- Any plugin may open an `https` link in the Browser tab (`open`), from a
+  click only (the same relay check), one a second. Main checks it is an
+  `https` address; the window opens it through `browser:open`, so it meets
+  the reach rule a typed address does. The plugin never reads or drives it.
 - `HELM_PLUGINS` registers folders in a dev build only.
 
 ## Overlays and templates

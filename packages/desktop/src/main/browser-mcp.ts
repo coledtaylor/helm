@@ -148,9 +148,9 @@ interface ToolResult {
 interface AgentSession {
   opener: BrowserOpener
   /**
-   * What a plugin knows the session by. Minted with the token and nothing like
-   * it: the token is a credential for this endpoint, and a plugin is handed
-   * only what it needs to tell one session from another.
+   * What a plugin knows the session by (`McpSessionIdentity.id`). Nothing like
+   * the token: the token is a credential for this endpoint, and a plugin is
+   * handed only what it needs to tell one session from another.
    */
   id: string
   /** Where the session runs, for a plugin's tools. */
@@ -165,6 +165,11 @@ interface AgentSession {
 
 /** The session a registration is for. */
 export interface McpSessionIdentity {
+  /**
+   * What a plugin knows the session by, in a tool call and in its session
+   * list. Minted by the session host at launch, and nothing like the token.
+   */
+  id: string
   /** What the tab strip shows against every tab the session opens, and what a plugin is told. */
   name: string
   /** Its working directory, for a plugin's tools. */
@@ -1577,7 +1582,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
 
     servedNames: () => routes().filter((route) => route.enabled()).map((route) => route.name),
 
-    register({ name, cwd }) {
+    register({ id, name, cwd }) {
       const info = server?.address()
       if (server === null || info === null || info === undefined || typeof info === 'string') {
         return null
@@ -1591,7 +1596,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       const opener: BrowserOpener = { key: token, name }
       const session: AgentSession = {
         opener,
-        id: randomBytes(16).toString('hex'),
+        id,
         cwd,
         lastTab: null,
         file: null,

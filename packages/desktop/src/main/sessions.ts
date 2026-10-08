@@ -1,4 +1,5 @@
 import { type BrowserWindow, dialog, ipcMain, Notification } from 'electron'
+import { randomBytes } from 'node:crypto'
 import { basename } from 'node:path'
 import {
   finishSession,
@@ -8,6 +9,7 @@ import {
   noteConversation as recordConversation,
   PERMISSION_MODES,
   prepareLaunch,
+  readCachedProjects,
   readGitBranch,
   readHistorySession,
   readProfile,
@@ -23,6 +25,7 @@ import {
   type LostSession,
   type PermissionMode,
   type Profile,
+  type PluginSessionFacts,
   type SessionMcpServer,
   type SessionRecord
 } from '@helm/core'
@@ -87,6 +90,13 @@ interface Hosted {
   /** The conversation last written for it, so an unchanged one is not rewritten. */
   conversation: string | null
 }
+
+/**
+ * How many ended sessions plugins are still told about. The list is "since
+ * Helm opened", and a day of work is a few dozen; this is where it stops
+ * growing.
+ */
+const ENDED_SESSIONS_KEPT = 100
 
 /**
  * Optional taps for the check drivers.
@@ -211,6 +221,11 @@ function nativeConfirm(window: () => BrowserWindow | null): Confirm {
 export interface SessionHost {
   start: (req: StartSessionRequest) => Promise<SessionRecord>
   /**
+   * A session a plugin asked for and the user agreed to: a folder, a name and
+   * a first message, said once as the session's opening prompt.
+   */
+  startWithPrompt: (req: { cwd: string; name: string; prompt: string; cols: number; rows: number }) => Promise<SessionRecord>
+  /**
    * The new-session launcher's launch: a folder, a profile or none, an explicit
    * permission mode, and optionally a conversation to reopen there.
    */
@@ -269,6 +284,13 @@ export interface SessionHost {
   /** Every session `browserOpener` answers for, by id and label: the share menu. */
   browserSessions: () => BrowserShare[]
   /**
+   * Every session started since Helm opened, running or ended, oldest first,
+   * as a plugin may know it: by the id its tool calls carry, never by its row.
+   * An ended session stays after its tab closes, up to the last
+   * `ENDED_SESSIONS_KEPT`.
+   */
+  pluginSessions: () => PluginSessionFacts[]
+  /**
    * Called whenever the set of hosted sessions changes - a spawn, an exit, a
    * close - so the activity poller re-reads at once instead of on its next tick.
    *
@@ -315,6 +337,22 @@ export function createSessionHost({
   confirm = rendererConfirm(window, nativeConfirm(window))
 }: SessionHostDeps): SessionHost {
   const hosted = new Map<number, Hosted>()
+  /**
+   * Every session this host started, by row id, with the id plugins know it
+   * by and its row as last read. Outlives the tab: `hosted` lets go of an
+   * ended session when its tab closes, and a plugin's list says it ended.
+   */
+  const started = new Map<number, { pluginId: string; record: SessionRecord }>()
+  /** The row, wherever a change to it lands: on the hosted entry and in `started`. */
+  const remember = (record: SessionRecord): void => {
+    const known = started.get(record.id)
+    if (known !== undefined) known.record = record
+  }
+  /** Lets go of the oldest ended sessions past `ENDED_SESSIONS_KEPT`. A running one is never dropped. */
+  const forgetOldestEnded = (): void => {
+    const ended = [...started.entries()].filter(([, known]) => known.record.status !== 'running')
+    for (const [id] of ended.slice(0, Math.max(0, ended.length - ENDED_SESSIONS_KEPT))) started.delete(id)
+  }
   const grids = new Map<number, { cols: number; rows: number }>()
   let focused: ReadonlySet<number> = new Set()
   const changed = new Set<() => void>()
@@ -364,6 +402,7 @@ export function createSessionHost({
     // clock that wrote `started_at`. `finishSession` returns null if this exit
     // was already recorded, in which case there is nothing to announce.
     const record = finishSession(services.store, id, { exitCode })
+    if (record) remember(record)
     const entry = hosted.get(id)
     // Before every branch below, because every one of them ends this session:
     // the process is gone, so its token is a credential nothing owns.
@@ -459,10 +498,11 @@ export function createSessionHost({
    * half a credential.
    */
   const registerBrowserTools = (
+    id: string,
     name: string,
     cwd: string
   ): { token: string; mcp: { dir: string; servers: SessionMcpServer[] } } | null => {
-    const registration = browserMcp?.()?.register({ name, cwd }) ?? null
+    const registration = browserMcp?.()?.register({ id, name, cwd }) ?? null
     return registration === null ? null : { token: registration.token, mcp: registration.launch }
   }
 
@@ -502,7 +542,8 @@ export function createSessionHost({
       profileId?: number | null | undefined
       permissionMode?: PermissionMode | null | undefined
     },
-    mcpToken: string | null = null
+    mcpToken: string | null,
+    pluginId: string
   ): Promise<SessionRecord> {
     const command = resolveClaudeCommand()
     if (!command) {
@@ -594,6 +635,8 @@ export function createSessionHost({
       mcpConfigFile: plan.mcpConfigFile,
       conversation: record.claudeSessionId
     })
+    started.set(record.id, { pluginId, record })
+    forgetOldestEnded()
     announce()
     return record
   }
@@ -646,6 +689,8 @@ export function createSessionHost({
       profile: Profile | null
       permissionMode: PermissionMode | null
       history: HistorySession | null
+      /** The first message, over the profile's opening prompt. Unused for a reopened conversation. */
+      openingPrompt?: string | undefined
     },
     grid: { cols: number; rows: number }
   ): Promise<{ session: SessionRecord; plan: LaunchPlan }> {
@@ -666,7 +711,9 @@ export function createSessionHost({
     // the normal case, and `/resume` shows only the name.
     const name = uniqueSessionName(base, takenNames())
 
-    const tools = registerBrowserTools(name, cwd)
+    // What plugins know this session by, in its tool calls and in their list.
+    const pluginId = randomBytes(16).toString('hex')
+    const tools = registerBrowserTools(pluginId, name, cwd)
     let plan: LaunchPlan
     try {
       plan = prepareLaunch({
@@ -678,6 +725,7 @@ export function createSessionHost({
           resume: history?.sessionId ?? null,
           shimRoot
         }),
+        ...(composition.openingPrompt === undefined ? {} : { openingPrompt: composition.openingPrompt }),
         mcp: tools?.mcp ?? null,
         // A reopened conversation keeps the id it has; asserting it again with
         // `--session-id` is refused by the CLI as already in use.
@@ -698,9 +746,17 @@ export function createSessionHost({
       plan,
       grid,
       { projectPath, profileId: profile?.id ?? null, permissionMode },
-      tools?.token ?? null
+      tools?.token ?? null,
+      pluginId
     )
     return { session, plan }
+  }
+
+  /** The discovered project at `cwd`, by the path discovery spells it, or null. */
+  const knownProject = (cwd: string): string | null => {
+    const wanted = cwd.toLowerCase()
+    const projects = services.lastScan?.projects ?? readCachedProjects(services.store)
+    return projects.find((project) => project.path.toLowerCase() === wanted)?.path ?? null
   }
 
   /** What a composed launch says about itself, for the window to report. */
@@ -721,6 +777,24 @@ export function createSessionHost({
           profile: null,
           permissionMode: null,
           history: null
+        },
+        req
+      )
+      return session
+    },
+
+    async startWithPrompt(req) {
+      const { session } = await launchComposed(
+        {
+          cwd: req.cwd,
+          // A folder Helm knows as a project is recorded as one, so the
+          // session is that project's in the sidebar and its crumb.
+          projectPath: knownProject(req.cwd),
+          name: req.name,
+          profile: null,
+          permissionMode: null,
+          history: null,
+          openingPrompt: req.prompt
         },
         req
       )
@@ -849,6 +923,9 @@ export function createSessionHost({
       if (!record) throw new Error('That session is not in this database.')
       const entry = hosted.get(req.id)
       if (entry) entry.record = record
+      remember(record)
+      // A plugin listing sessions shows the name the tab has.
+      announce()
       return record
     },
 
@@ -930,6 +1007,17 @@ export function createSessionHost({
       running()
         .filter((entry) => entry.mcpToken !== null)
         .map((entry) => ({ session: entry.record.id, name: sessionLabel(entry.record) })),
+
+    pluginSessions: () =>
+      [...started.values()].map(({ pluginId, record }) => ({
+        id: pluginId,
+        helmSessionId: record.id,
+        name: sessionLabel(record),
+        cwd: record.cwd,
+        running: record.status === 'running',
+        startedAtMs: Date.parse(record.startedAt),
+        endedAtMs: record.endedAt === null ? null : Date.parse(record.endedAt)
+      })),
 
     onChanged(listener) {
       changed.add(listener)

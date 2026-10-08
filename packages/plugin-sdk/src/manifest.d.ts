@@ -100,6 +100,8 @@ export interface NormalizedManifest {
   rail: RailSpec | null
   panels: Record<string, { title: string; entry: string; actions: PanelActionSpec[] }>
   tabs: Record<string, TabSpec>
+  /** Its tabs open as pages in one tab of its own, with their own strip, rather than a tab each in the pane. */
+  pageStrip: boolean
   background: string | null
   commands: Array<{ id: string; title: string; tab: string | null }>
   settings: SettingSpec[]
@@ -108,6 +110,11 @@ export interface NormalizedManifest {
   exec: Record<string, NormalizedExec>
   service: NormalizedService | null
   agent: NormalizedAgent | null
+  /**
+   * `start`: its pages may ask to start a Claude Code session, which the user
+   * confirms. `list`: its pages may see the sessions Helm hosts.
+   */
+  sessions: { start: boolean; list: boolean }
 }
 
 export type ManifestResult =

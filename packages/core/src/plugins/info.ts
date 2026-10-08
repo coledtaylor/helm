@@ -73,6 +73,8 @@ export interface PluginInfo {
   rail: { title: string; panel: string } | null
   panels: Record<string, PluginPanelInfo>
   tabs: Record<string, PluginTabInfo>
+  /** Its tabs open as pages in one tab of its own (`plugin-pages`), not a tab each. */
+  pageStrip: boolean
   background: PluginBackgroundInfo | null
   commands: Array<{ id: string; title: string; tab: string | null }>
   settings: SettingSpec[]
@@ -87,6 +89,10 @@ export interface PluginInfo {
   runsPrograms: boolean
   /** The tools it offers sessions; null when its manifest declares none. */
   agent: PluginAgentInfo | null
+  /** Its pages may ask to start a Claude Code session, which the user confirms each time. */
+  startsSessions: boolean
+  /** Its pages may see Helm's sessions: names, folders, and whether each is working. */
+  seesSessions: boolean
   status: StatusItem | null
   badge: number | null
 }

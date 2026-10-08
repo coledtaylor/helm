@@ -13,6 +13,8 @@ const KNOWN = new Set([
   '$ref',
   'title',
   'description',
+  // An annotation for editors, like the two above: it validates nothing.
+  'default',
   'type',
   'enum',
   'const',

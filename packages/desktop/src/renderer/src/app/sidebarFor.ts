@@ -29,6 +29,7 @@ export function sidebarFor(ref: PaneRef): SidebarView | null {
     case 'config':
     case 'browser':
     case 'plugin':
+    case 'plugin-pages':
       return null
   }
 }

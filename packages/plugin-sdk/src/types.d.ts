@@ -60,6 +60,13 @@ export interface PluginManifest {
    * background page with `helm.tools.handle`. Needs `background`.
    */
   agent?: AgentSpec
+  /**
+   * What its pages may do with the Claude Code sessions Helm hosts. `start`:
+   * ask to start one with `helm.sessions.start`, which Helm shows to the user,
+   * who starts it or not. `list`: see them with `helm.sessions.list` and the
+   * `sessions` event.
+   */
+  sessions?: Array<'start' | 'list'>
 }
 
 export interface RailSpec {
@@ -295,6 +302,45 @@ export type SettingValue = string | number | boolean | null
  */
 export type SecretState = 'ready' | 'missing'
 
+/** A Claude Code session a page asks Helm to start. */
+export interface SessionStartRequest {
+  /** The folder it runs in: an absolute path to a folder that exists. */
+  cwd: string
+  /** Its first message, said once it opens. One line of up to 2000 characters, with no `"` and not starting with `-`. */
+  prompt: string
+  /** What its tab is called. The folder's name when absent. Up to 60 characters. */
+  name?: string
+}
+
+/** `started`: the user started it and its tab is open. `cancelled`: the user said no, or the page went away first. */
+export type SessionStartResult = 'started' | 'cancelled'
+
+/**
+ * One Claude Code session Helm started since it opened, as a plugin may see
+ * it. Nothing of its conversation: no prompt, no output, no transcript.
+ */
+export interface PluginSession {
+  /** The same id a tool call from this session carries (`ToolSession.id`). It means nothing outside Helm and does not survive a restart. */
+  id: string
+  /** What its tab is called now. */
+  name: string
+  /** The folder it is working in. */
+  cwd: string
+  state: 'running' | 'ended'
+  /**
+   * What Claude Code says it is doing: `busy` working, `idle` done and waiting
+   * for the user's next message, `waiting` for the user to answer something,
+   * `shell` running a command. Null when it has ended, or Helm cannot tell.
+   */
+  activity: 'busy' | 'idle' | 'waiting' | 'shell' | null
+  /** Since when `activity` has held, epoch ms. Null when Helm cannot tell. For an idle session, when it last finished working. */
+  activitySince: number | null
+  /** Epoch ms. */
+  startedAt: number
+  /** Epoch ms, or null while it runs. */
+  endedAt: number | null
+}
+
 /** What Helm tells a page, by event name. */
 export interface HelmEvents {
   /** The theme changed. Tokens are already applied to the page when this fires. */
@@ -313,6 +359,11 @@ export interface HelmEvents {
   command: { id: string }
   /** A panel's header action was pressed. Panels only. */
   action: { id: string }
+  /**
+   * A session started, ended, was renamed or changed what it is doing. Every
+   * session, as `helm.sessions.list` answers. Needs `"list"` in `sessions`.
+   */
+  sessions: PluginSession[]
 }
 
 /** Why a bridge call failed: `error.code` on the `Error` it rejects with. */
@@ -333,6 +384,10 @@ export type HelmErrorCode =
   | 'service'
   /** A program `exec` names was not found on this computer. */
   | 'not-found'
+  /** The call needs a click or key press the user just made in the page, and there was none. */
+  | 'not-allowed'
+  /** The same request is already waiting on the user, or a link was opened a moment ago. */
+  | 'busy'
 
 export interface HelmError extends Error {
   code: HelmErrorCode
@@ -393,6 +448,15 @@ export interface HelmBridge {
   /** Runs a program from `exec`, with no shell. Arguments are passed as they are. */
   exec(command: string, args?: readonly string[], options?: ExecOptions): Promise<ExecResult>
 
+  /**
+   * Opens an `https` address in Helm's Browser tab, where the user's own pages
+   * are. Needs a click or key press the user just made in the page: call it
+   * from the handler. Panels and tabs only, one link a second. Helm holds it to
+   * the same rule as an address typed in the Browser tab, and says on that tab
+   * when it will not go there.
+   */
+  open(url: string): Promise<void>
+
   tabs: {
     /**
      * Opens one of the plugin's tabs, or brings it forward if it is open with
@@ -426,6 +490,22 @@ export interface HelmBridge {
     state(key: string): Promise<SecretState>
     /** Opens Helm's dialog for adding the key, scoped to this plugin. Resolves with the state after it closes. */
     request(key: string): Promise<SecretState>
+  }
+
+  sessions: {
+    /**
+     * Asks to start a Claude Code session in a folder with a first message.
+     * Needs `"start"` in the manifest's `sessions`, and a click or key press the user just
+     * made in the page: call it from the handler. Helm shows the folder and the
+     * message and the user starts it or not. Panels and tabs only.
+     */
+    start(request: SessionStartRequest): Promise<SessionStartResult>
+    /**
+     * The Claude Code sessions Helm started since it opened, running and ended,
+     * oldest first. Needs `"list"` in `sessions`. The `sessions` event says
+     * when the list changes.
+     */
+    list(): Promise<PluginSession[]>
   }
 
   /** The tools `agent.tools` declares, answered. Background page only. */

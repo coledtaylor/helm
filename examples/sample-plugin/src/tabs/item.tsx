@@ -1,6 +1,6 @@
 import { StrictMode, useEffect, useMemo, useState, type JSX } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ExecResult } from '@coledtaylor/helm-plugin-sdk'
+import type { ExecResult, HelmError, SessionStartResult } from '@coledtaylor/helm-plugin-sdk'
 import { useHelmSettings } from '@coledtaylor/helm-plugin-sdk/react'
 import { CHANNEL, createItem, getItem, markRead, messageOf, optionsOf, type Item, type Options } from '../lib/api'
 import '../styles.css'
@@ -69,7 +69,95 @@ function ItemView({ options, id }: { options: Options; id: string }): JSX.Elemen
           {echo.stdout.trim()}
         </pre>
       )}
+      <StartSession item={item} />
+      <OpenLink />
     </main>
+  )
+}
+
+/**
+ * An address, opened in Helm's Browser tab. Like a session, only the click
+ * itself can ask: Helm refuses the call from anywhere else.
+ */
+function OpenLink(): JSX.Element {
+  const [address, setAddress] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const open = (): void => {
+    setError(null)
+    helm.open(address.trim()).catch((failure: unknown) => {
+      const code = (failure as Partial<HelmError>).code
+      setError(code === undefined ? messageOf(failure) : `${code}: ${messageOf(failure)}`)
+    })
+  }
+  return (
+    <section className="session">
+      <h2>Open a link</h2>
+      <div className="row">
+        <input
+          className="helm-input"
+          aria-label="Address"
+          data-sample-link-address
+          placeholder="https://example.com"
+          value={address}
+          onChange={(event) => setAddress(event.target.value)}
+        />
+        <button type="button" className="helm-button" data-sample-link-open disabled={address.trim() === ''} onClick={open}>
+          Open
+        </button>
+      </div>
+      {error !== null && (
+        <p className="error" data-sample-link-error>
+          {error}
+        </p>
+      )}
+    </section>
+  )
+}
+
+/**
+ * A Claude Code session about this item, in a folder the user names. Helm
+ * shows the folder and the message, and starts it only if the user does; the
+ * call has to come from the click itself.
+ */
+function StartSession({ item }: { item: Item }): JSX.Element {
+  const [folder, setFolder] = useState('')
+  const [outcome, setOutcome] = useState<SessionStartResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const start = (): void => {
+    setOutcome(null)
+    setError(null)
+    helm.sessions.start({ cwd: folder.trim(), prompt: `work on ${item.title}`, name: item.title }).then(setOutcome, (failure: unknown) => {
+      const code = (failure as Partial<HelmError>).code
+      setError(code === undefined ? messageOf(failure) : `${code}: ${messageOf(failure)}`)
+    })
+  }
+  return (
+    <section className="session">
+      <h2>Work on it in Claude Code</h2>
+      <div className="row">
+        <input
+          className="helm-input"
+          aria-label="Folder"
+          data-sample-session-folder
+          placeholder="C:\path\to\project"
+          value={folder}
+          onChange={(event) => setFolder(event.target.value)}
+        />
+        <button type="button" className="helm-button" data-sample-session-start disabled={folder.trim() === ''} onClick={start}>
+          Start a session
+        </button>
+      </div>
+      {outcome !== null && (
+        <p className="helm-meta" data-sample-session-result>
+          {outcome === 'started' ? 'Started.' : 'Cancelled.'}
+        </p>
+      )}
+      {error !== null && (
+        <p className="error" data-sample-session-error>
+          {error}
+        </p>
+      )}
+    </section>
   )
 }
 

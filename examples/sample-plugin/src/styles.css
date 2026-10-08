@@ -73,3 +73,23 @@ p {
 .error {
   color: var(--helm-danger);
 }
+
+.session {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--helm-border);
+}
+
+.session .helm-input {
+  flex: 1;
+  min-width: 0;
+}
+
+h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+}

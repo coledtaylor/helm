@@ -20,6 +20,8 @@ const plugin = (overrides: Partial<PluginInfo> = {}): PluginInfo => ({
   rail: null,
   panels: {},
   tabs: {},
+  pageStrip: false,
+  startsSessions: false, seesSessions: false,
   background: null,
   commands: [],
   settings: [],
