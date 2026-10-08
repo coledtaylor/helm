@@ -14,6 +14,7 @@ sample-plugin/
 ├── src/
 │   ├── panels/main.*     the rail panel: the items, a token prompt, the service's hello
 │   ├── tabs/item.*       one item, or a form for a new one; runs the `echo` program
+│   │                     and asks to start a session about the item (`helm.sessions.start`)
 │   ├── background/*      polls the server, sets the badge and the status bar item, and
 │   │                     answers the sessions' list_items and create_item
 │   └── lib/api.ts        the server's API, through helm.fetch with {{sample-token}}

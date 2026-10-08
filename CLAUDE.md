@@ -213,8 +213,13 @@ folder: run through npx, that folder is a cache.
   site, and a top-level page would share nothing with the plugin's panels.
 - A plugin's tools (`agent` in its manifest) are answered by its background
   page, through `main/plugins/tools.ts`, and served as one more family on the
-  inbound listener. A plugin sends no notifications and never sends a session
-  anything: a session calls it, not the other way round.
+  inbound listener. A plugin sends no notifications and never sends a running
+  session anything: a session calls it, not the other way round.
+- A plugin with `sessions` may ask to start one (`sessions.start`): only from
+  a click in its page (the relay checks the window's user activation), and
+  only once the user agrees in Helm's dialog, which shows the folder, name,
+  first message and command. Main composes the launch from what it checked
+  and holds; the window answers yes or no and never says what to run.
 - `HELM_PLUGINS` registers folders in a dev build only.
 
 ## Overlays and templates

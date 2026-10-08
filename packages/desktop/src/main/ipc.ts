@@ -655,6 +655,7 @@ export function registerIpc(ctx: IpcContext): void {
     // The sender is part of the call's name, so two Helm pages relaying calls
     // cannot cancel each other's.
     'plugins:call': (request, event) => ctx.plugins.call(request, event.sender.id),
+    'plugins:session': (answer, event) => ctx.plugins.session(answer, event.sender.id),
     'plugins:command': ({ plugin, id }) => ctx.plugins.command(plugin, id),
     'plugins:metrics': () => ctx.plugins.metrics(),
     'plugins:log': ({ path }) => ctx.plugins.log(path),

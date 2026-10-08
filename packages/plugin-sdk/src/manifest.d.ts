@@ -110,6 +110,8 @@ export interface NormalizedManifest {
   exec: Record<string, NormalizedExec>
   service: NormalizedService | null
   agent: NormalizedAgent | null
+  /** Its pages may ask to start a Claude Code session, which the user confirms. */
+  sessions: boolean
 }
 
 export type ManifestResult =

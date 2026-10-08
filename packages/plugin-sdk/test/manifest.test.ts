@@ -69,7 +69,8 @@ describe('validateManifest - what a manifest leaves out', () => {
       secrets: [],
       exec: {},
       service: null,
-      agent: null
+      agent: null,
+      sessions: false
     })
   })
 
@@ -105,6 +106,19 @@ describe('validateManifest - what a manifest leaves out', () => {
       'pageStrip has no tabs to hold: it gathers the tabs the manifest declares, and this one declares none'
     ])
     expect(errorsFor({ ...MINIMAL, tabs, pageStrip: 'yes' })).toEqual(['pageStrip must be true or false'])
+  })
+
+  it('lets its pages ask to start sessions only when asked, and says when it has no page to ask from', () => {
+    const panels = { main: { title: 'Main', entry: 'main.html' } }
+    const asking = validateManifest({ ...MINIMAL, panels, sessions: true })
+    expect(accepted(asking).sessions).toBe(true)
+    expect(asking.warnings).toEqual([])
+    expect(accepted(validateManifest({ ...MINIMAL, panels, sessions: false })).sessions).toBe(false)
+
+    expect(validateManifest({ ...MINIMAL, sessions: true }).warnings).toEqual([
+      'sessions needs a panel or a tab: only a click in one of its pages can ask for a session, and this manifest declares neither'
+    ])
+    expect(errorsFor({ ...MINIMAL, panels, sessions: 'yes' })).toEqual(['sessions must be true or false'])
   })
 
   it('starts a service on demand unless it says otherwise, and takes null for none', () => {

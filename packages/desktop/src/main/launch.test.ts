@@ -152,6 +152,23 @@ describe('launching from the new-session launcher', () => {
     expect(run.argv.at(-1)).toBe('/recap')
   })
 
+  it('starts what a plugin asked for with its message last, recording a folder Helm knows as its project', async () => {
+    const { runScan, updateSettings } = await import('./services')
+    updateSettings(services, { scanRoots: [world.projectsDir] })
+    await runScan(services, { includeGit: false })
+
+    const session = await host.startWithPrompt({ cwd: harness.root, name: 'HELM-2', prompt: 'work on HELM-2', cols: 100, rows: 30 })
+    expect(session).toMatchObject({ cwd: harness.root, projectPath: harness.root, name: 'HELM-2', profileId: null })
+    const run = await runOf(session.claudeSessionId)
+    expect(after(run.argv, '-n')).toBe('HELM-2')
+    expect(run.argv.at(-1)).toBe('work on HELM-2')
+
+    // A plain folder: no `.claude`, so not a project discovery lists.
+    const elsewhere = await host.startWithPrompt({ cwd: world.projects.beta, name: 'beta', prompt: 'look around', cols: 100, rows: 30 })
+    expect(elsewhere.projectPath).toBeNull()
+    expect((await runOf(elsewhere.claudeSessionId)).argv.at(-1)).toBe('look around')
+  })
+
   it('passes no permission flag when none was chosen, whatever the profile says', async () => {
     const launched = await launch({
       cwd: world.projects.beta,

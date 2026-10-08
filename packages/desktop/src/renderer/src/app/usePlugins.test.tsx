@@ -21,6 +21,7 @@ const plugin = (overrides: Partial<PluginInfo> = {}): PluginInfo => ({
   panels: {},
   tabs: {},
   pageStrip: false,
+  startsSessions: false,
   background: null,
   commands: [],
   settings: [],

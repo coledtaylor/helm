@@ -332,6 +332,16 @@ export function PluginPage({
         </Group>
       )}
 
+      {loaded && plugin.startsSessions && (
+        <Group name="plugin-sessions" title="Starting sessions">
+          <Verdict
+            tone="warn"
+            text="Can ask to start Claude Code sessions. Helm shows you the folder and first message of each, and starts it only if you do."
+            data-plugin-starts-sessions
+          />
+        </Group>
+      )}
+
       {loaded && plugin.agent !== null && (
         <SessionTools agent={plugin.agent} pluginOn={plugin.enabled} onSetTools={onSetTools} />
       )}

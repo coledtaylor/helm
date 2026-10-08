@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { PluginInfo, PluginLogLine, PluginMetrics } from '@helm/core/types'
 import { PluginPage, PluginsPage, type PluginPageProps } from './PluginSettings'
@@ -27,6 +27,7 @@ const plugin = (overrides: Partial<PluginInfo> = {}): PluginInfo => ({
   panels: {},
   tabs: {},
   pageStrip: false,
+  startsSessions: false,
   background: null,
   commands: [],
   settings: [],
@@ -170,6 +171,14 @@ describe('PluginPage: what it may reach', () => {
   it('says None when it has no origins', () => {
     renderPage({ plugin: plugin({ network: [] }) })
     expect(group('plugin-network').textContent).toContain('None. It makes no requests.')
+  })
+
+  it('says it can ask to start sessions only when its manifest declares it', () => {
+    renderPage({ plugin: plugin() })
+    expect(document.querySelector('[data-plugin-starts-sessions]')).toBeNull()
+    cleanup()
+    renderPage({ plugin: plugin({ startsSessions: true }) })
+    expect(group('plugin-sessions').textContent).toContain('Can ask to start Claude Code sessions.')
   })
 
   it('says it runs programs only when it does, with each program and its service', () => {

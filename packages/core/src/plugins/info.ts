@@ -89,6 +89,8 @@ export interface PluginInfo {
   runsPrograms: boolean
   /** The tools it offers sessions; null when its manifest declares none. */
   agent: PluginAgentInfo | null
+  /** Its pages may ask to start a Claude Code session, which the user confirms each time. */
+  startsSessions: boolean
   status: StatusItem | null
   badge: number | null
 }

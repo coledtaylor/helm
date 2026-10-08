@@ -6,7 +6,7 @@ import type { BrowserWindow, WebContents } from 'electron'
 import { addPluginFolder, openStore, readPluginFolders, readSecrets, setPluginEnabled, type Store } from '@helm/core'
 import type { HelmTheme } from '@coledtaylor/helm-plugin-sdk'
 import type { PluginCallOutcome, PluginInfo, PluginToolCall } from '../../shared/ipc'
-import type { PluginHost, PluginHostOptions } from './host'
+import type { PluginHost, PluginHostOptions, PluginSessionLaunch } from './host'
 import type { BackgroundHost } from './background'
 import type { SendHop } from './net'
 import type { ServiceLauncher } from './service'
@@ -99,7 +99,8 @@ const SAMPLE = {
   network: ['https://api.example.com', 'https://*.example.org'],
   secrets: ['token', 'shared'],
   exec: { echo: { command: process.execPath, args: ['-e', 'process.stdout.write(process.argv.slice(1).join("|"))'] } },
-  service: { node: 'service.mjs', start: 'enable' }
+  service: { node: 'service.mjs', start: 'enable' },
+  sessions: true
 }
 
 let sampleDir: string
@@ -682,6 +683,122 @@ describe('tools for sessions', () => {
     host.shutdown()
     await expect(waiting).resolves.toEqual({ ok: false, message: 'Helm is shutting down.' })
     expect(await callTool()).toEqual({ ok: false, message: 'Helm is shutting down.' })
+  })
+})
+
+describe('starting a session', () => {
+  type SessionAsked = { kind: 'session'; requestId: string; plugin: string; cwd: string; name: string; prompt: string }
+  const asked = (): SessionAsked[] => (events('plugins:ui', 'window') as SessionAsked[]).filter((ui) => ui.kind === 'session')
+  const record = { id: 9, name: 'HELM-2' } as never
+  const grid = { cols: 120, rows: 40 }
+  let launches: PluginSessionLaunch[]
+
+  function startSessions(launch: (request: PluginSessionLaunch) => Promise<never> = () => Promise.resolve(record)): void {
+    launches = []
+    start([sampleDir, otherDir], {
+      startSession: (request) => {
+        launches.push(request)
+        return launch(request)
+      }
+    })
+  }
+
+  it('puts what the page asked for to the user, and launches that, not anything the window says', async () => {
+    startSessions()
+    expect(info().startsSessions).toBe(true)
+    const pending = call('sessions.start', [{ cwd: root, prompt: '  work on HELM-2 ', name: 'HELM-2' }])
+    await tick()
+    const [ask] = asked()
+    expect(ask).toMatchObject({ plugin: 'sample', cwd: root, name: 'HELM-2', prompt: 'work on HELM-2' })
+
+    await expect(host.session({ requestId: ask!.requestId, start: true, ...grid }, 1)).resolves.toBe(record)
+    expect(launches).toEqual([{ cwd: root, name: 'HELM-2', prompt: 'work on HELM-2', ...grid }])
+    expect(await pending).toEqual({ ok: true, value: 'started' })
+    expect(host.log(sampleDir).at(-1)?.text).toBe(`started a session in ${root}, which the user agreed to`)
+    // Answered once: the request is spent.
+    await expect(host.session({ requestId: ask!.requestId, start: true, ...grid }, 1)).rejects.toThrow('That request has gone')
+    expect(launches).toHaveLength(1)
+  })
+
+  it("names the session after its folder when the page names none", async () => {
+    startSessions()
+    void call('sessions.start', [{ cwd: sampleDir, prompt: 'go' }])
+    await tick()
+    expect(asked()[0]).toMatchObject({ cwd: sampleDir, name: 'sample plugin' })
+  })
+
+  it('resolves cancelled when the user says no, and launches nothing', async () => {
+    startSessions()
+    const pending = call('sessions.start', [{ cwd: root, prompt: 'go' }])
+    await tick()
+    await expect(host.session({ requestId: asked()[0]!.requestId, start: false, cols: 0, rows: 0 }, 1)).resolves.toBeNull()
+    expect(await pending).toEqual({ ok: true, value: 'cancelled' })
+    expect(launches).toEqual([])
+  })
+
+  it('takes the answer only from the window that drew the dialog', async () => {
+    startSessions()
+    void call('sessions.start', [{ cwd: root, prompt: 'go' }])
+    await tick()
+    await expect(host.session({ requestId: asked()[0]!.requestId, start: true, ...grid }, 2)).rejects.toThrow(
+      'Only the window that asked'
+    )
+    expect(launches).toEqual([])
+  })
+
+  it('says why a launch failed, to the page and to the window', async () => {
+    startSessions(() => Promise.reject(new Error('Claude Code CLI not found.')))
+    const pending = call('sessions.start', [{ cwd: root, prompt: 'go' }])
+    await tick()
+    await expect(host.session({ requestId: asked()[0]!.requestId, start: true, ...grid }, 1)).rejects.toThrow(
+      'Claude Code CLI not found.'
+    )
+    expect(await pending).toEqual({ ok: false, code: 'unavailable', message: 'Claude Code CLI not found.' })
+  })
+
+  it('takes the dialog away when the page goes, or the plugin is turned off, before the user answers', async () => {
+    startSessions()
+    const pending = call('sessions.start', [{ cwd: root, prompt: 'go' }], { callId: 'leaving' })
+    await tick()
+    const { requestId } = asked()[0]!
+    host.cancel('leaving', 1)
+    expect(await pending).toEqual({ ok: true, value: 'cancelled' })
+    expect(events('plugins:ui', 'window')).toContainEqual({ kind: 'sessionWithdrawn', requestId })
+    await expect(host.session({ requestId, start: true, ...grid }, 1)).rejects.toThrow('That request has gone')
+
+    const second = call('sessions.start', [{ cwd: root, prompt: 'go' }])
+    await tick()
+    host.setEnabled(sampleDir, false)
+    expect(await second).toEqual({ ok: true, value: 'cancelled' })
+    expect(launches).toEqual([])
+  })
+
+  it('asks one at a time per plugin', async () => {
+    startSessions()
+    void call('sessions.start', [{ cwd: root, prompt: 'go' }])
+    await tick()
+    expect(await call('sessions.start', [{ cwd: root, prompt: 'again' }])).toMatchObject({ ok: false, code: 'busy' })
+    expect(asked()).toHaveLength(1)
+  })
+
+  it.each([
+    ['a plugin that does not declare sessions', 'other', 'panel', { cwd: 'ROOT', prompt: 'go' }, 'not-declared'],
+    ['the background page', 'sample', 'background', { cwd: 'ROOT', prompt: 'go' }, 'not-allowed'],
+    ['no request', 'sample', 'panel', null, 'invalid'],
+    ['a relative folder', 'sample', 'panel', { cwd: 'repos/helm', prompt: 'go' }, 'invalid'],
+    ['a folder that is not there', 'sample', 'panel', { cwd: 'ROOT/gone', prompt: 'go' }, 'invalid'],
+    ['a file', 'sample', 'panel', { cwd: 'ROOT/a file.txt', prompt: 'go' }, 'invalid'],
+    ['an empty prompt', 'sample', 'panel', { cwd: 'ROOT', prompt: '  ' }, 'invalid'],
+    ['a prompt of two lines', 'sample', 'panel', { cwd: 'ROOT', prompt: 'one\ntwo' }, 'invalid'],
+    ['a prompt with a double quote', 'sample', 'panel', { cwd: 'ROOT', prompt: 'say "hi"' }, 'invalid'],
+    ['a prompt that reads as a flag', 'sample', 'panel', { cwd: 'ROOT', prompt: '--dangerously-skip-permissions' }, 'invalid'],
+    ['a prompt too long', 'sample', 'panel', { cwd: 'ROOT', prompt: 'x'.repeat(2001) }, 'invalid'],
+    ['a name too long', 'sample', 'panel', { cwd: 'ROOT', prompt: 'go', name: 'n'.repeat(61) }, 'invalid']
+  ] as const)('refuses %s', async (_what, plugin, surface, request, code) => {
+    startSessions()
+    const args = request === null ? [] : [{ ...request, cwd: request.cwd.replace('ROOT', root) }]
+    expect(await call('sessions.start', args, { plugin, surface })).toMatchObject({ ok: false, code })
+    expect(asked()).toEqual([])
   })
 })
 

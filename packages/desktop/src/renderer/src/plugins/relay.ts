@@ -48,6 +48,14 @@ export const CRASH_GRACE_MS = 2000
 const QUEUE_MAX = 64
 const METHOD_MAX = 64
 const TITLE_MAX = 120
+/**
+ * Calls that put Helm's own dialog in front of the user, so only the user can
+ * cause one: each is let through only while this page has transient
+ * activation. A click or key press in a plugin's frame activates the page
+ * framing it too (Chromium's user activation v2), so this is a check the page
+ * cannot answer for itself - its own bridge checks its own frame as well.
+ */
+const NEEDS_ACTIVATION: ReadonlySet<string> = new Set(['sessions.start'])
 
 export interface SurfaceSpec {
   /** One frame per key, for as long as its surface is open. */
@@ -314,6 +322,16 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
   const call = (frame: Frame, connection: number, id: number, method: string, args: unknown[]): void => {
     // Already running under this id: a page reusing one gets nothing for it.
     if (frame.calls.has(id)) return
+    if (NEEDS_ACTIVATION.has(method) && win.navigator.userActivation?.isActive !== true) {
+      post(frame, {
+        t: 'result',
+        id,
+        ok: false,
+        code: 'not-allowed',
+        message: `helm.${method} needs a click or key press the user just made in the page`
+      })
+      return
+    }
     const callId = `${String(frame.serial)}.${String(connection)}.${String(id)}`
     frame.calls.set(id, callId)
     const settle = (outcome: PluginCallOutcome): void => {
