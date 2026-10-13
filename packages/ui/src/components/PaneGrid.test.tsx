@@ -10,12 +10,16 @@ const ROW: PaneNode = { axis: 'row', children: [{ group: 1 }, { group: 2 }], siz
 /** The box every pane is placed in: jsdom lays nothing out, so its size is given. */
 let width = 1006
 let height = 600
+/** jsdom has no pointer capture; Chromium always does. */
+let capture: ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   width = 1006
   height = 600
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width)
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => height)
+  capture = vi.fn()
+  Object.defineProperty(HTMLElement.prototype, 'setPointerCapture', { value: capture, configurable: true })
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -26,6 +30,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  delete (HTMLElement.prototype as Partial<HTMLElement>).setPointerCapture
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -41,13 +46,17 @@ function panesFor(root: PaneNode): Map<number, JSX.Element> {
 }
 
 function renderGrid(root: PaneNode, onResize = vi.fn(), maximized: number | null = null) {
-  const view = render(<PaneGrid root={root} maximized={maximized} gap={6} panes={panesFor(root)} onResize={onResize} />)
+  const onResizing = vi.fn()
+  const grid = (tree: PaneNode, max: number | null) => (
+    <PaneGrid root={tree} maximized={max} gap={6} panes={panesFor(tree)} onResize={onResize} onResizing={onResizing} />
+  )
+  const view = render(grid(root, maximized))
   return {
     ...view,
     onResize,
+    onResizing,
     slot: (id: number) => view.container.querySelector<HTMLElement>(`[data-pane-slot="${String(id)}"]`)!,
-    rerenderWith: (next: PaneNode, nextMax: number | null = null) =>
-      view.rerender(<PaneGrid root={next} maximized={nextMax} gap={6} panes={panesFor(next)} onResize={onResize} />)
+    rerenderWith: (next: PaneNode, nextMax: number | null = null) => view.rerender(grid(next, nextMax))
   }
 }
 
@@ -92,15 +101,15 @@ describe('PaneGrid', () => {
     const { slot, onResize } = renderGrid(ROW)
     const divider = screen.getByRole('separator')
 
-    fireEvent.mouseDown(divider, { button: 0, clientX: 503 })
-    fireEvent.mouseMove(window, { buttons: 1, clientX: 603 })
-    fireEvent.mouseMove(window, { buttons: 1, clientX: 703 })
+    fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientX: 503 })
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 603 })
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 703 })
 
     expect(slot(1).style.width).toBe('700px')
     expect(slot(2).style).toMatchObject({ left: '706px', width: '300px' })
     expect(onResize).not.toHaveBeenCalled()
 
-    fireEvent.mouseUp(window)
+    fireEvent.pointerUp(window)
     expect(onResize).toHaveBeenCalledTimes(1)
     expect(onResize.mock.calls[0]![0]).toEqual([])
     expect(onResize.mock.calls[0]![1][0]).toBeCloseTo(0.7)
@@ -108,8 +117,8 @@ describe('PaneGrid', () => {
 
   it('keeps a drag going through a new copy of the same tree, and through a change elsewhere', () => {
     const { slot, rerenderWith, onResize } = renderGrid(ROW)
-    fireEvent.mouseDown(screen.getByRole('separator'), { button: 0, clientX: 503 })
-    fireEvent.mouseMove(window, { buttons: 1, clientX: 603 })
+    fireEvent.pointerDown(screen.getByRole('separator'), { button: 0, pointerId: 1, clientX: 503 })
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 603 })
 
     // The settings write after a drop comes back as a new object, same panes.
     rerenderWith(JSON.parse(JSON.stringify(ROW)) as PaneNode)
@@ -120,45 +129,77 @@ describe('PaneGrid', () => {
       children: [{ group: 1 }, { axis: 'column', children: [{ group: 2 }, { group: 3 }], sizes: [0.5, 0.5] }],
       sizes: [0.5, 0.5]
     })
-    fireEvent.mouseMove(window, { buttons: 1, clientX: 703 })
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 703 })
     expect(slot(1).style.width).toBe('700px')
 
-    fireEvent.mouseUp(window)
+    fireEvent.pointerUp(window)
     expect(onResize).toHaveBeenCalledTimes(1)
     expect(onResize.mock.calls[0]![1][0]).toBeCloseTo(0.7)
   })
 
   it('ends a drag whose divider has gone', () => {
-    const { rerenderWith, onResize } = renderGrid(ROW)
-    fireEvent.mouseDown(screen.getByRole('separator'), { button: 0, clientX: 503 })
-    fireEvent.mouseMove(window, { buttons: 1, clientX: 603 })
+    const { rerenderWith, onResize, onResizing } = renderGrid(ROW)
+    fireEvent.pointerDown(screen.getByRole('separator'), { button: 0, pointerId: 1, clientX: 503 })
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 603 })
     rerenderWith({ group: 1 })
-    fireEvent.mouseUp(window)
+    expect(onResizing).toHaveBeenLastCalledWith(false)
+    expect(document.body.style.cursor).toBe('')
+    fireEvent.pointerUp(window)
     expect(onResize).not.toHaveBeenCalled()
+  })
+
+  it('captures the pointer, so a drag over a page in another process stays with the divider', () => {
+    renderGrid(ROW)
+    const divider = screen.getByRole('separator')
+    fireEvent.pointerDown(divider, { button: 0, pointerId: 7, clientX: 503 })
+    expect(capture).toHaveBeenCalledWith(7)
+    expect(capture.mock.contexts[0]).toBe(divider)
+  })
+
+  it('says a drag has begun on the press and is over on the release, so the browser views stand down for it', () => {
+    const { onResizing } = renderGrid(ROW)
+    fireEvent.pointerDown(screen.getByRole('separator'), { button: 0, pointerId: 1, clientX: 503 })
+    expect(onResizing.mock.calls).toEqual([[true]])
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 603 })
+    fireEvent.pointerUp(window)
+    expect(onResizing.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('ends a drag cancelled by the system, and one whose grid goes', () => {
+    const { onResize, onResizing, unmount } = renderGrid(ROW)
+    fireEvent.pointerDown(screen.getByRole('separator'), { button: 0, pointerId: 1, clientX: 503 })
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 603 })
+    fireEvent.pointerCancel(window)
+    expect(onResizing.mock.calls).toEqual([[true], [false]])
+    expect(onResize).toHaveBeenCalledTimes(1)
+
+    fireEvent.pointerDown(screen.getByRole('separator'), { button: 0, pointerId: 1, clientX: 603 })
+    unmount()
+    expect(onResizing.mock.calls).toEqual([[true], [false], [true], [false]])
   })
 
   it('stops a pane at its minimum, and writes nothing for a press that never moved', () => {
     const { slot, onResize } = renderGrid(ROW)
     const divider = screen.getByRole('separator')
 
-    fireEvent.mouseDown(divider, { button: 0, clientX: 503 })
-    fireEvent.mouseMove(window, { buttons: 1, clientX: 5 })
+    fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientX: 503 })
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 5 })
     expect(slot(1).style.width).toBe('200px')
-    fireEvent.mouseUp(window)
+    fireEvent.pointerUp(window)
     expect(onResize).toHaveBeenCalledTimes(1)
 
-    fireEvent.mouseDown(divider, { button: 0, clientX: 203 })
-    fireEvent.mouseUp(window)
+    fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientX: 203 })
+    fireEvent.pointerUp(window)
     expect(onResize).toHaveBeenCalledTimes(1)
   })
 
   it('takes a move with no button held as a release outside the window', () => {
     const { onResize } = renderGrid(ROW)
-    fireEvent.mouseDown(screen.getByRole('separator'), { button: 0, clientX: 503 })
-    fireEvent.mouseMove(window, { buttons: 1, clientX: 553 })
-    fireEvent.mouseMove(window, { buttons: 0, clientX: 600 })
+    fireEvent.pointerDown(screen.getByRole('separator'), { button: 0, pointerId: 1, clientX: 503 })
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 553 })
+    fireEvent.pointerMove(window, { buttons: 0, clientX: 600 })
     expect(onResize).toHaveBeenCalledTimes(1)
-    fireEvent.mouseMove(window, { buttons: 1, clientX: 700 })
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 700 })
     expect(onResize).toHaveBeenCalledTimes(1)
   })
 

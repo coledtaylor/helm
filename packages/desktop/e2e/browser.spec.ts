@@ -513,6 +513,47 @@ test('permissions: a page may write the clipboard and take the whole screen, and
   await expect.poll(async () => (await screen()).view.y).toBeGreaterThan(36)
 })
 
+test('resizing: the page stands down while a divider is held, so the drag toward it keeps going, and comes back at its new size', async ({
+  helm
+}) => {
+  const ui = helm.window
+  const first = ui.getByRole('region', { name: 'First pane' })
+
+  // The page on the left, Settings on the right: the divider is dragged toward the page.
+  await showBrowser(ui)
+  await go(ui, `${fixture.http}/`)
+  await expect(pages(ui).getByRole('tab', { name: /Helm fixture one/ })).toBeVisible()
+  await ui.locator('[data-rail="settings"]').click()
+  await paneTabs(ui).getByRole('tab', { name: 'Settings' }).dragTo(first, {
+    targetPosition: { x: (await first.boundingBox())!.width - 12, y: 200 }
+  })
+  await ui.getByRole('region', { name: 'First pane' }).getByRole('tab', { name: 'Browser' }).click()
+  await expect.poll(() => viewsShown(helm)).toEqual([true])
+
+  const before = (await first.boundingBox())!
+  const divider = (await ui.locator('[data-sash]').boundingBox())!
+  const y = divider.y + divider.height / 2
+  await ui.mouse.move(divider.x + divider.width / 2, y)
+  await ui.mouse.down()
+  await expect.poll(() => viewsShown(helm)).toEqual([false])
+  await ui.mouse.move(divider.x + divider.width / 2 - 150, y, { steps: 10 })
+  await ui.mouse.up()
+
+  const after = (await first.boundingBox())!
+  expect(Math.round(before.width - after.width)).toBe(150)
+  await expect.poll(() => viewsShown(helm)).toEqual([true])
+  const hole = (await ui.locator('[data-browser-hole]').boundingBox())!
+  await expect
+    .poll(() =>
+      helm.app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]!.contentView.children.flatMap((view) =>
+          'webContents' in view ? [view.getBounds().width] : []
+        )
+      )
+    )
+    .toEqual([Math.round(hole.width)])
+})
+
 test('dragging: the page stands down while the Browser tab is dragged, and is drawn where the tab lands', async ({
   helm
 }) => {

@@ -73,8 +73,11 @@ function frames(count: number): Promise<void> {
   })
 }
 
-/** Why every view is off the screen: a tab being dragged, or the address bar's list hanging over the page. */
-export type SuppressReason = 'tab-drag' | 'address-list'
+/**
+ * Why every view is off the screen: a tab being dragged, a pane divider being
+ * dragged, or the address bar's list hanging over the page.
+ */
+export type SuppressReason = 'tab-drag' | 'pane-resize' | 'address-list'
 
 export interface BrowserPanesState {
   /** Every live view, keyed by id. Adopted from main on mount. */

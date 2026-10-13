@@ -1,4 +1,4 @@
-import type { JSX, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
+import type { JSX, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { isSplit, type PaneNode } from '@helm/core/types'
 import { cn } from '../lib/cn'
@@ -26,6 +26,8 @@ export interface PaneGridProps {
   panes: ReadonlyMap<number, ReactNode>
   /** A divider was let go, or double-clicked: the split at `path` now shares its room as `sizes`. */
   onResize: (path: readonly number[], sizes: readonly number[]) => void
+  /** A divider was pressed (`true`), or its drag is over however it ended (`false`). */
+  onResizing?: (resizing: boolean) => void
 }
 
 /** A divider being dragged: where it started, and everything the drag is bounded by. */
@@ -75,11 +77,26 @@ function apply(element: HTMLElement | undefined, box: Box): void {
  * render pulled the pane back to the value React held. A property React never
  * renders has no second writer, and that is what a box's position is here.
  */
-export function PaneGrid({ root, maximized, gap, panes, onResize }: PaneGridProps): JSX.Element {
+export function PaneGrid({ root, maximized, gap, panes, onResize, onResizing }: PaneGridProps): JSX.Element {
   const boxRef = useRef<HTMLDivElement>(null)
   const paneElements = useRef(new Map<number, HTMLDivElement>())
   const sashElements = useRef(new Map<string, HTMLDivElement>())
   const drag = useRef<Drag | null>(null)
+  const resizing = useRef(onResizing)
+  useLayoutEffect(() => {
+    resizing.current = onResizing
+  }, [onResizing])
+
+  /** The drag is over, by release or because its divider went: everything it set, put back. */
+  const finish = useCallback((): Drag | null => {
+    const ending = drag.current
+    if (ending === null) return null
+    drag.current = null
+    document.body.style.userSelect = ''
+    document.body.style.cursor = ''
+    resizing.current?.(false)
+    return ending
+  }, [])
 
   /*
    * The tree on screen, by what it is rather than by identity. The layout is
@@ -117,11 +134,11 @@ export function PaneGrid({ root, maximized, gap, panes, onResize }: PaneGridProp
     if (held !== null && split !== null && split.axis === held.sash.axis && split.children.length === held.sizes.length) {
       drawn.current = held.moved === null ? shown : withShares(shown, held.sash.path, held.moved)
     } else {
-      drag.current = null
+      finish()
       drawn.current = shown
     }
     place()
-  }, [shown, place])
+  }, [shown, place, finish])
 
   useLayoutEffect(() => {
     const box = boxRef.current
@@ -132,17 +149,21 @@ export function PaneGrid({ root, maximized, gap, panes, onResize }: PaneGridProp
   }, [place])
 
   const release = useCallback(() => {
-    const ending = drag.current
-    if (ending === null) return
-    drag.current = null
-    document.body.style.userSelect = ''
-    document.body.style.cursor = ''
+    const ending = finish()
     // One write for the whole gesture, and none for a press that never moved.
-    if (ending.moved !== null) onResize(ending.sash.path, ending.moved)
-  }, [onResize])
+    if (ending !== null && ending.moved !== null) onResize(ending.sash.path, ending.moved)
+  }, [finish, onResize])
+
+  // Unmounted mid-drag: nothing else would ever say the drag is over.
+  useEffect(
+    () => () => {
+      finish()
+    },
+    [finish]
+  )
 
   useEffect(() => {
-    const onMove = (event: MouseEvent): void => {
+    const onMove = (event: PointerEvent): void => {
       const current = drag.current
       if (current === null) return
       // A move with no button held is a release that happened outside the
@@ -158,20 +179,27 @@ export function PaneGrid({ root, maximized, gap, panes, onResize }: PaneGridProp
       drawn.current = withShares(drawn.current, current.sash.path, sizes)
       place()
     }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', release)
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', release)
+    window.addEventListener('pointercancel', release)
     return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', release)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', release)
+      window.removeEventListener('pointercancel', release)
     }
   }, [place, release])
 
   const startDrag = useCallback(
-    (event: ReactMouseEvent, sash: SashRef) => {
+    (event: ReactPointerEvent<HTMLDivElement>, sash: SashRef) => {
       const box = boxRef.current
       const split = splitAt(drawn.current, sash.path)
       if (box === null || split === null || event.button !== 0) return
       event.preventDefault()
+      // Captured, so the moves over a plugin page - a frame in another process -
+      // still come here; without it a divider dragged toward one stopped a step
+      // in. A browser page is a native view that capture cannot reach, so it is
+      // stood down instead, by whoever `onResizing` tells.
+      event.currentTarget.setPointerCapture(event.pointerId)
       const geometry = gridGeometry(drawn.current, box.clientWidth, box.clientHeight, gap)
       drag.current = {
         sash,
@@ -184,6 +212,7 @@ export function PaneGrid({ root, maximized, gap, panes, onResize }: PaneGridProp
       document.body.style.userSelect = 'none'
       // The pointer keeps the divider's cursor over whatever it crosses.
       document.body.style.cursor = sash.axis === 'row' ? 'col-resize' : 'row-resize'
+      resizing.current?.(true)
     },
     [gap]
   )
@@ -226,7 +255,7 @@ export function PaneGrid({ root, maximized, gap, panes, onResize }: PaneGridProp
             aria-orientation={upright ? 'vertical' : 'horizontal'}
             title="Drag to resize, double-click to share evenly"
             data-sash={sash.key}
-            onMouseDown={(event) => startDrag(event, sash)}
+            onPointerDown={(event) => startDrag(event, sash)}
             onDoubleClick={() => even(sash)}
             // The divider is the gutter: a 3px grip that goes accent on hover,
             // with an 8px target whatever the gap is.
