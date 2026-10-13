@@ -1334,6 +1334,17 @@ export function App(): JSX.Element {
     [suppressBrowsers]
   )
 
+  /**
+   * A pane divider held or let go. A native view takes the mouse at the OS
+   * level, before any pointer capture in this window, so a divider dragged
+   * toward a page stopped where the pointer reached it. The views stand down
+   * for the gesture and the pointer stays with the window.
+   */
+  const onPaneResizing = useCallback(
+    (resizing: boolean) => suppressBrowsers('pane-resize', resizing),
+    [suppressBrowsers]
+  )
+
   // ---------------------------------------------------------------------------
   // The keyboard
   // ---------------------------------------------------------------------------
@@ -3506,6 +3517,7 @@ export function App(): JSX.Element {
             gap={settings?.paneGap ?? DEFAULT_SETTINGS.paneGap}
             panes={new Map(shownGroups.map((id) => [id, renderGroup(id)]))}
             onResize={(path, sizes) => commit((current) => resizeSplit(current, path, sizes))}
+            onResizing={onPaneResizing}
           />
         )}
 

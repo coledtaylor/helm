@@ -14,6 +14,15 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.3.1
+
+**Panes**
+
+- Dragging a divider toward a browser page or a plugin page no longer stops
+  a moment after it starts. A pane holding one can be made smaller as easily
+  as larger; the page shows as a picture of itself while the divider is held
+  and comes back at its new size when you let go.
+
 ## 2.3.0
 
 Helm 2.3 lets plugins do more with your sessions and your browser: start a

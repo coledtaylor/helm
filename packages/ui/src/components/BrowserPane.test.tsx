@@ -463,4 +463,15 @@ describe('BrowserPane - where the view goes', () => {
     expect(still.getAttribute('alt')).toBe('')
     expect(still.className).toContain('pointer-events-none')
   })
+
+  it('keeps the still at the size it was taken, so a pane resized under it crops it rather than squeezing it', () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(640)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(480)
+    renderPane({ still: 'data:image/png;base64,cGFnZQ==' })
+    const hole = document.querySelector<HTMLElement>('[data-browser-hole]')!
+    const still = hole.querySelector('img')!
+    expect(still.style).toMatchObject({ width: '640px', height: '480px' })
+    expect(still.className).toContain('max-w-none')
+    expect(hole.className).toContain('overflow-hidden')
+  })
 })

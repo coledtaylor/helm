@@ -185,6 +185,8 @@ export function BrowserPane({
   const [finding, setFinding] = useState(false)
   const [findQuery, setFindQuery] = useState('')
   const [width, setWidth] = useState<number | null>(null)
+  /** The size the page was when its still was taken, in CSS pixels. */
+  const [stillSize, setStillSize] = useState<{ width: number; height: number } | null>(null)
   const [menuAt, setMenuAt] = useState<DOMRect | null>(null)
   const [shareMenu, setShareMenu] = useState<{ at: DOMRect; targets: readonly BrowserShareTarget[] } | null>(null)
 
@@ -268,6 +270,14 @@ export function BrowserPane({
   useLayoutEffect(() => {
     report()
   }, [width, consoleOpen, report])
+
+  // The still keeps the size it was taken at, so a pane resized while the view
+  // is down - a divider being dragged - crops the picture or shows the canvas
+  // beside it, as a page does before it reflows, rather than squeezing it.
+  useLayoutEffect(() => {
+    const hole = holeRef.current
+    setStillSize(still === null || hole === null ? null : { width: hole.clientWidth, height: hole.clientHeight })
+  }, [still])
 
   const retrying = state.retryingUntil !== null
   const zoomed = state.zoomLevel !== 0
@@ -696,7 +706,7 @@ export function BrowserPane({
           ref={holeRef}
           data-browser-hole={String(state.id)}
           style={width === null ? undefined : { maxWidth: `${String(width)}px` }}
-          className="relative min-h-0 w-full flex-1"
+          className="relative min-h-0 w-full flex-1 overflow-hidden"
         >
           {/* The page, as a picture, while the view is off the screen for
               something drawn over it - so a menu opens over the page rather
@@ -707,7 +717,11 @@ export function BrowserPane({
               src={still}
               alt=""
               draggable={false}
-              className="pointer-events-none absolute inset-0 size-full select-none"
+              style={stillSize === null ? undefined : { width: `${String(stillSize.width)}px`, height: `${String(stillSize.height)}px` }}
+              className={cn(
+                'pointer-events-none absolute top-0 left-0 max-w-none select-none',
+                stillSize === null && 'size-full'
+              )}
             />
           )}
         </div>
