@@ -21,6 +21,7 @@ function renderPages(overrides: Partial<PluginPagesProps> = {}): PluginPagesProp
     onActivate: vi.fn(),
     onClose: vi.fn(),
     onMove: vi.fn(),
+    onKeep: vi.fn(),
     ...overrides
   }
   render(<PluginPages {...props} />)
@@ -49,6 +50,16 @@ describe('PluginPages', () => {
     expect(props.onActivate).toHaveBeenCalledWith(PAGES[2]!.id)
     await userEvent.click(screen.getByRole('button', { name: 'Close Helm' }))
     expect(props.onClose).toHaveBeenCalledWith(PAGES[0]!.id)
+  })
+
+  it('draws the preview page in italic and keeps it on a double click, and only it', () => {
+    const props = renderPages({ pages: PAGES.map((page, index) => ({ ...page, preview: index === 2 })) })
+    const preview = screen.getByRole('tab', { name: /^HELM-13/ })
+    expect(preview.querySelector('[data-tab-title]')?.className).toContain('italic')
+    fireEvent.doubleClick(screen.getByRole('tab', { name: /^HELM-12/ }))
+    expect(props.onKeep).not.toHaveBeenCalled()
+    fireEvent.doubleClick(preview)
+    expect(props.onKeep).toHaveBeenCalledWith(PAGES[2]!.id)
   })
 
   it('moves a page with Ctrl+Shift+Arrow, as the Browser tab moves its pages', () => {

@@ -100,7 +100,10 @@ function Panel(): JSX.Element {
                 type="button"
                 className="helm-row item"
                 data-sample-item={item.id}
-                onClick={() => void helm.tabs.open('item', { id: item.id }, { title: item.title })}
+                // A click previews the item, as a click on a file in Helm does: the
+                // next click replaces it. A double click opens it to stay.
+                onClick={() => void helm.tabs.open('item', { id: item.id }, { title: item.title, preview: true })}
+                onDoubleClick={() => void helm.tabs.open('item', { id: item.id }, { title: item.title })}
               >
                 <span className="helm-dot" data-tone={item.read ? undefined : 'accent'} />
                 <span className="grow">

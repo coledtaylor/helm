@@ -323,14 +323,25 @@ describe('bridge calls', () => {
   it('opens a declared tab in the window, with its parameters and title', async () => {
     start()
     expect(await call('tabs.open', ['item', { id: '7', n: 2 }, { title: 'Seven' }])).toEqual({ ok: true, value: undefined })
-    expect(events('plugins:ui', 'window')).toEqual([{ kind: 'openTab', plugin: 'sample', tab: 'item', params: { id: '7', n: 2 }, title: 'Seven' }])
+    expect(events('plugins:ui', 'window')).toEqual([
+      { kind: 'openTab', plugin: 'sample', tab: 'item', params: { id: '7', n: 2 }, title: 'Seven', preview: false }
+    ])
+  })
+
+  it('opens a tab as a preview only when asked to', async () => {
+    start()
+    await call('tabs.open', ['item', {}, { preview: true }])
+    await call('tabs.open', ['item', {}, { preview: false }])
+    await call('tabs.open', ['item'])
+    expect(events('plugins:ui', 'window').map((event) => (event as { preview: boolean }).preview)).toEqual([true, false, false])
   })
 
   it.each([
     [['nope'], 'not-declared'],
     [['item', { nested: { deep: 1 } }], 'invalid'],
     [['item', {}, { title: '' }], 'invalid'],
-    [['item', {}, 'title'], 'invalid']
+    [['item', {}, 'title'], 'invalid'],
+    [['item', {}, { preview: 'yes' }], 'invalid']
   ])('refuses tabs.open %j', async (args, code) => {
     start()
     expect(await call('tabs.open', args)).toMatchObject({ ok: false, code })

@@ -285,7 +285,7 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
     },
 
     tabs: {
-      open(tab: string, params?: PluginParams, options?: { title?: string }): Promise<void> {
+      open(tab: string, params?: PluginParams, options?: { title?: string; preview?: boolean }): Promise<void> {
         return call<void>('tabs.open', [tab, params ?? {}, options ?? {}])
       }
     },
@@ -293,6 +293,9 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
     surface: {
       setTitle(title: string | null): void {
         post({ t: 'title', title: typeof title === 'string' && title.trim() !== '' ? title.trim().slice(0, 120) : null })
+      },
+      keep(): void {
+        post({ t: 'keep' })
       }
     },
 

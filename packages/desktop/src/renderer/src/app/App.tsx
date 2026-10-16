@@ -21,6 +21,7 @@ import {
   moveTab,
   openFile,
   openTab,
+  openTabWithPreview,
   paneId,
   paneRects,
   placeBeside,
@@ -42,8 +43,8 @@ import {
   frontPluginPage,
   isPluginPageId,
   movePluginPage,
-  openPluginPage,
   openPluginPageIds,
+  placePluginPage,
   pluginPageId,
   pluginPagesId,
   retitlePluginSurface,
@@ -201,7 +202,6 @@ import { useUsage } from './useUsage'
 import { usePlugins } from './usePlugins'
 import { PluginFrame } from './PluginFrame'
 import {
-  disposePluginFrame,
   disposePluginFrames,
   emitToPluginFrame,
   queueToPluginFrame,
@@ -320,6 +320,23 @@ function railPanelSpec(id: string, plugin: PluginInfo): SurfaceSpec | null {
 }
 
 /** What a page in a plugin's strip is called: the title it was given, or its tab's in the manifest. */
+/** The second line of a preview tab's hover text. */
+const PREVIEW_HINT = 'Preview - double-click to keep it open'
+
+/** The strip previews with `plugin`'s set to `page`, or taken away (null). */
+function withPreview(previews: ReadonlyMap<string, string>, plugin: string, page: string | null): ReadonlyMap<string, string> {
+  if ((previews.get(plugin) ?? null) === page) return previews
+  const next = new Map(previews)
+  if (page === null) next.delete(plugin)
+  else next.set(plugin, page)
+  return next
+}
+
+/** The strip previews with `page` no longer `plugin`'s preview, if it was. */
+function withoutPreview(previews: ReadonlyMap<string, string>, plugin: string, page: string): ReadonlyMap<string, string> {
+  return previews.get(plugin) === page ? withPreview(previews, plugin, null) : previews
+}
+
 function pluginPageTitle(page: PluginPagesRef['pages'][number], plugin: PluginInfo): string {
   return page.title ?? plugin.tabs[page.tab]?.title ?? page.tab
 }
@@ -371,6 +388,12 @@ export function App(): JSX.Element {
    * ordinary tab, which is what a tab that survived a restart is.
    */
   const [preview, setPreview] = useState<string | null>(null)
+  /**
+   * The page standing as the preview in each plugin's strip, by plugin
+   * (`placePluginPage`). A strip's preview is its own, apart from the pane's.
+   * Not written down, for the reason `preview` is not.
+   */
+  const [pagePreviews, setPagePreviews] = useState<ReadonlyMap<string, string>>(new Map())
   /** Ctrl+P, open on this project, or null. */
   const [quickOpenRoot, setQuickOpenRoot] = useState<string | null>(null)
   /** Which half of it: names (Ctrl+P) or text (Ctrl+Shift+F). */
@@ -700,6 +723,13 @@ export function App(): JSX.Element {
       },
       title: (spec, title) => {
         if (spec.surface === 'tab') commit((current) => retitlePluginSurface(current, spec.key, title))
+      },
+      // The page asked to stay: a page in a strip stops being its preview, a
+      // plugin tab the pane's.
+      keep: (spec) => {
+        if (spec.surface !== 'tab') return
+        if (isPluginPageId(spec.key)) setPagePreviews((current) => withoutPreview(current, spec.plugin, spec.key))
+        else setPreview((current) => (current === spec.key ? null : current))
       }
     })
   }, [commit])
@@ -708,22 +738,50 @@ export function App(): JSX.Element {
    * Opens one of a plugin's tabs, or brings it forward: as a page in the
    * plugin's own tab when it declares `pageStrip`, and as a tab of its own in
    * the focused pane when it does not. Either way, the title it was asked for
-   * this time is the one it shows.
+   * this time is the one it shows, and `asPreview` opens it as the preview the
+   * next one replaces - the strip's own, or the pane's that files use.
+   *
+   * The preview that comes back is worked out from the layout on screen, as
+   * `openFileAt` does, because an updater has to be pure.
    */
   const openPluginTab = useCallback(
-    (plugin: string, tab: string, params: PluginParams, title: string | null) => {
+    (plugin: string, tab: string, params: PluginParams, title: string | null, asPreview: boolean) => {
       if (plugins.get(plugin)?.pageStrip === true) {
+        const page = { tab, params, title }
+        const was = pagePreviews.get(plugin) ?? null
         const at = findTab(open, pluginPagesId(plugin))
-        commit((current) => openPluginPage(current, plugin, { tab, params, title }))
+        const placed = placePluginPage(open, plugin, page, was, !asPreview)
+        commit((current) => placePluginPage(current, plugin, page, was, !asPreview).layout)
+        setPagePreviews((current) => withPreview(current, plugin, placed.preview))
         if (at !== null) setMaximized((current) => (current === null || current === at.group ? current : null))
         return
       }
       const ref: PaneRef = { kind: 'plugin', plugin, tab, params, title }
-      openPane(ref)
-      if (title !== null) commit((current) => retitleTab(current, paneId(ref), title))
+      const id = paneId(ref)
+      const still = preview !== null && findTab(open, preview) !== null ? preview : null
+      const placed = openTabWithPreview(open, ref, still, !asPreview)
+      const landed = findTab(placed.layout, id)
+      commit((current) => {
+        const next = openTabWithPreview(current, ref, still, !asPreview).layout
+        return title === null ? next : retitleTab(next, id, title)
+      })
+      setPreview(placed.preview)
+      setMaximized((current) => (current === null || current === landed?.group ? current : null))
     },
-    [plugins, open, commit, openPane]
+    [plugins, pagePreviews, preview, open, commit]
   )
+
+  /**
+   * A plugin tab that left the layout ends - closed, or replaced as the
+   * preview. Read off the layout, as the pages below are.
+   */
+  const openPluginTabs = useMemo(
+    () => new Set(open.groups.flatMap((group) => group.tabs.filter((ref) => ref.kind === 'plugin').map(paneId))),
+    [open]
+  )
+  useEffect(() => {
+    disposePluginFrames((spec) => spec.surface === 'tab' && !isPluginPageId(spec.key) && !openPluginTabs.has(spec.key))
+  }, [openPluginTabs])
 
   /**
    * A page that left its plugin's strip ends - closed, closed with its tab,
@@ -962,7 +1020,7 @@ export function App(): JSX.Element {
           openBrowser({ url: request.url, project: null })
           return
         }
-        openPluginTab(request.plugin, request.tab, request.params, request.title)
+        openPluginTab(request.plugin, request.tab, request.params, request.title, request.preview)
       }),
     [openPluginTab, openBrowser]
   )
@@ -1276,8 +1334,6 @@ export function App(): JSX.Element {
       if (ref.kind === 'browser') browsers.closeAll()
       // Closing the offer is "not now", the same as its button.
       if (ref.kind === 'restore') dismissRestore()
-      // The page ends with its tab, not with a render.
-      if (ref.kind === 'plugin') disposePluginFrame(paneId(ref))
       commit((current) => closeTab(current, id))
     },
     [open, closeSession, browsers, commit, dismissRestore]
@@ -1979,12 +2035,14 @@ export function App(): JSX.Element {
         const surface = plugin?.tabs[ref.tab]
         if (plugin === undefined || surface === undefined) return []
         const title = ref.title ?? surface.title
+        const isPreview = paneId(ref) === preview
         return [
           {
             id: paneId(ref),
             title: truncate(title, 30),
-            hint: `${title} - ${plugin.name}`,
-            icon: <PluginIcon url={plugin.icon} size={13} />
+            hint: isPreview ? `${title} - ${plugin.name}\n${PREVIEW_HINT}` : `${title} - ${plugin.name}`,
+            icon: <PluginIcon url={plugin.icon} size={13} />,
+            preview: isPreview
           }
         ]
       }
@@ -2052,7 +2110,7 @@ export function App(): JSX.Element {
           {
             id: paneId(ref),
             title: folderName(ref.path),
-            hint: paneId(ref) === preview ? `${ref.path}\nPreview - double-click to keep it open` : ref.path,
+            hint: paneId(ref) === preview ? `${ref.path}\n${PREVIEW_HINT}` : ref.path,
             icon: <DocIcon width={13} height={13} />,
             mono: true,
             preview: paneId(ref) === preview,
@@ -2520,7 +2578,14 @@ export function App(): JSX.Element {
           label={`${plugin.name} pages`}
           pages={pages.map((page) => {
             const title = pluginPageTitle(page, plugin)
-            return { id: pluginPageId(ref.plugin, page), title: truncate(title, 30), hint: `${title} - ${plugin.name}` }
+            const id = pluginPageId(ref.plugin, page)
+            const isPreview = id === pagePreviews.get(ref.plugin)
+            return {
+              id,
+              title: truncate(title, 30),
+              hint: isPreview ? `${title} - ${plugin.name}\n${PREVIEW_HINT}` : `${title} - ${plugin.name}`,
+              preview: isPreview
+            }
           })}
           activeId={shownId}
           icon={icon}
@@ -2528,6 +2593,7 @@ export function App(): JSX.Element {
           onActivate={(id) => commit((current) => activatePluginPage(current, ref.plugin, id))}
           onClose={(id) => commit((current) => closePluginPage(current, ref.plugin, id))}
           onMove={(id, toIndex) => commit((current) => movePluginPage(current, ref.plugin, id, toIndex))}
+          onKeep={(id) => setPagePreviews((current) => withoutPreview(current, ref.plugin, id))}
         />
         {shown !== null && shownId !== null && surface !== undefined && (
           <PluginFrame
@@ -3064,7 +3130,7 @@ export function App(): JSX.Element {
     const command = plugin?.commands.find((candidate) => candidate.id === key.slice(slash + 1))
     if (plugin === undefined || command === undefined) return
     if (command.tab !== null) {
-      openPluginTab(id, command.tab, {}, null)
+      openPluginTab(id, command.tab, {}, null, false)
       return
     }
     if (plugin.background !== null) {

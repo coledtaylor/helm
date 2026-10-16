@@ -15,6 +15,7 @@ import {
   moveTab,
   neighbourAt,
   openFile,
+  openTabWithPreview,
   openTab,
   paneId,
   placeBeside,
@@ -781,6 +782,62 @@ describe('openFile', () => {
     const first = openFile(layoutOf(g(HISTORY)), file('a.ts'), null, false)
     const closed = closeTab(first.layout, 'file:C:\\r\\a.ts')
     const next = openFile(closed, file('b.ts'), first.preview, true)
+    expect(next.preview).toBeNull()
+  })
+})
+
+describe('openTabWithPreview', () => {
+  const file = (name: string): FileRef => ({ kind: 'file', root: 'C:\\r', path: `C:\\r\\${name}` })
+  const id = (ref: PaneRef): string => paneId(ref)
+
+  it('opens in the focused pane, and the next tab opened as a preview takes its place', () => {
+    const first = openTabWithPreview(layoutOf(g(HISTORY)), plugin('item', { n: 1 }), null, false)
+    expect(first.preview).toBe(id(plugin('item', { n: 1 })))
+    const second = openTabWithPreview(first.layout, plugin('item', { n: 2 }), first.preview, false)
+    expect(shape(second.layout)).toEqual([`>history *${id(plugin('item', { n: 2 }))}`])
+    expect(second.preview).toBe(id(plugin('item', { n: 2 })))
+  })
+
+  it('adds a tab opened to keep and leaves the preview standing', () => {
+    const first = openTabWithPreview(layoutOf(g(HISTORY)), plugin('item', { n: 1 }), null, false)
+    const kept = openTabWithPreview(first.layout, plugin('item', { n: 2 }), first.preview, true)
+    expect(shape(kept.layout)).toEqual([`>history ${id(plugin('item', { n: 1 }))} *${id(plugin('item', { n: 2 }))}`])
+    expect(kept.preview).toBe(first.preview)
+  })
+
+  it("shares the one preview with files: a plugin's preview replaces a file's, and the other way round", () => {
+    const viewed = openFile(layoutOf(g(HISTORY)), file('a.ts'), null, false)
+    const swapped = openTabWithPreview(viewed.layout, plugin('item'), viewed.preview, false)
+    expect(shape(swapped.layout)).toEqual([`>history *${id(plugin('item'))}`])
+    const back = openFile(swapped.layout, file('b.ts'), swapped.preview, false)
+    expect(shape(back.layout)).toEqual(['>history *file:C:\\r\\b.ts'])
+  })
+
+  it('does not reach into another pane for the preview to replace', () => {
+    const layout = layoutOf(row([g(HISTORY), g(SETTINGS)]), 0)
+    const first = openTabWithPreview(layout, plugin('item', { n: 1 }), null, false)
+    const there = openTabWithPreview(focusGroup(first.layout, 2), plugin('item', { n: 2 }), first.preview, false)
+    expect(shape(there.layout)).toEqual([
+      ` history *${id(plugin('item', { n: 1 }))}`,
+      `>settings *${id(plugin('item', { n: 2 }))}`
+    ])
+    expect(there.preview).toBe(id(plugin('item', { n: 2 })))
+  })
+
+  it('brings an open tab forward, and opening the preview to keep ends it being one', () => {
+    const first = openTabWithPreview(layoutOf(g(HISTORY)), plugin('item'), null, false)
+    const away = activateTab(first.layout, 'history')
+    const again = openTabWithPreview(away, plugin('item'), first.preview, false)
+    expect(shape(again.layout)).toEqual([`>history *${id(plugin('item'))}`])
+    expect(again.preview).toBe(first.preview)
+    expect(openTabWithPreview(away, plugin('item'), first.preview, true).preview).toBeNull()
+  })
+
+  it('forgets a preview whose tab has been closed', () => {
+    const first = openTabWithPreview(layoutOf(g(HISTORY)), plugin('item', { n: 1 }), null, false)
+    const closed = closeTab(first.layout, id(plugin('item', { n: 1 })))
+    const next = openTabWithPreview(closed, plugin('item', { n: 2 }), first.preview, true)
+    expect(shape(next.layout)).toEqual([`>history *${id(plugin('item', { n: 2 }))}`])
     expect(next.preview).toBeNull()
   })
 })

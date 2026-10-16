@@ -433,8 +433,9 @@ stripTest('a plugin with a page strip opens its tabs as pages in one tab, which 
   await expect(panel.locator('[data-sample-item]')).toHaveCount(3)
   const pages = (page: Page): Locator => page.getByRole('tablist', { name: 'Sample pages' })
 
-  // The first page opens the plugin's one tab, named for the plugin.
-  await panel.locator('[data-sample-item="2"]').click()
+  // The first page opens the plugin's one tab, named for the plugin. Double
+  // clicks, so each page stays rather than standing as the preview.
+  await panel.locator('[data-sample-item="2"]').dblclick()
   await expect(pages(ui).getByRole('tab')).toHaveText(['Second item'])
   await expect(ui.getByRole('tab', { name: /^Sample$/ })).toHaveAttribute('aria-selected', 'true')
   const second = await pluginFrame(ui, 'dist/tabs/item.html')
@@ -449,7 +450,7 @@ stripTest('a plugin with a page strip opens its tabs as pages in one tab, which 
   await expect(ui.getByRole('tab', { name: /^Sample$/ })).toBeVisible()
 
   // A second page joins the strip rather than the pane's tabs.
-  await panel.locator('[data-sample-item="1"]').click()
+  await panel.locator('[data-sample-item="1"]').dblclick()
   await expect(pages(ui).getByRole('tab')).toHaveText(['Second, renamed', 'Welcome'])
   await expect(ui.getByRole('tab', { name: /Welcome/ })).toHaveCount(1)
   await expect(pages(ui).getByRole('tab', { name: /Welcome/ })).toHaveAttribute('aria-selected', 'true')
@@ -483,6 +484,108 @@ stripTest('a plugin with a page strip opens its tabs as pages in one tab, which 
   await ui.keyboard.press('Control+w')
   await expect(pages(ui)).toHaveCount(0)
   await expect(ui.getByRole('tab', { name: /^Sample$/ })).toHaveCount(0)
+})
+
+/** The sample's item page about item `id`, once it has loaded. */
+async function itemFrame(ui: Page, id: string): Promise<Frame> {
+  let found: Frame | undefined
+  await expect
+    .poll(async () => {
+      for (const frame of ui.frames()) {
+        if (!frame.url().startsWith('helm-plugin://sample/dist/tabs/item.html')) continue
+        if ((await frame.locator(`[data-sample-item-page="${id}"]`).count().catch(() => 0)) > 0) {
+          found = frame
+          return true
+        }
+      }
+      return false
+    })
+    .toBe(true)
+  return found as Frame
+}
+
+/** How many of the sample's item pages are running, on screen or parked. */
+const itemPages = (ui: Page): number =>
+  ui.frames().filter((frame) => frame.url().startsWith('helm-plugin://sample/dist/tabs/item.html')).length
+
+/** The tab, or page in a strip, `locator` names, drawn as the preview. */
+const asPreview = (locator: Locator): Locator => locator.locator('[data-tab-preview="true"]')
+
+test("a plugin's tab opened as a preview is replaced by the next, and stays once double-clicked or typed in", async ({
+  helm,
+  sample
+}) => {
+  const ui = helm.window
+  await storeToken(ui, sample.server.url)
+  const panel = await openPanel(ui)
+  await expect(panel.locator('[data-sample-item]')).toHaveCount(3)
+  const tab = (name: RegExp): Locator => ui.getByRole('tab', { name })
+
+  // A click previews the item; the next click replaces it in its place, and
+  // the page it replaced ends.
+  await panel.locator('[data-sample-item="2"]').click()
+  await expect(asPreview(tab(/Second item/))).toHaveCount(1)
+  await panel.locator('[data-sample-item="1"]').click()
+  await expect(asPreview(tab(/Welcome/))).toHaveCount(1)
+  await expect(tab(/Second item/)).toHaveCount(0)
+  await expect.poll(() => itemPages(ui)).toBe(1)
+
+  // Double-clicking its tab keeps it, and the next click opens beside it.
+  await tab(/Welcome/).dblclick()
+  await expect(tab(/Welcome/)).toBeVisible()
+  await expect(asPreview(tab(/Welcome/))).toHaveCount(0)
+  await panel.locator('[data-sample-item="2"]').click()
+  await expect(asPreview(tab(/Second item/))).toHaveCount(1)
+  await expect(tab(/Welcome/)).toBeVisible()
+
+  // Typing in the page keeps it too: the page calls helm.surface.keep.
+  const second = await itemFrame(ui, '2')
+  await second.locator('[data-sample-link-address]').fill('https://example.com')
+  await expect(asPreview(tab(/Second item/))).toHaveCount(0)
+  await expect(tab(/Second item/)).toBeVisible()
+
+  // A tab opened to stay is never a preview: a double click in the list.
+  await panel.locator('[data-sample-item="3"]').dblclick()
+  await expect(ui.locator('[data-tab-preview="true"]')).toHaveCount(0)
+  await expect.poll(() => itemPages(ui)).toBe(3)
+})
+
+stripTest("a plugin with a page strip previews its pages in the strip, apart from the pane's tabs", async ({ helm, sample }) => {
+  const ui = helm.window
+  await storeToken(ui, sample.server.url)
+  const panel = await openPanel(ui)
+  await expect(panel.locator('[data-sample-item]')).toHaveCount(3)
+  const pages = ui.getByRole('tablist', { name: 'Sample pages' })
+
+  // A click previews a page; the next click takes its place in the strip.
+  await panel.locator('[data-sample-item="2"]').click()
+  await expect(pages.getByRole('tab')).toHaveText(['Second item'])
+  await expect(asPreview(pages.getByRole('tab', { name: /Second item/ }))).toHaveCount(1)
+  await panel.locator('[data-sample-item="1"]').click()
+  await expect(pages.getByRole('tab')).toHaveText(['Welcome'])
+  await expect(asPreview(pages.getByRole('tab', { name: /Welcome/ }))).toHaveCount(1)
+  await expect.poll(() => itemPages(ui)).toBe(1)
+  // The plugin's own tab among the pane's is never the preview.
+  await expect(asPreview(ui.getByRole('tab', { name: /^Sample$/ }))).toHaveCount(0)
+
+  // A double click in the list is a click first, so it takes the preview's
+  // place, as in Helm's file tree - and then keeps it.
+  await panel.locator('[data-sample-item="2"]').dblclick()
+  await expect(pages.getByRole('tab')).toHaveText(['Second item'])
+  await expect(pages.locator('[data-tab-preview="true"]')).toHaveCount(0)
+
+  // The next click adds a preview beside the page that stays.
+  await panel.locator('[data-sample-item="1"]').click()
+  await expect(pages.getByRole('tab')).toHaveText(['Second item', 'Welcome'])
+  await expect(asPreview(pages.getByRole('tab', { name: /Welcome/ }))).toHaveCount(1)
+
+  // Double-clicking the preview in the strip keeps it, and the next click adds a page.
+  await pages.getByRole('tab', { name: /Welcome/ }).dblclick()
+  await expect(pages.locator('[data-tab-preview="true"]')).toHaveCount(0)
+  await panel.locator('[data-sample-item="3"]').click()
+  await expect(pages.getByRole('tab')).toHaveCount(3)
+  await expect(asPreview(pages.getByRole('tab').nth(2))).toHaveCount(1)
+  await expect.poll(() => itemPages(ui)).toBe(3)
 })
 
 test('a plugin page starts a session from a click, once the user has seen what it will run', async ({ helm, sample, world }) => {

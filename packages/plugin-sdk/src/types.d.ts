@@ -461,14 +461,31 @@ export interface HelmBridge {
     /**
      * Opens one of the plugin's tabs, or brings it forward if it is open with
      * the same parameters. `title` names the tab until its page sets one.
+     *
+     * `preview: true` opens it as the preview, the way a single click opens a
+     * file in Helm: the next tab opened as a preview takes its place, so
+     * clicking through a list does not leave a tab per item. The user keeps it
+     * by double-clicking its tab, and the page by `helm.surface.keep()`.
+     * Opened without it, the tab stays, and opening the preview that way keeps
+     * it. A plugin with `pageStrip` has a preview of its own among its pages;
+     * one without shares the pane's with Helm's files. Helm before 2.3.2 ignores
+     * it and opens a tab that stays.
      */
-    open(tab: string, params?: PluginParams, options?: { title?: string }): Promise<void>
+    open(tab: string, params?: PluginParams, options?: { title?: string; preview?: boolean }): Promise<void>
   }
 
   /** The page's own surface. */
   surface: {
     /** A tab's title in the strip. Null puts back the manifest's. No effect outside a tab. */
     setTitle(title: string | null): void
+    /**
+     * Keeps a tab opened as a preview, so the next preview does not replace
+     * it. Call it once the user starts changing something in the page, as an
+     * editor keeps a file once it is edited. No effect on a tab that already
+     * stays, or outside a tab. Helm before 2.3.2 does not have it: check
+     * `helm.surface.keep` before calling it in a plugin that runs on both.
+     */
+    keep(): void
   }
 
   status: {

@@ -14,6 +14,21 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.3.2
+
+**Plugins**
+
+- A plugin can open what you click as a preview, the way a click on a file
+  does: the next click replaces it, so clicking down a list no longer leaves
+  a tab per item. A preview's title is in italic. Double-click its tab to keep
+  it, and a plugin keeps it on its own once you start changing something in
+  it.
+- A plugin with its own strip of pages previews among those pages. Any other
+  plugin shares the pane's preview with files, so a plugin's preview replaces
+  a file's and the other way round.
+- Plugin authors: the `preview` option of `helm.tabs.open` and
+  `helm.surface.keep`, in plugin SDK 1.3.1.
+
 ## 2.3.1
 
 **Panes**
