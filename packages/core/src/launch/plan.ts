@@ -238,12 +238,14 @@ export function prepareLaunch(req: LaunchRequest): LaunchPlan {
   // its skills with it. Sweeping is `cleanStaleShims`, at app start, where the
   // answer to "is anything using this" is reliably no.
 
-  const memory = composeOverlayMemory(plans)
+  const memory = composeOverlayMemory(plans, req.root)
   let memoryFile: string | null = null
   if (memory !== null) {
     memoryFile = memoryFileFor(shimRoot, req.name)
     writeFileSync(memoryFile, memory)
-  } else if (plans.length > 0) {
+  } else if (plans.length > 0 && plans.every((plan) => plan.claudeMdPath === null)) {
+    // Not when the only CLAUDE.md was an ancestor's: that one arrives without
+    // being composed, so nothing is missing.
     warnings.push('No overlay had a CLAUDE.md, so no project instructions were composed.')
   }
 

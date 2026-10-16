@@ -56,6 +56,10 @@ export function makeConfigFixture(): ConfigFixture {
   write(join(project, '.claude', 'skills', 'think', 'prompts.md'), '# Prompts\n\nAsk twice.\n')
   write(join(project, '.claude', 'commands', 'spec', 'plan.md'), '---\ndescription: Plan a spec\n---\n\nPlan it.\n')
   write(join(project, '.claude', 'agents', 'reviewer.md'), '---\nname: reviewer\ndescription: Reviews a change\n---\n\nReview.\n')
+  write(
+    join(project, '.claude', 'workflows', 'audit-routes.js'),
+    "export const meta = {\n  name: 'route-audit',\n  description: 'Audit every route handler',\n}\n\nawait agent('List the routes.')\n"
+  )
 
   const scope = projectConfigScope(project, 'project', 'app')
   const tree = readConfigTree(scope)

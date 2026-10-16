@@ -179,6 +179,27 @@ describe('computeConfigLive: skills, commands, agents', () => {
     expect(review?.note).toContain('under the overlay overlay')
   })
 
+  it('addresses a workflow by its meta name, with a slash, namespaced under an overlay', () => {
+    const overlay = join(root, 'overlay')
+    write(
+      overlay,
+      '.claude/workflows/audit.js',
+      "export const meta = { name: 'route-audit', description: 'Audit routes' }\n"
+    )
+
+    const { view } = resolve(project, { overlays: [overlay] })
+    expect(view.workflows.map((entry) => entry.invocation)).toEqual(['overlay:route-audit'])
+    expect(view.overlays[0]?.workflows).toBe(1)
+
+    const overlayTree = resolve(overlay, { overlays: [overlay] })
+    const audit = computeConfigLive(
+      overlayTree.files.get('.claude/workflows/audit.js') as ConfigFile,
+      overlayTree.view
+    )
+    expect(audit?.state).toBe('live')
+    expect(audit?.invocation).toBe('/overlay:route-audit')
+  })
+
   it('does not predict a winner when two unprefixed sources define one name', () => {
     skill(project, 'think', 'The project’s.')
     userSkill('think', 'The user’s.')

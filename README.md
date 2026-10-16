@@ -20,10 +20,11 @@ so it is worth the paragraph:
 **Overlay composition.** For each project you want composed in, Helm synthesizes
 a throwaway *plugin* in its own data directory - a manifest plus junctions
 (`mklink /J`, no elevation) pointing at that project's real `.claude/skills`,
-`.claude/commands` and `.claude/agents`. It then launches `claude` **from the
-root you chose** with one `--plugin-dir` per overlay, `--add-dir` for the files
-the session may touch, and the overlays' `CLAUDE.md` files concatenated into a
-single `--append-system-prompt-file`. The result is a session whose working
+`.claude/commands`, `.claude/agents` and `.claude/workflows`. It then launches
+`claude` **from the root you chose** with one `--plugin-dir` per overlay,
+`--add-dir` for the files the session may touch, and the overlays' `CLAUDE.md`
+files concatenated into a single `--append-system-prompt-file` - except an
+overlay at or above that root, whose `CLAUDE.md` the CLI already loads. The result is a session whose working
 directory is the workspace root and whose skill set is the union of every repo
 you named.
 

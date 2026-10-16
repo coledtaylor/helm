@@ -14,6 +14,24 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.3.3
+
+**Profiles**
+
+- An overlay now brings its project's workflows (`.claude/workflows`) along
+  with its skills, commands and agents, each under the overlay's name, such
+  as `/dev:audit`.
+- A profile that overlays a folder above the one the session runs in - a
+  harness, from one of its repos - no longer gives the session that folder's
+  `CLAUDE.md` twice. Claude Code already reads it there, so Helm leaves it out.
+
+**Config console**
+
+- Workflows have their own group in a scope's files, named the way you type
+  them, and their own count and tab in Effective, overlays included.
+- Effective's instruction files show an overlaid `CLAUDE.md` once, where
+  Claude Code actually reads it from.
+
 ## 2.3.2
 
 **Plugins**

@@ -194,6 +194,13 @@ function classify(inside: string[]): { kind: ConfigFileKind; name: string } | nu
     return { kind: 'agent', name: tail.join('/').replace(/\.md$/i, '') }
   }
 
+  // Only directly inside `workflows/`: that is the one place the CLI documents
+  // looking, and the file name is a fallback - `workflowMeta` reads the name
+  // the CLI actually uses.
+  if (top === 'workflows' && tail.length === 1 && lower.endsWith('.js')) {
+    return { kind: 'workflow', name: file.replace(/\.js$/i, '') }
+  }
+
   if (top === 'hooks') return { kind: 'hook', name: tail.join('/') }
   if (top === 'rules') return { kind: 'rule', name: tail.join('/').replace(/\.md$/i, '') }
 
@@ -221,6 +228,37 @@ function describe(path: string, kind: ConfigFileKind): string | null {
     return frontmatterField(head, 'description')
   } catch {
     return null
+  }
+}
+
+/**
+ * A workflow's `export const meta = { name, description }`, read as text.
+ *
+ * The CLI names a workflow's `/command` after `meta.name`, and only recognises
+ * a block of plain literals - a variable or a call in it drops the command from
+ * autocomplete. So a literal string is the only value worth reporting, and the
+ * script is never run to find one. A file with no readable name keeps its file
+ * name, which is what the CLI's own saved workflows are called anyway.
+ */
+export function workflowMeta(text: string): { name: string | null; description: string | null } {
+  const block = /export\s+const\s+meta\s*=\s*\{([\s\S]*?)\}/.exec(text)?.[1]
+  if (block === undefined) return { name: null, description: null }
+  const field = (key: string): string | null => {
+    // `name: 'x'`, `"name": "x"` or a template literal with nothing to evaluate.
+    const match = new RegExp(`(?:^|[\\s,'"])${key}['"]?\\s*:\\s*(['"\`])(.*?)\\1`).exec(block)
+    const value = match?.[2]?.trim()
+    if (value === undefined || value === '' || value.includes('${')) return null
+    return value
+  }
+  return { name: field('name'), description: field('description') }
+}
+
+function readWorkflowMeta(path: string): { name: string | null; description: string | null } {
+  try {
+    // The CLI wants `meta` as the first statement, so the head is enough.
+    return workflowMeta(readFileSync(path, 'utf8').slice(0, 4096))
+  } catch {
+    return { name: null, description: null }
   }
 }
 
@@ -277,14 +315,15 @@ export function readConfigTree(scope: ConfigScope): ConfigTree {
       }
 
       const binary = !TEXT_EXT.has(extensionOf(entry.name))
+      const meta = what.kind === 'workflow' ? readWorkflowMeta(path) : null
       files.push({
         path,
         relPath,
         kind: what.kind,
-        name: what.name,
+        name: meta?.name ?? what.name,
         size: stat.size,
         mtimeMs: stat.mtimeMs,
-        description: binary ? null : describe(path, what.kind),
+        description: binary ? null : meta !== null ? meta.description : describe(path, what.kind),
         binary
       })
     }
@@ -329,6 +368,7 @@ export function readConfigTree(scope: ConfigScope): ConfigTree {
     'skill',
     'command',
     'agent',
+    'workflow',
     'hook',
     'rule',
     'other'

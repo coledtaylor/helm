@@ -1755,6 +1755,7 @@ export type ConfigFileKind =
   | 'skill'
   | 'command'
   | 'agent'
+  | 'workflow'
   | 'hook'
   | 'settings'
   | 'settings-local'
@@ -1948,7 +1949,7 @@ export interface DeleteConfigResult {
 export type EffectiveSource = 'user' | 'cwd' | 'overlay'
 
 /**
- * One skill, command or agent as a session would actually address it.
+ * One skill, command, agent or workflow as a session would actually address it.
  *
  * The namespace is *predicted*, not observed: the platform prefixes everything
  * an overlay contributes with the plugin's manifest name (Spike A), and Helm
@@ -2037,10 +2038,12 @@ export interface EffectiveView {
     skills: number
     commands: number
     agents: number
+    workflows: number
   }>
   skills: EffectiveEntry[]
   commands: EffectiveEntry[]
   agents: EffectiveEntry[]
+  workflows: EffectiveEntry[]
   /**
    * Names carried by more than one source, each under its own invocation. Not
    * a collision report - it cannot be one - but the thing a person wants to see

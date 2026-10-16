@@ -136,6 +136,16 @@ describe('syncOverlay', () => {
     expect(readFileSync(join(shim.dir, 'skills', 'think', 'SKILL.md'), 'utf8')).toBe('# think\n')
   })
 
+  it('links workflows, which a plugin carries at its root like the others', () => {
+    const project = makeProject('acme', { skills: ['think'] })
+    mkdirSync(join(project, '.claude', 'workflows'), { recursive: true })
+    writeFileSync(join(project, '.claude', 'workflows', 'audit.js'), 'export const meta = {}\n')
+    const shim = syncOverlay(planOverlays([project], shimRoot)[0]!)
+
+    expect(shim.linked.sort()).toEqual(['skills', 'workflows'])
+    expect(readFileSync(join(shim.dir, 'workflows', 'audit.js'), 'utf8')).toBe('export const meta = {}\n')
+  })
+
   it('only links the convention dirs the source actually has', () => {
     const project = makeProject('bare', { skills: ['one'] })
     const [plan] = planOverlays([project], shimRoot)
@@ -502,7 +512,7 @@ describe('composeOverlayMemory', () => {
   it('carries each overlay CLAUDE.md, attributed to the project it governs', () => {
     const a = makeProject('acme', { skills: ['think'], claudeMd: '# Acme\nPyQt5 app.' })
     const b = makeProject('reporting', { skills: ['think'], claudeMd: '# Reporting\ndotnet API.' })
-    const memory = composeOverlayMemory(planOverlays([a, b], shimRoot))
+    const memory = composeOverlayMemory(planOverlays([a, b], shimRoot), join(root, 'workspace'))
 
     expect(memory).not.toBeNull()
     expect(memory).toContain('PyQt5 app.')
@@ -515,6 +525,20 @@ describe('composeOverlayMemory', () => {
 
   it('is null when no overlay has one, so no flag gets emitted', () => {
     const project = makeProject('acme', { skills: ['think'] })
-    expect(composeOverlayMemory(planOverlays([project], shimRoot))).toBeNull()
+    expect(composeOverlayMemory(planOverlays([project], shimRoot), root)).toBeNull()
+  })
+
+  it('leaves out an overlay the CLI already loads from the working directory up', () => {
+    const harness = makeProject('harness', { skills: ['notes'], claudeMd: '# Harness rules' })
+    const repo = makeProject(join('harness', 'repos', 'acme'), { claudeMd: '# Acme' })
+    const sibling = makeProject('acme-ui', { skills: ['think'], claudeMd: '# Acme UI' })
+    const plans = planOverlays([harness, repo, sibling], shimRoot)
+
+    const memory = composeOverlayMemory(plans, repo)
+    expect(memory).not.toContain('Harness rules')
+    expect(memory).not.toContain('# Acme\n')
+    // A shared name prefix is not ancestry.
+    expect(memory).toContain('Acme UI')
+    expect(composeOverlayMemory(plans.slice(0, 2), join(repo, 'src'))).toBeNull()
   })
 })

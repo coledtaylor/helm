@@ -82,6 +82,7 @@ const KIND_LABEL: Record<ConfigFileKind, string> = {
   skill: 'Skills',
   command: 'Commands',
   agent: 'Agents',
+  workflow: 'Workflows',
   hook: 'Hooks',
   rule: 'Rules',
   other: 'Other'

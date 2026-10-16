@@ -290,6 +290,20 @@ describe('prepareLaunch', () => {
     expect(plan.warnings).toEqual([])
   })
 
+  it('composes no copy of an ancestor overlay CLAUDE.md, and does not warn about it', () => {
+    const harness = makeProject('harness', '# Harness rules')
+    const repo = join(harness, 'repos', 'acme')
+    mkdirSync(repo, { recursive: true })
+    const plan = prepareLaunch({ root: repo, name: 's', overlays: [harness], shimRoot })
+
+    // The shim still carries the harness's skills; only the instructions,
+    // which the CLI loads from the parent folder on its own, are left out.
+    expect(plan.argv).toContain('--plugin-dir')
+    expect(plan.memoryFile).toBeNull()
+    expect(plan.argv).not.toContain('--append-system-prompt-file')
+    expect(plan.warnings).toEqual([])
+  })
+
   it('emits no memory flag when no overlay has a CLAUDE.md', () => {
     const a = makeProject('acme')
     const plan = prepareLaunch({ root, name: 's', overlays: [a], shimRoot })
