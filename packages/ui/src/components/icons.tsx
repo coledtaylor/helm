@@ -97,6 +97,18 @@ export function AgentIcon(props: IconProps): JSX.Element {
   )
 }
 
+/** A workflow: one script fanning work out to several agents. */
+export function WorkflowIcon(props: IconProps): JSX.Element {
+  return (
+    <Icon {...props}>
+      <circle cx="4" cy="8" r="1.75" />
+      <circle cx="12" cy="4" r="1.75" />
+      <circle cx="12" cy="12" r="1.75" />
+      <path d="M5.6 7.2 10.4 4.8M5.6 8.8l4.8 2.4" />
+    </Icon>
+  )
+}
+
 export function CommandIcon(props: IconProps): JSX.Element {
   return (
     <Icon {...props}>

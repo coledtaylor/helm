@@ -1,9 +1,10 @@
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, join, relative, resolve } from 'node:path'
 import { claudeHome } from '../discovery/history'
-import { overlayPluginNames } from '../launch/overlay'
+import { isSameOrAncestor, overlayPluginNames } from '../launch/overlay'
 import type {
+  ConfigFileKind,
   EffectiveEntry,
   EffectiveMcpServer,
   EffectiveSetting,
@@ -67,8 +68,10 @@ function fileBytes(path: string): number | null {
 }
 
 // ---------------------------------------------------------------------------
-// Skills, commands, agents
+// Skills, commands, agents, workflows
 // ---------------------------------------------------------------------------
+
+type Entries = Pick<EffectiveView, 'skills' | 'commands' | 'agents' | 'workflows'>
 
 /**
  * One source's contributions, addressed the way a session would address them.
@@ -81,7 +84,7 @@ function entriesFrom(
   basePath: string,
   source: EffectiveSource,
   namespace: string | null
-): { skills: EffectiveEntry[]; commands: EffectiveEntry[]; agents: EffectiveEntry[] } {
+): Entries {
   const scope =
     source === 'user' ? userConfigScope(basePath) : projectConfigScope(basePath)
   const tree = readConfigTree(scope)
@@ -89,10 +92,16 @@ function entriesFrom(
   const skills: EffectiveEntry[] = []
   const commands: EffectiveEntry[] = []
   const agents: EffectiveEntry[] = []
+  const workflows: EffectiveEntry[] = []
+  const buckets: Partial<Record<ConfigFileKind, EffectiveEntry[]>> = {
+    skill: skills,
+    command: commands,
+    agent: agents,
+    workflow: workflows
+  }
 
   for (const file of tree.files) {
-    const bucket =
-      file.kind === 'skill' ? skills : file.kind === 'command' ? commands : file.kind === 'agent' ? agents : null
+    const bucket = buckets[file.kind]
     if (!bucket) continue
     bucket.push({
       invocation: namespace === null ? file.name : `${namespace}:${file.name}`,
@@ -105,7 +114,7 @@ function entriesFrom(
     })
   }
 
-  return { skills, commands, agents }
+  return { skills, commands, agents, workflows }
 }
 
 const byInvocation = (a: EffectiveEntry, b: EffectiveEntry): number =>
@@ -401,11 +410,13 @@ export function computeEffectiveView(input: EffectiveInput): EffectiveView {
   const skills: EffectiveEntry[] = []
   const commands: EffectiveEntry[] = []
   const agents: EffectiveEntry[] = []
+  const workflows: EffectiveEntry[] = []
 
-  const push = (from: ReturnType<typeof entriesFrom>): void => {
+  const push = (from: Entries): void => {
     skills.push(...from.skills)
     commands.push(...from.commands)
     agents.push(...from.agents)
+    workflows.push(...from.workflows)
   }
 
   push(entriesFrom(userDir, 'user', null))
@@ -417,7 +428,15 @@ export function computeEffectiveView(input: EffectiveInput): EffectiveView {
     const exists = isDir(path)
     if (!exists) {
       warnings.push(`${path} is not on disk, so nothing would be composed from it.`)
-      overlays.push({ name, projectPath: path, exists: false, skills: 0, commands: 0, agents: 0 })
+      overlays.push({
+        name,
+        projectPath: path,
+        exists: false,
+        skills: 0,
+        commands: 0,
+        agents: 0,
+        workflows: 0
+      })
       return
     }
     const from = entriesFrom(path, 'overlay', name)
@@ -428,11 +447,15 @@ export function computeEffectiveView(input: EffectiveInput): EffectiveView {
       exists: true,
       skills: from.skills.length,
       commands: from.commands.length,
-      agents: from.agents.length
+      agents: from.agents.length,
+      workflows: from.workflows.length
     })
-    if (from.skills.length + from.commands.length + from.agents.length === 0) {
+    if (
+      from.skills.length + from.commands.length + from.agents.length + from.workflows.length ===
+      0
+    ) {
       warnings.push(
-        `${path} has no skills, commands or agents to compose - only its CLAUDE.md would arrive.`
+        `${path} has no skills, commands, agents or workflows to compose - only its CLAUDE.md would arrive.`
       )
     }
   })
@@ -440,11 +463,12 @@ export function computeEffectiveView(input: EffectiveInput): EffectiveView {
   skills.sort(byInvocation)
   commands.sort(byInvocation)
   agents.sort(byInvocation)
+  workflows.sort(byInvocation)
 
   // A name carried by more than one source. Every copy resolves - the platform
   // gives each its own prefix - so this is a map, not a warning.
   const shared = new Map<string, string[]>()
-  for (const entry of [...skills, ...commands, ...agents]) {
+  for (const entry of [...skills, ...commands, ...agents, ...workflows]) {
     shared.set(entry.name, [...(shared.get(entry.name) ?? []), entry.invocation])
   }
   const sharedNames = [...shared.entries()]
@@ -480,7 +504,15 @@ export function computeEffectiveView(input: EffectiveInput): EffectiveView {
   addInstruction(join(cwd, 'CLAUDE.md'), 'cwd', cwd)
   for (const overlay of overlays) {
     if (!overlay.exists) continue
-    addInstruction(join(overlay.projectPath, 'CLAUDE.md'), 'overlay', overlay.projectPath)
+    // An overlay at or above the working directory is not composed (see
+    // `composeOverlayMemory`); its CLAUDE.md arrives once, from the CLI's own
+    // walk up from the working directory - already listed when it is the
+    // working directory itself.
+    if (!isSameOrAncestor(overlay.projectPath, cwd)) {
+      addInstruction(join(overlay.projectPath, 'CLAUDE.md'), 'overlay', overlay.projectPath)
+    } else if (relative(overlay.projectPath, cwd) !== '') {
+      addInstruction(join(overlay.projectPath, 'CLAUDE.md'), 'cwd', overlay.projectPath)
+    }
   }
 
   return {
@@ -491,6 +523,7 @@ export function computeEffectiveView(input: EffectiveInput): EffectiveView {
     skills,
     commands,
     agents,
+    workflows,
     sharedNames,
     settingsLayers,
     settings: resolveSettings(chain),

@@ -5,7 +5,15 @@ import { cn } from '../lib/cn'
 import { SEGMENT_ON } from '../lib/segmented'
 import { formatBytes } from '../lib/time'
 import { Checkbox } from './Checkbox'
-import { AgentIcon, CommandIcon, LayersIcon, SearchIcon, SparkIcon, WarnIcon } from './icons'
+import {
+  AgentIcon,
+  CommandIcon,
+  LayersIcon,
+  SearchIcon,
+  SparkIcon,
+  WarnIcon,
+  WorkflowIcon
+} from './icons'
 
 export interface EffectiveViewPaneProps {
   profiles: Profile[]
@@ -22,7 +30,8 @@ export interface EffectiveViewPaneProps {
   onOpenFile: (path: string) => void
 }
 
-type Kind = 'skills' | 'commands' | 'agents'
+const KINDS = ['skills', 'commands', 'agents', 'workflows'] as const
+type Kind = (typeof KINDS)[number]
 
 /**
  * What a session would actually see.
@@ -147,10 +156,11 @@ export function EffectiveViewPane({
           </p>
         ) : (
           <>
-            <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+            <dl className="mt-5 grid grid-cols-3 gap-x-6 gap-y-3 sm:grid-cols-5">
               <Metric label="skills" value={view.skills.length} />
               <Metric label="commands" value={view.commands.length} />
               <Metric label="agents" value={view.agents.length} />
+              <Metric label="workflows" value={view.workflows.length} />
               <Metric label="overlays" value={view.overlays.length} />
             </dl>
 
@@ -210,7 +220,8 @@ export function EffectiveViewPane({
                         <span className="shrink-0 text-[10px] tabular-nums text-fg-muted">
                           <Plural n={overlay.skills} one="skill" /> ·{' '}
                           <Plural n={overlay.agents} one="agent" /> ·{' '}
-                          <Plural n={overlay.commands} one="command" />
+                          <Plural n={overlay.commands} one="command" /> ·{' '}
+                          <Plural n={overlay.workflows} one="workflow" />
                         </span>
                       ) : (
                         <span className="shrink-0 rounded-sm border border-danger/40 px-1 text-[9px] tracking-wide text-danger uppercase">
@@ -263,7 +274,7 @@ export function EffectiveViewPane({
               actions={
                 <div className="flex items-center gap-2">
                   <div className="flex gap-0.5 rounded-well border border-border bg-surface-sunken p-0.5">
-                    {(['skills', 'commands', 'agents'] as const).map((option) => (
+                    {KINDS.map((option) => (
                       <button
                         key={option}
                         type="button"
@@ -413,7 +424,7 @@ export function EffectiveViewPane({
             {/* ----------------------------------------------------------- */}
             <Section
               title="Instruction files"
-              hint="An overlay's CLAUDE.md arrives via --append-system-prompt-file; nothing else carries it."
+              hint="An overlay's CLAUDE.md arrives via --append-system-prompt-file, unless it sits above the working directory, where the CLI reads it itself."
             >
               {view.instructions.length === 0 ? (
                 <p className="rounded-raised border border-border bg-surface-raised px-3 py-6 text-center text-[12px] text-fg-subtle">
@@ -455,7 +466,8 @@ export function EffectiveViewPane({
 const KIND_ICON = {
   skills: SparkIcon,
   commands: CommandIcon,
-  agents: AgentIcon
+  agents: AgentIcon,
+  workflows: WorkflowIcon
 } as const
 
 function Entry({

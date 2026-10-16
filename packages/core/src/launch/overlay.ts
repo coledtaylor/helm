@@ -15,7 +15,7 @@ import {
 } from 'node:fs'
 import type { Dirent } from 'node:fs'
 import { uptime } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 
 /**
  * Turning a repo's `.claude/` directory into something `--plugin-dir` accepts.
@@ -30,7 +30,8 @@ import { basename, join, resolve } from 'node:path'
  *     ├── .helm-overlay.json              generated: what this was built from
  *     ├── skills/     ──junction──▶  repos/acme/.claude/skills
  *     ├── commands/   ──junction──▶  repos/acme/.claude/commands
- *     └── agents/     ──junction──▶  repos/acme/.claude/agents
+ *     ├── agents/     ──junction──▶  repos/acme/.claude/agents
+ *     └── workflows/  ──junction──▶  repos/acme/.claude/workflows
  *
  * Junctions rather than symlinks because symlinks need elevation on Windows and
  * junctions do not, and rather than copies because a junction is the source
@@ -46,9 +47,12 @@ import { basename, join, resolve } from 'node:path'
  * working directory, and the whole point of an overlay is that the session's
  * cwd is somewhere else - so composing one would run commands against paths
  * that are not there. Skills, commands and agents are declarative and do not
- * have that problem.
+ * have that problem. Workflows are scripts, but they run inside the session as
+ * orchestration of its subagents rather than as shell commands against a path,
+ * and a plugin's `workflows/` is one of the CLI's own default locations, so it
+ * is composed the same way and namespaced the same way (`/acme:audit`).
  */
-export const OVERLAY_DIRS = ['skills', 'commands', 'agents'] as const
+export const OVERLAY_DIRS = ['skills', 'commands', 'agents', 'workflows'] as const
 
 /** Everything Helm generates inside a shim, so a rebuild knows what is its own. */
 const MANIFEST = join('.claude-plugin', 'plugin.json')
@@ -116,6 +120,18 @@ function isDir(path: string): boolean {
   } catch {
     return false
   }
+}
+
+/**
+ * Whether `dir` is `path` or a directory above it - whether the CLI, started in
+ * `path`, walks through `dir` on its way up looking for CLAUDE.md.
+ *
+ * `relative` rather than a string prefix, so `repos/acme` is not taken for an
+ * ancestor of `repos/acme-ui`; on Windows it also compares without case.
+ */
+export function isSameOrAncestor(dir: string, path: string): boolean {
+  const rel = relative(resolve(dir), resolve(path))
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
 }
 
 function isFile(path: string): boolean {
@@ -630,11 +646,17 @@ export function cleanStaleShims(
  * A file rather than `--append-system-prompt` with the text inline: two repos
  * here total 34 KB, and Windows caps a command line at 32,767 characters, so
  * the inline form is not merely wasteful but breaks on the second overlay.
+ *
+ * An overlay that is the working directory or one of its ancestors is left
+ * out: the CLI already loads every CLAUDE.md from the working directory up, so
+ * composing it would put the same instructions in the session twice - the
+ * second copy introduced as belonging to a project the session is not in.
  */
-export function composeOverlayMemory(plans: readonly OverlayPlan[]): string | null {
+export function composeOverlayMemory(plans: readonly OverlayPlan[], cwd: string): string | null {
   const parts: string[] = []
   for (const plan of plans) {
     if (!plan.claudeMdPath) continue
+    if (isSameOrAncestor(plan.projectPath, cwd)) continue
     let content: string
     try {
       content = readFileSync(plan.claudeMdPath, 'utf8')

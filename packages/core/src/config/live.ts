@@ -297,6 +297,7 @@ export function computeConfigLive(file: ConfigFile, view: EffectiveView | null):
     case 'skill':
     case 'command':
     case 'agent':
+    case 'workflow':
       return entryLive(file, view)
     case 'claude-md':
       return instructionLive(file, view)
@@ -375,9 +376,17 @@ function settingsLive(file: ConfigFile, view: EffectiveView): ConfigLive {
 
 function entryLive(file: ConfigFile, view: EffectiveView): ConfigLive {
   const pool =
-    file.kind === 'skill' ? view.skills : file.kind === 'command' ? view.commands : view.agents
+    file.kind === 'skill'
+      ? view.skills
+      : file.kind === 'command'
+        ? view.commands
+        : file.kind === 'workflow'
+          ? view.workflows
+          : view.agents
   const mine = pool.find((entry) => samePath(entry.path, file.path))
-  const what = file.kind === 'skill' ? 'skill' : file.kind === 'command' ? 'command' : 'agent'
+  const what = file.kind === 'skill' || file.kind === 'command' || file.kind === 'workflow' ? file.kind : 'agent'
+  // Typed at the prompt with a slash, where a skill or agent is named bare.
+  const slashed = file.kind === 'command' || file.kind === 'workflow'
 
   if (!mine) {
     return {
@@ -397,13 +406,13 @@ function entryLive(file: ConfigFile, view: EffectiveView): ConfigLive {
     (entry) => entry.name === mine.name && !samePath(entry.path, file.path)
   )
   const contested = others.some((entry) => entry.invocation === mine.invocation)
-  const invocation = file.kind === 'command' ? `/${mine.invocation}` : mine.invocation
+  const invocation = slashed ? `/${mine.invocation}` : mine.invocation
 
   const answer: ConfigLive = {
     ...empty('live', null, ''),
     invocation,
     alsoDefinedBy: others.map((entry) => ({
-      invocation: file.kind === 'command' ? `/${entry.invocation}` : entry.invocation,
+      invocation: slashed ? `/${entry.invocation}` : entry.invocation,
       source: entry.source,
       origin: entry.origin,
       path: entry.path
@@ -423,7 +432,7 @@ function entryLive(file: ConfigFile, view: EffectiveView): ConfigLive {
     ...answer,
     state: 'live',
     note:
-      file.kind === 'command'
+      slashed
         ? `available as ${invocation}`
         : mine.namespace === null
           ? `resolves as ${invocation}`

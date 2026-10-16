@@ -27,7 +27,8 @@ const EXPECTED_FILES = [
   '.claude/skills/think/SKILL.md',
   '.claude/skills/think/prompts.md',
   '.claude/commands/spec/plan.md',
-  '.claude/agents/reviewer.md'
+  '.claude/agents/reviewer.md',
+  '.claude/workflows/audit-routes.js'
 ]
 
 function renderConsole(overrides: Partial<ConfigConsoleProps> = {}) {
@@ -108,7 +109,7 @@ describe('ConfigConsole: the file list', () => {
     const skill = rows().get('.claude/skills/think/SKILL.md')
     expect(skill?.textContent).toContain('think')
     expect(skill?.textContent).toContain('prompts.md')
-    expect(screen.getByText('7 entries · 8 files')).toBeTruthy()
+    expect(screen.getByText('8 entries · 9 files')).toBeTruthy()
   })
 
   it('says nothing about live state until the resolution arrives, then says it on each row', () => {
@@ -121,6 +122,11 @@ describe('ConfigConsole: the file list', () => {
     expect(rows().get('.claude/skills/think/SKILL.md')?.textContent).toContain('resolves as think')
     expect(rows().get('.claude/commands/spec/plan.md')?.textContent).toContain('available as /spec:plan')
     expect(rows().get('.claude/settings.json')?.textContent).toMatch(/1 of 4 keys outranked/)
+    // Named after its meta block, and typed with a slash like a command.
+    expect(rows().get('.claude/workflows/audit-routes.js')?.textContent).toContain(
+      'available as /route-audit'
+    )
+    expect(within(list()).getByRole('button', { name: /^Workflows/ })).toBeTruthy()
   })
 
   it('hides a section’s rows when it is collapsed and brings them back when expanded', async () => {

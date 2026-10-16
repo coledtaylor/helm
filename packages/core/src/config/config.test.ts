@@ -7,7 +7,7 @@ import { openStore, type Store } from '../store/db'
 import { countConfigSnapshots, readConfigSnapshots } from '../store/config'
 import { computeEffectiveView, projectEntry } from './effective'
 import { diffLines, previewMcpAdd } from './mcp'
-import { projectConfigScope, readConfigTree, userConfigScope } from './tree'
+import { projectConfigScope, readConfigTree, userConfigScope, workflowMeta } from './tree'
 import { readConfigFileContent, restoreConfigSnapshot, writeConfigFile } from './write'
 
 /**
@@ -58,6 +58,33 @@ describe('readConfigTree', () => {
     // A command's namespace is its path: `commands/spec/plan.md` is `/spec:plan`.
     expect(named.get('spec:plan')?.kind).toBe('command')
     expect(named.get('reviewer')?.kind).toBe('agent')
+  })
+
+  it('names a workflow after its meta block, falling back to the file name', () => {
+    write(
+      '.claude/workflows/audit.js',
+      "export const meta = {\n  name: 'route-audit',\n  description: 'Audit every route',\n}\n\nawait agent('x')\n"
+    )
+    write('.claude/workflows/saved.js', 'export const meta = { name: someVariable }\n')
+    write('.claude/workflows/lib/helper.js', 'export const x = 1\n')
+
+    const tree = readConfigTree(projectConfigScope(root))
+    const workflows = tree.files.filter((file) => file.kind === 'workflow')
+    expect(workflows.map((file) => [file.name, file.description])).toEqual([
+      ['route-audit', 'Audit every route'],
+      ['saved', null]
+    ])
+    // Only directly inside workflows/, which is all the CLI documents loading.
+    expect(tree.files.find((file) => file.relPath.endsWith('helper.js'))?.kind).toBe('other')
+  })
+
+  it('reads only literal values from a workflow meta block', () => {
+    expect(workflowMeta('export const meta = { "name": "a", description: `b` }')).toEqual({
+      name: 'a',
+      description: 'b'
+    })
+    expect(workflowMeta('export const meta = { name: `x-${y}` }').name).toBeNull()
+    expect(workflowMeta('const meta = 1').name).toBeNull()
   })
 
   it('lists a skill resource as `other` rather than as a second skill', () => {
@@ -316,6 +343,22 @@ describe('computeEffectiveView', () => {
       'user',
       'overlay',
       'overlay'
+    ])
+  })
+
+  it('lists an ancestor overlay CLAUDE.md once, as the working directory chain carries it', () => {
+    const { home } = fixture()
+    const harness = join(root, 'harness')
+    const repo = join(harness, 'repos', 'acme')
+    mkdirSync(repo, { recursive: true })
+    writeFileSync(join(harness, 'CLAUDE.md'), '# harness rules\n')
+    writeFileSync(join(repo, 'CLAUDE.md'), '# acme\n')
+
+    const view = computeEffectiveView({ cwd: repo, overlays: [harness, repo], userHome: home })
+    expect(view.instructions.map((file) => [file.source, file.origin])).toEqual([
+      ['user', home],
+      ['cwd', repo],
+      ['cwd', harness]
     ])
   })
 
