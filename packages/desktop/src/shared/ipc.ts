@@ -1465,7 +1465,15 @@ export interface PluginFetchResponse {
 
 /** Main asking the window to do something a plugin asked for. */
 export type PluginUiRequest =
-  | { kind: 'openTab'; plugin: string; tab: string; params: PluginParams; title: string | null }
+  | {
+      kind: 'openTab'
+      plugin: string
+      tab: string
+      params: PluginParams
+      title: string | null
+      /** Opened as the preview, which the next one opened that way replaces. */
+      preview: boolean
+    }
   | {
       kind: 'secret'
       /** Answered on `plugins:answer` when the dialog closes. */

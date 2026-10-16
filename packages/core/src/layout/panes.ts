@@ -706,8 +706,44 @@ export function openFile(
   if (!reading && beside === null) {
     return { layout: splitWith(openTab(layout, ref, home.id), id, home.id, 'right'), preview: keep ? still : id }
   }
-  const target = beside ?? home.id
+  return placeTab(layout, ref, beside ?? home.id, still, keep)
+}
 
+/**
+ * Opens a tab that may stand as the preview, in group `group` - the focused
+ * one unless told otherwise. The preview rule of `openFile`, for a tab that
+ * goes where it is sent rather than beside a session: a plugin's, opened with
+ * `preview`. There is one preview, whatever kind of tab it is, so a plugin's
+ * link clicked after a file's single click replaces that file.
+ */
+export function openTabWithPreview(
+  layout: PaneLayout,
+  ref: PaneRef,
+  preview: string | null,
+  keep: boolean,
+  group = layout.focused
+): { layout: PaneLayout; preview: string | null } {
+  const id = paneId(ref)
+  const still = preview !== null && findTab(layout, preview) !== null ? preview : null
+  if (findTab(layout, id) !== null) {
+    return { layout: activateTab(layout, id), preview: keep && still === id ? null : still }
+  }
+  return placeTab(layout, ref, (groupById(layout, group) ?? focusedGroup(layout)).id, still, keep)
+}
+
+/**
+ * A tab not open yet, into group `target`: in the preview's place when it is
+ * one too and the preview is in that group, at the end otherwise. `still` is
+ * a preview known to be open, or null.
+ */
+function placeTab(
+  layout: PaneLayout,
+  ref: PaneRef,
+  target: number,
+  still: string | null,
+  keep: boolean
+): { layout: PaneLayout; preview: string | null } {
+  const id = paneId(ref)
   if (!keep && still !== null && findTab(layout, still)!.group === target) {
     const group = groupById(layout, target)!
     const tabs = group.tabs.map((tab) => (paneId(tab) === still ? ref : tab))
@@ -716,7 +752,6 @@ export function openFile(
       preview: id
     }
   }
-
   return { layout: openTab(layout, ref, target), preview: keep ? still : id }
 }
 

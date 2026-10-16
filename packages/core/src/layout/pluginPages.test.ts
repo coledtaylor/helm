@@ -19,6 +19,7 @@ import {
   movePluginPage,
   openPluginPage,
   openPluginPageIds,
+  placePluginPage,
   pluginPagesTab,
   retitlePluginSurface
 } from './pluginPages'
@@ -162,5 +163,68 @@ describe('a plugin with a page strip', () => {
     layout = openPluginPage(layout, 'other', page('X'))
     expect(tabs(layout)).toEqual([['session:1', 'plugin-pages:trackr', '*plugin-pages:other']])
     expect(strip(layout)).toEqual(['*TC-1'])
+  })
+})
+
+describe("a plugin's page strip with a preview", () => {
+  /** Pages opened one after another, `+` before an id opening it to keep, carrying the preview along. */
+  function placed(...steps: string[]): { layout: PaneLayout; preview: string | null } {
+    let state = { layout: openTab(fromSaved(null), session(1)), preview: null as string | null }
+    for (const step of steps) {
+      const keep = step.startsWith('+')
+      state = placePluginPage(state.layout, 'trackr', page(keep ? step.slice(1) : step), state.preview, keep)
+    }
+    return state
+  }
+
+  it('replaces the preview in place, wherever it stands in the strip', () => {
+    const state = placed('+TC-1', 'TC-2', '+TC-3', 'TC-4')
+    expect(strip(state.layout)).toEqual(['TC-1', '*TC-4', 'TC-3'])
+    expect(state.preview).toBe(pageId('TC-4'))
+  })
+
+  it('opens the first page as the preview when the plugin has no tab yet', () => {
+    const state = placed('TC-1')
+    expect(tabs(state.layout)).toEqual([['session:1', '*plugin-pages:trackr']])
+    expect(state.preview).toBe(pageId('TC-1'))
+    expect(placed('+TC-1').preview).toBeNull()
+  })
+
+  it('adds a page opened to keep at the end and leaves the preview standing', () => {
+    const state = placed('TC-1', '+TC-2')
+    expect(strip(state.layout)).toEqual(['TC-1', '*TC-2'])
+    expect(state.preview).toBe(pageId('TC-1'))
+  })
+
+  it('brings an open page forward, and opening the preview to keep ends it being one', () => {
+    const viewed = placed('TC-1', '+TC-2', 'TC-1')
+    expect(strip(viewed.layout)).toEqual(['*TC-1', 'TC-2'])
+    expect(viewed.preview).toBe(pageId('TC-1'))
+    const kept = placePluginPage(viewed.layout, 'trackr', page('TC-1'), viewed.preview, true)
+    expect(kept.preview).toBeNull()
+    expect(strip(placePluginPage(kept.layout, 'trackr', page('TC-3'), kept.preview, false).layout)).toEqual([
+      'TC-1',
+      'TC-2',
+      '*TC-3'
+    ])
+  })
+
+  it("forgets a preview the strip no longer holds, and never takes another plugin's", () => {
+    const state = placed('TC-1')
+    const closed = closePluginPage(openPluginPage(state.layout, 'trackr', page('TC-2')), 'trackr', pageId('TC-1'))
+    const next = placePluginPage(closed, 'trackr', page('TC-3'), state.preview, true)
+    expect(strip(next.layout)).toEqual(['TC-2', '*TC-3'])
+    expect(next.preview).toBeNull()
+    const other = placePluginPage(state.layout, 'other', page('X'), state.preview, false)
+    expect(strip(other.layout)).toEqual(['*TC-1'])
+  })
+
+  it('lets the preview go when making room for a page opened to keep lets it go', () => {
+    const ids = Array.from({ length: PLUGIN_PAGES_MAX }, (_, index) => `TC-${String(index)}`)
+    let state = placed(...ids.map((id, index) => (index === 0 ? id : `+${id}`)))
+    expect(state.preview).toBe(pageId('TC-0'))
+    state = placePluginPage(state.layout, 'trackr', page('TC-new'), state.preview, true)
+    expect(pluginPagesTab(state.layout, 'trackr')!.pages.map((candidate) => candidate.params['id'])).not.toContain('TC-0')
+    expect(state.preview).toBeNull()
   })
 })

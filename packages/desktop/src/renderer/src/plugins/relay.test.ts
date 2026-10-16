@@ -407,6 +407,15 @@ describe('titles and keys', () => {
       repeat: false
     })
   })
+
+  it('pass a page asking to keep its surface to the hook, naming the surface', () => {
+    const keep = vi.fn()
+    relay.setHooks({ keep })
+    const { port } = connect(open())
+    port.postMessage({ t: 'keep' })
+    expect(keep).toHaveBeenCalledTimes(1)
+    expect(keep.mock.calls[0]![0]).toMatchObject({ key: 'panel:sample/main' })
+  })
 })
 
 describe('failure', () => {

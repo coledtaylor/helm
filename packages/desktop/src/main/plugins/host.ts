@@ -665,7 +665,7 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
       const given = params ?? {}
       const problem = pluginParamsProblem(given)
       if (problem !== null) throw new PluginCallError('invalid', problem)
-      const title = readTitle(openOptions)
+      const { title, preview } = readTabOptions(openOptions)
       const win = options.window()
       if (win === null || win.isDestroyed()) throw new PluginCallError('unavailable', 'there is no window to open a tab in')
       emitTo(win.webContents, 'plugins:ui', {
@@ -673,7 +673,8 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
         plugin: ctx.plugin.manifest.id,
         tab,
         params: given as Record<string, string | number | boolean>,
-        title
+        title,
+        preview
       })
       return undefined
     },
@@ -1315,15 +1316,18 @@ function readSessionRequest(value: unknown): { cwd: string; name: string; prompt
   return { cwd: folder, name: called, prompt: message }
 }
 
-function readTitle(value: unknown): string | null {
-  if (value === undefined || value === null) return null
+/** `helm.tabs.open`'s options. Absent, a tab has the manifest's title and stays. */
+function readTabOptions(value: unknown): { title: string | null; preview: boolean } {
+  if (value === undefined || value === null) return { title: null, preview: false }
   if (typeof value !== 'object') throw new PluginCallError('invalid', 'tab options must be an object')
-  const title = (value as Record<string, unknown>)['title']
-  if (title === undefined || title === null) return null
-  if (typeof title !== 'string' || title.trim() === '' || title.length > PLUGIN_TITLE_MAX) {
-    throw new PluginCallError('invalid', `a tab title is 1-${String(PLUGIN_TITLE_MAX)} characters`)
+  const { title, preview } = value as Record<string, unknown>
+  if (preview !== undefined && typeof preview !== 'boolean') throw new PluginCallError('invalid', 'preview is true or false')
+  if (title !== undefined && title !== null) {
+    if (typeof title !== 'string' || title.trim() === '' || title.length > PLUGIN_TITLE_MAX) {
+      throw new PluginCallError('invalid', `a tab title is 1-${String(PLUGIN_TITLE_MAX)} characters`)
+    }
   }
-  return title.trim()
+  return { title: typeof title === 'string' ? title.trim() : null, preview: preview === true }
 }
 
 function readStatus(value: unknown): StatusItem | null {

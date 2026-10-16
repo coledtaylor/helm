@@ -7,6 +7,8 @@ export interface PluginPageTab {
   title: string
   /** Hover text: the title in full, and the plugin it belongs to. */
   hint: string
+  /** The strip's preview, which the next page the plugin opens as one replaces. */
+  preview?: boolean | undefined
 }
 
 /**
@@ -28,6 +30,8 @@ export interface PluginPagesProps {
   onClose: (id: string) => void
   /** A page should end up at `toIndex`, counted after it has left its place. */
   onMove: (id: string, toIndex: number) => void
+  /** The preview page was double-clicked: it stays. */
+  onKeep: (id: string) => void
 }
 
 /**
@@ -47,9 +51,10 @@ export function PluginPages({
   focused,
   onActivate,
   onClose,
-  onMove
+  onMove,
+  onKeep
 }: PluginPagesProps): JSX.Element {
-  const tabs: Tab[] = pages.map((page) => ({ id: page.id, title: page.title, hint: page.hint, icon }))
+  const tabs: Tab[] = pages.map((page) => ({ id: page.id, title: page.title, hint: page.hint, icon, preview: page.preview }))
   return (
     <div data-plugin-pages>
       <TabBar
@@ -60,6 +65,7 @@ export function PluginPages({
         onActivate={onActivate}
         onClose={onClose}
         onMove={onMove}
+        onKeep={onKeep}
         dragType={PLUGIN_PAGE_MIME}
       />
     </div>

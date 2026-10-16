@@ -456,6 +456,13 @@ describe('the surface title', () => {
       { t: 'title', title: null }
     ])
   })
+
+  it('is kept when the page asks', () => {
+    const { win, helm } = page()
+    const port = connect(win)
+    helm.surface.keep()
+    expect(sent(port).filter((entry) => entry.t === 'keep')).toEqual([{ t: 'keep' }])
+  })
 })
 
 describe('tools', () => {

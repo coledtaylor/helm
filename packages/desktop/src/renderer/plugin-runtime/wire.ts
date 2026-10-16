@@ -42,6 +42,8 @@ export type FrameMessage =
   | { t: 'cancel'; id: number }
   | { t: 'key'; key: KeyInit }
   | { t: 'title'; title: string | null }
+  /** The page's surface should stay rather than be replaced as a preview. */
+  | { t: 'keep' }
   /** A background page's answer to a `tool` message. */
   | { t: 'tool-result'; id: string; ok: true; text: string }
   | { t: 'tool-result'; id: string; ok: false; message: string }

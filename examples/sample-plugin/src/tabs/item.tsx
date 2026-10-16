@@ -17,6 +17,15 @@ function ItemTab(): JSX.Element {
   return typeof id === 'string' ? <ItemView options={options} id={id} /> : <NewItem options={options} />
 }
 
+/**
+ * Typing into the page keeps its tab, as editing keeps a file Helm opened as a
+ * preview: the next item clicked in the panel must not replace what the user
+ * is half way through. A Helm without `keep` has no previews to keep.
+ */
+function keepTab(): void {
+  if (typeof helm.surface.keep === 'function') helm.surface.keep()
+}
+
 function ItemView({ options, id }: { options: Options; id: string }): JSX.Element {
   const [item, setItem] = useState<Item | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -99,7 +108,10 @@ function OpenLink(): JSX.Element {
           data-sample-link-address
           placeholder="https://example.com"
           value={address}
-          onChange={(event) => setAddress(event.target.value)}
+          onChange={(event) => {
+            setAddress(event.target.value)
+            keepTab()
+          }}
         />
         <button type="button" className="helm-button" data-sample-link-open disabled={address.trim() === ''} onClick={open}>
           Open
@@ -141,7 +153,10 @@ function StartSession({ item }: { item: Item }): JSX.Element {
           data-sample-session-folder
           placeholder="C:\path\to\project"
           value={folder}
-          onChange={(event) => setFolder(event.target.value)}
+          onChange={(event) => {
+            setFolder(event.target.value)
+            keepTab()
+          }}
         />
         <button type="button" className="helm-button" data-sample-session-start disabled={folder.trim() === ''} onClick={start}>
           Start a session

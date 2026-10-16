@@ -73,19 +73,59 @@ export function openPluginPage(
   page: PluginPage,
   group = layout.focused
 ): PaneLayout {
+  return placePluginPage(layout, plugin, page, null, true, group).layout
+}
+
+/**
+ * `openPluginPage` with a preview, as `openFile` has: a page opened with
+ * `keep` false stands as the strip's preview, and the next one opened that
+ * way takes its place in the strip rather than adding a page. A page opened
+ * to keep goes at the end, and opening the preview itself to keep ends its
+ * being one. `preview` is the page standing as the preview in this plugin's
+ * strip now, or null; what comes back is the layout and the preview after.
+ *
+ * Each plugin's strip has its own preview, apart from the one among a pane's
+ * tabs: a page replaces only another page of the same plugin.
+ */
+export function placePluginPage(
+  layout: PaneLayout,
+  plugin: string,
+  page: PluginPage,
+  preview: string | null,
+  keep: boolean,
+  group = layout.focused
+): { layout: PaneLayout; preview: string | null } {
   const id = pluginPageId(plugin, page)
   const ref = pluginPagesTab(layout, plugin)
   if (ref === null) {
-    return openTab(layout, { kind: 'plugin-pages', plugin, pages: [page], active: id }, group)
+    return {
+      layout: openTab(layout, { kind: 'plugin-pages', plugin, pages: [page], active: id }, group),
+      preview: keep ? null : id
+    }
   }
+  const holds = (pages: readonly PluginPage[], wanted: string | null): boolean =>
+    wanted !== null && pages.some((candidate) => pluginPageId(plugin, candidate) === wanted)
+  const still = holds(ref.pages, preview) ? preview : null
+  const show = (pages: PluginPage[]): PaneLayout =>
+    activateTab(withPages(layout, { ...ref, pages, active: id }), pluginPagesId(plugin))
+
   const index = ref.pages.findIndex((candidate) => pluginPageId(plugin, candidate) === id)
-  const pages =
-    index < 0
-      ? appended(ref, page)
-      : page.title !== null && ref.pages[index]!.title !== page.title
+  if (index >= 0) {
+    const pages =
+      page.title !== null && ref.pages[index]!.title !== page.title
         ? ref.pages.map((candidate, at) => (at === index ? { ...candidate, title: page.title } : candidate))
         : ref.pages
-  return activateTab(withPages(layout, { ...ref, pages, active: id }), pluginPagesId(plugin))
+    return { layout: show(pages), preview: keep && still === id ? null : still }
+  }
+  if (!keep && still !== null) {
+    return {
+      layout: show(ref.pages.map((candidate) => (pluginPageId(plugin, candidate) === still ? page : candidate))),
+      preview: id
+    }
+  }
+  const pages = appended(ref, page)
+  // Making room may have let the preview go.
+  return { layout: show(pages), preview: keep ? (holds(pages, still) ? still : null) : id }
 }
 
 /** A page clicked in the strip: in front of it, and the plugin's tab in front of its pane. */

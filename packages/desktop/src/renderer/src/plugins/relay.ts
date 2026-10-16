@@ -82,6 +82,8 @@ export interface RelayHooks {
   key?: (spec: SurfaceSpec, element: HTMLIFrameElement, key: KeyInit) => void
   /** The page named its surface, or gave the name back (null). */
   title?: (spec: SurfaceSpec, title: string | null) => void
+  /** The page asked for its surface to stay rather than stand as a preview. */
+  keep?: (spec: SurfaceSpec) => void
 }
 
 export interface PluginRelay {
@@ -301,6 +303,10 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
         const title = message['title']
         if (title === null) hooks.title?.(frame.spec, null)
         else if (typeof title === 'string' && title.trim() !== '') hooks.title?.(frame.spec, title.trim().slice(0, TITLE_MAX))
+        return
+      }
+      case 'keep': {
+        hooks.keep?.(frame.spec)
         return
       }
       case 'tool-result': {

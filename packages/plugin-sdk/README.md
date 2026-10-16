@@ -180,6 +180,28 @@ the page in that strip. Pages switch, close (Ctrl+W) and reorder (drag, or
 Ctrl+Shift+Left and Right) as the Browser tab's do, and closing the last one
 closes the tab. Without it, each tab is a tab of its own in the pane.
 
+A list that opens an item on a click can open it as a preview, the way a click
+on a file in Helm does: the next tab opened as a preview takes its place, so
+clicking down a list does not leave a tab per item. It is drawn in italic, and
+stays once the user double-clicks it:
+
+```js
+row.onclick = () => helm.tabs.open('run', { id }, { preview: true })
+row.ondblclick = () => helm.tabs.open('run', { id }) // opened to stay
+```
+
+A page the user has started changing should stay too, as a file being edited
+does. It says so itself:
+
+```js
+input.oninput = () => helm.surface.keep()
+```
+
+With `pageStrip`, the preview is one of the plugin's pages and replaces only
+another of its pages. Without it, a tab shares the pane's one preview with
+Helm's files. Helm before 2.3.2 ignores `preview` and has no `surface.keep`, so a
+plugin that runs on both checks `helm.surface.keep` before calling it.
+
 ### Background page
 
 `background` is a page with no surface. It starts when the plugin is turned
@@ -273,8 +295,9 @@ SyntaxError and stops the whole file.
 | `fetch(input, init?)` | `fetch`, sent by Helm. See [Network](#network). |
 | `exec(name, args?, options?)` | Runs a program from `exec`. See [Programs](#programs). |
 | `open(url)` | Opens an `https` address in Helm's Browser tab, from a click. See [Opening a link](#opening-a-link). |
-| `tabs.open(tab, params?, options?)` | Opens one of the plugin's tabs. |
+| `tabs.open(tab, params?, options?)` | Opens one of the plugin's tabs. `options`: `title`, and `preview` to open it as the preview the next one replaces. |
 | `surface.setTitle(title)` | Names a tab in the strip; null puts back the manifest's. No effect outside a tab. |
+| `surface.keep()` | Keeps a tab opened as a preview. No effect on a tab that stays, or outside a tab. |
 | `status.set(item)` | The status bar item, or null. |
 | `badge.set(count)` | The rail badge, or null. |
 | `settings.get()` | Every setting's value. |
