@@ -633,9 +633,14 @@ test('a plugin page starts a session from a click, once the user has seen what i
   await expect(dialog).toHaveCount(0)
   await expect(ui.getByRole('tab', { name: 'Second item, ready' })).toHaveAttribute('aria-selected', 'true')
   await expect(item.locator('[data-sample-session-result]')).toHaveText('Started.')
+  // Read by the CLI as its opening prompt, not as one more `--mcp-config` file,
+  // and the tools still load beside it.
   const run = await claudeRunIn(world, world.projects.alpha)
   expect(run.argv[run.argv.indexOf('-n') + 1]).toBe('Second item')
-  expect(run.argv.at(-1)).toBe('work on Second item')
+  expect(run.argv).toContain('--mcp-config')
+  expect(run.prompt).toBe('work on Second item')
+  expect(run.mcpServers).toEqual(expect.arrayContaining(['helm-browser', 'helm-sessions', 'helm-plugin-sample']))
+  expect(run.exitCode).toBeNull()
 })
 
 test('a plugin page opens a link in the Browser tab from a click, held to the reach a typed address meets', async ({

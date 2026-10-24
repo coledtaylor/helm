@@ -26,6 +26,32 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
+/**
+ * The positional arguments the CLI's parser finds in an argv. A variadic flag
+ * (`--add-dir <directories...>`, `--mcp-config <configs...>`) takes every
+ * argument after it up to the next one that starts with a dash, `--` ends the
+ * flags, and every other flag Helm passes takes one value.
+ */
+function operandsOf(argv: readonly string[]): string[] {
+  const variadic = new Set(['--add-dir', '--mcp-config'])
+  const operands: string[] = []
+  let inList = false
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!
+    if (arg === '--') return [...operands, ...argv.slice(i + 1)]
+    const isFlag = arg.length > 1 && arg.startsWith('-')
+    if (inList && !isFlag) continue
+    inList = false
+    if (!isFlag) {
+      operands.push(arg)
+      continue
+    }
+    i++
+    inList = variadic.has(arg)
+  }
+  return operands
+}
+
 describe('buildLaunchArgs', () => {
   it('is just the name when nothing is composed', () => {
     expect(buildLaunchArgs({ root: '/x', name: 'plain' })).toEqual(['-n', 'plain'])
@@ -66,31 +92,45 @@ describe('buildLaunchArgs', () => {
   })
 
   /**
-   * `--add-dir` is variadic: it eats arguments until one starts with a dash. If
-   * the opening prompt were reachable from it, `/recap` would be added as a
-   * directory instead of submitted, and the session would start with neither.
+   * `--add-dir` and `--mcp-config` are variadic: each eats arguments until one
+   * starts with a dash. A prompt reachable from either would be read as one
+   * more directory or one more config file, and the session would start
+   * without it - or, for a config file that does not exist, not start at all.
    */
-  it('terminates the variadic --add-dir before the opening prompt', () => {
-    const argv = buildLaunchArgs({
-      root: '/x',
-      name: 'session',
-      access: ['/repos/a'],
-      openingPrompt: '/recap'
-    })
-    expect(argv).toEqual(['--add-dir', resolve('/repos/a'), '-n', 'session', '/recap'])
-    expect(argv.indexOf('-n')).toBeGreaterThan(argv.indexOf('--add-dir'))
-    expect(argv.at(-1)).toBe('/recap')
+  it('ends the flags with -- before the opening prompt, so no variadic flag can take it', () => {
+    const launches = [
+      { access: ['/repos/a'] },
+      { mcpConfigFile: '/data/mcp/mcp-1-a.json' },
+      { access: ['/repos/a'], mcpConfigFile: '/data/mcp/mcp-1-a.json' },
+      {
+        access: ['/repos/a'],
+        pluginDirs: ['/shims/a'],
+        memoryFile: '/shims/memory.md',
+        sessionId: '7b3d1c20-4a55-4f18-9c21-8e0c5a6d1f01',
+        mcpConfigFile: '/data/mcp/mcp-1-a.json',
+        model: 'opus',
+        effort: 'high' as const,
+        permissionMode: 'auto' as const,
+        agent: 'reviewer'
+      }
+    ]
+    for (const launch of launches) {
+      const argv = buildLaunchArgs({ root: '/x', name: 'session', openingPrompt: '/recap', ...launch })
+      expect(argv.slice(-2)).toEqual(['--', '/recap'])
+      expect(operandsOf(argv)).toEqual(['/recap'])
+    }
+    expect(buildLaunchArgs({ root: '/x', name: 'session', access: ['/repos/a'], openingPrompt: '/recap' })).toEqual([
+      '--add-dir',
+      resolve('/repos/a'),
+      '-n',
+      'session',
+      '--',
+      '/recap'
+    ])
   })
 
-  it('puts the opening prompt last, after every flag', () => {
-    const argv = buildLaunchArgs({
-      root: '/x',
-      name: 'session',
-      pluginDirs: ['/shims/a'],
-      model: 'opus',
-      openingPrompt: '/recap'
-    })
-    expect(argv.at(-1)).toBe('/recap')
+  it('passes no -- when there is no opening prompt', () => {
+    expect(buildLaunchArgs({ root: '/x', name: 's', mcpConfigFile: '/data/mcp/mcp-1-a.json' })).not.toContain('--')
   })
 
   it('omits an opening prompt that is only whitespace', () => {
@@ -467,23 +507,25 @@ describe('prepareLaunch', () => {
     })
 
     /**
-     * The flag lands where the CLI can read it: after `-n`, which terminates
-     * the variadic `--add-dir` list, and before the positional prompt.
+     * A session with an opening prompt and none of the flags that would
+     * otherwise follow `--mcp-config` - a plugin's, or a profile with no model,
+     * effort, permission mode or agent. Nothing but `--` stands between the
+     * config file and the prompt, and without it the CLI reads the prompt as a
+     * second config path and exits 1.
      */
-    it('sits between the name and the opening prompt', () => {
+    it('leaves the opening prompt a prompt, not a second config file', () => {
       const dir = join(root, 'mcp')
       const plan = prepareLaunch({
         root,
-        name: 'ordered',
+        name: 'work on PLUG-10',
         shimRoot,
-        access: [root],
-        openingPrompt: 'go',
+        openingPrompt: 'work on PLUG-10',
         mcp: { dir, servers: [browserServer] }
       })
       const at = plan.argv.indexOf('--mcp-config')
       expect(at).toBeGreaterThan(plan.argv.indexOf('-n'))
-      expect(at + 1).toBeLessThan(plan.argv.length - 1)
-      expect(plan.argv[plan.argv.length - 1]).toBe('go')
+      expect(plan.argv[at + 1]).toBe(plan.mcpConfigFile)
+      expect(operandsOf(plan.argv)).toEqual(['work on PLUG-10'])
     })
   })
 })

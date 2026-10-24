@@ -47,6 +47,10 @@ export interface FakeClaudeLog {
   /** The conversation it is in now, which a `/clear` moves. */
   current: string
   resumed: boolean
+  /** The opening prompt, as the CLI's parser read it from the argv. */
+  prompt: string | null
+  /** The servers named by every `--mcp-config` the CLI loaded. */
+  mcpServers: string[]
   received: string[]
   resized: { cols: number; rows: number }[]
   /** SGR mouse reports (`ESC [ < b ; x ; y M|m`) it was sent, after `/links` asked for them. */

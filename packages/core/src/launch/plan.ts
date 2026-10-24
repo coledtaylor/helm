@@ -128,12 +128,12 @@ export function launchRequestInFolder(options: {
 /**
  * Argv after the executable.
  *
- * The order is not cosmetic. `--add-dir` is variadic - it consumes arguments
- * until the next one that starts with a dash - so anything positional placed
- * after it would be swallowed into the directory list. `-n` - or `--resume`,
- * for a conversation being reopened - always follows it and always exists,
- * which terminates that list, and the opening prompt goes last where the CLI
- * expects a bare prompt.
+ * The order is not cosmetic. `--add-dir` and `--mcp-config` are variadic -
+ * each consumes arguments until the next one that starts with a dash - so a
+ * positional argument after one would be swallowed into its list: a prompt
+ * read as a config path is a launch that exits 1 at once. Every flag comes
+ * first, and the opening prompt goes last behind `--`, which ends every
+ * variadic list, including any added later.
  */
 export function buildLaunchArgs(
   req: Omit<LaunchRequest, 'shimRoot'> & {
@@ -150,21 +150,17 @@ export function buildLaunchArgs(
   const access = dedupePaths(req.access ?? [])
   if (access.length > 0) argv.push('--add-dir', ...access)
 
-  // Either one terminates the directory list. A reopened conversation keeps
-  // the name it already has.
+  // A reopened conversation keeps the name it already has.
   if (req.resume) argv.push('--resume', req.resume)
   else argv.push('-n', sanitizeSessionName(req.name))
 
   for (const dir of req.pluginDirs ?? []) argv.push('--plugin-dir', dir)
   if (req.memoryFile) argv.push('--append-system-prompt-file', req.memoryFile)
-  // One value, so it is safe anywhere after `-n` and before the positional
-  // prompt. Assigning the conversation id rather than discovering it later is
-  // what lets the session row and the CLI's live registry agree from the first
+  // Assigning the conversation id rather than discovering it later is what
+  // lets the session row and the CLI's live registry agree from the first
   // instant; see `SessionRecord.claudeSessionId`.
   if (req.sessionId && !req.resume) argv.push('--session-id', req.sessionId)
-  // One value, so it is safe anywhere after `-n`. Here rather than at the end
-  // because the opening prompt is positional and everything before it has to
-  // be a flag with its argument.
+  // Variadic, like `--add-dir`: what follows it is a flag or the `--` below.
   if (req.mcpConfigFile) argv.push('--mcp-config', req.mcpConfigFile)
 
   if (req.model) argv.push('--model', req.model)
@@ -172,10 +168,10 @@ export function buildLaunchArgs(
   if (req.permissionMode) argv.push('--permission-mode', req.permissionMode)
   if (req.agent) argv.push('--agent', req.agent)
 
-  // Last, and only if it is really there: an empty string here would be a
-  // positional argument the CLI reads as an empty prompt.
+  // Last, behind `--`, and only if it is really there: an empty string here
+  // would be a positional argument the CLI reads as an empty prompt.
   const prompt = req.resume ? undefined : req.openingPrompt?.trim()
-  if (prompt) argv.push(prompt)
+  if (prompt) argv.push('--', prompt)
 
   return argv
 }
