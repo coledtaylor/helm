@@ -65,6 +65,7 @@ if (argv.includes('--help') || argv.includes('-h')) {
       '  --agent <agent>                Agent for the current session',
       '  --mcp-config <configs...>      Load MCP servers from JSON files or strings',
       '  --add-dir <directories...>     Additional directories to allow tool access to',
+      '  --allowedTools, --allowed-tools <tools...>  Tools to allow without prompting',
       '  --plugin-dir <path>            Load a plugin from a directory',
       '  -v, --version                  Output the version number',
       '  -h, --help                     Display help for command',
@@ -127,7 +128,9 @@ const OPTIONS = {
   '--append-system-prompt-file': { name: '--append-system-prompt-file', takes: 'value' },
   '--plugin-dir': { name: '--plugin-dir', takes: 'value' },
   '--mcp-config': { name: '--mcp-config', takes: 'variadic' },
-  '--add-dir': { name: '--add-dir', takes: 'variadic' }
+  '--add-dir': { name: '--add-dir', takes: 'variadic' },
+  '--allowedTools': { name: '--allowedTools', takes: 'variadic' },
+  '--allowed-tools': { name: '--allowedTools', takes: 'variadic' }
 }
 
 /**
@@ -235,6 +238,8 @@ const log = {
   resumed: resume !== undefined,
   prompt: resume !== undefined ? null : (parsed.operands[0] ?? null),
   mcpServers: mcp.servers ?? [],
+  // Each value may hold several, split on commas or spaces, as the real CLI reads them.
+  allowedTools: (parsed.options.get('--allowedTools') ?? []).flatMap((value) => value.split(/[\s,]+/).filter(Boolean)),
   received: [],
   resized: [],
   mouse: [],

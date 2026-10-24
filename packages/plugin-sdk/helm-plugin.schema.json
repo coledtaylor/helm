@@ -354,6 +354,10 @@
                   }
                 },
                 "description": "The arguments, as JSON Schema. Passed to the session as written; Helm does not check a call's arguments against it."
+              },
+              "readOnly": {
+                "type": "boolean",
+                "description": "It only reads and changes nothing. The sessions Helm starts call it without asking the user first. False when left out."
               }
             }
           }

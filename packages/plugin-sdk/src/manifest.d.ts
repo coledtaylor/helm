@@ -81,6 +81,8 @@ export interface NormalizedAgentTool {
   description: string
   /** As the manifest wrote it; `{ type: 'object', properties: {} }` when it wrote none. */
   inputSchema: Record<string, unknown>
+  /** The sessions Helm starts call it without asking. False when the manifest did not say. */
+  readOnly: boolean
 }
 
 export interface NormalizedAgent {

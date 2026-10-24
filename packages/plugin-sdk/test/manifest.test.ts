@@ -266,10 +266,31 @@ describe('validateManifest - tools for sessions', () => {
     expect(manifest.agent).toEqual({
       instructions: 'Use these for the list.',
       tools: [
-        { name: 'list_things', description: 'Lists the things.', inputSchema: { type: 'object', properties: {} } },
-        { name: 'add-thing', description: 'Adds one.', inputSchema: schema }
+        { name: 'list_things', description: 'Lists the things.', inputSchema: { type: 'object', properties: {} }, readOnly: false },
+        { name: 'add-thing', description: 'Adds one.', inputSchema: schema, readOnly: false }
       ]
     })
+  })
+
+  it('reads a tool marked read-only as one, and any other as not', () => {
+    const manifest = accepted(
+      validateManifest({
+        ...MINIMAL,
+        background: 'bg.html',
+        agent: {
+          tools: {
+            list_things: { ...tool, readOnly: true },
+            add_thing: { description: 'Adds one.', readOnly: false },
+            drop_thing: { description: 'Drops one.' }
+          }
+        }
+      })
+    )
+    expect(manifest.agent?.tools.map(({ name, readOnly }) => ({ name, readOnly }))).toEqual([
+      { name: 'list_things', readOnly: true },
+      { name: 'add_thing', readOnly: false },
+      { name: 'drop_thing', readOnly: false }
+    ])
   })
 
   it('names the server and every tool the way a session sees them', () => {
@@ -291,6 +312,11 @@ describe('validateManifest - tools for sessions', () => {
     ['a tool name starting with a digit', { background: 'bg.html', agent: { tools: { '1go': tool } } }, 'agent.tools key "1go"'],
     ['a tool with no description', { background: 'bg.html', agent: { tools: { go: {} } } }, 'agent.tools.go.description must be a non-empty string'],
     ['a tool that is not an object', { background: 'bg.html', agent: { tools: { go: 'Lists.' } } }, 'agent.tools.go must be an object'],
+    [
+      'a tool read-only in words rather than true or false',
+      { background: 'bg.html', agent: { tools: { go: { ...tool, readOnly: 'yes' } } } },
+      'agent.tools.go.readOnly must be true or false'
+    ],
     [
       'a description too long',
       { background: 'bg.html', agent: { tools: { go: { description: 'd'.repeat(2001) } } } },

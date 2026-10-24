@@ -28,12 +28,13 @@ afterEach(() => {
 
 /**
  * The positional arguments the CLI's parser finds in an argv. A variadic flag
- * (`--add-dir <directories...>`, `--mcp-config <configs...>`) takes every
- * argument after it up to the next one that starts with a dash, `--` ends the
- * flags, and every other flag Helm passes takes one value.
+ * (`--add-dir <directories...>`, `--mcp-config <configs...>`,
+ * `--allowedTools <tools...>`) takes every argument after it up to the next one
+ * that starts with a dash, `--` ends the flags, and every other flag Helm
+ * passes takes one value.
  */
 function operandsOf(argv: readonly string[]): string[] {
-  const variadic = new Set(['--add-dir', '--mcp-config'])
+  const variadic = new Set(['--add-dir', '--mcp-config', '--allowedTools'])
   const operands: string[] = []
   let inList = false
   for (let i = 0; i < argv.length; i++) {
@@ -488,6 +489,49 @@ describe('prepareLaunch', () => {
       }
       expect(Object.keys(written.mcpServers)).toEqual(['helm-sessions'])
       expect(readFileSync(plan.mcpConfigFile!, 'utf8')).not.toContain('helm-browser')
+    })
+
+    /*
+     * A plugin's read-only tools, allowed without asking.
+     *
+     * By the name the CLI gives an MCP tool, `mcp__<server>__<tool>`, so the
+     * rule matches that tool on that server and nothing else. Tools not marked
+     * get no rule and ask, as any MCP tool does.
+     */
+    it("allows a server's read-only tools by the name the CLI gives them, and no others", () => {
+      const dir = join(root, 'mcp')
+      const plugin = {
+        name: 'helm-plugin-sample',
+        url: 'http://127.0.0.1:51234/mcp/plugin/sample',
+        headers: browserServer.headers,
+        allowedTools: ['list_items', 'get_item']
+      }
+      const plan = prepareLaunch({
+        root,
+        name: 'allowed',
+        shimRoot,
+        openingPrompt: 'look',
+        mcp: { dir, servers: [browserServer, plugin] }
+      })
+      const at = plan.argv.indexOf('--allowedTools')
+      expect(at).toBeGreaterThan(-1)
+      expect(plan.argv.slice(at + 1, at + 3)).toEqual([
+        'mcp__helm-plugin-sample__list_items',
+        'mcp__helm-plugin-sample__get_item'
+      ])
+      expect(plan.argv.filter((word) => word.startsWith('mcp__'))).toHaveLength(2)
+      // The prompt is still a prompt, past one more variadic list.
+      expect(operandsOf(plan.argv)).toEqual(['look'])
+      // The rule rides on the argv; the file holds servers, not permissions.
+      expect(readFileSync(plan.mcpConfigFile!, 'utf8')).not.toContain('list_items')
+    })
+
+    it('passes no --allowedTools when no server has a read-only tool, or there is no server', () => {
+      const dir = join(root, 'mcp')
+      expect(prepareLaunch({ root, name: 'none', shimRoot, mcp: { dir, servers: [browserServer] } }).argv).not.toContain(
+        '--allowedTools'
+      )
+      expect(prepareLaunch({ root, name: 'empty', shimRoot, mcp: { dir, servers: [] } }).argv).not.toContain('--allowedTools')
     })
 
     /** Both off is the same outcome as no endpoint at all: no file, no flag. */

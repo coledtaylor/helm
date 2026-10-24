@@ -374,6 +374,8 @@ test("a session calls the plugin's tools, its background page answers, and turni
   const config = readMcpConfig(run.argv[run.argv.indexOf('--mcp-config') + 1] ?? '')
   const tools = config.mcpServers['helm-plugin-sample']
   if (tools === undefined) throw new Error(`no plugin server among ${Object.keys(config.mcpServers).join(', ')}`)
+  // The one tool the manifest marks read-only is allowed without asking; the other asks.
+  expect(run.allowedTools).toEqual(['mcp__helm-plugin-sample__list_items'])
   const token = bearerOf(tools)
   expect(await toolNames(tools.url, token)).toEqual(['list_items', 'create_item'])
   const init = await rpcResult<{ instructions: string }>(tools.url, token, 'initialize', {})
@@ -403,6 +405,8 @@ test("a session calls the plugin's tools, its background page answers, and turni
   await ui.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Sample', exact: true }).click()
   const group = ui.locator('[data-settings-group="plugin-tools"]')
   await expect(group.locator('[data-plugin-tools] li')).toHaveCount(2)
+  await expect(group.locator('[data-plugin-tool="list_items"] [data-plugin-tool-read-only]')).toHaveText('read-only')
+  await expect(group.locator('[data-plugin-tool="create_item"] [data-plugin-tool-read-only]')).toHaveCount(0)
   await group.getByRole('checkbox', { name: 'Offer to sessions' }).click()
   await expect(group.locator('[data-plugin-tools-state]')).toHaveText('No session gets them.')
   expect((await rpc(tools.url, token, 'tools/list')).status).toBe(404)

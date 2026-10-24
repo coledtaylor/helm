@@ -51,6 +51,8 @@ export interface FakeClaudeLog {
   prompt: string | null
   /** The servers named by every `--mcp-config` the CLI loaded. */
   mcpServers: string[]
+  /** Every tool `--allowedTools` allows without asking. */
+  allowedTools: string[]
   received: string[]
   resized: { cols: number; rows: number }[]
   /** SGR mouse reports (`ESC [ < b ; x ; y M|m`) it was sent, after `/links` asked for them. */

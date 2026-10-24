@@ -215,6 +215,10 @@ folder: run through npx, that folder is a cache.
   page, through `main/plugins/tools.ts`, and served as one more family on the
   inbound listener. A plugin sends no notifications and never sends a running
   session anything: a session calls it, not the other way round.
+- A tool its manifest marks `readOnly` is listed with `readOnlyHint` and
+  passed as `--allowedTools mcp__helm-plugin-<id>__<tool>` to the sessions
+  Helm starts, fixed at launch; Settings marks it. Every other tool asks, and
+  a deny rule of the user's still wins.
 - A plugin whose `sessions` lists `start` may ask to start one (`sessions.start`): only from
   a click in its page (the relay checks the window's user activation), and
   only once the user agrees in Helm's dialog, which shows the folder, name,

@@ -128,9 +128,9 @@ export function launchRequestInFolder(options: {
 /**
  * Argv after the executable.
  *
- * The order is not cosmetic. `--add-dir` and `--mcp-config` are variadic -
- * each consumes arguments until the next one that starts with a dash - so a
- * positional argument after one would be swallowed into its list: a prompt
+ * The order is not cosmetic. `--add-dir`, `--mcp-config` and `--allowedTools`
+ * are variadic - each consumes arguments until the next one that starts with a
+ * dash - so a positional argument after one would be swallowed into its list: a prompt
  * read as a config path is a launch that exits 1 at once. Every flag comes
  * first, and the opening prompt goes last behind `--`, which ends every
  * variadic list, including any added later.
@@ -143,6 +143,8 @@ export function buildLaunchArgs(
     memoryFile?: string | null | undefined
     /** The ephemeral per-session MCP config, already written. */
     mcpConfigFile?: string | null | undefined
+    /** Tools the session calls without asking, as the CLI names them (`mcp__<server>__<tool>`). */
+    allowedTools?: readonly string[] | undefined
   }
 ): string[] {
   const argv: string[] = []
@@ -162,6 +164,9 @@ export function buildLaunchArgs(
   if (req.sessionId && !req.resume) argv.push('--session-id', req.sessionId)
   // Variadic, like `--add-dir`: what follows it is a flag or the `--` below.
   if (req.mcpConfigFile) argv.push('--mcp-config', req.mcpConfigFile)
+  // Variadic too. An allow rule, as one in the user's settings would be: a
+  // deny rule of theirs still wins, and every other tool still asks.
+  if (req.allowedTools && req.allowedTools.length > 0) argv.push('--allowedTools', ...req.allowedTools)
 
   if (req.model) argv.push('--model', req.model)
   if (req.effort) argv.push('--effort', req.effort)
@@ -261,9 +266,17 @@ export function prepareLaunch(req: LaunchRequest): LaunchPlan {
    * that is not there.
    */
   let mcpConfigFile: string | null = null
+  let allowedTools: string[] = []
   if (req.mcp) {
     try {
       mcpConfigFile = writeSessionMcpConfig(req.mcp.dir, req.mcp.servers)
+      // Only for servers the file names: a rule for a tool the session was
+      // never given would be an allow rule waiting for whatever takes the name.
+      if (mcpConfigFile !== null) {
+        allowedTools = req.mcp.servers.flatMap((server) =>
+          (server.allowedTools ?? []).map((tool) => `mcp__${server.name}__${tool}`)
+        )
+      }
     } catch (err) {
       // A session without Helm's tools is a working session. A launch that
       // failed because a JSON file could not be written is not.
@@ -287,6 +300,7 @@ export function prepareLaunch(req: LaunchRequest): LaunchPlan {
     pluginDirs: shims.map((shim) => shim.dir),
     memoryFile,
     mcpConfigFile,
+    allowedTools,
     sessionId: req.sessionId,
     resume: req.resume
   })
