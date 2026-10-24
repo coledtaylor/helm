@@ -127,8 +127,13 @@ tier above, so keep this one small.
 CLI and nothing more. It answers `--version` and `--help`, draws a prompt,
 echoes what is typed, and writes the session registry record, `history.jsonl`
 and a transcript. `--resume` works only in the directory the conversation was
-recorded in. Everything it was given and received is logged to
-`<claude dir>/fake-claude/<pid>.json`.
+recorded in. It reads its argv as the real CLI's parser does: `--add-dir`,
+`--mcp-config` and `--allowedTools` take every argument up to the next that
+starts with a dash, `--` ends the options, and what is left is the opening
+prompt. An `--mcp-config` value that is neither JSON nor a file that exists
+fails the run with the real CLI's error. Everything it was given and received,
+the opening prompt it read, the MCP servers it loaded and the tools it allows
+without asking are logged to `<claude dir>/fake-claude/<pid>.json`.
 
 It also answers `mcp add-json` and `mcp remove` by writing `.mcp.json` or
 `~/.claude.json` as the real CLI does.

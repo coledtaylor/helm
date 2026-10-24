@@ -419,12 +419,11 @@ function SessionTools({
     : agent.enabled
       ? `Sessions Helm starts get them as ${agent.server}. Turning this off takes them from sessions already running.`
       : 'No session gets them.'
+  const hint = agent.tools.some((tool) => tool.readOnly)
+    ? "Claude Code sessions can call these. Its background page answers, and the answer goes into the session's conversation. Read-only ones run without asking; the others ask first."
+    : "Claude Code sessions can call these. Its background page answers, and the answer goes into the session's conversation."
   return (
-    <Group
-      name="plugin-tools"
-      title="Tools for sessions"
-      hint="Claude Code sessions can call these. Its background page answers, and the answer goes into the session's conversation."
-    >
+    <Group name="plugin-tools" title="Tools for sessions" hint={hint}>
       <label className="flex items-center justify-between gap-4 py-1.5" data-plugin-tools-switch>
         <span className="min-w-[220px] flex-1">
           <span className="block text-[12.5px] text-fg">Offer to sessions</span>
@@ -436,8 +435,17 @@ function SessionTools({
       </label>
       <ul className="mt-2 flex flex-col gap-1.5 pl-6" data-plugin-tools>
         {agent.tools.map((tool) => (
-          <li key={tool.name} className="flex min-w-0 items-baseline gap-3 text-[11px] select-text">
+          <li key={tool.name} className="flex min-w-0 items-baseline gap-3 text-[11px] select-text" data-plugin-tool={tool.name}>
             <span className="shrink-0 font-mono text-fg">{tool.name}</span>
+            {tool.readOnly && (
+              <span
+                className="shrink-0 rounded-full border border-border-strong px-[7px] text-[10.5px] leading-[14px] text-fg-muted"
+                title="Sessions call it without asking"
+                data-plugin-tool-read-only
+              >
+                read-only
+              </span>
+            )}
             <span className="min-w-0 flex-1 truncate text-fg-muted" title={tool.description}>
               {tool.description}
             </span>

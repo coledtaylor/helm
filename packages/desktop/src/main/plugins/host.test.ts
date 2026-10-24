@@ -544,7 +544,7 @@ describe('tools for sessions', () => {
       agent: {
         instructions: 'Cards are on the board.',
         tools: {
-          list_cards: { description: 'Lists the cards.' },
+          list_cards: { description: 'Lists the cards.', readOnly: true },
           add_card: { description: 'Adds a card.', inputSchema: { type: 'object', properties: { title: { type: 'string' } } } }
         }
       }
@@ -566,8 +566,13 @@ describe('tools for sessions', () => {
         server: 'helm-plugin-tracker',
         instructions: 'Cards are on the board.',
         tools: [
-          { name: 'list_cards', description: 'Lists the cards.', inputSchema: { type: 'object', properties: {} } },
-          { name: 'add_card', description: 'Adds a card.', inputSchema: { type: 'object', properties: { title: { type: 'string' } } } }
+          { name: 'list_cards', description: 'Lists the cards.', inputSchema: { type: 'object', properties: {} }, readOnly: true },
+          {
+            name: 'add_card',
+            description: 'Adds a card.',
+            inputSchema: { type: 'object', properties: { title: { type: 'string' } } },
+            readOnly: false
+          }
         ]
       }
     ])
@@ -576,8 +581,8 @@ describe('tools for sessions', () => {
       server: 'helm-plugin-tracker',
       instructions: 'Cards are on the board.',
       tools: [
-        { name: 'list_cards', description: 'Lists the cards.' },
-        { name: 'add_card', description: 'Adds a card.' }
+        { name: 'list_cards', description: 'Lists the cards.', readOnly: true },
+        { name: 'add_card', description: 'Adds a card.', readOnly: false }
       ]
     })
     expect(info().agent).toBeNull()

@@ -10,6 +10,11 @@
 //   `projects/`.
 // - `--resume <id>` succeeds only in the directory the conversation was
 //   recorded in, as the real CLI does.
+// - The argv is read the way the real CLI's parser reads it: a variadic option
+//   (`--add-dir`, `--mcp-config`) takes every argument up to the next one that
+//   starts with a dash, `--` ends the options, and the first argument left over
+//   is the opening prompt. Every `--mcp-config` value has to be JSON or a file
+//   that exists, or the run fails at once with the real CLI's error.
 //
 // Everything it was given and everything it received is written to
 // `<config>/fake-claude/<pid>.json`, so a test can assert what reached the
@@ -34,7 +39,7 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 const VERSION = '2.1.999'
 const argv = process.argv.slice(2)
@@ -51,14 +56,17 @@ if (argv.includes('--help') || argv.includes('-h')) {
       'Usage: claude [options] [command] [prompt]',
       '',
       'Options:',
-      '  -r, --resume [sessionId]       Resume a conversation',
+      '  -r, --resume [value]           Resume a conversation',
       '  --session-id <uuid>            Use a specific session ID for the conversation',
       '  -n, --name <name>              Name the session',
       '  --model <model>                Model for the current session',
+      '  --effort <level>               Effort level for the current session',
       '  --permission-mode <mode>       Permission mode to use for the session',
+      '  --agent <agent>                Agent for the current session',
       '  --mcp-config <configs...>      Load MCP servers from JSON files or strings',
       '  --add-dir <directories...>     Additional directories to allow tool access to',
-      '  --plugin-dir <paths...>        Load plugins from directories',
+      '  --allowedTools, --allowed-tools <tools...>  Tools to allow without prompting',
+      '  --plugin-dir <path>            Load a plugin from a directory',
       '  -v, --version                  Output the version number',
       '  -h, --help                     Display help for command',
       ''
@@ -100,12 +108,101 @@ if (argv[0] === 'mcp' || argv.includes('-p') || argv.includes('--print')) proces
 
 const configDir = (process.env.CLAUDE_CONFIG_DIR ?? '').trim() || join(homedir(), '.claude')
 const cwd = process.cwd()
-const option = (...names) => {
-  for (const name of names) {
-    const at = argv.indexOf(name)
-    if (at >= 0 && at + 1 < argv.length) return argv[at + 1]
+
+/**
+ * The options an interactive run is given, as the real CLI's `--help` declares
+ * them: `value` takes the next argument whatever it is, `optional` takes it
+ * unless it starts with a dash, and `variadic` takes it and then every one
+ * after it up to the next that starts with a dash.
+ */
+const OPTIONS = {
+  '-n': { name: '--name', takes: 'value' },
+  '--name': { name: '--name', takes: 'value' },
+  '-r': { name: '--resume', takes: 'optional' },
+  '--resume': { name: '--resume', takes: 'optional' },
+  '--session-id': { name: '--session-id', takes: 'value' },
+  '--model': { name: '--model', takes: 'value' },
+  '--effort': { name: '--effort', takes: 'value' },
+  '--permission-mode': { name: '--permission-mode', takes: 'value' },
+  '--agent': { name: '--agent', takes: 'value' },
+  '--append-system-prompt-file': { name: '--append-system-prompt-file', takes: 'value' },
+  '--plugin-dir': { name: '--plugin-dir', takes: 'value' },
+  '--mcp-config': { name: '--mcp-config', takes: 'variadic' },
+  '--add-dir': { name: '--add-dir', takes: 'variadic' },
+  '--allowedTools': { name: '--allowedTools', takes: 'variadic' },
+  '--allowed-tools': { name: '--allowedTools', takes: 'variadic' }
+}
+
+/**
+ * Options by name, each with every value it was given, and the arguments that
+ * are not options. Exits as the real CLI does on an option it does not know or
+ * one missing its value.
+ */
+function parseArgv(args) {
+  const options = new Map()
+  const operands = []
+  const looksLikeOption = (arg) => arg.length > 1 && arg.startsWith('-')
+  const fail = (message) => {
+    process.stderr.write(`error: ${message}\n`)
+    process.exit(1)
   }
-  return undefined
+  let variadic = null
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (arg === '--') {
+      operands.push(...args.slice(i + 1))
+      break
+    }
+    if (variadic !== null && !looksLikeOption(arg)) {
+      variadic.push(arg)
+      continue
+    }
+    variadic = null
+    if (!looksLikeOption(arg)) {
+      operands.push(arg)
+      continue
+    }
+    const spec = OPTIONS[arg]
+    if (spec === undefined) fail(`unknown option '${arg}'`)
+    const values = options.get(spec.name) ?? []
+    options.set(spec.name, values)
+    if (spec.takes === 'optional') {
+      if (i + 1 < args.length && !looksLikeOption(args[i + 1])) values.push(args[++i])
+      continue
+    }
+    if (i + 1 >= args.length) fail(`option '${arg}' argument missing`)
+    values.push(args[++i])
+    if (spec.takes === 'variadic') variadic = values
+  }
+  return { options, operands }
+}
+
+const parsed = parseArgv(argv)
+const option = (name) => parsed.options.get(name)?.at(-1)
+
+/**
+ * The servers every `--mcp-config` value names, or the real CLI's error for
+ * the first one it cannot load. A value is JSON or the path of a JSON file,
+ * resolved against the working directory.
+ */
+function loadMcpConfigs(values) {
+  const servers = []
+  for (const value of values) {
+    let document
+    try {
+      document = JSON.parse(value)
+    } catch {
+      const file = resolve(cwd, value)
+      if (!existsSync(file)) return { error: `MCP config file not found: ${file}` }
+      try {
+        document = JSON.parse(readFileSync(file, 'utf8'))
+      } catch {
+        return { error: `MCP config file is not valid JSON: ${file}` }
+      }
+    }
+    servers.push(...Object.keys(document?.mcpServers ?? {}))
+  }
+  return { servers }
 }
 
 /** The CLI's own directory naming under `projects/`: anything not alphanumeric becomes `-`. */
@@ -114,7 +211,7 @@ const sameDir = (a, b) =>
   process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 
 let sessionId = option('--session-id') ?? randomUUID()
-const resume = option('--resume', '-r')
+const resume = option('--resume')
 if (resume !== undefined) {
   const recorded = findTranscript(resume)
   if (recorded === null || !sameDir(recorded.cwd, cwd)) {
@@ -124,7 +221,8 @@ if (resume !== undefined) {
   sessionId = resume
 }
 
-const name = option('--name', '-n') ?? null
+const name = option('--name') ?? null
+const mcp = loadMcpConfigs(parsed.options.get('--mcp-config') ?? [])
 const startedAt = Date.now()
 const registryFile = join(configDir, 'sessions', `${String(process.pid)}.json`)
 const logFile = join(configDir, 'fake-claude', `${String(process.pid)}.json`)
@@ -138,6 +236,10 @@ const log = {
   sessionId,
   current: sessionId,
   resumed: resume !== undefined,
+  prompt: resume !== undefined ? null : (parsed.operands[0] ?? null),
+  mcpServers: mcp.servers ?? [],
+  // Each value may hold several, split on commas or spaces, as the real CLI reads them.
+  allowedTools: (parsed.options.get('--allowedTools') ?? []).flatMap((value) => value.split(/[\s,]+/).filter(Boolean)),
   received: [],
   resized: [],
   mouse: [],
@@ -328,6 +430,11 @@ process.stdout.on('resize', () => {
   log.resized.push({ cols: process.stdout.columns, rows: process.stdout.rows })
   saveLog()
 })
+
+if (mcp.error !== undefined) {
+  out(`Error: Invalid MCP configuration:\r\n${mcp.error}\r\n`)
+  exit(1)
+}
 
 setStatus(undefined)
 saveLog()

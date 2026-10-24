@@ -1061,7 +1061,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     path: string
     instructions: string
     enabled: () => boolean
-    listed: () => Array<{ name: string; description: string; inputSchema: unknown }>
+    listed: () => Array<{ name: string; description: string; inputSchema: unknown; annotations?: { readOnlyHint: true } }>
     /** `signal` is aborted when nobody is waiting for the answer any more. */
     call: (session: AgentSession, name: string, args: Args, signal: AbortSignal) => Promise<ToolResult>
   }
@@ -1132,7 +1132,13 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       instructions: pluginInstructions(server),
       enabled: () => true,
       listed: () =>
-        server.tools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })),
+        server.tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          // The manifest's `readOnly`, in MCP's spelling.
+          ...(tool.readOnly ? { annotations: { readOnlyHint: true as const } } : {})
+        })),
       async call(session, name, args, signal) {
         const answer = await provider.call(
           {
@@ -1608,12 +1614,23 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
         launch: {
           dir: options.dir,
           // One entry per family, all on the same port and carrying the same
-          // token: it is one session's identity, not one server's key.
-          servers: on.map((route) => ({
-            name: route.name,
-            url: `http://127.0.0.1:${String(info.port)}${route.path}`,
-            headers: { Authorization: `Bearer ${token}` }
-          }))
+          // token: it is one session's identity, not one server's key. What a
+          // family lists as read-only is what the session calls without
+          // asking, so the mark is read in one place. Fixed at launch, as an
+          // allow rule is: a plugin reloaded with a tool no longer read-only
+          // reaches sessions started after.
+          servers: on.map((route) => {
+            const allowedTools = route
+              .listed()
+              .filter((tool) => tool.annotations?.readOnlyHint === true)
+              .map((tool) => tool.name)
+            return {
+              name: route.name,
+              url: `http://127.0.0.1:${String(info.port)}${route.path}`,
+              headers: { Authorization: `Bearer ${token}` },
+              ...(allowedTools.length > 0 ? { allowedTools } : {})
+            }
+          })
         }
       }
     },

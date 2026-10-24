@@ -374,6 +374,8 @@ test("a session calls the plugin's tools, its background page answers, and turni
   const config = readMcpConfig(run.argv[run.argv.indexOf('--mcp-config') + 1] ?? '')
   const tools = config.mcpServers['helm-plugin-sample']
   if (tools === undefined) throw new Error(`no plugin server among ${Object.keys(config.mcpServers).join(', ')}`)
+  // The one tool the manifest marks read-only is allowed without asking; the other asks.
+  expect(run.allowedTools).toEqual(['mcp__helm-plugin-sample__list_items'])
   const token = bearerOf(tools)
   expect(await toolNames(tools.url, token)).toEqual(['list_items', 'create_item'])
   const init = await rpcResult<{ instructions: string }>(tools.url, token, 'initialize', {})
@@ -403,6 +405,8 @@ test("a session calls the plugin's tools, its background page answers, and turni
   await ui.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Sample', exact: true }).click()
   const group = ui.locator('[data-settings-group="plugin-tools"]')
   await expect(group.locator('[data-plugin-tools] li')).toHaveCount(2)
+  await expect(group.locator('[data-plugin-tool="list_items"] [data-plugin-tool-read-only]')).toHaveText('read-only')
+  await expect(group.locator('[data-plugin-tool="create_item"] [data-plugin-tool-read-only]')).toHaveCount(0)
   await group.getByRole('checkbox', { name: 'Offer to sessions' }).click()
   await expect(group.locator('[data-plugin-tools-state]')).toHaveText('No session gets them.')
   expect((await rpc(tools.url, token, 'tools/list')).status).toBe(404)
@@ -633,9 +637,14 @@ test('a plugin page starts a session from a click, once the user has seen what i
   await expect(dialog).toHaveCount(0)
   await expect(ui.getByRole('tab', { name: 'Second item, ready' })).toHaveAttribute('aria-selected', 'true')
   await expect(item.locator('[data-sample-session-result]')).toHaveText('Started.')
+  // Read by the CLI as its opening prompt, not as one more `--mcp-config` file,
+  // and the tools still load beside it.
   const run = await claudeRunIn(world, world.projects.alpha)
   expect(run.argv[run.argv.indexOf('-n') + 1]).toBe('Second item')
-  expect(run.argv.at(-1)).toBe('work on Second item')
+  expect(run.argv).toContain('--mcp-config')
+  expect(run.prompt).toBe('work on Second item')
+  expect(run.mcpServers).toEqual(expect.arrayContaining(['helm-browser', 'helm-sessions', 'helm-plugin-sample']))
+  expect(run.exitCode).toBeNull()
 })
 
 test('a plugin page opens a link in the Browser tab from a click, held to the reach a typed address meets', async ({

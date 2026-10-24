@@ -215,6 +215,13 @@ export interface AgentToolSpec {
    * treats them as untrusted input.
    */
   inputSchema?: { type: 'object'; [keyword: string]: unknown }
+  /**
+   * It only reads: it changes nothing in the plugin, its service or anywhere
+   * else. The sessions Helm starts call it without asking the user first, and
+   * Settings says so. A tool that is not marked asks, as any MCP tool does,
+   * unless the user has allowed it. False when left out.
+   */
+  readOnly?: boolean
 }
 
 // ---------------------------------------------------------------------------

@@ -518,7 +518,8 @@ browser tools. The background page answers every call.
       "inputSchema": {
         "type": "object",
         "properties": { "unreadOnly": { "type": "boolean", "description": "Only the unread ones." } }
-      }
+      },
+      "readOnly": true
     },
     "create_item": {
       "description": "Adds an item, unread, and answers with it.",
@@ -569,7 +570,11 @@ helm.tools.handle('create_item', async (args, { session, signal }) => {
 - A call that arrives before its handler is registered waits up to 5 seconds
   for it. A call answers within 10 minutes or fails.
 - Claude Code asks the user before a session runs a tool, as it does for any
-  MCP tool, unless the user has allowed it.
+  MCP tool, unless the user has allowed it. Mark a tool `"readOnly": true` when
+  it only reads and changes nothing, and the sessions Helm starts call it
+  without asking; the plugin's page in Settings marks it read-only. A rule the
+  user wrote to deny it still wins. Mark nothing that writes: the user trusts
+  the mark without seeing each call.
 
 The tools are on while the plugin is, for sessions started after that. The
 user can turn them off on the plugin's page in Settings, which takes them from
