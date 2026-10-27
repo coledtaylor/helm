@@ -231,15 +231,27 @@ function applyTranscripts(store: Store, transcripts: Map<string, TranscriptFile>
   }
 }
 
-/** One stat per distinct recorded directory, not one per session. */
+/**
+ * One stat per distinct recorded directory, not one per session.
+ *
+ * A project is keyed by its lower-cased path, so one key can hold several
+ * spellings. The key exists when any of them does: on a case-sensitive file
+ * system (Linux) only the spelling on disk answers, and the last one stat'ed
+ * must not decide for the rest.
+ */
 function applyProjectExistence(store: Store, exists: (path: string) => boolean): void {
   const rows = store.raw
     .prepare('SELECT DISTINCT project, project_key FROM history_sessions')
     .all() as Array<{ project: string; project_key: string }>
 
-  const set = store.raw.prepare('UPDATE history_sessions SET project_exists = ? WHERE project_key = ?')
+  const found = new Map<string, boolean>()
   for (const row of rows) {
-    set.run(exists(row.project) ? 1 : 0, row.project_key)
+    if (found.get(row.project_key) === true) continue
+    found.set(row.project_key, exists(row.project))
+  }
+  const set = store.raw.prepare('UPDATE history_sessions SET project_exists = ? WHERE project_key = ?')
+  for (const [key, present] of found) {
+    set.run(present ? 1 : 0, key)
   }
 }
 

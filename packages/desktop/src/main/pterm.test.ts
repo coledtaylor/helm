@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DetectedShell } from '@helm/core'
@@ -82,6 +82,14 @@ let updateSettings: typeof ServicesModule.updateSettings
 /** Where this machine's installers put the shells PATH does not know about. */
 let storePwsh: string
 let gitBash: string
+/**
+ * The shells the tests below pick between, on this OS: the first one detection
+ * finds, and two more to choose in a setting or a pane.
+ */
+let firstShell: { path: string; args: string[] }
+let shellOne: string
+let shellTwo: string
+const onWindows = process.platform === 'win32'
 
 function plant(file: string): void {
   mkdirSync(dirname(file), { recursive: true })
@@ -105,7 +113,21 @@ beforeAll(async () => {
   gitBash = join(programFiles, 'Git', 'bin', 'bash.exe')
   plant(storePwsh)
   plant(gitBash)
+  // Off Windows, `$SHELL` is the first shell detection finds.
+  const shells = join(world.root, 'Shells')
+  const [fish, bash, zsh] = ['fish', 'bash', 'zsh'].map((name) => join(shells, name)) as [string, string, string]
+  if (onWindows) {
+    firstShell = { path: storePwsh, args: ['-NoLogo'] }
+    shellOne = gitBash
+    shellTwo = ON_PATH['cmd.exe'] ?? ''
+  } else {
+    for (const shell of [fish, bash, zsh]) plant(shell)
+    firstShell = { path: fish, args: [] }
+    shellOne = bash
+    shellTwo = zsh
+  }
   const saved = {
+    SHELL: process.env['SHELL'],
     ProgramW6432: process.env['ProgramW6432'],
     ProgramFiles: process.env['ProgramFiles'],
     'ProgramFiles(x86)': process.env['ProgramFiles(x86)'],
@@ -115,7 +137,8 @@ beforeAll(async () => {
     ProgramW6432: programFiles,
     ProgramFiles: programFiles,
     'ProgramFiles(x86)': join(world.root, 'Program Files (x86)'),
-    LOCALAPPDATA: localAppData
+    LOCALAPPDATA: localAppData,
+    SHELL: fish
   })
 
   pterm = await import('./pterm')
@@ -168,13 +191,19 @@ const shellSpawns = (): Array<{ file: string; args: SessionSpawnOptions['args'];
   ptys.spawned.filter((spawn) => spawn.id.startsWith('shell:')).map(({ file, args, cwd }) => ({ file, args, cwd }))
 
 describe('shellArgs', () => {
-  it('quiets the PowerShell banner and passes nothing to any other shell', () => {
+  it.runIf(onWindows)('quiets the PowerShell banner and passes nothing to any other shell', () => {
     expect(pterm.shellArgs('pwsh.exe')).toEqual(['-NoLogo'])
     expect(pterm.shellArgs('C:\\Program Files\\PowerShell\\7\\PWSH.EXE')).toEqual(['-NoLogo'])
     expect(pterm.shellArgs(ON_PATH['powershell.exe'] ?? '')).toEqual(['-NoLogo'])
     expect(pterm.shellArgs('C:\\Windows\\System32\\cmd.exe')).toEqual([])
     expect(pterm.shellArgs('C:\\Windows\\System32\\wsl.exe')).toEqual([])
     expect(pterm.shellArgs('C:\\Program Files\\Git\\bin\\bash.exe')).toEqual([])
+  })
+
+  it.runIf(!onWindows)('passes nothing to a macOS or Linux shell', () => {
+    expect(pterm.shellArgs('/bin/zsh')).toEqual([])
+    expect(pterm.shellArgs('/usr/bin/bash')).toEqual([])
+    expect(pterm.shellArgs('/opt/homebrew/bin/fish')).toEqual([])
   })
 
   it('keys on the file name, not on a path that happens to mention PowerShell', () => {
@@ -184,7 +213,7 @@ describe('shellArgs', () => {
 })
 
 describe('shell detection', () => {
-  it('finds shells on PATH and where installers put them off it', () => {
+  it.runIf(onWindows)('finds shells on PATH and where installers put them off it', () => {
     const expected: DetectedShell[] = [
       { path: storePwsh, name: 'pwsh.exe', label: 'PowerShell 7', args: ['-NoLogo'] },
       { path: ON_PATH['powershell.exe'] ?? '', name: 'powershell.exe', label: 'Windows PowerShell', args: ['-NoLogo'] },
@@ -193,6 +222,14 @@ describe('shell detection', () => {
     ]
 
     expect(pterm.detectShells()).toEqual(expected)
+  })
+
+  it.runIf(!onWindows)('finds $SHELL first, then the shells that are there, one row per program', () => {
+    const detected = pterm.detectShells()
+    expect(detected[0]).toEqual({ path: firstShell.path, name: 'fish', label: 'Fish', args: [] })
+    for (const shell of detected) expect(existsSync(shell.path), shell.path).toBe(true)
+    const programs = detected.map((shell) => realpathSync(shell.path))
+    expect(new Set(programs).size).toBe(programs.length)
   })
 
   it('hands the renderer the same list over pterm:shells', async () => {
@@ -213,15 +250,15 @@ describe('which shell a project pane runs', () => {
   it('is whatever terminalShell says at the moment it opens, with no restart', () => {
     const host = shellHost()
 
-    updateSettings(services, { terminalShell: gitBash })
-    expect(host.open({ path: world.projects.alpha, cols: 100, rows: 20 }).shell).toBe(gitBash)
+    updateSettings(services, { terminalShell: shellOne })
+    expect(host.open({ path: world.projects.alpha, cols: 100, rows: 20 }).shell).toBe(shellOne)
 
-    updateSettings(services, { terminalShell: ON_PATH['cmd.exe'] ?? null })
-    expect(host.open({ path: world.projects.beta, cols: 100, rows: 20 }).shell).toBe(ON_PATH['cmd.exe'])
+    updateSettings(services, { terminalShell: shellTwo })
+    expect(host.open({ path: world.projects.beta, cols: 100, rows: 20 }).shell).toBe(shellTwo)
 
     expect(shellSpawns()).toEqual([
-      { file: gitBash, args: [], cwd: world.projects.alpha },
-      { file: ON_PATH['cmd.exe'], args: [], cwd: world.projects.beta }
+      { file: shellOne, args: [], cwd: world.projects.alpha },
+      { file: shellTwo, args: [], cwd: world.projects.beta }
     ])
   })
 
@@ -231,28 +268,28 @@ describe('which shell a project pane runs', () => {
 
     host.open({ path: world.projects.alpha, cols: 100, rows: 20 })
 
-    expect(shellSpawns()).toEqual([{ file: storePwsh, args: ['-NoLogo'], cwd: world.projects.alpha }])
+    expect(shellSpawns()).toEqual([{ file: firstShell.path, args: firstShell.args, cwd: world.projects.alpha }])
   })
 
   it('is the pane’s own pick over the setting, for that pane only', () => {
     const host = shellHost()
-    updateSettings(services, { terminalShell: ON_PATH['cmd.exe'] ?? null })
+    updateSettings(services, { terminalShell: shellTwo })
 
-    host.open({ path: world.projects.alpha, cols: 100, rows: 20, shell: gitBash })
+    host.open({ path: world.projects.alpha, cols: 100, rows: 20, shell: shellOne })
     host.open({ path: world.projects.beta, cols: 100, rows: 20 })
 
-    expect(shellSpawns().map((spawn) => spawn.file)).toEqual([gitBash, ON_PATH['cmd.exe']])
+    expect(shellSpawns().map((spawn) => spawn.file)).toEqual([shellOne, shellTwo])
   })
 
   it('falls back to a shell that starts when the chosen one will not, and says why', () => {
     const host = shellHost()
     updateSettings(services, { terminalShell: null })
-    ptys.missing.add(gitBash)
+    ptys.missing.add(shellOne)
 
-    const opened = host.open({ path: world.projects.alpha, cols: 100, rows: 20, shell: gitBash })
+    const opened = host.open({ path: world.projects.alpha, cols: 100, rows: 20, shell: shellOne })
 
-    expect(opened.shell).toBe(storePwsh)
-    expect(opened.requested).toBe(gitBash)
+    expect(opened.shell).toBe(firstShell.path)
+    expect(opened.requested).toBe(shellOne)
     expect(opened.problem).toContain('File not found')
   })
 })
@@ -260,7 +297,7 @@ describe('which shell a project pane runs', () => {
 describe('terminal tabs', () => {
   it('get a shell of their own, where a project pane reattaches to the one it has', () => {
     const host = shellHost()
-    updateSettings(services, { terminalShell: ON_PATH['cmd.exe'] ?? null })
+    updateSettings(services, { terminalShell: shellTwo })
 
     const project = host.open({ path: world.projects.alpha, cols: 100, rows: 20 })
     const first = host.open({ path: world.projects.alpha, cols: 100, rows: 20, separate: true })

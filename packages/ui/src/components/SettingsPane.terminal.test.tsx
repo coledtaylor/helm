@@ -75,7 +75,7 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
     hasCostEstimate: false,
     terminal: TERMINAL,
     onTerminalChange: vi.fn(),
-    terminalFontStack: '"Cascadia Mono", "Consolas", monospace',
+    terminalFontStack: '"Cascadia Mono", "SF Mono", Menlo, Consolas, ui-monospace, monospace',
     shells: SHELLS,
     onLocateShell: vi.fn(),
     archiveStats: null,

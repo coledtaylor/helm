@@ -44,11 +44,20 @@ extraResources:
     to: icon.png
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'
+  # On macOS this also unpacks node-pty's `spawn-helper`, an executable every
+  # pty is started through; it cannot be exec'd from inside the archive.
   - '**/node_modules/node-pty/**'
   # koffi (src/main/corners.ts) keeps its native binary in a platform package,
-  # @koromix/koffi-win32-x64, rather than in koffi itself.
+  # @koromix/koffi-win32-x64 or koffi-darwin-arm64, rather than in koffi itself.
   - '**/node_modules/koffi/**'
   - '**/node_modules/@koromix/**'
+
+# On macOS, makes node-pty's spawn-helper under app.asar.unpacked executable:
+# the package publishes it without the bit, and the copy keeps that mode.
+# afterPack runs before signing, so the signature covers the changed file.
+# Every other platform it leaves alone. Resolved from packages/desktop, where
+# every build runs electron-builder.
+afterPack: ./scripts/after-pack.mjs
 
 # No update feed is generated, because there is no auto-updater. The decision
 # and the three reasons behind it are in docs/PACKAGING.md; the short version is
@@ -103,3 +112,39 @@ nsis:
   runAfterFinish: true
   createStartMenuShortcut: true
   createDesktopShortcut: false
+
+# Built by `pnpm dist:mac`, on a Mac or the macos-latest runner: electron-builder
+# makes a dmg only on macOS. Apple Silicon only - every Mac sold since 2023 is,
+# and an Intel build would double the release's size for machines Helm is not
+# looked at on.
+mac:
+  # Explicit for the reason `win.icon` is: a moved file fails the build rather
+  # than shipping Electron's icon in Finder and the Dock. Packed by `pnpm icon`
+  # alongside the .ico and committed.
+  icon: build/icon.icns
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  # The zip's name. The dmg names itself below.
+  artifactName: Helm-${version}-${arch}-mac.${ext}
+  # Ad-hoc signed: a code signature with no certificate behind it. Apple Silicon
+  # will not run an unsigned arm64 binary at all, and there is no Developer ID
+  # to sign with, so this is the signature the app can have. A downloaded copy
+  # still meets Gatekeeper, and is opened once with Open Anyway in System
+  # Settings > Privacy & Security; docs/PACKAGING.md says so. Developer ID signing and
+  # notarization come with an Apple Developer account.
+  identity: '-'
+  # The hardened runtime only matters to notarization, and with an ad-hoc
+  # signature it turns on library validation, which refuses to load the native
+  # modules (better-sqlite3, node-pty, koffi) - they carry no Team ID to match.
+  hardenedRuntime: false
+  notarize: false
+  # Without this electron-builder writes NSRequiresAquaSystemAppearance, which
+  # pins the app to the light appearance: the `system` theme would never follow
+  # macOS into dark mode.
+  darkModeSupport: true
+dmg:
+  artifactName: Helm-${version}-${arch}.${ext}

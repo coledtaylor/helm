@@ -1,6 +1,6 @@
 {
   "name": "@helm/desktop",
-  "version": "2.3.3",
+  "version": "2.4.0",
   "description": "Helm's Electron shell: main process, preload, renderer.",
   "//productName": "Electron derives app.getName() - and therefore %APPDATA%\\<name> - from this file. Without productName a scoped package name puts the database in %APPDATA%\\@helm/desktop, creating a nested folder from the scope. electron-builder sets the same value for packaged builds.",
   "productName": "Helm",
@@ -9,7 +9,9 @@
   "private": true,
   "main": "./out/main/index.js",
   "scripts": {
-    "//dev": "Goes through scripts/run-dev.mjs, which gives the run a data directory of its own under %LOCALAPPDATA%\\Helm\\dev. Without that, productName: Helm resolves userData to %APPDATA%\\Helm - the installed app's - and the two fight over one Chromium profile and one helm.db. --fresh starts with no database, which is the first-run state. A second `pnpm dev` gets its own directory rather than failing on a held helm.db.",
+    "//postinstall": "On macOS, gives node-pty's prebuilt spawn-helper the execute bit the package publishes it without; with no bit, every pty fails with 'posix_spawnp failed'. Does nothing on Windows and Linux, and nothing when run again. The packaged app gets the same fix from scripts/after-pack.mjs.",
+    "postinstall": "node scripts/spawn-helper.mjs",
+    "//dev":"Goes through scripts/run-dev.mjs, which gives the run a data directory of its own under %LOCALAPPDATA%\\Helm\\dev. Without that, productName: Helm resolves userData to %APPDATA%\\Helm - the installed app's - and the two fight over one Chromium profile and one helm.db. --fresh starts with no database, which is the first-run state. A second `pnpm dev` gets its own directory rather than failing on a held helm.db.",
     "dev": "node scripts/run-dev.mjs",
     "//dev:live": "The old behaviour: unpackaged, against %APPDATA%\\Helm, sharing everything with the installed app. Kept because it is the only way to see the real database in a dev build, and it says so loudly on the console and on the status bar's mode chip. --watch is what makes the main process and preload reload too; without it electron-vite only gives the renderer HMR, and every main-process edit needs the app killed and restarted by hand.",
     "dev:live": "electron-vite dev --watch",
@@ -31,9 +33,15 @@
     "claude": "electron-vite build && electron . --claude --cwd=.",
     "//dist:win": "Goes through scripts/dist-win.mjs rather than calling electron-builder directly. electron-builder resolves pnpm with which(), which prefers pnpm.EXE over pnpm.CMD on Windows; a stale standalone pnpm shadowing the managed one makes it either fail outright or - worse - fall back to the npm collector and silently produce artefacts with no app.asar.unpacked, which is an exe that cannot dlopen better-sqlite3. The wrapper checks the resolved pnpm answers the declared version and shims it for the child process if not.",
     "dist:win": "electron-vite build && node scripts/dist-win.mjs --win",
+    "//dist:mac": "The macOS artefacts: an arm64 dmg and zip, ad-hoc signed, in dist-app. Runs only on macOS, because electron-builder makes a dmg only there; the release workflow runs it on macos-latest. electron-builder is called directly: the pnpm shadowing dist-win.mjs guards against is a Windows PATHEXT problem.",
+    "dist:mac": "electron-vite build && electron-builder --mac --publish never",
     "//verify:artifact": "Asserts a built exe actually carries app.asar.unpacked, by unwrapping the NSIS artefact and the app-64.7z nested inside it. Checking dist-app/win-unpacked instead would be checking electron-builder's scratch directory rather than the file a person downloads. With no arguments it checks every Helm-*.exe in dist-app; the release workflow names the two it is about to upload. Needs 7-Zip, which ships on the windows-latest runner image.",
     "verify:artifact": "node scripts/verify-artifact.mjs",
-    "//icon": "Draws build/icon.* and packs build/icon.ico. The .ico is committed, so this is not part of the build - run it when the artwork changes.",
+    "//verify:mac-artifact": "The macOS counterpart: opens the dmg and the zip a person downloads and asserts the app inside is arm64, carries a valid ad-hoc signature, names its .icns icon and has its native modules unpacked. Needs macOS (codesign, hdiutil, ditto, lipo). --icon checks only build/icon.icns, which runs anywhere.",
+    "verify:mac-artifact": "node scripts/verify-mac-artifact.mjs",
+    "//screenshots": "Not a test, and in no suite. Builds, launches the app in a fake-claude world (test/world.ts) through the E2E launch, and saves a screenshot of every rail destination and a session terminal in the light and the dark theme to reports/screenshots, for a person to look at. The macOS screenshot workflow runs it on macos-latest; it runs the same on Windows and Linux.",
+    "screenshots": "electron-vite build && playwright test -c scripts/screenshots",
+    "//icon": "Draws build/icon.* and packs build/icon.ico and build/icon.icns. Both are committed, so this is not part of the build - run it when the artwork changes.",
     "icon": "node scripts/make-icon.mjs"
   },
   "dependencies": {

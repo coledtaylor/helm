@@ -24,6 +24,12 @@ export interface ConnectMessage {
   /** Null while the relay has not read one yet; the page keeps the one it booted with. */
   theme: HelmTheme | null
   visible: boolean
+  /**
+   * Whether Helm runs on macOS, where Cmd rather than Ctrl is the page's
+   * editing modifier. The window answers it once, from the platform helper
+   * Helm's own shortcuts use, so a frame never works it out on its own.
+   */
+  mac?: boolean
 }
 
 /** A key the page did not handle, for Helm's shortcuts. */

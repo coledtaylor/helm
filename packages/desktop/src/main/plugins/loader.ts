@@ -114,18 +114,25 @@ export function fileProblem(dir: string, entry: string): string | null {
 /**
  * A path under `dir` as the file it really is, `'outside'` when it resolves
  * out of the folder, or null when there is no such file.
+ *
+ * The file and the folder are both resolved before they are compared. A
+ * folder can be reached through a link or an 8.3 alias - macOS's temporary
+ * folder is under /var, which is /private/var - and a resolved file held
+ * against the folder as spelled would always be outside it.
  */
 export function resolveInside(dir: string, entry: string): string | 'outside' | null {
   const lexical = resolve(dir, entry)
   if (!isInside(dir, lexical)) return 'outside'
+  let realDir: string
   let real: string
   try {
+    realDir = realpathSync.native(dir)
     real = realpathSync.native(lexical)
     if (!statSync(real).isFile()) return null
   } catch {
     return null
   }
-  return isInside(dir, real) ? real : 'outside'
+  return isInside(realDir, real) ? real : 'outside'
 }
 
 /**

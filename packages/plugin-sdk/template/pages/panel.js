@@ -24,7 +24,8 @@ function openTab() {
 
 document.getElementById('open').addEventListener('click', openTab)
 
-// The + in the sidebar header, and the command in Ctrl+Shift+P without a tab.
+// The + in the sidebar header, and the command in the command palette
+// (Ctrl+Shift+P, or Cmd+Shift+P on macOS) without a tab.
 helm.on('action', ({ id }) => {
   if (id === 'open') openTab()
 })

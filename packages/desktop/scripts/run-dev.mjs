@@ -2,7 +2,8 @@
 //
 // Why this exists at all: `package.json` sets `productName: Helm`, so an
 // unpackaged Electron run resolves `app.getPath('userData')` to
-// **`%APPDATA%\Helm`** - the very directory the installed app uses. Before this
+// **the installed app's own directory** (`%APPDATA%\Helm`, `~/Library/Application
+// Support/Helm`, `~/.config/Helm`). Before this
 // script, `pnpm dev` shared `helm.db`, `overlays/` and the Chromium profile with
 // whichever Helm the developer had open. The visible half of that was two
 // processes fighting over one Chromium profile ("Unable to move the cache:
@@ -14,13 +15,15 @@
 // sharing safe.
 //
 // Every check already gets a directory of its own through `isolate.mjs`. This is
-// the same mechanism, pointed at `%LOCALAPPDATA%\Helm\dev`, with `concurrent`
+// the same mechanism, pointed at `dev` under the isolated base (`%LOCALAPPDATA%\Helm`
+// on Windows, `~/Library/Application Support/Helm Dev` on macOS,
+// `${XDG_DATA_HOME:-~/.local/share}/Helm` on Linux; see `isolatedBaseFor`), with `concurrent`
 // on - because unlike a check, this is a window somebody leaves open, and a
 // second `pnpm dev` is a second window rather than a mistake.
 //
 //   pnpm dev            isolated, seeded from a copy of the real database
 //   pnpm dev --fresh    isolated, no database at all: the first-run state
-//   pnpm dev:live       today's behaviour, against %APPDATA%\Helm
+//   pnpm dev:live       today's behaviour, against the installed app's directory
 //
 // The database and the **templates** directory are seeded on opposite rules,
 // and `seedTemplates` below says why: one is a mirror nobody authors into, and
@@ -38,7 +41,7 @@ import { cpSync, existsSync, lstatSync, readdirSync, readFileSync, rmSync, statS
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
-import { isolate, realDataDir } from './isolate.mjs'
+import { isolate, isolatedRoot, realDataDir } from './isolate.mjs'
 
 const desktopDir = resolve(import.meta.dirname, '..')
 const require = createRequire(import.meta.url)
@@ -227,7 +230,7 @@ function reportTemplates(start, end) {
   console.log(`\n${realTemplatesDir()} CHANGED while dev was up:`)
   for (const line of end.filter((entry) => !start.includes(entry))) console.log(`  now      ${line}`)
   for (const line of start.filter((entry) => !end.includes(entry))) console.log(`  was      ${line}`)
-  console.log('  Dev is supposed to write only to its own copy under %LOCALAPPDATA%\\Helm\\dev.')
+  console.log(`  Dev is supposed to write only to its own copy under ${isolatedRoot('dev', null)}.`)
 }
 
 /** Entry names and the database's size and mtime, which is what a run moves. */

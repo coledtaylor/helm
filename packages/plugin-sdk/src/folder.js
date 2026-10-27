@@ -81,6 +81,11 @@ export function checkPluginFolder(folder) {
  * A path under `dir` as the file it really is, `'outside'` when it resolves
  * out of the folder, or null when there is no such file.
  *
+ * The file and the folder are both resolved before they are compared. A
+ * folder can be reached through a link or an 8.3 alias - macOS's temporary
+ * folder is under /var, which is /private/var - and a resolved file held
+ * against the folder as spelled would always be outside it.
+ *
  * @param {string} dir
  * @param {string} entry
  * @returns {string | 'outside' | null}
@@ -89,14 +94,17 @@ export function resolveInside(dir, entry) {
   const lexical = resolve(dir, entry)
   if (!isInside(dir, lexical)) return 'outside'
   /** @type {string} */
+  let realDir
+  /** @type {string} */
   let real
   try {
+    realDir = realpathSync.native(dir)
     real = realpathSync.native(lexical)
     if (!statSync(real).isFile()) return null
   } catch {
     return null
   }
-  return isInside(dir, real) ? real : 'outside'
+  return isInside(realDir, real) ? real : 'outside'
 }
 
 /**

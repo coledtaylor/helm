@@ -3,6 +3,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { ContentDirEntry, ContentDirListing, ContentScope, FilesStatus, GitFileState } from '@helm/core'
 import { changedDirectories, GIT_STATE_LABEL, GIT_STATE_LETTER } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { shortcutLabel } from '../lib/platform'
 import { ROW_SELECTED_GROUP } from '../lib/rows'
 import { CaretIcon, CheckIcon, CodeIcon, CopyIcon, DocIcon, FolderIcon, HarnessIcon, LinkIcon, SearchIcon } from './icons'
 import { Menu } from './Menu'
@@ -93,7 +94,7 @@ export function FilesTree(props: FilesTreeProps): JSX.Element {
       >
         <SearchIcon width={12} height={12} className="shrink-0" />
         <span className="min-w-0 flex-1 truncate text-[12.5px]">Go to file</span>
-        <span className="shrink-0 font-mono text-[10.5px]">Ctrl P</span>
+        <span className="shrink-0 font-mono text-[10.5px]">{shortcutLabel('P', { separator: ' ' })}</span>
       </button>
 
       <div ref={listRef} role="group" aria-label="Project files" className="min-h-0 flex-1 overflow-y-auto px-1.5 pt-0.5 pb-1.5 text-[12.5px]">

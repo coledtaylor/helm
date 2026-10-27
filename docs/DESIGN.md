@@ -100,8 +100,10 @@ from the same resolved theme on every change (`main/chrome.ts`).
 
 ## 2. Type
 
-Inter for the interface; Cascadia Mono / ui-monospace for machine data. Base
-size 13px. Numerals are tabular wherever a number can change.
+Inter for the interface; for machine data, Cascadia Mono where it is
+installed, then SF Mono and Menlo on a Mac, which has none - the one stack
+`'Cascadia Mono', 'SF Mono', Menlo, Consolas, ui-monospace, monospace` in
+`--font-mono`, the terminal and plugin pages alike. Base size 13px. Numerals are tabular wherever a number can change.
 
 - **title** 20-21 / 500 / tracking -1%
 - **heading** 15-17 / 500
@@ -719,13 +721,21 @@ overrides the gate; keep it.
 - **The frame**, left to right: the **rail** on the canvas, 2px, the
   **sidebar** island (256px), a gutter, then the **panes**, and a gutter
   to the window's edge. The title strip above it all, the status bar below.
-- **Title bar**: the native bar is hidden on Windows; Helm draws its own 36px
-  strip - the accent mark alone, centred over the rail at the rail's icon size
-  so the two read as one column, and the drag region - and the Window Controls
-  Overlay paints the
-  min/max/close buttons in the theme's `bg` and `fg-muted` (`main/chrome.ts`),
-  retinted on every theme change. Nothing else lives in it: the theme toggle
-  went to Appearance, and Settings to the rail.
+- **Title bar**: Helm draws its own 36px strip - the accent mark alone, at the
+  rail's icon size, and the drag region. Nothing else lives in it: the theme
+  toggle went to Appearance, and Settings to the rail. Each OS puts its window
+  controls into it its own way (`main/chrome.ts`):
+  - **Windows**: the native bar is hidden and the Window Controls Overlay
+    paints the min/max/close buttons at the right in the theme's `bg` and
+    `fg-muted`, retinted on every theme change. The strip keeps 144px clear
+    at its right for them, and the mark sits centred over the rail so the two
+    read as one column.
+  - **macOS**: the native bar is hidden (`hiddenInset`) and the traffic
+    lights sit at the left, centred in the strip (14px in, 10px down). The
+    strip's first 80px are theirs - nothing interactive, no mark, no page -
+    and the mark sits in its 48px column right after them. No right reserve.
+  - **Linux**: the native frame stays, and the strip sits under it as on
+    Windows.
 - **The rail**: 48px of 40px icon buttons on the canvas, `rounded-well`, each
   a 20px glyph (`RAIL_ICON`) drawn with a stroke thinned to keep the 1.6px line
   of the rest of the chrome - bigger, not bolder. Ordered by how often each is

@@ -45,6 +45,16 @@ beforeAll(() => {
   writeFileSync(join(dir, 'service', 'main.mjs'), SERVER)
   writeFileSync(join(dir, 'service', 'exits.mjs'), 'process.exit(2)')
   writeFileSync(join(dir, 'service', 'silent.mjs'), 'console.log(process.pid); setInterval(() => {}, 1000)')
+  // Listens like any service, and starts a child that would outlive a kill of
+  // the service alone.
+  writeFileSync(
+    join(dir, 'service', 'tree.mjs'),
+    `import { spawn } from 'node:child_process'
+import { createServer } from 'node:http'
+const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+createServer((req, res) => res.end(JSON.stringify({ pid: process.pid, child: child.pid }))).listen(Number(process.env.HELM_SERVICE_PORT), '127.0.0.1')
+`
+  )
   writeFileSync(join(root, 'outside.mjs'), 'process.exit(0)')
 })
 
@@ -142,6 +152,16 @@ describe('a service', () => {
     await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5000 })
     await vi.waitFor(() => expect(log).toContainEqual({ stream: 'out', text: 'partial' }))
     expect(log).toContainEqual({ stream: 'helm', text: 'stopped' })
+  })
+
+  it('is stopped with every process it started', async () => {
+    const { service } = make('service/tree.mjs')
+    const endpoint = await service.ensure()
+    const response = await fetch(endpoint.origin)
+    const { pid, child } = (await response.json()) as { pid: number; child: number }
+    expect(alive(child)).toBe(true)
+    service.stop(false)
+    await vi.waitFor(() => expect([alive(pid), alive(child)]).toEqual([false, false]), { timeout: 5000 })
   })
 
   it('is started again after it dies, as another process', async () => {

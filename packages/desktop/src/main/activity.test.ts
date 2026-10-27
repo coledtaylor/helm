@@ -45,7 +45,7 @@ describe('activity service', () => {
       return activity.states().find((state) => state.id === id)
     }
 
-    it('joins each session to its own record, through the .cmd shim: idle, waiting with its reason, busy', async () => {
+    it('joins each session to its own record, through the fake CLI shim: idle, waiting with its reason, busy', async () => {
       const { alpha: alphaDir, beta: betaDir } = h.world.projects
       const [alpha, beta] = await Promise.all([
         h.host.start({ cwd: alphaDir, projectPath: alphaDir, name: 'alpha', cols: 80, rows: 24 }),
@@ -63,9 +63,12 @@ describe('activity service', () => {
         expect(stateOf(beta.id)?.activity).toBe('idle')
       }, WAIT)
 
-      // The pty is `cmd.exe`, and the CLI registered under its own pid beneath it.
+      // On Windows the pty is `cmd.exe` running the `.cmd` shim, and the CLI
+      // registered under its own pid beneath it. Elsewhere the shim execs, so
+      // the pty is the CLI.
       const run = await h.run(alpha)
-      expect(run.pid).not.toBe(h.host.pid(alpha.id))
+      if (process.platform === 'win32') expect(run.pid).not.toBe(h.host.pid(alpha.id))
+      else expect(run.pid).toBe(h.host.pid(alpha.id))
       expect(activity.overview().sessions.find((s) => s.helmSessionId === alpha.id)).toMatchObject({
         pid: run.pid,
         registered: true,

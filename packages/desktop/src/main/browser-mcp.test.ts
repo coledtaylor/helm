@@ -968,11 +968,12 @@ describe('the tool endpoint', () => {
       server: 'helm-plugin-tracker',
       instructions: 'Cards live on the board.',
       tools: [
-        { name: 'list_cards', description: 'Lists the cards.', inputSchema: { type: 'object', properties: {} } },
+        { name: 'list_cards', description: 'Lists the cards.', inputSchema: { type: 'object', properties: {} }, readOnly: true },
         {
           name: 'add_card',
           description: 'Adds a card.',
-          inputSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }
+          inputSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] },
+          readOnly: false
         }
       ]
     }
@@ -1015,12 +1016,40 @@ describe('the tool endpoint', () => {
         alpha.token,
         'tools/list'
       )
-      expect(tools).toEqual(TRACKER.tools)
+      // The manifest's `readOnly` is MCP's `readOnlyHint`, on the one tool marked.
+      expect(tools).toEqual([
+        {
+          name: 'list_cards',
+          description: 'Lists the cards.',
+          inputSchema: { type: 'object', properties: {} },
+          annotations: { readOnlyHint: true }
+        },
+        {
+          name: 'add_card',
+          description: 'Adds a card.',
+          inputSchema: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] }
+        }
+      ])
       const init = await rpcResult<{ serverInfo: { name: string }; instructions: string }>(trackerUrl(alpha), alpha.token, 'initialize', {})
       expect(init.serverInfo.name).toBe('helm-plugin-tracker')
       expect(init.instructions).toMatch(/^These tools come from "Tracker", a plugin the user added to Helm/)
       expect(init.instructions.endsWith('\n\nCards live on the board.')).toBe(true)
       expect(endpoint.servedNames()).toEqual(['helm-browser', 'helm-sessions', 'helm-plugin-tracker'])
+    })
+
+    it("registers a plugin's read-only tools as allowed for the session, and nothing of Helm's own families", async () => {
+      await endpoint.start()
+      const alpha = register('alpha')
+      expect(alpha.launch.servers.map((server) => [server.name, server.allowedTools])).toEqual([
+        ['helm-browser', undefined],
+        ['helm-sessions', undefined],
+        ['helm-plugin-tracker', ['list_cards']]
+      ])
+
+      // A plugin with no tool marked has no allow list at all.
+      servers = [{ ...TRACKER, tools: TRACKER.tools.map((tool) => ({ ...tool, readOnly: false })) }]
+      const beta = register('beta')
+      expect(beta.launch.servers.find((server) => server.name === 'helm-plugin-tracker')).not.toHaveProperty('allowedTools')
     })
 
     it('hands the plugin the call, its arguments and who made it - an id, a name and a folder, never the token', async () => {

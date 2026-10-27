@@ -228,8 +228,8 @@ describe('PluginPage: its tools for sessions', () => {
     server: 'helm-plugin-sample',
     instructions: 'Use these for items.',
     tools: [
-      { name: 'list_items', description: 'Lists the items.' },
-      { name: 'create_item', description: 'Adds an item.' }
+      { name: 'list_items', description: 'Lists the items.', readOnly: true },
+      { name: 'create_item', description: 'Adds an item.', readOnly: false }
     ]
   }
 
@@ -237,13 +237,27 @@ describe('PluginPage: its tools for sessions', () => {
     renderPage({ plugin: plugin({ agent }) })
     const tools = group('plugin-tools')
     expect([...tools.querySelectorAll('[data-plugin-tools] li')].map((li) => li.textContent)).toEqual([
-      'list_itemsLists the items.',
+      'list_itemsread-onlyLists the items.',
       'create_itemAdds an item.'
     ])
     expect(tools.querySelector('[data-plugin-tools-state]')?.textContent).toBe(
       'Sessions Helm starts get them as helm-plugin-sample. Turning this off takes them from sessions already running.'
     )
     expect(within(tools).getByRole<HTMLInputElement>('checkbox', { name: 'Offer to sessions' }).checked).toBe(true)
+  })
+
+  it('marks the read-only tools, and says they run without asking while the others ask', () => {
+    renderPage({ plugin: plugin({ agent }) })
+    const tools = group('plugin-tools')
+    expect([...tools.querySelectorAll('[data-plugin-tool-read-only]')].map((mark) => mark.closest('li')?.dataset['pluginTool'])).toEqual([
+      'list_items'
+    ])
+    expect(tools.textContent).toContain('Read-only ones run without asking; the others ask first.')
+
+    document.body.innerHTML = ''
+    renderPage({ plugin: plugin({ agent: { ...agent, tools: agent.tools.map((tool) => ({ ...tool, readOnly: false })) } }) })
+    expect(document.querySelector('[data-plugin-tool-read-only]')).toBeNull()
+    expect(group('plugin-tools').textContent).not.toContain('without asking')
   })
 
   it('turns them off and on from its switch', () => {

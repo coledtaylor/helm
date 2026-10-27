@@ -30,8 +30,9 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
-const ALPHA = 'C:\\repos\\alpha'
-const BETA = 'C:\\repos\\beta'
+// Recorded directories as the CLI writes them on this OS.
+const ALPHA = process.platform === 'win32' ? 'C:\\repos\\alpha' : '/repos/alpha'
+const BETA = process.platform === 'win32' ? 'C:\\repos\\beta' : '/repos/beta'
 
 interface Prompt {
   sessionId: string
@@ -265,7 +266,7 @@ describe('readHistorySessions', () => {
 
   it('matches a project whatever case the search box was typed in', () => {
     expect(readHistorySessions(store, { search: 'BETA' }).total).toBe(1)
-    expect(readHistorySessions(store, { search: 'repos\\beta' }).total).toBe(1)
+    expect(readHistorySessions(store, { search: join('REPOS', 'beta') }).total).toBe(1)
   })
 
   it('counts a session once when the search matches its project and a prompt', () => {

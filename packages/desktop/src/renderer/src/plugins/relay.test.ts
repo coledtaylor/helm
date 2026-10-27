@@ -139,6 +139,7 @@ beforeEach(() => {
 afterEach(() => {
   relay.destroy()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
   vi.useRealTimers()
   document.body.replaceChildren()
 })
@@ -194,9 +195,16 @@ describe('the handshake', () => {
       type: CONNECT,
       context: { plugin: 'sample', surface: 'panel', name: 'main', params: { id: '2' } },
       theme: null,
-      visible: true
+      visible: true,
+      mac: false
     })
     expect(relay.state('panel:sample/main')).toEqual({ kind: 'ready' })
+  })
+
+  it('tells the frame it is on macOS, where Cmd is the page’s editing modifier', () => {
+    vi.spyOn(Navigator.prototype, 'platform', 'get').mockReturnValue('MacIntel')
+    const element = open()
+    expect(connect(element).connect.mac).toBe(true)
   })
 
   it('carries the latest theme main pushed', () => {

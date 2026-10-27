@@ -193,7 +193,24 @@ export class Terminal {
     for (const listener of this.dataListeners) listener(data)
   }
 
-  attachCustomKeyEventHandler(_handler: (event: KeyboardEvent) => boolean): void {}
+  /** The key handler Helm attached, which `press` runs as xterm would. */
+  keyHandler: ((event: KeyboardEvent) => boolean) | null = null
+  /** What is selected, as a test sets it. */
+  selection = ''
+  readonly pasted: string[] = []
+
+  attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void {
+    this.keyHandler = handler
+  }
+
+  /**
+   * A keydown, through Helm's handler. True when it would go on to xterm, and
+   * so to the program; false when Helm answered it.
+   */
+  press(init: KeyboardEventInit): boolean {
+    if (this.keyHandler === null) throw new Error('no key handler attached')
+    return this.keyHandler(new KeyboardEvent('keydown', { cancelable: true, ...init }))
+  }
 
   write(data: string): void {
     this.written.push(data)
@@ -202,13 +219,17 @@ export class Terminal {
   focus(): void {}
   blur(): void {}
   hasSelection(): boolean {
-    return false
+    return this.selection !== ''
   }
   getSelection(): string {
-    return ''
+    return this.selection
   }
-  clearSelection(): void {}
-  paste(_text: string): void {}
+  clearSelection(): void {
+    this.selection = ''
+  }
+  paste(text: string): void {
+    this.pasted.push(text)
+  }
 
   dispose(): void {
     this.disposed = true

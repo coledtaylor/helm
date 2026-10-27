@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { linkFolder, unlinkFolder } from '../../../test/links'
 import type { PluginRuntime } from './protocol'
 
 vi.mock('electron', async () => (await import('../../../test/electron')).electronFake())
@@ -35,11 +35,11 @@ beforeAll(() => {
   writeFileSync(join(root, 'secret.txt'), "not the plugin's")
   mkdirSync(join(root, 'elsewhere'))
   writeFileSync(join(root, 'elsewhere', 'x.js'), 'outside')
-  execFileSync('cmd', ['/c', 'mklink', '/J', join(dir, 'escape'), join(root, 'elsewhere')], { stdio: 'ignore' })
+  linkFolder(join(dir, 'escape'), join(root, 'elsewhere'))
 })
 
 afterAll(() => {
-  execFileSync('cmd', ['/c', 'rmdir', join(dir, 'escape')], { stdio: 'ignore' })
+  unlinkFolder(join(dir, 'escape'))
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -99,7 +99,9 @@ describe('servePluginRequest', () => {
     // The URL parser folds encoded dot segments away first: this asks for
     // /secret.txt inside the folder, which is not there.
     ['helm-plugin://sample/%2e%2e/secret.txt', 404],
-    ['helm-plugin://sample/dist/..%5C..%5Csecret.txt', 403],
+    // A backslash is a separator on Windows, where this climbs out and is
+    // refused; on macOS and Linux it is part of a file name, not there.
+    ['helm-plugin://sample/dist/..%5C..%5Csecret.txt', process.platform === 'win32' ? 403 : 404],
     ['helm-plugin://sample/escape/x.js', 403],
     ['helm-plugin://sample/dist/%00.html', 404],
     ['helm-plugin://sample/dist/%E0%A4%A.html', 400]

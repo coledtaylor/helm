@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseNoteFrontmatter } from './frontmatter'
@@ -407,7 +407,8 @@ describe('readContentDir', () => {
    * repositories, so a tree that walked one would list another project's files
    * as this scope's - and one pointing at an ancestor would not finish.
    *
-   * Windows-first, so this plants a real junction with `mklink /J`. The row is
+   * A real link of the kind overlays make: a junction on Windows, a symbolic
+   * link on macOS and Linux (Node ignores the `'junction'` type there). The row is
    * still *listed* - that is the point of the whole surface - and marked as a
    * link; what is refused is reading through it.
    */
@@ -417,8 +418,7 @@ describe('readContentDir', () => {
     try {
       writeFileSync(join(outside, 'somebody-elses-note.md'), '# Not this scope\n')
       const link = join(root, 'linked')
-      const made = spawnSync('cmd', ['/c', 'mklink', '/J', link, outside], { windowsHide: true })
-      if (made.status !== 0) return // Not Windows, or no permission to make one.
+      symlinkSync(outside, link, 'junction')
 
       const top = await readContentDir(contentScope(root, 'project'), '', {
         ignoreSource: 'default'
@@ -499,28 +499,31 @@ describe('search', () => {
 })
 
 describe('assertContentWritable', () => {
+  // An absolute root on this OS: a drive on Windows, / elsewhere.
+  const v = process.platform === 'win32' ? 'C:/v' : '/v'
+
   it('refuses a path outside the scope', () => {
-    expect(() => assertContentWritable('C:/v', 'C:/other/notes/a.md')).toThrow(/not inside/)
+    expect(() => assertContentWritable(v, join(v, '..', 'other', 'notes', 'a.md'))).toThrow(/not inside/)
   })
 
   it('refuses a nested repository', () => {
-    expect(() => assertContentWritable('C:/v', 'C:/v/repos/x/notes/a.md')).toThrow(/not content/)
+    expect(() => assertContentWritable(v, `${v}/repos/x/notes/a.md`)).toThrow(/not content/)
   })
 
   it('refuses a file it cannot read as content', () => {
-    expect(() => assertContentWritable('C:/v', 'C:/v/notes/a.exe')).toThrow(/binary/)
+    expect(() => assertContentWritable(v, `${v}/notes/a.exe`)).toThrow(/binary/)
   })
 
   it('allows a script, which is a file the agent wrote', () => {
-    expect(() => assertContentWritable('C:/v', 'C:/v/tools/rebuild.py')).not.toThrow()
+    expect(() => assertContentWritable(v, `${v}/tools/rebuild.py`)).not.toThrow()
   })
 
   it('allows an extensionless file, which is text until the bytes say otherwise', () => {
-    expect(() => assertContentWritable('C:/v', 'C:/v/LICENSE')).not.toThrow()
+    expect(() => assertContentWritable(v, `${v}/LICENSE`)).not.toThrow()
   })
 
   it('allows a note and a skill', () => {
-    expect(() => assertContentWritable('C:/v', 'C:/v/notes/a.md')).not.toThrow()
-    expect(() => assertContentWritable('C:/v', 'C:/v/.claude/skills/x/SKILL.md')).not.toThrow()
+    expect(() => assertContentWritable(v, `${v}/notes/a.md`)).not.toThrow()
+    expect(() => assertContentWritable(v, `${v}/.claude/skills/x/SKILL.md`)).not.toThrow()
   })
 })

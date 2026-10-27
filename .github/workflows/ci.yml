@@ -3,8 +3,8 @@ name: CI
 on:
   # `main` is deliberately absent. Every push to `main` runs `Release`, which
   # calls this workflow as its gate - so `main` is checked exactly once per
-  # push rather than twice. Windows minutes bill at 2x on a private repo, and
-  # two identical 8-minute runs of the same commit buy nothing.
+  # push rather than twice. A second run of the same commit on the same three
+  # runners would buy nothing.
   push:
     branches-ignore: [main]
   pull_request:
@@ -17,17 +17,46 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# CI builds the app and gates the release. It runs no tests: those run
-# locally, before a change is merged (docs/TESTING.md). What is left here is
-# what a release cannot ship without - code that typechecks, lints and builds.
+# CI runs the gate - `pnpm check`: typecheck, lint, unit and integration tests -
+# on Windows, macOS and Linux, then builds. Once work happens on a Mac, nothing
+# else would run the Windows code paths, and the reverse. The end-to-end tier
+# (`pnpm test:e2e`) stays local (docs/TESTING.md).
 jobs:
   check:
-    # Helm is Windows-first (CLAUDE.md): junctions rather than symlinks, ConPTY,
-    # paths with spaces. Checking it on Linux would pass while missing the
-    # platform every one of those decisions was made for.
-    runs-on: windows-latest
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # One OS failing must not cancel the others: each job runs to the end and
+      # reports its own result.
+      fail-fast: false
+      matrix:
+        include:
+          # All three are required: a failure on any one fails this workflow,
+          # and from `Release` that skips the tag, the release and the SDK
+          # publish. A runner can be made advisory again by setting its flag to
+          # false.
+          - os: windows-latest
+            required: true
+          - os: macos-latest
+            required: true
+          - os: ubuntu-latest
+            required: true
+
+    # A job whose flag is false would still show as failed, with its output,
+    # but count as a success to the workflow and to `needs:` in release.yml.
+    continue-on-error: ${{ !matrix.required }}
+
+    # A hung pty test must not hold a runner for the six-hour default.
+    timeout-minutes: 30
 
     steps:
+      # GitHub's Windows runners check out with core.autocrlf=true; developers
+      # work on LF bytes (there is no .gitattributes). Without this, Windows
+      # would lint and test files no developer has. A no-op on macOS and Linux.
+      - name: Check out with LF line endings
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v5
 
       - uses: pnpm/action-setup@v4
@@ -44,11 +73,10 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Lint
-        run: pnpm lint
+      # One step, not three: the gate has one definition, in package.json, and
+      # CI runs exactly what a developer runs.
+      - name: Check (typecheck, lint, unit and integration tests)
+        run: pnpm check
 
       - name: Build
         run: pnpm build

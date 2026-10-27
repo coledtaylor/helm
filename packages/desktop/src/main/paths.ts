@@ -8,10 +8,17 @@ import type { AppMode } from '../shared/ipc'
  * Where Helm keeps its data.
  *
  * Portable builds put it beside the exe so the whole install travels on a
- * stick; installed builds use `%APPDATA%`. electron-builder's portable launcher
- * is what tells us which we are: it sets `PORTABLE_EXECUTABLE_DIR` to the
- * directory the exe was double-clicked from (the exe itself runs from a temp
- * extraction directory, so `process.execPath` would point at the wrong place).
+ * stick; installed builds use Electron's `userData` for the product name
+ * `Helm`:
+ *
+ *   Windows  `%APPDATA%\Helm`
+ *   macOS    `~/Library/Application Support/Helm`
+ *   Linux    `${XDG_CONFIG_HOME:-~/.config}/Helm`
+ *
+ * electron-builder's portable launcher is what tells us which we are: it sets
+ * `PORTABLE_EXECUTABLE_DIR` to the directory the exe was double-clicked from
+ * (the exe itself runs from a temp extraction directory, so `process.execPath`
+ * would point at the wrong place).
  */
 
 const portableDir = process.env['PORTABLE_EXECUTABLE_DIR']
@@ -23,13 +30,17 @@ const portableDir = process.env['PORTABLE_EXECUTABLE_DIR']
  * checkout, and `PORTABLE_EXECUTABLE_DIR` says whether the data lives somewhere
  * of its own - and the pair matters because the case with no directory of its
  * own is the dangerous one. `productName` is `Helm`, so an unpackaged run with
- * no portable directory resolves `userData` to **`%APPDATA%\Helm`**: the same
- * `helm.db`, the same `overlays/` and the same Chromium profile as the Helm
- * somebody is using. That is `dev-live`, it is what `pnpm dev:live` asks for on
- * purpose, and it is named rather than inferred so the status bar can say it.
+ * no portable directory resolves `userData` to **the installed app's own**
+ * (`%APPDATA%\Helm`, `~/Library/Application Support/Helm`, `~/.config/Helm`):
+ * the same `helm.db`, the same `overlays/` and the same Chromium profile as the
+ * Helm somebody is using. That is `dev-live`, it is what `pnpm dev:live` asks
+ * for on purpose, and it is named rather than inferred so the status bar can
+ * say it.
  *
  * `pnpm dev` and every check go through `scripts/isolate.mjs` instead, which
- * sets `PORTABLE_EXECUTABLE_DIR` to a directory under `%LOCALAPPDATA%\Helm`.
+ * sets `PORTABLE_EXECUTABLE_DIR` to a directory of their own outside it:
+ * `%LOCALAPPDATA%\Helm` on Windows, `~/Library/Application Support/Helm Dev`
+ * on macOS, `${XDG_DATA_HOME:-~/.local/share}/Helm` on Linux.
  */
 export const appMode: AppMode = app.isPackaged
   ? portableDir
@@ -56,10 +67,13 @@ export const dbFile: string = join(dataDir, 'helm.db')
  * whole of the mechanism - one rule covering all four run modes rather than a
  * second override invented for this one:
  *
- *   installed, dev:live   `~/.config/helm/templates`
+ *   installed, dev:live   `~/.config/helm/templates`, on every OS
  *   portable              `helm-data/templates` beside the exe
- *   pnpm dev              its own, under `%LOCALAPPDATA%\Helm\dev`
- *   every check           its own, under `%LOCALAPPDATA%\Helm\checks\<name>`
+ *   pnpm dev              its own, under `<isolated base>/dev`
+ *   every check           its own, under `<isolated base>/checks/<name>`
+ *
+ * where the isolated base is the per-OS folder `isolate.mjs` names
+ * (`%LOCALAPPDATA%\Helm` on Windows).
  *
  * The last two come for free: both go through `scripts/isolate.mjs`, which sets
  * the variable. `pnpm dev` needs its own rather than sharing because in-app
@@ -68,10 +82,12 @@ export const dbFile: string = join(dataDir, 'helm.db')
  * `scripts/run-dev.mjs` seeds it by copying the real one, the way the database
  * is seeded from a `VACUUM INTO` copy.
  *
- * Not under `%APPDATA%\Helm` for the installed case, and that is deliberate:
- * these are files a person writes and edits by hand, likely keeps in git, and
- * has to be able to find. `~/.config/helm` is where somebody looks for that;
- * `%APPDATA%` is where an application keeps things about itself.
+ * Not under the installed data directory, and that is deliberate: these are
+ * files a person writes and edits by hand, likely keeps in git, and has to be
+ * able to find. `~/.config/helm` is where somebody looks for that; `%APPDATA%`
+ * and `~/Library/Application Support` are where an application keeps things
+ * about itself. On Linux `~/.config/helm` sits beside Electron's
+ * `~/.config/Helm`, and the case is what keeps them apart.
  */
 export const templatesDir: string = portableDir
   ? join(dataDir, 'templates')
@@ -97,7 +113,8 @@ export const themesDir: string = portableDir
  * Where synthesised overlay plugins go.
  *
  * SPEC 2 sketched these under `%TEMP%`, and they are not there. A shim's
- * subdirectories are junctions into the user's real repositories, and every
+ * subdirectories are links (junctions on Windows, symlinks on macOS and Linux)
+ * into the user's real repositories, and every
  * temp-cleaning tool on Windows - Disk Cleanup, Storage Sense, the third-party
  * ones - walks `%TEMP%` and deletes what it finds. One that follows a reparse
  * point instead of unlinking it deletes the repo's `.claude/skills`, which is

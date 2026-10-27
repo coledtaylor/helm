@@ -2,18 +2,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import {
   cleanStaleShims,
   composeOverlayMemory,
+  linkKind,
   overlayPluginName,
   overlayPluginNames,
   planOverlays,
@@ -52,6 +55,17 @@ function setOwners(dir: string, owners: ShimOwner[] | undefined): void {
   if (owners === undefined) delete next['owners']
   else next['owners'] = owners
   writeFileSync(join(dir, STAMP), JSON.stringify(next, null, 2))
+}
+
+/** Every file under `dir` with its contents, sorted: what a removal must not change. */
+function filesUnder(dir: string): Array<[string, string]> {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry): [string, string] => {
+      const path = join(entry.parentPath, entry.name)
+      return [relative(dir, path), readFileSync(path, 'utf8')]
+    })
+    .sort(([a], [b]) => a.localeCompare(b))
 }
 
 /** A pid that is not this process, with a start time inside the current boot. */
@@ -115,6 +129,14 @@ describe('overlayPluginName', () => {
       'acme',
       'acme-2'
     ])
+  })
+})
+
+describe('linkKind', () => {
+  it('is a junction on Windows and a directory symlink on macOS and Linux', () => {
+    expect(linkKind('win32')).toEqual({ type: 'junction', mode: 'junction' })
+    expect(linkKind('darwin')).toEqual({ type: 'dir', mode: 'symlink' })
+    expect(linkKind('linux')).toEqual({ type: 'dir', mode: 'symlink' })
   })
 })
 
@@ -199,7 +221,7 @@ describe('syncOverlay', () => {
    * loaded a plugin pointing at nothing. Asserted on the source, not on the
    * shim, because the shim being right is not the property that matters here.
    */
-  it('a rebuild leaves the source repo untouched behind the junction', () => {
+  it('a rebuild leaves the source repo untouched behind the link', () => {
     const project = makeProject('acme', { skills: ['think'], agents: ['reviewer'] })
     syncOverlay(planOverlays([project], shimRoot)[0]!)
 
@@ -215,6 +237,24 @@ describe('syncOverlay', () => {
     expect(existsSync(join(project, '.claude', 'agents', 'reviewer.md'))).toBe(true)
     // And the rebuilt shim reaches it.
     expect(readFileSync(join(shim.dir, 'skills', 'think', 'SKILL.md'), 'utf8')).toBe('# edited\n')
+  })
+
+  /**
+   * A junction on Windows, a directory symlink on macOS and Linux - and either
+   * way a link to the source folder itself, not a copy of it. Runs with real
+   * links on whichever OS runs the tests.
+   */
+  it("links each carried folder to the source folder with this OS's kind of link", () => {
+    const project = makeProject('acme', { skills: ['think'], agents: ['reviewer'] })
+    const shim = syncOverlay(planOverlays([project], shimRoot)[0]!)
+
+    expect(shim.mode).toBe(process.platform === 'win32' ? 'junction' : 'symlink')
+    const stamp = JSON.parse(readFileSync(join(shim.dir, STAMP), 'utf8')) as { mode: string }
+    expect(stamp.mode).toBe(shim.mode)
+    for (const dir of ['skills', 'agents']) {
+      expect(lstatSync(join(shim.dir, dir)).isSymbolicLink()).toBe(true)
+      expect(realpathSync(join(shim.dir, dir))).toBe(realpathSync(join(project, '.claude', dir)))
+    }
   })
 
   it('an edit to a skill is visible through the link without a rebuild', () => {
@@ -251,7 +291,7 @@ describe('cleanStaleShims', () => {
    * real repo, so a cleanup that descended through them would delete the skills
    * it exists to expose.
    */
-  it('unlinks junctions rather than deleting the repo behind them', () => {
+  it('unlinks the links rather than deleting the repo behind them', () => {
     const project = makeProject('acme', { skills: ['think'], agents: ['reviewer'] })
     syncOverlay(planOverlays([project], shimRoot)[0]!)
 
@@ -262,6 +302,29 @@ describe('cleanStaleShims', () => {
       '# think\n'
     )
     expect(existsSync(join(project, '.claude', 'agents', 'reviewer.md'))).toBe(true)
+  })
+
+  /**
+   * Rebuilt, then swept: every file in the repository behind the links is
+   * still there, byte for byte, nested folders included. With real symlinks on
+   * macOS and Linux and real junctions on Windows.
+   */
+  it('leaves every file in the repository behind the links through a rebuild and a sweep', () => {
+    const project = makeProject('acme', { skills: ['think', 'plan'], agents: ['reviewer'], commands: ['ship'] })
+    mkdirSync(join(project, '.claude', 'skills', 'think', 'references', 'deep'), { recursive: true })
+    writeFileSync(join(project, '.claude', 'skills', 'think', 'references', 'deep', 'notes.md'), 'nested\n')
+    syncOverlay(planOverlays([project], shimRoot)[0]!)
+    const before = filesUnder(join(project, '.claude'))
+    expect(before.length).toBeGreaterThanOrEqual(5)
+
+    writeFileSync(join(project, 'CLAUDE.md'), '# forces a rebuild\n')
+    const rebuilt = syncOverlay(planOverlays([project], shimRoot)[0]!)
+    expect(rebuilt.rebuilt).toBe(true)
+    expect(filesUnder(join(project, '.claude'))).toEqual(before)
+
+    expect(cleanStaleShims(shimRoot, [], rebooted())).toEqual([rebuilt.dir])
+    expect(existsSync(rebuilt.dir)).toBe(false)
+    expect(filesUnder(join(project, '.claude'))).toEqual(before)
   })
 
   it('leaves directories that are not Helm shims alone', () => {
