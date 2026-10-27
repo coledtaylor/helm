@@ -61,7 +61,9 @@ beforeAll(() => {
   if (report === undefined) throw new Error('npm pack reported nothing')
   tarball = join(root, report.filename)
   packed = report.files.map((file) => file.path).sort()
-})
+  // npm pack starts a whole npm, which a loaded CI runner can take past the
+  // default 10s to do.
+}, 60_000)
 
 afterAll(() => {
   rmSync(root, { recursive: true, force: true })
