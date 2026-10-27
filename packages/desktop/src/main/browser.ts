@@ -1232,7 +1232,7 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
      */
     wc.on('before-input-event', (event, input) => {
       if (input.type !== 'keyDown' || entry.agentInput > 0) return
-      const command = browserKeyCommand(input)
+      const command = browserKeyCommand(input, process.platform)
       if (command === null) return
       event.preventDefault()
       if (input.isAutoRepeat && !COMMANDS_THAT_REPEAT.has(command)) return

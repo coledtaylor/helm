@@ -43,7 +43,7 @@ export interface PluginManifest {
   tabs?: Record<string, TabSpec>
   /** A page that runs from the moment the plugin is enabled, with no surface open. */
   background?: string
-  /** Entries in Quick Open (Ctrl+Shift+P). */
+  /** Entries in the command palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS). */
   commands?: CommandSpec[]
   /** A settings page Helm draws for the plugin. */
   settings?: SettingSpec[]

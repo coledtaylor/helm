@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { linkFolder, unlinkFolder } from '../../../test/links'
 
 vi.mock('electron', async () => (await import('../../../test/electron')).electronFake())
 
@@ -24,11 +24,11 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  // Junctions first, unlinked rather than walked: `rmSync` with `recursive`
-  // has been seen to leave one standing.
+  // Links first, unlinked rather than walked: `rmSync` with `recursive` has
+  // been seen to leave a junction standing.
   for (const link of ['escape', 'inside']) {
     try {
-      execFileSync('cmd', ['/c', 'rmdir', join(dir, link)], { stdio: 'ignore' })
+      unlinkFolder(join(dir, link))
     } catch {
       // Not made by this test.
     }
@@ -55,8 +55,9 @@ function manifest(patch: Record<string, unknown> = {}): void {
   )
 }
 
+/** A junction on Windows, a symbolic link on macOS and Linux. */
 function junction(link: string, target: string): void {
-  execFileSync('cmd', ['/c', 'mklink', '/J', link, target], { stdio: 'ignore' })
+  linkFolder(link, target)
 }
 
 describe('loadPluginFolder', () => {

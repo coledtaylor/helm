@@ -251,7 +251,9 @@ describe('reading folders', () => {
     expect(readPluginFolders(store)).toEqual([])
   })
 
-  it('adds a folder once, whatever the case of its path', async () => {
+  // Windows and macOS fold case in paths; on Linux the other spelling is
+  // another folder, which is not there.
+  it.runIf(process.platform !== 'linux')('adds a folder once, whatever the case of its path', async () => {
     start([])
     expect(host.add(sampleDir)).toMatchObject({ path: sampleDir, error: null, plugins: [expect.objectContaining({ id: 'sample' })] })
     expect(host.add(sampleDir.toUpperCase()).error).toBeNull()

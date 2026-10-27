@@ -1,7 +1,8 @@
 /**
- * Draws the ship's-wheel icon and packs it into `build/icon.ico`.
+ * Draws the ship's-wheel icon and packs it into `build/icon.ico` for Windows
+ * and `build/icon.icns` for macOS.
  *
- * Run with `pnpm icon`. The .ico is committed, so this is not part of the
+ * Run with `pnpm icon`. Both packs are committed, so this is not part of the
  * build - run it when the artwork changes and commit the result.
  *
  * ## Why it draws rather than renders a file
@@ -85,6 +86,15 @@ const PURPLE = [0x91, 0x84, 0xd9]
  */
 const FILL = 0.92
 
+/**
+ * The share of the canvas a macOS app icon's artwork takes. Apple's icon grid
+ * puts the body in an 824px square centred on the 1024px canvas, and the Dock
+ * and Finder draw every app's icon at the canvas size, so artwork that fills
+ * the canvas the way the Windows icon does stands visibly larger than the icons
+ * beside it.
+ */
+const MAC_FILL = FILL * (824 / 1024)
+
 // ---------------------------------------------------------------------------
 // Signed distance fields. Negative inside, positive outside, in pixels.
 // ---------------------------------------------------------------------------
@@ -114,9 +124,9 @@ const coverage = (d) => Math.max(0, Math.min(1, 0.5 - d))
 // The mark
 // ---------------------------------------------------------------------------
 
-function draw(size) {
+function draw(size, fill = FILL) {
   const px = new Uint8Array(size * size * 4)
-  const unit = (size * FILL) / 16
+  const unit = (size * fill) / 16
 
   // Up to 48px the drawing is snapped to the pixel grid. Every width is a
   // whole number of pixels, the centre sits where the spokes' width needs it -
@@ -278,6 +288,53 @@ function buildIco(entries) {
   return Buffer.concat([header, dir, ...entries.map((e) => e.png)])
 }
 
+// ---------------------------------------------------------------------------
+// ICNS: the magic `icns` and the file's length, then one element per image -
+// a four-character type, the element's length including its 8-byte header, and
+// a PNG. Every type below takes PNG data on the macOS versions Electron runs on.
+// ---------------------------------------------------------------------------
+
+/**
+ * The iconset `iconutil` would build: each point size at 1x and 2x, as
+ * [type, pixels]. The pixel size is what the PNG must be; two types can share
+ * one (a 16pt@2x image is a 32px image).
+ */
+const ICNS_TYPES = [
+  ['icp4', 16],
+  ['ic11', 32],
+  ['icp5', 32],
+  ['ic12', 64],
+  ['ic07', 128],
+  ['ic13', 256],
+  ['ic08', 256],
+  ['ic14', 512],
+  ['ic09', 512],
+  ['ic10', 1024]
+]
+
+/**
+ * The pixel sizes taken from the Windows drawings rather than drawn on the
+ * macOS grid. At 16 and 32px the inset would leave the wheel 12 and 24px
+ * across, under the floors its pixel snapping was tuned for, and those sizes
+ * appear only in Finder's list and sidebar, where every icon is drawn full.
+ */
+const ICNS_FROM_WINDOWS = new Set([16, 32])
+
+function buildIcns(pngBySize) {
+  const elements = ICNS_TYPES.map(([type, size]) => {
+    const png = pngBySize.get(size)
+    if (png === undefined) throw new Error(`no ${String(size)}px drawing for icns type ${type}`)
+    const header = Buffer.alloc(8)
+    header.write(type, 0, 'ascii')
+    header.writeUInt32BE(8 + png.length, 4)
+    return Buffer.concat([header, png])
+  })
+  const header = Buffer.alloc(8)
+  header.write('icns', 0, 'ascii')
+  header.writeUInt32BE(8 + elements.reduce((sum, e) => sum + e.length, 0), 4)
+  return Buffer.concat([header, ...elements])
+}
+
 const entries = SIZES.map((size) => {
   const png = encodePng(draw(size), size)
   writeFileSync(join(BUILD, `icon-${String(size)}.png`), png)
@@ -341,3 +398,12 @@ writePreview()
 // electron-builder's Linux target and the runtime window icon both want a PNG.
 writeFileSync(join(BUILD, 'icon.png'), entries[entries.length - 1].png)
 process.stdout.write(`icon.ico written with ${String(entries.length)} sizes\n`)
+
+const macPngs = new Map()
+for (const [, size] of ICNS_TYPES) {
+  if (macPngs.has(size)) continue
+  const fromWindows = ICNS_FROM_WINDOWS.has(size) ? entries.find((e) => e.size === size) : undefined
+  macPngs.set(size, fromWindows?.png ?? encodePng(draw(size, MAC_FILL), size))
+}
+writeFileSync(join(BUILD, 'icon.icns'), buildIcns(macPngs))
+process.stdout.write(`icon.icns written with ${String(ICNS_TYPES.length)} images\n`)

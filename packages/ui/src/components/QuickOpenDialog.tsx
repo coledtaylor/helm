@@ -3,6 +3,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ContentSearchResult, FileListing } from '@helm/core'
 import { rankPaths, type PathMatch } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { hasPrimaryModifier, shortcutLabel } from '../lib/platform'
 import { CONTENT_KIND_ICON } from '../lib/contentIcons'
 import { ROW_SELECTED } from '../lib/rows'
 import { SEGMENT_ON } from '../lib/segmented'
@@ -187,12 +188,12 @@ export function QuickOpenDialog({
     }
     // The shortcut for the other half switches to it, from inside the dialog
     // as from outside it.
-    if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === 'f' && event.shiftKey) {
+    if (hasPrimaryModifier(event) && !event.altKey && event.key.toLowerCase() === 'f' && event.shiftKey) {
       event.preventDefault()
       switchTo('text')
       return
     }
-    if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'p') {
+    if (hasPrimaryModifier(event) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'p') {
       event.preventDefault()
       switchTo('files')
     }
@@ -233,8 +234,8 @@ export function QuickOpenDialog({
         >
           {(
             [
-              ['files', 'Names', 'Ctrl+P'],
-              ['text', 'Text', 'Ctrl+Shift+F']
+              ['files', 'Names', shortcutLabel('P')],
+              ['text', 'Text', shortcutLabel('F', { shift: true })]
             ] as const
           ).map(([id, label, keys]) => (
             <button

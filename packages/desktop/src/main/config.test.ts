@@ -105,11 +105,12 @@ describe('config service', () => {
     expect(readFileSync(file, 'utf8')).toBe(original)
   })
 
-  // The world's `claude` is a `.cmd` shim under a path with a space, which is
-  // what an npm install in such a folder leaves. Through `cmd.exe /c` the JSON's
-  // quotes used to cut that path in half before the CLI ever ran.
+  // The world's `claude` is a shim under a path with a space - on Windows a
+  // `.cmd`, which is what an npm install in such a folder leaves. Through
+  // `cmd.exe /c` the JSON's quotes used to cut that path in half before the
+  // CLI ever ran.
   it('snapshots .mcp.json, then lets the CLI write the server into it', async () => {
-    expect(world.claude).toMatch(/ .*\.cmd$/)
+    expect(world.claude).toMatch(process.platform === 'win32' ? / .*\.cmd$/ : / /)
     const file = join(project, '.mcp.json')
     const before = `${JSON.stringify({ mcpServers: { old: { command: 'old-server' } } }, null, 2)}\n`
     writeFileSync(file, before)

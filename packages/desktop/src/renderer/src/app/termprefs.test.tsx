@@ -25,7 +25,7 @@ vi.mock('./bridge', () => import('./bridge.testkit'))
 
 const PROJECT = 'C:\\work\\alpha'
 const SHELL_ID = 41
-const BUILT_IN_STACK = '"Cascadia Mono", "Consolas", monospace'
+const BUILT_IN_STACK = '"Cascadia Mono", "SF Mono", Menlo, Consolas, ui-monospace, monospace'
 
 const SESSION: SessionRecord = {
   id: 1,

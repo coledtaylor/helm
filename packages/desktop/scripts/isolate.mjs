@@ -10,7 +10,8 @@
 // only reason the settings came back at all is that the run got as far as its
 // restore. A run that dies leaves them parked.
 //
-// So the app under test gets its own directory, and it is told about it with
+// So the app under test gets its own directory - under `isolatedBaseFor`, apart
+// from the installed app's `realDataDirFor` on each OS - and it is told about it with
 // **PORTABLE_EXECUTABLE_DIR** - the app's own portable-mode mechanism, the same
 // one `run-packaging.mjs` already uses as isolation, rather than a hook that exists
 // only for checks. `paths.ts` reads it, puts `helm-data` under it and calls
@@ -37,14 +38,53 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { join, posix, win32 } from 'node:path'
 
-/** The Electron binary, resolved the way the drivers already resolve it. */
-const electronBinary = createRequire(import.meta.url)('electron')
+/**
+ * The Electron binary, resolved the way the drivers already resolve it.
+ *
+ * Resolved when a copy is taken rather than at import, so the directory rules
+ * below can be imported (and tested) where Electron's binary is not installed.
+ */
+const electronBinary = () => createRequire(import.meta.url)('electron')
+
+/**
+ * The installed Helm's data directory on each OS: Electron's `userData` for an
+ * app whose `productName` is `Helm`.
+ *
+ *   Windows  `%APPDATA%\Helm`
+ *   macOS    `~/Library/Application Support/Helm`
+ *   Linux    `${XDG_CONFIG_HOME:-~/.config}/Helm`
+ */
+export function realDataDirFor(platform, env, home) {
+  if (platform === 'win32') return win32.join(env.APPDATA ?? win32.join(home, 'AppData', 'Roaming'), 'Helm')
+  if (platform === 'darwin') return posix.join(home, 'Library', 'Application Support', 'Helm')
+  return posix.join(env.XDG_CONFIG_HOME || posix.join(home, '.config'), 'Helm')
+}
+
+/**
+ * Where `pnpm dev` and every check keep their data on each OS: a folder of
+ * their own, outside the installed app's, the way `%LOCALAPPDATA%\Helm` sits
+ * apart from `%APPDATA%\Helm` on Windows.
+ *
+ *   Windows  `%LOCALAPPDATA%\Helm`
+ *   macOS    `~/Library/Application Support/Helm Dev`
+ *   Linux    `${XDG_DATA_HOME:-~/.local/share}/Helm`
+ *
+ * macOS has one application-support folder, so the separate folder is a
+ * separate name. Linux's data home is already apart from Electron's config
+ * home, so it keeps the name.
+ */
+export function isolatedBaseFor(platform, env, home) {
+  if (platform === 'win32') return win32.join(env.LOCALAPPDATA ?? win32.join(home, 'AppData', 'Local'), 'Helm')
+  if (platform === 'darwin') return posix.join(home, 'Library', 'Application Support', 'Helm Dev')
+  return posix.join(env.XDG_DATA_HOME || posix.join(home, '.local', 'share'), 'Helm')
+}
 
 /** The real Helm's data directory - read from, never written to. */
 export function realDataDir() {
-  return join(process.env.APPDATA ?? process.env.HOME ?? '.', 'Helm')
+  return realDataDirFor(process.platform, process.env, homedir())
 }
 
 /**
@@ -87,14 +127,15 @@ export const UI_STATE_KEYS = ['paneLayout', 'windowBounds']
  * screenshots are still there to look at afterwards.
  *
  * `group` separates the two things that use this. Checks share `checks/`; `null`
- * puts the directory straight under `%LOCALAPPDATA%\Helm`, which is where
- * `pnpm dev` goes - beside the checks rather than among them, so that "delete
- * every check's leftovers" stays something somebody can do without throwing
- * away the projects and settings their dev app has accumulated.
+ * puts the directory straight under the isolated base (`isolatedBaseFor`:
+ * `%LOCALAPPDATA%\Helm` on Windows), which is where `pnpm dev` goes - beside
+ * the checks rather than among them, so that "delete every check's leftovers"
+ * stays something somebody can do without throwing away the projects and
+ * settings their dev app has accumulated.
  */
 export function isolatedRoot(name, group = 'checks') {
-  const base = process.env.LOCALAPPDATA ?? process.env.HOME ?? '.'
-  return group === null ? join(base, 'Helm', name) : join(base, 'Helm', group, name)
+  const base = isolatedBaseFor(process.platform, process.env, homedir())
+  return group === null ? join(base, name) : join(base, group, name)
 }
 
 /**
@@ -110,7 +151,7 @@ export function isolatedRoot(name, group = 'checks') {
  * purpose: two of them in one directory would interleave their fixtures and
  * their reports, and the honest answer to that is to stop, not to shard.
  *
- * `group` is the subdirectory of `%LOCALAPPDATA%\Helm` this lands under; see
+ * `group` is the subdirectory of the isolated base this lands under; see
  * `isolatedRoot`.
  *
  * `keepUiState` carries `UI_STATE_KEYS` through into the copy. It defaults off
@@ -240,7 +281,7 @@ export function seedDatabase(dataDir, { keepUiState = false } = {}) {
     '}'
   ].join('\n')
   const { status, stderr } = spawnSync(
-    electronBinary,
+    electronBinary(),
     ['-e', script, source, dest, JSON.stringify(keepUiState ? [] : UI_STATE_KEYS)],
     {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },

@@ -8,8 +8,13 @@
  * `before-input-event`, swallows it and forwards the command. Both ask this
  * function, so a binding cannot work from one side and not the other.
  *
- * The bindings are the ones every browser on Windows has, and only those. The
- * page owns everything else - Ctrl+N included, which is why it is not here.
+ * There are two tables, chosen by the OS each side passes in (Node's name for
+ * it: main's `process.platform`, the window's `hostOs()`). Off macOS they are
+ * the bindings every browser on Windows has, and only those. On macOS they are
+ * the Cmd bindings every Mac browser has; a Ctrl chord there is the page's, as
+ * is a character typed with Option, and Option+Arrow moves the caret a word
+ * rather than going back. The page owns everything else - Ctrl+N and Cmd+N
+ * included, which is why neither is here.
  */
 
 export type BrowserCommand =
@@ -34,6 +39,12 @@ export interface BrowserKey {
   shift: boolean
   alt: boolean
   meta: boolean
+  /**
+   * The physical key, where the press has one. On macOS Option changes the
+   * character a key types, so Cmd+Option+I arrives with a `key` of `ˆ` or
+   * `Dead`; its `code` is still `KeyI`.
+   */
+  code?: string
 }
 
 /**
@@ -62,8 +73,59 @@ export const COMMANDS_THAT_REPEAT: ReadonlySet<BrowserCommand> = new Set<Browser
   'forward'
 ])
 
-/** What a key press does in the Browser tab, or null when it is the page's. */
-export function browserKeyCommand(press: BrowserKey): BrowserCommand | null {
+/**
+ * What a key press does in the Browser tab, or null when it is the page's.
+ * `platform` is Node's name for the OS: `darwin` takes the macOS table, any
+ * other the Windows one.
+ */
+export function browserKeyCommand(press: BrowserKey, platform: string): BrowserCommand | null {
+  return platform === 'darwin' ? macCommand(press) : windowsCommand(press)
+}
+
+/** Cmd chords, as Safari and Chrome on a Mac have them. */
+function macCommand(press: BrowserKey): BrowserCommand | null {
+  if (!press.meta || press.control) return null
+  const key = press.key.length === 1 ? press.key.toLowerCase() : press.key
+  if (press.alt) {
+    // Cmd+Option+I. Option changes the character, so the physical key decides.
+    return !press.shift && (press.code === 'KeyI' || key === 'i') ? 'devtools' : null
+  }
+  if (press.shift) {
+    if (key === 't') return 'reopen-page'
+    if (key === 'r') return 'hard-reload'
+    // Cmd+Shift+= is how a US keyboard types Cmd++.
+    if (key === '+') return 'zoom-in'
+    return null
+  }
+  switch (key) {
+    case 't':
+      return 'new-page'
+    case 'w':
+      return 'close-page'
+    case 'f':
+      return 'find'
+    case 'l':
+      return 'address'
+    case 'r':
+      return 'reload'
+    case '[':
+      return 'back'
+    case ']':
+      return 'forward'
+    case '=':
+    case '+':
+      return 'zoom-in'
+    case '-':
+      return 'zoom-out'
+    case '0':
+      return 'zoom-reset'
+    default:
+      return null
+  }
+}
+
+/** Ctrl, Alt and function-key chords, as every browser on Windows has them. */
+function windowsCommand(press: BrowserKey): BrowserCommand | null {
   // AltGr arrives as Ctrl+Alt on Windows, and a character typed with it is
   // text, never a command.
   if (press.meta || (press.control && press.alt)) return null

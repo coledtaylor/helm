@@ -1,6 +1,7 @@
 /*
  * xterm shows a hand over every link it underlines. A link opens on Ctrl+click
- * only (terminalLinks.ts), so without Ctrl the pane keeps its own cursor: the
+ * only (Cmd+click on macOS, terminalLinks.ts), so without that modifier the
+ * pane keeps its own cursor: the
  * text cursor, or the arrow while the program has asked for the mouse.
  */
 :root:not(.helm-link-chord) .xterm .xterm-cursor-pointer {

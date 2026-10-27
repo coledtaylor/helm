@@ -21,6 +21,7 @@
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "test:e2e": "pnpm --filter @helm/desktop test:e2e",
+    "test:posix": "node packages/desktop/scripts/test-posix.mjs",
     "check": "pnpm typecheck && pnpm lint && pnpm test",
     "shell": "pnpm --filter @helm/desktop shell",
     "selftest": "pnpm --filter @helm/desktop selftest",
@@ -29,7 +30,10 @@
     "packaging-check": "pnpm --filter @helm/desktop packaging-check",
     "verify:installer": "pnpm --filter @helm/desktop verify:installer",
     "dist:win": "pnpm --filter @helm/desktop dist:win",
+    "dist:mac": "pnpm --filter @helm/desktop dist:mac",
     "verify:artifact": "pnpm --filter @helm/desktop verify:artifact",
+    "verify:mac-artifact": "pnpm --filter @helm/desktop verify:mac-artifact",
+    "screenshots": "pnpm --filter @helm/desktop screenshots",
     "db:generate": "pnpm --filter @helm/core db:generate",
     "icon": "pnpm --filter @helm/desktop icon"
   },

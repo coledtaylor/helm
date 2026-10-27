@@ -1,7 +1,7 @@
 # Packaging and updates
 
-What `pnpm dist:win` produces, where its data goes, how a release is cut, and
-why Helm has no auto-updater.
+What `pnpm dist:win` and `pnpm dist:mac` produce, where their data goes, how a
+release is cut, and why Helm has no auto-updater.
 
 ## Artefacts
 
@@ -12,9 +12,45 @@ why Helm has no auto-updater.
 | `Helm-<version>-portable.exe` | One file, ~95 MB. No install. Keeps its data in `helm-data\` beside itself. |
 | `Helm-<version>-setup.exe` | NSIS one-click installer. Per-user, no elevation. Data in `%APPDATA%\Helm`. |
 
-Both come out of the same build. Nothing is compiled: `npmRebuild: false` and
-both native modules ship N-API prebuilds, so a clean checkout needs no compiler,
-no Python and no build tools.
+`pnpm dist:mac` writes two more, and runs only on macOS, because
+electron-builder makes a dmg only there:
+
+| File | What it is |
+|---|---|
+| `Helm-<version>-arm64.dmg` | Disk image: Helm.app beside an Applications link to drag it onto. Apple Silicon only. |
+| `Helm-<version>-arm64-mac.zip` | The same Helm.app, zipped, for anyone who would rather not mount an image. |
+
+Every build comes out of the same code. Nothing is compiled: `npmRebuild: false`
+and the native modules ship N-API prebuilds for each platform, so a clean
+checkout needs no compiler, no Python and no build tools.
+
+### The Mac build is ad-hoc signed
+
+Apple Silicon runs no arm64 binary without a code signature, and Helm has no
+Apple Developer ID to sign with, so `identity: '-'` in `electron-builder.yml`
+signs it ad-hoc: a valid signature with no certificate behind it. A copy
+downloaded in a browser is quarantined, so macOS refuses it the first time it
+is opened; **System Settings > Privacy & Security > Open Anyway** opens it, once.
+A copy built on the machine itself carries no quarantine and just opens.
+Developer ID signing and notarization would remove that step and wait on an
+Apple Developer account.
+
+`hardenedRuntime` is off with it. The hardened runtime is only for notarization,
+and with an ad-hoc signature it turns on library validation, which refuses to
+load the native modules. `darkModeSupport` is on, or the app is pinned to the
+light appearance and the `system` theme never follows macOS into dark mode.
+
+The icon is `build/icon.icns`, packed by `pnpm icon` from the same drawing as
+the .ico and committed beside it. Its large sizes sit on Apple's icon grid (the
+artwork in the middle 824px of 1024) so the wheel stands the size of the icons
+around it in the Dock.
+
+`pnpm verify:mac-artifact` opens the dmg and the zip a person downloads and
+checks the Helm.app in each: an arm64 executable, a signature that verifies and
+is ad-hoc, `CFBundleIconFile` naming a file identical to `build/icon.icns`, no
+`NSRequiresAquaSystemAppearance`, and better-sqlite3, node-pty (with an
+executable `spawn-helper`) and koffi unpacked beside the asar. It needs macOS;
+`--icon` checks only the .icns, anywhere.
 
 ## Where the data goes
 
@@ -77,21 +113,32 @@ hand, no button to press, no artefact built on a developer's machine.
 
 `.github/workflows/release.yml` reads the version out of
 `packages/desktop/package.json` and, if `v<version>` is not already a tag on the
-remote, runs the checks, builds on a clean `windows-latest` runner and publishes
-a GitHub release with both exes attached. A merge that does not bump the version
-runs the checks, skips the release job and finishes green.
+remote, runs the checks, builds the Windows artefacts on a clean
+`windows-latest` runner and the macOS ones on `macos-latest`, and publishes one
+GitHub release with all four attached. A merge that does not bump the version
+runs the checks, skips both build jobs and finishes green.
+
+- **The Mac build is its own job and publishes nothing.** `release-mac` has the
+  same gate as `release`, builds with `pnpm dist:mac`, runs
+  `verify-mac-artifact.mjs` over the dmg and the zip, and hands them on as a
+  workflow artifact. `release` needs it, downloads them and attaches them with
+  the two exes. A failed Mac build therefore skips the release outright: a
+  version is never published with half its downloads. Every runner is a
+  standard GitHub-hosted one, and no secret or certificate is involved.
 
 - **The gate is whether the tag exists**, asked with `git ls-remote --tags`, not
   whether the commit changed the version. Diffing against the parent gives a
   different answer after a squash, a rebase, a revert or a re-run.
 - **`ci.yml` does not run on pushes to `main` on its own.** `release.yml` calls
   it through `workflow_call`, so `main` is checked once per push rather than
-  twice. It typechecks, lints and builds; it runs no tests, which run locally.
-  A failure there fails that job and `needs: [version, check]` skips the
-  release: no tag, no release, no artefacts.
+  twice. It runs `pnpm check` (typecheck, lint, unit and integration tests)
+  and then builds, on Windows, macOS and Linux runners, each its own job; the
+  end-to-end tests run locally only. All three jobs are required: a failure on
+  any one fails `check`, and `needs: [version, check]` skips the release and
+  the SDK publish: no tag, no release, no artefacts.
 - **The release is created as a draft and published in the same job**, which is
   not an approval gate. `/releases/latest` ignores drafts, and publishing the
-  draft is what creates the tag, so the ref and the ~200 MB of assets appear
+  draft is what creates the tag, so the ref and all four assets appear
   together rather than leaving a window where the app announces a version whose
   download page is empty. A run cancelled mid-upload leaves an unpublished
   draft; the next run deletes it and starts over.
@@ -124,6 +171,34 @@ runs the checks, skips the release job and finishes green.
   on its first `dlopen`. Checking `dist-app/win-unpacked/` instead would check
   electron-builder's scratch directory rather than the file a person downloads.
   It runs on any exe: `pnpm verify:artifact -- path/to/Helm-x.y.z-setup.exe`.
+  The Mac artefacts get `verify-mac-artifact.mjs`, described above.
+- **The confirmation expects all four files.** After publishing, the job asks
+  `/releases/latest` - the endpoint the in-app check asks - and fails unless it
+  names this tag, is not a draft, and lists exactly the setup exe, the portable
+  exe, the dmg and the zip.
+
+## Looking at the Mac build
+
+Nobody working on Helm has a Mac in front of them, so the
+**macOS build and screenshots** workflow
+(`.github/workflows/macos-screenshots.yml`) builds and photographs it on
+`macos-latest`. It runs on a push to any branch but `main` that changes how the
+Mac build is made or photographed - `electron-builder.yml`, `build/`,
+`packages/desktop/package.json`, `verify-mac-artifact.mjs`, the screenshot run,
+the E2E launch and world it uses, or the workflow itself - so a branch shows
+its dmg and zip build before it merges rather than at release time. It can
+also be started by hand from the Actions tab, or with
+`gh workflow run macos-screenshots.yml --ref <branch>` once the file is on
+`main`.
+
+It runs `pnpm dist:mac` and `verify-mac-artifact.mjs` over the dmg and the zip
+exactly as `release-mac` does, then launches the built app through the E2E
+tests' Playwright launch into a world with the fake claude, and photographs
+every destination on the rail and a session terminal in the light and the dark
+theme. The pictures are the run's `helm-macos-screenshots` artifact: each view
+as the page and, on macOS, as the window with its traffic lights. It is no
+check in the gate and nothing waits on it. `pnpm screenshots` runs the same
+capture locally on any OS, into `reports/screenshots`.
 
 ## Updates: an explicit check, not an updater
 

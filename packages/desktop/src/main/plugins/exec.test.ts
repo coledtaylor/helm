@@ -17,6 +17,9 @@ const { PluginCallError } = await import('./errors')
  */
 
 const node = process.execPath
+
+/** A batch file and PATHEXT are Windows' own; the tests that use them run there. */
+const onWindows = it.runIf(process.platform === 'win32')
 let root: string
 let dir: string
 
@@ -95,7 +98,7 @@ describe('resolveProgram', () => {
     expect(resolveProgram(dir, node)).toEqual({ file: node, program: node, batch: false })
   })
 
-  it('finds a path with a slash inside the plugin folder, and runs a batch file through cmd', () => {
+  onWindows('finds a path with a slash inside the plugin folder, and runs a batch file through cmd', () => {
     const resolved = resolveProgram(dir, 'bin/echo args.cmd')
     expect(resolved).toMatchObject({ program: join(dir, 'bin', 'echo args.cmd'), batch: true })
     expect(resolved?.file.toLowerCase()).toMatch(/cmd\.exe$/)
@@ -107,7 +110,7 @@ describe('resolveProgram', () => {
     expect(resolveProgram(dir, join(root, 'nothing.exe'))).toBeNull()
   })
 
-  it('looks a bare name up on PATH, with PATHEXT', () => {
+  onWindows('looks a bare name up on PATH, with PATHEXT', () => {
     vi.stubEnv('PATH', [join(root, 'path bin'), process.env['PATH'] ?? ''].join(delimiter))
     const found = resolveProgram(dir, 'helmtool')
     // Spelled with PATHEXT's case; the file system does not care.
@@ -153,14 +156,14 @@ describe('runProgram', () => {
     expect(await run(spec(node, ['fail.mjs']))).toEqual({ exitCode: 3, stdout: 'some', stderr: 'bad things', timedOut: false })
   })
 
-  it('hands a batch file its arguments intact through cmd, from a path with spaces', async () => {
+  onWindows('hands a batch file its arguments intact through cmd, from a path with spaces', async () => {
     const args = ['a b', 'x&y', '(paren)', 'pipe|less', 'plain', '']
     const result = await run(spec('bin/echo args.cmd'), args)
     expect(result.exitCode).toBe(0)
     expect(JSON.parse(result.stdout).args).toEqual(args)
   })
 
-  it('drops a double quote, which cmd cannot carry, rather than letting it end the line', async () => {
+  onWindows('drops a double quote, which cmd cannot carry, rather than letting it end the line', async () => {
     const result = await run(spec('bin/echo args.cmd'), ['say"hi" & echo injected'])
     expect(JSON.parse(result.stdout).args).toEqual(['sayhi & echo injected'])
   })

@@ -86,7 +86,7 @@ function message(win: Window, init: { data: unknown; source: unknown; ports?: un
 }
 
 /** Helm answering HELLO: CONNECT, from the parent, with the page's port. */
-function connect(win: Window, extra: Partial<{ context: HelmContext; theme: HelmTheme | null; visible: boolean }> = {}): FakePort {
+function connect(win: Window, extra: Partial<{ context: HelmContext; theme: HelmTheme | null; visible: boolean; mac: boolean }> = {}): FakePort {
   const { helmSide, pageSide } = channel()
   win.dispatchEvent(
     message(win, {
@@ -431,6 +431,22 @@ describe('keys', () => {
     win.document.addEventListener('keydown', (event) => event.preventDefault(), { once: true })
     await press(win, { key: 'n', ctrlKey: true })
     expect(keys(port)).toEqual([])
+  })
+
+  it('on macOS keep Cmd editing keys and Option-typed characters for the page, and forward Cmd shortcuts', async () => {
+    const { win } = page()
+    const port = connect(win, { mac: true })
+    for (const key of ['c', 'V', 'x', 'z', 'a']) await press(win, { key, metaKey: true })
+    await press(win, { key: 'z', metaKey: true, shiftKey: true })
+    await press(win, { key: 'é', altKey: true })
+    expect(keys(port)).toEqual([])
+
+    await press(win, { key: 'p', code: 'KeyP', metaKey: true })
+    await press(win, { key: 'c', code: 'KeyC', ctrlKey: true })
+    expect(keys(port)).toEqual([
+      { t: 'key', key: { key: 'p', code: 'KeyP', ctrlKey: false, shiftKey: false, altKey: false, metaKey: true, repeat: false } },
+      { t: 'key', key: { key: 'c', code: 'KeyC', ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, repeat: false } }
+    ])
   })
 
   it('are not watched at all on a background page', async () => {

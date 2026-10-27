@@ -1866,7 +1866,7 @@ function FontRow({
   return (
     <Row
       label="Font"
-      hint="One family name. It goes in front of Cascadia Mono and Consolas rather than replacing them, so anything it lacks still draws."
+      hint="One family name. It goes in front of the built-in stack - Cascadia Mono, SF Mono, Menlo, Consolas - rather than replacing it, so anything it lacks still draws."
     >
       <div className="flex flex-col items-end gap-1.5">
         <div className="flex items-center gap-2">
@@ -1874,7 +1874,7 @@ function FontRow({
             type="text"
             data-settings-terminal-font={saved}
             aria-label="Terminal font family"
-            placeholder="Cascadia Mono (built in)"
+            placeholder="Built-in stack"
             spellCheck={false}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -1908,7 +1908,7 @@ function FontRow({
             className="max-w-[280px] text-right text-[11px] leading-[1.5] text-warn"
           >
             {terminal.terminalFontFamily} is not installed on this machine, so terminals fall back
-            to Cascadia Mono and Consolas.
+            to the built-in stack.
           </p>
         )}
       </div>

@@ -2,6 +2,7 @@ import type { DragEvent, JSX, KeyboardEvent } from 'react'
 import { useState } from 'react'
 import type { Profile } from '@helm/core'
 import { cn } from '../lib/cn'
+import { hasPrimaryModifier } from '../lib/platform'
 import {
   ExportIcon,
   LayersIcon,
@@ -70,7 +71,7 @@ export function ProfileList({
   }
 
   const moveWithKeyboard = (event: KeyboardEvent<HTMLElement>, index: number): void => {
-    if (!event.ctrlKey || !event.shiftKey) return
+    if (!hasPrimaryModifier(event) || !event.shiftKey) return
     const delta = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0
     if (delta === 0) return
     const profile = pinned[index]

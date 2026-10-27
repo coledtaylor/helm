@@ -173,7 +173,7 @@
     "commands": {
       "type": "array",
       "maxItems": 100,
-      "description": "Entries in the command palette (Ctrl+Shift+P).",
+      "description": "Entries in the command palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS).",
       "items": {
         "type": "object",
         "required": [

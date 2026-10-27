@@ -10,6 +10,7 @@ import {
   type Project
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { hasPrimaryModifier, isMac, shortcutLabel } from '../lib/platform'
 import {
   homePath,
   launchSentence,
@@ -244,12 +245,12 @@ export function NewSessionDialog({
     const target = event.target as HTMLElement
     if (event.key === 'Enter' && event.altKey && !event.shiftKey && target.tagName !== 'BUTTON') {
       event.preventDefault()
-      terminal(event.ctrlKey)
+      terminal(hasPrimaryModifier(event))
       return
     }
     if (event.key === 'Enter' && !event.altKey && !event.shiftKey && target.tagName !== 'BUTTON') {
       event.preventDefault()
-      start(event.ctrlKey)
+      start(hasPrimaryModifier(event))
       return
     }
     // The arrows belong to the field. On a picker they change its value.
@@ -405,11 +406,11 @@ export function NewSessionDialog({
         <KeyButton keys="↵" onClick={() => start(false)} disabled={busy || selected === null}>
           {busy ? 'Starting…' : 'Start'}
         </KeyButton>
-        <KeyButton keys="Ctrl ↵" onClick={() => start(true)} disabled={busy || selected === null}>
+        <KeyButton keys={shortcutLabel('↵', { separator: ' ' })} onClick={() => start(true)} disabled={busy || selected === null}>
           Start beside
         </KeyButton>
         {onTerminal !== undefined && (
-          <KeyButton keys="Alt ↵" onClick={() => terminal(false)} disabled={busy || selected === null}>
+          <KeyButton keys={isMac() ? '⌥↵' : 'Alt ↵'} onClick={() => terminal(false)} disabled={busy || selected === null}>
             Terminal
           </KeyButton>
         )}

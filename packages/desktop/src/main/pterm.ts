@@ -1,6 +1,6 @@
 import type { BrowserWindow } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { lstatSync, readdirSync } from 'node:fs'
+import { lstatSync, readdirSync, realpathSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import type { DetectedShell } from '@helm/core'
 import { getSession, killSession, spawnSession } from './pty'
@@ -274,12 +274,23 @@ export function detectShells(): DetectedShell[] {
       found.push({ path, name: basename(path), label: entry.label, args: entry.args })
     }
   } else {
+    // `$SHELL` first, as the user's own terminal would. Only shells that are
+    // there, and one row per program: where /bin links to /usr/bin, `$SHELL`
+    // and a /bin path can name the same file.
     const fromEnv = process.env['SHELL']
     const candidates = [fromEnv, '/bin/bash', '/bin/zsh', '/bin/sh'].filter(
       (candidate): candidate is string => candidate !== undefined && candidate !== ''
     )
+    const programs = new Set<string>()
     for (const candidate of candidates) {
-      if (found.some((entry) => entry.path === candidate)) continue
+      let program: string
+      try {
+        program = realpathSync(candidate)
+      } catch {
+        continue
+      }
+      if (programs.has(program)) continue
+      programs.add(program)
       const entry = known(candidate)
       found.push({
         path: candidate,

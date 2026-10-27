@@ -189,4 +189,14 @@ export { cn } from './lib/cn'
 // Whether a dialog is up, for anything that has to get out of its way - the
 // browser pane's `WebContentsView` first. `Overlay` is the only writer.
 export { overlayOpen, subscribeOverlay, useOverlayOpen } from './lib/overlay'
+export {
+  hasPrimaryModifier,
+  hostOs,
+  isMac,
+  shortcutLabel,
+  type HostOs,
+  type ModifierState,
+  type PlatformSource,
+  type ShortcutLabelOptions
+} from './lib/platform'
 export { formatAge, formatBytes, formatMoment, formatResetsIn } from './lib/time'

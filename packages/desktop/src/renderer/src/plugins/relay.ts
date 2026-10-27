@@ -1,5 +1,6 @@
 import type { HelmContext, HelmTheme, PluginParams, SurfaceKind } from '@coledtaylor/helm-plugin-sdk'
 import { pluginThemeOf } from '@helm/core/types'
+import { isMac } from '@helm/ui'
 import {
   PLUGIN_SCHEME,
   type HelmBridge as Ipc,
@@ -235,7 +236,8 @@ export function createPluginRelay(options: { win: Window; ipc: Ipc; hooks?: Rela
       type: CONNECT,
       context: contextOf(frame.spec),
       theme,
-      visible: frame.visible
+      visible: frame.visible,
+      mac: isMac()
     }
     source.postMessage(message, origin, [channel.port2])
     for (const queued of frame.queue.splice(0)) port.postMessage(queued)

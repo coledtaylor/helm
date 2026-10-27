@@ -19,7 +19,12 @@ import { SDK_DIR } from './fixtures'
 const NAME = '@coledtaylor/helm-plugin-sdk'
 
 /** npm's own script, beside the node running this. Spawning `npm.cmd` would need a shell. */
-const NPM_CLI = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+// npm ships beside node: next to node.exe on Windows, and in
+// <prefix>/lib/node_modules beside <prefix>/bin/node on macOS and Linux.
+const NPM_CLI =
+  process.platform === 'win32'
+    ? join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    : join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
 
 interface Run {
   status: number | null
