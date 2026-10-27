@@ -128,12 +128,12 @@ export function launchRequestInFolder(options: {
 /**
  * Argv after the executable.
  *
- * The order is not cosmetic. `--add-dir` is variadic - it consumes arguments
- * until the next one that starts with a dash - so anything positional placed
- * after it would be swallowed into the directory list. `-n` - or `--resume`,
- * for a conversation being reopened - always follows it and always exists,
- * which terminates that list, and the opening prompt goes last where the CLI
- * expects a bare prompt.
+ * The order is not cosmetic. `--add-dir`, `--mcp-config` and `--allowedTools`
+ * are variadic - each consumes arguments until the next one that starts with a
+ * dash - so a positional argument after one would be swallowed into its list: a prompt
+ * read as a config path is a launch that exits 1 at once. Every flag comes
+ * first, and the opening prompt goes last behind `--`, which ends every
+ * variadic list, including any added later.
  */
 export function buildLaunchArgs(
   req: Omit<LaunchRequest, 'shimRoot'> & {
@@ -143,6 +143,8 @@ export function buildLaunchArgs(
     memoryFile?: string | null | undefined
     /** The ephemeral per-session MCP config, already written. */
     mcpConfigFile?: string | null | undefined
+    /** Tools the session calls without asking, as the CLI names them (`mcp__<server>__<tool>`). */
+    allowedTools?: readonly string[] | undefined
   }
 ): string[] {
   const argv: string[] = []
@@ -150,22 +152,21 @@ export function buildLaunchArgs(
   const access = dedupePaths(req.access ?? [])
   if (access.length > 0) argv.push('--add-dir', ...access)
 
-  // Either one terminates the directory list. A reopened conversation keeps
-  // the name it already has.
+  // A reopened conversation keeps the name it already has.
   if (req.resume) argv.push('--resume', req.resume)
   else argv.push('-n', sanitizeSessionName(req.name))
 
   for (const dir of req.pluginDirs ?? []) argv.push('--plugin-dir', dir)
   if (req.memoryFile) argv.push('--append-system-prompt-file', req.memoryFile)
-  // One value, so it is safe anywhere after `-n` and before the positional
-  // prompt. Assigning the conversation id rather than discovering it later is
-  // what lets the session row and the CLI's live registry agree from the first
+  // Assigning the conversation id rather than discovering it later is what
+  // lets the session row and the CLI's live registry agree from the first
   // instant; see `SessionRecord.claudeSessionId`.
   if (req.sessionId && !req.resume) argv.push('--session-id', req.sessionId)
-  // Variadic, like `--add-dir`: it takes every argument up to the next one
-  // that starts with a dash, so the flag after it, or the `--` in front of the
-  // prompt, ends its list. It is given one file, the session's own config.
+  // Variadic, like `--add-dir`: what follows it is a flag or the `--` below.
   if (req.mcpConfigFile) argv.push('--mcp-config', req.mcpConfigFile)
+  // Variadic too. An allow rule, as one in the user's settings would be: a
+  // deny rule of theirs still wins, and every other tool still asks.
+  if (req.allowedTools && req.allowedTools.length > 0) argv.push('--allowedTools', ...req.allowedTools)
 
   if (req.model) argv.push('--model', req.model)
   if (req.effort) argv.push('--effort', req.effort)
@@ -174,9 +175,6 @@ export function buildLaunchArgs(
 
   // Last, behind `--`, and only if it is really there: an empty string here
   // would be a positional argument the CLI reads as an empty prompt.
-  // `--mcp-config` and `--plugin-dir` are variadic like `--add-dir`, so with no
-  // single-value flag after them the prompt would be taken as one more config
-  // file or plugin folder; `--` ends every variadic list.
   const prompt = req.resume ? undefined : req.openingPrompt?.trim()
   if (prompt) argv.push('--', prompt)
 
@@ -268,9 +266,17 @@ export function prepareLaunch(req: LaunchRequest): LaunchPlan {
    * that is not there.
    */
   let mcpConfigFile: string | null = null
+  let allowedTools: string[] = []
   if (req.mcp) {
     try {
       mcpConfigFile = writeSessionMcpConfig(req.mcp.dir, req.mcp.servers)
+      // Only for servers the file names: a rule for a tool the session was
+      // never given would be an allow rule waiting for whatever takes the name.
+      if (mcpConfigFile !== null) {
+        allowedTools = req.mcp.servers.flatMap((server) =>
+          (server.allowedTools ?? []).map((tool) => `mcp__${server.name}__${tool}`)
+        )
+      }
     } catch (err) {
       // A session without Helm's tools is a working session. A launch that
       // failed because a JSON file could not be written is not.
@@ -294,6 +300,7 @@ export function prepareLaunch(req: LaunchRequest): LaunchPlan {
     pluginDirs: shims.map((shim) => shim.dir),
     memoryFile,
     mcpConfigFile,
+    allowedTools,
     sessionId: req.sessionId,
     resume: req.resume
   })

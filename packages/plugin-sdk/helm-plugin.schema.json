@@ -173,7 +173,7 @@
     "commands": {
       "type": "array",
       "maxItems": 100,
-      "description": "Entries in the command palette (Ctrl+Shift+P).",
+      "description": "Entries in the command palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS).",
       "items": {
         "type": "object",
         "required": [
@@ -354,6 +354,10 @@
                   }
                 },
                 "description": "The arguments, as JSON Schema. Passed to the session as written; Helm does not check a call's arguments against it."
+              },
+              "readOnly": {
+                "type": "boolean",
+                "description": "It only reads and changes nothing. The sessions Helm starts call it without asking the user first. False when left out."
               }
             }
           }

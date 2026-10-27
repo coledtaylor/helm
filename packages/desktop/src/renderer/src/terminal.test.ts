@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { DEFAULT_SETTINGS } from '@helm/core/types'
 import { applyPrefs, createTerminal, terminalFontStack, type TerminalHooks, type TerminalPrefs } from './terminal'
@@ -17,7 +19,12 @@ vi.mock('@xterm/addon-web-links', () => import('./app/terminal.testkit'))
  * fit and the answer changed (SPEC 8.3).
  */
 
-const BUILT_IN_STACK = '"Cascadia Mono", "Consolas", monospace'
+const BUILT_IN_STACK = '"Cascadia Mono", "SF Mono", Menlo, Consolas, ui-monospace, monospace'
+
+/** The window says it is on the given OS, as Chromium's navigator would. */
+function runningOn(platform: 'MacIntel' | 'Win32'): void {
+  vi.spyOn(Navigator.prototype, 'platform', 'get').mockReturnValue(platform)
+}
 
 function hooks(): TerminalHooks & { onResize: Mock<(cols: number, rows: number) => void> } {
   return {
@@ -109,6 +116,79 @@ describe('terminalFontStack', () => {
     expect(terminalFontStack(null)).toBe(BUILT_IN_STACK)
     expect(terminalFontStack('')).toBe(BUILT_IN_STACK)
     expect(terminalFontStack('   ')).toBe(BUILT_IN_STACK)
+  })
+
+  it('falls back from Cascadia Mono to SF Mono, then Menlo, on a Mac that has no Cascadia', () => {
+    const families = terminalFontStack(null)
+      .split(',')
+      .map((family) => family.trim().replace(/"/g, ''))
+    expect(families.slice(0, 3)).toEqual(['Cascadia Mono', 'SF Mono', 'Menlo'])
+    expect(families.at(-1)).toBe('monospace')
+  })
+
+  it('is the same stack the interface and plugin pages draw machine data in', () => {
+    const families = (stack: string): string[] => stack.split(',').map((family) => family.trim().replace(/['"]/g, ''))
+    const declared = (path: string, property: string): string => {
+      const match = new RegExp(`${property}:\\s*([^;]+);`).exec(readFileSync(join(import.meta.dirname, path), 'utf8'))
+      if (match === null) throw new Error(`${property} is not declared in ${path}`)
+      return match[1]!
+    }
+    const terminal = families(terminalFontStack(null))
+    expect(families(declared('../../../../ui/src/styles/theme.css', '--font-mono'))).toEqual(terminal)
+    expect(families(declared('../plugin-runtime/helm.css', '--helm-font-mono'))).toEqual(terminal)
+  })
+})
+
+describe('a terminal’s keys', () => {
+  async function terminalOn(platform: 'MacIntel' | 'Win32'): Promise<{
+    term: Terminal
+    h: ReturnType<typeof hooks> & { writeClipboard: Mock<(text: string) => Promise<void>> }
+  }> {
+    runningOn(platform)
+    const h = {
+      ...hooks(),
+      readClipboard: () => Promise.resolve('pasted'),
+      writeClipboard: vi.fn<(text: string) => Promise<void>>(() => Promise.resolve())
+    }
+    createTerminal(container(), { cols: 80, rows: 24, fit: false }, h)
+    await Promise.resolve()
+    return { term: latest(), h }
+  }
+
+  it('on macOS Ctrl+C reaches the program, even over a selection, and Ctrl+V is the program’s too', async () => {
+    const { term, h } = await terminalOn('MacIntel')
+    term.selection = 'some output'
+    expect(term.press({ key: 'c', code: 'KeyC', ctrlKey: true })).toBe(true)
+    expect(term.press({ key: 'v', code: 'KeyV', ctrlKey: true })).toBe(true)
+    expect(term.press({ key: 'l', code: 'KeyL', ctrlKey: true })).toBe(true)
+    expect(h.writeClipboard).not.toHaveBeenCalled()
+    expect(term.pasted).toEqual([])
+  })
+
+  it('on macOS Cmd+C copies the selection and Cmd+V pastes, each once', async () => {
+    const { term, h } = await terminalOn('MacIntel')
+    term.selection = 'some output'
+    expect(term.press({ key: 'c', code: 'KeyC', metaKey: true })).toBe(false)
+    expect(h.writeClipboard).toHaveBeenCalledWith('some output')
+    expect(term.hasSelection()).toBe(false)
+    // Nothing selected: spent, so the menu's Copy cannot copy a stale textarea.
+    expect(term.press({ key: 'c', code: 'KeyC', metaKey: true })).toBe(false)
+    expect(h.writeClipboard).toHaveBeenCalledTimes(1)
+    expect(term.press({ key: 'v', code: 'KeyV', metaKey: true })).toBe(false)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(term.pasted).toEqual(['pasted'])
+  })
+
+  it('on Windows Ctrl+C interrupts without a selection and copies with one, as today', async () => {
+    const { term, h } = await terminalOn('Win32')
+    expect(term.press({ key: 'c', code: 'KeyC', ctrlKey: true })).toBe(true)
+    term.selection = 'some output'
+    expect(term.press({ key: 'c', code: 'KeyC', ctrlKey: true })).toBe(false)
+    expect(h.writeClipboard).toHaveBeenCalledWith('some output')
+    // Cmd is the Windows key there, and not the clipboard's.
+    term.selection = 'again'
+    expect(term.press({ key: 'c', code: 'KeyC', metaKey: true })).toBe(true)
   })
 })
 

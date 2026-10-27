@@ -2,6 +2,7 @@ import type { JSX } from 'react'
 import { useMemo, useRef, useState } from 'react'
 import type { Profile, Project } from '@helm/core/types'
 import { folderName, homePath, profilesInOrder, rankProjects } from '../lib/launcher'
+import { shortcutLabel } from '../lib/platform'
 import type { PopupAnchor } from '../lib/popup'
 import { PROJECT_KIND_ICON } from '../lib/projectIcons'
 import { ConsoleIcon, GlobeIcon, LayersIcon, TerminalIcon } from './icons'
@@ -121,7 +122,7 @@ export function NewTabMenu({
       id: 'session',
       label: 'Session',
       icon: <TerminalIcon width={13} height={13} />,
-      hint: 'Ctrl N'
+      hint: shortcutLabel('N', { separator: ' ' })
     },
     {
       kind: 'item',

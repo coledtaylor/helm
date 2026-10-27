@@ -130,7 +130,7 @@ describe('the schema and the validator agree on manifests', () => {
     agent: {
       instructions: 'Runs are in the panel; start one with start-run.',
       tools: {
-        list_runs: { description: 'Lists the runs.' },
+        list_runs: { description: 'Lists the runs.', readOnly: true },
         'start-run': {
           description: 'Starts a run.',
           inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }
@@ -188,6 +188,7 @@ describe('the schema and the validator agree on manifests', () => {
     ['an agent with no tools', { ...MINIMAL, background: 'bg.html', agent: { instructions: 'x' } }],
     ['a tool name with capitals', { ...MINIMAL, background: 'bg.html', agent: { tools: { Go: { description: 'Go.' } } } }],
     ['a tool with no description', { ...MINIMAL, background: 'bg.html', agent: { tools: { go: {} } } }],
+    ['a tool read-only in words', { ...MINIMAL, background: 'bg.html', agent: { tools: { go: { description: 'Go.', readOnly: 'yes' } } } }],
     [
       'a tool whose arguments are not an object',
       { ...MINIMAL, background: 'bg.html', agent: { tools: { go: { description: 'Go.', inputSchema: { type: 'array' } } } } }

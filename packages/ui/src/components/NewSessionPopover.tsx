@@ -10,6 +10,7 @@ import {
   type Project
 } from '@helm/core/types'
 import { cn } from '../lib/cn'
+import { shortcutLabel } from '../lib/platform'
 import { homePath, launchSentence, profileFor, profilesInOrder, rankProjects } from '../lib/launcher'
 import { usePopup, type PopupAnchor } from '../lib/popup'
 import { PROJECT_KIND_ICON } from '../lib/projectIcons'
@@ -186,6 +187,7 @@ export function NewSessionPopover({
       !event.altKey &&
       !event.shiftKey &&
       !event.ctrlKey &&
+      !event.metaKey &&
       target.tagName !== 'BUTTON'
     ) {
       event.preventDefault()
@@ -234,7 +236,7 @@ export function NewSessionPopover({
           title="The launcher, from the keyboard"
           className="rounded-xs border border-border px-[5px] font-mono text-[10.5px] leading-4 text-fg-subtle"
         >
-          Ctrl N
+          {shortcutLabel('N', { separator: ' ' })}
         </span>
       </div>
 

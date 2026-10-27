@@ -286,9 +286,12 @@ credentials too, and a dev build that cannot sign in cannot host a session.
 real database in a dev build - it says so on the console at startup, and the
 status bar names the mode.
 
-`pnpm check` and `pnpm test:e2e` run the tests, locally; CI builds and releases
-the app and runs none of them. [docs/TESTING.md](docs/TESTING.md) describes the
-tiers and the rules every test follows.
+`pnpm check` and `pnpm test:e2e` run the tests locally. CI also runs
+`pnpm check` on Windows, macOS and Linux on every push, and a failure on any
+of them blocks the run and the release. `pnpm test:e2e` stays local, and
+`pnpm test:posix` runs the tests of the POSIX code under Linux in WSL from
+Windows. [docs/TESTING.md](docs/TESTING.md) describes the tiers and the
+rules every test follows.
 
 A few drivers open the real window to diagnose what a test cannot reach. They
 are tools, not tests, and nothing has to pass them before a change is done:

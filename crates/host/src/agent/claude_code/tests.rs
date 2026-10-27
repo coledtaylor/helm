@@ -449,9 +449,9 @@ fn a_choice_left_empty_passes_no_flag() {
     );
 }
 
-/// `--add-dir`, `--plugin-dir` and `--mcp-config` are variadic, and a launch
-/// with nothing single-valued after them once handed the prompt to the last
-/// one. Behind `--`, the CLI's parser reads it as the prompt.
+/// `--add-dir` and `--mcp-config` are variadic, and a launch with nothing
+/// single-valued after them once handed the prompt to the last one. Behind
+/// `--`, the CLI's parser reads it as the prompt, whatever comes before it.
 #[test]
 fn the_prompt_arrives_as_the_prompt_after_every_variadic_list() {
     let world = World::new();

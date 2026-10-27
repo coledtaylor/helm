@@ -24,7 +24,7 @@
 @layer helm {
   :root {
     --helm-font-sans: 'Inter var', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
-    --helm-font-mono: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+    --helm-font-mono: 'Cascadia Mono', 'SF Mono', Menlo, Consolas, ui-monospace, monospace;
     /* The corner scale (DESIGN.md "Shape"): rows and cards at the radius,
      * controls one pixel rounder so they read as separate from their panel. */
     --helm-radius-well: calc(var(--helm-radius, 3px) + 1px);

@@ -71,7 +71,8 @@
         "inputSchema": {
           "type": "object",
           "properties": { "unreadOnly": { "type": "boolean", "description": "Only the items not read yet." } }
-        }
+        },
+        "readOnly": true
       },
       "create_item": {
         "description": "Adds an item to the Sample list, unread, and answers with it.",

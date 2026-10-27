@@ -1,22 +1,29 @@
 import type { JSX } from 'react'
+import { cn } from '../lib/cn'
+import { isMac } from '../lib/platform'
 import { HelmMarkIcon } from './icons'
 import { RAIL_ICON } from './Rail'
 
 /**
  * The strip that replaces the native title bar, and the window's drag region.
  *
- * The app window is created with `titleBarStyle: 'hidden'` plus the Window
- * Controls Overlay (main/chrome.ts), so Windows draws only the min/max/close
- * buttons - coloured to the canvas - and this strip provides the mark and the
- * drag region. The mark sits centred over the rail below it, at the rail's
- * icon size, so the two read as one column down the window's left edge.
+ * Each OS draws its window controls into it (main/chrome.ts, DESIGN.md 5b).
+ * On Windows the Window Controls Overlay draws min/max/close at the right,
+ * which `pr-36` keeps clear, and the mark sits centred over the rail below it,
+ * at the rail's icon size, so the two read as one column down the window's
+ * left edge. On macOS the traffic lights sit at the left instead: the first
+ * 80px are left to them - nothing interactive under them, the mark included -
+ * the mark moves right of them, and there is nothing at the right to keep
+ * clear.
  *
  * Nothing else lives here any more. The theme switch went to Settings with the
  * rest of Appearance, and Settings went to the rail.
  */
 export function TitleBar(): JSX.Element {
+  const mac = isMac()
   return (
-    <div className="app-drag flex h-9 shrink-0 items-center pr-36">
+    <div className={cn('app-drag flex h-9 shrink-0 items-center', !mac && 'pr-36')}>
+      {mac && <span data-traffic-lights aria-hidden className="w-20 shrink-0 self-stretch" />}
       <span className="grid w-12 shrink-0 place-items-center">
         {/* The mark alone - a wordmark beside it would say "Helm" to someone
             already looking at Helm. The accessible name stays, because the

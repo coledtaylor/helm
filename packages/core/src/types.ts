@@ -1018,6 +1018,13 @@ export type ProfileDraft = Omit<Profile, 'id' | 'createdAt' | 'updatedAt'>
  * One synthesised overlay plugin: the directory handed to `--plugin-dir`, and
  * what went into it.
  */
+/**
+ * How an overlay shim carries a source folder: a junction on Windows, which
+ * needs no elevation; a directory symlink on macOS and Linux; `copy` when the
+ * filesystem under the shim can make neither.
+ */
+export type OverlayLinkMode = 'junction' | 'symlink' | 'copy'
+
 export interface OverlayShim {
   /** The plugin manifest name, and therefore the prefix its skills appear
    * under - `acme:think`, not `acme-overlay:think`. */
@@ -1028,8 +1035,7 @@ export interface OverlayShim {
   dir: string
   /** Convention directories that were linked in, e.g. `['skills', 'agents']`. */
   linked: string[]
-  /** Junctions need no elevation; `copy` is the fallback when one fails. */
-  mode: 'junction' | 'copy'
+  mode: OverlayLinkMode
   /** Whether the source project had a CLAUDE.md to carry. */
   hasClaudeMd: boolean
   /** True when this launch rebuilt the shim rather than reusing it. */

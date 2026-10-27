@@ -30,6 +30,12 @@ export interface SessionMcpServer {
   url: string
   /** The bearer header. This is the whole of the auth. */
   headers: Record<string, string>
+  /**
+   * Tools on this server the session calls without asking, by the name the
+   * server lists them under: a plugin's tools its manifest marks read-only.
+   * Passed as `--allowedTools`, never written into this file. Absent is none.
+   */
+  allowedTools?: readonly string[] | undefined
 }
 
 /**

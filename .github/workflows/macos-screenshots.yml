@@ -1,0 +1,120 @@
+name: macOS build and screenshots
+
+# For a person to look at Helm on a Mac nobody has in front of them. It is not
+# a check in the gate, and nothing waits on it.
+#
+# It builds the real macOS artefacts with `pnpm dist:mac` on a macOS runner and
+# checks them as the release does (verify-mac-artifact.mjs: an arm64 dmg and
+# zip, ad-hoc signed, with Helm's icon and their native modules). Then it
+# launches the built app through the E2E tests' Playwright launch into a world
+# with the fake claude (packages/desktop/test/world.ts), and photographs every
+# destination on the rail and a session terminal, in the light and the dark
+# theme. The pictures are uploaded as the run's `helm-macos-screenshots`
+# artifact. On macOS each view is saved twice: the page through Playwright, and
+# the window as the screen shows it, traffic lights and browser page included.
+#
+# The capture is packages/desktop/scripts/screenshots, which `pnpm screenshots`
+# also runs locally on any OS. It is in neither `pnpm check` nor
+# `pnpm test:e2e`.
+
+on:
+  # Started by hand from the Actions tab, or with
+  # `gh workflow run macos-screenshots.yml --ref <branch>`. GitHub dispatches a
+  # workflow only once its file is on the default branch.
+  workflow_dispatch:
+
+  # And by a push to a branch that changes how the macOS build is made or
+  # photographed. Without it the Mac build would first be built at release
+  # time, by `release-mac` on a version bump merged to main, and a branch
+  # could not show its dmg and zip build, verify and launch before it merges.
+  # `main` is left out: release.yml builds the Mac artefacts there.
+  push:
+    branches-ignore: [main]
+    paths:
+      - .github/workflows/macos-screenshots.yml
+      - packages/desktop/electron-builder.yml
+      - packages/desktop/build/**
+      # `dist:mac`, `screenshots` and the Electron version the build packs.
+      - packages/desktop/package.json
+      - packages/desktop/scripts/verify-mac-artifact.mjs
+      # The afterPack hook, and the spawn-helper fix it and postinstall share.
+      - packages/desktop/scripts/after-pack.mjs
+      - packages/desktop/scripts/spawn-helper.mjs
+      - packages/desktop/scripts/screenshots/**
+      # The launch and the fake-claude world the capture runs in.
+      - packages/desktop/e2e/helm.ts
+      - packages/desktop/test/world.ts
+      - test/fake-agents/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshots:
+    # A standard GitHub-hosted runner: free for a public repository. Never a
+    # larger runner, which is billed.
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      HELM_SHOTS_DIR: ${{ github.workspace }}/reports/screenshots
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        # Version comes from `packageManager` in package.json; see ci.yml.
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Read the version the artefacts are named for
+        run: |
+          echo "VERSION=$(node -p "require('./packages/desktop/package.json').version")" >>"$GITHUB_ENV"
+
+      # As `release-mac` in release.yml builds it: ad-hoc signed
+      # (`identity: '-'` in electron-builder.yml), with no Developer ID,
+      # certificate or secret. It also leaves the app built in
+      # packages/desktop/out, which the capture below launches.
+      - name: Build artefacts
+        run: pnpm dist:mac
+
+      - name: Verify the artefacts are arm64, ad-hoc signed, with Helm's icon and their native modules
+        run: |
+          node packages/desktop/scripts/verify-mac-artifact.mjs \
+            "packages/desktop/dist-app/Helm-$VERSION-arm64.dmg" \
+            "packages/desktop/dist-app/Helm-$VERSION-arm64-mac.zip"
+
+      - name: Launch Helm with the fake claude and capture each view
+        id: capture
+        run: pnpm --filter @helm/desktop exec playwright test -c scripts/screenshots
+
+      # Whatever the capture wrote, even from a run that failed partway; there
+      # is nothing to upload when the build or its check stopped the job first.
+      - name: Upload the screenshots
+        if: ${{ !cancelled() && steps.capture.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-macos-screenshots
+          path: reports/screenshots
+          if-no-files-found: error
+          retention-days: 14
+
+      # What Playwright kept of a run that failed partway: its error context
+      # and the trace, which say which view it could not reach.
+      - name: Upload the failed run's report
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-macos-screenshots-failure
+          path: reports/screenshots-results
+          if-no-files-found: ignore
+          retention-days: 14

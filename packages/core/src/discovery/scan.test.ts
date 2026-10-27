@@ -317,7 +317,8 @@ describe('reconciling the discovery cache', () => {
     expect(disprovedProjectPaths(cached, scanned([join(root, 'here')], []))).toEqual([])
   })
 
-  it('matches roots and rows across two spellings of one directory', () => {
+  // Windows paths fold case; on macOS and Linux two spellings are two paths.
+  it.runIf(process.platform === 'win32')('matches roots and rows across two spellings of one directory', () => {
     const cached = [join(root, 'Tool', 'SRC')]
     const tool = join(root, 'tool')
     expect(disprovedProjectPaths(cached, scanned([tool], [tool]))).toEqual([

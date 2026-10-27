@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -27,6 +27,38 @@ function git(cwd: string, ...args: string[]): string {
 
 const lines = (count: number, label = 'line'): string =>
   Array.from({ length: count }, (_, i) => `${label} ${String(i + 1)}`).join('\n') + '\n'
+
+/**
+ * A link to a folder, of the kind overlays make: a junction on Windows, a
+ * symbolic link on macOS and Linux (Node ignores the `'junction'` type there).
+ */
+const linkFolder = (link: string, target: string): void => symlinkSync(target, link, 'junction')
+
+/** Removes a folder link without walking into it. */
+function unlinkFolder(link: string): void {
+  try {
+    unlinkSync(link)
+  } catch {
+    rmdirSync(link)
+  }
+}
+
+/**
+ * The 8.3 alias Windows keeps for an existing path, such as
+ * `C:\Users\RUNNER~1` for a long user name - or null off Windows, and on a
+ * volume that keeps no short names. A GitHub Windows runner's TEMP is spelled
+ * this way.
+ */
+function shortPath(path: string): string | null {
+  if (process.platform !== 'win32') return null
+  const run = spawnSync(process.env['COMSPEC'] ?? 'cmd.exe', ['/d', '/s', '/c', `"for %I in ("${path}") do @echo %~sI"`], {
+    encoding: 'utf8',
+    windowsHide: true,
+    windowsVerbatimArguments: true
+  })
+  const short = run.status === 0 ? run.stdout.trim() : ''
+  return short !== '' && short !== path ? short : null
+}
 
 let root: string
 
@@ -255,6 +287,46 @@ describe('readFileView', () => {
       tooLarge: true,
       content: ''
     })
+  })
+
+  it('reads a project reached through a link as the project, and still refuses a link out of it', async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'helm files elsewhere-'))
+    const linked = join(elsewhere, 'linked project')
+    const escape = join(root, 'escape')
+    try {
+      writeFileSync(join(root, 'a.txt'), 'one\n')
+      linkFolder(linked, root)
+      expect(await readFileView(linked, join(linked, 'a.txt'))).toMatchObject({ exists: true, content: 'one\n', error: null })
+      expect(await readFileView(linked, join(linked, 'missing.txt'))).toMatchObject({ exists: false, error: null })
+      expect(isInsideRoot(linked, join(linked, 'new', 'b.txt'))).toBe(true)
+
+      // Out through a link inside the project, for a file that is there and one that is not.
+      mkdirSync(join(elsewhere, 'outside'))
+      writeFileSync(join(elsewhere, 'outside', 'secret.txt'), 'nope')
+      linkFolder(escape, join(elsewhere, 'outside'))
+      const secret = await readFileView(linked, join(linked, 'escape', 'secret.txt'))
+      expect(secret.content).toBe('')
+      expect(secret.error).toMatch(/not inside/)
+      expect(isInsideRoot(linked, join(linked, 'escape', 'gone.txt'))).toBe(false)
+    } finally {
+      for (const link of [linked, escape]) {
+        try {
+          unlinkFolder(link)
+        } catch {
+          // Not made before the failure.
+        }
+      }
+      rmSync(elsewhere, { recursive: true, force: true })
+    }
+  })
+
+  it.runIf(process.platform === 'win32')('reads a project named by its 8.3 alias as the project', async ({ skip }) => {
+    const short = shortPath(root)
+    if (short === null) return skip('this volume keeps no 8.3 names')
+    writeFileSync(join(root, 'a.txt'), 'one\n')
+    expect(await readFileView(short, join(short, 'a.txt'))).toMatchObject({ exists: true, content: 'one\n', error: null })
+    expect(await readFileView(short, join(short, 'missing.txt'))).toMatchObject({ exists: false, error: null })
+    expect(isInsideRoot(short, join(short, 'new', 'b.txt'))).toBe(true)
   })
 })
 

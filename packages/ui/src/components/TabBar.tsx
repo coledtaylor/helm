@@ -1,6 +1,7 @@
 import type { DragEvent, JSX, KeyboardEvent, ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '../lib/cn'
+import { hasPrimaryModifier } from '../lib/platform'
 import {
   SESSION_STATE_DOT,
   SESSION_STATE_LABEL,
@@ -246,7 +247,7 @@ export function TabBar({
   }
 
   const moveWithKeyboard = (event: KeyboardEvent<HTMLElement>, index: number): void => {
-    if (!canMove || !event.ctrlKey || !event.shiftKey) return
+    if (!canMove || !hasPrimaryModifier(event) || !event.shiftKey) return
     const delta = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0
     if (delta === 0) return
     const target = index + delta

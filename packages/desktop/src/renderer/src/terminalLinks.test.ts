@@ -133,6 +133,30 @@ describe('Ctrl+click on a link', () => {
     expect(event.defaultPrevented).toBe(false)
   })
 
+  it('on macOS opens on Cmd+click, and leaves Ctrl+click - a right-click there - to the program', () => {
+    vi.spyOn(Navigator.prototype, 'platform', 'get').mockReturnValue('MacIntel')
+    const { screen, reached, opened, osc } = pane()
+
+    osc.hover?.(pointer(), DOCS, RANGE)
+    press(screen, { ctrlKey: true })
+    expect(opened).toEqual([])
+    expect(reached).toHaveBeenCalledTimes(1)
+
+    const event = press(screen, { metaKey: true })
+    expect(opened).toEqual([DOCS])
+    expect(event.defaultPrevented).toBe(true)
+  })
+
+  it('leaves Cmd+click to the program off macOS', () => {
+    vi.spyOn(Navigator.prototype, 'platform', 'get').mockReturnValue('Win32')
+    const { screen, reached, opened, osc } = pane()
+
+    osc.hover?.(pointer(), DOCS, RANGE)
+    press(screen, { metaKey: true })
+    expect(opened).toEqual([])
+    expect(reached).toHaveBeenCalledTimes(1)
+  })
+
   it('leaves Ctrl with another modifier, and Ctrl with another button, to the program', () => {
     const { screen, reached, opened, osc } = pane()
 

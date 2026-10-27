@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -27,7 +27,10 @@ function run(args: string[], cwd: string): Run {
 
 let root: string
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'helm sdk-'))
+  // Resolved, because the CLI names folders from its working directory, which
+  // the OS reports resolved: macOS's temporary folder is under /var, a link to
+  // /private/var.
+  root = realpathSync.native(mkdtempSync(join(tmpdir(), 'helm sdk-')))
 })
 afterEach(() => {
   rmSync(root, { recursive: true, force: true })

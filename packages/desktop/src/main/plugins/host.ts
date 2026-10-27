@@ -536,7 +536,11 @@ export function createPluginHost(options: PluginHostOptions): PluginHost {
               enabled: entry.folder.toolsEnabled,
               server: agentServerName(manifest.id),
               instructions: manifest.agent.instructions,
-              tools: manifest.agent.tools.map((tool) => ({ name: tool.name, description: tool.description }))
+              tools: manifest.agent.tools.map((tool) => ({
+                name: tool.name,
+                description: tool.description,
+                readOnly: tool.readOnly
+              }))
             },
       startsSessions: manifest.sessions.start,
       seesSessions: manifest.sessions.list

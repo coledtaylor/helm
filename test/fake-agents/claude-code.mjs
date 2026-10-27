@@ -100,7 +100,9 @@ const OPTION_SPEC = (() => {
   add(['--input-format'], 'inputFormat', 'value')
   add(['--add-dir'], 'addDir', 'variadic')
   add(['--mcp-config'], 'mcpConfig', 'variadic')
-  add(['--plugin-dir'], 'pluginDir', 'variadic')
+  // One path per flag, repeated for more (`--plugin-dir A --plugin-dir B`), as
+  // the real CLI's `--help` declares it.
+  add(['--plugin-dir'], 'pluginDir', 'value')
   add(['--allowedTools', '--allowed-tools'], 'allowedTools', 'variadic')
   add(['--disallowedTools', '--disallowed-tools'], 'disallowedTools', 'variadic')
   add(['--tools'], 'tools', 'variadic')
@@ -357,6 +359,8 @@ loadSettings()
 loadMcpServers()
 loadInstructions()
 log.openingPrompt = parsed.positionals[0] ?? null
+// Each value may hold several, split on commas or spaces, as the real CLI reads them.
+log.allowedTools = (opts.allowedTools ?? []).flatMap((value) => value.split(/[\s,]+/).filter(Boolean))
 
 if (resume !== undefined) {
   const recorded = resume === null ? null : findTranscript(resume)

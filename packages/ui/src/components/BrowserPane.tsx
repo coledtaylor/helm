@@ -2,6 +2,7 @@ import type { JSX, RefObject } from 'react'
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from 'react'
 import { cn } from '../lib/cn'
 import { PANES_MOVED_EVENT } from '../lib/paneGeometry'
+import { shortcutLabel } from '../lib/platform'
 import { SEGMENT_ON } from '../lib/segmented'
 import { ConsolePanel, type ConsoleEntry } from './ConsolePanel'
 import { AgentIcon, BackIcon, ExternalIcon, ForwardIcon, MoreIcon, RefreshIcon, SearchIcon, ShareIcon } from './icons'
@@ -290,9 +291,9 @@ export function BrowserPane({
    */
   const menu: MenuEntry[] = [
     { kind: 'heading', id: 'zoom-heading', label: `Zoom ${zoomPercent(state.zoomLevel)}` },
-    { kind: 'item', id: 'zoom-in', label: 'Zoom in', hint: 'Ctrl =', disabled: state.zoomLevel >= BROWSER_ZOOM.max },
-    { kind: 'item', id: 'zoom-out', label: 'Zoom out', hint: 'Ctrl -', disabled: state.zoomLevel <= BROWSER_ZOOM.min },
-    { kind: 'item', id: 'zoom-reset', label: 'Actual size', hint: 'Ctrl 0', disabled: !zoomed },
+    { kind: 'item', id: 'zoom-in', label: 'Zoom in', hint: shortcutLabel('=', { separator: ' ' }), disabled: state.zoomLevel >= BROWSER_ZOOM.max },
+    { kind: 'item', id: 'zoom-out', label: 'Zoom out', hint: shortcutLabel('-', { separator: ' ' }), disabled: state.zoomLevel <= BROWSER_ZOOM.min },
+    { kind: 'item', id: 'zoom-reset', label: 'Actual size', hint: shortcutLabel('0', { separator: ' ' }), disabled: !zoomed },
     { kind: 'separator', id: 'after-zoom' },
     { kind: 'heading', id: 'width-heading', label: 'Width' },
     ...BROWSER_WIDTHS.map(
@@ -479,7 +480,7 @@ export function BrowserPane({
               type="button"
               data-browser="zoom-reset"
               data-browser-zoom={String(state.zoomLevel)}
-              title="Zoomed - back to actual size (Ctrl 0)"
+              title={`Zoomed - back to actual size (${shortcutLabel('0', { separator: ' ' })})`}
               aria-label={`Zoom ${zoomPercent(state.zoomLevel)}, back to actual size`}
               onClick={() => onZoom(0)}
               className="absolute top-1/2 right-1 -translate-y-1/2 rounded-raised px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-fg-muted transition-colors hover:bg-hover hover:text-fg"

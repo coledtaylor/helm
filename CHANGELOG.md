@@ -14,6 +14,42 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.4.0
+
+**macOS**
+
+- Helm runs on Macs with Apple Silicon. The release has a `.dmg` and a
+  `.zip` next to the Windows downloads. They are not notarized, so the first
+  time you open Helm, macOS refuses: open it from Finder with right-click >
+  Open, or allow it under System Settings > Privacy & Security.
+- Helm's shortcuts use Cmd, and every hint shows ⌘. The Browser tab's keys do
+  too: Cmd+T, Cmd+W, Cmd+L, Cmd+R and the rest. Ctrl+C in a terminal still
+  interrupts the program.
+- Helm has an app menu and an Edit menu, so Cmd+C, Cmd+V, Cmd+Z and Cmd+A
+  work in every text field. Quit Helm (Cmd+Q) asks before ending running
+  sessions, the way closing the window does.
+- The traffic lights sit in Helm's own title strip, clear of its controls.
+- The sessions pane shows a session's processes and listening ports instead
+  of Unknown.
+- Mono text uses SF Mono, then Menlo, where Cascadia Mono is not installed.
+- Your data lives in `~/Library/Application Support/Helm`.
+
+**Sessions**
+
+- A session started with a first message - from a plugin, or from a profile
+  with no model set - starts with that message. Claude Code used to exit at
+  once instead.
+
+**Plugins**
+
+- A plugin's tools that its author marks read-only run without asking each
+  time. Settings shows which ones. Every other tool still asks, and your own
+  deny rules still win.
+- A plugin folder reached through a link or a Windows short name finds its
+  own files and services.
+- Plugin authors: a tool's `readOnly` field, and Cmd for macOS in the
+  authoring guide, in plugin SDK 1.3.2.
+
 ## 2.3.3
 
 **Profiles**

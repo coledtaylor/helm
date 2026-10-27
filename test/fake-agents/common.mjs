@@ -142,13 +142,29 @@ export function writeJsonAtomically(file, value) {
   const temporary = `${file}.${String(process.pid)}.tmp`
   const text = JSON.stringify(value, null, 2)
   writeFileSync(temporary, text)
-  try {
-    renameSync(temporary, file)
-  } catch {
-    // A reader that opened the file without sharing delete holds the name on
-    // Windows. Writing in place is the older behaviour and still whole once
-    // the write returns.
-    writeFileSync(file, text)
-    rmSync(temporary, { force: true })
+  // A reader holding the file open makes the rename fail on Windows for as long
+  // as it reads, which is a moment, so the rename is tried again. Writing in
+  // place instead would truncate the file first, and a test polling the log
+  // would read it empty.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      renameSync(temporary, file)
+      return
+    } catch (error) {
+      if (attempt === RENAME_ATTEMPTS) {
+        rmSync(temporary, { force: true })
+        throw error
+      }
+      sleepSync(RENAME_RETRY_MS)
+    }
   }
+}
+
+/** About a second of tries, far longer than any reader holds the file. */
+const RENAME_ATTEMPTS = 100
+const RENAME_RETRY_MS = 10
+
+/** Blocks for `ms`: the fake writes synchronously, from handlers that cannot wait. */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }

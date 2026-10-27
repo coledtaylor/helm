@@ -120,9 +120,10 @@ Three details that are load-bearing rather than stylistic:
 
 - **`--append-system-prompt-file`** carries the overlays' CLAUDE.md. Plugins do
   not, and neither does `--add-dir` - both measured. See the risk table.
-- **Argument order.** `--add-dir` is variadic, so `-n` follows it to terminate
-  the list and the opening prompt goes last - a positional reachable from
-  `--add-dir` is read as another directory.
+- **Argument order.** `--add-dir` and `--mcp-config` are variadic, so the
+  opening prompt goes last, behind `--` - a positional reachable from either is
+  read as another directory or another config file, and a config file that
+  does not exist ends the session at once with exit 1.
 - **The shim root is under the app's data directory, not `%TEMP%`.** A shim
   contains junctions into real repositories, and a temp cleaner that follows a
   reparse point instead of unlinking it deletes the repo's `.claude/skills`.

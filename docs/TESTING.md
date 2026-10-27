@@ -10,8 +10,11 @@ that are not tests.
 | end to end | Playwright for Electron | the high-level user workflows, through the built app | `pnpm test:e2e` |
 | Rust crates | `cargo test` | the Floti protocol crate (`crates/floti-protocol`) and host (`crates/host`) | `cargo test -p floti-protocol`, `cargo test -p floti-host` |
 
-Both tiers run locally, before a change is merged. CI runs neither: it builds
-and releases the app.
+Both tiers run locally, before a change is merged. CI also runs the unit and
+integration tier, as `pnpm check`, on Windows, macOS and Linux runners on every
+push. All three jobs are required: a failure on any one fails the run and, from
+the release workflow, stops the release. The end-to-end tier runs locally only,
+never in CI.
 
 The protocol crate generates JSON Schema and TypeScript into
 `crates/floti-protocol/generated/`. A test fails when those files are out of
@@ -79,6 +82,8 @@ interfaces, with an implementation for each OS.
 pnpm test                          # every vitest project, with coverage
 pnpm vitest run --project ui       # one of core, ui, desktop, sdk, sdk-svelte
 pnpm vitest run <file>             # one file, while building
+pnpm test:posix                    # the POSIX code's tests: under Linux in WSL on Windows, natively elsewhere
+pnpm test:posix <file> ...         # the same, for these files
 pnpm test:e2e                      # builds, then runs every workflow
 pnpm --filter @helm/desktop exec playwright test -c e2e panes   # one spec, after a build
 cargo test -p floti-protocol       # the protocol crate, its ipc.ts coverage and generated-file check included
@@ -86,6 +91,46 @@ cargo test -p floti-host           # the host, with the fake agents (Node on PAT
 cargo run -p floti-protocol --bin generate                      # rewrite the generated schema and TypeScript
 pnpm exec tsc -p crates/floti-protocol/generated/tsconfig.json  # the generated TypeScript under strict settings
 ```
+
+## Windows, macOS and Linux
+
+Every test runs on all three, and a test that only holds on one says so with
+`it.runIf(process.platform === ...)` and a comment naming why: a drive letter,
+a `.cmd` shim, a file system that folds case. Paths a test hands the code are
+absolute on the OS it runs on. Links to folders are made with `linkFolder`
+(`test/links.ts`), a junction on Windows and a symbolic link elsewhere, as
+overlays make them. The fake `claude` is a `.cmd` shim on Windows and an
+executable `sh` script elsewhere (`writeFakeClaude` in `test/world.ts`), and a
+world's root is a real path, because on macOS the temporary folder is reached
+through a link.
+
+A temporary folder is not always its own real path: macOS's is under `/var`, a
+link to `/private/var`, and a GitHub Windows runner's TEMP is the 8.3 alias
+`C:\Users\RUNNER~1\...`. Code that checks one path is inside another resolves
+both before comparing them, and its tests reach the folder through a link
+(`linkFolder`) and, on Windows, through its 8.3 alias (`shortPath`, also in
+`test/links.ts`). To run tests the way those machines do, set TEMP and TMP to a
+short alias on Windows, or point TMPDIR at a link to a folder - from Windows,
+`TMPDIR=/tmp/<link> WSLENV=TMPDIR pnpm test:posix <files>`.
+
+The code that differs by OS - the processes-and-ports pass, overlay links,
+ending a process tree, the data directories and node-pty's spawn-helper mode -
+has its tests run where that code is the POSIX one by `pnpm test:posix`
+(`scripts/test-posix.mjs`):
+
+- **On macOS and Linux** it runs those test files natively, in the checkout.
+- **On Windows** it runs them under Linux in WSL. It mirrors the working tree
+  into `~/.cache/helm-posix/<checkout>` inside WSL with `rsync` (no
+  `node_modules`, `.git` or build output), runs `pnpm install
+  --frozen-lockfile` there when `pnpm-lock.yaml` has changed since the last
+  install, and runs the tests in that copy. The copy is Linux-side because a
+  tree under `/mnt/c` has Windows native modules and no POSIX links or
+  permissions. WSL needs Node 22 or later, on `PATH` or under
+  `~/.local/node` (no `sudo` needed), and `rsync`; pnpm is the version
+  `package.json` pins, through `npx` when it is not installed.
+
+Files given on the command line replace the default set, so any test can be run
+under Linux the same way.
 
 ## Unit and integration tests
 
@@ -163,7 +208,7 @@ tier above, so keep this one small.
 
 - **Each test gets a world** (`test/world.ts`): a temporary root with a space in
   its path, holding a home directory with its own `.claude`, the fake `claude`
-  as a `.cmd` shim, two git projects, and the app's data
+  (a `.cmd` shim on Windows, an `sh` script elsewhere), two git projects, and the app's data
   directory (`PORTABLE_EXECUTABLE_DIR`). Settings are seeded through the app's
   own store before it starts: the projects folder scanned, the fake `claude`
   chosen, first run done, the update check off. Nothing reaches the network, a
@@ -221,8 +266,9 @@ and a transcript whose assistant rows carry a model and token usage.
 `--resume` works only in the directory the conversation was recorded in. The
 config dir is `CLAUDE_CONFIG_DIR`, or `~/.claude`.
 
-- `--add-dir`, `--mcp-config`, `--plugin-dir` and `--allowedTools` are
-  variadic; the opening prompt is the first positional.
+- `--add-dir`, `--mcp-config` and `--allowedTools` are variadic, and
+  `--plugin-dir` takes one path per flag; the opening prompt is the first
+  positional. The tools `--allowedTools` allows are logged as `allowedTools`.
 - `--settings` takes a file or inline JSON; a missing file fails as the CLI
   does. User, project and local settings are loaded too, and logged in order.
 - Instructions: `<config dir>/CLAUDE.md`, then each folder from the root down
@@ -231,8 +277,8 @@ config dir is `CLAUDE_CONFIG_DIR`, or `~/.claude`.
   set `instructionFiles` to `claude-md-and-agents-md`, when both load. Each
   file loads once. `--append-system-prompt-file` is logged as
   `composedInstructions`.
-- `--mcp-config` files are read and their servers logged; a missing file fails
-  as the CLI does.
+- Each `--mcp-config` value is inline JSON or a file; the servers are logged
+  by name, and a missing file fails as the CLI does.
 - `mcp add-json` and `mcp remove` write `.mcp.json` or `~/.claude.json` as the
   real CLI does.
 

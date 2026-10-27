@@ -1,5 +1,5 @@
 import { realpathSync, statSync } from 'node:fs'
-import { relative, resolve, sep } from 'node:path'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import type { FileView } from '../types'
 import { readConfigFileContent } from '../config/write'
 import { readFileChanges } from './changes'
@@ -21,11 +21,29 @@ import { readFileChanges } from './changes'
  */
 export const FILE_VIEW_MAX_BYTES = 5 * 1024 * 1024
 
-const realOrSelf = (path: string): string => {
-  try {
-    return realpathSync.native(path)
-  } catch {
-    return path
+/**
+ * An absolute path as the disk resolves it: every link followed and every 8.3
+ * alias spelled out. A path that does not exist - a file the session deleted,
+ * a folder not made yet - resolves through its deepest ancestor that does,
+ * with the rest appended as written.
+ *
+ * Never the path as written: a root reached through a link (macOS's temporary
+ * folder is under /var, which is /private/var) or a short name (a Windows
+ * runner's TEMP is C:\Users\RUNNER~1) resolves, so a missing file under it
+ * compared unresolved would look like it was outside the project - and a
+ * missing file behind a junction out of the project would look like it was in.
+ */
+function realPath(path: string): string {
+  const rest: string[] = []
+  for (let at = path; ; ) {
+    try {
+      return join(realpathSync.native(at), ...rest)
+    } catch {
+      const parent = dirname(at)
+      if (parent === at) return path
+      rest.unshift(basename(at))
+      at = parent
+    }
   }
 }
 
@@ -35,7 +53,8 @@ const realOrSelf = (path: string): string => {
  * Both, for the reason the content tree checks both: a path spelled inside the
  * project can be a junction out of it - an overlay shim's subdirectories are
  * junctions into other repositories - and a file view scoped to a project must
- * not quietly become a reader for the rest of the disk.
+ * not quietly become a reader for the rest of the disk. The resolved check
+ * resolves both sides, the root and the path, the same way.
  */
 export function isInsideRoot(root: string, path: string): boolean {
   const inside = (base: string, target: string): boolean => {
@@ -44,7 +63,7 @@ export function isInsideRoot(root: string, path: string): boolean {
   }
   const base = resolve(root)
   const target = resolve(path)
-  return inside(base, target) && inside(realOrSelf(base), realOrSelf(target))
+  return inside(base, target) && inside(realPath(base), realPath(target))
 }
 
 /** How the file's lines end. `null` for a file with one line or none. */

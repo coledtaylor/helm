@@ -104,7 +104,8 @@ export interface PluginAgentInfo {
   /** The MCP server they appear under in a session: `helm-plugin-<id>`. */
   server: string
   instructions: string | null
-  tools: Array<{ name: string; description: string }>
+  /** `readOnly`: the manifest marks it so, and sessions call it without asking. */
+  tools: Array<{ name: string; description: string; readOnly: boolean }>
 }
 
 export interface PluginMetrics {

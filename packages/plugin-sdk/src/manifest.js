@@ -824,11 +824,13 @@ function readTools(value, id, fail) {
     }
     const description = text(spec['description'], `${where}.description`, AGENT_TEXT_MAX, fail)
     const inputSchema = readInputSchema(spec['inputSchema'], `${where}.inputSchema`, fail)
-    if (description === null || inputSchema === null) {
+    const readOnly = spec['readOnly'] ?? false
+    if (typeof readOnly !== 'boolean') fail(`${where}.readOnly must be true or false`)
+    if (description === null || inputSchema === null || typeof readOnly !== 'boolean') {
       good = false
       continue
     }
-    tools.push({ name, description, inputSchema })
+    tools.push({ name, description, inputSchema, readOnly })
   }
   return good ? tools : null
 }

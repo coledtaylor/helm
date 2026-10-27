@@ -156,7 +156,7 @@
 
   --font-sans:
     'Inter var', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
-  --font-mono: 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+  --font-mono: 'Cascadia Mono', 'SF Mono', Menlo, Consolas, ui-monospace, monospace;
 }
 
 /* --------------------------------------------------------------------------

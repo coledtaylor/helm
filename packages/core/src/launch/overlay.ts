@@ -16,6 +16,7 @@ import {
 import type { Dirent } from 'node:fs'
 import { uptime } from 'node:os'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
+import type { OverlayLinkMode } from '../types'
 
 /**
  * Turning a repo's `.claude/` directory into something `--plugin-dir` accepts.
@@ -28,16 +29,30 @@ import { basename, isAbsolute, join, relative, resolve } from 'node:path'
  *     <shimRoot>/overlay-acme/
  *     ├── .claude-plugin/plugin.json      generated
  *     ├── .helm-overlay.json              generated: what this was built from
- *     ├── skills/     ──junction──▶  repos/acme/.claude/skills
- *     ├── commands/   ──junction──▶  repos/acme/.claude/commands
- *     ├── agents/     ──junction──▶  repos/acme/.claude/agents
- *     └── workflows/  ──junction──▶  repos/acme/.claude/workflows
+ *     ├── skills/     ──link──▶  repos/acme/.claude/skills
+ *     ├── commands/   ──link──▶  repos/acme/.claude/commands
+ *     ├── agents/     ──link──▶  repos/acme/.claude/agents
+ *     └── workflows/  ──link──▶  repos/acme/.claude/workflows
  *
- * Junctions rather than symlinks because symlinks need elevation on Windows and
- * junctions do not, and rather than copies because a junction is the source
- * directory: editing a skill in the repo changes what the next session loads
- * without anything having to notice.
+ * The link is a junction on Windows, because a symlink there needs elevation
+ * and a junction does not, and a directory symlink on macOS and Linux, which
+ * need nothing (`linkKind`). A link rather than a copy because a link is the
+ * source directory: editing a skill in the repo changes what the next session
+ * loads without anything having to notice.
  */
+
+/**
+ * The link a shim makes on this OS, and the name its stamp records for it.
+ *
+ * The one place overlays branch on the OS. Node ignores the `type` argument of
+ * `symlinkSync` off Windows, so passing `'dir'` there is for the reader.
+ */
+export function linkKind(platform: NodeJS.Platform = process.platform): {
+  type: 'junction' | 'dir'
+  mode: Exclude<OverlayLinkMode, 'copy'>
+} {
+  return platform === 'win32' ? { type: 'junction', mode: 'junction' } : { type: 'dir', mode: 'symlink' }
+}
 
 /**
  * What gets linked, and in what order.
@@ -234,7 +249,7 @@ export interface ShimOwner {
 interface Stamp {
   name: string
   projectPath: string
-  mode: 'junction' | 'copy'
+  mode: OverlayLinkMode
   linked: string[]
   fingerprint: string
   builtAt: string
@@ -395,7 +410,8 @@ function claimOwners(previous: readonly ShimOwner[] | undefined, world: ShimWorl
 }
 
 /**
- * Removes a shim directory, unlinking its junctions before anything recurses.
+ * Removes a shim directory, unlinking its links (junctions on Windows,
+ * symlinks on macOS and Linux) before anything recurses.
  *
  * `fs.rm(dir, { recursive: true })` is documented to unlink a link rather than
  * descend through it, and in a clean test it does. It was still observed
@@ -451,15 +467,16 @@ function removeShimDir(dir: string): void {
 /**
  * Links one convention directory, falling back to a copy.
  *
- * The fallback exists because a junction can fail for reasons that are not the
+ * The fallback exists because a link can fail for reasons that are not the
  * user's to fix - the shim root landing on a filesystem that has no reparse
- * points, most plausibly a network share or a FAT-formatted stick, which is a
- * real case for an app whose whole premise is being portable.
+ * points or symlinks, most plausibly a network share or a FAT-formatted stick,
+ * which is a real case for an app whose whole premise is being portable.
  */
-function link(target: string, path: string): 'junction' | 'copy' {
+function link(target: string, path: string): OverlayLinkMode {
+  const kind = linkKind()
   try {
-    symlinkSync(target, path, 'junction')
-    return 'junction'
+    symlinkSync(target, path, kind.type)
+    return kind.mode
   } catch {
     cpSync(target, path, { recursive: true, dereference: true })
     return 'copy'
@@ -471,7 +488,7 @@ export interface SyncedOverlay {
   projectPath: string
   dir: string
   linked: string[]
-  mode: 'junction' | 'copy'
+  mode: OverlayLinkMode
   hasClaudeMd: boolean
   rebuilt: boolean
 }
@@ -484,10 +501,9 @@ export interface SyncedOverlay {
  * nothing in it worth preserving, and "delete and rebuild" cannot leave a
  * junction pointing at a directory the source no longer has.
  *
- * Removing it is safe even though it contains junctions - `rm` unlinks a
- * junction rather than descending through it, so the source repo is never
- * reachable from here. That is load-bearing: the alternative deletes the user's
- * skills.
+ * Removing it is safe even though it contains links - `removeShimDir` unlinks
+ * each one before anything recurses, so the source repo is never reachable from
+ * here. That is load-bearing: the alternative deletes the user's skills.
  */
 export function syncOverlay(plan: OverlayPlan): SyncedOverlay {
   const current = fingerprint(plan)
@@ -528,7 +544,7 @@ export function syncOverlay(plan: OverlayPlan): SyncedOverlay {
   )
 
   const linked: string[] = []
-  let mode: 'junction' | 'copy' = 'junction'
+  let mode: OverlayLinkMode = linkKind().mode
   for (const dir of plan.links) {
     const how = link(join(plan.projectPath, '.claude', dir), join(plan.dir, dir))
     if (how === 'copy') mode = 'copy'

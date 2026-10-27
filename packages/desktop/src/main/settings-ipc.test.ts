@@ -112,8 +112,15 @@ describe('settings over IPC', () => {
 
     const pickedDir = join(world.root, 'picked bin')
     mkdirSync(pickedDir)
-    picked = join(pickedDir, 'claude.cmd')
-    writeFileSync(picked, ['@echo off', 'echo 2.1.500 (Claude Code)', ''].join('\r\n'))
+    // A CLI that answers with its own version: a `.cmd` on Windows, an
+    // executable script elsewhere.
+    if (process.platform === 'win32') {
+      picked = join(pickedDir, 'claude.cmd')
+      writeFileSync(picked, ['@echo off', 'echo 2.1.500 (Claude Code)', ''].join('\r\n'))
+    } else {
+      picked = join(pickedDir, 'claude')
+      writeFileSync(picked, ['#!/bin/sh', "echo '2.1.500 (Claude Code)'", ''].join('\n'), { mode: 0o755 })
+    }
 
     nativeTheme = (await import('electron')).nativeTheme
     update = await import('./update')
