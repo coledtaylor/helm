@@ -66,6 +66,17 @@ describe('TabBar', () => {
     expect(props.onMove).toHaveBeenCalledTimes(1)
   })
 
+  it('on macOS moves a tab with Cmd+Shift+Arrow, and Ctrl+Shift+Arrow does nothing', () => {
+    vi.spyOn(Navigator.prototype, 'platform', 'get').mockReturnValue('MacIntel')
+    const props = renderBar()
+    const tab = screen.getByRole('tab', { name: 'alpha, ready' })
+    fireEvent.keyDown(tab, { key: 'ArrowRight', ctrlKey: true, shiftKey: true })
+    expect(props.onMove).not.toHaveBeenCalled()
+    fireEvent.keyDown(tab, { key: 'ArrowRight', metaKey: true, shiftKey: true })
+    expect(props.onMove).toHaveBeenCalledWith('session:1', 1)
+    vi.restoreAllMocks()
+  })
+
   it('renames a renamable tab on double-click: Enter commits, blank resets, Escape abandons', async () => {
     const props = renderBar()
     const user = userEvent.setup()

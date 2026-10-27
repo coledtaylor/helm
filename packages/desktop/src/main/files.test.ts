@@ -76,10 +76,16 @@ describe('the Files service', () => {
 
   it('tells the window which files changed under a watched root, and stops when it is let go', async () => {
     service.watch([root])
-    writeFileSync(join(root, 'src', 'a.ts'), 'changed\n')
-    await vi.waitFor(() => expect(changes.flatMap((change) => change.paths ?? [])).toContain('src/a.ts'), {
-      timeout: 5000
-    })
+    // Written again on every try: macOS's FSEvents can miss a write made in
+    // the moment after a stream starts, and nothing says when it is live.
+    let write = 0
+    await vi.waitFor(
+      () => {
+        writeFileSync(join(root, 'src', 'a.ts'), `changed ${++write}\n`)
+        expect(changes.flatMap((change) => change.paths ?? [])).toContain('src/a.ts')
+      },
+      { timeout: 5000, interval: 250 }
+    )
     expect(changes[0]?.root.toLowerCase()).toBe(root.toLowerCase())
 
     service.watch([])

@@ -5,7 +5,7 @@ import { utilityProcess } from 'electron'
 import { cmdShimArgs } from '@helm/core'
 import type { NormalizedService } from '@coledtaylor/helm-plugin-sdk/manifest'
 import type { PluginLogLine, PluginServiceInfo } from '../../shared/ipc'
-import { treeKill } from '../treekill'
+import { POSIX_OWN_GROUP, treeKill } from '../treekill'
 import { PluginCallError } from './errors'
 import { programEnv, resolveProgram } from './exec'
 import { resolveInside } from './loader'
@@ -105,7 +105,9 @@ export function childProcessLauncher(launch: ServiceLaunch): ServiceProcess {
     env: launch.kind === 'node' ? { ...launch.env, ELECTRON_RUN_AS_NODE: '1' } : launch.env,
     windowsHide: true,
     windowsVerbatimArguments: launch.batch,
-    stdio: ['ignore', 'pipe', 'pipe']
+    stdio: ['ignore', 'pipe', 'pipe'],
+    // Its own process group on macOS and Linux, so ending it ends what it started.
+    ...POSIX_OWN_GROUP
   })
   const exits: Array<(code: number | null) => void> = []
   let exited = false

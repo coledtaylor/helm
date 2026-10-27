@@ -1,5 +1,6 @@
 import type { IDisposable, Terminal } from '@xterm/xterm'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { hasPrimaryModifier } from '@helm/ui'
 import './terminalLinks.css'
 
 /**
@@ -113,9 +114,13 @@ function lookAgain(term: Terminal, event: MouseEvent): void {
   }
 }
 
-/** Ctrl and nothing else: the Windows chord for following a link. */
+/**
+ * The shortcut modifier and nothing else: Ctrl on Windows and Linux, Cmd on
+ * macOS, the chord each OS's terminals follow a link with. On a Mac Ctrl+click
+ * is a right-click, and a Ctrl press is the program's.
+ */
 function isChordHeld(event: MouseEvent | KeyboardEvent): boolean {
-  return event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey
+  return hasPrimaryModifier(event) && !event.shiftKey && !event.altKey
 }
 
 function isLinkChord(event: MouseEvent): boolean {

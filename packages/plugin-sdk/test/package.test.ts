@@ -19,7 +19,12 @@ import { SDK_DIR } from './fixtures'
 const NAME = '@coledtaylor/helm-plugin-sdk'
 
 /** npm's own script, beside the node running this. Spawning `npm.cmd` would need a shell. */
-const NPM_CLI = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+// npm ships beside node: next to node.exe on Windows, and in
+// <prefix>/lib/node_modules beside <prefix>/bin/node on macOS and Linux.
+const NPM_CLI =
+  process.platform === 'win32'
+    ? join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    : join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
 
 interface Run {
   status: number | null
@@ -56,7 +61,9 @@ beforeAll(() => {
   if (report === undefined) throw new Error('npm pack reported nothing')
   tarball = join(root, report.filename)
   packed = report.files.map((file) => file.path).sort()
-})
+  // npm pack starts a whole npm, which a loaded CI runner can take past the
+  // default 10s to do.
+}, 60_000)
 
 afterAll(() => {
   rmSync(root, { recursive: true, force: true })

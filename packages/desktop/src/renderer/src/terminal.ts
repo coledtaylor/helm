@@ -4,6 +4,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import '@xterm/xterm/css/xterm.css'
+import { isMac } from '@helm/ui'
 import type { TermCreateOptions } from '../../shared/protocol'
 import { attachLinks } from './terminalLinks'
 
@@ -42,7 +43,10 @@ const THEME = {
  * not have a terminal in it yet (see `estimateGrid`).
  */
 export const TERMINAL_FONT = {
-  family: '"Cascadia Mono", "Consolas", monospace',
+  // Cascadia Mono where it is installed - every Windows 11 machine - and SF
+  // Mono, then Menlo, on a Mac, which has no Cascadia. The same order as the
+  // interface's `--font-mono` (theme.css).
+  family: '"Cascadia Mono", "SF Mono", Menlo, Consolas, ui-monospace, monospace',
   size: 14,
   lineHeight: 1.0
 } as const
@@ -369,6 +373,7 @@ export function createTerminal(
  * would silently swallow the next Ctrl-C.
  */
 function attachKeyBindings(term: Terminal, hooks: TerminalHooks): void {
+  const mac = isMac()
   const copy = async (): Promise<void> => {
     const text = term.getSelection()
     if (text) await hooks.writeClipboard(text)
@@ -466,7 +471,28 @@ function attachKeyBindings(term: Terminal, hooks: TerminalHooks): void {
       return handled(e)
     }
 
-    const mod = e.ctrlKey && !e.altKey
+    if (mac) {
+      // A Mac terminal's contract: every Ctrl chord is the program's, Ctrl+C
+      // and Ctrl+V included, and the clipboard is Cmd's. Cmd+C and Cmd+V are
+      // the Edit menu's keys, answered here so the menu's own Copy and Paste
+      // never run on top: a cancelled keydown is not offered to the menu. Cmd+C
+      // with nothing selected is spent too, for the stale-textarea reason
+      // below.
+      const cmd = e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
+      if (cmd && e.code === 'KeyC') {
+        if (term.hasSelection()) {
+          void copy()
+          term.clearSelection()
+        }
+        return handled(e)
+      }
+      if (cmd && e.code === 'KeyV') {
+        void paste()
+        return handled(e)
+      }
+    }
+
+    const mod = !mac && e.ctrlKey && !e.altKey
     // Ctrl+Shift+C and Ctrl+Shift+V: Chromium binds an editing command to the
     // second of these (PasteAndMatchStyle) and, as measured, nothing to the
     // first. They are cancelled alike regardless, because which chords Blink

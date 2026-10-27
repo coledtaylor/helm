@@ -15,11 +15,21 @@ const run = promisify(execFile)
  * failed launch later with no explanation.
  */
 
-const INSTALL_CANDIDATES = [
-  join(homedir(), '.local', 'bin', 'claude.exe'),
-  join(homedir(), '.local', 'bin', 'claude.cmd'),
-  join(homedir(), '.local', 'bin', 'claude')
-]
+/**
+ * Where an install of `claude` lands, looked at before PATH.
+ *
+ * `~/.local/bin` is the native installer's on every OS. On macOS, Homebrew
+ * puts it in `/opt/homebrew/bin` (Apple Silicon) or `/usr/local/bin` (Intel),
+ * and an app opened from Finder or the Dock gets launchd's PATH, which has
+ * neither - so they are named here rather than left to the PATH walk.
+ */
+export function installCandidates(platform: NodeJS.Platform = process.platform, home: string = homedir()): string[] {
+  const local = join(home, '.local', 'bin')
+  if (platform === 'win32') return [join(local, 'claude.exe'), join(local, 'claude.cmd'), join(local, 'claude')]
+  const candidates = [join(local, 'claude')]
+  if (platform === 'darwin') candidates.push('/opt/homebrew/bin/claude', '/usr/local/bin/claude')
+  return candidates
+}
 
 export function isExecutableFile(path: string): boolean {
   try {
@@ -93,7 +103,7 @@ export function searchPath(name: string): string | null {
 /** The `claude` entry point on this machine, or null if there is not one. */
 export function findClaudeExecutable(): string | null {
   if (overridePath !== null) return overridePath
-  for (const candidate of INSTALL_CANDIDATES) {
+  for (const candidate of installCandidates()) {
     if (isExecutableFile(candidate)) return candidate
   }
   return searchPath('claude')

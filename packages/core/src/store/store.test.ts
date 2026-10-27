@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_SETTINGS,
@@ -958,8 +958,9 @@ describe('pinned projects', () => {
   it('produces a list the validator accepts', () => {
     // The toggle and the validator have to agree about what a set is: a helper
     // that could produce two spellings would build a value nothing can write.
+    // Absolute on this OS, which the validator asks of every path.
     let held: string[] = []
-    for (const path of [a, b, 'c:\\repos\\api', 'C:\\Repos\\WEB']) {
+    for (const path of ['/Repos/Api', '/Repos/web', '/repos/api', '/Repos/WEB'].map((p) => resolve(p))) {
       held = withProjectPinned(held, path, true)
       expect(validateSetting('pinnedProjects', held)).toBeNull()
     }

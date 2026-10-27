@@ -167,4 +167,35 @@ describe('QuickOpenDialog: text', () => {
     expect(field().getAttribute('aria-label')).toBe('File name')
     expect(options()).toEqual(['docs/notes.md'])
   })
+
+  it('names Ctrl in its hints on Windows and Linux', () => {
+    render(<QuickOpenDialog {...dialog()} />)
+    expect(screen.getByRole('radio', { name: 'Names' }).getAttribute('title')).toBe('Names (Ctrl+P)')
+    expect(screen.getByRole('radio', { name: 'Text' }).getAttribute('title')).toBe('Text (Ctrl+Shift+F)')
+  })
+
+  describe('on macOS', () => {
+    beforeEach(() => {
+      vi.spyOn(Navigator.prototype, 'platform', 'get').mockReturnValue('MacIntel')
+    })
+    afterEach(() => vi.restoreAllMocks())
+
+    it('names Cmd in its hints', () => {
+      render(<QuickOpenDialog {...dialog()} />)
+      expect(screen.getByRole('radio', { name: 'Names' }).getAttribute('title')).toBe('Names (⌘P)')
+      expect(screen.getByRole('radio', { name: 'Text' }).getAttribute('title')).toBe('Text (⇧⌘F)')
+    })
+
+    it('switches halves on Cmd, and the same chords with Ctrl do nothing', () => {
+      render(<QuickOpenDialog {...dialog()} />)
+      fireEvent.keyDown(field(), { key: 'F', ctrlKey: true, shiftKey: true })
+      expect(field().getAttribute('aria-label')).toBe('File name')
+      fireEvent.keyDown(field(), { key: 'F', metaKey: true, shiftKey: true })
+      expect(field().getAttribute('aria-label')).toBe('Text to find')
+      fireEvent.keyDown(field(), { key: 'p', ctrlKey: true })
+      expect(field().getAttribute('aria-label')).toBe('Text to find')
+      fireEvent.keyDown(field(), { key: 'p', metaKey: true })
+      expect(field().getAttribute('aria-label')).toBe('File name')
+    })
+  })
 })

@@ -176,9 +176,10 @@ them out of the pane's strip with `"pageStrip": true`. Its tabs then open as
 pages in one tab of its own, named for the plugin, with a strip of pages inside
 it, the way Helm's Browser tab holds its pages. `helm.tabs.open` opens a page
 there, or brings forward the page with the same parameters; `setTitle` names
-the page in that strip. Pages switch, close (Ctrl+W) and reorder (drag, or
-Ctrl+Shift+Left and Right) as the Browser tab's do, and closing the last one
-closes the tab. Without it, each tab is a tab of its own in the pane.
+the page in that strip. Pages switch, close (Ctrl+W, or Cmd+W on macOS) and
+reorder (drag, or Ctrl+Shift+Left and Right, Cmd+Shift on macOS) as the
+Browser tab's do, and closing the last one closes the tab. Without it, each
+tab is a tab of its own in the pane.
 
 A list that opens an item on a click can open it as a preview, the way a click
 on a file in Helm does: the next tab opened as a preview takes its place, so
@@ -239,11 +240,11 @@ than keep showing what a stopped page said.
 ]
 ```
 
-Each appears in the command palette (Ctrl+Shift+P) under the plugin's name. A
-command with a `tab` opens that tab. One without arrives as the `command`
-event: at the background page when there is one, and otherwise at the rail
-panel, which Helm opens first. A command with neither a tab nor a page to
-receive it is refused.
+Each appears in the command palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS)
+under the plugin's name. A command with a `tab` opens that tab. One without
+arrives as the `command` event: at the background page when there is one, and
+otherwise at the rail panel, which Helm opens first. A command with neither a
+tab nor a page to receive it is refused.
 
 ```js
 helm.on('command', ({ id }) => {
@@ -842,13 +843,16 @@ is the validator itself, for a build that wants to check the manifest.
 ## Keyboard
 
 Keys pressed in a plugin page go to that page. So that Helm's shortcuts still
-work from inside a plugin - Ctrl+N, Ctrl+P, Ctrl+Tab and the rest - the bridge
-passes on a key with Ctrl, Alt or the Windows key held **after the page's own
-handlers have run, unless one of them called `preventDefault()`**. A page that
-binds a shortcut of its own calls `preventDefault()` and keeps it.
+work from inside a plugin - Ctrl+N, Ctrl+P, Ctrl+Tab and the rest, which are
+Cmd+N, Cmd+P and Ctrl+Tab on macOS - the bridge passes on a key with Ctrl, Alt
+or the Windows key (Cmd on macOS) held **after the page's own handlers have
+run, unless one of them called `preventDefault()`**. A page that binds a
+shortcut of its own calls `preventDefault()` and keeps it.
 
-The page's own editing keys are never passed on: Ctrl+A, C, V, X, Y and Z, and
-AltGr combinations, which many keyboards type characters with.
+The page's own editing keys are never passed on: Ctrl+A, C, V, X, Y and Z
+(Cmd+A, C, V, X, Y and Z on macOS), and AltGr combinations, which many
+keyboards type characters with. On macOS a character typed with Option, such
+as Option+E for an accent, is the page's too.
 
 ## Errors and crashes
 

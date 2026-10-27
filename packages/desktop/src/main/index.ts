@@ -68,7 +68,8 @@ import { createActivityService } from './activity'
 import { createRestoreService } from './restore'
 import { createResourcesService } from './resources'
 import { createCollector, type CheckContext } from './checkkit'
-import { titleBarOverlayFor, windowBorderFor } from './chrome'
+import { applicationMenuTemplate, windowChromeFor } from './chrome'
+import { createQuitGate } from './quit'
 import { requestSmallCorners } from './corners'
 import { createPtermHost } from './pterm'
 import { runSelftest } from './selftest'
@@ -211,12 +212,17 @@ app.on('web-contents-created', (_e, contents) => {
 /** Set once the plugin host exists; until then no web contents frames plugins. */
 let pluginFrameHosts: (contentsId: number) => boolean = () => false
 
+/**
+ * What the app menu's Quit Helm does (macOS; chrome.ts). A plain quit until
+ * the app has sessions to ask about; `startApp` points it at the quit gate.
+ */
+let quitFromMenu: () => void = () => app.quit()
+
 function createWindow(
   page: 'index' | 'spike',
   bounds?: AppSettings['windowBounds'],
   theme?: AppliedTheme
 ): BrowserWindow {
-  const edge = theme === undefined ? null : windowBorderFor(theme)
   const win = new BrowserWindow({
     width: bounds?.width ?? 1280,
     height: bounds?.height ?? 820,
@@ -232,18 +238,11 @@ function createWindow(
     backgroundColor: theme?.tokens.bg ?? (nativeTheme.shouldUseDarkColors ? '#12131f' : '#eceef4'),
     show: true,
     autoHideMenuBar: true,
-    // The app window replaces the OS-accent title bar with its own brand
-    // strip plus the Window Controls Overlay (see chrome.ts). The spike pages
-    // keep the native frame: their drivers predate the strip and measure a
-    // page, not the chrome.
-    ...(page === 'index' && process.platform === 'win32' && theme !== undefined
-      ? {
-          titleBarStyle: 'hidden' as const,
-          titleBarOverlay: titleBarOverlayFor(theme),
-          // The window's edge in the theme's hairline, not the OS accent.
-          ...(edge === null ? {} : { accentColor: edge })
-        }
-      : {}),
+    // The app window replaces the native title bar with its own brand strip,
+    // and the OS draws its window controls into it (see chrome.ts). The spike
+    // pages keep the native frame: their drivers predate the strip and measure
+    // a page, not the chrome.
+    ...(page === 'index' && theme !== undefined ? windowChromeFor(process.platform, theme) : {}),
     // A packaged Electron window does NOT inherit the exe's icon: given no
     // `icon` it uses Electron's own, which is what the taskbar showed on
     // 2026-08-10 while the exe itself was correctly stamped.
@@ -446,6 +445,25 @@ function startApp(options: AppOptions = {}): void {
     observer: options.observer,
     confirm: options.confirm
   })
+
+  // One question about running sessions, shared by the menu's Quit Helm and
+  // the window's close, asked before anything ends (quit.ts).
+  const quitGate = createQuitGate({
+    running: () => sessions.runningCount(),
+    confirm: () => {
+      // The question is drawn in the window, so the window is brought on
+      // screen first: Cmd+Q works with it minimized to the Dock, and a quit
+      // held on a dialog nobody can see looks like a quit that did nothing.
+      if (win && !win.isDestroyed()) {
+        if (win.isMinimized()) win.restore()
+        win.show()
+        win.focus()
+      }
+      return sessions.confirmCloseAll()
+    },
+    quit: () => app.quit()
+  })
+  quitFromMenu = () => quitGate.requestQuit()
 
   // The setting is read through a function rather than passed by value: the
   // default shell has to be able to change while the app is running, and a
@@ -768,25 +786,19 @@ function startApp(options: AppOptions = {}): void {
 
   /**
    * Closing the window ends every hosted session, so it asks first - once, for
-   * all of them, rather than a dialog per tab.
+   * all of them, rather than a dialog per tab - through the quit gate, so a
+   * quit already agreed to from the menu is not asked about again.
    *
    * `close` is also the last moment the window still exists, so this is where
    * the bounds are flushed: by `closed` the geometry is gone and whatever the
    * debounce was still holding would be lost.
    */
-  let closeConfirmed = false
   win.on('close', (event) => {
     if (boundsTimer) clearTimeout(boundsTimer)
     boundsTimer = null
     persistBounds()
 
-    if (closeConfirmed || sessions.runningCount() === 0) return
-    event.preventDefault()
-    void sessions.confirmCloseAll().then((confirmed) => {
-      if (!confirmed) return
-      closeConfirmed = true
-      win?.close()
-    })
+    if (!quitGate.allowClose(() => win?.close())) event.preventDefault()
   })
 
   win.on('closed', () => {
@@ -1011,10 +1023,11 @@ function claimDevShortcut(): void {
 }
 
 app.whenReady().then(() => {
-  // The default application menu binds Ctrl-C to the Edit>Copy role, which
-  // swallows the interrupt before xterm ever sees the keydown. A terminal host
-  // cannot ship that menu.
-  Menu.setApplicationMenu(null)
+  // None on Windows and Linux, where the default menu's Edit > Copy would
+  // swallow Ctrl+C before xterm sees it; the app and Edit menus on macOS,
+  // where Cmd+C, Cmd+V, Cmd+Z, Cmd+A and Cmd+Q are menu items (chrome.ts).
+  const menu = applicationMenuTemplate(process.platform, app.name, () => quitFromMenu())
+  Menu.setApplicationMenu(menu === null ? null : Menu.buildFromTemplate(menu))
 
   // Windows resolves a toast back to an installed application through this id.
   // Without it the exit notifications either carry electron.app.Electron's

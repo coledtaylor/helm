@@ -1,5 +1,8 @@
 import { execFile } from 'node:child_process'
 import { noProcessSnapshot, type PortRow, type ProcessRow, type ProcessSnapshot } from '@helm/core'
+import { readDarwinProcesses } from './processes-darwin'
+import { readLinuxProcesses } from './processes-linux'
+import type { HostProcessFacts, ProcessTableReader } from './processes-tool'
 
 /**
  * The machine's process table and its listening sockets, asked for once.
@@ -8,7 +11,13 @@ import { noProcessSnapshot, type PortRow, type ProcessRow, type ProcessSnapshot 
  * and never shells out for platform facts, so the platform call is here and the
  * shape it produces is handed over.
  *
- * ## Why CIM, and why one child process
+ * One reader per OS behind `ProcessTableReader`: CIM through PowerShell on
+ * Windows (below), `ps` and `lsof` on macOS (`processes-darwin.ts`), `/proc`
+ * and `ss` on Linux (`processes-linux.ts`). `processTableReader` is the only
+ * place that picks one. Every reader keeps the two halves apart, so a socket
+ * tool that is missing costs the ports and never the tree.
+ *
+ * ## Why CIM on Windows, and why one child process
  *
  * `Get-CimInstance Win32_Process` gives `ParentProcessId` and `CommandLine`
  * unelevated, which is the whole of what a tree needs, and
@@ -130,7 +139,7 @@ function str(value: unknown): string | null {
  * changing type must cost a value and never an exception. A row that cannot
  * name a pid is dropped, since nothing can be joined to it.
  */
-function parsePass(text: string): { processes: ProcessRow[] | null; ports: PortRow[] | null } {
+export function parseWindowsPass(text: string): HostProcessFacts {
   let value: unknown
   try {
     value = JSON.parse(text)
@@ -183,34 +192,9 @@ function parsePass(text: string): { processes: ProcessRow[] | null; ports: PortR
   return { processes, ports }
 }
 
-/**
- * One pass over the machine.
- *
- * Never rejects and never throws. A host that cannot be asked - no
- * `powershell.exe`, a timeout, a parse that failed - is a snapshot of nulls,
- * which is what `sessionResources` turns into "unknown" rather than "empty".
- */
-export function readProcessSnapshot(timeoutMs = PASS_TIMEOUT_MS): Promise<ProcessSnapshot> {
-  const startedAt = Date.now()
-  const startedHr = process.hrtime.bigint()
-
-  if (process.platform !== 'win32') {
-    // The enumeration is Windows-shaped and Helm is Windows-first. Elsewhere
-    // this reports "could not look", which is the honest answer and the one the
-    // surfaces already degrade to.
-    return Promise.resolve(noProcessSnapshot(startedAt))
-  }
-
-  return new Promise<ProcessSnapshot>((resolve) => {
-    const done = (parsed: { processes: ProcessRow[] | null; ports: PortRow[] | null }): void => {
-      resolve({
-        processes: parsed.processes,
-        ports: parsed.ports,
-        atMs: startedAt,
-        durationMs: Number(process.hrtime.bigint() - startedHr) / 1e6
-      })
-    }
-
+/** The Windows reader: one PowerShell pass, both halves in one child process. */
+export const readWindowsProcesses: ProcessTableReader = (timeoutMs) =>
+  new Promise<HostProcessFacts>((done) => {
     try {
       execFile(
         'powershell.exe',
@@ -226,7 +210,7 @@ export function readProcessSnapshot(timeoutMs = PASS_TIMEOUT_MS): Promise<Proces
             done({ processes: null, ports: null })
             return
           }
-          done(parsePass(stdout))
+          done(parseWindowsPass(stdout))
         }
       )
     } catch {
@@ -234,4 +218,56 @@ export function readProcessSnapshot(timeoutMs = PASS_TIMEOUT_MS): Promise<Proces
       done({ processes: null, ports: null })
     }
   })
+
+/**
+ * The reader for an OS, or null for one Helm has no reader for.
+ *
+ * The one place the pass branches on the OS. Each reader lives in its own
+ * module and answers the same shape; see `processes-darwin.ts` and
+ * `processes-linux.ts` for what macOS and Linux read and why.
+ */
+export function processTableReader(platform: NodeJS.Platform): ProcessTableReader | null {
+  switch (platform) {
+    case 'win32':
+      return readWindowsProcesses
+    case 'darwin':
+      return readDarwinProcesses
+    case 'linux':
+      return readLinuxProcesses
+    default:
+      return null
+  }
+}
+
+/**
+ * One pass over the machine.
+ *
+ * Never rejects and never throws. A host that cannot be asked - no reader for
+ * this OS, a tool that is not installed, a timeout, a parse that failed - is a
+ * null for that half, which is what `sessionResources` turns into "unknown"
+ * rather than "empty". The other half still answers.
+ */
+export async function readProcessSnapshot(
+  timeoutMs = PASS_TIMEOUT_MS,
+  platform: NodeJS.Platform = process.platform
+): Promise<ProcessSnapshot> {
+  const startedAt = Date.now()
+  const startedHr = process.hrtime.bigint()
+  const reader = processTableReader(platform)
+  // An OS with no reader reports "could not look", which is the honest answer
+  // and the one the surfaces already degrade to.
+  if (reader === null) return noProcessSnapshot(startedAt)
+
+  let facts: HostProcessFacts
+  try {
+    facts = await reader(timeoutMs)
+  } catch {
+    facts = { processes: null, ports: null }
+  }
+  return {
+    processes: facts.processes,
+    ports: facts.ports,
+    atMs: startedAt,
+    durationMs: Number(process.hrtime.bigint() - startedHr) / 1e6
+  }
 }

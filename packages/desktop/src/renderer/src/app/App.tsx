@@ -123,6 +123,9 @@ import {
   NewHarnessDialog,
   NewSessionDialog,
   NewTabMenu,
+  hasPrimaryModifier,
+  hostOs,
+  isMac,
   overlayOpen,
   PaneActions,
   PaneCrumb,
@@ -147,6 +150,7 @@ import {
   SettingsSections,
   SetupPane,
   Sidebar,
+  shortcutLabel,
   SidebarAction,
   SlidersIcon,
   StatusBar,
@@ -1476,13 +1480,17 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (!browserInFront) return undefined
     const onKeyDown = (event: KeyboardEvent): void => {
-      const command = browserKeyCommand({
-        key: event.key,
-        control: event.ctrlKey,
-        shift: event.shiftKey,
-        alt: event.altKey,
-        meta: event.metaKey
-      })
+      const command = browserKeyCommand(
+        {
+          key: event.key,
+          code: event.code,
+          control: event.ctrlKey,
+          shift: event.shiftKey,
+          alt: event.altKey,
+          meta: event.metaKey
+        },
+        hostOs()
+      )
       if (command === null || overlayOpen()) return
       if (document.activeElement?.closest('.xterm')) return
       event.preventDefault()
@@ -1509,8 +1517,9 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (frontPagesPlugin === null || frontStripPageId === null) return undefined
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return
-      if (event.key.toLowerCase() !== 'w' && event.key !== 'F4') return
+      if (!hasPrimaryModifier(event) || event.shiftKey || event.altKey) return
+      // Ctrl+F4 is Windows' second close chord; a Mac has only Cmd+W.
+      if (event.key.toLowerCase() !== 'w' && (event.key !== 'F4' || isMac())) return
       if (overlayOpen() || document.activeElement?.closest('.xterm')) return
       event.preventDefault()
       event.stopPropagation()
@@ -1734,7 +1743,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (setupNeeded) return undefined
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!event.ctrlKey || event.altKey || event.shiftKey || event.metaKey) return
+      if (!hasPrimaryModifier(event) || event.altKey || event.shiftKey) return
       if (event.key.toLowerCase() !== 'n') return
       event.preventDefault()
       event.stopPropagation()
@@ -1755,7 +1764,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (setupNeeded) return undefined
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!event.ctrlKey || event.altKey || event.metaKey) return
+      if (!hasPrimaryModifier(event) || event.altKey) return
       const key = event.key.toLowerCase()
       const mode = !event.shiftKey && key === 'p' ? 'files' : event.shiftKey && key === 'f' ? 'text' : null
       if (mode === null) return
@@ -1774,7 +1783,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (setupNeeded) return undefined
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) return
+      if (!hasPrimaryModifier(event) || !event.shiftKey || event.altKey) return
       if (event.key.toLowerCase() !== 'p') return
       event.preventDefault()
       event.stopPropagation()
@@ -1789,17 +1798,21 @@ export function App(): JSX.Element {
    * sends the front tab to the pane beside it. In capture so neither reaches a
    * focused terminal. Ctrl+Shift+Tab is not bound by Claude Code; Shift+Tab
    * alone is (it cycles permission modes) and is deliberately left alone.
+   *
+   * On macOS the split is Cmd+\, as Helm's other shortcuts are, but the ring
+   * stays Ctrl+Tab: Cmd+Tab is the system's app switcher, and Ctrl+Tab is how
+   * every Mac browser cycles its tabs.
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!event.ctrlKey || event.altKey) return
-      if (event.key === '\\' && !event.shiftKey) {
+      if (event.altKey) return
+      if (event.key === '\\' && !event.shiftKey && hasPrimaryModifier(event)) {
         event.preventDefault()
         event.stopPropagation()
         splitFocused()
         return
       }
-      if (event.key !== 'Tab') return
+      if (event.key !== 'Tab' || !event.ctrlKey || event.metaKey) return
       event.preventDefault()
       event.stopPropagation()
       const step = event.shiftKey ? -1 : 1
@@ -3291,7 +3304,7 @@ export function App(): JSX.Element {
           title="Sessions"
           actions={
             <>
-              <SidebarAction label="New session (Ctrl+N)" onClick={openLauncher} data-new-session>
+              <SidebarAction label={`New session (${shortcutLabel('N')})`} onClick={openLauncher} data-new-session>
                 <PlusIcon width={13} height={13} />
               </SidebarAction>
               <SidebarAction

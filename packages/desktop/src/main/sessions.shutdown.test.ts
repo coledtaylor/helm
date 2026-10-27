@@ -39,9 +39,10 @@ describe('session host shutdown', () => {
       )
       const runs = await Promise.all([h.run(alpha), h.run(beta)])
       const ptys = [h.host.pid(alpha.id), h.host.pid(beta.id)].filter((pid) => pid !== null)
-      const tree = [...ptys, ...runs.map((run) => run.pid), child]
-      expect(tree).toHaveLength(5)
-      expect(new Set(tree).size).toBe(5)
+      // On Windows the pty is `cmd.exe` running the `.cmd` shim, with the CLI
+      // beneath it; on macOS and Linux the shim `exec`s, so the pty is the CLI.
+      const tree = [...new Set([...ptys, ...runs.map((run) => run.pid), child])]
+      expect(tree).toHaveLength(process.platform === 'win32' ? 5 : 3)
       expect(tree.filter(processAlive)).toEqual(tree)
 
       h.host.shutdown()

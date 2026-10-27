@@ -392,33 +392,43 @@ describe('computeEffectiveView', () => {
  */
 describe('projectEntry', () => {
   const servers = { mcpServers: { clickup: { command: 'npx' } } }
+  // Drive letters and backslashes are Windows paths: `resolve` reads them as
+  // relative anywhere else, and the CLI there writes POSIX paths.
+  const onWindows = it.runIf(process.platform === 'win32')
+  const offWindows = it.runIf(process.platform !== 'win32')
 
-  it('finds an entry the CLI wrote with forward slashes', () => {
+  offWindows('finds the entry for a macOS or Linux directory, with or without a trailing slash', () => {
+    expect(projectEntry({ '/Users/x/repos/helm': servers }, '/Users/x/repos/helm')).toEqual(servers)
+    expect(projectEntry({ '/Users/x/repos/helm/': servers }, '/Users/x/repos/helm')).toEqual(servers)
+    expect(projectEntry({ '/Users/x/repos/helmet': servers }, '/Users/x/repos/helm')).toBeUndefined()
+  })
+
+  onWindows('finds an entry the CLI wrote with forward slashes', () => {
     const doc = { 'C:/Users/x/repos/helm': servers }
     expect(projectEntry(doc, 'C:\\Users\\x\\repos\\helm')).toEqual(servers)
   })
 
-  it('finds an entry the CLI wrote with backslashes', () => {
+  onWindows('finds an entry the CLI wrote with backslashes', () => {
     const doc = { 'C:\\Users\\x\\repos\\helm': servers }
     expect(projectEntry(doc, 'C:/Users/x/repos/helm')).toEqual(servers)
   })
 
-  it('matches case-insensitively, because these are Windows paths', () => {
+  onWindows('matches case-insensitively, because these are Windows paths', () => {
     const doc = { 'c:/users/X/Repos/Helm': servers }
     expect(projectEntry(doc, 'C:\\Users\\x\\repos\\helm')).toEqual(servers)
   })
 
-  it('prefers the duplicate that actually defines servers', () => {
+  onWindows('prefers the duplicate that actually defines servers', () => {
     const doc = { 'C:\\Users\\x': { history: [] }, 'C:/Users/x': servers }
     expect(projectEntry(doc, 'C:\\Users\\x')).toEqual(servers)
   })
 
-  it('still answers with a matching entry that defines none', () => {
+  onWindows('still answers with a matching entry that defines none', () => {
     const doc = { 'C:/Users/x': { history: [] } }
     expect(projectEntry(doc, 'C:\\Users\\x')).toEqual({ history: [] })
   })
 
-  it('does not match a different directory, or a prefix of one', () => {
+  onWindows('does not match a different directory, or a prefix of one', () => {
     const doc = { 'C:/Users/x/repos/helmet': servers, 'C:/Users/x/repos': servers }
     expect(projectEntry(doc, 'C:\\Users\\x\\repos\\helm')).toBeUndefined()
   })

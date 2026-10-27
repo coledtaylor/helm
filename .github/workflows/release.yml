@@ -33,7 +33,7 @@ permissions:
 
 jobs:
   # Cheap, and on Linux: reading one JSON field and asking the remote for a tag
-  # does not need a Windows runner, and Windows minutes bill at 2x.
+  # does not need a Windows runner.
   version:
     runs-on: ubuntu-latest
     outputs:
@@ -79,15 +79,66 @@ jobs:
 
   # Runs on every push to main, released or not - this is `main`'s only CI, by
   # design. ci.yml skips pushes to main precisely so this is not a second copy
-  # of the same eight minutes.
+  # of the same run. It runs `pnpm check` and the build on Windows, macOS and
+  # Linux, and a failure on any one of them fails it, which skips the tag, the
+  # release and the SDK publish.
   check:
     uses: ./.github/workflows/ci.yml
 
-  release:
+  # The macOS artefacts, built where electron-builder can make a dmg. Same gate
+  # as the Windows job, and it publishes nothing: it hands the dmg and the zip
+  # to `release`, which attaches all four files to one release. A failure here
+  # skips `release` too, so a version is never published without its Mac build.
+  release-mac:
     needs: [version, check]
-    # No always()/!cancelled() here, deliberately: a failed `check` must skip
-    # this job, and the default `needs` behaviour is what does that. A main that
-    # does not typecheck, lint or build therefore produces no tag and no release.
+    if: needs.version.outputs.release == 'true'
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Ad-hoc signed (`identity: '-'` in electron-builder.yml): there is no
+      # Developer ID, and no certificate or secret is involved.
+      - name: Build artefacts
+        run: pnpm dist:mac
+
+      - name: Verify the artefacts are arm64, ad-hoc signed, with Helm's icon and their native modules
+        run: |
+          node packages/desktop/scripts/verify-mac-artifact.mjs \
+            "packages/desktop/dist-app/Helm-$VERSION-arm64.dmg" \
+            "packages/desktop/dist-app/Helm-$VERSION-arm64-mac.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-artefacts
+          path: |
+            packages/desktop/dist-app/Helm-${{ env.VERSION }}-arm64.dmg
+            packages/desktop/dist-app/Helm-${{ env.VERSION }}-arm64-mac.zip
+          if-no-files-found: error
+          # Already compressed, and only `release` below reads them.
+          compression-level: 0
+          retention-days: 1
+
+  release:
+    needs: [version, check, release-mac]
+    # No always()/!cancelled() here, deliberately: a failed `check` or
+    # `release-mac` must skip this job, and the default `needs` behaviour is
+    # what does that. A main that fails the gate, the Windows check or the Mac
+    # build therefore produces no tag and no release.
     if: needs.version.outputs.release == 'true'
     runs-on: windows-latest
     permissions:
@@ -137,6 +188,12 @@ jobs:
           node packages/desktop/scripts/verify-artifact.mjs \
             "packages/desktop/dist-app/Helm-$VERSION-portable.exe" \
             "packages/desktop/dist-app/Helm-$VERSION-setup.exe"
+
+      - name: Fetch the macOS artefacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-artefacts
+          path: packages/desktop/dist-app
 
       - name: Compose the release notes
         shell: bash
@@ -242,7 +299,7 @@ jobs:
           # approval gate. /releases/latest ignores drafts, so a release that
           # waits for someone to press publish is a release the in-app check
           # cannot see. The draft here lives for as long as the upload takes:
-          # publishing it is what creates the tag, so the ref and ~200 MB of
+          # publishing it is what creates the tag, so the ref and all four
           # assets become visible in the same instant. `gh release create` with
           # assets does it the other way round - tag first, upload after - which
           # leaves a window where the app announces an update whose download
@@ -253,7 +310,9 @@ jobs:
             --title "Helm $VERSION" \
             --notes-file notes.md \
             "packages/desktop/dist-app/Helm-$VERSION-portable.exe" \
-            "packages/desktop/dist-app/Helm-$VERSION-setup.exe"
+            "packages/desktop/dist-app/Helm-$VERSION-setup.exe" \
+            "packages/desktop/dist-app/Helm-$VERSION-arm64.dmg" \
+            "packages/desktop/dist-app/Helm-$VERSION-arm64-mac.zip"
 
           gh release edit "$TAG" --draft=false --latest
 
@@ -278,7 +337,8 @@ jobs:
           tag=$(jq -r .tag_name <<<"$latest")
           draft=$(jq -r .draft <<<"$latest")
           assets=$(jq -r '[.assets[].name] | sort | join(", ")' <<<"$latest")
-          expected="Helm-$VERSION-portable.exe, Helm-$VERSION-setup.exe"
+          # Sorted as jq sorts them: the Mac zip, the dmg, then the two exes.
+          expected="Helm-$VERSION-arm64-mac.zip, Helm-$VERSION-arm64.dmg, Helm-$VERSION-portable.exe, Helm-$VERSION-setup.exe"
 
           [[ $tag == "$TAG" ]]        || { echo "::error::/releases/latest says $tag, expected $TAG"; exit 1; }
           [[ $draft == false ]]       || { echo "::error::$TAG is still a draft"; exit 1; }

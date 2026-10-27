@@ -1,5 +1,6 @@
 import type { JSX } from 'react'
 import { cn } from '../lib/cn'
+import { shortcutLabel } from '../lib/platform'
 import { HelmMarkIcon, TerminalIcon } from './icons'
 
 export interface WelcomePaneProps {
@@ -89,7 +90,7 @@ export function WelcomePane({
           >
             <TerminalIcon width={14} height={14} />
             New session
-            <span className="font-mono text-[11px] font-normal text-fg-subtle">Ctrl+N</span>
+            <span className="font-mono text-[11px] font-normal text-fg-subtle">{shortcutLabel('N')}</span>
           </button>
         )}
 

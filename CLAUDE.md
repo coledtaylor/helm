@@ -38,7 +38,12 @@ export TypeScript source, so there is one build step.
 
 - `pnpm check` is the gate. Every change passes it, and `pnpm test:e2e`
   when it touches a user workflow.
-- Tests run locally, never in CI. CI builds and releases the app.
+- CI runs `pnpm check` on Windows, macOS and Linux on every push, then
+  builds. All three jobs are required: a failure on any one fails the run and
+  stops the release. `pnpm test:e2e` runs locally only, never in CI.
+- `pnpm test:posix` runs the processes-and-ports, overlay, process-tree and
+  data-directory tests where that code is the POSIX one: natively on macOS and
+  Linux, and under Linux in WSL from Windows.
 - Every change ships with its tests: a bug gets a failing test before the fix,
   a feature gets tests that cover it. [docs/TESTING.md](docs/TESTING.md) says
   which kind.
@@ -74,8 +79,13 @@ export TypeScript source, so there is one build step.
 - Helm renders nothing for a live session: it parses no session output,
   answers no permission prompt and puts nothing between the user and the TUI.
   Rendering an archived transcript (read-only, after the fact) is allowed.
-- Windows first: junctions (`mklink /J`) not symlinks, no elevation, test paths
-  with spaces.
+- Windows, macOS and Linux: links are junctions (`mklink /J`) on Windows and
+  symlinks on macOS and Linux; nothing needs elevation; tests use paths with
+  spaces. What differs by OS sits behind one interface per concern (overlay
+  links in `linkKind`, processes and ports in `processTableReader`, ending a
+  process tree in `treeKill`, data directories in `isolate.mjs`), with one
+  implementation per OS, and nothing outside it branches on the OS. An OS with
+  no implementation yet reports Unknown and the feature around it keeps working.
 
 ## Credentials
 
@@ -239,9 +249,9 @@ folder: run through npx, that folder is a cache.
 
 - Overlay shims live under the app data directory, never `%TEMP%`: they hold
   junctions into real repositories.
-- Anything removing a shim or walking a template unlinks junctions and never
-  walks into one. `fs.rm` with `recursive: true` has been seen to leave a
-  junction in place.
+- Anything removing a shim or walking a template unlinks links (junctions on
+  Windows, symlinks on macOS and Linux) and never walks into one. `fs.rm` with
+  `recursive: true` has been seen to leave a junction in place.
 - Shims are swept only at app start (`createServices`), and only where every
   owning pid is provably dead. `EPERM` counts as alive; unknown means keep.
 - Templates live in `templatesDir` (`paths.ts`). The shipped README and example
@@ -252,15 +262,19 @@ folder: run through npx, that folder is a cache.
 
 `appMode` in `paths.ts` is the authority.
 
-| run | data directory |
-|---|---|
-| installed | `%APPDATA%\Helm` |
-| portable | `helm-data` beside the exe |
-| `pnpm dev` | `%LOCALAPPDATA%\Helm\dev\helm-data`, seeded each launch from a copy of the real database. `--fresh` for the first-run state. |
-| `pnpm dev:live` | `%APPDATA%\Helm`, the installed app's own |
+| run | Windows | macOS | Linux |
+|---|---|---|---|
+| installed | `%APPDATA%\Helm` | `~/Library/Application Support/Helm` | `${XDG_CONFIG_HOME:-~/.config}/Helm` |
+| portable | `helm-data` beside the exe | none | none |
+| `pnpm dev` | `%LOCALAPPDATA%\Helm\dev\helm-data` | `~/Library/Application Support/Helm Dev/dev/helm-data` | `${XDG_DATA_HOME:-~/.local/share}/Helm/dev/helm-data` |
+| checks | `%LOCALAPPDATA%\Helm\checks\<name>\helm-data` | `~/Library/Application Support/Helm Dev/checks/<name>/helm-data` | `${XDG_DATA_HOME:-~/.local/share}/Helm/checks/<name>/helm-data` |
+| `pnpm dev:live` | the installed app's own | the installed app's own | the installed app's own |
+| templates | `~/.config/helm/templates`; `helm-data/templates` when portable | `~/.config/helm/templates` | `~/.config/helm/templates` |
 
-Templates are `helm-data/templates` when `PORTABLE_EXECUTABLE_DIR` is set, and
-`~/.config/helm/templates` otherwise.
+`pnpm dev` is seeded each launch from a copy of the installed app's database;
+`--fresh` gives the first-run state. The dev and check folders
+(`isolatedBaseFor` in `scripts/isolate.mjs`) never sit inside the installed
+app's folder, on any OS.
 
 ## Surfaces
 

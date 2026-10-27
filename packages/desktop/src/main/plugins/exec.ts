@@ -4,7 +4,7 @@ import { cmdShimArgs, isBatchFile } from '@helm/core'
 import type { ExecResult } from '@coledtaylor/helm-plugin-sdk'
 import type { NormalizedExec } from '@coledtaylor/helm-plugin-sdk/manifest'
 import { isExecutableFile, searchPath } from '../claude-cli'
-import { treeKill } from '../treekill'
+import { POSIX_OWN_GROUP, treeKill } from '../treekill'
 import { PluginCallError } from './errors'
 import { resolveInside } from './loader'
 
@@ -139,7 +139,9 @@ export function runProgram(options: {
       env: programEnv(options.env),
       windowsHide: true,
       windowsVerbatimArguments: resolved.batch,
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      // Its own process group on macOS and Linux, so ending it ends what it started.
+      ...POSIX_OWN_GROUP
     })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []

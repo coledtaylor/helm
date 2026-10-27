@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { linkFolder, shortPath, unlinkFolder } from '../../../test/links'
 
 vi.mock('electron', async () => (await import('../../../test/electron')).electronFake())
 
@@ -24,11 +24,11 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  // Junctions first, unlinked rather than walked: `rmSync` with `recursive`
-  // has been seen to leave one standing.
-  for (const link of ['escape', 'inside']) {
+  // Links first, unlinked rather than walked: `rmSync` with `recursive` has
+  // been seen to leave a junction standing.
+  for (const link of [join(dir, 'escape'), join(dir, 'inside'), join(root, 'linked plugin')]) {
     try {
-      execFileSync('cmd', ['/c', 'rmdir', join(dir, link)], { stdio: 'ignore' })
+      unlinkFolder(link)
     } catch {
       // Not made by this test.
     }
@@ -55,8 +55,9 @@ function manifest(patch: Record<string, unknown> = {}): void {
   )
 }
 
+/** A junction on Windows, a symbolic link on macOS and Linux. */
 function junction(link: string, target: string): void {
-  execFileSync('cmd', ['/c', 'mklink', '/J', link, target], { stdio: 'ignore' })
+  linkFolder(link, target)
 }
 
 describe('loadPluginFolder', () => {
@@ -173,5 +174,26 @@ describe('resolveInside', () => {
     write('dist/x.js', '')
     junction(join(dir, 'inside'), join(dir, 'dist'))
     expect(resolveInside(realpathSync.native(dir), 'inside/x.js')).toBe(realpathSync.native(join(dir, 'dist', 'x.js')))
+  })
+
+  it('is the real file for a path inside a folder reached through a link, and still outside through a link out of it', () => {
+    write('dist/a b.html', '')
+    const elsewhere = join(root, 'elsewhere')
+    mkdirSync(elsewhere)
+    writeFileSync(join(elsewhere, 'x.js'), '')
+    junction(join(dir, 'escape'), elsewhere)
+    const linked = join(root, 'linked plugin')
+    junction(linked, dir)
+
+    expect(resolveInside(linked, 'dist/a b.html')).toBe(realpathSync.native(join(dir, 'dist', 'a b.html')))
+    expect(resolveInside(linked, 'escape/x.js')).toBe('outside')
+    expect(resolveInside(linked, '../elsewhere/x.js')).toBe('outside')
+  })
+
+  it.runIf(process.platform === 'win32')('is the real file for a path inside a folder named by its 8.3 alias', ({ skip }) => {
+    write('dist/a b.html', '')
+    const short = shortPath(dir)
+    if (short === null) return skip('this volume keeps no 8.3 names')
+    expect(resolveInside(short, 'dist/a b.html')).toBe(realpathSync.native(join(dir, 'dist', 'a b.html')))
   })
 })

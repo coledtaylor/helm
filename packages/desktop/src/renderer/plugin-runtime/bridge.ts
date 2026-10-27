@@ -37,7 +37,10 @@ import {
  * authority of its own. Calls made before the port arrives wait for it.
  */
 
-/** Keys that are the page's own business - its clipboard, its undo - even with Ctrl down. */
+/**
+ * Keys that are the page's own business - its clipboard, its undo - even with
+ * the editing modifier down: Ctrl, or Cmd on macOS.
+ */
 const EDITING_KEYS = new Set(['a', 'c', 'v', 'x', 'y', 'z'])
 const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'AltGraph', 'OS'])
 
@@ -56,6 +59,8 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
   let theme = readBoot(bootText) ?? fallbackTheme()
   let context = readContext(win)
   let visible = false
+  // Off macOS until CONNECT says otherwise.
+  let mac = false
   applyTheme(doc, theme)
 
   let port: MessagePort | null = null
@@ -208,6 +213,7 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
     given.onmessage = (portEvent: MessageEvent) => receive(portEvent.data as HelmMessage)
     given.start()
     if (data.context !== undefined) context = data.context
+    mac = data.mac === true
     if (data.theme !== undefined && data.theme !== null) {
       theme = data.theme
       applyTheme(doc, theme)
@@ -226,7 +232,10 @@ export function installBridge(win: Window, bootText: string | null): HelmBridge 
       if (!(event.ctrlKey || event.altKey || event.metaKey) || MODIFIER_KEYS.has(event.key)) return
       // AltGr arrives as Ctrl+Alt and is how many keyboards type @, { and \.
       if (event.getModifierState('AltGraph') || (event.ctrlKey && event.altKey && event.key.length === 1)) return
-      if (event.ctrlKey && !event.altKey && EDITING_KEYS.has(event.key.toLowerCase())) return
+      const editing = mac ? event.metaKey && !event.ctrlKey : event.ctrlKey
+      if (editing && !event.altKey && EDITING_KEYS.has(event.key.toLowerCase())) return
+      // On macOS Option types characters (Option+E is an accent), and text is the page's.
+      if (mac && event.altKey && !event.ctrlKey && !event.metaKey && event.key.length === 1) return
       win.setTimeout(() => {
         if (event.defaultPrevented) return
         const key: KeyInit = {

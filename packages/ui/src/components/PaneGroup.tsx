@@ -1,5 +1,6 @@
 import type { JSX, ReactNode, Ref } from 'react'
 import { cn } from '../lib/cn'
+import { shortcutLabel } from '../lib/platform'
 import { CloseIcon, MaximizeIcon, SplitIcon, UnmaximizeIcon } from './icons'
 
 /** "First pane", "Second pane", ... and past the words, "Pane 9". */
@@ -185,8 +186,8 @@ export function PaneActions({
         <PaneButton
           label={
             split === 'new'
-              ? 'Split: move this tab to a pane of its own (Ctrl+\\)'
-              : 'Move this tab to the pane beside it (Ctrl+\\)'
+              ? `Split: move this tab to a pane of its own (${shortcutLabel('\\')})`
+              : `Move this tab to the pane beside it (${shortcutLabel('\\')})`
           }
           onClick={onSplit}
           data-pane-split={split}
