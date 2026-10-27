@@ -28,17 +28,28 @@ import { expect, startSession, terminalText, test, type Helm } from '../../e2e/h
 
 const OUT = process.env['HELM_SHOTS_DIR'] ?? join(repoRoot(), 'reports', 'screenshots')
 const THEMES = ['light', 'dark'] as const
-/** One size on every runner, so two runs can be compared side by side. */
-const BOUNDS = { x: 40, y: 40, width: 1440, height: 900 }
+/**
+ * One size wherever the screen holds it, so two runs can be compared side by
+ * side. A smaller screen gets the window fitted inside it: the macOS runner's
+ * is about 1024x768, and a window that runs off it is cut off in the
+ * `screencapture` shot.
+ */
+const BOUNDS = { width: 1440, height: 900 }
 
 type HelmWindow = Window & { helm: { invoke: (channel: string, payload?: unknown) => Promise<unknown> } }
 
-/** Puts the main window at `BOUNDS`, in front, and returns where it is on screen. */
+/** Fits the main window to `BOUNDS` inside the screen, in front, and returns where it is on screen. */
 async function frontWindow(helm: Helm): Promise<{ x: number; y: number; width: number; height: number }> {
-  return helm.app.evaluate(({ BrowserWindow }, bounds) => {
+  return helm.app.evaluate(({ BrowserWindow, screen }, size) => {
     const win = BrowserWindow.getAllWindows().find((w) => w.isVisible())
     if (win === undefined) throw new Error('Helm has no visible window')
-    win.setBounds(bounds)
+    const area = screen.getPrimaryDisplay().workArea
+    win.setBounds({
+      x: area.x,
+      y: area.y,
+      width: Math.min(size.width, area.width),
+      height: Math.min(size.height, area.height)
+    })
     win.moveTop()
     win.focus()
     return win.getBounds()
