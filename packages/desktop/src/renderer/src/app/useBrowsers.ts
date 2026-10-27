@@ -191,6 +191,25 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
    * is stale.
    */
   const coverTurn = useRef(0)
+  /** What a cover is waiting out, cleared when the hook goes away so nothing fires after it. */
+  const pending = useRef(new Set<ReturnType<typeof setTimeout>>())
+  const later = useCallback((run: () => void, ms: number): void => {
+    const timer = setTimeout(() => {
+      pending.current.delete(timer)
+      run()
+    }, ms)
+    pending.current.add(timer)
+  }, [])
+  useEffect(() => {
+    const timers = pending.current
+    const turns = coverTurn
+    return () => {
+      // A capture still on its way is stale once the browsers are gone.
+      turns.current++
+      for (const timer of timers) clearTimeout(timer)
+      timers.clear()
+    }
+  }, [])
 
   const push = useCallback((id: number): void => {
     const rect = rects.current.get(id)
@@ -226,7 +245,7 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
     if (suppressed.current.size === 0 && !overlayOpen()) {
       standingDown.current = false
       pushAll()
-      setTimeout(() => {
+      later(() => {
         if (coverTurn.current === turn) setStills(NO_STILLS)
       }, STILL_LINGER_MS)
       return
@@ -243,7 +262,7 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
       standDown()
       return
     }
-    setTimeout(standDown, STILL_WAIT_MS)
+    later(standDown, STILL_WAIT_MS)
     void Promise.all(
       onScreen.map((id) =>
         helm.invoke('browser:snapshot', { id }).then(
@@ -259,7 +278,7 @@ export function useBrowsers(recent: readonly string[]): BrowserPanesState {
       await frames(2)
       standDown()
     })
-  }, [pushAll])
+  }, [pushAll, later])
 
   /**
    * The overlay subscription. **Once**, for the whole app.
