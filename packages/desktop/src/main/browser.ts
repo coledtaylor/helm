@@ -413,6 +413,12 @@ export interface BrowserHostOptions {
   /** A Browser tab key pressed with the caret in a page - see `before-input-event` in `create`. */
   onCommand: (command: BrowserCommandEvent) => void
   /**
+   * The OS whose browser keys a page's key presses are read against
+   * (`browserKeyCommand`): Cmd chords on `darwin`, Ctrl chords elsewhere.
+   * `process.platform` unless a test names one.
+   */
+  platform?: NodeJS.Platform
+  /**
    * A session's identity at the tool endpoint, by the id the window names it
    * by - or null for one that cannot take a share: ended, started without the
    * tools, or the tools switched off. The token comes in here and goes no
@@ -751,6 +757,7 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
 
   const settings = (): AppSettings => options.settings()
   const reach = (): BrowserReach => settings().browserReach
+  const platform = options.platform ?? process.platform
 
   const viewFor = (id: number): View | null => views.get(id) ?? null
 
@@ -1232,7 +1239,7 @@ export function createBrowserHost(options: BrowserHostOptions): BrowserHost {
      */
     wc.on('before-input-event', (event, input) => {
       if (input.type !== 'keyDown' || entry.agentInput > 0) return
-      const command = browserKeyCommand(input, process.platform)
+      const command = browserKeyCommand(input, platform)
       if (command === null) return
       event.preventDefault()
       if (input.isAutoRepeat && !COMMANDS_THAT_REPEAT.has(command)) return

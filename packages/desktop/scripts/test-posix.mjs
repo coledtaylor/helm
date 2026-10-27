@@ -25,7 +25,7 @@ export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', 
 
 /**
  * The default set, repository-relative: processes and ports, overlay links,
- * ending a process tree, and data directories.
+ * ending a process tree, data directories, and node-pty's spawn-helper mode.
  */
 export const POSIX_TESTS = [
   'packages/desktop/src/main/processes.test.ts',
@@ -35,7 +35,8 @@ export const POSIX_TESTS = [
   'packages/desktop/src/main/plugins/exec.test.ts',
   'packages/desktop/src/main/plugins/service.test.ts',
   'packages/desktop/src/main/sessions.shutdown.test.ts',
-  'packages/desktop/src/main/datadirs.test.ts'
+  'packages/desktop/src/main/datadirs.test.ts',
+  'packages/desktop/src/main/spawnhelper.test.ts'
 ]
 
 /** Where the tests run on this OS, and which files. */

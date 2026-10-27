@@ -51,13 +51,19 @@ interface Harness {
 
 let current: Harness | null = null
 
-function harness(patch: Partial<AppSettings> = {}): Harness {
+/**
+ * A host over a fake Electron. It reads a page's keys as the OS named here
+ * does - Windows' table unless a test asks for the Mac's - never as the OS the
+ * tests happen to run on.
+ */
+function harness(patch: Partial<AppSettings> = {}, platform: NodeJS.Platform = 'win32'): Harness {
   let settings: AppSettings = { ...DEFAULT_SETTINGS, browserRecentUrls: [], browserProjectUrls: {}, ...patch }
   const window = new FakeBrowserWindow()
   const opened: BrowserOpened[] = []
   const closed: number[] = []
   const commands: BrowserCommandEvent[] = []
   const host = createBrowserHost({
+    platform,
     window: () => window as unknown as BrowserWindow,
     settings: () => settings,
     writeSettings: (next) => {
@@ -706,6 +712,36 @@ describe('browser host - the keyboard inside a page', () => {
     expect(h.commands.slice(3)).toEqual([{ id, command: 'zoom-in' }])
   })
 
+  it("takes the Mac's Cmd chords on macOS, and leaves the page its Ctrl chords and Option's characters", () => {
+    const h = harness({}, 'darwin')
+    const { id, wc } = openTab(h, 'http://localhost:3000/')
+
+    expect(wc.press({ key: 'w', meta: true })).toBe(true)
+    expect(wc.press({ key: 'r', meta: true })).toBe(true)
+    expect(wc.press({ key: 'T', meta: true, shift: true })).toBe(true)
+    expect(wc.press({ key: '[', meta: true })).toBe(true)
+    expect(h.commands).toEqual([
+      { id, command: 'close-page' },
+      { id, command: 'reload' },
+      { id, command: 'reopen-page' },
+      { id, command: 'back' }
+    ])
+    expect(h.window.webContents.focused).toBe(2)
+
+    // Ctrl+W and F5 are Windows' keys, a page's own on a Mac; so is a
+    // character typed with Option, and a Cmd chord coming back up.
+    expect(wc.press({ key: 'w', control: true })).toBe(false)
+    expect(wc.press({ key: 'F5' })).toBe(false)
+    expect(wc.press({ key: 'ArrowLeft', alt: true })).toBe(false)
+    expect(wc.press({ key: 'w', meta: true, type: 'keyUp' })).toBe(false)
+    expect(h.commands).toHaveLength(4)
+
+    // Held: Cmd+W closes nothing more; Cmd+[ keeps going back.
+    expect(wc.press({ key: 'w', meta: true, isAutoRepeat: true })).toBe(true)
+    expect(wc.press({ key: '[', meta: true, isAutoRepeat: true })).toBe(true)
+    expect(h.commands.slice(4)).toEqual([{ id, command: 'back' }])
+  })
+
   it("leaves an agent's key presses to the page, even the Browser tab's own", async () => {
     vi.useFakeTimers()
     const h = harness()
@@ -717,6 +753,18 @@ describe('browser host - the keyboard inside a page', () => {
     expect(h.commands).toEqual([])
     // And the next key the user presses is theirs again.
     expect(wc.press({ key: 'w', control: true })).toBe(true)
+    expect(h.commands).toEqual([{ id, command: 'close-page' }])
+  })
+
+  it("leaves an agent's Cmd+W to the page on macOS too", async () => {
+    vi.useFakeTimers()
+    const h = harness({}, 'darwin')
+    const { id, wc } = openTab(h, 'http://localhost:3000/')
+    const pressed = h.host.press(id, 'w', ['meta'])
+    await vi.advanceTimersByTimeAsync(1000)
+    await pressed
+    expect(h.commands).toEqual([])
+    expect(wc.press({ key: 'w', meta: true })).toBe(true)
     expect(h.commands).toEqual([{ id, command: 'close-page' }])
   })
 })

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -100,7 +100,7 @@ describe('resolveProgram', () => {
 
   onWindows('finds a path with a slash inside the plugin folder, and runs a batch file through cmd', () => {
     const resolved = resolveProgram(dir, 'bin/echo args.cmd')
-    expect(resolved).toMatchObject({ program: join(dir, 'bin', 'echo args.cmd'), batch: true })
+    expect(resolved).toMatchObject({ program: realpathSync.native(join(dir, 'bin', 'echo args.cmd')), batch: true })
     expect(resolved?.file.toLowerCase()).toMatch(/cmd\.exe$/)
   })
 
@@ -145,11 +145,12 @@ describe('runProgram', () => {
     vi.stubEnv('CLAUDECODE', '1')
     const result = await run(spec(node, ['echo.mjs', 'first']), ['second', 'with space'], { env: { MINE: 'mine' } })
     expect(result).toMatchObject({ exitCode: 0, stderr: '', timedOut: false })
-    expect(JSON.parse(result.stdout)).toEqual({
-      args: ['first', 'second', 'with space'],
-      cwd: dir,
-      env: { MINE: 'mine', ELECTRON_RUN_AS_NODE: null, CLAUDECODE: null, NODE_OPTIONS: null }
-    })
+    const said = JSON.parse(result.stdout) as { args: string[]; cwd: string; env: Record<string, string | null> }
+    expect(said.args).toEqual(['first', 'second', 'with space'])
+    // The folder as the program's OS reports it back: macOS resolves the link
+    // its temporary folder is reached through (/var is /private/var).
+    expect(realpathSync.native(said.cwd)).toBe(realpathSync.native(dir))
+    expect(said.env).toEqual({ MINE: 'mine', ELECTRON_RUN_AS_NODE: null, CLAUDECODE: null, NODE_OPTIONS: null })
   })
 
   it('answers a non-zero exit as an answer, not a failure', async () => {

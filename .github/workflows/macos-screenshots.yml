@@ -37,6 +37,9 @@ on:
       # `dist:mac`, `screenshots` and the Electron version the build packs.
       - packages/desktop/package.json
       - packages/desktop/scripts/verify-mac-artifact.mjs
+      # The afterPack hook, and the spawn-helper fix it and postinstall share.
+      - packages/desktop/scripts/after-pack.mjs
+      - packages/desktop/scripts/spawn-helper.mjs
       - packages/desktop/scripts/screenshots/**
       # The launch and the fake-claude world the capture runs in.
       - packages/desktop/e2e/helm.ts

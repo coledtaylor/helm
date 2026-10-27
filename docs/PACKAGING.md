@@ -40,6 +40,15 @@ and with an ad-hoc signature it turns on library validation, which refuses to
 load the native modules. `darkModeSupport` is on, or the app is pinned to the
 light appearance and the `system` theme never follows macOS into dark mode.
 
+node-pty starts every pty on macOS through `spawn-helper`, an executable in its
+macOS prebuilds, and publishes it without the execute bit; without one every
+terminal fails with `posix_spawnp failed`. `scripts/spawn-helper.mjs` sets the
+bit in two places: as `@helm/desktop`'s postinstall, for a checkout on a Mac,
+and from electron-builder's `afterPack` hook (`scripts/after-pack.mjs`) on the
+copy under `app.asar.unpacked`. `afterPack` runs before signing, so the
+signature covers the file as changed. Neither rebuilds anything, and both do
+nothing on Windows and Linux.
+
 The icon is `build/icon.icns`, packed by `pnpm icon` from the same drawing as
 the .ico and committed beside it. Its large sizes sit on Apple's icon grid (the
 artwork in the middle 824px of 1024) so the wheel stands the size of the icons
@@ -184,7 +193,8 @@ Nobody working on Helm has a Mac in front of them, so the
 (`.github/workflows/macos-screenshots.yml`) builds and photographs it on
 `macos-latest`. It runs on a push to any branch but `main` that changes how the
 Mac build is made or photographed - `electron-builder.yml`, `build/`,
-`packages/desktop/package.json`, `verify-mac-artifact.mjs`, the screenshot run,
+`packages/desktop/package.json`, `verify-mac-artifact.mjs`, the `afterPack`
+hook and the spawn-helper script it shares with the postinstall, the screenshot run,
 the E2E launch and world it uses, or the workflow itself - so a branch shows
 its dmg and zip build before it merges rather than at release time. It can
 also be started by hand from the Actions tab, or with

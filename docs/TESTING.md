@@ -39,9 +39,19 @@ executable `sh` script elsewhere (`writeFakeClaude` in `test/world.ts`), and a
 world's root is a real path, because on macOS the temporary folder is reached
 through a link.
 
+A temporary folder is not always its own real path: macOS's is under `/var`, a
+link to `/private/var`, and a GitHub Windows runner's TEMP is the 8.3 alias
+`C:\Users\RUNNER~1\...`. Code that checks one path is inside another resolves
+both before comparing them, and its tests reach the folder through a link
+(`linkFolder`) and, on Windows, through its 8.3 alias (`shortPath`, also in
+`test/links.ts`). To run tests the way those machines do, set TEMP and TMP to a
+short alias on Windows, or point TMPDIR at a link to a folder - from Windows,
+`TMPDIR=/tmp/<link> WSLENV=TMPDIR pnpm test:posix <files>`.
+
 The code that differs by OS - the processes-and-ports pass, overlay links,
-ending a process tree and the data directories - has its tests run where that
-code is the POSIX one by `pnpm test:posix` (`scripts/test-posix.mjs`):
+ending a process tree, the data directories and node-pty's spawn-helper mode -
+has its tests run where that code is the POSIX one by `pnpm test:posix`
+(`scripts/test-posix.mjs`):
 
 - **On macOS and Linux** it runs those test files natively, in the checkout.
 - **On Windows** it runs them under Linux in WSL. It mirrors the working tree

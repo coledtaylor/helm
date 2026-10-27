@@ -52,6 +52,13 @@ asarUnpack:
   - '**/node_modules/koffi/**'
   - '**/node_modules/@koromix/**'
 
+# On macOS, makes node-pty's spawn-helper under app.asar.unpacked executable:
+# the package publishes it without the bit, and the copy keeps that mode.
+# afterPack runs before signing, so the signature covers the changed file.
+# Every other platform it leaves alone. Resolved from packages/desktop, where
+# every build runs electron-builder.
+afterPack: ./scripts/after-pack.mjs
+
 # No update feed is generated, because there is no auto-updater. The decision
 # and the three reasons behind it are in docs/PACKAGING.md; the short version is
 # that the build is unsigned, half the artefacts (the portable exe) have no
