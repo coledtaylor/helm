@@ -9,9 +9,11 @@ use floti_protocol::channel::{RequestChannel, from_payload, to_payload};
 use floti_protocol::channels::sessions::{SessionStreamOpen, SessionTerminal};
 use floti_protocol::message::{
     ClientInfo, ClientKind, ErrorCode, ErrorReply, Hello, Request, StreamCredit, StreamData,
-    StreamOpen, Welcome,
+    StreamOpen, Subscribe, Welcome,
 };
-use floti_protocol::{Bytes, FrameDecoder, Message, PROTOCOL_VERSION, StreamChannel, encode_frame};
+use floti_protocol::{
+    Bytes, FrameDecoder, Message, PROTOCOL_VERSION, Payload, StreamChannel, encode_frame,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::Instant;
 
@@ -99,35 +101,107 @@ impl TestClient {
         &mut self,
         request: &C::Request,
     ) -> Result<C::Response, ErrorReply> {
+        let payload = to_payload(request).expect("encode a request");
+        self.request_on(C::NAME, payload).await.map(|answer| {
+            from_payload(&answer).unwrap_or_else(|why| panic!("`{}` answered with {why}", C::NAME))
+        })
+    }
+
+    /// Makes a request on `channel` with `payload`, whatever its type, and
+    /// waits for its answer.
+    pub async fn request_on(
+        &mut self,
+        channel: &str,
+        payload: Payload,
+    ) -> Result<Payload, ErrorReply> {
         let id = self.next_request;
         self.next_request += 1;
         self.send(&Message::Request(Request {
             id,
-            channel: C::NAME.to_owned(),
-            payload: to_payload(request).expect("encode a request"),
+            channel: channel.to_owned(),
+            payload,
         }))
         .await;
+        let found = self
+            .wait_for(
+                &format!("an answer to `{channel}`"),
+                |message| match message {
+                    Message::Response(response) => response.id == id,
+                    Message::Error(error) => error.id == id,
+                    _ => false,
+                },
+            )
+            .await;
+        match found {
+            Message::Response(response) => Ok(response.payload),
+            Message::Error(error) => Err(error),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Subscribes to `channel` as `subscription` and waits for how the host
+    /// starts it: a snapshot, or a subscription error. A channel without
+    /// state sends neither, so this is for one that carries state or is
+    /// refused.
+    pub async fn subscribe_on(&mut self, subscription: u64, channel: &str) -> Message {
+        self.subscribe_quietly(subscription, channel).await;
+        self.wait_for(
+            &format!("the start of a subscription to `{channel}`"),
+            |message| match message {
+                Message::Snapshot(snapshot) => snapshot.subscription == subscription,
+                Message::SubscriptionError(error) => error.subscription == subscription,
+                _ => false,
+            },
+        )
+        .await
+    }
+
+    /// Subscribes to `channel` as `subscription` without waiting for
+    /// anything.
+    pub async fn subscribe_quietly(&mut self, subscription: u64, channel: &str) {
+        self.send(&Message::Subscribe(Subscribe {
+            subscription,
+            channel: channel.to_owned(),
+        }))
+        .await;
+    }
+
+    /// Opens `channel` as stream `stream` with `params`, whatever their type.
+    pub async fn open_on(&mut self, stream: u64, channel: &str, params: Payload) {
+        self.send(&Message::StreamOpen(StreamOpen {
+            stream,
+            channel: channel.to_owned(),
+            params,
+        }))
+        .await;
+    }
+
+    /// Waits for the host to close `stream`, and says why it did.
+    pub async fn wait_stream_closed(&mut self, stream: u64) -> Option<String> {
         let deadline = Instant::now() + PATIENCE;
         loop {
-            let found = self.pending.iter().position(|message| match message {
-                Message::Response(response) => response.id == id,
-                Message::Error(error) => error.id == id,
-                _ => false,
-            });
-            if let Some(index) = found {
-                return match self.pending.remove(index) {
-                    Some(Message::Response(response)) => Ok(from_payload(&response.payload)
-                        .unwrap_or_else(|why| panic!("`{}` answered with {why}", C::NAME))),
-                    Some(Message::Error(error)) => Err(error),
-                    _ => unreachable!(),
-                };
+            if let Some(reason) = self.closed_streams.get(&stream) {
+                return reason.clone();
             }
             let left = deadline.saturating_duration_since(Instant::now());
             assert!(
-                self.pump(left).await,
-                "no answer to `{}` within {PATIENCE:?}",
-                C::NAME
+                !left.is_zero() && self.pump(left).await,
+                "the host did not close stream {stream} within {PATIENCE:?}"
             );
+        }
+    }
+
+    /// The first message other than stream traffic that `wanted` accepts,
+    /// leaving the rest for later; panics naming `what` when none comes
+    /// within [`PATIENCE`].
+    async fn wait_for(&mut self, what: &str, wanted: impl Fn(&Message) -> bool) -> Message {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            if let Some(index) = self.pending.iter().position(&wanted) {
+                return self.pending.remove(index).expect("the message just found");
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(self.pump(left).await, "no {what} within {PATIENCE:?}");
         }
     }
 

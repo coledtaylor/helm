@@ -21,7 +21,7 @@ use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use super::env::session_env;
-use super::ledger::{NewSessionRow, SessionId, SessionLedger};
+use super::ledger::{NewSessionRow, SessionId, SessionLedger, SessionOrigin};
 use super::screen::{Screen, TermSize};
 use crate::agent::LaunchSpec;
 use crate::agent::launch_folder::remove_launch_folder;
@@ -101,6 +101,8 @@ pub struct StartSession {
     pub conversation_id: Option<String>,
     /// The agent backend that composed `spec`, recorded in the row.
     pub backend: BackendId,
+    /// Where the launch came from, recorded in the row.
+    pub origin: SessionOrigin,
 }
 
 /// The sessions running on this host.
@@ -145,6 +147,7 @@ impl SessionHost {
             client,
             conversation_id,
             backend,
+            origin,
         } = request;
         let program = spec.program.to_string_lossy().into_owned();
         let launch_folder = spec.launch_folder.clone();
@@ -194,6 +197,7 @@ impl SessionHost {
                 .collect(),
             conversation_id,
             backend,
+            origin,
         };
         let id = match self.shared.ledger.started(&row) {
             Ok(id) => id,

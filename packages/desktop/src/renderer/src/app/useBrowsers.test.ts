@@ -112,6 +112,23 @@ describe('useBrowsers - whether the native view paints', () => {
     }
   })
 
+  it('leaves no timer behind when it goes away with a cover pending', () => {
+    vi.useFakeTimers()
+    try {
+      bridge.answer('browser:snapshot', () => new Promise<string | null>(() => undefined))
+      const { result, unmount } = renderHook(() => useBrowsers([]))
+      act(() => result.current.sendBounds(3, RECT, true))
+      // Covered and uncovered: one timer to stand down, one to take the still away.
+      act(() => result.current.setSuppressed('tab-drag', true))
+      act(() => result.current.setSuppressed('tab-drag', false))
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      unmount()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('leaves the view up when what covered it is gone before the still arrives', async () => {
     let answer: (url: string | null) => void = () => undefined
     bridge.answer('browser:snapshot', () => new Promise<string | null>((resolve) => (answer = resolve)))

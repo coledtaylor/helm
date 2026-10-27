@@ -40,6 +40,20 @@ pub struct NewSessionRow {
     pub conversation_id: Option<String>,
     /// The agent backend it runs on, which a restore reopens it through.
     pub backend: BackendId,
+    /// Where the launch came from.
+    pub origin: SessionOrigin,
+}
+
+/// What a launch came from, recorded in its row and nowhere else.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionOrigin {
+    /// The discovered project it is, when it is one.
+    pub project_path: Option<String>,
+    /// The saved profile it was launched from.
+    pub profile_id: Option<i64>,
+    /// The permission mode it was launched with, as the agent spells it, so
+    /// a restore reopens it in the mode it had.
+    pub permission_mode: Option<String>,
 }
 
 /// The record of sessions: a row on spawn, its end when the program ends.
@@ -63,14 +77,18 @@ impl SessionLedger for Mutex<Store> {
         let id = store
             .connection()
             .query_row(
-                "INSERT INTO sessions (name, cwd, argv, claude_session_id, backend, status) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'running') RETURNING id",
+                "INSERT INTO sessions (name, cwd, argv, claude_session_id, backend, \
+                 project_path, profile_id, permission_mode, status) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'running') RETURNING id",
                 params![
                     row.name,
                     row.cwd.to_string_lossy(),
                     argv,
                     row.conversation_id,
-                    row.backend.as_str()
+                    row.backend.as_str(),
+                    row.origin.project_path,
+                    row.origin.profile_id,
+                    row.origin.permission_mode
                 ],
                 |found| found.get(0),
             )

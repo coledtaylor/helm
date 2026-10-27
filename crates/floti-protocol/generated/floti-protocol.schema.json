@@ -706,7 +706,7 @@
     "CloseSessionResult": {
       "properties": {
         "closed": {
-          "description": "False when the user declined the confirmation.",
+          "description": "False when the session is still running because the user has to agree\nfirst: the host asked on `session:confirm`, and the session ends only\nwhen a client agrees on `session:confirmed`.",
           "type": "boolean"
         }
       },
@@ -7973,7 +7973,16 @@
       "type": "object"
     },
     "StartSessionRequest": {
+      "description": "A new session with everything it is launched with, short of Floti's\nagent tools, which the host registers for each launch itself.\n\nThe composition starts from the saved profile `profile_id` names, or from\nnothing. Each composition field that is set replaces the profile's; a null\none keeps it. The folder is always `cwd`, never the profile's root.",
       "properties": {
+        "agent": {
+          "default": null,
+          "description": "A named agent definition to run as.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "backend": {
           "anyOf": [
             {
@@ -7997,11 +8006,80 @@
           "description": "The folder the session runs in.",
           "type": "string"
         },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EffortLevel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "extraFolders": {
+          "default": null,
+          "description": "Further folders the session may work in: a profile's access.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "model": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "default": null,
           "description": "Basis for the session's name, made unique against running sessions.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "openingPrompt": {
+          "default": null,
+          "description": "Submitted as the session's first message.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "overlays": {
+          "default": null,
+          "description": "Project paths composed into the session as overlays.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "permissionMode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "profileId": {
+          "default": null,
+          "description": "The saved profile whose composition the session starts from, or null.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
             "null"
           ]
         },
@@ -10304,6 +10382,15 @@
         },
         "type": "array"
       }
+    },
+    {
+      "capability": null,
+      "event": {
+        "$ref": "#/$defs/SessionRecord"
+      },
+      "kind": "event",
+      "name": "session:notify",
+      "snapshot": null
     },
     {
       "capability": null,

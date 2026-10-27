@@ -23,6 +23,12 @@ alacritty_terminal = "0.26"
 ciborium = "0.2"
 floti-protocol = { path = "crates/floti-protocol" }
 getrandom = "0.4"
+# Raw deflate for archived transcript bodies, on the pure-Rust backend so no OS
+# needs a C zlib.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# Local midnight in the host's own timezone. Default features: Windows bundles
+# the tz database, Unix reads the system zoneinfo.
+jiff = "0.2"
 # Directory junctions, which Windows lets any user make, where a symlink needs
 # elevation or developer mode.
 junction = "1.4"

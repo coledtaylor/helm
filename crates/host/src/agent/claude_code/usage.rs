@@ -11,9 +11,10 @@
 //! per token, so they are Floti's arithmetic over the transcripts against
 //! [`PRICES`], dated [`PRICE_TABLE_DATE`]. Reads only.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::time::{Instant, SystemTime};
 
 use floti_protocol::BackendId;
 use floti_protocol::channels::sessions::{
@@ -573,6 +574,41 @@ impl Sum {
 
 /// Spend over the three windows, or `None` when a transcript that could hold
 /// part of it cannot be read: a partial sum would read as a smaller spend.
+/// A transcript's usage rows, with the size and modification time they were
+/// read at.
+type ReadRows = (u64, Option<SystemTime>, Arc<Vec<UsageRow>>);
+
+/// The usage rows last read from each transcript. Usage is read every few
+/// seconds and a week of transcripts is large, so a transcript is parsed
+/// again only when its size or modification time moved.
+static ROWS: LazyLock<Mutex<HashMap<PathBuf, ReadRows>>> = LazyLock::new(Mutex::default);
+
+/// `file`'s usage rows, from [`ROWS`] when it has not changed since.
+fn rows_of(file: &Path) -> Option<Arc<Vec<UsageRow>>> {
+    let meta = std::fs::metadata(file).ok()?;
+    let stamp = (meta.len(), meta.modified().ok());
+    if let Some((len, modified, rows)) = ROWS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(file)
+        && (*len, *modified) == stamp
+    {
+        return Some(Arc::clone(rows));
+    }
+    let text = std::fs::read_to_string(file).ok()?;
+    let rows: Arc<Vec<UsageRow>> = Arc::new(
+        text.lines()
+            // Most lines are not assistant messages; skip the parse for them.
+            .filter(|line| line.contains("\"assistant\""))
+            .filter_map(parse_usage_line)
+            .collect(),
+    );
+    ROWS.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(file.to_path_buf(), (stamp.0, stamp.1, Arc::clone(&rows)));
+    Some(rows)
+}
+
 fn spend(projects: &Path, windows: Windows) -> Option<UsageSpend> {
     let started = Instant::now();
     let mut files = Vec::new();
@@ -581,20 +617,17 @@ fn spend(projects: &Path, windows: Windows) -> Option<UsageSpend> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return None,
     }
+    // Forget what was read from transcripts no longer in any window.
+    let listed: HashSet<&PathBuf> = files.iter().collect();
+    ROWS.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|file, _| !file.starts_with(projects) || listed.contains(file));
 
     let (mut session, mut today, mut week) = (Sum::default(), Sum::default(), Sum::default());
     let mut seen = HashSet::new();
     let mut unpriced = BTreeSet::new();
-    for file in files {
-        let text = std::fs::read_to_string(&file).ok()?;
-        for line in text.lines() {
-            // Most lines are not assistant messages; skip the parse for them.
-            if !line.contains("\"assistant\"") {
-                continue;
-            }
-            let Some(row) = parse_usage_line(line) else {
-                continue;
-            };
+    for file in &files {
+        for row in rows_of(file)?.iter() {
             if row.at > windows.now || row.at < windows.earliest() {
                 continue;
             }
@@ -606,13 +639,13 @@ fn spend(projects: &Path, windows: Windows) -> Option<UsageSpend> {
                 unpriced.insert(row.model.clone());
             }
             if row.at >= windows.session_from {
-                session.add(&row, rate);
+                session.add(row, rate);
             }
             if row.at >= windows.today_from {
-                today.add(&row, rate);
+                today.add(row, rate);
             }
             if row.at >= windows.week_from {
-                week.add(&row, rate);
+                week.add(row, rate);
             }
         }
     }

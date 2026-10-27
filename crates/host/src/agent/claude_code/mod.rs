@@ -13,6 +13,7 @@ mod argv;
 mod config;
 mod history;
 mod overlay;
+mod prompts;
 mod sign_in;
 mod status;
 mod time;
@@ -34,17 +35,18 @@ use floti_protocol::{BackendId, HarnessPart, HarnessSupport, Knowable};
 
 use super::{
     AgentBackend, AgentToolServer, AgentTools, Composition, ConfigSource, Conversation,
-    HistorySource, Launch, LaunchFolder, LaunchRequest, LaunchSpec, Permissions, Registration,
-    ResumeRequest, Resumer, SessionRef, SignIn, SignInCheck, StatusSource, TestedVersions,
-    Transcript, UsageSource, Version, VersionCheck,
+    HistorySource, Launch, LaunchFolder, LaunchRequest, LaunchSpec, Permissions, PromptRecord,
+    PromptTail, Registration, ResumeRequest, Resumer, SessionRef, SignIn, SignInCheck,
+    StatusSource, TestedVersions, Transcript, UsageSource, Version, VersionCheck,
 };
 use crate::platform::folders::UserEnv;
 use crate::platform::launcher::{self, Program, ProgramLauncher};
 use crate::platform::process_tree::ProcessTree;
 use crate::{Error, Result};
 
-pub use argv::sanitize_session_name;
+pub use argv::{sanitize_session_name, unique_session_name};
 pub use overlay::{overlay_plugin_name, overlay_plugin_names};
+pub(crate) use time::parse_instant;
 pub use title::{SessionTitle, session_title_from};
 pub use usage::{PRICE_TABLE_DATE, UsageBucket, UsageView, usage_view};
 
@@ -397,6 +399,10 @@ impl StatusSource for ClaudeCodeBackend {
     fn status(&self, session: &SessionRef) -> Knowable<Option<SessionActivity>> {
         status::status(&self.sessions_dir(), self.tree.as_ref(), session)
     }
+
+    fn registry(&self) -> Knowable<Vec<super::LiveRecord>> {
+        status::registry(&self.sessions_dir(), self.tree.as_ref())
+    }
 }
 
 impl AgentTools for ClaudeCodeBackend {
@@ -443,6 +449,21 @@ impl HistorySource for ClaudeCodeBackend {
     fn transcript(&self, conversation_id: &str) -> Result<Option<Transcript>> {
         history::transcript(&self.settings.config_dir, conversation_id)
     }
+
+    fn prompt_record(&self) -> Option<&dyn PromptRecord> {
+        Some(self)
+    }
+}
+
+/// `history.jsonl`, the prompt record the history list is built from.
+impl PromptRecord for ClaudeCodeBackend {
+    fn prompt_file(&self) -> PathBuf {
+        prompts::history_file(&self.settings.config_dir)
+    }
+
+    fn prompts_since(&self, offset: u64) -> PromptTail {
+        prompts::read_since(&self.prompt_file(), offset)
+    }
 }
 
 impl UsageSource for ClaudeCodeBackend {
@@ -454,6 +475,10 @@ impl UsageSource for ClaudeCodeBackend {
 impl ConfigSource for ClaudeCodeBackend {
     fn config_files(&self, project: Option<&Path>) -> Result<Vec<ConfigFile>> {
         config::config_files(&self.settings.config_dir, project, &self.credential_paths())
+    }
+
+    fn console(&self) -> Option<crate::config_console::AgentConfig> {
+        Some(self.console_agent())
     }
 }
 

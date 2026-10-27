@@ -11,20 +11,33 @@
 //! session's process tree; a plain stop records each row as exited first, a
 //! stop for an update leaves them for the next start to find lost.
 //!
-//! The skeleton serves the session list, start, close and resize, the
-//! session terminal stream, `session:exit`, the restore offer and restore,
-//! and `host:stop`. Every other declared channel is answered with an error
-//! naming it.
+//! What it serves is one module per feature under `features`: today launch
+//! and live sessions (the session list, start, the launcher's launch, a
+//! profile's launch, a resume from history, rename, resize, focus, close with
+//! its confirmation, `session:exit`, `session:activate`, the activity and the
+//! machine-wide overview, the restore offer and restore, and the session
+//! terminal stream), plain terminals (`pterm:*` and their stream); history
+//! (`history:*`), the transcript archive (`archive:*`) and usage (`usage:*`);
+//! the config console (`config:*` but `config:render`, with
+//! `config:externalChange`); and `host:stop`. Every other declared channel
+//! is on the not-yet-served list ([`unserved`]) with the feature that will
+//! serve it, and is answered with an error naming it.
 
 mod connection;
+mod events;
+mod features;
 mod hosted;
 mod records;
+pub mod unserved;
+
+use std::collections::BTreeSet;
 
 use std::ffi::OsString;
 use std::fs::{File, TryLockError};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
+use std::time::Duration;
 
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::{BackendId, Catalogue, HostIdentity, PROTOCOL_VERSION};
@@ -41,6 +54,7 @@ use crate::store::Store;
 use crate::{Error, Result};
 
 use connection::ConnectionContext;
+use features::Features;
 use hosted::Hosted;
 
 /// The socket's name in the runtime folder.
@@ -48,6 +62,10 @@ pub const SOCKET_NAME: &str = "floti";
 
 /// The file in the data folder whose lock says a host is using that folder.
 pub const LOCK_FILE: &str = "host.lock";
+
+/// How long a stop waits, once the sessions have ended, for the store to be
+/// let go before it releases the data folder anyway.
+const RELEASE_WAIT: Duration = Duration::from_secs(10);
 
 /// Every channel of the protocol, built once.
 static CATALOGUE: LazyLock<Catalogue> = LazyLock::new(Catalogue::protocol);
@@ -136,11 +154,14 @@ impl Stopper {
 /// A running host.
 pub struct Host {
     hosted: Arc<Hosted>,
+    features: Arc<Features>,
     endpoint: Endpoint,
     stopper: Stopper,
     stop_requested: watch::Receiver<Option<HostStopReason>>,
     shutdown: watch::Sender<bool>,
     accepting: JoinHandle<()>,
+    /// The store, watched so a stop can wait until nothing has it open.
+    store: Weak<Mutex<Store>>,
     /// Held for the host's life: the data folder is this host's.
     _lock: File,
 }
@@ -172,33 +193,43 @@ impl Host {
                 .map(|backend| backend.capabilities())
                 .collect(),
         });
+        let store = Arc::new(Mutex::new(store));
+        let store_held = Arc::downgrade(&store);
         let hosted = Arc::new(Hosted::new(
-            Arc::new(Mutex::new(store)),
+            store,
             folders.data.clone(),
             backends,
             inherited_env,
             lost,
         )?);
+        let features = Arc::new(Features::new(Arc::clone(&hosted))?);
 
         let (stop_tx, stop_requested) = watch::channel(None);
         let stopper = Stopper(Arc::new(stop_tx));
         let (shutdown, shutdown_rx) = watch::channel(false);
         let accepting = tokio::spawn(accept(
             listener,
-            Arc::clone(&hosted),
+            Arc::clone(&features),
             identity,
             stopper.clone(),
             shutdown_rx,
         ));
         Ok(Self {
             hosted,
+            features,
             endpoint,
             stopper,
             stop_requested,
             shutdown,
             accepting,
+            store: store_held,
             _lock: lock,
         })
+    }
+
+    /// Every protocol channel this host serves, of every kind.
+    pub fn served_channels(&self) -> BTreeSet<&'static str> {
+        connection::served_channels(&self.features)
     }
 
     /// Where clients connect.
@@ -236,6 +267,28 @@ impl Host {
             .await
             .map_err(|err| Error::io("end the sessions", std::io::Error::other(err)))?;
         let _ = self.shutdown.send(true);
+        let Self {
+            hosted,
+            features,
+            store,
+            _lock: lock,
+            ..
+        } = self;
+        drop(features);
+        drop(hosted);
+        // Connections close on the shutdown, and the history and activity
+        // workers let go of the store at the end of the pass they are in.
+        let deadline = tokio::time::Instant::now() + RELEASE_WAIT;
+        while store.strong_count() > 0 {
+            if tokio::time::Instant::now() >= deadline {
+                eprintln!(
+                    "floti host: the store was still in use {RELEASE_WAIT:?} after the sessions ended"
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        drop(lock);
         Ok(reason)
     }
 }
@@ -264,7 +317,7 @@ fn lock_data_folder(folders: &Folders) -> Result<File> {
 
 async fn accept(
     mut listener: socket::Listener,
-    hosted: Arc<Hosted>,
+    features: Arc<Features>,
     identity: Arc<HostIdentity>,
     stopper: Stopper,
     shutdown: watch::Receiver<bool>,
@@ -278,7 +331,7 @@ async fn accept(
                     stream,
                     client,
                     ConnectionContext {
-                        hosted: Arc::clone(&hosted),
+                        features: Arc::clone(&features),
                         identity: Arc::clone(&identity),
                         stopper: stopper.clone(),
                         shutdown: shutdown.clone(),

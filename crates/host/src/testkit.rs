@@ -10,6 +10,12 @@
 //!   (`floti-fake-agent`, in `testkit/fake_agent.rs`), its records and a
 //!   backend that runs it. Integration tests get one with
 //!   [`fake_agent!`](crate::fake_agent).
+//! - [`RunningHost`]: a host serving in the test's runtime, which the test
+//!   stops.
+//!
+//! A test leaves nothing behind: [`TestDirs`] fails the test that leaves a
+//! file in its tree open, and [`RunningHost`] fails the test that never
+//! stopped its host.
 
 mod client;
 
@@ -22,8 +28,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use floti_protocol::BackendId;
+use floti_protocol::channels::host::HostStopReason;
 use serde::Deserialize;
 use tempfile::TempDir;
+use tokio::task::JoinHandle;
 
 use crate::Result;
 use crate::agent::{
@@ -31,18 +39,31 @@ use crate::agent::{
 };
 use crate::platform::folders::{Folders, UserEnv};
 use crate::platform::socket::{Endpoint, LocalSocket, Native as NativeSocket};
+use crate::server::{Host, HostConfig, Stopper};
 
 /// The variable naming the folder the fake agent records each run in.
 pub const FAKE_AGENT_LOG_VAR: &str = "FLOTI_FAKE_AGENT_LOG";
 
+/// How long a dropped [`TestDirs`] keeps trying to remove its tree: an OS can
+/// let go of an exited process's files a moment after the exit.
+const REMOVE_WAIT: Duration = Duration::from_secs(3);
+
 /// A temporary folder tree for one test, removed when it is dropped.
+///
+/// A test leaves nothing behind. When the tree cannot be removed because
+/// something the test started still has a file in it open (a store, a host,
+/// a process), dropping it fails the test, naming the folder. Drop whatever
+/// holds it first; in a struct, declare the `TestDirs` last, since fields
+/// drop in order. Windows refuses to remove an open file, so that is where
+/// such a test fails.
 ///
 /// Every path has a space in it, as a Windows user folder often does.
 /// `runtime` is kept short because a Unix socket path has a length limit of
 /// about a hundred bytes.
 #[derive(Debug)]
 pub struct TestDirs {
-    root: TempDir,
+    /// `None` only while it is being dropped.
+    root: Option<TempDir>,
     pub home: PathBuf,
     pub data: PathBuf,
     pub logs: PathBuf,
@@ -67,19 +88,22 @@ impl TestDirs {
             logs: make("state dir"),
             config: make("config dir"),
             runtime: make("run"),
-            root,
+            root: Some(root),
         }
     }
 
     /// The temporary root everything else is in.
     pub fn root(&self) -> &Path {
-        self.root.path()
+        self.root
+            .as_ref()
+            .expect("a TestDirs has its root until it is dropped")
+            .path()
     }
 
     /// A new folder under the root, such as a project for a session to run
     /// in. `name` may contain spaces.
     pub fn folder(&self, name: &str) -> PathBuf {
-        let path = self.root.path().join(name);
+        let path = self.root().join(name);
         std::fs::create_dir_all(&path).expect("create a test folder");
         path
     }
@@ -113,6 +137,87 @@ impl TestDirs {
 impl Default for TestDirs {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for TestDirs {
+    fn drop(&mut self) {
+        let Some(root) = self.root.take() else {
+            return;
+        };
+        let path = root.path().to_path_buf();
+        let mut removed = root.close();
+        let deadline = Instant::now() + REMOVE_WAIT;
+        while removed.is_err() && path.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+            removed = std::fs::remove_dir_all(&path);
+        }
+        // A test that is already failing says why itself.
+        if let Err(err) = removed
+            && path.exists()
+            && !std::thread::panicking()
+        {
+            panic!(
+                "the test left {} behind: something it started still has a file in it open ({err}). \
+                 Stop or drop it before the TestDirs goes.",
+                path.display()
+            );
+        }
+    }
+}
+
+/// A host serving in the test's runtime.
+///
+/// The test stops it with [`Self::stop`], or waits with [`Self::stopped`]
+/// for a stop a client asked for: stopping is what ends its sessions and
+/// lets go of its store and data folder, which dropping a [`Host`] does not.
+/// Dropping one the test never stopped fails the test.
+pub struct RunningHost {
+    stopper: Stopper,
+    /// `None` once the test has waited for it to stop.
+    running: Option<JoinHandle<Result<HostStopReason>>>,
+}
+
+impl RunningHost {
+    /// Starts a host on `config` and serves. Call it inside a Tokio runtime.
+    pub fn start(config: HostConfig) -> Self {
+        Self::run(Host::start(config).expect("start the host"))
+    }
+
+    /// Serves `host`, for a test that looks at it before it serves.
+    pub fn run(host: Host) -> Self {
+        Self {
+            stopper: host.stopper(),
+            running: Some(tokio::spawn(host.run_until_stopped())),
+        }
+    }
+
+    /// Asks the host to stop for `reason` and waits until it has.
+    pub async fn stop(self, reason: HostStopReason) -> HostStopReason {
+        self.stopper.stop(reason);
+        self.stopped().await
+    }
+
+    /// Waits for the host to finish stopping, however it was asked.
+    pub async fn stopped(mut self) -> HostStopReason {
+        let running = self.running.take().expect("a host is waited for once");
+        tokio::time::timeout(PATIENCE, running)
+            .await
+            .expect("the host stops in time")
+            .expect("the host's task")
+            .expect("the host stops cleanly")
+    }
+}
+
+impl Drop for RunningHost {
+    fn drop(&mut self) {
+        // A test that is already failing says why itself.
+        if self.running.is_some() && !std::thread::panicking() {
+            panic!(
+                "the test did not stop its host: end it with `stop(..).await`, which ends its \
+                 sessions and lets go of its data folder"
+            );
+        }
     }
 }
 
@@ -336,6 +441,26 @@ mod tests {
         assert!(dirs.user_env().vars.is_empty());
         drop(dirs);
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn a_tree_left_in_use_fails_the_test_naming_it() {
+        let dirs = TestDirs::new();
+        let root = dirs.root().to_path_buf();
+        let open = std::fs::File::create(dirs.data.join("still open")).unwrap();
+        let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(dirs)));
+        drop(open);
+        match dropped {
+            // An OS that removes an open file has nothing left to report.
+            Ok(()) => assert!(!root.exists()),
+            Err(panic) => {
+                let _ = std::fs::remove_dir_all(&root);
+                let message = panic
+                    .downcast_ref::<String>()
+                    .expect("the failure is a message");
+                assert!(message.contains(&root.display().to_string()), "{message}");
+            }
+        }
     }
 
     #[test]

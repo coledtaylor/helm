@@ -42,6 +42,7 @@ const DECLARED: &[(&str, ChannelKind, Option<Capability>)] = &[
     ("sessions:overview", STATE, None),
     ("sessions:resources", STATE, None),
     ("session:exit", EVENT, None),
+    ("session:notify", EVENT, None),
     ("session:activate", EVENT, None),
     ("session:confirm", EVENT, None),
     ("session:data", STREAM, Some(Capability::Terminal)),
@@ -393,6 +394,26 @@ fn session_requests_and_answers_round_trip_over_cbor() {
             backend: Some(BackendId::claude_code()),
             cols: 120,
             rows: 40,
+            ..StartSessionRequest::default()
+        },
+        record(12),
+    );
+    exchange::<SessionStart>(
+        StartSessionRequest {
+            cwd: "C:\\work\\a repo".into(),
+            project_path: Some("C:\\work\\a repo".into()),
+            name: Some("api".into()),
+            backend: Some(BackendId::claude_code()),
+            profile_id: Some(4),
+            overlays: Some(vec!["C:\\work\\shared".into()]),
+            extra_folders: Some(vec!["C:\\work\\docs".into()]),
+            model: Some("opus".into()),
+            effort: Some(EffortLevel::High),
+            agent: Some("reviewer".into()),
+            permission_mode: Some(PermissionMode::AcceptEdits),
+            opening_prompt: Some("Read the plan".into()),
+            cols: 120,
+            rows: 40,
         },
         record(12),
     );
@@ -557,6 +578,7 @@ fn session_events_and_state_round_trip_over_cbor() {
         },
     ]);
     event::<SessionExit>(record(12));
+    event::<SessionNotify>(record(12));
     event::<SessionActivate>(SessionActivation { id: 12 });
     event::<SessionConfirm>(SessionConfirmRequest {
         id: 5,

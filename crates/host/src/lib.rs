@@ -9,18 +9,26 @@
 //! The modules, one concern each:
 //!
 //! - [`agent`]: the `AgentBackend` trait every agent CLI is run through.
+//! - [`config_console`]: an agent's config files, read through its backend and
+//!   changed only through one snapshot-first writer; served to clients as
+//!   `config:*`.
 //! - [`platform`]: what differs by OS, behind one trait per concern. Nothing
 //!   outside its per-OS files is conditional on the OS.
 //! - [`store`]: `floti.db`, which only the host opens.
+//! - [`history`]: the history index and the transcript archive in it.
+//! - [`usage`]: each backend's latest usage reading.
 //! - [`session`]: sessions in ptys and the screens kept for them.
 //! - [`server`]: the local socket's clients and the protocol they speak.
 
 pub mod agent;
+pub mod config_console;
 pub mod error;
+pub mod history;
 pub mod platform;
 pub mod server;
 pub mod session;
 pub mod store;
+pub mod usage;
 
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;

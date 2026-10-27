@@ -11,8 +11,10 @@
 //! unusable line is skipped, not fatal, and rows are de-duplicated by their
 //! own `uuid`, because a forked conversation copies its parent's rows.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex, PoisonError};
+use std::time::SystemTime;
 
 use floti_protocol::channels::sessions::{ArchiveMessage, ArchiveRole};
 use serde_json::Value;
@@ -22,12 +24,45 @@ use super::title::session_title_from;
 use crate::agent::{Conversation, Transcript};
 use crate::{Error, Result};
 
+/// A transcript's conversation as last read, with the size and
+/// modification time it was read at.
+type Seen = HashMap<PathBuf, (u64, Option<SystemTime>, Conversation)>;
+
+/// The conversations last read under each config folder. A transcript is
+/// parsed again only when its size or modification time moved, so listing
+/// the conversations costs a directory scan once they have been read.
+static SEEN: LazyLock<Mutex<HashMap<PathBuf, Seen>>> = LazyLock::new(Mutex::default);
+
 /// Every conversation with a transcript on disk, most recent first.
 pub(super) fn conversations(config_dir: &Path) -> Result<Vec<Conversation>> {
-    let mut found: Vec<Conversation> = transcripts(config_dir)?
-        .into_iter()
-        .filter_map(|(id, file)| read(&id, &file).map(|(conversation, _)| conversation))
+    let files = transcripts(config_dir)?;
+    let mut before = SEEN
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(config_dir)
+        .unwrap_or_default();
+    let mut now = Seen::with_capacity(files.len());
+    for (id, file) in files {
+        let Ok(meta) = std::fs::metadata(&file) else {
+            continue;
+        };
+        let stamp = (meta.len(), meta.modified().ok());
+        let conversation = match before.remove(&file) {
+            Some((len, modified, conversation)) if (len, modified) == stamp => conversation,
+            _ => match read(&id, &file) {
+                Some((conversation, _)) => conversation,
+                None => continue,
+            },
+        };
+        now.insert(file, (stamp.0, stamp.1, conversation));
+    }
+    let mut found: Vec<Conversation> = now
+        .values()
+        .map(|(_, _, conversation)| conversation.clone())
         .collect();
+    SEEN.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(config_dir.to_path_buf(), now);
     found.sort_by(|a, b| b.last_at_ms.cmp(&a.last_at_ms).then(a.id.cmp(&b.id)));
     Ok(found)
 }
@@ -35,8 +70,24 @@ pub(super) fn conversations(config_dir: &Path) -> Result<Vec<Conversation>> {
 /// One conversation's messages, or `None` when no transcript holds it.
 pub(super) fn transcript(config_dir: &Path, id: &str) -> Result<Option<Transcript>> {
     let id = id.to_lowercase();
-    let Some(file) = transcripts(config_dir)?.remove(&id) else {
-        return Ok(None);
+    // Where the last listing found it, which spares a scan of every project
+    // folder for each conversation a pass reads; a scan when it has moved.
+    let listed = SEEN
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(config_dir)
+        .and_then(|seen| {
+            seen.iter()
+                .find(|(_, (_, _, conversation))| conversation.id == id)
+                .map(|(file, _)| file.clone())
+        })
+        .filter(|file| file.is_file());
+    let file = match listed {
+        Some(file) => file,
+        None => match transcripts(config_dir)?.remove(&id) {
+            Some(file) => file,
+            None => return Ok(None),
+        },
     };
     Ok(read(&id, &file).map(|(conversation, messages)| Transcript {
         conversation,
@@ -46,7 +97,7 @@ pub(super) fn transcript(config_dir: &Path, id: &str) -> Result<Option<Transcrip
 
 /// Each conversation id with its transcript. Where one id is in two project
 /// folders the larger file is kept, the fuller record of the two.
-fn transcripts(config_dir: &Path) -> Result<BTreeMap<String, PathBuf>> {
+pub(super) fn transcripts(config_dir: &Path) -> Result<BTreeMap<String, PathBuf>> {
     let projects = config_dir.join("projects");
     let entries = match std::fs::read_dir(&projects) {
         Ok(entries) => entries,
@@ -206,5 +257,89 @@ fn block_text(block: &Value) -> Option<String> {
             None => "[tool]".to_owned(),
         }),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn row(kind: &str, content: Value) -> Value {
+        json!({
+            "type": kind,
+            "uuid": "00000000-0000-4000-8000-000000000001",
+            "sessionId": "sess",
+            "timestamp": "2025-10-09T08:53:20.000Z",
+            "message": { "content": content },
+        })
+    }
+
+    #[test]
+    fn user_and_assistant_messages_are_kept_and_nothing_else() {
+        assert_eq!(
+            message(&row("user", json!("hello"))).map(|m| m.role),
+            Some(ArchiveRole::User)
+        );
+        assert_eq!(
+            message(&row("assistant", json!([{ "type": "text", "text": "hi" }]))).map(|m| m.role),
+            Some(ArchiveRole::Assistant)
+        );
+        for kind in [
+            "system",
+            "attachment",
+            "file-history-snapshot",
+            "queue-operation",
+            "mode",
+        ] {
+            assert_eq!(message(&row(kind, json!("hello"))), None, "{kind}");
+        }
+    }
+
+    #[test]
+    fn a_row_that_is_not_usable_is_skipped() {
+        assert_eq!(message(&json!([])), None);
+        assert_eq!(message(&json!({ "type": "user" })), None);
+        // No timestamp to read is a row with no place on a time axis.
+        assert_eq!(
+            message(&json!({
+                "type": "user", "uuid": "u", "timestamp": "never",
+                "message": { "content": "x" },
+            })),
+            None
+        );
+    }
+
+    #[test]
+    fn the_caveats_the_cli_injects_around_a_slash_command_are_skipped() {
+        let mut caveat = row("user", json!("Caveat: the messages below were generated"));
+        caveat["isMeta"] = json!(true);
+        assert_eq!(message(&caveat), None);
+    }
+
+    #[test]
+    fn text_and_thinking_are_kept_tools_are_marked_and_their_results_dropped() {
+        let content = json!([
+            { "type": "text", "text": "first" },
+            { "type": "thinking", "thinking": "second" },
+            { "type": "tool_use", "name": "Read", "input": { "file": "x".repeat(10_000) } },
+            { "type": "tool_result", "content": "y".repeat(10_000) },
+            { "type": "image", "source": {} },
+        ]);
+        assert_eq!(message_text(&content), "first\n\nsecond\n\n[tool: Read]");
+    }
+
+    #[test]
+    fn a_plain_string_content_is_taken_as_it_is() {
+        assert_eq!(message_text(&json!("  just words  ")), "just words");
+    }
+
+    #[test]
+    fn a_message_nobody_said_anything_in_is_empty_and_not_kept() {
+        let results = json!([{ "type": "tool_result", "content": "x" }]);
+        assert_eq!(message_text(&results), "");
+        assert_eq!(message_text(&Value::Null), "");
+        assert_eq!(message(&row("user", results)), None);
     }
 }

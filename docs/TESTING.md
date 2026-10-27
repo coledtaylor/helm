@@ -27,10 +27,22 @@ to temporary directories.
 The host's tests get their support from `crates/host/src/testkit.rs`, which
 the crate's own tests turn on through its `testkit` feature: `TestDirs`, a
 temporary tree with spaces in its paths holding a home, data, log, config and
-runtime folder; `unique_name` for a pipe or socket no other test is using; and
-the fake agent. Every folder and socket a host test uses is in a `TestDirs`,
-never the real `%LOCALAPPDATA%`, Application Support, XDG data folder or
-`~/.config/floti`, and no test registers anything to start at sign-in.
+runtime folder; `unique_name` for a pipe or socket no other test is using;
+`RunningHost`, a host serving in the test's runtime; and the fake agent. Every
+folder and socket a host test uses is in a `TestDirs`, never the real
+`%LOCALAPPDATA%`, Application Support, XDG data folder or `~/.config/floti`,
+and no test registers anything to start at sign-in.
+
+A host test leaves nothing behind, and the testkit enforces it rather than
+each test remembering to. A `TestDirs` that cannot remove its tree because
+something the test started still has a file in it open fails that test,
+naming the folder; Windows refuses to remove an open file, so that is where
+such a test fails. A struct holding a `TestDirs` declares it last, since
+fields drop in order. A test that starts a host in-process uses `RunningHost`
+and ends with `stop(..).await`, which ends the host's sessions and lets go of
+its store; dropping one unstopped fails the test. A test that kills the
+`floti host` executable kills its process tree with it, as a crash would, so
+no session it started outlives the test.
 
 The fake agent (`crates/host/testkit/fake_agent.rs`, the `floti-fake-agent`
 binary) is a stand-in for any program a session runs, written in Rust so the
@@ -301,6 +313,8 @@ backend code: the backend's tests drive the fake, never the real CLI.
   there first.** An empty expectation matches everything and passes with no
   evidence.
 - A bug gets a failing test before its fix.
+- **A test leaves nothing behind**: no temporary folder, no process, no read of
+  the real home. A failed test is the only exception.
 
 ## Not covered by tests
 

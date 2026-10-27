@@ -26,10 +26,10 @@
 
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
@@ -93,8 +93,8 @@ impl Record {
             "input": self.input,
         });
         let partial = path.with_extension("json.partial");
-        let written = std::fs::write(&partial, body.to_string())
-            .and_then(|()| std::fs::rename(&partial, path));
+        let written =
+            std::fs::write(&partial, body.to_string()).and_then(|()| replace(&partial, path));
         if let Err(err) = written {
             eprintln!(
                 "floti-fake-agent: could not record to {}: {err}",
@@ -156,6 +156,18 @@ fn main() {
 fn flag_value<'a>(argv: &'a [String], name: &str) -> Option<&'a str> {
     argv.iter()
         .find_map(|arg| arg.strip_prefix(name)?.strip_prefix('='))
+}
+
+/// Renames `from` over `to`, retrying while a test has `to` open to read it:
+/// Windows refuses to replace a file that is open.
+fn replace(from: &Path, to: &Path) -> io::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::fs::rename(from, to) {
+            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+            done => return done,
+        }
+    }
 }
 
 fn parse_ms(ms: &str) -> u64 {

@@ -146,6 +146,14 @@ pub trait StatusSource: Send + Sync {
     /// no live record for the session, which shows as a plain tab; Unknown
     /// when a record is there and cannot be interpreted.
     fn status(&self, session: &SessionRef) -> Knowable<Option<SessionActivity>>;
+
+    /// Every live session the agent's records list on this machine, whoever
+    /// started it: records whose process is not provably running are
+    /// dropped, and so is one that cannot be read. No records at all is
+    /// known and empty; Unknown is a backend that cannot list them.
+    fn registry(&self) -> Knowable<Vec<LiveRecord>> {
+        Knowable::Unknown
+    }
 }
 
 /// Gives a launch Floti's agent tools without touching the agent's config.
@@ -161,13 +169,49 @@ pub trait Permissions: Send + Sync {
     fn arguments(&self, mode: PermissionMode) -> Vec<OsString>;
 }
 
-/// The agent's transcripts.
+/// The agent's transcripts, and its record of prompts when it keeps one.
 pub trait HistorySource: Send + Sync {
     /// Every conversation on disk, most recent first.
     fn conversations(&self) -> Result<Vec<Conversation>>;
 
     /// One conversation's messages, or `None` when it is not on disk.
     fn transcript(&self, conversation_id: &str) -> Result<Option<Transcript>>;
+
+    /// The agent's own record of every prompt submitted, which outlives the
+    /// transcripts the agent reaps. `None`, the default, for an agent that
+    /// keeps no such record: its prompts are then what its transcripts say
+    /// the person submitted.
+    fn prompt_record(&self) -> Option<&dyn PromptRecord> {
+        None
+    }
+}
+
+/// An append-only file of the prompts an agent was given, read a tail at a
+/// time.
+pub trait PromptRecord: Send + Sync {
+    /// The file. The history index keeps its cursor under this name.
+    fn prompt_file(&self) -> PathBuf;
+
+    /// What the file holds past `offset` bytes, up to its last complete line.
+    fn prompts_since(&self, offset: u64) -> PromptTail;
+}
+
+/// What a prompt record held past a cursor.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PromptTail {
+    /// The prompts, in submission order.
+    pub lines: Vec<crate::history::index::PromptLine>,
+    /// Where the next read resumes: always the byte after a line break, so a
+    /// line the agent is still writing is read whole next time and the
+    /// cursor never splits a character.
+    pub bytes: u64,
+    /// The file is not the one the cursor belonged to - it shrank or it is
+    /// gone - so what was indexed from it is discarded, not appended to.
+    pub reset: bool,
+    /// Lines that were not usable records. Skipped, not fatal.
+    pub skipped: u64,
+    /// Set when the file could not be read at all.
+    pub error: Option<String>,
 }
 
 /// The agent's usage figures.
@@ -182,6 +226,12 @@ pub trait ConfigSource: Send + Sync {
     /// The user's files, and `project`'s when one is given. Never a
     /// credential file.
     fn config_files(&self, project: Option<&Path>) -> Result<Vec<ConfigFile>>;
+
+    /// The agent's side of the config console - its config folder, its
+    /// global config and how to run its CLI - when it has one.
+    fn console(&self) -> Option<crate::config_console::AgentConfig> {
+        None
+    }
 }
 
 /// Whether the agent is signed in.
@@ -304,6 +354,79 @@ pub struct SessionRef {
     pub pid: u32,
     /// The conversation it was launched or resumed with, when known.
     pub conversation_id: Option<String>,
+}
+
+/// One live session in an agent's own records. Every field but the pid
+/// degrades to `None` on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveRecord {
+    /// The record's own name, which is its identity: two records for one pid
+    /// cannot both be live.
+    pub file: String,
+    /// The pid it registered under.
+    pub pid: u32,
+    /// When that process started, in the agent's words, which keeps a pid
+    /// the machine reused from passing for it.
+    pub proc_start: Option<String>,
+    pub conversation_id: Option<String>,
+    pub cwd: Option<String>,
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub entrypoint: Option<String>,
+    pub started_at_ms: Option<u64>,
+    /// What it says it is doing, or `None` for no status or one this reader
+    /// does not know.
+    pub activity: Option<SessionActivity>,
+    pub waiting_for: Option<String>,
+    /// When the status was last published.
+    pub status_since_ms: Option<u64>,
+}
+
+/// What the host knows about one of its sessions, as a key into an agent's
+/// records.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RecordJoin {
+    /// The conversation it was launched or resumed with.
+    pub conversation_id: Option<String>,
+    /// The pid of the program the pty runs, which is not always the agent's
+    /// own: through a batch-file shim it is the shell's.
+    pub pty_pid: Option<u32>,
+    /// The process its records came from last time, authoritative once set.
+    pub pinned: Option<RecordPin>,
+}
+
+/// The process a session's records have been coming from: learned once from
+/// the conversation id and then followed, because a cleared conversation
+/// gets a new id in the same process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordPin {
+    pub pid: u32,
+    pub proc_start: Option<String>,
+}
+
+/// The record belonging to one of the host's sessions, or `None`. First match
+/// wins: the pinned process, then the conversation id, then the pty's pid.
+pub fn join_record<'a>(records: &'a [LiveRecord], join: &RecordJoin) -> Option<&'a LiveRecord> {
+    if let Some(pin) = &join.pinned {
+        // A missing start time on either side is the absence of the guard,
+        // not a mismatch.
+        return records.iter().find(|record| {
+            record.pid == pin.pid
+                && match (&pin.proc_start, &record.proc_start) {
+                    (Some(pinned), Some(found)) => pinned == found,
+                    _ => true,
+                }
+        });
+    }
+    if let Some(id) = &join.conversation_id
+        && let Some(found) = records
+            .iter()
+            .find(|record| record.conversation_id.as_ref() == Some(id))
+    {
+        return Some(found);
+    }
+    join.pty_pid
+        .and_then(|pid| records.iter().find(|record| record.pid == pid))
 }
 
 /// One conversation in an agent's history.

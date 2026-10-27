@@ -230,3 +230,62 @@ fn parts_not_taken_reads_every_overlay_and_names_each_part_once() {
         vec![HarnessPart::Commands, HarnessPart::Workflows]
     );
 }
+
+fn live(pid: u32, conversation: &str, proc_start: Option<&str>) -> LiveRecord {
+    LiveRecord {
+        file: format!("{pid}.json"),
+        pid,
+        proc_start: proc_start.map(str::to_owned),
+        conversation_id: Some(conversation.to_owned()),
+        cwd: None,
+        name: None,
+        version: None,
+        entrypoint: None,
+        started_at_ms: None,
+        activity: None,
+        waiting_for: None,
+        status_since_ms: None,
+    }
+}
+
+#[test]
+fn a_session_joins_its_pinned_process_then_its_conversation_then_its_pty() {
+    let records = [
+        live(10, "first", Some("t10")),
+        live(20, "second", None),
+        live(30, "third", Some("t30")),
+    ];
+    let join = |conversation: Option<&str>, pty: Option<u32>, pinned: Option<RecordPin>| {
+        join_record(
+            &records,
+            &RecordJoin {
+                conversation_id: conversation.map(str::to_owned),
+                pty_pid: pty,
+                pinned,
+            },
+        )
+        .map(|record| record.pid)
+    };
+    let pin = |pid, start: Option<&str>| {
+        Some(RecordPin {
+            pid,
+            proc_start: start.map(str::to_owned),
+        })
+    };
+
+    // The conversation id before the pty's pid.
+    assert_eq!(join(Some("second"), Some(10), None), Some(20));
+    // The pty's pid when the conversation is not listed.
+    assert_eq!(join(Some("gone"), Some(30), None), Some(30));
+    assert_eq!(join(None, None, None), None);
+
+    // A pin is authoritative, even over a conversation id that matches
+    // another record: a cleared conversation is a new id in the same
+    // process.
+    assert_eq!(join(Some("second"), None, pin(10, Some("t10"))), Some(10));
+    // A pid the machine reused is not the pinned process.
+    assert_eq!(join(Some("first"), Some(10), pin(10, Some("other"))), None);
+    // A start time missing on either side is no guard, not a mismatch.
+    assert_eq!(join(None, None, pin(20, Some("t20"))), Some(20));
+    assert_eq!(join(None, None, pin(30, None)), Some(30));
+}
