@@ -399,6 +399,7 @@ impl Fixture {
                 client: Some(A),
                 conversation_id: Some("conversation-1".into()),
                 backend: backend.id().clone(),
+                origin: Default::default(),
             })
             .expect("start the session")
     }

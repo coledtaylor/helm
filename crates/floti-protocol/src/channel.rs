@@ -456,6 +456,11 @@ impl<'a> Router<'a> {
         self
     }
 
+    /// The channels this router has a handler for, in no particular order.
+    pub fn handled(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.handlers.keys().copied()
+    }
+
     pub fn dispatch(&mut self, request: &Request) -> Message {
         let decl = match self
             .catalogue

@@ -12,19 +12,29 @@
 //! - [`session_env`] is the environment every session gets.
 //! - [`SessionLedger`] is where a session's row is written, on spawn and
 //!   when it ends.
+//! - [`ActivityTracker`] joins the host's sessions to their backends' own
+//!   records, for what each is doing and every live session on the machine.
+//! - [`Terminals`] are plain terminals: a shell in a folder, run the same way
+//!   with no row, from the shells [`detect_shells`] finds.
 
+mod activity;
 mod env;
 mod ledger;
 mod live;
 mod redraw;
 mod screen;
+mod shells;
+mod terminals;
 
 #[cfg(test)]
 pub(crate) mod tests;
 
+pub use activity::{ActivityPass, ActivityTracker, HostedView};
 pub use env::{STRIPPED_ENV, TERMINAL_ENV, session_env};
-pub use ledger::{NewSessionRow, SessionId, SessionLedger};
+pub use ledger::{NewSessionRow, SessionId, SessionLedger, SessionOrigin};
 pub use live::{
     Attachment, ClientId, GRACE, Session, SessionExit, SessionHost, SessionOutput, StartSession,
 };
 pub use screen::{SCROLLBACK_LINES, Screen, TermSize};
+pub use shells::{detect_shells, shell_args};
+pub use terminals::{TerminalExit, Terminals};

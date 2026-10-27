@@ -17,19 +17,22 @@ use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, R
 use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree};
 use floti_host::platform::socket::{self, Endpoint, LocalSocket, Native as NativeSocket};
 use floti_host::platform::startup;
-use floti_host::server::{Host, HostConfig, SOCKET_NAME, Stopper};
+use floti_host::server::{Host, HostConfig, SOCKET_NAME, Stopper, unserved};
 use floti_host::store::Store;
 use floti_host::testkit::{
     FakeAgent, FakeAgentRecord, PATIENCE, TestClient, TestDirs, names_unserved_channel,
 };
 use floti_host::{Error, Result, fake_agent};
+use floti_protocol::channel::{from_payload, to_payload};
 use floti_protocol::channels::common::{SessionRecord, SessionStatus};
 use floti_protocol::channels::host::{HostStop, HostStopReason, HostStopRequest};
 use floti_protocol::channels::sessions::{
-    LaunchSessionRequest, RestoreSessionsRequest, SessionLaunch, SessionList, SessionRestorable,
-    SessionRestore, SessionStart, SessionToRestore, StartSessionRequest,
+    CloseSessionRequest, LaunchSessionRequest, RestoreSessionsRequest, SessionClose, SessionExit,
+    SessionLaunch, SessionList, SessionRestorable, SessionRestore, SessionStart, SessionToRestore,
+    StartSessionRequest,
 };
-use floti_protocol::{BackendId, Knowable};
+use floti_protocol::message::ErrorCode;
+use floti_protocol::{BackendId, Catalogue, ChannelKind, EventChannel, Knowable, Message};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
@@ -93,6 +96,7 @@ fn start_request(folder: &Path) -> StartSessionRequest {
         backend: None,
         cols: 80,
         rows: 24,
+        ..StartSessionRequest::default()
     }
 }
 
@@ -326,8 +330,9 @@ async fn s1_floti_host_is_one_executable_that_starts_and_serves_clients() {
         vec![started.clone()]
     );
 
-    // A channel the skeleton does not serve is answered naming it.
-    let unserved = client
+    // The launcher's launch runs on the backend it names, named uniquely
+    // against the session already running in the folder.
+    let launched = client
         .request::<SessionLaunch>(&LaunchSessionRequest {
             cwd: folder.to_string_lossy().into_owned(),
             project_path: None,
@@ -335,16 +340,15 @@ async fn s1_floti_host_is_one_executable_that_starts_and_serves_clients() {
             profile_id: None,
             permission_mode: None,
             resume: None,
-            backend: None,
+            backend: Some(BackendId::new("shell")),
             cols: 80,
             rows: 24,
         })
         .await
-        .expect_err("session:launch is not served yet");
-    assert!(
-        names_unserved_channel(&unserved, "session:launch"),
-        "{unserved:?}"
-    );
+        .expect("launch a shell session");
+    assert_eq!(launched.session.backend.as_str(), "shell");
+    assert_eq!(launched.session.status, SessionStatus::Running);
+    assert_ne!(launched.session.name, started.name);
 
     // Its only listener for clients is the local socket.
     let listeners = socket::network_listeners(pid).expect("list the host's sockets");
@@ -1307,5 +1311,151 @@ async fn s5_s9_a_claude_code_sessions_launch_folder_is_removed_when_the_session_
         .expect("the session's row");
     assert_eq!(row.status, "exited", "{row:?}");
     assert_eq!(row.exit_code, Some(0), "{row:?}");
+    host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// What the host serves, and the channels it does not serve yet
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_protocol_host_channel_is_served_or_listed_with_the_feature_that_will_serve_it() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.endpoint();
+    let host = Host::start(fake_config(&dirs, &endpoint, &agent, &[])).expect("start the host");
+
+    let drift = unserved::drift(&Catalogue::protocol(), &host.served_channels());
+    assert!(
+        drift.is_empty(),
+        "the not-yet-served list and the host disagree:\n{drift}"
+    );
+
+    host.stop(HostStopReason::Stop);
+    tokio::time::timeout(PATIENCE, host.run_until_stopped())
+        .await
+        .expect("the host stops in time")
+        .expect("the host stops cleanly");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_channel_not_served_yet_is_refused_naming_it_and_every_client_is_served_on() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.endpoint();
+    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let folder = dirs.folder("a project");
+
+    let mut other = TestClient::connect(&endpoint, TERMINAL).await;
+    let session = other
+        .request::<SessionStart>(&start_request(&folder))
+        .await
+        .unwrap();
+    other.attach(1, session.id).await;
+
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let catalogue = Catalogue::protocol();
+    let listed: Vec<_> = catalogue
+        .channels()
+        .filter_map(|decl| unserved::later(decl.name()).map(|later| (decl, later)))
+        .collect();
+    assert!(!listed.is_empty());
+    let null = || to_payload(&()).unwrap();
+    for (n, (decl, later)) in (100_u64..).zip(&listed) {
+        let name = decl.name();
+        match decl.kind() {
+            ChannelKind::Request => {
+                let refused = client
+                    .request_on(name, null())
+                    .await
+                    .expect_err("a channel not served yet is refused");
+                assert!(names_unserved_channel(&refused, name), "{refused:?}");
+                assert!(refused.message.contains(later.feature), "{refused:?}");
+            }
+            ChannelKind::Event { .. } => match client.subscribe_on(n, name).await {
+                Message::SubscriptionError(refused) => {
+                    assert_eq!(refused.code, ErrorCode::Unavailable, "{refused:?}");
+                    assert_eq!(refused.channel, name);
+                    assert!(
+                        refused.message.contains(&format!("`{name}`"))
+                            && refused.message.contains(later.feature),
+                        "{refused:?}"
+                    );
+                }
+                other => panic!("a subscription to `{name}` was not refused: {other:?}"),
+            },
+            ChannelKind::Stream => {
+                client.open_on(n, name, null()).await;
+                let reason = client.wait_stream_closed(n).await.unwrap_or_default();
+                assert!(
+                    reason.contains(&format!("`{name}`")) && reason.contains(later.feature),
+                    "{reason}"
+                );
+            }
+        }
+        // Each refusal leaves the client served.
+        assert_eq!(
+            client.request::<SessionList>(&()).await.unwrap(),
+            vec![session.clone()]
+        );
+    }
+
+    // And every other client too: its session still takes input and answers.
+    other.type_into(1, b"still here\r").await;
+    other
+        .read_stream_until(1, |bytes| {
+            String::from_utf8_lossy(bytes).contains("echo: still here")
+        })
+        .await;
+    assert_eq!(
+        other.request::<SessionList>(&()).await.unwrap(),
+        vec![session]
+    );
+
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_subscriber_to_session_exit_gets_a_sessions_finished_row_when_it_ends() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.endpoint();
+    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let folder = dirs.folder("a project");
+
+    let mut watching = TestClient::connect(&endpoint, TERMINAL).await;
+    watching.subscribe_quietly(5, SessionExit::NAME).await;
+    let mut closing = TestClient::connect(&endpoint, TERMINAL).await;
+    closing.subscribe_quietly(9, SessionExit::NAME).await;
+    // Answered in order, so both subscriptions are held by now.
+    watching.request::<SessionList>(&()).await.unwrap();
+    let session = closing
+        .request::<SessionStart>(&start_request(&folder))
+        .await
+        .unwrap();
+    closing
+        .request::<SessionClose>(&CloseSessionRequest {
+            id: session.id,
+            force: true,
+        })
+        .await
+        .unwrap();
+
+    for (client, subscription) in [(&mut watching, 5), (&mut closing, 9)] {
+        let event = loop {
+            match client.next(PATIENCE).await {
+                Some(Message::Event(event)) => break event,
+                Some(_) => {}
+                None => panic!("no session:exit within {PATIENCE:?}"),
+            }
+        };
+        assert_eq!(event.subscription, subscription);
+        assert_eq!(event.seq, 1);
+        let record: SessionRecord = from_payload(&event.payload).unwrap();
+        assert_eq!(record.id, session.id);
+        assert_eq!(record.status, SessionStatus::Exited);
+        assert!(record.ended_at.is_some(), "{record:?}");
+    }
+
     host.stop(HostStopReason::Stop).await;
 }

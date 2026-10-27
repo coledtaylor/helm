@@ -257,7 +257,9 @@ force: boolean, };
 
 export type CloseSessionResult = { 
 /**
- * False when the user declined the confirmation.
+ * False when the session is still running because the user has to agree
+ * first: the host asked on `session:confirm`, and the session ends only
+ * when a client agrees on `session:confirmed`.
  */
 closed: boolean, };
 
@@ -2448,6 +2450,14 @@ export type SnapshotRef = { id: number, };
  */
 export type SourceToRender = { path: string, source: string, };
 
+/**
+ * A new session with everything it is launched with, short of Floti's
+ * agent tools, which the host registers for each launch itself.
+ *
+ * The composition starts from the saved profile `profile_id` names, or from
+ * nothing. Each composition field that is set replaces the profile's; a null
+ * one keeps it. The folder is always `cwd`, never the profile's root.
+ */
 export type StartSessionRequest = { 
 /**
  * The folder the session runs in.
@@ -2466,6 +2476,26 @@ name: string | null,
  * The agent backend to run, or null for the host's default.
  */
 backend: BackendId | null, 
+/**
+ * The saved profile whose composition the session starts from, or null.
+ */
+profileId: number | null, 
+/**
+ * Project paths composed into the session as overlays.
+ */
+overlays: Array<string> | null, 
+/**
+ * Further folders the session may work in: a profile's access.
+ */
+extraFolders: Array<string> | null, model: string | null, effort: EffortLevel | null, 
+/**
+ * A named agent definition to run as.
+ */
+agent: string | null, permissionMode: PermissionMode | null, 
+/**
+ * Submitted as the session's first message.
+ */
+openingPrompt: string | null, 
 /**
  * Initial grid, from the pane that will host it.
  */

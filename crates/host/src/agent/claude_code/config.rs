@@ -13,7 +13,39 @@ use std::path::{Component, Path, PathBuf};
 
 use floti_protocol::channels::workspace::{ConfigFile, ConfigFileKind, Millis};
 
+use super::ClaudeCodeBackend;
+use crate::config_console::{AgentCommand, AgentConfig};
 use crate::{Error, Result};
+
+impl ClaudeCodeBackend {
+    /// Claude Code's side of the config console: its config folder, its
+    /// global config, and `claude` with the environment every session gets,
+    /// for `claude mcp` and `claude doctor`.
+    ///
+    /// The global config is where the CLI keeps it: `.claude.json` in
+    /// `CLAUDE_CONFIG_DIR` when that is set, and in the home folder beside
+    /// `~/.claude` otherwise.
+    pub fn console_agent(&self) -> AgentConfig {
+        let settings = self.settings();
+        let global_dir = if settings.pass_config_dir {
+            settings.config_dir.clone()
+        } else {
+            settings
+                .config_dir
+                .parent()
+                .map_or_else(|| settings.config_dir.clone(), Path::to_path_buf)
+        };
+        AgentConfig {
+            config_dir: settings.config_dir.clone(),
+            global_config: global_dir.join(".claude.json"),
+            command: AgentCommand {
+                program: settings.program.clone(),
+                args: settings.leading_args.clone(),
+                env: self.session_env(),
+            },
+        }
+    }
+}
 
 /// Deep enough for `commands/spec/section/thing.md`, shallow enough to end.
 const MAX_DEPTH: usize = 8;

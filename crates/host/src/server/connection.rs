@@ -3,39 +3,68 @@
 //!
 //! A client leaving detaches it from every session it was attached to and
 //! ends nothing: the sessions run on for the next client.
+//!
+//! What is served is the features' to say ([`Features`]); the connection
+//! carries requests, subscriptions and streams to them. A channel on the
+//! not-yet-served list is refused naming it before anything else looks at
+//! it, and the client is served on.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use floti_protocol::channel::{EventChannel, Router, StreamChannel, from_payload, to_payload};
+use floti_protocol::channel::{RequestChannel, Router};
 use floti_protocol::channels::host::{HostStop, HostStopReason};
-use floti_protocol::channels::sessions::{
-    SessionClose, SessionExit, SessionList, SessionResize, SessionRestorable, SessionRestore,
-    SessionStart, SessionStreamOpen, SessionTerminal,
-};
 use floti_protocol::message::{
-    ErrorCode, Request, StreamClose, StreamCredit, StreamData, StreamOpen, Subscribe,
-    SubscriptionError,
+    ErrorCode, ErrorReply, Event, Request, Snapshot, StreamClose, StreamCredit, StreamData,
+    StreamOpen, Subscribe, SubscriptionError,
 };
 use floti_protocol::{
-    ClientChannels, CreditReceiver, DEFAULT_INITIAL_CREDIT, FrameDecoder, HostIdentity, Message,
-    Outbox, ProtocolError, encode_frame,
+    CapabilitySet, ClientChannels, CreditReceiver, DEFAULT_INITIAL_CREDIT, FrameDecoder,
+    HostIdentity, Message, Outbox, ProtocolError, encode_frame,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 
-use super::hosted::{Hosted, session_id};
-use super::records::ExitNotice;
-use super::{CATALOGUE, Stopper};
+use super::events::{Publication, Start};
+use super::features::Features;
+use super::{CATALOGUE, Stopper, unserved};
 use crate::platform::socket::LocalStream;
 use crate::session::{ClientId, Session, SessionOutput};
 
 const READ_CHUNK: usize = 64 * 1024;
 
+/// The router that answers `client`'s requests: every feature's handlers,
+/// and `host:stop`, which records the stop asked for in `stop`.
+fn router<'a>(
+    features: &'a Features,
+    capabilities: CapabilitySet,
+    client: ClientId,
+    stop: &'a mut Option<HostStopReason>,
+) -> Router<'a> {
+    let mut router = Router::new(&CATALOGUE, capabilities);
+    features.requests(client, &mut router);
+    router.handle::<HostStop>(move |request| {
+        *stop = Some(request.reason);
+        Ok(())
+    });
+    router
+}
+
+/// Every channel the host serves: what a client's requests are routed to,
+/// and the features' events and streams.
+pub(crate) fn served_channels(features: &Features) -> BTreeSet<&'static str> {
+    let mut stop = None;
+    let router = router(features, CapabilitySet::default(), ClientId(0), &mut stop);
+    let mut served: BTreeSet<&'static str> = router.handled().collect();
+    served.extend(features.served_events_and_streams());
+    debug_assert!(served.contains(HostStop::NAME));
+    served
+}
+
 /// What the connection needs from the host.
 pub(crate) struct ConnectionContext {
-    pub hosted: Arc<Hosted>,
+    pub features: Arc<Features>,
     pub identity: Arc<HostIdentity>,
     pub stopper: Stopper,
     pub shutdown: watch::Receiver<bool>,
@@ -57,9 +86,10 @@ pub(crate) async fn serve(stream: LocalStream, client: ClientId, context: Connec
         writer,
         decoder: FrameDecoder::new(),
         client,
-        hosted: context.hosted,
+        features: context.features,
         stopper: context.stopper,
         outbox: Outbox::new(),
+        snapshot_seq: HashMap::new(),
         streams: HashMap::new(),
         closing: BTreeSet::new(),
         stop_after_flush: None,
@@ -70,6 +100,7 @@ pub(crate) async fn serve(stream: LocalStream, client: ClientId, context: Connec
     };
     connection.run(channels, shutdown).await;
     connection.detach_all();
+    connection.features.client_left(client);
 }
 
 struct Connection {
@@ -77,9 +108,12 @@ struct Connection {
     writer: WriteHalf<LocalStream>,
     decoder: FrameDecoder,
     client: ClientId,
-    hosted: Arc<Hosted>,
+    features: Arc<Features>,
     stopper: Stopper,
     outbox: Outbox,
+    /// For each subscription that started with a snapshot, the number of the
+    /// last event it included: publications up to it are already covered.
+    snapshot_seq: HashMap<u64, u64>,
     streams: HashMap<u64, OpenStream>,
     /// Streams whose session has ended, closed once their output is sent.
     closing: BTreeSet<u64>,
@@ -129,7 +163,7 @@ impl Connection {
         mut shutdown: watch::Receiver<bool>,
     ) {
         let (output_tx, mut output_rx) = mpsc::unbounded_channel::<(u64, SessionOutput)>();
-        let mut exits = self.hosted.ledger().exits();
+        let mut events = self.features.events().listen();
         let mut buf = vec![0; READ_CHUNK];
         loop {
             if self.flush().await.is_err() {
@@ -150,11 +184,11 @@ impl Connection {
                     self.session_output(stream, output);
                     Ok(())
                 }
-                notice = exits.recv() => {
-                    match notice {
-                        Ok(notice) => self.exit_event(&channels, notice),
-                        // Missed exits are missed events; the client sees a
-                        // gap in the numbers and lists again.
+                published = events.recv() => {
+                    match published {
+                        Ok(published) => self.publication(&channels, published),
+                        // Missed events: the client sees a gap in the numbers
+                        // and subscribes again.
                         Err(broadcast::error::RecvError::Lagged(_)) => {}
                         Err(broadcast::error::RecvError::Closed) => {}
                     }
@@ -202,7 +236,10 @@ impl Connection {
                 self.outbox.push(answer);
             }
             Message::Subscribe(subscribe) => self.subscribe(channels, &subscribe),
-            Message::Unsubscribe(unsubscribe) => channels.unsubscribe(unsubscribe.subscription),
+            Message::Unsubscribe(unsubscribe) => {
+                channels.unsubscribe(unsubscribe.subscription);
+                self.snapshot_seq.remove(&unsubscribe.subscription);
+            }
             Message::StreamOpen(open) => self.open_stream(channels, &open, output_tx),
             Message::StreamData(data) => self.input(&data),
             Message::StreamCredit(credit) => {
@@ -216,70 +253,97 @@ impl Connection {
         }
     }
 
-    /// The answer to one request. Channels the skeleton does not serve are
-    /// answered with an error naming the channel.
+    /// The answer to one request: an error naming the channel when it is not
+    /// served yet, otherwise the features'.
     fn answer(&mut self, channels: &ClientChannels<'static>, request: &Request) -> Message {
-        let hosted = &self.hosted;
-        let client = self.client;
+        if let Some(later) = unserved::later(&request.channel) {
+            return Message::Error(ErrorReply {
+                id: request.id,
+                channel: request.channel.clone(),
+                code: ErrorCode::Unavailable,
+                message: unserved::refusal(&request.channel, later),
+            });
+        }
         let mut stop = None;
-        let answer = {
-            let mut router = Router::new(&CATALOGUE, channels.capabilities());
-            router
-                .handle::<SessionList>(|()| hosted.list())
-                .handle::<SessionStart>(|request| hosted.start(client, request))
-                .handle::<SessionClose>(|request| hosted.close(request))
-                .handle::<SessionResize>(|request| hosted.resize(client, request))
-                .handle::<SessionRestorable>(|()| Ok(hosted.restorable()))
-                .handle::<SessionRestore>(|request| Ok(hosted.restore(client, request)))
-                .handle::<HostStop>(|request| {
-                    stop = Some(request.reason);
-                    Ok(())
-                });
-            router.dispatch(request)
-        };
+        let answer = router(
+            &self.features,
+            channels.capabilities(),
+            self.client,
+            &mut stop,
+        )
+        .dispatch(request);
         if matches!(answer, Message::Response(_)) && stop.is_some() {
             self.stop_after_flush = stop;
         }
         answer
     }
 
+    /// Starts a subscription: with its channel's state when it carries one,
+    /// with nothing until the next event when it does not.
     fn subscribe(&mut self, channels: &mut ClientChannels<'static>, subscribe: &Subscribe) {
-        match channels.subscribe(subscribe) {
-            // Exits carry no state, so nothing is sent until one happens.
-            Ok(decl) if decl.name() == SessionExit::NAME => {}
-            Ok(decl) => {
-                channels.unsubscribe(subscribe.subscription);
-                self.outbox
-                    .push(Message::SubscriptionError(SubscriptionError {
-                        subscription: subscribe.subscription,
-                        channel: subscribe.channel.clone(),
-                        code: ErrorCode::Unavailable,
-                        message: format!("This host does not serve `{}`.", decl.name()),
-                    }));
+        let subscription = subscribe.subscription;
+        self.snapshot_seq.remove(&subscription);
+        let refuse = |message: String| {
+            Message::SubscriptionError(SubscriptionError {
+                subscription,
+                channel: subscribe.channel.clone(),
+                code: ErrorCode::Unavailable,
+                message,
+            })
+        };
+        if let Some(later) = unserved::later(&subscribe.channel) {
+            // A number reused for this one ends what it was before.
+            channels.unsubscribe(subscription);
+            return self
+                .outbox
+                .push(refuse(unserved::refusal(&subscribe.channel, later)));
+        }
+        let decl = match channels.subscribe(subscribe) {
+            Ok(decl) => decl,
+            Err(refusal) => return self.outbox.push(Message::SubscriptionError(refusal)),
+        };
+        match self.features.events().start(decl.name()) {
+            Some(Start::Snapshot { seq, state }) => {
+                self.snapshot_seq.insert(subscription, seq);
+                self.outbox.push(Message::Snapshot(Snapshot {
+                    subscription,
+                    seq,
+                    state,
+                }));
             }
-            Err(refusal) => self.outbox.push(Message::SubscriptionError(refusal)),
+            Some(Start::Quiet) => {}
+            None => {
+                channels.unsubscribe(subscription);
+                self.outbox.push(refuse(format!(
+                    "This host does not serve `{}`.",
+                    decl.name()
+                )));
+            }
         }
     }
 
-    /// A session ended: its finished row, to every subscription to
-    /// `session:exit`.
-    fn exit_event(&mut self, channels: &ClientChannels<'static>, notice: ExitNotice) {
-        if channels.subscriptions_to(SessionExit::NAME).is_empty() {
-            return;
-        }
-        let Ok(record) = self.hosted.record(notice.session) else {
-            return;
-        };
-        let Ok(payload) = to_payload(&record) else {
-            return;
-        };
-        for message in channels.event(SessionExit::NAME, notice.seq, &payload) {
-            self.outbox.push(message);
+    /// One publication, to each of this client's subscriptions to its
+    /// channel that its snapshot did not already cover.
+    fn publication(&mut self, channels: &ClientChannels<'static>, published: Publication) {
+        for subscription in channels.subscriptions_to(published.channel) {
+            if self
+                .snapshot_seq
+                .get(&subscription)
+                .is_some_and(|covered| published.seq <= *covered)
+            {
+                continue;
+            }
+            self.outbox.push(Message::Event(Event {
+                subscription,
+                seq: published.seq,
+                payload: published.payload.clone(),
+            }));
         }
     }
 
-    /// Attaches the client to a session: the stream carries its current
-    /// screen, then its live output; what the client sends on it is typed.
+    /// Opens a terminal stream: the feature serving its channel attaches the
+    /// client, and the stream carries the screen, then the live output; what
+    /// the client sends on it is typed.
     fn open_stream(
         &mut self,
         channels: &ClientChannels<'static>,
@@ -292,31 +356,30 @@ impl Connection {
                 reason: Some(reason),
             })
         };
+        if let Some(later) = unserved::later(&open.channel) {
+            return self
+                .outbox
+                .push(refuse(unserved::refusal(&open.channel, later)));
+        }
         let decl = match channels.open_stream(open) {
             Ok(decl) => decl,
             Err(close) => return self.outbox.push(Message::StreamClose(close)),
         };
-        if decl.name() != SessionTerminal::NAME {
-            return self.outbox.push(refuse(format!(
-                "This host does not serve `{}`.",
-                decl.name()
-            )));
-        }
         // A stream number reused while open replaces the earlier stream.
         self.close_stream(open.stream, None, false);
-        let Ok(params) = from_payload::<<SessionTerminal as StreamChannel>::Open>(&open.params)
-        else {
-            return;
-        };
-        let SessionStreamOpen { id } = params;
-        let Some(session) = session_id(id).and_then(|id| self.hosted.sessions().get(id)) else {
-            return self.outbox.push(refuse(format!(
-                "Session {id} is not running on this Floti host."
-            )));
-        };
-        let attachment = match session.attach(self.client, session.size()) {
-            Ok(attachment) => attachment,
-            Err(err) => return self.outbox.push(refuse(err.to_string())),
+        let features = Arc::clone(&self.features);
+        let attachment = match features
+            .streams()
+            .open(decl.name(), self.client, &open.params)
+        {
+            Some(Ok(attachment)) => attachment,
+            Some(Err(why)) => return self.outbox.push(refuse(why)),
+            None => {
+                return self.outbox.push(refuse(format!(
+                    "This host does not serve `{}`.",
+                    decl.name()
+                )));
+            }
         };
         self.outbox.open_stream(open.stream, DEFAULT_INITIAL_CREDIT);
         let _ = self.outbox.write(open.stream, &attachment.redraw);
@@ -334,7 +397,7 @@ impl Connection {
         self.streams.insert(
             stream,
             OpenStream {
-                session,
+                session: attachment.session,
                 input: CreditReceiver::new(stream, DEFAULT_INITIAL_CREDIT),
                 forward,
             },

@@ -11,10 +11,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use floti_protocol::BackendId;
-use floti_protocol::channels::common::{SessionRecord, SessionStatus};
+use floti_protocol::channels::common::{PermissionMode, SessionRecord, SessionStatus};
+use floti_protocol::channels::sessions::{HistorySession, Profile};
 use rusqlite::{OptionalExtension, Row, params};
 use tokio::sync::broadcast;
 
+use crate::agent::claude_code::session_title_from;
 use crate::session::{NewSessionRow, SessionExit, SessionId, SessionLedger};
 use crate::store::Store;
 use crate::{Error, Result};
@@ -76,6 +78,11 @@ impl HostLedger {
         self.store.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The store itself, for a feature that keeps its own rows in it.
+    pub fn shared_store(&self) -> Arc<Mutex<Store>> {
+        Arc::clone(&self.store)
+    }
+
     /// Exits from now on, for one connection.
     pub fn exits(&self) -> broadcast::Receiver<ExitNotice> {
         self.exits.subscribe()
@@ -119,7 +126,12 @@ pub(crate) struct LostRow {
     pub cwd: String,
     pub branch: Option<String>,
     pub profile_id: Option<i64>,
+    pub project_path: Option<String>,
+    /// The conversation it was last in: the one it moved to after a clear,
+    /// or the one it started in.
     pub conversation_id: Option<String>,
+    /// The permission mode it was launched with, which it reopens in.
+    pub permission_mode: Option<PermissionMode>,
     /// The backend it ran on, which reopens it ([`recorded_backend`]).
     pub backend: BackendId,
 }
@@ -132,7 +144,9 @@ pub(crate) fn reconcile_running(store: &Store) -> Result<Vec<LostRow>> {
         .connection()
         .prepare(
             "UPDATE sessions SET status = 'lost' WHERE status = 'running' \
-             RETURNING id, name, label, cwd, branch, profile_id, claude_session_id, backend",
+             RETURNING id, name, label, cwd, branch, profile_id, \
+             coalesce(last_claude_session_id, claude_session_id), backend, project_path, \
+             permission_mode",
         )
         .map_err(sql("reconcile the sessions the last run left running"))?;
     let mut lost = statement
@@ -149,6 +163,8 @@ pub(crate) fn reconcile_running(store: &Store) -> Result<Vec<LostRow>> {
                 profile_id: row.get(5)?,
                 conversation_id: row.get(6)?,
                 backend: recorded_backend(row.get(7)?),
+                project_path: row.get(8)?,
+                permission_mode: named(row.get(9)?),
             })
         })
         .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
@@ -175,6 +191,175 @@ pub(crate) fn record_stopped(store: &Store, ids: &[SessionId]) -> Result<()> {
             .map_err(sql("record the stopped sessions"))?;
     }
     Ok(())
+}
+
+/// The columns [`read_profile`] reads, in its order.
+const PROFILE_COLUMNS: &str = "id, name, root, overlays, access, model, effort, permission_mode, \
+     agent, mcp, opening_prompt, pinned_order, created_at, updated_at";
+
+/// Profile `id` as its row in `profiles` holds it, or `None` when it has
+/// been deleted. A value the row holds that this host does not know, such
+/// as an effort level from a later app, reads as not chosen.
+pub(crate) fn read_profile(store: &Store, id: u64) -> Result<Option<Profile>> {
+    let Ok(id) = i64::try_from(id) else {
+        return Ok(None);
+    };
+    store
+        .connection()
+        .query_row(
+            &format!("SELECT {PROFILE_COLUMNS} FROM profiles WHERE id = ?1"),
+            [id],
+            |row| {
+                let list = |index: usize| -> rusqlite::Result<Vec<String>> {
+                    let text: Option<String> = row.get(index)?;
+                    Ok(text
+                        .and_then(|text| serde_json::from_str(&text).ok())
+                        .unwrap_or_default())
+                };
+                Ok(Profile {
+                    id: unsigned(row.get(0)?),
+                    name: row.get(1)?,
+                    root: row.get(2)?,
+                    overlays: list(3)?,
+                    access: list(4)?,
+                    model: non_empty(row.get(5)?),
+                    effort: named(row.get(6)?),
+                    permission_mode: named(row.get(7)?),
+                    agent: non_empty(row.get(8)?),
+                    mcp: list(9)?,
+                    opening_prompt: non_empty(row.get(10)?),
+                    pinned_order: row
+                        .get::<_, Option<i64>>(11)?
+                        .and_then(|order| u32::try_from(order).ok()),
+                    created_at: row.get(12)?,
+                    updated_at: row.get(13)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(sql("read a profile"))
+}
+
+/// A value stored under its protocol name, such as `acceptEdits`, or `None`
+/// for none or a name this host does not know.
+fn named<T: serde::de::DeserializeOwned>(text: Option<String>) -> Option<T> {
+    serde_json::from_value(serde_json::Value::String(text?)).ok()
+}
+
+/// How a permission mode is stored: by its protocol name.
+pub(crate) fn permission_mode_name(mode: PermissionMode) -> String {
+    serde_json::to_value(mode)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+fn non_empty(text: Option<String>) -> Option<String> {
+    text.filter(|text| !text.trim().is_empty())
+}
+
+/// Conversation `conversation_id` in the history index, with any name given
+/// by hand, or `None` when the index does not have it. History is Claude
+/// Code's: its index rows name no backend because only Claude Code records
+/// one, so a row is Claude Code's, as [`recorded_backend`] reads a session
+/// row with none.
+pub(crate) fn read_history_session(
+    store: &Store,
+    conversation_id: &str,
+) -> Result<Option<HistorySession>> {
+    store
+        .connection()
+        .query_row(
+            "SELECT h.session_id, h.project, h.prompt_count, h.first_at, h.last_at, \
+             h.first_prompt, h.title_prompt, h.transcript_file, h.transcript_bytes, \
+             h.project_exists, n.name \
+             FROM history_sessions h \
+             LEFT JOIN history_names n ON n.session_id = lower(h.session_id) \
+             WHERE lower(h.session_id) = lower(?1)",
+            [conversation_id],
+            |row| {
+                let project: String = row.get(1)?;
+                let first_prompt: String = row.get(5)?;
+                let title_prompt: Option<String> = row.get(6)?;
+                let title =
+                    session_title_from(&[title_prompt.unwrap_or_else(|| first_prompt.clone())]);
+                Ok(HistorySession {
+                    session_id: row.get(0)?,
+                    backend: BackendId::claude_code(),
+                    project_name: last_segment(&project),
+                    project,
+                    prompt_count: u32::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+                    first_at: unsigned(row.get(3)?),
+                    last_at: unsigned(row.get(4)?),
+                    first_prompt,
+                    title: title.text,
+                    title_fallback: title.fallback,
+                    label: non_empty(row.get(10)?),
+                    transcript_file: row.get(7)?,
+                    transcript_bytes: row.get::<_, Option<i64>>(8)?.map(unsigned),
+                    project_exists: row.get::<_, Option<bool>>(9)?.unwrap_or(false),
+                    archive: None,
+                    archived_messages: None,
+                    matched: None,
+                })
+            },
+        )
+        .optional()
+        .map_err(sql("read a conversation from the history index"))
+}
+
+/// The last segment of a recorded folder, whichever separator it was
+/// recorded with.
+fn last_segment(path: &str) -> String {
+    path.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
+        .to_owned()
+}
+
+/// Sets session `id`'s label, or clears it with `None`. False when there is
+/// no such row.
+pub(crate) fn set_label(store: &Store, id: SessionId, label: Option<&str>) -> Result<bool> {
+    let changed = store
+        .connection()
+        .execute(
+            "UPDATE sessions SET label = ?2 WHERE id = ?1",
+            params![id.0, label],
+        )
+        .map_err(sql("rename a session"))?;
+    Ok(changed > 0)
+}
+
+/// Session `id` is in `conversation_id` now, which is not the one it started
+/// in: a cleared conversation. A restore reopens this one.
+pub(crate) fn record_conversation(
+    store: &Store,
+    id: SessionId,
+    conversation_id: &str,
+) -> Result<()> {
+    store
+        .connection()
+        .execute(
+            "UPDATE sessions SET last_claude_session_id = ?2 WHERE id = ?1 AND status = 'running'",
+            params![id.0, conversation_id],
+        )
+        .map_err(sql("record a session's conversation"))?;
+    Ok(())
+}
+
+/// The conversation session `id` is in now, as far as its row knows.
+pub(crate) fn current_conversation(store: &Store, id: SessionId) -> Result<Option<String>> {
+    store
+        .connection()
+        .query_row(
+            "SELECT coalesce(last_claude_session_id, claude_session_id) FROM sessions WHERE id = ?1",
+            [id.0],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(Option::flatten)
+        .map_err(sql("read a session's conversation"))
 }
 
 /// The name of profile `id`, or `None` when it has been deleted.

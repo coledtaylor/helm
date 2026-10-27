@@ -144,6 +144,36 @@ pub fn sanitize_session_name(name: &str) -> String {
     clean
 }
 
+/// `base` made safe, or `base 2`, `base 3`... whichever is free among
+/// `taken`, compared without regard to case because a person reads these.
+/// A base already at the length cap is shortened to leave room for its
+/// number, so a free name is always found.
+pub fn unique_session_name<'a>(base: &str, taken: impl IntoIterator<Item = &'a str>) -> String {
+    let used: std::collections::HashSet<String> =
+        taken.into_iter().map(str::to_lowercase).collect();
+    let root = sanitize_session_name(base);
+    if !used.contains(&root.to_lowercase()) {
+        return root;
+    }
+    (2..)
+        .map(|n| {
+            let suffix = format!(" {n}");
+            let room = MAX_NAME.saturating_sub(suffix.chars().count());
+            let stem: String = if root.chars().count() > room {
+                root.chars()
+                    .take(room)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            } else {
+                root.clone()
+            };
+            format!("{stem}{suffix}")
+        })
+        .find(|candidate| !used.contains(&candidate.to_lowercase()))
+        .expect("some number is free")
+}
+
 /// Unicode's "other" category, as far as a name can hold it: control and
 /// format characters, and the private and unassigned planes a terminal title
 /// cannot show.
@@ -192,5 +222,32 @@ impl AsRefOs for PathBuf {
 impl AsRefOs for &Path {
     fn os(&self) -> OsString {
         self.as_os_str().to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_NAME, unique_session_name};
+
+    #[test]
+    fn a_name_is_made_unique_against_the_names_taken_ignoring_case() {
+        assert_eq!(unique_session_name("helm", []), "helm");
+        assert_eq!(unique_session_name("helm", ["helm"]), "helm 2");
+        assert_eq!(
+            unique_session_name("helm", ["helm", "helm 2", "helm 3"]),
+            "helm 4"
+        );
+        // The first number free, not one past the highest.
+        assert_eq!(unique_session_name("helm", ["helm", "helm 3"]), "helm 2");
+        assert_eq!(unique_session_name("Helm", ["helm"]), "Helm 2");
+    }
+
+    #[test]
+    fn a_long_name_made_unique_stays_within_the_limit() {
+        let long = "x".repeat(MAX_NAME);
+        let unique = unique_session_name(&long, [long.as_str()]);
+        assert!(unique.chars().count() <= MAX_NAME, "{unique}");
+        assert!(unique.ends_with(" 2"), "{unique}");
+        assert_ne!(unique, long);
     }
 }

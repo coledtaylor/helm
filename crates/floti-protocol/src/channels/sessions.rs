@@ -192,7 +192,13 @@ stream_channel! {
 // Payloads
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+/// A new session with everything it is launched with, short of Floti's
+/// agent tools, which the host registers for each launch itself.
+///
+/// The composition starts from the saved profile `profile_id` names, or from
+/// nothing. Each composition field that is set replaces the profile's; a null
+/// one keeps it. The folder is always `cwd`, never the profile's root.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct StartSessionRequest {
     /// The folder the session runs in.
@@ -207,6 +213,28 @@ pub struct StartSessionRequest {
     /// The agent backend to run, or null for the host's default.
     #[serde(default)]
     pub backend: Option<BackendId>,
+    /// The saved profile whose composition the session starts from, or null.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub profile_id: Option<u64>,
+    /// Project paths composed into the session as overlays.
+    #[serde(default)]
+    pub overlays: Option<Vec<String>>,
+    /// Further folders the session may work in: a profile's access.
+    #[serde(default)]
+    pub extra_folders: Option<Vec<String>>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<EffortLevel>,
+    /// A named agent definition to run as.
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub permission_mode: Option<PermissionMode>,
+    /// Submitted as the session's first message.
+    #[serde(default)]
+    pub opening_prompt: Option<String>,
     /// Initial grid, from the pane that will host it.
     pub cols: u16,
     pub rows: u16,
@@ -350,7 +378,9 @@ pub struct CloseSessionRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CloseSessionResult {
-    /// False when the user declined the confirmation.
+    /// False when the session is still running because the user has to agree
+    /// first: the host asked on `session:confirm`, and the session ends only
+    /// when a client agrees on `session:confirmed`.
     pub closed: bool,
 }
 

@@ -43,8 +43,9 @@ use crate::platform::launcher::{self, Program, ProgramLauncher};
 use crate::platform::process_tree::ProcessTree;
 use crate::{Error, Result};
 
-pub use argv::sanitize_session_name;
+pub use argv::{sanitize_session_name, unique_session_name};
 pub use overlay::{overlay_plugin_name, overlay_plugin_names};
+pub(crate) use time::parse_instant;
 pub use title::{SessionTitle, session_title_from};
 pub use usage::{PRICE_TABLE_DATE, UsageBucket, UsageView, usage_view};
 
@@ -397,6 +398,10 @@ impl StatusSource for ClaudeCodeBackend {
     fn status(&self, session: &SessionRef) -> Knowable<Option<SessionActivity>> {
         status::status(&self.sessions_dir(), self.tree.as_ref(), session)
     }
+
+    fn registry(&self) -> Knowable<Vec<super::LiveRecord>> {
+        status::registry(&self.sessions_dir(), self.tree.as_ref())
+    }
 }
 
 impl AgentTools for ClaudeCodeBackend {
@@ -454,6 +459,10 @@ impl UsageSource for ClaudeCodeBackend {
 impl ConfigSource for ClaudeCodeBackend {
     fn config_files(&self, project: Option<&Path>) -> Result<Vec<ConfigFile>> {
         config::config_files(&self.settings.config_dir, project, &self.credential_paths())
+    }
+
+    fn console(&self) -> Option<crate::config_console::AgentConfig> {
+        Some(self.console_agent())
     }
 }
 

@@ -24,6 +24,12 @@
 //   under `projects/`.
 // - `--resume <id>` succeeds only in the directory the conversation was
 //   recorded in, as the real CLI does.
+// - `mcp add-json`, `mcp remove` and `mcp list` read and write the files the
+//   real CLI does: the working folder's `.mcp.json`, and the global config,
+//   `.claude.json` in `CLAUDE_CONFIG_DIR` when that is set and in the home
+//   folder otherwise. `doctor` prints a report and exits 0, or prints and
+//   exits with what `<config>/fake-doctor.json` says ({ output, exitCode,
+//   delayMs }).
 //
 // Everything it was given, loaded and received is written to
 // `<config>/fake-agent/<pid>.json` in the shared run-log shape (`common.mjs`),
@@ -158,12 +164,15 @@ if (opts.help) {
 // -s <scope>` write the file the real CLI writes for that scope: `.mcp.json` in
 // the working directory for `project`, `~/.claude.json` for `user` and, under
 // the working directory's entry, for `local`.
+const configHome = (process.env.CLAUDE_CONFIG_DIR ?? '').trim()
+const globalConfig = join(configHome || homedir(), '.claude.json')
+
 if (parsed.command === 'mcp' && (parsed.rest[0] === 'add-json' || parsed.rest[0] === 'remove')) {
   const rest = parsed.rest
   const at = rest.indexOf('-s')
   const scope = at >= 0 ? rest[at + 1] : 'local'
   const name = rest[1]
-  const file = scope === 'project' ? join(process.cwd(), '.mcp.json') : join(homedir(), '.claude.json')
+  const file = scope === 'project' ? join(process.cwd(), '.mcp.json') : globalConfig
   const document = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8') || '{}') : {}
   const holder = scope === 'local' ? (((document.projects ??= {})[process.cwd()]) ??= {}) : document
   const servers = (holder.mcpServers ??= {})
@@ -182,8 +191,59 @@ if (parsed.command === 'mcp' && (parsed.rest[0] === 'add-json' || parsed.rest[0]
   process.exit(0)
 }
 
-// Any other command (`claude mcp list`, `claude doctor`) and a `-p` run answer
-// nothing and succeed.
+// `claude mcp list`: every server a session here could load, one a line, the
+// way the real CLI lays its health check out.
+if (parsed.command === 'mcp' && parsed.rest[0] === 'list') {
+  const read = (file) => {
+    try {
+      return JSON.parse(readFileSync(file, 'utf8'))
+    } catch {
+      return {}
+    }
+  }
+  const global = read(globalConfig)
+  const local = (global.projects ?? {})[process.cwd()] ?? {}
+  const servers = {
+    ...(global.mcpServers ?? {}),
+    ...(read(join(process.cwd(), '.mcp.json')).mcpServers ?? {}),
+    ...(local.mcpServers ?? {})
+  }
+  const names = Object.keys(servers)
+  if (names.length === 0) {
+    out('No MCP servers configured. Use `claude mcp add` to add a server.\n')
+  } else {
+    out('Checking MCP server health...\n\n')
+    for (const name of names) {
+      const server = servers[name] ?? {}
+      const target = server.url ?? [server.command, ...(server.args ?? [])].join(' ')
+      out(`${name}: ${target} - ✓ Connected\n`)
+    }
+  }
+  process.exit(0)
+}
+
+// `claude doctor`: a report shaped like the real one, or the one
+// `<config>/fake-doctor.json` gives, with its exit code, after its
+// `delayMs` when it gives one (the real doctor takes seconds).
+if (parsed.command === 'doctor') {
+  const scripted = join(configHome || join(homedir(), '.claude'), 'fake-doctor.json')
+  const report = existsSync(scripted)
+    ? JSON.parse(readFileSync(scripted, 'utf8'))
+    : {
+        output: [
+          'Diagnostics',
+          ` └ Currently running: native (${VERSION})`,
+          'Auto-update channel: latest',
+          `Install path: ${process.argv[1]}`
+        ].join('\n'),
+        exitCode: 0
+      }
+  if (report.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, report.delayMs))
+  out(`${report.output}\n`)
+  process.exit(report.exitCode ?? 0)
+}
+
+// Any other command and a `-p` run answer nothing and succeed.
 if (parsed.command !== null || opts.print) process.exit(0)
 
 if (parsed.positionals.length > 1) {
