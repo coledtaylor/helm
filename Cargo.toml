@@ -5,6 +5,14 @@
 members = ["crates/*"]
 resolver = "3"
 
+# No debug info for dependencies in dev and test builds. Full debug info for
+# every crate made each test binary carry its own copy of every dependency's
+# symbols (hundreds of MB of PDBs on Windows), and the target folder grew past
+# 10 GB. Our own crates keep full debug info, so stepping through and
+# backtraces in Floti's code are unchanged.
+[profile.dev.package."*"]
+debug = false
+
 [workspace.package]
 edition = "2024"
 license = "MIT"
