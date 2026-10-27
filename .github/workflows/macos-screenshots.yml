@@ -44,6 +44,7 @@ on:
       # The launch and the fake-claude world the capture runs in.
       - packages/desktop/e2e/helm.ts
       - packages/desktop/test/world.ts
+      - test/fake-agents/**
 
 permissions:
   contents: read

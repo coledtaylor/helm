@@ -1,0 +1,56 @@
+[package]
+name = "floti-host"
+version = "0.1.0"
+description = "The Floti host: sessions in ptys, their screens and the store, served to clients on a local socket"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+default-run = "floti"
+
+[lib]
+name = "floti_host"
+path = "src/lib.rs"
+
+# The one executable Floti ships: `floti host` is the daemon.
+[[bin]]
+name = "floti"
+path = "src/main.rs"
+
+# The fake agent CLI the host's tests launch instead of a real agent. Built
+# with the crate so integration tests reach it through
+# CARGO_BIN_EXE_floti-fake-agent; nothing ships it.
+[[bin]]
+name = "floti-fake-agent"
+path = "testkit/fake_agent.rs"
+test = false
+doc = false
+
+[features]
+# Test support (temporary folders, unique socket names, the fake agent's
+# backend and records) for the crate's integration tests. The crate turns it
+# on for its own tests through the dev-dependency below.
+testkit = ["dep:tempfile"]
+
+[dependencies]
+alacritty_terminal.workspace = true
+ciborium.workspace = true
+floti-protocol.workspace = true
+getrandom.workspace = true
+portable-pty.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio.workspace = true
+
+# Only the per-OS implementations under src/platform use these.
+[target.'cfg(windows)'.dependencies]
+junction.workspace = true
+windows-sys.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+floti-host = { path = ".", features = ["testkit"] }

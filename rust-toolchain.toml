@@ -1,0 +1,6 @@
+# The one place the Rust version is written. Local builds and the Host
+# workflow (.github/workflows/host.yml) both install exactly this.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

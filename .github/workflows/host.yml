@@ -1,0 +1,81 @@
+name: Host
+
+# The Rust host and its protocol crate, on every OS the host runs on. Kept
+# apart from ci.yml, which checks the Electron app with pnpm: this workflow
+# needs the Rust toolchain and Node (an agent backend's tests run its fake
+# CLI from test/fake-agents), and a change that touches neither crate nor
+# what they embed does not run it.
+on:
+  # The two path lists are the same; keep them so.
+  push:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      # The store embeds today's migrations at compile time.
+      - "packages/core/drizzle/**"
+      # The protocol's catalogue test reads the app's channel list.
+      - "packages/desktop/src/shared/ipc.ts"
+      # The agent backends' tests run these fake CLIs.
+      - "test/fake-agents/**"
+      - ".github/workflows/host.yml"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "packages/core/drizzle/**"
+      - "packages/desktop/src/shared/ipc.ts"
+      - "test/fake-agents/**"
+      - ".github/workflows/host.yml"
+
+concurrency:
+  group: host-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  host:
+    name: host (${{ matrix.os }})
+    strategy:
+      # Each OS reports on its own: a failure on one does not cancel the others.
+      fail-fast: false
+      matrix:
+        # Standard GitHub-hosted runners only.
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # The Rust version and its components live in rust-toolchain.toml, and
+      # nowhere else: rustup installs exactly what that file names, so CI
+      # lints and tests with the toolchain a local cargo uses.
+      - name: Rust toolchain
+        run: rustup toolchain install
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Build
+        run: cargo build --workspace --all-targets --locked
+
+      - name: Test
+        run: cargo test --workspace --locked

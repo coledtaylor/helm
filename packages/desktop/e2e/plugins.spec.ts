@@ -642,8 +642,8 @@ test('a plugin page starts a session from a click, once the user has seen what i
   const run = await claudeRunIn(world, world.projects.alpha)
   expect(run.argv[run.argv.indexOf('-n') + 1]).toBe('Second item')
   expect(run.argv).toContain('--mcp-config')
-  expect(run.prompt).toBe('work on Second item')
-  expect(run.mcpServers).toEqual(expect.arrayContaining(['helm-browser', 'helm-sessions', 'helm-plugin-sample']))
+  expect(run.openingPrompt).toBe('work on Second item')
+  expect(Object.keys(run.mcpServers)).toEqual(expect.arrayContaining(['helm-browser', 'helm-sessions', 'helm-plugin-sample']))
   expect(run.exitCode).toBeNull()
 })
 

@@ -37,20 +37,31 @@ export interface World {
   env: Record<string, string>
 }
 
-/** What `fake-claude.mjs` writes about itself, one file per run. */
+/**
+ * What the fake `claude` (`test/fake-agents/claude-code.mjs`) writes about
+ * itself, one file per run: the run-log shape every fake agent shares, plus
+ * the fields of its own after `received`.
+ */
 export interface FakeClaudeLog {
+  backend: 'claude-code'
   pid: number
   argv: string[]
   cwd: string
+  /** Each settings source it loaded, in load order; `path` is null for inline JSON. */
+  settings: { source: string; path: string | null; value: unknown }[]
+  /** Every instruction file it loaded, outermost first. */
+  instructionFiles: string[]
+  /** What `--append-system-prompt-file` held, or null. */
+  composedInstructions: string | null
+  /** The prompt it was started with, or null. */
+  openingPrompt: string | null
+  /** The MCP servers its `--mcp-config` files named. */
+  mcpServers: Record<string, unknown>
   /** The conversation the run began in. */
   sessionId: string
   /** The conversation it is in now, which a `/clear` moves. */
   current: string
   resumed: boolean
-  /** The opening prompt, as the CLI's parser read it from the argv. */
-  prompt: string | null
-  /** The servers named by every `--mcp-config` the CLI loaded. */
-  mcpServers: string[]
   /** Every tool `--allowedTools` allows without asking. */
   allowedTools: string[]
   received: string[]
@@ -70,8 +81,6 @@ export function repoRoot(): string {
   }
   return dir
 }
-
-const desktopDir = (): string => join(repoRoot(), 'packages', 'desktop')
 
 /** Variables from the machine running the tests that must not reach the world. */
 const LEAKY = /^(ANTHROPIC_|CLAUDE|GH_|GITHUB_|ELECTRON_RUN_AS_NODE$|PORTABLE_EXECUTABLE_DIR$)/i
@@ -118,11 +127,12 @@ export function createWorld(): World {
  * The fake `claude` in `bin`, in the form an install leaves on this OS: a
  * `claude.cmd` batch shim on Windows, the way npm installs one, and an
  * executable `claude` shell script on macOS and Linux. Either runs
- * `fake-claude.mjs` with this Node and hands it every argument unchanged.
+ * `test/fake-agents/claude-code.mjs` with this Node and hands it every
+ * argument unchanged.
  */
 export function writeFakeClaude(bin: string, platform: NodeJS.Platform = process.platform): string {
   const node = process.execPath
-  const script = join(desktopDir(), 'test', 'fake-claude.mjs')
+  const script = join(repoRoot(), 'test', 'fake-agents', 'claude-code.mjs')
   if (platform === 'win32') {
     const claude = join(bin, 'claude.cmd')
     writeFileSync(claude, ['@echo off', `"${node}" "${script}" %*`, 'exit /b %ERRORLEVEL%', ''].join('\r\n'))
@@ -183,7 +193,7 @@ export function seedProfile(world: World, draft: ProfileDraft): Profile {
 }
 
 export function fakeClaudeLogs(world: World): FakeClaudeLog[] {
-  const dir = join(world.claudeDir, 'fake-claude')
+  const dir = join(world.claudeDir, 'fake-agent')
   if (!existsSync(dir)) return []
   return readdirSync(dir)
     .filter((name) => name.endsWith('.json'))

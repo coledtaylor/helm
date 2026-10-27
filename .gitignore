@@ -7,6 +7,8 @@ reports/
 .env
 .cache/
 *.tsbuildinfo
+# The Cargo workspace's build output.
+/target/
 
 # Claude Code's per-machine state. `settings.local.json` records which MCP
 # servers this machine has switched off and nothing a contributor needs;
