@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ContentDocument } from '@helm/core'
 import { bridge } from './bridge.testkit'
@@ -120,12 +120,14 @@ describe('DocumentTab', () => {
     onDisk.file.kind = 'html'
     render(<DocumentTab {...tab('preview', { path: 'C:\\p\\lesson.html', kind: 'html', onOpenPath })} />)
     const frame = (await screen.findByTitle(/^lesson/)) as HTMLIFrameElement
-    act(() => {
+    // Posted again on every try: the frame can be on screen before the
+    // document behind it has loaded, and a click that early resolves nothing.
+    await waitFor(() => {
       window.dispatchEvent(
         new MessageEvent('message', { data: { helm: 'wikilink', target: 'b', heading: null }, source: frame.contentWindow })
       )
+      expect(onOpenPath).toHaveBeenCalledWith('C:\\p\\notes\\b.md')
     })
-    await waitFor(() => expect(onOpenPath).toHaveBeenCalledWith('C:\\p\\notes\\b.md'))
   })
 })
 
