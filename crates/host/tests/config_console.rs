@@ -15,10 +15,10 @@ use floti_host::config_console::{
 };
 use floti_host::platform::process_tree::Native as NativeTree;
 use floti_host::platform::socket::Endpoint;
-use floti_host::server::{Host, HostConfig, Stopper, backends};
+use floti_host::server::{HostConfig, backends};
 use floti_host::session::ClientId;
 use floti_host::store::Store;
-use floti_host::testkit::{PATIENCE, TestClient, TestDirs};
+use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs};
 use floti_protocol::Message;
 use floti_protocol::channel::{EventChannel, from_payload};
 use floti_protocol::channels::host::HostStopReason;
@@ -30,7 +30,6 @@ use floti_protocol::channels::workspace::{
     WatchConfigRequest, WriteConfigFile, WriteConfigRequest,
 };
 use serde_json::{Value, json};
-use tokio::task::JoinHandle;
 
 fn fake_claude() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -43,7 +42,6 @@ fn fake_claude() -> PathBuf {
 
 /// A user, a project with a space in its path, a store, and the console.
 struct World {
-    _dirs: TestDirs,
     /// The agent's config folder, the user scope.
     claude: PathBuf,
     project: PathBuf,
@@ -51,6 +49,8 @@ struct World {
     store: Arc<Mutex<Store>>,
     console: ConfigConsole,
     changes: Arc<Mutex<Vec<ConfigExternalChange>>>,
+    /// Last: fields drop in order, and the folder goes only once nothing in it is open.
+    _dirs: TestDirs,
 }
 
 impl World {
@@ -687,11 +687,7 @@ const CHANGES: u64 = 9;
 
 /// A host whose agents are today's, its Claude Code the fake keeping its
 /// config in `claude`.
-async fn host_over(
-    dirs: &TestDirs,
-    endpoint: &Endpoint,
-    claude: &Path,
-) -> (Stopper, JoinHandle<floti_host::Result<HostStopReason>>) {
+async fn host_over(dirs: &TestDirs, endpoint: &Endpoint, claude: &Path) -> RunningHost {
     let settings = ClaudeCodeSettings {
         program: "node".into(),
         leading_args: vec![fake_claude().into_os_string()],
@@ -699,15 +695,12 @@ async fn host_over(
         pass_config_dir: true,
         api_key_set: false,
     };
-    let host = Host::start(HostConfig {
+    RunningHost::start(HostConfig {
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: backends(&dirs.user_env(), Some(settings)),
         inherited_env: std::env::vars_os().collect(),
     })
-    .expect("start the host");
-    let stopper = host.stopper();
-    (stopper, tokio::spawn(host.run_until_stopped()))
 }
 
 /// Every outside change `client` is sent within `wait`, with its number.
@@ -754,7 +747,7 @@ async fn an_outside_change_is_told_only_to_the_clients_watching_that_file() {
     std::fs::write(&memory, "one\n").unwrap();
     std::fs::write(&settings, "{}\n").unwrap();
     let endpoint = dirs.endpoint();
-    let (stopper, running) = host_over(&dirs, &endpoint, &claude).await;
+    let host = host_over(&dirs, &endpoint, &claude).await;
 
     // Two clients with the memory file open, one with the settings, and one
     // with no file open.
@@ -831,12 +824,7 @@ async fn an_outside_change_is_told_only_to_the_clients_watching_that_file() {
         assert!(heard.is_empty(), "{heard:?}");
     }
 
-    stopper.stop(HostStopReason::Stop);
-    tokio::time::timeout(PATIENCE, running)
-        .await
-        .expect("the host stops in time")
-        .expect("the host's task")
-        .expect("the host stops cleanly");
+    host.stop(HostStopReason::Stop).await;
 }
 
 // --- MCP and the doctor, through the agent's CLI ----------------------------
@@ -1236,8 +1224,8 @@ mod over_the_protocol {
 
     use floti_host::agent::AgentBackend;
     use floti_host::platform::socket::Endpoint;
-    use floti_host::server::{Host, HostConfig, backends, shell_backend};
-    use floti_host::testkit::{PATIENCE, TestClient};
+    use floti_host::server::{HostConfig, backends, shell_backend};
+    use floti_host::testkit::{PATIENCE, RunningHost, TestClient};
     use floti_protocol::Message;
     use floti_protocol::channel::{EventChannel, from_payload};
     use floti_protocol::channels::workspace::{
@@ -1254,12 +1242,13 @@ mod over_the_protocol {
     /// A host on today's backends, a user whose agent config folder is
     /// `claude`, and two project folders with spaces in their paths.
     struct Served {
-        dirs: TestDirs,
         claude: PathBuf,
         project: PathBuf,
         other: PathBuf,
         endpoint: Endpoint,
-        _host: Host,
+        host: RunningHost,
+        /// Last: fields drop in order, and the folder goes only once nothing in it is open.
+        dirs: TestDirs,
     }
 
     impl Served {
@@ -1285,21 +1274,24 @@ mod over_the_protocol {
             let project = dirs.folder("my project");
             let other = dirs.folder("someone else");
             let endpoint = dirs.endpoint();
-            let host = Host::start(HostConfig {
+            let host = RunningHost::start(HostConfig {
                 folders: dirs.folders(),
                 endpoint: endpoint.clone(),
                 backends: backends(&dirs, &claude),
                 inherited_env: std::env::vars_os().collect(),
-            })
-            .expect("start the host");
+            });
             Self {
-                dirs,
                 claude,
                 project,
                 other,
                 endpoint,
-                _host: host,
+                host,
+                dirs,
             }
+        }
+
+        async fn stop(self) {
+            self.host.stop(HostStopReason::Stop).await;
         }
 
         async fn client(&self) -> TestClient {
@@ -1505,6 +1497,7 @@ mod over_the_protocol {
         assert_eq!(model.winner, SettingsLayerKind::Project);
         assert_eq!(model.value, "\"project\"");
         assert!(model.overridden);
+        served.stop().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1584,6 +1577,7 @@ mod over_the_protocol {
             .unwrap()
             .unwrap();
         assert_eq!(before_restore.content, "{\"model\":\"b\"}\n");
+        served.stop().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1677,6 +1671,7 @@ mod over_the_protocol {
 
         // The client is served on.
         assert!(client.request::<ListConfigScopes>(&()).await.is_ok());
+        served.stop().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1732,6 +1727,7 @@ mod over_the_protocol {
             next_change(&mut other, 8, Duration::from_millis(900)).await,
             None
         );
+        served.stop().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1840,6 +1836,7 @@ mod over_the_protocol {
                 .iter()
                 .any(|row| row.label == "Auto-update channel" && row.value == "latest")
         );
+        served.stop().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1875,6 +1872,7 @@ mod over_the_protocol {
             "the other client waited {:?}",
             answered - asked
         );
+        served.stop().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1982,6 +1980,7 @@ mod over_the_protocol {
         );
         assert!(outside.exists());
         assert_eq!(served.snapshot_count(), snapshots);
+        served.stop().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2004,5 +2003,6 @@ mod over_the_protocol {
                 "{refused:?}"
             );
         }
+        served.stop().await;
     }
 }

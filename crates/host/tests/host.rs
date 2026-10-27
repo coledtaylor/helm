@@ -14,15 +14,15 @@ use std::time::{Duration, Instant};
 use floti_host::agent::AgentBackend;
 use floti_host::agent::claude_code::ClaudeCodeSettings;
 use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
-use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree};
+use floti_host::platform::process_tree::{Ending, Native as NativeTree, ProcessTree};
 use floti_host::platform::socket::{self, Endpoint, LocalSocket, Native as NativeSocket};
 use floti_host::platform::startup;
-use floti_host::server::{Host, HostConfig, SOCKET_NAME, Stopper, unserved};
+use floti_host::server::{Host, HostConfig, SOCKET_NAME, unserved};
 use floti_host::store::Store;
 use floti_host::testkit::{
-    FakeAgent, FakeAgentRecord, PATIENCE, TestClient, TestDirs, names_unserved_channel,
+    FakeAgent, FakeAgentRecord, PATIENCE, RunningHost, TestClient, TestDirs, names_unserved_channel,
 };
-use floti_host::{Error, Result, fake_agent};
+use floti_host::{Error, fake_agent};
 use floti_protocol::channel::{from_payload, to_payload};
 use floti_protocol::channels::common::{SessionRecord, SessionStatus};
 use floti_protocol::channels::host::{HostStop, HostStopReason, HostStopRequest};
@@ -36,7 +36,6 @@ use floti_protocol::{BackendId, Catalogue, ChannelKind, EventChannel, Knowable, 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
-use tokio::task::JoinHandle;
 
 const TERMINAL: &[&str] = &["terminal"];
 
@@ -56,37 +55,6 @@ fn fake_config(
         endpoint: endpoint.clone(),
         backends: vec![Arc::new(agent.backend(args.iter().copied())) as Arc<dyn AgentBackend>],
         inherited_env: std::env::vars_os().collect(),
-    }
-}
-
-/// A host running in this process.
-struct InProcess {
-    stopper: Stopper,
-    running: JoinHandle<Result<HostStopReason>>,
-}
-
-impl InProcess {
-    fn start(config: HostConfig) -> Self {
-        let host = Host::start(config).expect("start the host");
-        let stopper = host.stopper();
-        Self {
-            stopper,
-            running: tokio::spawn(host.run_until_stopped()),
-        }
-    }
-
-    /// Waits for the host to finish stopping, however it was asked.
-    async fn stopped(self) -> HostStopReason {
-        tokio::time::timeout(PATIENCE, self.running)
-            .await
-            .expect("the host stops in time")
-            .expect("the host's task")
-            .expect("the host stops cleanly")
-    }
-
-    async fn stop(self, reason: HostStopReason) -> HostStopReason {
-        self.stopper.stop(reason);
-        self.stopped().await
     }
 }
 
@@ -240,7 +208,17 @@ fn binary_endpoint(dirs: &TestDirs) -> Endpoint {
     NativeSocket.endpoint(&dirs.runtime, SOCKET_NAME)
 }
 
-/// Waits for `child` to exit, killing it after [`PATIENCE`].
+/// Kills the host `child` and everything it started, as a crash takes a
+/// host down: no stop runs and nothing is recorded. Its sessions go with it,
+/// so the test leaves none behind; a Windows pseudoconsole's program would
+/// otherwise outlive the host that started it.
+fn kill_with_its_tree(child: &mut Child) {
+    let _ = NativeTree.end_tree(child.id(), Ending::Forced);
+    let _ = child.kill();
+    child.wait().expect("reap the host");
+}
+
+/// Waits for `child` to exit, killing it and its tree after [`PATIENCE`].
 fn wait_exit(child: &mut Child) -> ExitStatus {
     let deadline = Instant::now() + PATIENCE;
     loop {
@@ -248,7 +226,7 @@ fn wait_exit(child: &mut Child) -> ExitStatus {
             return status;
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
+            kill_with_its_tree(child);
             panic!("the host did not exit within {PATIENCE:?}");
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -649,7 +627,7 @@ async fn s8_a_second_host_on_the_same_data_folder_is_refused_without_taking_its_
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
-    let first = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let first = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     let folder = dirs.folder("a project");
     let session = client
@@ -684,7 +662,7 @@ async fn s8_a_second_host_on_the_same_socket_is_refused_without_opening_floti_db
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
-    let first = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let first = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
 
     let other = TestDirs::new();
@@ -713,7 +691,7 @@ async fn s10_a_session_outlives_every_client_and_a_later_client_finds_and_attach
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
-    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &["--fake-tick=100"]));
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &["--fake-tick=100"]));
     let folder = dirs.folder("a project");
 
     let mut first = TestClient::connect(&endpoint, TERMINAL).await;
@@ -774,7 +752,7 @@ async fn s11_a_stop_from_a_client_ends_every_tree_records_rows_exited_and_offers
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
-    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &["--fake-child"]));
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &["--fake-child"]));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     let folders = [dirs.folder("project one"), dirs.folder("project two")];
     let mut pids = Vec::new();
@@ -804,7 +782,7 @@ async fn s11_a_stop_from_a_client_ends_every_tree_records_rows_exited_and_offers
         assert!(row.ended_at.is_some(), "{row:?}");
     }
 
-    let again = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let again = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     assert_eq!(
         client.request::<SessionRestorable>(&()).await.unwrap(),
@@ -867,7 +845,7 @@ async fn stop_floti_host_with(signal: fn(u32) -> std::io::Result<()>) {
     assert_eq!(after[0].status, "exited", "{after:?}");
     assert!(after[0].ended_at.is_some(), "{after:?}");
 
-    let again = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let again = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     assert_eq!(
         client.request::<SessionRestorable>(&()).await.unwrap(),
@@ -886,6 +864,43 @@ async fn s11_sigterm_ends_every_tree_and_records_rows_exited() {
     stop_floti_host_with(startup::terminate).await;
 }
 
+/// A host that goes away without a stop, as one whose run a panic dropped
+/// does, still ends every process it started. Its rows are left running, as
+/// a stop for an update leaves them, for the next start to offer.
+#[test]
+fn a_host_dropped_without_a_stop_ends_every_tree_it_started() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.endpoint();
+    let folder = dirs.folder("a project");
+    let runtime = tokio::runtime::Runtime::new().expect("a runtime");
+    let pids = runtime.block_on(async {
+        let host = Host::start(fake_config(&dirs, &endpoint, &agent, &["--fake-child"]))
+            .expect("start the host");
+        tokio::spawn(host.run_until_stopped());
+        let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+        client
+            .request::<SessionStart>(&start_request(&folder))
+            .await
+            .unwrap();
+        tree_of(&agent, run_of(&agent, &folder)[0])
+    });
+    let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Its run and every task holding it go with the runtime, unstopped.
+        drop(runtime);
+        tokio::runtime::Runtime::new()
+            .expect("a runtime")
+            .block_on(assert_all_end(&pids));
+    }));
+    end_all(&pids);
+    if let Err(panic) = ended {
+        std::panic::resume_unwind(panic);
+    }
+    let after = rows(&dirs.data);
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].status, "running", "{after:?}");
+}
+
 // ---------------------------------------------------------------------------
 // S12: an update or a kill leaves sessions lost, offered once
 // ---------------------------------------------------------------------------
@@ -898,7 +913,7 @@ async fn sessions_stopped_for_an_update(
     agent: &FakeAgent,
     folders: &[PathBuf],
 ) -> Vec<SessionRecord> {
-    let host = InProcess::start(fake_config(dirs, endpoint, agent, &["--fake-child"]));
+    let host = RunningHost::start(fake_config(dirs, endpoint, agent, &["--fake-child"]));
     let mut client = TestClient::connect(endpoint, TERMINAL).await;
     let mut started = Vec::new();
     let mut pids = Vec::new();
@@ -938,7 +953,7 @@ async fn s12_after_a_stop_for_an_update_the_next_start_offers_the_sessions_once_
     let started = sessions_stopped_for_an_update(&dirs, &endpoint, &agent, &folders).await;
     let runs_before = agent.records().len();
 
-    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let mut first = TestClient::connect(&endpoint, TERMINAL).await;
     let offer = first
         .request::<SessionRestorable>(&())
@@ -978,7 +993,7 @@ async fn s12_after_a_stop_for_an_update_the_next_start_offers_the_sessions_once_
     host.stop(HostStopReason::Stop).await;
 
     // Not offered again at the next start either.
-    let again = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let again = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     assert_eq!(
         client.request::<SessionRestorable>(&()).await.unwrap(),
@@ -1002,11 +1017,10 @@ async fn s12_after_floti_host_is_killed_the_next_start_offers_its_sessions_and_s
     drop(client);
 
     // Killed: no stop, nothing recorded.
-    host.kill().expect("kill the host");
-    host.wait().expect("reap the host");
+    kill_with_its_tree(&mut host);
     assert_eq!(rows(&dirs.data)[0].status, "running");
 
-    let again = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let again = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     let offer = client
         .request::<SessionRestorable>(&())
@@ -1041,7 +1055,7 @@ async fn s13_restoring_some_sessions_resumes_each_in_its_recorded_folder_and_ans
     let started = sessions_stopped_for_an_update(&dirs, &endpoint, &agent, &folders).await;
     let runs_before: Vec<u32> = agent.records().iter().map(|record| record.pid).collect();
 
-    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     assert!(
         client
@@ -1130,7 +1144,7 @@ async fn s13_choosing_none_answers_the_offer_and_reopens_nothing() {
     sessions_stopped_for_an_update(&dirs, &endpoint, &agent, &folders).await;
     let runs_before = agent.records().len();
 
-    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     assert!(
         client
@@ -1285,7 +1299,7 @@ async fn s3_restoring_a_claude_code_conversation_on_todays_backends_resumes_it_i
 
     // A Claude Code conversation with a prompt in it, left running by a stop
     // for an update.
-    let host = InProcess::start(todays_backends(&dirs, &endpoint, &claude_config));
+    let host = RunningHost::start(todays_backends(&dirs, &endpoint, &claude_config));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     let started = client
         .request::<SessionStart>(&claude_code_start(&project))
@@ -1313,7 +1327,7 @@ async fn s3_restoring_a_claude_code_conversation_on_todays_backends_resumes_it_i
 
     // The next start offers it, reopenable through the backend its row
     // recorded rather than the default shell.
-    let host = InProcess::start(todays_backends(&dirs, &endpoint, &claude_config));
+    let host = RunningHost::start(todays_backends(&dirs, &endpoint, &claude_config));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     let offer = client
         .request::<SessionRestorable>(&())
@@ -1396,7 +1410,7 @@ async fn s3_a_row_with_no_backend_recorded_reopens_through_claude_code_and_a_mis
         .unwrap();
     }
 
-    let host = InProcess::start(todays_backends(&dirs, &endpoint, &claude_config));
+    let host = RunningHost::start(todays_backends(&dirs, &endpoint, &claude_config));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     let offer = client
         .request::<SessionRestorable>(&())
@@ -1458,7 +1472,7 @@ async fn s5_s9_a_claude_code_sessions_launch_folder_is_removed_when_the_session_
     let endpoint = dirs.endpoint();
     let claude_config = resolved(&dirs.folder("claude config"));
     let project = resolved(&dirs.folder("a project"));
-    let host = InProcess::start(todays_backends(&dirs, &endpoint, &claude_config));
+    let host = RunningHost::start(todays_backends(&dirs, &endpoint, &claude_config));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     let session = client
         .request::<SessionStart>(&claude_code_start(&project))
@@ -1531,7 +1545,7 @@ async fn a_channel_not_served_yet_is_refused_naming_it_and_every_client_is_serve
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
-    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let folder = dirs.folder("a project");
 
     let mut other = TestClient::connect(&endpoint, TERMINAL).await;
@@ -1608,7 +1622,7 @@ async fn every_subscriber_to_session_exit_gets_a_sessions_finished_row_when_it_e
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
-    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let folder = dirs.folder("a project");
 
     let mut watching = TestClient::connect(&endpoint, TERMINAL).await;

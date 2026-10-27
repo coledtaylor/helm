@@ -21,10 +21,11 @@ use floti_host::history::archive::{self, ArchiveInput};
 use floti_host::history::index::{HistoryIndex, IndexInput, PromptLine, TranscriptFile};
 use floti_host::history::{directory_exists, index_history, read_indexed};
 use floti_host::platform::process_tree::Native as NativeTree;
-use floti_host::server::{Host, HostConfig};
+use floti_host::server::HostConfig;
 use floti_host::store::Store;
-use floti_host::testkit::{PATIENCE, TestClient, TestDirs};
+use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs};
 use floti_protocol::channel::from_payload;
+use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::sessions::{
     ArchiveChanged, ArchiveConversation, ArchiveMessage, ArchiveRole, ArchiveSessionState,
     ArchiveStats, HistoryChanged, HistoryPage, HistoryProjects, HistoryPrompts, HistoryQuery,
@@ -44,13 +45,14 @@ const RECORD: &str = "history.jsonl";
 
 /// A store in a temporary data folder.
 struct Indexed {
-    _dirs: TestDirs,
     store: Store,
     backend: BackendId,
     alpha: String,
     beta: String,
     clock: u64,
     transcripts_dir: PathBuf,
+    /// Last: fields drop in order, and the folder goes only once nothing in it is open.
+    _dirs: TestDirs,
 }
 
 /// One prompt to index; `project` and `at` default as core's tests do.
@@ -771,9 +773,10 @@ fn a_search_over_thousands_of_prompts_answers_within_a_keystroke() {
 // ---------------------------------------------------------------------------
 
 struct Archive {
-    _dirs: TestDirs,
     store: Store,
     next_uuid: u64,
+    /// Last: fields drop in order, and the folder goes only once nothing in it is open.
+    _dirs: TestDirs,
 }
 
 impl Archive {
@@ -1936,7 +1939,7 @@ async fn the_start_up_pass_indexes_and_archives_what_happened_while_the_host_was
     );
     let config = world.config();
     let endpoint = config.endpoint.clone();
-    let host = Host::start(config).expect("start the host");
+    let host = RunningHost::start(config);
     let mut client = TestClient::connect(&endpoint, &[]).await;
 
     // The start-up pass may have landed before the subscription: the
@@ -1959,7 +1962,7 @@ async fn the_start_up_pass_indexes_and_archives_what_happened_while_the_host_was
         .unwrap()
         .expect("archived on the start-up pass");
     assert_eq!(conversation.message_count, 2);
-    drop(host);
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1978,7 +1981,7 @@ async fn a_client_gets_the_history_index_through_the_host_and_every_subscriber_e
     );
     let config = world.config();
     let endpoint = config.endpoint.clone();
-    let host = Host::start(config).expect("start the host");
+    let host = RunningHost::start(config);
     let mut client = TestClient::connect(&endpoint, &[]).await;
     let mut watcher = TestClient::connect(&endpoint, &[]).await;
     let first = client.request::<HistoryRefresh>(&()).await.unwrap();
@@ -2068,7 +2071,7 @@ async fn a_client_gets_the_history_index_through_the_host_and_every_subscriber_e
             .unwrap(),
         None
     );
-    drop(host);
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2087,7 +2090,7 @@ async fn the_archive_answers_after_the_transcript_is_gone_and_null_for_one_never
     let before = tree_state(&world.config);
     let config = world.config();
     let endpoint = config.endpoint.clone();
-    let host = Host::start(config).expect("start the host");
+    let host = RunningHost::start(config);
     let mut client = TestClient::connect(&endpoint, &[]).await;
     client.request::<HistoryRefresh>(&()).await.unwrap();
     assert_eq!(
@@ -2127,7 +2130,7 @@ async fn the_archive_answers_after_the_transcript_is_gone_and_null_for_one_never
     assert_eq!((stats.sessions, stats.messages), (1, 2));
     assert_eq!(stats.max_bytes, archive::DEFAULT_CEILING);
     assert_eq!(stats.stored_bytes, kept.stored_bytes);
-    drop(host);
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2145,7 +2148,7 @@ async fn the_oldest_conversations_are_evicted_to_stay_under_the_ceiling_and_subs
     }
     let config = world.config();
     let endpoint = config.endpoint.clone();
-    let host = Host::start(config).expect("start the host");
+    let host = RunningHost::start(config);
     let mut client = TestClient::connect(&endpoint, &[]).await;
     client.request::<HistoryRefresh>(&()).await.unwrap();
     let full = client.request::<ReadArchiveStats>(&()).await.unwrap();
@@ -2179,7 +2182,7 @@ async fn the_oldest_conversations_are_evicted_to_stay_under_the_ceiling_and_subs
         .unwrap();
     assert_eq!(dropped.state, ArchiveSessionState::Evicted);
     assert!(dropped.messages.is_empty());
-    drop(host);
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2187,13 +2190,12 @@ async fn a_host_with_no_backend_that_keeps_history_answers_with_an_empty_index()
     let dirs = TestDirs::new();
     let shell = floti_host::server::shell_backend(&dirs.user_env());
     let endpoint = dirs.endpoint();
-    let host = Host::start(HostConfig {
+    let host = RunningHost::start(HostConfig {
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: vec![Arc::new(shell) as Arc<dyn AgentBackend>],
         inherited_env: Vec::new(),
-    })
-    .expect("start the host");
+    });
     let mut client = TestClient::connect(&endpoint, &[]).await;
     let summary = client.request::<HistoryRefresh>(&()).await.unwrap();
     assert_eq!(
@@ -2206,5 +2208,5 @@ async fn a_host_with_no_backend_that_keeps_history_answers_with_an_empty_index()
         .unwrap();
     assert!(page.sessions.is_empty());
     tokio::time::sleep(Duration::from_millis(10)).await;
-    drop(host);
+    host.stop(HostStopReason::Stop).await;
 }

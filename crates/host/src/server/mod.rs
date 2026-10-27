@@ -36,7 +36,8 @@ use std::ffi::OsString;
 use std::fs::{File, TryLockError};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
+use std::time::Duration;
 
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::{BackendId, Catalogue, HostIdentity, PROTOCOL_VERSION};
@@ -61,6 +62,10 @@ pub const SOCKET_NAME: &str = "floti";
 
 /// The file in the data folder whose lock says a host is using that folder.
 pub const LOCK_FILE: &str = "host.lock";
+
+/// How long a stop waits, once the sessions have ended, for the store to be
+/// let go before it releases the data folder anyway.
+const RELEASE_WAIT: Duration = Duration::from_secs(10);
 
 /// Every channel of the protocol, built once.
 static CATALOGUE: LazyLock<Catalogue> = LazyLock::new(Catalogue::protocol);
@@ -155,6 +160,8 @@ pub struct Host {
     stop_requested: watch::Receiver<Option<HostStopReason>>,
     shutdown: watch::Sender<bool>,
     accepting: JoinHandle<()>,
+    /// The store, watched so a stop can wait until nothing has it open.
+    store: Weak<Mutex<Store>>,
     /// Held for the host's life: the data folder is this host's.
     _lock: File,
 }
@@ -186,8 +193,10 @@ impl Host {
                 .map(|backend| backend.capabilities())
                 .collect(),
         });
+        let store = Arc::new(Mutex::new(store));
+        let store_held = Arc::downgrade(&store);
         let hosted = Arc::new(Hosted::new(
-            Arc::new(Mutex::new(store)),
+            store,
             folders.data.clone(),
             backends,
             inherited_env,
@@ -213,6 +222,7 @@ impl Host {
             stop_requested,
             shutdown,
             accepting,
+            store: store_held,
             _lock: lock,
         })
     }
@@ -257,6 +267,28 @@ impl Host {
             .await
             .map_err(|err| Error::io("end the sessions", std::io::Error::other(err)))?;
         let _ = self.shutdown.send(true);
+        let Self {
+            hosted,
+            features,
+            store,
+            _lock: lock,
+            ..
+        } = self;
+        drop(features);
+        drop(hosted);
+        // Connections close on the shutdown, and the history and activity
+        // workers let go of the store at the end of the pass they are in.
+        let deadline = tokio::time::Instant::now() + RELEASE_WAIT;
+        while store.strong_count() > 0 {
+            if tokio::time::Instant::now() >= deadline {
+                eprintln!(
+                    "floti host: the store was still in use {RELEASE_WAIT:?} after the sessions ended"
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        drop(lock);
         Ok(reason)
     }
 }

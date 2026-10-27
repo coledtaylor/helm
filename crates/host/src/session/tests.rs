@@ -354,10 +354,11 @@ fn settle(watchers: &mut [&mut Watcher]) {
 }
 
 struct Fixture {
-    dirs: TestDirs,
     agent: FakeAgent,
     host: SessionHost,
     store: Arc<Mutex<Store>>,
+    /// Last: fields drop in order, and the folder goes only once nothing in it is open.
+    dirs: TestDirs,
 }
 
 impl Fixture {

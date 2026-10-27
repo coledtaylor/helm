@@ -89,11 +89,12 @@ fn write(path: &Path, contents: impl AsRef<[u8]>) {
 }
 
 struct World {
-    dirs: TestDirs,
     /// Claude Code's config folder, `CLAUDE_CONFIG_DIR` for every run.
     config: PathBuf,
     machine: Arc<Machine>,
     backend: ClaudeCodeBackend,
+    /// Last: fields drop in order, and the folder goes only once nothing in it is open.
+    dirs: TestDirs,
 }
 
 impl World {

@@ -11,11 +11,13 @@ use std::time::{Duration, Instant};
 
 use floti_host::agent::AgentBackend;
 use floti_host::agent::claude_code::ClaudeCodeSettings;
+use floti_host::fake_agent;
 use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree};
 use floti_host::platform::socket::Endpoint;
-use floti_host::server::{Host, HostConfig, Stopper};
-use floti_host::testkit::{FakeAgent, FakeAgentRecord, PATIENCE, TestClient, TestDirs};
-use floti_host::{Result, fake_agent};
+use floti_host::server::HostConfig;
+use floti_host::testkit::{
+    FakeAgent, FakeAgentRecord, PATIENCE, RunningHost, TestClient, TestDirs,
+};
 use floti_protocol::channel::EventChannel;
 use floti_protocol::channel::from_payload;
 use floti_protocol::channels::common::{PermissionMode, SessionRecord, SessionStatus};
@@ -32,39 +34,12 @@ use floti_protocol::channels::sessions::{
 use floti_protocol::{BackendId, Knowable, Message};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use tokio::task::JoinHandle;
 
 const TERMINAL: &[&str] = &["terminal"];
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// A host running in this process.
-struct InProcess {
-    stopper: Stopper,
-    running: JoinHandle<Result<HostStopReason>>,
-}
-
-impl InProcess {
-    fn start(config: HostConfig) -> Self {
-        let host = Host::start(config).expect("start the host");
-        let stopper = host.stopper();
-        Self {
-            stopper,
-            running: tokio::spawn(host.run_until_stopped()),
-        }
-    }
-
-    async fn stop(self) {
-        self.stopper.stop(HostStopReason::Stop);
-        tokio::time::timeout(PATIENCE, self.running)
-            .await
-            .expect("the host stops in time")
-            .expect("the host's task")
-            .expect("the host stops cleanly");
-    }
-}
 
 /// A host whose one backend is the fake agent.
 fn fake_config(
@@ -145,8 +120,8 @@ impl ClaudeWorld {
         }
     }
 
-    fn host(&self) -> InProcess {
-        InProcess::start(todays_backends(&self.dirs, &self.endpoint, &self.config))
+    fn host(&self) -> RunningHost {
+        RunningHost::start(todays_backends(&self.dirs, &self.endpoint, &self.config))
     }
 
     async fn client(&self) -> TestClient {
@@ -529,7 +504,7 @@ async fn a_start_carries_the_whole_composition_to_the_agent_in_the_requested_fol
     assert_eq!(profile_id, Some(i64::try_from(profile).unwrap()));
     assert_eq!(mode.as_deref(), Some("plan"));
     assert_eq!(project_path, Some(text(&project)));
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -544,7 +519,7 @@ async fn a_start_in_a_folder_that_is_not_there_is_refused_in_a_sentence() {
         .expect_err("no folder, no session");
     assert!(refused.message.contains("is not a folder"), "{refused:?}");
     assert_eq!(client.request::<SessionList>(&()).await.unwrap(), vec![]);
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -598,7 +573,7 @@ async fn a_profile_launch_runs_at_its_root_named_after_it_in_its_own_permission_
         .await
         .expect_err("a deleted profile does not launch");
     assert!(gone.message.contains("no longer exists"), "{gone:?}");
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -646,7 +621,7 @@ async fn the_launchers_permission_none_passes_no_flag_whatever_the_profile_says(
         Some("acceptEdits"),
         "{argv:?}"
     );
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -695,7 +670,7 @@ async fn a_conversation_from_history_resumes_in_its_recorded_folder_on_its_backe
     );
     let run = world.run(|argv| flag(argv, "--resume") == Some(CONVERSATION));
     assert_resumed(&run, &project);
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -720,7 +695,7 @@ async fn the_launchers_resume_runs_in_the_folder_history_recorded_not_the_one_pi
     assert_eq!(Path::new(&launched.session.cwd), project);
     let run = world.run(|argv| flag(argv, "--resume") == Some(CONVERSATION));
     assert_resumed(&run, &project);
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -775,7 +750,7 @@ async fn a_conversation_whose_folder_or_transcript_is_gone_is_refused_in_a_sente
     );
     assert_eq!(client.request::<SessionList>(&()).await.unwrap(), vec![]);
     assert!(world.runs().is_empty(), "no agent ran: {:?}", world.runs());
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -787,7 +762,7 @@ async fn closing_a_running_session_asks_first_and_ends_its_tree_only_on_yes() {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
-    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &["--fake-child"]));
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &["--fake-child"]));
     let folder = dirs.folder("a project");
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     let mut other = TestClient::connect(&endpoint, TERMINAL).await;
@@ -876,7 +851,7 @@ async fn closing_a_running_session_asks_first_and_ends_its_tree_only_on_yes() {
         assert!(ended.ended_at.is_some(), "{ended:?}");
     }
     assert_eq!(client.request::<SessionList>(&()).await.unwrap(), vec![]);
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -884,7 +859,7 @@ async fn a_forced_close_ends_the_tree_at_once_and_a_closed_session_closes_again_
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
-    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &["--fake-child"]));
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &["--fake-child"]));
     let folder = dirs.folder("a project");
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     client.subscribe_quietly(3, "session:confirm").await;
@@ -915,7 +890,7 @@ async fn a_forced_close_ends_the_tree_at_once_and_a_closed_session_closes_again_
             .unwrap()
             .closed
     );
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -923,7 +898,7 @@ async fn a_name_is_made_unique_against_the_running_sessions_on_launch_and_rename
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
-    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let folder = dirs.folder("helm");
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
 
@@ -980,7 +955,7 @@ async fn a_name_is_made_unique_against_the_running_sessions_on_launch_and_rename
         })
         .await
         .unwrap();
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1054,7 +1029,7 @@ async fn an_exit_is_sent_for_a_notification_only_to_the_clients_whose_user_canno
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
-    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let folder = dirs.folder("a project");
     // One client whose user can see both sessions, one that sees only the
     // second, and one that never says what it sees.
@@ -1150,7 +1125,7 @@ async fn an_exit_is_sent_for_a_notification_only_to_the_clients_whose_user_canno
     for heard in [&watching, &elsewhere, &silent] {
         assert_eq!(numbers_on(heard, EXITS), [1, 2, 3]);
     }
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1178,7 +1153,7 @@ async fn a_plain_terminal_runs_a_shell_in_its_folder_on_the_stream_and_says_when
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
-    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let folder = resolved(&dirs.folder("a project"));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     client.subscribe_quietly(6, "pterm:exit").await;
@@ -1273,7 +1248,7 @@ async fn a_plain_terminal_runs_a_shell_in_its_folder_on_the_stream_and_says_when
         .await
         .expect_err("no folder, no shell");
     assert!(missing.message.contains("is not a folder"), "{missing:?}");
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1382,7 +1357,7 @@ async fn activity_comes_from_the_agents_own_records_and_the_whole_set_is_sent_on
             .filter_map(|entry| entry.ok())
             .any(|entry| entry.path().extension().is_some_and(|ext| ext == "key"))
     );
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 fn record(dir: &Path, pid: u32, conversation: &str, cwd: &Path, name: &str) {
@@ -1496,7 +1471,7 @@ async fn the_overview_is_every_live_agent_session_on_the_machine_with_the_hosts_
     })
     .await;
     assert_eq!(names(&after), [Some("elsewhere".to_owned())]);
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1504,7 +1479,7 @@ async fn a_session_whose_agent_keeps_no_records_is_listed_with_its_activity_unkn
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
-    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let host = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     client.subscribe_on(8, "session:activity").await;
     let session = client
@@ -1519,5 +1494,5 @@ async fn a_session_whose_agent_keeps_no_records_is_listed_with_its_activity_unkn
     let state = activity_of(&states, session.id).unwrap();
     assert_eq!(state.activity, None);
     assert_eq!(state.waiting_for, None);
-    host.stop().await;
+    host.stop(HostStopReason::Stop).await;
 }

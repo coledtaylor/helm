@@ -13,10 +13,11 @@ use std::sync::Arc;
 use floti_host::agent::claude_code::{ClaudeCodeBackend, ClaudeCodeSettings, usage_view};
 use floti_host::agent::{AgentBackend, BackendAnswers};
 use floti_host::platform::process_tree::Native as NativeTree;
-use floti_host::server::{Host, HostConfig, shell_backend};
-use floti_host::testkit::{PATIENCE, TestClient, TestDirs};
+use floti_host::server::{HostConfig, shell_backend};
+use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs};
 use floti_host::usage::{LocalDay, UsageReader, ZonedDay, same_readings};
 use floti_protocol::channel::from_payload;
+use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::sessions::{
     ReadUsage, UsageChanged, UsageGroup, UsageProblemKind, UsageSeverity, UsageSnapshot,
 };
@@ -699,7 +700,7 @@ async fn a_client_gets_the_latest_raw_reading_and_each_new_one_as_it_lands() {
     world.write(&claude_json(json!(fetched), limits()));
     let config = world.config();
     let endpoint = config.endpoint.clone();
-    let host = Host::start(config).expect("start the host");
+    let host = RunningHost::start(config);
     let mut client = TestClient::connect(&endpoint, &[]).await;
 
     let read = client.request::<ReadUsage>(&()).await.unwrap();
@@ -728,7 +729,7 @@ async fn a_client_gets_the_latest_raw_reading_and_each_new_one_as_it_lands() {
     assert_eq!(next[0].limits[0].percent, 64.0);
     let again = client.request::<ReadUsage>(&()).await.unwrap();
     assert!(same_readings(&again, &next), "{again:?} != {next:?}");
-    drop(host);
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -736,7 +737,7 @@ async fn a_reading_the_host_could_not_take_is_unknown_and_never_a_number() {
     let world = Claude::new();
     let config = world.config();
     let endpoint = config.endpoint.clone();
-    let host = Host::start(config).expect("start the host");
+    let host = RunningHost::start(config);
     let mut client = TestClient::connect(&endpoint, &[]).await;
 
     let read = client.request::<ReadUsage>(&()).await.unwrap();
@@ -754,23 +755,22 @@ async fn a_reading_the_host_could_not_take_is_unknown_and_never_a_number() {
     let next = next_readings(&mut client, 5).await;
     assert_eq!(problem(&next[0]), Some(UsageProblemKind::NotJson));
     assert!(next[0].limits.is_empty());
-    drop(host);
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_host_whose_backends_declare_no_usage_answers_with_no_readings() {
     let dirs = TestDirs::new();
     let endpoint = dirs.endpoint();
-    let host = Host::start(HostConfig {
+    let host = RunningHost::start(HostConfig {
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: vec![Arc::new(shell_backend(&dirs.user_env())) as Arc<dyn AgentBackend>],
         inherited_env: Vec::new(),
-    })
-    .expect("start the host");
+    });
     let mut client = TestClient::connect(&endpoint, &[]).await;
     assert!(client.request::<ReadUsage>(&()).await.unwrap().is_empty());
     let watched = snapshot_state(client.subscribe_on(6, UsageChanged::NAME).await);
     assert!(watched.is_empty());
-    drop(host);
+    host.stop(HostStopReason::Stop).await;
 }

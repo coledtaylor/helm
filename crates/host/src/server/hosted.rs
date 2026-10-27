@@ -11,6 +11,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -70,6 +71,8 @@ pub(crate) struct Hosted {
     data: PathBuf,
     /// What the start reconciled to lost, until a client answers the offer.
     offer: Mutex<Option<Vec<LostRow>>>,
+    /// Set by the first stop; a host dropped without one stops as it goes.
+    stopped: AtomicBool,
 }
 
 impl Hosted {
@@ -99,6 +102,7 @@ impl Hosted {
             data,
             backends,
             offer: Mutex::new(Some(lost)),
+            stopped: AtomicBool::new(false),
         })
     }
 
@@ -764,8 +768,11 @@ impl Hosted {
     /// plain stop records each row as exited first, so none is offered for
     /// restore; a stop for an update leaves the rows running, for the next
     /// start to find lost and offer once. Either way each whole process tree
-    /// ends.
+    /// ends. Only the first stop does anything.
     pub fn stop(&self, reason: HostStopReason) {
+        if self.stopped.swap(true, Ordering::SeqCst) {
+            return;
+        }
         // From here no session starts and no exit writes its row.
         self.ledger.freeze();
         self.terminals.end_all();
@@ -791,6 +798,16 @@ impl Hosted {
         for terminal in self.terminals.list() {
             terminal.wait_exit(STOP_WAIT);
         }
+    }
+}
+
+/// A host that goes away without being stopped, such as one whose run was
+/// dropped by a panic, still ends every process it started: nothing it ran
+/// outlives it. The rows are left running, as a stop for an update leaves
+/// them, so the next start offers them back.
+impl Drop for Hosted {
+    fn drop(&mut self) {
+        self.stop(HostStopReason::Update);
     }
 }
 
