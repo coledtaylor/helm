@@ -1,3 +1,8 @@
 # The protocol's generated files are compared with what the generator writes,
 # which is LF. A Windows checkout keeps them LF too.
 crates/floti-protocol/generated/** text eol=lf
+
+# The host embeds the migrations with include_str! and its tests compare the
+# schema they make with today's app's byte for byte, so a Windows checkout
+# that turned them CRLF would make a different database.
+packages/core/drizzle/** text eol=lf

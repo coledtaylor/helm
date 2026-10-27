@@ -176,12 +176,15 @@ fn run_of(agent: &FakeAgent, cwd: &Path) -> Vec<u32> {
 /// waits for one.
 fn runs_in(agent: &FakeAgent, cwd: &Path, except: &[u32]) -> Vec<FakeAgentRecord> {
     let deadline = Instant::now() + PATIENCE;
+    // A process reports its folder with links resolved: on macOS the temp
+    // folder is /var/..., and the fake logs /private/var/....
+    let real = resolved(cwd);
     loop {
         let runs: Vec<FakeAgentRecord> = agent
             .records()
             .into_iter()
             .filter(|record| {
-                Path::new(&record.cwd) == cwd
+                (Path::new(&record.cwd) == cwd || Path::new(&record.cwd) == real)
                     && !except.contains(&record.pid)
                     && !record
                         .argv
