@@ -22,6 +22,8 @@ export default tseslint.config(
       '**/dist-app/**',
       '**/drizzle/**',
       '**/*.generated.ts',
+      // The Cargo workspace's build output.
+      'target/**',
       // Agent worktrees: whole checkouts of this repository, linted in their own right.
       '.claude/worktrees/**'
     ]

@@ -1,0 +1,3 @@
+# The protocol's generated files are compared with what the generator writes,
+# which is LF. A Windows checkout keeps them LF too.
+crates/floti-protocol/generated/** text eol=lf

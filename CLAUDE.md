@@ -23,10 +23,16 @@ packages/
 ├── desktop/  # Electron main, preload and renderer
 └── plugin-sdk/ # manifest validator, bridge types, helm-plugin CLI, authoring guide
 examples/sample-plugin/  # every plugin surface; the plugin the E2E tests drive
+crates/
+├── floti-protocol/  # the host-client protocol; generates JSON Schema and TypeScript into generated/
+└── host/            # floti-host: the `floti` binary (`floti host`); per-OS code only in src/platform/*/{windows,macos,linux}.rs
+    └── src/agent/   # the AgentBackend trait; one module per agent (claude_code/), plain.rs for any command line
+test/fake-agents/    # one fake CLI per agent backend, sharing common.mjs; tests drive these, never a real agent
 ```
 
 pnpm workspaces with `node-linker=hoisted` (`.npmrc` says why). `core` and `ui`
-export TypeScript source, so there is one build step.
+export TypeScript source, so there is one build step. `crates/` is a Cargo
+workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
 
 | command | does |
 |---|---|
@@ -67,6 +73,11 @@ export TypeScript source, so there is one build step.
   exposes three generic functions; a feature adds a channel, not a bridge
   method. `term:*` (the spike page's single pty) and `session:*` (the app's
   sessions) never mix.
+- A host channel added to `shared/ipc.ts` is also declared in
+  `crates/floti-protocol`, or listed there as client-only or host-internal
+  with a reason (`channels/boundary.rs`), and the generated files are
+  rewritten with `cargo run -p floti-protocol --bin generate`. A crate test
+  reads `shared/ipc.ts` and fails naming any channel that is neither.
 - The main process owns process lifetime. Session rows are written on spawn,
   `before-quit` ends sessions, `will-quit` releases the database, and nothing
   else closes the store.
@@ -74,18 +85,25 @@ export TypeScript source, so there is one build step.
 - Helm renders nothing for a live session: it parses no session output,
   answers no permission prompt and puts nothing between the user and the TUI.
   Rendering an archived transcript (read-only, after the fact) is allowed.
+  This holds for every agent: no RPC or JSON mode in place of its own TUI.
 - Windows first: junctions (`mklink /J`) not symlinks, no elevation, test paths
   with spaces.
 
 ## Credentials
 
-- Never handle or store a credential, Claude's or GitHub's. A sign-in is
-  detected only from an artefact existing (`.credentials.json`,
-  `ANTHROPIC_API_KEY`, the onboarding record in `.claude.json`). Never open
-  those, `hosts.yml`, the keyring or `GH_TOKEN`. The remedy for "not signed
-  in" is a sentence naming `claude`.
+- Never handle or store any agent's credential, or GitHub's. Each agent
+  backend lists its credential paths (`credential_paths` in the host's
+  `AgentBackend`), and nothing opens them. A sign-in is checked by the agent's
+  own status command where it has one, by an artefact existing where it does
+  not, and is Unknown otherwise. For Claude Code that is an artefact existing
+  (`.credentials.json`, `ANTHROPIC_API_KEY`, the onboarding record in
+  `.claude.json`). Never open those, `hosts.yml`, the keyring or `GH_TOKEN`,
+  and never run a command that prints a credential. The remedy for "not signed
+  in" is a sentence naming the agent's login command (`claude` for Claude
+  Code).
 - `~/.claude/sessions` keeps a `<pid>.<sha256>.key` credential beside every
-  `<pid>.json`. `readSessionRegistry` reads `.json` files only; never widen it.
+  `<pid>.json`. `readSessionRegistry`, and the host's Claude Code status
+  reader, read `.json` files only; never widen either.
 - The `persist:helm-browser` partition holds the user's cookies and logins.
   Nothing reads it; the only call against it is `clearStorageData`.
 - The plugin secret store (`main/plugins/secrets.ts`) is the one place Helm
@@ -156,8 +174,10 @@ export TypeScript source, so there is one build step.
   id minted for the session, its name and its working directory - never the
   token, never anything of the conversation. Turning them on reaches sessions
   started after; turning them off reaches running ones at once.
-- Registration is a per-session `--mcp-config` file under the data directory,
-  never `claude mcp add-json`. Leftover files are removed only when their owning
+- Agent tools are registered per launch for every backend, never through an
+  agent's own add command or global config. For Claude Code that is a
+  per-session `--mcp-config` file under the data directory, never
+  `claude mcp add-json`. Leftover files are removed only when their owning
   pid is provably dead.
 - An agent navigation must pass both `browserReach` and `browserMcpLocalOnly`.
 - A tool drives the tabs its own session opened and a tab the user shared with
@@ -267,12 +287,17 @@ Templates are `helm-data/templates` when `PORTABLE_EXECUTABLE_DIR` is set, and
 - Usage figures paint nothing rather than a wrong number. A stale reading of a
   window that is still running paints lower bounds. Roll-over is judged before
   age. Dollar figures are estimates and say so.
-- `~/.claude` is read-only to Helm, except that the config console writes,
-  through `writeConfigFile`, which snapshots the file first and aborts if it
-  cannot. The transcript archive copies into `helm.db` and never writes there.
-- Session state comes from `~/.claude/sessions/<pid>.json`, read only. Stale
-  records are filtered by liveness at read time, and anything that cannot be
-  interpreted degrades to the plain tab.
+- Every agent's config directory (`~/.claude` for Claude Code) is read-only to
+  Helm and Floti, except config console writes and hooks the user installs
+  from it, each through `writeConfigFile` (or its host equivalent), which
+  snapshots the file first and aborts if it cannot. The transcript archive
+  copies into `helm.db` and never writes there. What a launch needs (agent
+  tools, settings, composed instructions, overlays) is a per-launch file under
+  the data directory, never a write into the agent's config.
+- Session state comes from each backend's own signals, read only; an agent
+  with none shows the plain tab. For Claude Code that is
+  `~/.claude/sessions/<pid>.json`. Stale records are filtered by liveness at
+  read time, and anything that cannot be interpreted degrades to the plain tab.
 - The process-and-ports pass costs about half a second, so it runs only while
   the sessions pane is on screen or a `session_detail` call is waiting, every
   4s, through `execFile`. Passes never overlap.
@@ -286,8 +311,9 @@ Templates are `helm-data/templates` when `PORTABLE_EXECUTABLE_DIR` is set, and
   profile's folder, a hosted session's working directory). Changed lines are the working tree against `HEAD`, said
   as that and never attributed to a session: git does not know who made a
   change. Only what is on screen is watched, and main is told the whole set.
-- `claude --resume` must run in the directory history recorded. Transcripts are
-  found by scanning `projects/*` for `<uuid>.jsonl`, never by deriving a path.
+- Every backend resumes in the directory history recorded; for Claude Code,
+  `claude --resume` there. Claude Code's transcripts are found by scanning
+  `projects/*` for `<uuid>.jsonl`, never by deriving a path.
 - `CLAUDE_CONFIG_DIR` moves credentials too, so a session pointed at a fixture
   home cannot sign in.
 

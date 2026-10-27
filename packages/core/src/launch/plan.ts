@@ -172,10 +172,13 @@ export function buildLaunchArgs(
   if (req.permissionMode) argv.push('--permission-mode', req.permissionMode)
   if (req.agent) argv.push('--agent', req.agent)
 
-  // Last, and only if it is really there: an empty string here would be a
-  // positional argument the CLI reads as an empty prompt.
+  // Last, behind `--`, and only if it is really there: an empty string here
+  // would be a positional argument the CLI reads as an empty prompt.
+  // `--mcp-config` and `--plugin-dir` are variadic like `--add-dir`, so with no
+  // single-value flag after them the prompt would be taken as one more config
+  // file or plugin folder; `--` ends every variadic list.
   const prompt = req.resume ? undefined : req.openingPrompt?.trim()
-  if (prompt) argv.push(prompt)
+  if (prompt) argv.push('--', prompt)
 
   return argv
 }

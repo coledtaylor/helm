@@ -77,9 +77,25 @@ describe('buildLaunchArgs', () => {
       access: ['/repos/a'],
       openingPrompt: '/recap'
     })
-    expect(argv).toEqual(['--add-dir', resolve('/repos/a'), '-n', 'session', '/recap'])
+    expect(argv).toEqual(['--add-dir', resolve('/repos/a'), '-n', 'session', '--', '/recap'])
     expect(argv.indexOf('-n')).toBeGreaterThan(argv.indexOf('--add-dir'))
     expect(argv.at(-1)).toBe('/recap')
+  })
+
+  /**
+   * `--mcp-config` and `--plugin-dir` are variadic too, and nothing single-valued
+   * need follow them: a profile with no model, effort, mode or agent put the
+   * prompt straight after the config file, and the CLI read it as a second one.
+   */
+  it('ends every variadic list with -- before the opening prompt', () => {
+    const argv = buildLaunchArgs({
+      root: '/x',
+      name: 'session',
+      pluginDirs: ['/shims/a'],
+      mcpConfigFile: '/data/mcp-1.json',
+      openingPrompt: 'review this'
+    })
+    expect(argv.slice(-4)).toEqual(['--mcp-config', '/data/mcp-1.json', '--', 'review this'])
   })
 
   it('puts the opening prompt last, after every flag', () => {

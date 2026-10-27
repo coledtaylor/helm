@@ -29,7 +29,8 @@ export function electronRecordingIpc(handlers: Map<string, IpcHandler>): Record<
 
 /**
  * A `.claude` tree for the session history and transcript archive tests,
- * written the way the CLI writes one (and `fake-claude.mjs` imitates): every
+ * written the way the CLI writes one (and `test/fake-agents/claude-code.mjs`
+ * imitates): every
  * prompt appended to `history.jsonl`, and each conversation's transcript under
  * `projects/<directory>/<session id>.jsonl`.
  */

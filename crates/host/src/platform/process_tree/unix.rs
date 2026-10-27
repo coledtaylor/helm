@@ -1,0 +1,66 @@
+//! Ending a process tree on macOS and Linux, through its process group.
+//!
+//! A session's program starts a session of its own in its pty, which makes
+//! it the leader of a process group that everything it starts joins unless
+//! it moves itself out. Signalling the group reaches the whole tree: SIGTERM
+//! to ask, SIGKILL to end it, as today's app does.
+
+use std::io;
+
+use floti_protocol::Knowable;
+
+use super::{Ending, ProcessTree};
+use crate::{Error, Result};
+
+/// The implementation macOS and Linux share.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Native;
+
+impl ProcessTree for Native {
+    fn end_tree(&self, root_pid: u32, how: Ending) -> Result<()> {
+        // 0 and 1 would signal the host's own group or every process.
+        let Some(pid) = libc::pid_t::try_from(root_pid).ok().filter(|pid| *pid > 1) else {
+            return Ok(());
+        };
+        let signal = match how {
+            Ending::Polite => libc::SIGTERM,
+            Ending::Forced => libc::SIGKILL,
+        };
+        // SAFETY: killpg and kill take plain values.
+        if unsafe { libc::killpg(pid, signal) } == 0 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::ESRCH) {
+            return Err(Error::io(format!("end process tree {root_pid}"), err));
+        }
+        // No group of that id: a process that never led one, or one already
+        // gone.
+        // SAFETY: as above.
+        if unsafe { libc::kill(pid, signal) } == 0 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ESRCH) {
+            Ok(())
+        } else {
+            Err(Error::io(format!("end process {root_pid}"), err))
+        }
+    }
+
+    fn is_alive(&self, pid: u32) -> Knowable<bool> {
+        let Some(pid) = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0) else {
+            return Knowable::Unknown;
+        };
+        // SAFETY: signal 0 checks the process exists and sends nothing.
+        if unsafe { libc::kill(pid, 0) } == 0 {
+            return Knowable::Known(true);
+        }
+        match io::Error::last_os_error().raw_os_error() {
+            Some(libc::ESRCH) => Knowable::Known(false),
+            // It exists; it belongs to another user.
+            Some(libc::EPERM) => Knowable::Known(true),
+            _ => Knowable::Unknown,
+        }
+    }
+}
