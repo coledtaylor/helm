@@ -12,6 +12,7 @@ on:
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       # The store embeds today's migrations at compile time.
       - "packages/core/drizzle/**"
       # The protocol's catalogue test reads the app's channel list.
@@ -24,6 +25,7 @@ on:
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "packages/core/drizzle/**"
       - "packages/desktop/src/shared/ipc.ts"
       - "test/fake-agents/**"
@@ -54,9 +56,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # The Rust version and its components live in rust-toolchain.toml, and
+      # nowhere else: rustup installs exactly what that file names, so CI
+      # lints and tests with the toolchain a local cargo uses.
+      - name: Rust toolchain
+        run: rustup toolchain install
 
       - uses: actions/setup-node@v6
         with:

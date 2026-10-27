@@ -19,7 +19,7 @@ use super::*;
 use crate::agent::{AgentBackend, LaunchFolder, LaunchRequest};
 use crate::platform::process_tree::{Native, ProcessTree};
 use crate::store::Store;
-use crate::testkit::{FakeAgent, TestDirs};
+use crate::testkit::{FakeAgent, FakeAgentBackend, TestDirs};
 
 const WAIT: Duration = Duration::from_secs(20);
 const QUIET: Duration = Duration::from_millis(400);
@@ -380,9 +380,8 @@ impl Fixture {
 
     fn start(&self, folder: &Path, args: &[&str], size: TermSize) -> Arc<Session> {
         let launch_folder = LaunchFolder::create(&self.dirs.data).expect("create a launch folder");
-        let spec = self
-            .agent
-            .backend(args.iter().copied())
+        let backend = self.agent.backend(args.iter().copied());
+        let spec = backend
             .launch(
                 &LaunchRequest {
                     folder: folder.to_path_buf(),
@@ -399,19 +398,20 @@ impl Fixture {
                 size,
                 client: Some(A),
                 conversation_id: Some("conversation-1".into()),
+                backend: backend.id().clone(),
             })
             .expect("start the session")
     }
 
     /// The session's row: status, exit code, ended_at, duration_ms, name,
-    /// cwd, argv.
+    /// cwd, argv, conversation and backend.
     fn row(&self, id: SessionId) -> Row {
         let store = self.store.lock().unwrap();
         store
             .connection()
             .query_row(
-                "SELECT status, exit_code, ended_at, duration_ms, name, cwd, argv, claude_session_id \
-                 FROM sessions WHERE id = ?1",
+                "SELECT status, exit_code, ended_at, duration_ms, name, cwd, argv, \
+                 claude_session_id, backend FROM sessions WHERE id = ?1",
                 [id.0],
                 |row| {
                     Ok(Row {
@@ -423,6 +423,7 @@ impl Fixture {
                         cwd: row.get(5)?,
                         argv: row.get(6)?,
                         conversation_id: row.get(7)?,
+                        backend: row.get(8)?,
                     })
                 },
             )
@@ -440,6 +441,7 @@ struct Row {
     cwd: String,
     argv: String,
     conversation_id: Option<String>,
+    backend: Option<String>,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -546,6 +548,7 @@ fn s15_a_session_runs_in_a_pty_in_its_folder_with_the_session_environment_and_re
     assert_eq!(Path::new(&row.cwd), folder);
     assert_eq!(row.argv, "[]");
     assert_eq!(row.conversation_id.as_deref(), Some("conversation-1"));
+    assert_eq!(row.backend.as_deref(), Some(FakeAgentBackend::ID));
 
     session.end_now().unwrap();
     assert!(session.wait_exit(WAIT).is_some());

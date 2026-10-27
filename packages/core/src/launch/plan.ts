@@ -162,9 +162,9 @@ export function buildLaunchArgs(
   // what lets the session row and the CLI's live registry agree from the first
   // instant; see `SessionRecord.claudeSessionId`.
   if (req.sessionId && !req.resume) argv.push('--session-id', req.sessionId)
-  // One value, so it is safe anywhere after `-n`. Here rather than at the end
-  // because the opening prompt is positional and everything before it has to
-  // be a flag with its argument.
+  // Variadic, like `--add-dir`: it takes every argument up to the next one
+  // that starts with a dash, so the flag after it, or the `--` in front of the
+  // prompt, ends its list. It is given one file, the session's own config.
   if (req.mcpConfigFile) argv.push('--mcp-config', req.mcpConfigFile)
 
   if (req.model) argv.push('--model', req.model)

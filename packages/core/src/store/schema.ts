@@ -205,6 +205,16 @@ export const sessions = sqliteTable(
      * reopens it asking first - the safe direction to be wrong in.
      */
     permissionMode: text('permission_mode'),
+    /**
+     * The agent backend the session ran on (`claude-code`, `shell`), as the
+     * Floti host records it on spawn, so a restore reopens the conversation
+     * through the backend that holds it.
+     *
+     * Null for a row this app wrote, or one written before the column existed.
+     * This app runs only Claude Code, and before the column only Claude Code
+     * recorded a conversation id, so a reader takes null as Claude Code.
+     */
+    backend: text('backend'),
     status: text('status', { enum: ['running', 'exited', 'lost'] })
       .notNull()
       .default('running'),

@@ -127,7 +127,7 @@ fn main() {
     if let Some(ms) = flag_value(&argv, "--fake-tick") {
         let every = Duration::from_millis(parse_ms(ms));
         thread::spawn(move || {
-            for n in 1u64.. {
+            for n in 1u64..=u64::MAX {
                 thread::sleep(every);
                 write_out(format!("tick {n}\r\n").as_bytes());
             }

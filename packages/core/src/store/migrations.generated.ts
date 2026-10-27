@@ -132,5 +132,11 @@ export const MIGRATIONS: readonly EmbeddedMigration[] = [
     "statements": [
       "ALTER TABLE `plugins` ADD `tools_enabled` integer DEFAULT true NOT NULL;"
     ]
+  },
+  {
+    "tag": "0016_misty_smiling_tiger",
+    "statements": [
+      "ALTER TABLE `sessions` ADD `backend` text;"
+    ]
   }
 ]

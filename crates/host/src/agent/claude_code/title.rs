@@ -88,7 +88,8 @@ fn placeholder_length(text: &str) -> Option<usize> {
     let body = if let Some(rest) = text.strip_prefix("[Image #") {
         let n = digits(rest);
         (n > 0).then(|| &rest[n..])?
-    } else if let Some(rest) = text.strip_prefix("[Pasted text #") {
+    } else {
+        let rest = text.strip_prefix("[Pasted text #")?;
         let n = digits(rest);
         let mut rest = (n > 0).then(|| &rest[n..])?;
         if let Some(lines) = rest.strip_prefix(" +") {
@@ -100,8 +101,6 @@ fn placeholder_length(text: &str) -> Option<usize> {
             }
         }
         rest
-    } else {
-        return None;
     };
     body.starts_with(']').then(|| text.len() - body.len() + 1)
 }

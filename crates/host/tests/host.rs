@@ -12,22 +12,25 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use floti_host::agent::AgentBackend;
+use floti_host::agent::claude_code::ClaudeCodeSettings;
 use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
 use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree};
 use floti_host::platform::socket::{self, Endpoint, LocalSocket, Native as NativeSocket};
 use floti_host::platform::startup;
 use floti_host::server::{Host, HostConfig, SOCKET_NAME, Stopper};
+use floti_host::store::Store;
 use floti_host::testkit::{
     FakeAgent, FakeAgentRecord, PATIENCE, TestClient, TestDirs, names_unserved_channel,
 };
 use floti_host::{Error, Result, fake_agent};
-use floti_protocol::Knowable;
 use floti_protocol::channels::common::{SessionRecord, SessionStatus};
 use floti_protocol::channels::host::{HostStop, HostStopReason, HostStopRequest};
 use floti_protocol::channels::sessions::{
     LaunchSessionRequest, RestoreSessionsRequest, SessionLaunch, SessionList, SessionRestorable,
     SessionRestore, SessionStart, SessionToRestore, StartSessionRequest,
 };
+use floti_protocol::{BackendId, Knowable};
+use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
 const TERMINAL: &[&str] = &["terminal"];
@@ -952,5 +955,354 @@ async fn s13_choosing_none_answers_the_offer_and_reopens_nothing() {
     );
     assert_eq!(client.request::<SessionList>(&()).await.unwrap(), vec![]);
     assert_eq!(agent.records().len(), runs_before);
+    host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// Claude Code on today's backends: the shell first, then the fake `claude`
+// ---------------------------------------------------------------------------
+
+/// The fake `claude` (`test/fake-agents/claude-code.mjs`), run by Node.
+fn fake_claude() -> PathBuf {
+    resolved(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("test")
+            .join("fake-agents")
+            .join("claude-code.mjs"),
+    )
+}
+
+/// `path` with links resolved, in the form a process reports its own folder
+/// in (no `\\?\` on Windows), so it compares with what the fake logs.
+fn resolved(path: &Path) -> PathBuf {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let text = canonical.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(plain) => PathBuf::from(plain),
+        None => canonical,
+    }
+}
+
+/// A host with today's backends in today's order, the shell first and then
+/// Claude Code, whose `claude` is the fake keeping its records in
+/// `claude_config`.
+fn todays_backends(dirs: &TestDirs, endpoint: &Endpoint, claude_config: &Path) -> HostConfig {
+    let claude = ClaudeCodeSettings {
+        program: "node".into(),
+        leading_args: vec![fake_claude().into_os_string()],
+        config_dir: claude_config.to_path_buf(),
+        pass_config_dir: true,
+        api_key_set: false,
+    };
+    HostConfig {
+        folders: dirs.folders(),
+        endpoint: endpoint.clone(),
+        backends: floti_host::server::backends(&dirs.user_env(), Some(claude)),
+        inherited_env: std::env::vars_os().collect(),
+    }
+}
+
+fn claude_code_start(folder: &Path) -> StartSessionRequest {
+    StartSessionRequest {
+        backend: Some(BackendId::claude_code()),
+        ..start_request(folder)
+    }
+}
+
+/// Every run log the fake `claude` has written in `claude_config`.
+fn claude_runs(claude_config: &Path) -> Vec<Value> {
+    let Ok(entries) = std::fs::read_dir(claude_config.join("fake-agent")) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            if path.extension()? != "json" {
+                return None;
+            }
+            serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+        })
+        .collect()
+}
+
+fn argv_of(run: &Value) -> Vec<String> {
+    run["argv"]
+        .as_array()
+        .map(|args| {
+            args.iter()
+                .filter_map(|arg| arg.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The fake `claude`'s run whose arguments `matches`, waiting for it.
+fn wait_for_claude_run(claude_config: &Path, matches: impl Fn(&[String]) -> bool) -> Value {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        if let Some(run) = claude_runs(claude_config)
+            .into_iter()
+            .find(|run| matches(&argv_of(run)))
+        {
+            return run;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the fake claude logged no such run: {:?}",
+            claude_runs(claude_config)
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn resumes(argv: &[String], conversation: &str) -> bool {
+    argv.windows(2)
+        .any(|pair| pair[0] == "--resume" && pair[1] == conversation)
+}
+
+/// What S3 asks of a resume the fake `claude` logged: it ran in `folder`,
+/// found `conversation` there, and was given a settings file of its own and
+/// nothing that belongs to a new conversation.
+fn assert_resumed_in(run: &Value, conversation: &str, folder: &Path) {
+    assert_eq!(run["exitCode"], Value::Null, "the resume failed: {run}");
+    assert_eq!(run["resumed"], true, "{run}");
+    assert_eq!(run["sessionId"], conversation, "{run}");
+    assert_eq!(
+        resolved(Path::new(run["cwd"].as_str().expect("the run's folder"))),
+        folder
+    );
+    let argv = argv_of(run);
+    assert!(argv.iter().any(|arg| arg == "--settings"), "{argv:?}");
+    for new_only in ["-n", "--session-id"] {
+        assert!(!argv.iter().any(|arg| arg == new_only), "{argv:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s3_restoring_a_claude_code_conversation_on_todays_backends_resumes_it_in_its_recorded_folder()
+ {
+    let dirs = TestDirs::new();
+    let endpoint = dirs.endpoint();
+    let claude_config = resolved(&dirs.folder("claude config"));
+    let project = resolved(&dirs.folder("a project"));
+
+    // A Claude Code conversation with a prompt in it, left running by a stop
+    // for an update.
+    let host = InProcess::start(todays_backends(&dirs, &endpoint, &claude_config));
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let started = client
+        .request::<SessionStart>(&claude_code_start(&project))
+        .await
+        .unwrap();
+    assert_eq!(started.backend, BackendId::claude_code());
+    let conversation = started
+        .conversation_id
+        .clone()
+        .expect("Claude Code chose the conversation's id");
+    client.attach(1, started.id).await;
+    client.type_into(1, b"fix the export\r").await;
+    client
+        .read_stream_until(1, |bytes| {
+            String::from_utf8_lossy(bytes).contains("You said: fix the export")
+        })
+        .await;
+    client
+        .request::<HostStop>(&HostStopRequest {
+            reason: HostStopReason::Update,
+        })
+        .await
+        .unwrap();
+    assert_eq!(host.stopped().await, HostStopReason::Update);
+
+    // The next start offers it, reopenable through the backend its row
+    // recorded rather than the default shell.
+    let host = InProcess::start(todays_backends(&dirs, &endpoint, &claude_config));
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let offer = client
+        .request::<SessionRestorable>(&())
+        .await
+        .unwrap()
+        .expect("the conversation is offered");
+    assert_eq!(offer.sessions.len(), 1);
+    assert_eq!(offer.sessions[0].blocked, None, "{offer:?}");
+
+    let result = client
+        .request::<SessionRestore>(&RestoreSessionsRequest {
+            sessions: vec![SessionToRestore {
+                id: started.id,
+                cols: 100,
+                rows: 30,
+            }],
+        })
+        .await
+        .unwrap();
+    assert!(result.failed.is_empty(), "{:?}", result.failed);
+    assert_eq!(result.restored.len(), 1);
+    let session = &result.restored[0].launched.session;
+    assert_eq!(session.backend, BackendId::claude_code());
+    assert_eq!(Path::new(&session.cwd), project);
+    assert_eq!(
+        session.conversation_id.as_deref(),
+        Some(conversation.as_str())
+    );
+
+    // `claude --resume <id>` ran in the recorded folder and found the
+    // conversation there.
+    let resumed = wait_for_claude_run(&claude_config, |argv| resumes(argv, &conversation));
+    assert_resumed_in(&resumed, &conversation, &project);
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s3_a_row_with_no_backend_recorded_reopens_through_claude_code_and_a_missing_backend_is_named()
+ {
+    let dirs = TestDirs::new();
+    let endpoint = dirs.endpoint();
+    let claude_config = resolved(&dirs.folder("claude config"));
+    let todays = resolved(&dirs.folder("todays project"));
+    let tomorrows = resolved(&dirs.folder("tomorrows project"));
+    let conversation = "6d1f3c52-8a4e-4f0b-9c7d-2e5a8b1f4c90";
+
+    // A conversation Claude Code recorded in `todays`. The folder its
+    // transcript is in is the CLI's business; nothing derives it.
+    let transcript = claude_config
+        .join("projects")
+        .join("not-derived-from-the-path")
+        .join(format!("{conversation}.jsonl"));
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    let line = json!({
+        "type": "user",
+        "uuid": "u1",
+        "sessionId": conversation,
+        "cwd": todays,
+        "timestamp": "2026-10-01T09:00:00.000Z",
+        "message": { "role": "user", "content": "fix the payroll export" },
+    });
+    std::fs::write(&transcript, format!("{line}\n")).unwrap();
+
+    // The rows a crash left running: one as today's app writes it, with no
+    // backend, and one naming a backend this host does not have.
+    Store::open(&dirs.data).unwrap().close().unwrap();
+    {
+        let db = rusqlite::Connection::open(dirs.data.join("floti.db")).unwrap();
+        db.execute(
+            "INSERT INTO sessions (name, cwd, argv, claude_session_id, status) \
+             VALUES ('from today', ?1, '[]', ?2, 'running')",
+            rusqlite::params![todays.to_string_lossy(), conversation],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO sessions (name, cwd, argv, claude_session_id, status, backend) \
+             VALUES ('from tomorrow', ?1, '[]', 'c-tomorrow', 'running', 'tomorrows-agent')",
+            rusqlite::params![tomorrows.to_string_lossy()],
+        )
+        .unwrap();
+    }
+
+    let host = InProcess::start(todays_backends(&dirs, &endpoint, &claude_config));
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let offer = client
+        .request::<SessionRestorable>(&())
+        .await
+        .unwrap()
+        .expect("both are offered");
+    assert_eq!(offer.sessions.len(), 2, "{offer:?}");
+    let (today, tomorrow) = (&offer.sessions[0], &offer.sessions[1]);
+    assert_eq!(today.blocked, None, "{today:?}");
+    let blocked = tomorrow
+        .blocked
+        .clone()
+        .expect("a backend this host does not have blocks the restore");
+    assert!(blocked.contains("`tomorrows-agent`"), "{blocked}");
+
+    let result = client
+        .request::<SessionRestore>(&RestoreSessionsRequest {
+            sessions: [today.id, tomorrow.id]
+                .map(|id| SessionToRestore {
+                    id,
+                    cols: 80,
+                    rows: 24,
+                })
+                .to_vec(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        result
+            .restored
+            .iter()
+            .map(|restored| restored.from)
+            .collect::<Vec<_>>(),
+        [today.id]
+    );
+    assert_eq!(
+        result.restored[0].launched.session.backend,
+        BackendId::claude_code()
+    );
+    assert_eq!(result.failed.len(), 1, "{:?}", result.failed);
+    assert_eq!(result.failed[0].id, tomorrow.id);
+    assert_eq!(result.failed[0].reason, blocked);
+
+    // The row with no backend was Claude Code's: `claude --resume` ran in its
+    // folder. Nothing ran for the other.
+    let resumed = wait_for_claude_run(&claude_config, |argv| resumes(argv, conversation));
+    assert_resumed_in(&resumed, conversation, &todays);
+    assert_eq!(claude_runs(&claude_config).len(), 1);
+    host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// S5, S9: a launch's own files go when its session ends
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s5_s9_a_claude_code_sessions_launch_folder_is_removed_when_the_session_ends() {
+    let dirs = TestDirs::new();
+    let endpoint = dirs.endpoint();
+    let claude_config = resolved(&dirs.folder("claude config"));
+    let project = resolved(&dirs.folder("a project"));
+    let host = InProcess::start(todays_backends(&dirs, &endpoint, &claude_config));
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let session = client
+        .request::<SessionStart>(&claude_code_start(&project))
+        .await
+        .unwrap();
+
+    // Its settings file is in a launch folder of its own under Floti's data
+    // folder.
+    let run = wait_for_claude_run(&claude_config, |argv| {
+        argv.iter().any(|arg| arg == "--settings")
+    });
+    let argv = argv_of(&run);
+    let at = argv.iter().position(|arg| arg == "--settings").unwrap();
+    let settings = PathBuf::from(&argv[at + 1]);
+    let launch_folder = settings.parent().expect("a launch folder").to_path_buf();
+    assert!(
+        launch_folder.starts_with(&dirs.data),
+        "{}",
+        launch_folder.display()
+    );
+    assert!(settings.is_file(), "{}", settings.display());
+
+    // The session ends, and its launch folder goes with it.
+    client.attach(1, session.id).await;
+    client.type_into(1, b"/exit\r").await;
+    let deadline = Instant::now() + PATIENCE;
+    while launch_folder.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "{} is still there after the session ended",
+            launch_folder.display()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let row = rows(&dirs.data)
+        .into_iter()
+        .find(|row| u64::try_from(row.id) == Ok(session.id))
+        .expect("the session's row");
+    assert_eq!(row.status, "exited", "{row:?}");
+    assert_eq!(row.exit_code, Some(0), "{row:?}");
     host.stop(HostStopReason::Stop).await;
 }

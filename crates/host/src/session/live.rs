@@ -16,6 +16,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use floti_protocol::BackendId;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -98,6 +99,8 @@ pub struct StartSession {
     pub client: Option<ClientId>,
     /// The agent's own id for the conversation, when the launch chose one.
     pub conversation_id: Option<String>,
+    /// The agent backend that composed `spec`, recorded in the row.
+    pub backend: BackendId,
 }
 
 /// The sessions running on this host.
@@ -141,6 +144,7 @@ impl SessionHost {
             size,
             client,
             conversation_id,
+            backend,
         } = request;
         let program = spec.program.to_string_lossy().into_owned();
         let launch_folder = spec.launch_folder.clone();
@@ -189,6 +193,7 @@ impl SessionHost {
                 .map(|arg| arg.to_string_lossy().into_owned())
                 .collect(),
             conversation_id,
+            backend,
         };
         let id = match self.shared.ledger.started(&row) {
             Ok(id) => id,

@@ -1,15 +1,16 @@
 //! Where a session's row is written: on spawn, and again when it ends.
 //!
-//! The rows are today's `sessions` table (`packages/core/src/store/schema.ts`)
-//! with no schema change: a row is `running` from the spawn and `exited` with
-//! its code, end time and duration once the program ends. The end is written
-//! only over a row still running, so an exit reported twice keeps the first
-//! code, as `finishSession` does today.
+//! The rows are today's `sessions` table (`packages/core/src/store/schema.ts`):
+//! a row is `running` from the spawn, naming the agent backend it runs on,
+//! and `exited` with its code, end time and duration once the program ends.
+//! The end is written only over a row still running, so an exit reported
+//! twice keeps the first code, as `finishSession` does today.
 
 use std::io;
 use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 
+use floti_protocol::BackendId;
 use rusqlite::{OptionalExtension, params};
 
 use super::SessionExit;
@@ -37,6 +38,8 @@ pub struct NewSessionRow {
     pub argv: Vec<String>,
     /// The agent's own id for the conversation, when the launch chose one.
     pub conversation_id: Option<String>,
+    /// The agent backend it runs on, which a restore reopens it through.
+    pub backend: BackendId,
 }
 
 /// The record of sessions: a row on spawn, its end when the program ends.
@@ -60,13 +63,14 @@ impl SessionLedger for Mutex<Store> {
         let id = store
             .connection()
             .query_row(
-                "INSERT INTO sessions (name, cwd, argv, claude_session_id, status) \
-                 VALUES (?1, ?2, ?3, ?4, 'running') RETURNING id",
+                "INSERT INTO sessions (name, cwd, argv, claude_session_id, backend, status) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'running') RETURNING id",
                 params![
                     row.name,
                     row.cwd.to_string_lossy(),
                     argv,
-                    row.conversation_id
+                    row.conversation_id,
+                    row.backend.as_str()
                 ],
                 |found| found.get(0),
             )

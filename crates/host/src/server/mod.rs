@@ -66,24 +66,15 @@ pub struct HostConfig {
 
 impl HostConfig {
     /// The host the user's environment describes: its folders (with any
-    /// `FLOTI_*_DIR` overrides), the socket in its runtime folder, and its
-    /// backends: the user's shell, run as a plain command, then Claude Code.
-    /// The shell stays the default until a client names the backend it
-    /// launches with.
+    /// `FLOTI_*_DIR` overrides), the socket in its runtime folder, and the
+    /// [`backends`] it gives.
     pub fn from_env(env: &UserEnv) -> Result<Self> {
         let folders = folders::resolve(env)?;
         let endpoint = socket::Native.endpoint(&folders.runtime, SOCKET_NAME);
-        let mut backends: Vec<Arc<dyn AgentBackend>> = vec![Arc::new(shell_backend(env))];
-        if let Some(settings) = ClaudeCodeSettings::from_env(env) {
-            backends.push(Arc::new(ClaudeCodeBackend::new(
-                settings,
-                Arc::new(process_tree::Native),
-            )));
-        }
         Ok(Self {
             folders,
             endpoint,
-            backends,
+            backends: backends(env, ClaudeCodeSettings::from_env(env)),
             inherited_env: env
                 .vars
                 .iter()
@@ -91,6 +82,21 @@ impl HostConfig {
                 .collect(),
         })
     }
+}
+
+/// The backends a host runs, in order: the user's shell, run as a plain
+/// command, then Claude Code as `claude` describes it, when there is one.
+/// The shell stays the default until a client names the backend it launches
+/// with; a restore uses the backend each session's row recorded.
+pub fn backends(env: &UserEnv, claude: Option<ClaudeCodeSettings>) -> Vec<Arc<dyn AgentBackend>> {
+    let mut backends: Vec<Arc<dyn AgentBackend>> = vec![Arc::new(shell_backend(env))];
+    if let Some(settings) = claude {
+        backends.push(Arc::new(ClaudeCodeBackend::new(
+            settings,
+            Arc::new(process_tree::Native),
+        )));
+    }
+    backends
 }
 
 /// The user's shell as a plain command: `%COMSPEC%` where it is set, which

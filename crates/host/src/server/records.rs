@@ -3,9 +3,8 @@
 //! running, recording a deliberate stop, and reading rows back as the
 //! protocol's [`SessionRecord`].
 //!
-//! All of it is today's `sessions` table with no schema change. The table has
-//! no column for the backend, so a row read back names the backend the host
-//! knows the session by, or the host's default for a row it does not run.
+//! All of it is today's `sessions` table, whose `backend` column names the
+//! agent backend each session ran on ([`recorded_backend`]).
 
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -25,7 +24,20 @@ const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
 /// The columns [`read_record`] reads, in its order.
 const RECORD_COLUMNS: &str = "id, name, label, cwd, branch, project_path, profile_id, argv, \
-     claude_session_id, status, started_at, ended_at, duration_ms, exit_code";
+     claude_session_id, status, started_at, ended_at, duration_ms, exit_code, backend";
+
+/// The backend a row ran on, from its `backend` column.
+///
+/// A row with none was written by today's app or before the column existed.
+/// Today's app runs only Claude Code, and before the column only Claude Code
+/// recorded a conversation id (a shell session has none to reopen), so such a
+/// row is Claude Code's. That keeps a conversation started before the column
+/// restorable through `claude --resume`, as it was in today's app.
+fn recorded_backend(column: Option<String>) -> BackendId {
+    column
+        .filter(|id| !id.trim().is_empty())
+        .map_or_else(BackendId::claude_code, BackendId::new)
+}
 
 /// A session that ended, numbered for the clients listening on
 /// `session:exit`.
@@ -108,6 +120,8 @@ pub(crate) struct LostRow {
     pub branch: Option<String>,
     pub profile_id: Option<i64>,
     pub conversation_id: Option<String>,
+    /// The backend it ran on, which reopens it ([`recorded_backend`]).
+    pub backend: BackendId,
 }
 
 /// Records every row still `running` as `lost`, as the start after a crash
@@ -118,7 +132,7 @@ pub(crate) fn reconcile_running(store: &Store) -> Result<Vec<LostRow>> {
         .connection()
         .prepare(
             "UPDATE sessions SET status = 'lost' WHERE status = 'running' \
-             RETURNING id, name, label, cwd, branch, profile_id, claude_session_id",
+             RETURNING id, name, label, cwd, branch, profile_id, claude_session_id, backend",
         )
         .map_err(sql("reconcile the sessions the last run left running"))?;
     let mut lost = statement
@@ -134,6 +148,7 @@ pub(crate) fn reconcile_running(store: &Store) -> Result<Vec<LostRow>> {
                 branch: row.get(4)?,
                 profile_id: row.get(5)?,
                 conversation_id: row.get(6)?,
+                backend: recorded_backend(row.get(7)?),
             })
         })
         .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
@@ -173,23 +188,19 @@ pub(crate) fn profile_name(store: &Store, id: i64) -> Result<Option<String>> {
         .map_err(sql("read a profile"))
 }
 
-/// Session `id`'s row, naming `backend` as the one running it.
-pub(crate) fn read_record(
-    store: &Store,
-    id: SessionId,
-    backend: &BackendId,
-) -> Result<SessionRecord> {
+/// Session `id`'s row.
+pub(crate) fn read_record(store: &Store, id: SessionId) -> Result<SessionRecord> {
     store
         .connection()
         .query_row(
             &format!("SELECT {RECORD_COLUMNS} FROM sessions WHERE id = ?1"),
             [id.0],
-            |row| record_from(row, backend),
+            record_from,
         )
         .map_err(sql("read a session's row"))
 }
 
-fn record_from(row: &Row<'_>, backend: &BackendId) -> rusqlite::Result<SessionRecord> {
+fn record_from(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
     let argv: String = row.get(7)?;
     let status: String = row.get(9)?;
     Ok(SessionRecord {
@@ -204,7 +215,7 @@ fn record_from(row: &Row<'_>, backend: &BackendId) -> rusqlite::Result<SessionRe
         // lists; its arguments are simply not known.
         argv: serde_json::from_str(&argv).unwrap_or_default(),
         conversation_id: row.get(8)?,
-        backend: backend.clone(),
+        backend: recorded_backend(row.get(14)?),
         status: match status.as_str() {
             "running" => SessionStatus::Running,
             "exited" => SessionStatus::Exited,
