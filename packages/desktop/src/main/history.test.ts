@@ -285,7 +285,8 @@ describe('the transcript archive', () => {
       { role: 'user', text: 'keep going', at: T0 },
       { role: 'assistant', text: 'Still working on it.', at: T0 + 1000 }
     ])
-    await vi.waitFor(() => expect(vi.getTimerCount()).toBe(armed + 1), { interval: 10 })
+    // How soon a watch reports is the OS's business: macOS's can take over a second.
+    await vi.waitFor(() => expect(vi.getTimerCount()).toBe(armed + 1), { timeout: 10_000, interval: 10 })
     expect(archiveStateOf(c.store, id)).toBeNull()
 
     // At most one pass per fifteen seconds, deferred rather than dropped.
