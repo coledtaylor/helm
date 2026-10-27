@@ -27,12 +27,14 @@ use floti_protocol::channel::{from_payload, to_payload};
 use floti_protocol::channels::common::{SessionRecord, SessionStatus};
 use floti_protocol::channels::host::{HostStop, HostStopReason, HostStopRequest};
 use floti_protocol::channels::sessions::{
-    CloseSessionRequest, LaunchSessionRequest, RestoreSessionsRequest, SessionClose, SessionExit,
-    SessionLaunch, SessionList, SessionRestorable, SessionRestore, SessionStart, SessionToRestore,
-    StartSessionRequest,
+    CloseSessionRequest, HistoryRefresh, LaunchSessionRequest, ReadUsage, RestoreSessionsRequest,
+    SessionClose, SessionExit, SessionLaunch, SessionList, SessionRestorable, SessionRestore,
+    SessionStart, SessionToRestore, StartSessionRequest, UsageSnapshot,
 };
 use floti_protocol::message::ErrorCode;
 use floti_protocol::{BackendId, Catalogue, ChannelKind, EventChannel, Knowable, Message};
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
@@ -213,6 +215,12 @@ fn floti_host_command(dirs: &TestDirs) -> Command {
         .env(LOG_DIR_VAR, &dirs.logs)
         .env(CONFIG_DIR_VAR, &dirs.config)
         .env(RUNTIME_DIR_VAR, &dirs.runtime)
+        // The home the host finds the agent's folder in: `HOME` on macOS and
+        // Linux, `USERPROFILE` on Windows. Never the real one, whose history
+        // and usage are the user's.
+        .env("HOME", &dirs.home)
+        .env("USERPROFILE", &dirs.home)
+        .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("SSH_CONNECTION")
         .env_remove("SSH_CLIENT")
         .env_remove("SSH_TTY")
@@ -370,6 +378,186 @@ async fn s1_floti_host_is_one_executable_that_starts_and_serves_clients() {
         "{stdout}{stderr}"
     );
     assert!(stdout.contains("Floti host stopped."), "{stdout}{stderr}");
+}
+
+// ---------------------------------------------------------------------------
+// The executable's home: the agent folder it reads, and its local day
+// ---------------------------------------------------------------------------
+
+/// US Eastern as a POSIX rule, which needs no time zone database on any OS.
+const EASTERN: &str = "EST5EDT,M3.2.0,M11.1.0";
+
+fn iso(ms: u64) -> String {
+    Timestamp::from_millisecond(i64::try_from(ms).unwrap())
+        .unwrap()
+        .to_string()
+}
+
+fn now_ms() -> u64 {
+    u64::try_from(Timestamp::now().as_millisecond()).unwrap()
+}
+
+/// A conversation in Claude Code's shape under `home`: its prompt in
+/// `history.jsonl`, and a transcript with one assistant message at each of
+/// `assistant_at` (epoch ms).
+fn claude_conversation(home: &Path, cwd: &Path, assistant_at: &[u64]) {
+    let config = home.join(".claude");
+    let id = "7b3d1c20-4a55-4f18-9c21-8e0c5a6d1f01";
+    let asked = assistant_at
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or(0)
+        .saturating_sub(1_000);
+    let mut transcript = format!(
+        "{}\n",
+        json!({
+            "type": "user", "uuid": "u1", "cwd": cwd, "timestamp": iso(asked),
+            "message": { "role": "user", "content": "go" },
+        })
+    );
+    for (n, &at) in assistant_at.iter().enumerate() {
+        let row = json!({
+            "type": "assistant", "uuid": format!("a{n}"), "cwd": cwd, "timestamp": iso(at),
+            "message": {
+                "role": "assistant", "content": "ok", "model": "claude-opus-5",
+                "usage": {
+                    "input_tokens": 1000, "output_tokens": 100,
+                    "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+                },
+            },
+        });
+        transcript.push_str(&format!("{row}\n"));
+    }
+    let project = config.join("projects").join("a-project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join(format!("{id}.jsonl")), transcript).unwrap();
+    let prompt = json!({
+        "display": "go", "pastedContents": {}, "timestamp": asked,
+        "project": cwd, "sessionId": id,
+    });
+    std::fs::write(config.join("history.jsonl"), format!("{prompt}\n")).unwrap();
+    std::fs::write(
+        home.join(".claude.json"),
+        json!({ "numStartups": 1 }).to_string(),
+    )
+    .unwrap();
+}
+
+async fn stop_executable(client: &mut TestClient, mut host: Child) {
+    client
+        .request::<HostStop>(&HostStopRequest {
+            reason: HostStopReason::Stop,
+        })
+        .await
+        .expect("stop the host");
+    assert!(wait_exit(&mut host).success());
+}
+
+/// Runs the executable with `dirs` and `TZ` set to `zone`, reads usage once
+/// and stops it. Claude Code's reading of it.
+async fn claude_usage_from_executable(dirs: &TestDirs, zone: &str) -> UsageSnapshot {
+    let host = floti_host_command(dirs)
+        .env("TZ", zone)
+        .spawn()
+        .expect("run floti host");
+    let mut client = TestClient::connect(&binary_endpoint(dirs), &[]).await;
+    let readings = client.request::<ReadUsage>(&()).await.expect("read usage");
+    stop_executable(&mut client, host).await;
+    readings
+        .into_iter()
+        .find(|reading| reading.backend == BackendId::claude_code())
+        .expect("Claude Code declares usage")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_executable_reads_only_the_agent_folder_under_its_home() {
+    let dirs = TestDirs::new();
+    let cwd = dirs.folder("a project");
+    claude_conversation(&dirs.home, &cwd, &[now_ms() - 60_000]);
+    let config = dirs.home.join(".claude");
+
+    let host = floti_host_command(&dirs).spawn().expect("run floti host");
+    let mut client = TestClient::connect(&binary_endpoint(&dirs), &[]).await;
+    let summary = client
+        .request::<HistoryRefresh>(&())
+        .await
+        .expect("index history");
+    assert!(
+        Path::new(&summary.history_file).starts_with(&config),
+        "{summary:?}"
+    );
+    // The one conversation under the test home, and nothing of the user's.
+    assert_eq!(summary.sessions, 1, "{summary:?}");
+    assert_eq!(summary.prompts, 1, "{summary:?}");
+
+    let readings = client.request::<ReadUsage>(&()).await.expect("read usage");
+    let files: Vec<&str> = readings
+        .iter()
+        .filter(|reading| reading.backend == BackendId::claude_code())
+        .map(|reading| reading.file.as_str())
+        .collect();
+    assert_eq!(
+        files,
+        vec![dirs.home.join(".claude.json").to_string_lossy()],
+        "{readings:?}"
+    );
+    stop_executable(&mut client, host).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_executable_estimates_today_from_local_midnight_in_its_own_zone() {
+    let dirs = TestDirs::new();
+    let midnight = u64::try_from(
+        Timestamp::now()
+            .to_zoned(TimeZone::posix(EASTERN).unwrap())
+            .start_of_day()
+            .unwrap()
+            .timestamp()
+            .as_millisecond(),
+    )
+    .unwrap();
+    // One message at local midnight, which is today's, and one the
+    // millisecond before, which is the day before's.
+    claude_conversation(
+        &dirs.home,
+        &dirs.folder("a project"),
+        &[midnight - 1, midnight],
+    );
+
+    let reading = claude_usage_from_executable(&dirs, EASTERN).await;
+    let spend = reading
+        .spend
+        .expect("a host that knows its zone estimates the spend");
+    assert_eq!(spend.today.messages, 1, "{spend:?}");
+    assert_eq!(spend.week.messages, 2, "{spend:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_executable_leaves_the_spend_out_when_it_cannot_tell_its_zone() {
+    let dirs = TestDirs::new();
+    let now = now_ms();
+    claude_conversation(&dirs.home, &dirs.folder("a project"), &[now - 60_000]);
+    std::fs::write(
+        dirs.home.join(".claude.json"),
+        json!({
+            "numStartups": 1,
+            "cachedUsageUtilization": {
+                "fetchedAtMs": now - 60_000,
+                "utilization": { "limits": [
+                    { "kind": "session", "group": "session", "percent": 51,
+                      "resets_at": iso(now + 3_600_000) },
+                ]},
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let reading = claude_usage_from_executable(&dirs, "Not/A_Zone").await;
+    assert_eq!(reading.spend, None, "{reading:?}");
+    assert_eq!(reading.limits.len(), 1, "{reading:?}");
+    assert_eq!(reading.problem, None, "{reading:?}");
 }
 
 // ---------------------------------------------------------------------------

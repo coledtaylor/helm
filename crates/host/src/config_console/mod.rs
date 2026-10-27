@@ -113,7 +113,8 @@ pub struct ConfigConsole {
 
 impl ConfigConsole {
     /// The console for `backend`, keeping its history in `store` and telling
-    /// `sink` of each outside change to a watched file.
+    /// `sink` of each outside change to a watched file, once for each client
+    /// watching it.
     pub fn new(
         backend: Arc<dyn AgentBackend>,
         agent: AgentConfig,
@@ -568,7 +569,10 @@ fn mcp_result(outcome: RunOutcome, after: Option<String>, snapshot_id: Option<u6
     }
 }
 
-/// An outside change, for tests that watch without a host.
-pub fn change_sink(sink: impl Fn(&ConfigExternalChange) + Send + Sync + 'static) -> ChangeSink {
+/// Who is told of an outside change to a watched file: the client watching
+/// it, and the change.
+pub fn change_sink(
+    sink: impl Fn(ClientId, &ConfigExternalChange) + Send + Sync + 'static,
+) -> ChangeSink {
     Box::new(sink)
 }

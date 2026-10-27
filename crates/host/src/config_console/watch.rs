@@ -7,6 +7,10 @@
 //! on every OS and filesystem, and a change the host made itself updates the
 //! hash under the same lock as the change, so it never comes back as
 //! somebody else's.
+//!
+//! An outside change is told to each client watching that file, once, and
+//! to no other: a client watching another file, or none, hears nothing.
+//! Two clients watching one file are each told.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,8 +25,8 @@ use crate::session::ClientId;
 /// How often a watched file is looked at.
 const POLL: Duration = Duration::from_millis(200);
 
-/// Who is told of an outside change.
-pub type ChangeSink = Box<dyn Fn(&ConfigExternalChange) + Send + Sync>;
+/// Tells one client of an outside change to the file it watches.
+pub type ChangeSink = Box<dyn Fn(ClientId, &ConfigExternalChange) + Send + Sync>;
 
 struct Watched {
     path: PathBuf,
@@ -101,32 +105,30 @@ impl Watches {
     }
 
     /// Every watched file whose bytes are not what the host last saw, told
-    /// once each.
+    /// once to each client watching it.
     fn look(&self) {
-        let changes: Vec<ConfigExternalChange> = {
+        let changes: Vec<(ClientId, ConfigExternalChange)> = {
             let mut by_client = self.lock();
             by_client
-                .values_mut()
-                .filter_map(|watched| {
+                .iter_mut()
+                .filter_map(|(client, watched)| {
                     let now = read_file(&watched.path);
                     (now.hash != watched.hash).then(|| {
                         watched.hash.clone_from(&now.hash);
-                        ConfigExternalChange {
+                        let change = ConfigExternalChange {
                             path: watched.path.display().to_string(),
                             hash: now.hash,
                             exists: now.exists,
                             mtime_ms: now.mtime_ms,
-                        }
+                        };
+                        (*client, change)
                     })
                 })
                 .collect()
         };
-        let mut told: Vec<&str> = Vec::new();
-        for change in &changes {
-            if !told.contains(&change.path.as_str()) {
-                (self.sink)(change);
-                told.push(&change.path);
-            }
+        // Told outside the lock: a sink is free to take its time.
+        for (client, change) in &changes {
+            (self.sink)(*client, change);
         }
     }
 }

@@ -16,6 +16,7 @@ use floti_host::platform::socket::Endpoint;
 use floti_host::server::{Host, HostConfig, Stopper};
 use floti_host::testkit::{FakeAgent, FakeAgentRecord, PATIENCE, TestClient, TestDirs};
 use floti_host::{Result, fake_agent};
+use floti_protocol::channel::EventChannel;
 use floti_protocol::channel::from_payload;
 use floti_protocol::channels::common::{PermissionMode, SessionRecord, SessionStatus};
 use floti_protocol::channels::host::HostStopReason;
@@ -24,9 +25,9 @@ use floti_protocol::channels::sessions::{
     LiveSession, ProfileLaunch, PtermClose, PtermCloseRequest, PtermOpen, PtermOpenRequest,
     PtermResize, PtermResizeRequest, PtermShells, PtermStreamOpen, RenameSessionRequest,
     ResumeSessionRequest, SessionActivity, SessionActivityState, SessionClose,
-    SessionConfirmAnswer, SessionConfirmKind, SessionConfirmRequest, SessionConfirmed,
-    SessionFocus, SessionFocusRequest, SessionLaunch, SessionList, SessionRename, SessionStart,
-    SessionsOverview, StartSessionRequest,
+    SessionConfirmAnswer, SessionConfirmKind, SessionConfirmRequest, SessionConfirmed, SessionExit,
+    SessionFocus, SessionFocusRequest, SessionLaunch, SessionList, SessionNotify, SessionRename,
+    SessionStart, SessionsOverview, StartSessionRequest,
 };
 use floti_protocol::{BackendId, Knowable, Message};
 use serde::de::DeserializeOwned;
@@ -195,9 +196,10 @@ impl ClaudeWorld {
             .join(format!("{conversation}.jsonl"))
     }
 
-    /// A conversation the CLI had in `project`, as its transcript, for the
-    /// history index to take in. Rows written straight into the index would
-    /// be dropped by its next pass, which builds them from transcripts.
+    /// A conversation the CLI had in `project`, as its prompt in the prompt
+    /// record and its transcript, for the history index to take in, as the
+    /// CLI leaves them. Rows written straight into the index would be
+    /// dropped by its next pass, which builds them from what the CLI keeps.
     fn history(&self, conversation: &str, project: &Path) {
         let file = self.transcript(conversation);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -210,6 +212,17 @@ impl ClaudeWorld {
             "message": { "role": "user", "content": "fix the export" },
         });
         std::fs::write(&file, format!("{row}\n")).unwrap();
+        let prompt = json!({
+            "display": "fix the export",
+            "pastedContents": {},
+            "timestamp": 1_790_848_800_000_u64,
+            "project": text(project),
+            "sessionId": conversation,
+        });
+        let record = self.config.join("history.jsonl");
+        let mut prompts = std::fs::read_to_string(&record).unwrap_or_default();
+        prompts.push_str(&format!("{prompt}\n"));
+        std::fs::write(&record, prompts).unwrap();
     }
 
     /// Waits until the history index holds `conversation`.
@@ -960,13 +973,183 @@ async fn a_name_is_made_unique_against_the_running_sessions_on_launch_and_rename
             .any(|row| row.id == second.id && row.label.is_none())
     );
 
-    // Which sessions a client can see is taken; nothing else follows from it.
+    // Which sessions a client can see is taken.
     client
         .request::<SessionFocus>(&SessionFocusRequest {
             ids: vec![first.id],
         })
         .await
         .unwrap();
+    host.stop().await;
+}
+
+// ---------------------------------------------------------------------------
+// Exit notifications
+// ---------------------------------------------------------------------------
+
+/// Where a client hears of exits.
+const EXITS: u64 = 4;
+/// Where a client is sent the exits worth an OS notification to it.
+const NOTIFY: u64 = 5;
+
+/// One event a client was sent, with its number.
+#[derive(Debug)]
+struct Heard {
+    subscription: u64,
+    seq: u64,
+    session: SessionRecord,
+}
+
+/// Every event `client` is sent on [`EXITS`] and [`NOTIFY`] up to and
+/// including session `id`'s exit. A notification goes out before its exit,
+/// so whatever a client is sent for that exit is in what this returns.
+async fn heard_until_exit_of(client: &mut TestClient, id: u64) -> Vec<Heard> {
+    let deadline = Instant::now() + PATIENCE;
+    let mut heard = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let Some(message) = client.next(left).await else {
+            panic!("no exit of session {id}; heard {heard:#?}");
+        };
+        let Message::Event(event) = message else {
+            continue;
+        };
+        if event.subscription != EXITS && event.subscription != NOTIFY {
+            continue;
+        }
+        let session: SessionRecord = from_payload(&event.payload).expect("a finished row");
+        let done = event.subscription == EXITS && session.id == id;
+        heard.push(Heard {
+            subscription: event.subscription,
+            seq: event.seq,
+            session,
+        });
+        if done {
+            return heard;
+        }
+    }
+}
+
+/// The sessions `heard` names on `subscription`, in the order sent.
+fn sessions_on(heard: &[Heard], subscription: u64) -> Vec<u64> {
+    heard
+        .iter()
+        .filter(|heard| heard.subscription == subscription)
+        .map(|heard| heard.session.id)
+        .collect()
+}
+
+/// The numbers of what `heard` holds on `subscription`, in the order sent.
+fn numbers_on(heard: &[Heard], subscription: u64) -> Vec<u64> {
+    heard
+        .iter()
+        .filter(|heard| heard.subscription == subscription)
+        .map(|heard| heard.seq)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_exit_is_sent_for_a_notification_only_to_the_clients_whose_user_cannot_see_the_session()
+{
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.endpoint();
+    let host = InProcess::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let folder = dirs.folder("a project");
+    // One client whose user can see both sessions, one that sees only the
+    // second, and one that never says what it sees.
+    let mut watching = TestClient::connect(&endpoint, TERMINAL).await;
+    let mut elsewhere = TestClient::connect(&endpoint, TERMINAL).await;
+    let mut silent = TestClient::connect(&endpoint, TERMINAL).await;
+    for client in [&mut watching, &mut elsewhere, &mut silent] {
+        client.subscribe_quietly(EXITS, SessionExit::NAME).await;
+        client.subscribe_quietly(NOTIFY, SessionNotify::NAME).await;
+    }
+    let first = watching
+        .request::<SessionStart>(&start_request(&folder))
+        .await
+        .unwrap();
+    let second = watching
+        .request::<SessionStart>(&start_request(&folder))
+        .await
+        .unwrap();
+    watching
+        .request::<SessionFocus>(&SessionFocusRequest {
+            ids: vec![first.id, second.id],
+        })
+        .await
+        .unwrap();
+    elsewhere
+        .request::<SessionFocus>(&SessionFocusRequest {
+            ids: vec![second.id],
+        })
+        .await
+        .unwrap();
+
+    // The first ends on its own: the two clients that cannot see it are
+    // sent its finished row to notify with, and every client the exit.
+    watching.attach(1, first.id).await;
+    watching.type_into(1, b"/exit 3\r").await;
+    let watching_first = heard_until_exit_of(&mut watching, first.id).await;
+    let elsewhere_first = heard_until_exit_of(&mut elsewhere, first.id).await;
+    let silent_first = heard_until_exit_of(&mut silent, first.id).await;
+    assert_eq!(sessions_on(&watching_first, NOTIFY), Vec::<u64>::new());
+    assert_eq!(sessions_on(&elsewhere_first, NOTIFY), [first.id]);
+    assert_eq!(sessions_on(&silent_first, NOTIFY), [first.id]);
+    let notified = elsewhere_first
+        .iter()
+        .find(|heard| heard.subscription == NOTIFY)
+        .unwrap();
+    assert_eq!(notified.session.status, SessionStatus::Exited);
+    assert_eq!(notified.session.exit_code, Some(3));
+    assert!(notified.session.ended_at.is_some(), "{notified:?}");
+    for heard in [&watching_first, &elsewhere_first, &silent_first] {
+        assert_eq!(sessions_on(heard, EXITS), [first.id]);
+    }
+
+    // The second ends where only the silent client's user cannot see it.
+    watching.attach(2, second.id).await;
+    watching.type_into(2, b"/exit 0\r").await;
+    let watching_second = heard_until_exit_of(&mut watching, second.id).await;
+    let elsewhere_second = heard_until_exit_of(&mut elsewhere, second.id).await;
+    let silent_second = heard_until_exit_of(&mut silent, second.id).await;
+    assert_eq!(sessions_on(&watching_second, NOTIFY), Vec::<u64>::new());
+    assert_eq!(sessions_on(&elsewhere_second, NOTIFY), Vec::<u64>::new());
+    assert_eq!(sessions_on(&silent_second, NOTIFY), [second.id]);
+
+    // A session a client closed was meant to end: nobody is notified, and
+    // every client still hears the exit.
+    let third = elsewhere
+        .request::<SessionStart>(&start_request(&folder))
+        .await
+        .unwrap();
+    elsewhere
+        .request::<SessionClose>(&CloseSessionRequest {
+            id: third.id,
+            force: true,
+        })
+        .await
+        .unwrap();
+    let watching_third = heard_until_exit_of(&mut watching, third.id).await;
+    let elsewhere_third = heard_until_exit_of(&mut elsewhere, third.id).await;
+    let silent_third = heard_until_exit_of(&mut silent, third.id).await;
+    for heard in [&watching_third, &elsewhere_third, &silent_third] {
+        assert_eq!(sessions_on(heard, NOTIFY), Vec::<u64>::new());
+        assert_eq!(sessions_on(heard, EXITS), [third.id]);
+    }
+
+    // Each client's numbers run on without a gap: notifications are
+    // numbered for each client alone, and the exits they all share.
+    let all = |heard: [Vec<Heard>; 3]| heard.into_iter().flatten().collect::<Vec<_>>();
+    let watching = all([watching_first, watching_second, watching_third]);
+    let elsewhere = all([elsewhere_first, elsewhere_second, elsewhere_third]);
+    let silent = all([silent_first, silent_second, silent_third]);
+    assert_eq!(numbers_on(&watching, NOTIFY), Vec::<u64>::new());
+    assert_eq!(numbers_on(&elsewhere, NOTIFY), [1]);
+    assert_eq!(numbers_on(&silent, NOTIFY), [1, 2]);
+    for heard in [&watching, &elsewhere, &silent] {
+        assert_eq!(numbers_on(heard, EXITS), [1, 2, 3]);
+    }
     host.stop().await;
 }
 

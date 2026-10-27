@@ -7,10 +7,12 @@
 //! which paints Unknown; it is never a zero. A backend that does not declare
 //! usage has no reading at all.
 //!
-//! The estimated spend's "today" runs from local midnight, which only a
-//! [`LocalDay`] can say. Where it cannot, the spend is left out of the
-//! reading: an estimate over the wrong day is a wrong number, and a missing
-//! estimate paints nothing.
+//! The estimated spend's "today" runs from local midnight, which a
+//! [`LocalDay`] says: the host's own zone ([`SystemDay`]) in the host. Where
+//! it cannot, the spend is left out of the reading: an estimate over the
+//! wrong day is a wrong number, and a missing estimate paints nothing.
+
+mod day;
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,24 +20,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use floti_protocol::Knowable;
 use floti_protocol::channels::sessions::UsageSnapshot;
 
+pub use self::day::{LocalDay, SystemDay, ZonedDay};
 use crate::agent::{AgentBackend, BackendAnswers};
-
-/// Where local midnight falls, for the estimate's "today".
-pub trait LocalDay: Send + Sync {
-    /// Epoch ms of the local midnight that starts the day `now_ms` is in,
-    /// or `None` when it cannot be told.
-    fn today_start_ms(&self, now_ms: u64) -> Option<u64>;
-}
-
-/// A local day nobody can tell.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct UnknownLocalDay;
-
-impl LocalDay for UnknownLocalDay {
-    fn today_start_ms(&self, _now_ms: u64) -> Option<u64> {
-        None
-    }
-}
 
 /// The readings of every backend that declares usage, and the latest set.
 pub struct UsageReader {

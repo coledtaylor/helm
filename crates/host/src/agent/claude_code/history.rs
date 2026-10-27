@@ -97,7 +97,7 @@ pub(super) fn transcript(config_dir: &Path, id: &str) -> Result<Option<Transcrip
 
 /// Each conversation id with its transcript. Where one id is in two project
 /// folders the larger file is kept, the fuller record of the two.
-fn transcripts(config_dir: &Path) -> Result<BTreeMap<String, PathBuf>> {
+pub(super) fn transcripts(config_dir: &Path) -> Result<BTreeMap<String, PathBuf>> {
     let projects = config_dir.join("projects");
     let entries = match std::fs::read_dir(&projects) {
         Ok(entries) => entries,

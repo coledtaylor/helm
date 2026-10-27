@@ -15,12 +15,13 @@ use floti_host::agent::{AgentBackend, BackendAnswers};
 use floti_host::platform::process_tree::Native as NativeTree;
 use floti_host::server::{Host, HostConfig, shell_backend};
 use floti_host::testkit::{PATIENCE, TestClient, TestDirs};
-use floti_host::usage::{LocalDay, UnknownLocalDay, UsageReader, same_readings};
+use floti_host::usage::{LocalDay, UsageReader, ZonedDay, same_readings};
 use floti_protocol::channel::from_payload;
 use floti_protocol::channels::sessions::{
     ReadUsage, UsageChanged, UsageGroup, UsageProblemKind, UsageSeverity, UsageSnapshot,
 };
 use floti_protocol::{BackendId, EventChannel, Message};
+use jiff::tz::TimeZone;
 use serde_json::{Value, json};
 
 /// How old a reading gets before its figures are floors (core's
@@ -548,17 +549,94 @@ fn a_reading_that_says_the_same_again_is_no_change() {
     assert!(reader.read().1);
 }
 
+/// A local day nobody can tell.
+struct NoDay;
+
+impl LocalDay for NoDay {
+    fn today_start_ms(&self, _now_ms: u64) -> Option<u64> {
+        None
+    }
+}
+
 #[test]
 fn the_estimate_is_left_out_where_local_midnight_cannot_be_told() {
     let world = Claude::new();
     world.write(&usual());
-    let unknown = UsageReader::new(&backends(&world), Box::new(UnknownLocalDay));
+    let unknown = UsageReader::new(&backends(&world), Box::new(NoDay));
     let (readings, _) = unknown.read();
     assert_eq!(readings[0].spend, None);
     assert_eq!(readings[0].limits.len(), 3);
 
     let known = UsageReader::new(&backends(&world), Box::new(FixedDay(0)));
     assert!(known.read().0[0].spend.is_some());
+}
+
+// ---------------------------------------------------------------------------
+// Local midnight
+// ---------------------------------------------------------------------------
+
+/// US Eastern as a POSIX rule, which needs no time zone database on any OS:
+/// summer time from 02:00 on the second Sunday of March to 02:00 on the
+/// first Sunday of November.
+const EASTERN: &str = "EST5EDT,M3.2.0,M11.1.0";
+
+const HOUR: u64 = 3_600_000;
+
+fn eastern() -> ZonedDay {
+    ZonedDay::new(TimeZone::posix(EASTERN).expect("a valid POSIX rule"))
+}
+
+#[test]
+fn today_starts_at_local_midnight_in_the_zone() {
+    // 2026-07-15T14:30 EDT; that day's midnight is 04:00Z.
+    let now = 1_784_140_200_000;
+    let midnight = 1_784_088_000_000;
+    assert_eq!(eastern().today_start_ms(now), Some(midnight));
+    // Midnight is the first instant of its own day, and the instant before
+    // it is the day before's.
+    assert_eq!(eastern().today_start_ms(midnight), Some(midnight));
+    assert_eq!(
+        eastern().today_start_ms(midnight - 1),
+        Some(midnight - 24 * HOUR)
+    );
+}
+
+#[test]
+fn today_starts_at_local_midnight_on_a_day_of_23_hours() {
+    // 2026-03-08, when the clocks go forward: 20:00 EDT is 19 hours after
+    // that day's midnight (05:00Z), not 20 and not 24.
+    let now = 1_773_014_400_000;
+    let midnight = 1_772_946_000_000;
+    let start = eastern().today_start_ms(now);
+    assert_eq!(start, Some(midnight));
+    assert_eq!(now - midnight, 19 * HOUR);
+    assert_ne!(start, Some(now - 24 * HOUR));
+}
+
+#[test]
+fn today_starts_at_local_midnight_on_a_day_of_25_hours() {
+    // 2026-11-01, when the clocks go back: 22:00 EST is 23 hours after that
+    // day's midnight (04:00Z), not 22 and not 24.
+    let now = 1_793_588_400_000;
+    let midnight = 1_793_505_600_000;
+    let start = eastern().today_start_ms(now);
+    assert_eq!(start, Some(midnight));
+    assert_eq!(now - midnight, 23 * HOUR);
+    assert_ne!(start, Some(now - 24 * HOUR));
+}
+
+#[test]
+fn a_zone_nobody_can_tell_has_no_local_midnight() {
+    let unknown = ZonedDay::new(TimeZone::unknown());
+    assert_eq!(unknown.today_start_ms(1_784_140_200_000), None);
+
+    // And a reading taken by it leaves the spend out, keeping the limits.
+    let world = Claude::new();
+    world.write(&usual());
+    let reader = UsageReader::new(&backends(&world), Box::new(unknown));
+    let (readings, _) = reader.read();
+    assert_eq!(readings[0].spend, None);
+    assert_eq!(readings[0].limits.len(), 3);
 }
 
 #[test]
@@ -636,7 +714,8 @@ async fn a_client_gets_the_latest_raw_reading_and_each_new_one_as_it_lands() {
     assert_eq!(read[0].problem, None);
 
     let watched = snapshot_state(client.subscribe_on(4, UsageChanged::NAME).await);
-    assert_eq!(watched, read);
+    // How long the estimate took to sum differs on every reading.
+    assert!(same_readings(&watched, &read), "{watched:?} != {read:?}");
 
     // The agent rewrites its cached figures: the reading arrives unasked.
     world.write(&claude_json(
@@ -647,7 +726,8 @@ async fn a_client_gets_the_latest_raw_reading_and_each_new_one_as_it_lands() {
     assert_eq!(next[0].fetched_at_ms, Some(fetched + 60_000));
     assert_eq!(next[0].limits.len(), 1);
     assert_eq!(next[0].limits[0].percent, 64.0);
-    assert_eq!(client.request::<ReadUsage>(&()).await.unwrap(), next);
+    let again = client.request::<ReadUsage>(&()).await.unwrap();
+    assert!(same_readings(&again, &next), "{again:?} != {next:?}");
     drop(host);
 }
 
@@ -664,12 +744,12 @@ async fn a_reading_the_host_could_not_take_is_unknown_and_never_a_number() {
     assert_eq!(problem(&read[0]), Some(UsageProblemKind::NoFile));
     assert!(read[0].limits.is_empty());
     assert_eq!(read[0].fetched_at_ms, None);
-    assert_eq!(read[0].spend, None);
     assert!(usage_view(&read[0], NOW).buckets.is_empty());
 
     // Half a file is no better.
     let watched = snapshot_state(client.subscribe_on(5, UsageChanged::NAME).await);
-    assert_eq!(watched, read);
+    // How long the estimate took to sum differs on every reading.
+    assert!(same_readings(&watched, &read), "{watched:?} != {read:?}");
     std::fs::write(world.beside(), "{\"cachedUsageUtilization\": {\"fetched").unwrap();
     let next = next_readings(&mut client, 5).await;
     assert_eq!(problem(&next[0]), Some(UsageProblemKind::NotJson));

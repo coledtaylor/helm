@@ -169,13 +169,49 @@ pub trait Permissions: Send + Sync {
     fn arguments(&self, mode: PermissionMode) -> Vec<OsString>;
 }
 
-/// The agent's transcripts.
+/// The agent's transcripts, and its record of prompts when it keeps one.
 pub trait HistorySource: Send + Sync {
     /// Every conversation on disk, most recent first.
     fn conversations(&self) -> Result<Vec<Conversation>>;
 
     /// One conversation's messages, or `None` when it is not on disk.
     fn transcript(&self, conversation_id: &str) -> Result<Option<Transcript>>;
+
+    /// The agent's own record of every prompt submitted, which outlives the
+    /// transcripts the agent reaps. `None`, the default, for an agent that
+    /// keeps no such record: its prompts are then what its transcripts say
+    /// the person submitted.
+    fn prompt_record(&self) -> Option<&dyn PromptRecord> {
+        None
+    }
+}
+
+/// An append-only file of the prompts an agent was given, read a tail at a
+/// time.
+pub trait PromptRecord: Send + Sync {
+    /// The file. The history index keeps its cursor under this name.
+    fn prompt_file(&self) -> PathBuf;
+
+    /// What the file holds past `offset` bytes, up to its last complete line.
+    fn prompts_since(&self, offset: u64) -> PromptTail;
+}
+
+/// What a prompt record held past a cursor.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PromptTail {
+    /// The prompts, in submission order.
+    pub lines: Vec<crate::history::index::PromptLine>,
+    /// Where the next read resumes: always the byte after a line break, so a
+    /// line the agent is still writing is read whole next time and the
+    /// cursor never splits a character.
+    pub bytes: u64,
+    /// The file is not the one the cursor belonged to - it shrank or it is
+    /// gone - so what was indexed from it is discarded, not appended to.
+    pub reset: bool,
+    /// Lines that were not usable records. Skipped, not fatal.
+    pub skipped: u64,
+    /// Set when the file could not be read at all.
+    pub error: Option<String>,
 }
 
 /// The agent's usage figures.

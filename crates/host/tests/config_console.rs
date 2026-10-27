@@ -14,16 +14,23 @@ use floti_host::config_console::{
     ConfigConsole, SnapshotStore, change_sink, hash_content, normalize, sha256_hex,
 };
 use floti_host::platform::process_tree::Native as NativeTree;
+use floti_host::platform::socket::Endpoint;
+use floti_host::server::{Host, HostConfig, Stopper, backends};
 use floti_host::session::ClientId;
 use floti_host::store::Store;
-use floti_host::testkit::TestDirs;
+use floti_host::testkit::{PATIENCE, TestClient, TestDirs};
+use floti_protocol::Message;
+use floti_protocol::channel::{EventChannel, from_payload};
+use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::workspace::{
-    ConfigExternalChange, ConfigFileKind, ConfigScopeKind, ConfigWriteReason, CreatableKind,
-    CreateConfigRequest, DeleteConfigRequest, EffectiveViewRequest, McpAddRequest,
-    McpApproveRequest, McpDiffSign, McpRemoveRequest, McpScope, RenameConfigRequest,
-    SettingsLayerKind, WriteConfigRequest,
+    ConfigChangedOutside, ConfigExternalChange, ConfigFileKind, ConfigPath, ConfigScopeKind,
+    ConfigWriteReason, CreatableKind, CreateConfigRequest, DeleteConfigRequest,
+    EffectiveViewRequest, McpAddRequest, McpApproveRequest, McpDiffSign, McpRemoveRequest,
+    McpScope, ReadConfigFile, RenameConfigRequest, SettingsLayerKind, WatchConfigFile,
+    WatchConfigRequest, WriteConfigFile, WriteConfigRequest,
 };
 use serde_json::{Value, json};
+use tokio::task::JoinHandle;
 
 fn fake_claude() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -71,7 +78,7 @@ impl World {
             backend,
             agent,
             Arc::clone(&store) as Arc<dyn SnapshotStore>,
-            change_sink(move |change| seen.lock().unwrap().push(change.clone())),
+            change_sink(move |_, change| seen.lock().unwrap().push(change.clone())),
         );
         Self {
             _dirs: dirs,
@@ -671,6 +678,165 @@ fn a_watched_file_changed_outside_the_host_is_told_and_a_write_through_the_host_
     world.put(&file, "four\n");
     std::thread::sleep(Duration::from_millis(600));
     assert_eq!(world.changes.lock().unwrap().len(), 2);
+}
+
+// --- Watching through the host, one client at a time -----------------------
+
+/// Where each client hears of outside changes.
+const CHANGES: u64 = 9;
+
+/// A host whose agents are today's, its Claude Code the fake keeping its
+/// config in `claude`.
+async fn host_over(
+    dirs: &TestDirs,
+    endpoint: &Endpoint,
+    claude: &Path,
+) -> (Stopper, JoinHandle<floti_host::Result<HostStopReason>>) {
+    let settings = ClaudeCodeSettings {
+        program: "node".into(),
+        leading_args: vec![fake_claude().into_os_string()],
+        config_dir: claude.to_path_buf(),
+        pass_config_dir: true,
+        api_key_set: false,
+    };
+    let host = Host::start(HostConfig {
+        folders: dirs.folders(),
+        endpoint: endpoint.clone(),
+        backends: backends(&dirs.user_env(), Some(settings)),
+        inherited_env: std::env::vars_os().collect(),
+    })
+    .expect("start the host");
+    let stopper = host.stopper();
+    (stopper, tokio::spawn(host.run_until_stopped()))
+}
+
+/// Every outside change `client` is sent within `wait`, with its number.
+async fn changes_within(
+    client: &mut TestClient,
+    wait: Duration,
+) -> Vec<(u64, ConfigExternalChange)> {
+    let deadline = tokio::time::Instant::now() + wait;
+    let mut changes = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match client.next(left).await {
+            Some(Message::Event(event)) if event.subscription == CHANGES => {
+                changes.push((event.seq, from_payload(&event.payload).expect("a change")));
+            }
+            Some(_) => {}
+            None => return changes,
+        }
+    }
+}
+
+/// The next outside change `client` is sent, with its number.
+async fn next_change(client: &mut TestClient) -> (u64, ConfigExternalChange) {
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match client.next(left).await {
+            Some(Message::Event(event)) if event.subscription == CHANGES => {
+                return (event.seq, from_payload(&event.payload).expect("a change"));
+            }
+            Some(_) => {}
+            None => panic!("no outside change within {PATIENCE:?}"),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_outside_change_is_told_only_to_the_clients_watching_that_file() {
+    let dirs = TestDirs::new();
+    let claude = dirs.home.join(".claude");
+    std::fs::create_dir_all(&claude).unwrap();
+    let memory = claude.join("CLAUDE.md");
+    let settings = claude.join("settings.json");
+    std::fs::write(&memory, "one\n").unwrap();
+    std::fs::write(&settings, "{}\n").unwrap();
+    let endpoint = dirs.endpoint();
+    let (stopper, running) = host_over(&dirs, &endpoint, &claude).await;
+
+    // Two clients with the memory file open, one with the settings, and one
+    // with no file open.
+    let mut memory_a = TestClient::connect(&endpoint, &[]).await;
+    let mut memory_b = TestClient::connect(&endpoint, &[]).await;
+    let mut on_settings = TestClient::connect(&endpoint, &[]).await;
+    let mut no_file = TestClient::connect(&endpoint, &[]).await;
+    for (client, open) in [
+        (&mut memory_a, Some(&memory)),
+        (&mut memory_b, Some(&memory)),
+        (&mut on_settings, Some(&settings)),
+        (&mut no_file, None),
+    ] {
+        client
+            .subscribe_quietly(CHANGES, ConfigChangedOutside::NAME)
+            .await;
+        if let Some(open) = open {
+            client
+                .request::<WatchConfigFile>(&WatchConfigRequest {
+                    path: Some(open.display().to_string()),
+                })
+                .await
+                .unwrap();
+        }
+    }
+
+    // A write through the host is no outside change: nobody is told.
+    let read = memory_a
+        .request::<ReadConfigFile>(&ConfigPath {
+            path: memory.display().to_string(),
+        })
+        .await
+        .unwrap();
+    let written = memory_a
+        .request::<WriteConfigFile>(&WriteConfigRequest {
+            scope_path: World::scope(&claude),
+            path: memory.display().to_string(),
+            content: "two\n".to_owned(),
+            expected_hash: Some(read.hash),
+            reason: ConfigWriteReason::Edit,
+        })
+        .await
+        .unwrap();
+    assert!(written.ok, "{written:?}");
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    for client in [&mut memory_a, &mut memory_b, &mut on_settings, &mut no_file] {
+        let heard = changes_within(client, Duration::from_millis(50)).await;
+        assert!(heard.is_empty(), "{heard:?}");
+    }
+
+    // An outside edit of the memory file is told to each client that has it
+    // open, once, numbered for that client alone.
+    std::fs::write(&memory, "three\n").unwrap();
+    for client in [&mut memory_a, &mut memory_b] {
+        let (seq, change) = next_change(client).await;
+        assert_eq!(seq, 1);
+        assert!(same(&change.path, &memory), "{change:?}");
+        assert_eq!(change.hash, hash_content("three\n"));
+        assert!(change.exists);
+    }
+
+    // An outside edit of the settings is the settings client's alone, and
+    // its numbers start at one too.
+    std::fs::write(&settings, "{\"model\":\"b\"}\n").unwrap();
+    let (seq, change) = next_change(&mut on_settings).await;
+    assert_eq!(seq, 1);
+    assert!(same(&change.path, &settings), "{change:?}");
+
+    // Nobody heard anything else: not the other file's change, not twice,
+    // and nothing at all with no file open.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    for client in [&mut memory_a, &mut memory_b, &mut on_settings, &mut no_file] {
+        let heard = changes_within(client, Duration::from_millis(50)).await;
+        assert!(heard.is_empty(), "{heard:?}");
+    }
+
+    stopper.stop(HostStopReason::Stop);
+    tokio::time::timeout(PATIENCE, running)
+        .await
+        .expect("the host stops in time")
+        .expect("the host's task")
+        .expect("the host stops cleanly");
 }
 
 // --- MCP and the doctor, through the agent's CLI ----------------------------

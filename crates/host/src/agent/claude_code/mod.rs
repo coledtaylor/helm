@@ -13,6 +13,7 @@ mod argv;
 mod config;
 mod history;
 mod overlay;
+mod prompts;
 mod sign_in;
 mod status;
 mod time;
@@ -34,9 +35,9 @@ use floti_protocol::{BackendId, HarnessPart, HarnessSupport, Knowable};
 
 use super::{
     AgentBackend, AgentToolServer, AgentTools, Composition, ConfigSource, Conversation,
-    HistorySource, Launch, LaunchFolder, LaunchRequest, LaunchSpec, Permissions, Registration,
-    ResumeRequest, Resumer, SessionRef, SignIn, SignInCheck, StatusSource, TestedVersions,
-    Transcript, UsageSource, Version, VersionCheck,
+    HistorySource, Launch, LaunchFolder, LaunchRequest, LaunchSpec, Permissions, PromptRecord,
+    PromptTail, Registration, ResumeRequest, Resumer, SessionRef, SignIn, SignInCheck,
+    StatusSource, TestedVersions, Transcript, UsageSource, Version, VersionCheck,
 };
 use crate::platform::folders::UserEnv;
 use crate::platform::launcher::{self, Program, ProgramLauncher};
@@ -447,6 +448,21 @@ impl HistorySource for ClaudeCodeBackend {
 
     fn transcript(&self, conversation_id: &str) -> Result<Option<Transcript>> {
         history::transcript(&self.settings.config_dir, conversation_id)
+    }
+
+    fn prompt_record(&self) -> Option<&dyn PromptRecord> {
+        Some(self)
+    }
+}
+
+/// `history.jsonl`, the prompt record the history list is built from.
+impl PromptRecord for ClaudeCodeBackend {
+    fn prompt_file(&self) -> PathBuf {
+        prompts::history_file(&self.settings.config_dir)
+    }
+
+    fn prompts_since(&self, offset: u64) -> PromptTail {
+        prompts::read_since(&self.prompt_file(), offset)
     }
 }
 

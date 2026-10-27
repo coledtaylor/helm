@@ -3014,6 +3014,7 @@ export interface EventChannels {
   "session:activity": { event: Array<SessionActivityState>; snapshot: Array<SessionActivityState>; capability: null };
   "session:confirm": { event: SessionConfirmRequest; snapshot: null; capability: null };
   "session:exit": { event: SessionRecord; snapshot: null; capability: null };
+  "session:notify": { event: SessionRecord; snapshot: null; capability: null };
   "sessions:overview": { event: SessionsOverview; snapshot: SessionsOverview; capability: null };
   "sessions:resources": { event: Array<SessionResources>; snapshot: Array<SessionResources>; capability: null };
   "settings:changed": { event: HostSettings; snapshot: HostSettings; capability: null };
@@ -3134,6 +3135,7 @@ export const CHANNELS = [
   { name: "session:focus", kind: "request", capability: null },
   { name: "session:launch", kind: "request", capability: null },
   { name: "session:list", kind: "request", capability: null },
+  { name: "session:notify", kind: "event", capability: null },
   { name: "session:rename", kind: "request", capability: null },
   { name: "session:resize", kind: "request", capability: "terminal" },
   { name: "session:restorable", kind: "request", capability: null },

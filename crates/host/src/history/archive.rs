@@ -12,12 +12,21 @@
 //! your limit" is a different fact from "this was gone before Floti saw it",
 //! and it is what stops the next pass archiving it again.
 //!
-//! Bodies are stored as read, with `compressed` false and `stored_bytes`
-//! equal to `raw_bytes`, so the ceiling is measured on what is in the
-//! database. The schema allows a raw-deflate body; one is never written
-//! here, and reads as empty text, as a body that cannot be inflated does.
+//! A body longer than [`COMPRESS_ABOVE_BYTES`] is stored as raw deflate
+//! when that makes it shorter, and as read otherwise: raw deflate on a short
+//! string comes out longer than the input, because the Huffman table has to
+//! go somewhere. `compressed` says which, and `stored_bytes` is what the row
+//! takes in the database, which is what the ceiling is measured on. A body
+//! that cannot be inflated reads as empty text: it is one message of one
+//! conversation, and failing the read would lose the rest with it.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::io::{Read as _, Write as _};
+
+use flate2::Compression;
+use flate2::read::DeflateDecoder;
+use flate2::write::DeflateEncoder;
 
 use floti_protocol::channels::sessions::{
     ArchiveMessage, ArchiveRole, ArchiveSessionState, ArchiveStats, ArchivedConversation,
@@ -158,21 +167,22 @@ pub fn archive_transcript(conn: &Connection, input: &ArchiveInput<'_>) -> Result
             let mut insert = tx.prepare(
                 "INSERT INTO transcript_messages
                    (uuid, session_id, role, at, body, compressed, raw_bytes, stored_bytes)
-                 VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(uuid) DO NOTHING",
             )?;
             let mut index = tx.prepare("INSERT INTO transcript_fts(rowid, text) VALUES (?, ?)")?;
             for message in input.messages {
-                let body = message.text.as_bytes();
-                let bytes = to_i64(body.len() as u64);
+                let raw_bytes = message.text.len() as u64;
+                let (body, compressed) = encode_body(&message.text);
                 let written = insert.execute(params![
                     message.uuid,
                     session,
                     role_name(message.role),
                     to_i64(message.at),
-                    body,
-                    bytes,
-                    bytes,
+                    body.as_ref(),
+                    compressed,
+                    to_i64(raw_bytes),
+                    to_i64(body.len() as u64),
                 ])?;
                 if written == 0 {
                     continue;
@@ -495,14 +505,38 @@ fn role_name(role: ArchiveRole) -> &'static str {
     }
 }
 
-/// A stored body as text. A compressed one is never written by the host and
-/// reads as empty: one unreadable message must not take its conversation
-/// down with it.
-fn decode_body(body: &[u8], compressed: bool) -> String {
-    if compressed {
-        return String::new();
+/// Bodies this long or shorter are stored as they are without trying:
+/// deflate does not make them shorter.
+pub const COMPRESS_ABOVE_BYTES: usize = 120;
+
+/// A message's text as it is stored, and whether that is raw deflate: the
+/// deflated bytes when they are shorter, the text's own bytes otherwise.
+fn encode_body(text: &str) -> (Cow<'_, [u8]>, bool) {
+    let raw = text.as_bytes();
+    if raw.len() <= COMPRESS_ABOVE_BYTES {
+        return (Cow::Borrowed(raw), false);
     }
-    String::from_utf8_lossy(body).into_owned()
+    let mut encoder =
+        DeflateEncoder::new(Vec::with_capacity(raw.len() / 2), Compression::default());
+    // Writing into a `Vec` cannot fail; were it to, the body is kept as read.
+    match encoder.write_all(raw).and_then(|()| encoder.finish()) {
+        Ok(packed) if packed.len() < raw.len() => (Cow::Owned(packed), true),
+        _ => (Cow::Borrowed(raw), false),
+    }
+}
+
+/// A stored body as text. One that cannot be inflated reads as empty: it is
+/// one message, and failing the read would take its conversation down with
+/// it.
+fn decode_body(body: &[u8], compressed: bool) -> String {
+    if !compressed {
+        return String::from_utf8_lossy(body).into_owned();
+    }
+    let mut raw = Vec::with_capacity(body.len() * 4);
+    match DeflateDecoder::new(body).read_to_end(&mut raw) {
+        Ok(_) => String::from_utf8_lossy(&raw).into_owned(),
+        Err(_) => String::new(),
+    }
 }
 
 #[cfg(test)]

@@ -1587,6 +1587,361 @@ fn history_with_no_projects_folder_is_known_and_empty() {
     );
 }
 
+// The prompt record (discovery/history.test.ts, readHistoryTail), with the
+// same inputs and expectations.
+
+/// One line of `history.jsonl` as the CLI writes it.
+fn history_line(session: &str, display: &str) -> String {
+    history_line_in(session, display, r"C:\repos\alpha", 1_700_000_000_000)
+}
+
+fn history_line_in(session: &str, display: &str, project: &str, timestamp: u64) -> String {
+    let row = json!({
+        "display": display,
+        "pastedContents": {},
+        "timestamp": timestamp,
+        "project": project,
+        "sessionId": session,
+    });
+    format!("{row}\n")
+}
+
+fn displays(tail: &PromptTail) -> Vec<&str> {
+    tail.lines.iter().map(|line| line.text.as_str()).collect()
+}
+
+fn append(path: &Path, contents: &str) {
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .unwrap()
+        .write_all(contents.as_bytes())
+        .unwrap();
+}
+
+/// The record in the world's config folder, and the backend reading it.
+fn record(world: &World) -> (PathBuf, &dyn PromptRecord) {
+    let source = world.backend.history().unwrap();
+    let record = source
+        .prompt_record()
+        .expect("Claude Code keeps a prompt record");
+    (record.prompt_file(), record)
+}
+
+#[test]
+fn the_prompt_record_is_history_jsonl_in_the_config_folder() {
+    let world = World::new();
+    let (file, _) = record(&world);
+    assert_eq!(file, world.config.join("history.jsonl"));
+}
+
+#[test]
+fn the_record_reads_every_line_of_a_file_it_has_never_seen() {
+    let world = World::new();
+    let (file, record) = record(&world);
+    write(
+        &file,
+        history_line("s1", "first") + &history_line("s1", "second") + &history_line("s2", "third"),
+    );
+
+    let tail = record.prompts_since(0);
+
+    assert_eq!(displays(&tail), ["first", "second", "third"]);
+    assert_eq!(tail.skipped, 0);
+    assert!(!tail.reset);
+    assert_eq!(tail.error, None);
+}
+
+#[test]
+fn the_record_reads_only_what_was_appended_since_the_cursor() {
+    let world = World::new();
+    let (file, record) = record(&world);
+    write(&file, history_line("s1", "first"));
+    let first = record.prompts_since(0);
+
+    append(&file, &history_line("s2", "second"));
+    let second = record.prompts_since(first.bytes);
+
+    assert_eq!(displays(&second), ["second"]);
+    assert!(!second.reset);
+}
+
+#[test]
+fn the_record_reports_nothing_new_when_the_file_has_not_grown() {
+    let world = World::new();
+    let (file, record) = record(&world);
+    write(&file, history_line("s1", "first"));
+    let first = record.prompts_since(0);
+
+    let again = record.prompts_since(first.bytes);
+    assert!(again.lines.is_empty());
+    assert_eq!(again.bytes, first.bytes);
+    assert!(!again.reset);
+}
+
+#[test]
+fn the_record_leaves_a_half_written_trailing_record_for_the_next_pass() {
+    // The CLI appends while the host reads: the last record is a fragment,
+    // and consuming it would parse half a line now and the other half later.
+    let world = World::new();
+    let (file, record) = record(&world);
+    write(
+        &file,
+        history_line("s1", "complete") + r#"{"display":"half w"#,
+    );
+
+    let tail = record.prompts_since(0);
+    assert_eq!(displays(&tail), ["complete"]);
+    assert_eq!(tail.skipped, 0);
+    assert_eq!(tail.bytes, history_line("s1", "complete").len() as u64);
+
+    // Once the rest lands, the record is read exactly once.
+    write(
+        &file,
+        history_line("s1", "complete") + &history_line("s2", "half written"),
+    );
+    let next = record.prompts_since(tail.bytes);
+    assert_eq!(displays(&next), ["half written"]);
+}
+
+#[test]
+fn the_record_keeps_the_cursor_on_a_byte_boundary_when_a_prompt_is_not_ascii() {
+    // A cursor placed mid-sequence would decode the next read as U+FFFD.
+    let world = World::new();
+    let (file, record) = record(&world);
+    let prompt = "ελληνικά 日本語 🚀";
+    write(&file, history_line("s1", prompt));
+    let first = record.prompts_since(0);
+    assert_eq!(displays(&first).first().copied(), Some(prompt));
+
+    append(&file, &history_line("s2", "after"));
+    assert_eq!(displays(&record.prompts_since(first.bytes)), ["after"]);
+}
+
+#[test]
+fn the_record_asks_for_a_full_reindex_when_the_file_has_shrunk() {
+    let world = World::new();
+    let (file, record) = record(&world);
+    write(
+        &file,
+        history_line("s1", "first") + &history_line("s2", "second"),
+    );
+    let first = record.prompts_since(0);
+
+    write(&file, history_line("s3", "only one now"));
+    let after = record.prompts_since(first.bytes);
+
+    assert!(after.reset);
+    assert_eq!(displays(&after), ["only one now"]);
+}
+
+#[test]
+fn the_record_skips_a_malformed_line_instead_of_losing_the_rest_of_the_file() {
+    let world = World::new();
+    let (file, record) = record(&world);
+    write(
+        &file,
+        history_line("s1", "good")
+            + "not json at all\n"
+            + "{\"display\":\"no session\"}\n"
+            + &history_line("s2", "also good"),
+    );
+
+    let tail = record.prompts_since(0);
+    assert_eq!(displays(&tail), ["good", "also good"]);
+    assert_eq!(tail.skipped, 2);
+}
+
+#[test]
+fn the_record_keeps_a_prompt_that_was_submitted_empty() {
+    let world = World::new();
+    let (file, record) = record(&world);
+    write(
+        &file,
+        format!(
+            "{}\n",
+            json!({"display": "", "timestamp": 1, "project": "p", "sessionId": "s"})
+        ),
+    );
+    assert_eq!(record.prompts_since(0).lines.len(), 1);
+}
+
+#[test]
+fn the_record_reports_a_missing_file_as_a_reset_rather_than_failing() {
+    let world = World::new();
+    let tail = prompts::read_since(&world.config.join("nope.jsonl"), 512);
+    assert!(tail.lines.is_empty());
+    assert!(tail.reset);
+    assert_eq!(tail.bytes, 0);
+    assert!(tail.error.is_some());
+}
+
+#[test]
+fn the_record_keeps_each_line_as_recorded_with_its_folder_and_time() {
+    let world = World::new();
+    let (file, record) = record(&world);
+    write(
+        &file,
+        history_line_in("Abc", "hello", r"C:\repos\beta", 1_700_000_000_123),
+    );
+    assert_eq!(
+        record.prompts_since(0).lines,
+        [crate::history::index::PromptLine {
+            session_id: "Abc".to_owned(),
+            project: r"C:\repos\beta".to_owned(),
+            at: 1_700_000_000_123,
+            text: "hello".to_owned(),
+        }]
+    );
+}
+
+// Finding transcripts (discovery/history.test.ts, scanTranscripts), with the
+// same inputs and expectations.
+
+/// A session id of the shape the transcript scan recognises.
+fn scanned_uuid(n: u32) -> String {
+    let hex = format!("{n:02x}");
+    format!(
+        "{}-{}-4{hex}0-8{hex}0-{}",
+        hex.repeat(4),
+        hex.repeat(2),
+        hex.repeat(6)
+    )
+}
+
+fn scanned_transcript(world: &World, project_dir: &str, id: &str, body: &str) {
+    write(
+        &world
+            .config
+            .join("projects")
+            .join(project_dir)
+            .join(format!("{id}.jsonl")),
+        body,
+    );
+}
+
+fn scanned(world: &World) -> BTreeMap<String, PathBuf> {
+    history::transcripts(&world.config).unwrap()
+}
+
+#[test]
+fn the_scan_finds_transcripts_across_every_project_directory() {
+    let world = World::new();
+    scanned_transcript(&world, "C--repos-alpha", &scanned_uuid(1), "{}\n");
+    scanned_transcript(&world, "C--repos-beta", &scanned_uuid(2), "{}\n");
+
+    let found = scanned(&world);
+    assert_eq!(
+        found.keys().cloned().collect::<Vec<_>>(),
+        [scanned_uuid(1), scanned_uuid(2)]
+    );
+    assert!(std::fs::metadata(&found[&scanned_uuid(1)]).unwrap().len() > 0);
+}
+
+#[test]
+fn the_scan_ignores_files_whose_name_is_not_a_session_id() {
+    let world = World::new();
+    scanned_transcript(&world, "C--repos-alpha", &scanned_uuid(1), "{}\n");
+    let dir = world.config.join("projects").join("C--repos-alpha");
+    write(&dir.join("sessions-index.json"), "{}");
+    write(&dir.join("notes.jsonl"), "{}");
+
+    assert_eq!(
+        scanned(&world).into_keys().collect::<Vec<_>>(),
+        [scanned_uuid(1)]
+    );
+}
+
+#[test]
+fn the_scan_does_not_descend_into_a_sessions_subagent_transcripts() {
+    // `<sessionId>/subagents/agent-*.jsonl` are not sessions, and one of them
+    // counted as a surviving transcript would offer a resume that cannot work.
+    let world = World::new();
+    let nested = world
+        .config
+        .join("projects")
+        .join("C--repos-alpha")
+        .join(scanned_uuid(1))
+        .join("subagents");
+    write(&nested.join(format!("{}.jsonl", scanned_uuid(2))), "{}");
+
+    assert!(scanned(&world).is_empty());
+}
+
+#[test]
+fn the_scan_matches_on_the_session_id_not_on_a_path_derived_from_the_project() {
+    // The directory name carries whatever casing the CLI was started with,
+    // so a path derived from the recorded project misses it.
+    let world = World::new();
+    scanned_transcript(&world, "C--repos-Alpha-Beta", &scanned_uuid(1), "{}\n");
+    assert!(scanned(&world).contains_key(&scanned_uuid(1)));
+}
+
+#[test]
+fn the_scan_keeps_the_larger_file_when_one_id_appears_under_two_directories() {
+    let world = World::new();
+    scanned_transcript(&world, "C--repos-alpha", &scanned_uuid(1), "{}\n");
+    scanned_transcript(
+        &world,
+        "C--repos-Alpha",
+        &scanned_uuid(1),
+        "{\"a\":1}\n{\"b\":2}\n",
+    );
+
+    let found = scanned(&world);
+    assert_eq!(
+        std::fs::metadata(&found[&scanned_uuid(1)]).unwrap().len(),
+        "{\"a\":1}\n{\"b\":2}\n".len() as u64
+    );
+}
+
+#[test]
+fn the_scan_returns_nothing_when_there_is_no_projects_directory() {
+    let world = World::new();
+    assert!(!world.config.join("projects").exists());
+    assert!(scanned(&world).is_empty());
+}
+
+// The config folder (discovery/history.test.ts, claudeHome), with the same
+// inputs and expectations. The home is the test's own, so `~/.claude` names a
+// place the test chose rather than the machine's.
+
+fn env_in(home: &Path, config_dir: Option<&str>) -> crate::platform::folders::UserEnv {
+    crate::platform::folders::UserEnv {
+        home: Some(home.to_path_buf()),
+        vars: config_dir
+            .map(|dir| ("CLAUDE_CONFIG_DIR".into(), dir.into()))
+            .into_iter()
+            .collect(),
+    }
+}
+
+#[test]
+fn the_config_folder_is_the_one_claude_config_dir_names_when_it_is_set() {
+    let dirs = TestDirs::new();
+    let configured = dirs.home.join("configured claude");
+    let settings =
+        ClaudeCodeSettings::from_env(&env_in(&dirs.home, Some(&text(&configured)))).unwrap();
+    assert_eq!(settings.config_dir, configured);
+    assert_eq!(
+        prompts::history_file(&settings.config_dir),
+        configured.join("history.jsonl")
+    );
+    assert_eq!(
+        settings.config_dir.join("projects"),
+        configured.join("projects")
+    );
+}
+
+#[test]
+fn the_config_folder_is_dot_claude_in_the_home_when_claude_config_dir_is_unset_or_blank() {
+    let dirs = TestDirs::new();
+    let unset = ClaudeCodeSettings::from_env(&env_in(&dirs.home, None)).unwrap();
+    assert_eq!(unset.config_dir, dirs.home.join(".claude"));
+    let blank = ClaudeCodeSettings::from_env(&env_in(&dirs.home, Some("   "))).unwrap();
+    assert_eq!(blank.config_dir, dirs.home.join(".claude"));
+}
+
 // ---------------------------------------------------------------------------
 // Usage (usage/read.ts, shape.ts, transcripts.ts, prices.ts)
 // ---------------------------------------------------------------------------

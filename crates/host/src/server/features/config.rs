@@ -9,9 +9,11 @@
 //!
 //! Snapshots are kept in floti.db. `config:watch` records the file the
 //! calling client's editor has open, until it says otherwise or its
-//! connection ends; an outside change to a watched file goes out on
-//! `config:externalChange` carrying its path, and a client acts only on the
-//! path its own editor has open.
+//! connection ends. `config:externalChange` is served one client at a time:
+//! an outside change to a watched file goes, carrying its path, only to the
+//! clients watching that file, each once, and a client watching another
+//! file or none hears nothing. A change made through the host is no outside
+//! change and goes to nobody.
 //!
 //! The MCP commands and the doctor run the agent's CLI for up to a minute.
 //! They run off the runtime's workers, so other clients are never kept
@@ -42,7 +44,7 @@ pub(crate) struct Config {
 
 impl Config {
     pub fn new(context: &FeatureContext) -> crate::Result<Self> {
-        context.events.serve_events::<ConfigChangedOutside>();
+        context.events.serve_per_client::<ConfigChangedOutside>();
         let console = context
             .hosted
             .backends()
@@ -51,8 +53,8 @@ impl Config {
             .map(|(backend, agent)| {
                 let events = Arc::clone(&context.events);
                 let store: Arc<dyn SnapshotStore> = context.hosted.ledger().shared_store();
-                let sink = change_sink(move |change| {
-                    if let Err(err) = events.emit::<ConfigChangedOutside>(change) {
+                let sink = change_sink(move |client, change| {
+                    if let Err(err) = events.emit_to::<ConfigChangedOutside>(client, change) {
                         eprintln!("floti host: {err}");
                     }
                 });

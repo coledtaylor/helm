@@ -5,8 +5,9 @@
 //! confirmation; the restore offer and restore; and the plain terminals'
 //! open, close, resize and shell list.
 //!
-//! Events: `session:exit` with each finished row, `session:confirm` when a
-//! close has to be agreed to first, `session:activate`, `pterm:exit`, and
+//! Events: `session:exit` with each finished row, `session:notify`,
+//! `session:confirm` when a close has to be agreed to first,
+//! `session:activate`, `pterm:exit`, and
 //! two that carry state: `session:activity`, what each hosted session is
 //! doing, and `sessions:overview`, every live agent session on the machine.
 //! Both come only from each backend's own records, read every
@@ -15,6 +16,13 @@
 //!
 //! Streams: each session's terminal (`session:data`) and each plain
 //! terminal's (`pterm:data`).
+//!
+//! Every client subscribed to `session:exit` gets every exit. An exit is
+//! also worth an OS notification for each client whose user could not see
+//! the session, judged as today's app judges it ([`Focus`]) from what the
+//! client last said on `session:focus`; each such client, and only it, gets
+//! the finished row on `session:notify` and shows the notification itself.
+//! A session a client closed is nobody's surprise and notifies no one.
 //!
 //! A close without `force` of a session still running is not taken as meant:
 //! every client subscribed to `session:confirm` is asked, the answer to the
@@ -34,9 +42,9 @@ use floti_protocol::channels::sessions::{
     PtermExit, PtermExited, PtermOpen, PtermResize, PtermShells, PtermStreamOpen, PtermTerminal,
     SessionActivate, SessionActivityChanged, SessionActivityState, SessionClose, SessionConfirm,
     SessionConfirmAnswer, SessionConfirmKind, SessionConfirmRequest, SessionConfirmed, SessionExit,
-    SessionFocus, SessionLaunch, SessionList, SessionRename, SessionResize, SessionRestorable,
-    SessionRestore, SessionStart, SessionStreamOpen, SessionTerminal, SessionsOverview,
-    SessionsOverviewChanged,
+    SessionFocus, SessionLaunch, SessionList, SessionNotify, SessionRename, SessionResize,
+    SessionRestorable, SessionRestore, SessionStart, SessionStreamOpen, SessionTerminal,
+    SessionsOverview, SessionsOverviewChanged,
 };
 use tokio::sync::broadcast::{self, error::RecvError};
 
@@ -68,10 +76,13 @@ struct Confirms {
     pending: HashMap<u64, u64>,
 }
 
-/// Which sessions each client's user can see now, as each last said.
+/// Which sessions each client's user can see now, as each last said, and
+/// which sessions a client closed.
 #[derive(Debug, Default)]
 pub(crate) struct Focus {
     seen: HashMap<ClientId, BTreeSet<u64>>,
+    /// Sessions a client asked to end, whose exit is expected.
+    closed: BTreeSet<u64>,
 }
 
 impl Focus {
@@ -80,27 +91,34 @@ impl Focus {
         self.seen.insert(client, ids.into_iter().collect());
     }
 
-    /// Session `id` is gone from every client's screen.
+    /// A client asked for session `id` to end: as in today's app, where a
+    /// closed tab's session exits without a notification, its exit is
+    /// worth one for nobody.
+    pub fn closing(&mut self, id: u64) {
+        self.closed.insert(id);
+    }
+
+    /// Session `id` has ended: it is gone from every client's screen.
     pub fn forget(&mut self, id: u64) {
+        self.closed.remove(&id);
         for ids in self.seen.values_mut() {
             ids.remove(&id);
         }
+    }
+
+    /// `client` has gone, and what it saw with it.
+    pub fn leave(&mut self, client: ClientId) {
+        self.seen.remove(&client);
     }
 
     /// Whether session `id` ending is worth a notification for `client`, as
     /// today's app judges it: only when its user cannot see the session. A
     /// session in a background tab is as unwatched as one in a window that
     /// is not in front, so a client whose window is not in front says it
-    /// sees nothing. A client that never said is watching nothing.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "a publication goes to every connection alike; the judgment is delivered once events can be sent to one client"
-        )
-    )]
+    /// sees nothing. A client that never said is watching nothing. A
+    /// session a client closed is worth a notification for nobody.
     pub fn worth_notifying(&self, client: ClientId, id: u64) -> bool {
-        !self.seen.get(&client).is_some_and(|ids| ids.contains(&id))
+        !self.closed.contains(&id) && !self.seen.get(&client).is_some_and(|ids| ids.contains(&id))
     }
 }
 
@@ -109,6 +127,7 @@ impl Sessions {
         let hosted = Arc::clone(&context.hosted);
         let events = Arc::clone(&context.events);
         events.serve_events::<SessionExit>();
+        events.serve_per_client::<SessionNotify>();
         events.serve_events::<SessionConfirm>();
         events.serve_events::<SessionActivate>();
         events.serve_events::<PtermExit>();
@@ -215,8 +234,9 @@ impl Sessions {
     }
 
     fn end(&self, id: u64) {
+        // Before the session is ended, so its exit is judged as closed.
+        lock(&self.focus).closing(id);
         self.hosted.end(&CloseSessionRequest { id, force: true });
-        lock(&self.focus).forget(id);
     }
 
     /// Attaches `client` to `session`: the stream carries its current
@@ -325,6 +345,10 @@ impl Feature for Sessions {
             .handle::<SessionTerminal>(|client, open| self.attach_session(client, open))
             .handle::<PtermTerminal>(|client, open| self.attach_terminal(client, open));
     }
+
+    fn client_left(&self, client: ClientId) {
+        lock(&self.focus).leave(client);
+    }
 }
 
 /// What one read of the backends' records gave.
@@ -405,9 +429,10 @@ impl ActivityWatcher {
     }
 }
 
-/// Each session that ends, as its finished row, on `session:exit`. Holds
-/// the sessions weakly, so the store is let go when the host is; the exits
-/// close then and this ends.
+/// Each session that ends, as its finished row: on `session:exit` to every
+/// subscriber, and on `session:notify` to each client for which the exit is
+/// worth a notification. Holds the sessions weakly, so the store is let go
+/// when the host is; the exits close then and this ends.
 async fn publish_exits(
     mut exits: broadcast::Receiver<ExitNotice>,
     hosted: Weak<Hosted>,
@@ -425,7 +450,21 @@ async fn publish_exits(
                 let Ok(record) = hosted.record(notice.session) else {
                     continue;
                 };
-                lock(&focus).forget(record.id);
+                // Judged before the session leaves every screen, against
+                // what each client listening now last said it sees, and sent
+                // before the exit, so a client that has the exit has any
+                // notification for it too.
+                {
+                    let mut focus = lock(&focus);
+                    for client in events.clients() {
+                        if focus.worth_notifying(client, record.id)
+                            && let Err(err) = events.emit_to::<SessionNotify>(client, &record)
+                        {
+                            eprintln!("floti host: {err}");
+                        }
+                    }
+                    focus.forget(record.id);
+                }
                 if let Err(err) = events.emit::<SessionExit>(&record) {
                     eprintln!("floti host: {err}");
                 }
@@ -492,8 +531,26 @@ mod tests {
         focus.set(A, []);
         assert!(focus.worth_notifying(A, 7));
 
-        // A closed session leaves every screen.
+        // An ended session leaves every screen.
         focus.forget(9);
         assert!(focus.worth_notifying(B, 9));
+
+        // A client that has gone takes what it saw with it.
+        focus.set(B, [4]);
+        focus.leave(B);
+        assert!(focus.worth_notifying(B, 4));
+    }
+
+    #[test]
+    fn a_session_a_client_closed_is_worth_a_notification_for_nobody_until_it_has_ended() {
+        let mut focus = Focus::default();
+        focus.set(A, []);
+        focus.closing(7);
+        assert!(!focus.worth_notifying(A, 7));
+        assert!(!focus.worth_notifying(B, 7), "a client that never said");
+
+        // Its number is let go with the exit.
+        focus.forget(7);
+        assert!(focus.worth_notifying(A, 7));
     }
 }

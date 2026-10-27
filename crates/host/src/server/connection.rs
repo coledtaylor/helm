@@ -4,6 +4,9 @@
 //! A client leaving detaches it from every session it was attached to and
 //! ends nothing: the sessions run on for the next client.
 //!
+//! Of the events published, a connection delivers those for every
+//! subscriber and those addressed to its own client, never another's.
+//!
 //! What is served is the features' to say ([`Features`]); the connection
 //! carries requests, subscriptions and streams to them. A channel on the
 //! not-yet-served list is refused naming it before anything else looks at
@@ -100,6 +103,7 @@ pub(crate) async fn serve(stream: LocalStream, client: ClientId, context: Connec
     };
     connection.run(channels, shutdown).await;
     connection.detach_all();
+    connection.features.events().leave(client);
     connection.features.client_left(client);
 }
 
@@ -163,7 +167,7 @@ impl Connection {
         mut shutdown: watch::Receiver<bool>,
     ) {
         let (output_tx, mut output_rx) = mpsc::unbounded_channel::<(u64, SessionOutput)>();
-        let mut events = self.features.events().listen();
+        let mut events = self.features.events().listen(self.client);
         let mut buf = vec![0; READ_CHUNK];
         loop {
             if self.flush().await.is_err() {
@@ -323,8 +327,12 @@ impl Connection {
     }
 
     /// One publication, to each of this client's subscriptions to its
-    /// channel that its snapshot did not already cover.
+    /// channel that its snapshot did not already cover, unless it is
+    /// addressed to another client.
     fn publication(&mut self, channels: &ClientChannels<'static>, published: Publication) {
+        if !published.is_for(self.client) {
+            return;
+        }
         for subscription in channels.subscriptions_to(published.channel) {
             if self
                 .snapshot_seq

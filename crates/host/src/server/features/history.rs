@@ -33,7 +33,7 @@ use crate::server::events::Events;
 use crate::server::hosted::Hosted;
 use crate::session::ClientId;
 use crate::store::Store;
-use crate::usage::{UnknownLocalDay, UsageReader};
+use crate::usage::{SystemDay, UsageReader};
 
 /// How often history and the archive are indexed without being asked.
 const PASS_EVERY: Duration = Duration::from_secs(15);
@@ -77,7 +77,7 @@ impl History {
             .or_else(|| hosted.backends().first())
             .map_or_else(BackendId::claude_code, |backend| backend.id().clone());
         let indexed = read_indexed(hosted.ledger().store().connection(), &backend)?;
-        let usage = UsageReader::new(hosted.backends(), Box::new(UnknownLocalDay));
+        let usage = UsageReader::new(hosted.backends(), Box::new(SystemDay));
         let (readings, _) = usage.read();
 
         context

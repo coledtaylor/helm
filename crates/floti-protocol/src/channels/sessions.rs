@@ -21,6 +21,10 @@
 //!   subscription's snapshot is that answer, so each is one event channel.
 //! - `session:exit`, `session:activate`, `session:confirm` and `pterm:exit`
 //!   are events without state.
+//! - Where ipc.ts's main process showed an OS notification for an exit its
+//!   user could not see, the host judges that per client and sends the
+//!   finished row on `session:notify` to each client whose user could not
+//!   see it; the client shows the notification.
 //! - Where ipc.ts opened a native dialog (`profile:export`,
 //!   `profile:import`), the dialog stays in the client: export returns the
 //!   profile document and import takes it.
@@ -74,6 +78,7 @@ pub fn declare(catalogue: &mut Catalogue) {
         .event::<SessionsOverviewChanged>()
         .event::<SessionResourcesChanged>()
         .event::<SessionExit>()
+        .event::<SessionNotify>()
         .event::<SessionActivate>()
         .event::<SessionConfirm>()
         .stream::<SessionTerminal>();
@@ -168,6 +173,14 @@ event_channel! {
 event_channel! {
     /// A session ended: its finished row, exit code and duration included.
     SessionExit = "session:exit", event SessionRecord
+}
+
+event_channel! {
+    /// A session ended where this client's user could not see it, judged
+    /// from what the client last said on `session:focus`: its finished row,
+    /// for the client to turn into its OS notification. Sent to one client
+    /// at a time, numbered for that client alone.
+    SessionNotify = "session:notify", event SessionRecord
 }
 
 event_channel! {

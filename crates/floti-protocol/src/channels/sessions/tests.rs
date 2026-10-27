@@ -42,6 +42,7 @@ const DECLARED: &[(&str, ChannelKind, Option<Capability>)] = &[
     ("sessions:overview", STATE, None),
     ("sessions:resources", STATE, None),
     ("session:exit", EVENT, None),
+    ("session:notify", EVENT, None),
     ("session:activate", EVENT, None),
     ("session:confirm", EVENT, None),
     ("session:data", STREAM, Some(Capability::Terminal)),
@@ -577,6 +578,7 @@ fn session_events_and_state_round_trip_over_cbor() {
         },
     ]);
     event::<SessionExit>(record(12));
+    event::<SessionNotify>(record(12));
     event::<SessionActivate>(SessionActivation { id: 12 });
     event::<SessionConfirm>(SessionConfirmRequest {
         id: 5,

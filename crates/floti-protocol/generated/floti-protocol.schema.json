@@ -10385,6 +10385,15 @@
     },
     {
       "capability": null,
+      "event": {
+        "$ref": "#/$defs/SessionRecord"
+      },
+      "kind": "event",
+      "name": "session:notify",
+      "snapshot": null
+    },
+    {
+      "capability": null,
       "kind": "request",
       "name": "session:rename",
       "request": {

@@ -19,7 +19,7 @@ use floti_host::agent::claude_code::{ClaudeCodeBackend, ClaudeCodeSettings};
 use floti_host::agent::{AgentBackend, Conversation, HistorySource, Transcript};
 use floti_host::history::archive::{self, ArchiveInput};
 use floti_host::history::index::{HistoryIndex, IndexInput, PromptLine, TranscriptFile};
-use floti_host::history::{index_history, read_indexed};
+use floti_host::history::{directory_exists, index_history, read_indexed};
 use floti_host::platform::process_tree::Native as NativeTree;
 use floti_host::server::{Host, HostConfig};
 use floti_host::store::Store;
@@ -908,12 +908,12 @@ fn a_cursor_for_a_transcript_that_has_gone_is_forgotten_and_its_conversation_kep
 }
 
 #[test]
-fn a_short_body_is_stored_as_it_is_and_comes_back_byte_for_byte() {
+fn a_long_body_is_stored_compressed_a_short_one_as_it_is_and_both_come_back_byte_for_byte() {
     let mut world = Archive::new();
     let long = "the quick brown fox jumps over the lazy dog. ".repeat(40);
-    let messages = [world.user(1, "short"), world.user(2, long.trim())];
+    let messages = [world.user(1, "short"), world.user(2, &long)];
     world.archive("sizes.jsonl", "sess", &messages);
-    let rows: Vec<(bool, i64, i64)> = world
+    let rows: Vec<(i64, i64, i64)> = world
         .conn()
         .prepare("SELECT compressed, raw_bytes, stored_bytes FROM transcript_messages ORDER BY at")
         .unwrap()
@@ -921,9 +921,55 @@ fn a_short_body_is_stored_as_it_is_and_comes_back_byte_for_byte() {
         .unwrap()
         .collect::<rusqlite::Result<_>>()
         .unwrap();
-    assert!(!rows[0].0);
-    assert_eq!(rows[0].1, rows[0].2);
-    assert_eq!(world.texts("sess")[1], long.trim());
+    assert_eq!(rows[0].0, 0);
+    assert_eq!(rows[0].2, rows[0].1);
+    assert_eq!(rows[1].0, 1);
+    assert!(rows[1].2 < rows[1].1 / 4, "{rows:?}");
+    // And it comes back out byte for byte.
+    assert_eq!(world.texts("sess"), ["short", long.as_str()]);
+}
+
+#[test]
+fn a_raw_deflate_body_reads_and_searches_decoded_and_one_that_cannot_be_inflated_reads_as_empty() {
+    use std::io::Write as _;
+    let mut world = Archive::new();
+    let long = "where is the zorblatt configured, asked again and again. ".repeat(30);
+    let other = "a second conversation about the gizmo, at some length. ".repeat(30);
+    let messages = [world.user(1, &long), world.user(2, "a short placeholder")];
+    world.archive("new.jsonl", "sess", &messages);
+    let messages = [world.user(3, "another short placeholder")];
+    world.archive("old.jsonl", "older", &messages);
+    // `older`'s body as another writer of `floti.db` stores it, in raw
+    // deflate, and `sess`'s short one marked compressed when it is not.
+    let mut encoder =
+        flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(other.as_bytes()).unwrap();
+    let packed = encoder.finish().unwrap();
+    world
+        .conn()
+        .execute(
+            "UPDATE transcript_messages SET body = ?, compressed = 1 WHERE session_id = 'older'",
+            [&packed],
+        )
+        .unwrap();
+    world
+        .conn()
+        .execute(
+            "UPDATE transcript_messages SET body = X'DEADBEEF00FF', compressed = 1
+             WHERE session_id = 'sess' AND compressed = 0",
+            [],
+        )
+        .unwrap();
+
+    // Read: decoded, and the body that cannot be inflated is empty text.
+    assert_eq!(world.texts("sess"), [long.as_str(), ""]);
+    assert_eq!(world.texts("older"), [other.as_str()]);
+    // Searched: the match is handed back decoded, and the unreadable body
+    // fails nothing.
+    assert_eq!(world.search("zorblatt").get("sess"), Some(&long));
+    let placeholders = world.search("placeholder");
+    assert_eq!(placeholders.get("older"), Some(&other));
+    assert_eq!(placeholders.get("sess").map(String::as_str), Some(""));
 }
 
 #[test]
@@ -1153,7 +1199,8 @@ impl Claude {
     }
 
     /// Writes a transcript under `projects/<folder>/`, rows as the CLI writes
-    /// them, all from `cwd`.
+    /// them, all from `cwd`, and appends each user row to `history.jsonl`,
+    /// as the CLI records every prompt submitted.
     fn transcript(
         &self,
         folder: &str,
@@ -1169,7 +1216,31 @@ impl Claude {
             .map(|(kind, uuid, at, text)| transcript_row(kind, uuid, cwd, *at, text))
             .collect();
         std::fs::write(&file, text).unwrap();
+        for (_, _, at, text) in rows.iter().filter(|(kind, ..)| *kind == "user") {
+            self.prompt(id, cwd, *at, text);
+        }
         file
+    }
+
+    /// The prompt record.
+    fn history_file(&self) -> PathBuf {
+        self.config.join("history.jsonl")
+    }
+
+    /// Appends one prompt to the prompt record, as the CLI writes it.
+    fn prompt(&self, id: &str, cwd: &Path, at: u64, text: &str) {
+        self.append_history(&history_line(id, cwd, at, text));
+    }
+
+    fn append_history(&self, text: &str) {
+        use std::io::Write as _;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.history_file())
+            .unwrap()
+            .write_all(text.as_bytes())
+            .unwrap();
     }
 
     fn config(&self) -> HostConfig {
@@ -1210,6 +1281,17 @@ fn transcript_row(kind: &str, uuid: &str, cwd: &Path, at_ms: u64, text: &str) ->
     format!("{row}\n")
 }
 
+fn history_line(id: &str, cwd: &Path, at_ms: u64, text: &str) -> String {
+    let row = json!({
+        "display": text,
+        "pastedContents": {},
+        "timestamp": at_ms,
+        "project": cwd.display().to_string(),
+        "sessionId": id,
+    });
+    format!("{row}\n")
+}
+
 fn iso(ms: u64) -> String {
     let (secs, millis) = (ms / 1000, ms % 1000);
     let (days, rem) = ((secs / 86_400) as i64, secs % 86_400);
@@ -1232,7 +1314,36 @@ fn iso(ms: u64) -> String {
 
 const T0: u64 = 1_760_000_000_000;
 
-/// A history that counts how often a transcript is read.
+/// `len` characters deflate cannot shorten much, different for each `seed`,
+/// so a conversation's stored size stays near its raw size.
+fn incompressible(seed: u64, len: usize) -> String {
+    let mut state = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+    (0..len)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            char::from(b'!' + ((state >> 33) % 94) as u8)
+        })
+        .collect()
+}
+
+/// Claude Code's transcripts without its prompt record: a backend that keeps
+/// none.
+struct Unrecorded<'a>(&'a ClaudeCodeBackend);
+
+impl HistorySource for Unrecorded<'_> {
+    fn conversations(&self) -> Result<Vec<Conversation>> {
+        self.0.history().unwrap().conversations()
+    }
+
+    fn transcript(&self, id: &str) -> Result<Option<Transcript>> {
+        self.0.history().unwrap().transcript(id)
+    }
+}
+
+/// A history without a prompt record that counts how often a transcript is
+/// read.
 struct Counting<'a> {
     inner: &'a ClaudeCodeBackend,
     reads: AtomicUsize,
@@ -1303,7 +1414,7 @@ fn a_pass_indexes_each_conversation_with_its_prompts_and_archives_its_messages()
     );
     assert_eq!(
         indexed.summary.history_file,
-        world.config.join("projects").display().to_string()
+        world.history_file().display().to_string()
     );
     assert_eq!((indexed.stats.sessions, indexed.stats.messages), (1, 3));
     let guard = store.lock().unwrap();
@@ -1368,13 +1479,184 @@ fn a_transcript_that_was_replaced_is_read_again_and_keeps_what_was_archived() {
     );
     let store = Mutex::new(world.open_store());
     let backend = world.backend();
-    pass(&store, &backend);
+    let source = Unrecorded(&backend);
+    pass(&store, &source);
     world.transcript("a", ONE, &alpha, &[("user", &uuid(4), T0 + 3, "four")]);
-    let indexed = pass(&store, &backend);
-    // The archive keeps every message it had; the index lists what the
-    // transcript says now.
+    let indexed = pass(&store, &source);
+    // The archive keeps every message it had; without a prompt record the
+    // index lists what the transcript says now.
     assert_eq!(indexed.stats.messages, 4);
     assert_eq!(indexed.summary.prompts, 1);
+}
+
+/// The prompts the index holds for `id`, in submission order.
+fn prompts_of(store: &Mutex<Store>, id: &str) -> Vec<String> {
+    let guard = store.lock().unwrap();
+    let backend = BackendId::claude_code();
+    HistoryIndex::new(guard.connection(), &backend)
+        .prompts(id)
+        .unwrap()
+        .into_iter()
+        .map(|prompt| prompt.text)
+        .collect()
+}
+
+fn session_of(store: &Mutex<Store>, id: &str) -> Option<HistorySession> {
+    let guard = store.lock().unwrap();
+    let backend = BackendId::claude_code();
+    HistoryIndex::new(guard.connection(), &backend)
+        .session(id)
+        .unwrap()
+}
+
+#[test]
+fn every_conversation_the_prompt_record_names_is_listed_with_its_prompts_even_once_its_transcript_is_reaped()
+ {
+    let world = Claude::new();
+    let alpha = world.project("alpha");
+    let beta = world.project("beta");
+    // ONE still has its transcript; TWO's was reaped before the host saw it.
+    world.transcript(
+        "a",
+        ONE,
+        &alpha,
+        &[
+            ("user", &uuid(1), T0, "first prompt here"),
+            ("assistant", &uuid(2), T0 + 1, "an answer"),
+            ("user", &uuid(3), T0 + 2, "second prompt here"),
+        ],
+    );
+    world.prompt(TWO, &beta, T0 + 10, "a conversation long gone");
+    world.prompt(TWO, &beta, T0 + 11, "");
+    world.prompt(TWO, &beta, T0 + 12, "and its last prompt");
+    let store = Mutex::new(world.open_store());
+    let backend = world.backend();
+
+    let indexed = pass(&store, &backend);
+    assert_eq!(
+        (
+            indexed.summary.sessions,
+            indexed.summary.prompts,
+            indexed.summary.resumable
+        ),
+        (2, 5, 1)
+    );
+    assert_eq!(indexed.summary.error, None);
+    assert_eq!(
+        prompts_of(&store, ONE),
+        ["first prompt here", "second prompt here"]
+    );
+    assert_eq!(
+        prompts_of(&store, TWO),
+        ["a conversation long gone", "", "and its last prompt"]
+    );
+    let gone = session_of(&store, TWO).expect("listed from the record");
+    assert_eq!(gone.project, beta.display().to_string());
+    assert_eq!(gone.transcript_file, None, "not resumable");
+    assert!(session_of(&store, ONE).unwrap().transcript_file.is_some());
+
+    // ONE's transcript is reaped too: it stays listed, no longer resumable,
+    // and its messages are still in the archive.
+    std::fs::remove_dir_all(world.config.join("projects").join("a")).unwrap();
+    let after = pass(&store, &backend);
+    assert_eq!((after.summary.sessions, after.summary.resumable), (2, 0));
+    assert_eq!(
+        prompts_of(&store, ONE),
+        ["first prompt here", "second prompt here"]
+    );
+    assert_eq!(session_of(&store, ONE).unwrap().transcript_file, None);
+    assert_eq!(after.stats.messages, 3);
+}
+
+#[test]
+fn each_pass_reads_only_what_the_prompt_record_gained_and_starts_over_when_it_shrank_or_went() {
+    let world = Claude::new();
+    let alpha = world.project("alpha");
+    world.prompt(ONE, &alpha, T0, "first");
+    let store = Mutex::new(world.open_store());
+    let backend = world.backend();
+    let first = pass(&store, &backend);
+    let size = std::fs::metadata(world.history_file()).unwrap().len();
+    assert_eq!(first.summary.indexed_bytes, size);
+
+    // Grown, with a half-written last line and a malformed one: the complete
+    // lines are added once, the fragment waits for the next pass.
+    world.prompt(ONE, &alpha, T0 + 1, "second ελληνικά 🚀");
+    world.append_history("not json at all\n");
+    let fragment = history_line(TWO, &alpha, T0 + 2, "third");
+    let (head, rest) = fragment.split_at(fragment.find("third").unwrap() + 2);
+    world.append_history(head);
+    let grown = pass(&store, &backend);
+    assert_eq!(prompts_of(&store, ONE), ["first", "second ελληνικά 🚀"]);
+    assert_eq!(grown.summary.sessions, 1);
+    assert_eq!(
+        grown.summary.indexed_bytes,
+        std::fs::metadata(world.history_file()).unwrap().len() - head.len() as u64
+    );
+    world.append_history(rest);
+    let finished = pass(&store, &backend);
+    assert_eq!(finished.summary.sessions, 2);
+    assert_eq!(prompts_of(&store, TWO), ["third"]);
+    assert_eq!(finished.summary.prompts, 3);
+
+    // Nothing new: nothing added.
+    assert_eq!(pass(&store, &backend).summary.prompts, 3);
+
+    // Shrunk: a different file, so the index starts over from it.
+    std::fs::write(
+        world.history_file(),
+        history_line(TWO, &alpha, T0 + 20, "only one now"),
+    )
+    .unwrap();
+    let shrunk = pass(&store, &backend);
+    assert_eq!((shrunk.summary.sessions, shrunk.summary.prompts), (1, 1));
+    assert!(session_of(&store, ONE).is_none());
+    assert_eq!(prompts_of(&store, TWO), ["only one now"]);
+
+    // Gone: the index starts over with nothing, and says why.
+    std::fs::remove_file(world.history_file()).unwrap();
+    let gone = pass(&store, &backend);
+    assert_eq!((gone.summary.sessions, gone.summary.prompts), (0, 0));
+    assert_eq!(gone.summary.indexed_bytes, 0);
+    assert!(gone.summary.error.is_some());
+}
+
+#[test]
+fn a_backend_that_keeps_no_prompt_record_has_its_sessions_and_prompts_from_its_transcripts() {
+    let world = Claude::new();
+    let alpha = world.project("alpha");
+    world.transcript(
+        "a",
+        ONE,
+        &alpha,
+        &[
+            ("user", &uuid(1), T0, "from the transcript"),
+            ("assistant", &uuid(2), T0 + 1, "an answer"),
+            ("user", &uuid(3), T0 + 2, "and again"),
+        ],
+    );
+    // A record the backend does not say it keeps is not read.
+    world.prompt(TWO, &alpha, T0 + 5, "only in a record nobody reads");
+    let store = Mutex::new(world.open_store());
+    let backend = world.backend();
+    let indexed = pass(&store, &Unrecorded(&backend));
+    assert_eq!(
+        (
+            indexed.summary.sessions,
+            indexed.summary.prompts,
+            indexed.summary.resumable
+        ),
+        (1, 2, 1)
+    );
+    assert_eq!(
+        indexed.summary.history_file,
+        world.config.join("projects").display().to_string()
+    );
+    assert_eq!(
+        prompts_of(&store, ONE),
+        ["from the transcript", "and again"]
+    );
+    assert!(session_of(&store, TWO).is_none());
 }
 
 #[test]
@@ -1413,7 +1695,7 @@ fn a_ceiling_written_in_the_settings_is_honoured_on_the_next_pass() {
     let world = Claude::new();
     let alpha = world.project("alpha");
     for (n, id) in [ONE, TWO].iter().enumerate() {
-        let text = format!("conversation number {n} ").repeat(200);
+        let text = incompressible(n as u64, 4000);
         world.transcript(
             &format!("p{n}"),
             id,
@@ -1563,6 +1845,19 @@ fn the_tree_the_config_folder_names_is_read_and_not_the_one_in_the_home() {
             .unwrap()
             .is_none()
     );
+}
+
+/// discovery/history.test.ts, directoryExists, with the same inputs and
+/// expectations.
+#[test]
+fn a_recorded_folder_exists_when_it_is_a_directory_and_not_when_it_is_a_file_or_missing() {
+    let dirs = TestDirs::new();
+    let dir = dirs.folder("recorded");
+    std::fs::write(dir.join("file.txt"), "x").unwrap();
+    let text = |path: PathBuf| path.display().to_string();
+    assert!(directory_exists(&text(dir.clone())));
+    assert!(!directory_exists(&text(dir.join("file.txt"))));
+    assert!(!directory_exists(&text(dir.join("gone"))));
 }
 
 #[test]
@@ -1840,7 +2135,7 @@ async fn the_oldest_conversations_are_evicted_to_stay_under_the_ceiling_and_subs
     let world = Claude::new();
     let alpha = world.project("alpha");
     for (n, id) in [ONE, TWO].iter().enumerate() {
-        let text = format!("conversation number {n} ").repeat(200);
+        let text = incompressible(n as u64, 4000);
         world.transcript(
             &format!("p{n}"),
             id,

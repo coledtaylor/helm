@@ -34,8 +34,10 @@ testkit = ["dep:tempfile"]
 [dependencies]
 alacritty_terminal.workspace = true
 ciborium.workspace = true
+flate2.workspace = true
 floti-protocol.workspace = true
 getrandom.workspace = true
+jiff.workspace = true
 portable-pty.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
