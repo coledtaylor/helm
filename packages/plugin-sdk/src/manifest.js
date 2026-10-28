@@ -19,6 +19,14 @@
 /** The bridge versions this Helm speaks. */
 export const SUPPORTED_API_VERSIONS = Object.freeze([1])
 
+/**
+ * Where a plugin's background code is, by bridge version: a page Helm frames
+ * at 1, a module Floti's host runs in an isolate of its own at 2.
+ *
+ * @type {Readonly<Record<number, readonly string[]>>}
+ */
+const BACKGROUND_EXTENSIONS = Object.freeze({ 1: Object.freeze(['.html']), 2: Object.freeze(['.js', '.mjs']) })
+
 /** A plugin's id: the host of its origin, which a standard scheme lower-cases. */
 export const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/
 
@@ -269,10 +277,17 @@ export function manifestFiles(manifest) {
  * Reads a manifest. Every problem is reported, not only the first, so a
  * plugin author fixes them in one pass.
  *
+ * `options.apiVersions` is for Floti's host, which runs version 2 plugins and
+ * passes `[2]`. Left out, it is `SUPPORTED_API_VERSIONS`, what Helm speaks.
+ * Version 2 reads every field as version 1 does, except that `background` is
+ * a `.js` or `.mjs` module rather than a page.
+ *
  * @param {unknown} value the parsed `helm-plugin.json`
+ * @param {import('./manifest').ValidateOptions} [options]
  * @returns {import('./manifest').ManifestResult}
  */
-export function validateManifest(value) {
+export function validateManifest(value, options = {}) {
+  const versions = options.apiVersions ?? SUPPORTED_API_VERSIONS
   /** @type {string[]} */
   const errors = []
   /** @type {string[]} */
@@ -288,14 +303,17 @@ export function validateManifest(value) {
   }
 
   const apiVersion = value['apiVersion']
-  if (typeof apiVersion !== 'number' || !SUPPORTED_API_VERSIONS.includes(apiVersion)) {
+  if (typeof apiVersion !== 'number' || !versions.includes(apiVersion) || BACKGROUND_EXTENSIONS[apiVersion] === undefined) {
     // Said first and on its own: a plugin from a newer Helm fails every other
     // check for reasons that are not its fault.
-    const supported = SUPPORTED_API_VERSIONS.join(', ')
+    const supported = versions.join(', ')
+    const said = apiVersion === undefined ? 'apiVersion is missing' : `apiVersion ${JSON.stringify(apiVersion)} is not supported`
     const message =
-      apiVersion === undefined
-        ? `apiVersion is missing; this Helm supports ${supported}`
-        : `apiVersion ${JSON.stringify(apiVersion)} is not supported by this Helm, which supports ${supported}`
+      options.apiVersions === undefined
+        ? apiVersion === undefined
+          ? `${said}; this Helm supports ${supported}`
+          : `${said} by this Helm, which supports ${supported}`
+        : `${said}: this host runs apiVersion ${supported} plugins`
     return { ok: false, errors: [message], warnings }
   }
 
@@ -433,7 +451,7 @@ export function validateManifest(value) {
     }
   }
 
-  const background = optionalEntry(value['background'], 'background', ['.html'], fail)
+  const background = optionalEntry(value['background'], 'background', BACKGROUND_EXTENSIONS[apiVersion] ?? ['.html'], fail)
 
   // --- commands
   /** @type {import('./manifest').NormalizedManifest['commands']} */
@@ -581,7 +599,7 @@ export function validateManifest(value) {
   return {
     ok: true,
     manifest: {
-      apiVersion: /** @type {1} */ (apiVersion),
+      apiVersion: /** @type {1 | 2} */ (apiVersion),
       id,
       name,
       version,
