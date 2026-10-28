@@ -5,8 +5,10 @@
 //! The runtime says how a background is doing through the
 //! [`BackgroundReporter`] it was started with, never by calling the registry
 //! from inside [`BackgroundRuntime::start`]: the registry may be busy with
-//! the read that started it. [`NoBackground`] stands in until the runtime is
-//! built: it runs nothing, so every background is shown as stopped.
+//! the read that started it. The host runs them in
+//! [`crate::plugins::runtime::IsolateRuntime`]; [`NoBackground`] runs
+//! nothing, so every background is shown as stopped, for tests of what
+//! needs no script.
 
 use std::collections::BTreeMap;
 use std::future::Future;

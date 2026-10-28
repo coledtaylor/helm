@@ -339,8 +339,7 @@ async fn a_wrong_manifest_is_registered_and_listed_with_what_is_wrong_and_runs_n
     );
     assert_eq!(listed[2].id.as_deref(), Some("unbuilt"));
 
-    // Built, and reloaded: it loads, and its background is shown as stopped
-    // while no runtime runs it.
+    // Built, and reloaded: it loads, and its background starts.
     std::fs::create_dir_all(unbuilt.join("dist")).unwrap();
     std::fs::write(unbuilt.join("dist").join("background.js"), "export {}").unwrap();
     let reloaded = world.reload(&unbuilt).await;
@@ -348,7 +347,13 @@ async fn a_wrong_manifest_is_registered_and_listed_with_what_is_wrong_and_runs_n
     assert_eq!(plugin.error, None);
     let background = plugin.background.as_ref().unwrap();
     assert_eq!(background.url, "floti-plugin://unbuilt/dist/background.js");
-    assert_eq!(background.state, PluginBackgroundState::Stopped);
+    assert!(
+        matches!(
+            background.state,
+            PluginBackgroundState::Starting | PluginBackgroundState::Running
+        ),
+        "{background:#?}"
+    );
     world.stop().await;
 }
 

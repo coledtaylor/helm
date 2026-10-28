@@ -256,6 +256,19 @@ impl Registry {
         if !folder.is_absolute() {
             return Ok(refuse("Choose a folder.".into()));
         }
+        // A folder already registered under any spelling is that folder,
+        // whether or not this file system reaches it by this one.
+        let registered = lock(&self.inner.state)
+            .entries
+            .iter()
+            .any(|entry| entry.is_at(path));
+        if registered {
+            return Ok(PluginAddResult {
+                path: path.to_owned(),
+                error: None,
+                plugins: self.list(),
+            });
+        }
         if !folder.is_dir() {
             return Ok(refuse(format!("{path} is not a folder.")));
         }
@@ -496,7 +509,8 @@ impl Registry {
                 );
             };
             if !agent.tools.iter().any(|tool| tool.name == call.tool) {
-                let offered: Vec<&str> = agent.tools.iter().map(|tool| tool.name.as_str()).collect();
+                let offered: Vec<&str> =
+                    agent.tools.iter().map(|tool| tool.name.as_str()).collect();
                 return Err(format!(
                     "{name} has no tool called \"{}\". It has: {}.",
                     call.tool,

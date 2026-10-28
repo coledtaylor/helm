@@ -300,27 +300,47 @@ pub fn read(text: &str) -> Result<Reading, String> {
 }
 
 /// The one validator thread, started on first use.
-fn validator() -> &'static Mutex<mpsc::Sender<Job>> {
-    static VALIDATOR_THREAD: OnceLock<Mutex<mpsc::Sender<Job>>> = OnceLock::new();
+fn validator() -> &'static Mutex<tokio::sync::mpsc::UnboundedSender<Job>> {
+    static VALIDATOR_THREAD: OnceLock<Mutex<tokio::sync::mpsc::UnboundedSender<Job>>> =
+        OnceLock::new();
     VALIDATOR_THREAD.get_or_init(|| {
-        let (jobs, queue) = mpsc::channel::<Job>();
+        let (jobs, queue) = tokio::sync::mpsc::unbounded_channel::<Job>();
         std::thread::Builder::new()
             .name("floti manifest validator".into())
-            .spawn(move || serve(&queue))
+            .spawn(move || serve(queue))
             .expect("start the manifest validator's thread");
         Mutex::new(jobs)
     })
 }
 
-fn serve(queue: &mpsc::Receiver<Job>) {
-    let mut runtime = start();
-    for (text, reply) in queue {
-        let answer = match &mut runtime {
-            Ok(runtime) => validate(runtime, &text),
-            Err(why) => Err(why.clone()),
-        };
-        let _ = reply.send(answer);
-    }
+/// The validator's isolate lives on a tokio runtime of its own thread: V8
+/// posts delayed tasks (its garbage collector's among them) to the runtime
+/// an isolate was created in, and aborts the process when there is none.
+/// Waiting for the next manifest on that runtime lets those tasks run.
+fn serve(mut queue: tokio::sync::mpsc::UnboundedReceiver<Job>) {
+    let local = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(local) => local,
+        Err(err) => {
+            let why = format!("the manifest validator could not start: {err}");
+            while let Some((_, reply)) = queue.blocking_recv() {
+                let _ = reply.send(Err(why.clone()));
+            }
+            return;
+        }
+    };
+    local.block_on(async move {
+        let mut runtime = start();
+        while let Some((text, reply)) = queue.recv().await {
+            let answer = match &mut runtime {
+                Ok(runtime) => validate(runtime, &text),
+                Err(why) => Err(why.clone()),
+            };
+            let _ = reply.send(answer);
+        }
+    });
 }
 
 fn start() -> Result<JsRuntime, String> {
