@@ -14,11 +14,12 @@ use std::time::{Duration, Instant};
 use floti_host::agent::AgentBackend;
 use floti_host::agent::claude_code::ClaudeCodeSettings;
 use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
+use floti_host::platform::launcher::{self, ProgramLauncher};
 use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree, descendants};
 use floti_host::platform::socket::{self, Endpoint, LocalSocket, Native as NativeSocket};
 use floti_host::platform::startup;
-use floti_host::server::{Host, HostConfig, SOCKET_NAME, unserved};
-use floti_host::store::Store;
+use floti_host::server::{Host, HostConfig, HostRun, SOCKET_NAME, unserved};
+use floti_host::store::{MIGRATIONS, Store};
 use floti_host::testkit::{
     FakeAgent, FakeAgentRecord, PATIENCE, RunningHost, TestClient, TestDirs, names_unserved_channel,
 };
@@ -36,7 +37,7 @@ use floti_protocol::channels::sessions::{
 use floti_protocol::channels::workspace;
 use floti_protocol::message::ErrorCode;
 use floti_protocol::{
-    BackendId, Catalogue, ChannelKind, EventChannel, Knowable, Message, RequestChannel,
+    BackendId, Catalogue, ChannelKind, EventChannel, Knowable, Message, Payload, RequestChannel,
 };
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -2000,6 +2001,373 @@ async fn every_subscriber_to_session_exit_gets_a_sessions_finished_row_when_it_e
         assert_eq!(record.status, SessionStatus::Exited);
         assert!(record.ended_at.is_some(), "{record:?}");
     }
+
+    host.stop(HostStopReason::Stop).await;
+}
+
+// ---------------------------------------------------------------------------
+// Settings, app info and setup over a client connection
+// ---------------------------------------------------------------------------
+
+const SETTINGS_CHANGED: u64 = 40;
+
+/// Where the fake `claude` of [`setup_config`] keeps its records: Claude
+/// Code's config folder in the test's home.
+fn claude_config_of(dirs: &TestDirs) -> PathBuf {
+    dirs.home.join(".claude")
+}
+
+/// A host on today's backends run for the test's home, whose fake `claude`
+/// keeps its records in [`claude_config_of`], with `$SHELL` pinned to
+/// `/bin/sh` rather than the user's shell.
+fn setup_config(dirs: &TestDirs, endpoint: &Endpoint) -> HostConfig {
+    let mut config = todays_backends(dirs, endpoint, &claude_config_of(dirs));
+    config.run = HostRun {
+        mode: workspace::AppMode::Dev,
+        home: Some(dirs.home.clone()),
+    };
+    config
+        .inherited_env
+        .retain(|(key, _)| key != std::ffi::OsStr::new("SHELL"));
+    config
+        .inherited_env
+        .push(("SHELL".into(), "/bin/sh".into()));
+    config
+}
+
+/// Node, which the fake `claude` runs under, as this machine finds it.
+fn node() -> PathBuf {
+    launcher::Native
+        .find("node".as_ref())
+        .expect("node is on PATH, as the fake claude needs")
+}
+
+/// The payload of the next event on `subscription`.
+async fn next_event_on(client: &mut TestClient, subscription: u64) -> Payload {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match client.next(left).await {
+            Some(Message::Event(event)) if event.subscription == subscription => {
+                return event.payload;
+            }
+            Some(_) => {}
+            None => panic!("no event on subscription {subscription} within {PATIENCE:?}"),
+        }
+    }
+}
+
+/// The settings the next `settings:changed` event carries.
+async fn next_settings(client: &mut TestClient) -> workspace::HostSettings {
+    from_payload(&next_event_on(client, SETTINGS_CHANGED).await).unwrap()
+}
+
+/// A client subscribed to `settings:changed`, and the settings it started
+/// with.
+async fn settings_watcher(endpoint: &Endpoint) -> (TestClient, workspace::HostSettings) {
+    let mut client = TestClient::connect(endpoint, &[]).await;
+    match client
+        .subscribe_on(SETTINGS_CHANGED, workspace::SettingsChanged::NAME)
+        .await
+    {
+        Message::Snapshot(snapshot) => {
+            let state = from_payload(&snapshot.state).unwrap();
+            (client, state)
+        }
+        other => panic!("settings:changed starts with its state, not {other:?}"),
+    }
+}
+
+async fn claude_status(client: &mut TestClient) -> workspace::BackendStatus {
+    let status = client
+        .request::<workspace::ReadSetupStatus>(&())
+        .await
+        .unwrap();
+    status.backends[&BackendId::claude_code()].clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s5_app_info_over_a_client_connection_names_the_hosts_version_mode_data_folder_database_migrations_and_home()
+ {
+    let dirs = TestDirs::new();
+    let endpoint = dirs.endpoint();
+    let host = RunningHost::start(setup_config(&dirs, &endpoint));
+    let mut client = TestClient::connect(&endpoint, &[]).await;
+
+    let info = client.request::<workspace::ReadAppInfo>(&()).await.unwrap();
+    assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(info.mode, workspace::AppMode::Dev);
+    assert_eq!(info.data_dir, dirs.data.display().to_string());
+    assert_eq!(
+        info.db_file,
+        dirs.data.join("floti.db").display().to_string()
+    );
+    assert_eq!(
+        info.migrations,
+        MIGRATIONS
+            .iter()
+            .map(|m| m.tag.to_owned())
+            .collect::<Vec<_>>(),
+        "a new store has every migration, in order"
+    );
+    assert_eq!(info.home, dirs.home.display().to_string());
+    assert!(info.releases_url.starts_with("https://"));
+    assert_eq!(
+        info.windows_build.is_some(),
+        startup::windows_build().is_some()
+    );
+
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s5_every_settings_subscriber_over_a_client_connection_gets_the_whole_settings_after_each_change()
+ {
+    let dirs = TestDirs::new();
+    let endpoint = dirs.endpoint();
+    let host = RunningHost::start(setup_config(&dirs, &endpoint));
+    let (mut first, first_start) = settings_watcher(&endpoint).await;
+    let (mut second, second_start) = settings_watcher(&endpoint).await;
+    assert_eq!(first_start, floti_host::workspace::settings::defaults());
+    assert_eq!(second_start, first_start);
+    let mut client = TestClient::connect(&endpoint, &[]).await;
+
+    let roots = vec![dirs.folder("projects").display().to_string()];
+    let written = client
+        .request::<workspace::WriteSettings>(&workspace::HostSettingsPatch {
+            scan_roots: Some(roots.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(written.scan_roots, roots);
+    let completed = client
+        .request::<workspace::CompleteSetup>(&())
+        .await
+        .unwrap();
+    let stamp = completed
+        .first_run_completed_at
+        .clone()
+        .expect("setup:complete stamps the time");
+    assert!(stamp.parse::<Timestamp>().is_ok(), "{stamp}");
+    assert_eq!(
+        completed.scan_roots, roots,
+        "the whole settings, not the change"
+    );
+
+    for watcher in [&mut first, &mut second] {
+        assert_eq!(next_settings(watcher).await, written);
+        assert_eq!(next_settings(watcher).await, completed);
+    }
+    let (_later, later_start) = settings_watcher(&endpoint).await;
+    assert_eq!(
+        later_start, completed,
+        "a later subscription starts with the latest"
+    );
+    assert_eq!(
+        client
+            .request::<workspace::ReadSettings>(&())
+            .await
+            .unwrap(),
+        completed
+    );
+
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s5_a_malformed_setting_over_a_client_connection_is_refused_with_the_validators_sentence_and_the_stored_value_kept()
+ {
+    let dirs = TestDirs::new();
+    let endpoint = dirs.endpoint();
+    let host = RunningHost::start(setup_config(&dirs, &endpoint));
+    let mut client = TestClient::connect(&endpoint, &[]).await;
+    let archive_max = |bytes| workspace::HostSettingsPatch {
+        transcript_archive_max_bytes: Some(bytes),
+        ..Default::default()
+    };
+    client
+        .request::<workspace::WriteSettings>(&archive_max(4096))
+        .await
+        .unwrap();
+    let (mut watcher, _) = settings_watcher(&endpoint).await;
+
+    let refused = client
+        .request::<workspace::WriteSettings>(&archive_max(999))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.message,
+        "settings rejected: transcriptArchiveMaxBytes: expected 1024 to 68719476736, got 999"
+    );
+    assert_eq!(
+        client
+            .request::<workspace::ReadSettings>(&())
+            .await
+            .unwrap()
+            .transcript_archive_max_bytes,
+        4096
+    );
+
+    // The refused write sent nothing: the next change is the first heard.
+    client
+        .request::<workspace::WriteSettings>(&archive_max(8192))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_settings(&mut watcher)
+            .await
+            .transcript_archive_max_bytes,
+        8192
+    );
+
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s5_setup_over_a_client_connection_reports_each_backends_executable_source_version_range_and_sign_in()
+ {
+    let dirs = TestDirs::new();
+    let endpoint = dirs.endpoint();
+    let host = RunningHost::start(setup_config(&dirs, &endpoint));
+    let mut client = TestClient::connect(&endpoint, &[]).await;
+
+    let status = client
+        .request::<workspace::ReadSetupStatus>(&())
+        .await
+        .unwrap();
+    assert_eq!(
+        status.backends.keys().cloned().collect::<Vec<_>>(),
+        vec![BackendId::claude_code()],
+        "the shell has no executable to find, so no setup"
+    );
+
+    let claude = claude_status(&mut client).await;
+    assert!(claude.installed, "{claude:?}");
+    assert_eq!(claude.source, Some(workspace::ExecutableSource::Discovered));
+    assert_eq!(
+        claude.path.as_deref().map(str::to_lowercase),
+        Some(node().display().to_string().to_lowercase())
+    );
+    assert_eq!(claude.version.as_deref(), Some("2.1.999 (Claude Code)"));
+    assert_eq!(claude.semver.as_deref(), Some("2.1.999"));
+    assert!(claude.tested);
+    assert_eq!(claude.tested_range.min, "2.1.277");
+    assert_eq!(claude.tested_range.max, "2.2.0");
+    assert_eq!(claude.error, None);
+    let config_dir = claude_config_of(&dirs);
+    assert_eq!(claude.config_dir, Some(config_dir.display().to_string()));
+    assert!(!claude.config_dir_exists);
+    assert_eq!(claude.signed_in, Knowable::Known(false));
+    assert_eq!(
+        claude.sign_in_signal,
+        "Claude Code is not signed in. Run claude in a terminal and sign in."
+    );
+
+    // A sign-in artefact existing is a sign-in; nothing opens it.
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(config_dir.join(".credentials.json"), "not read").unwrap();
+    let claude = claude_status(&mut client).await;
+    assert!(claude.config_dir_exists);
+    assert_eq!(claude.signed_in, Knowable::Known(true));
+    assert_eq!(claude.sign_in_signal, ".credentials.json is present");
+
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s5_a_located_executable_over_a_client_connection_is_stored_and_reports_its_own_version_and_a_pick_that_is_not_a_program_keeps_nothing()
+ {
+    let dirs = TestDirs::new();
+    let endpoint = dirs.endpoint();
+    let host = RunningHost::start(setup_config(&dirs, &endpoint));
+    let mut client = TestClient::connect(&endpoint, &[]).await;
+    let (mut watcher, _) = settings_watcher(&endpoint).await;
+    let locate = |path: String| workspace::LocateBackendRequest {
+        backend: BackendId::claude_code(),
+        path,
+    };
+
+    let folder = dirs.folder("not a program");
+    let text = folder.join("notes.txt");
+    std::fs::write(&text, "hello").unwrap();
+    for (path, why) in [
+        (folder.display().to_string(), "That is not a file."),
+        (
+            folder.join("gone").display().to_string(),
+            "That file could not be read.",
+        ),
+        ("claude".to_owned(), "That is not a full path to a file."),
+    ] {
+        let answer = client
+            .request::<workspace::LocateBackend>(&locate(path))
+            .await
+            .unwrap();
+        assert_eq!(answer.error.as_deref(), Some(why));
+        assert_eq!(answer.source, Some(workspace::ExecutableSource::Discovered));
+    }
+    let unknown = client
+        .request::<workspace::LocateBackend>(&workspace::LocateBackendRequest {
+            backend: BackendId::new("nobody"),
+            path: text.display().to_string(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        unknown.message,
+        "This Floti host has no agent backend `nobody`."
+    );
+    assert!(
+        client
+            .request::<workspace::ReadSettings>(&())
+            .await
+            .unwrap()
+            .backend_paths
+            .is_empty(),
+        "a refused pick keeps nothing"
+    );
+
+    let picked = node().display().to_string();
+    let located = client
+        .request::<workspace::LocateBackend>(&locate(picked.clone()))
+        .await
+        .unwrap();
+    assert_eq!(located.source, Some(workspace::ExecutableSource::Setting));
+    assert_eq!(located.path.as_deref(), Some(picked.as_str()));
+    let own = located
+        .version
+        .clone()
+        .expect("the picked program's own version");
+    assert_ne!(own, "2.1.999 (Claude Code)");
+    assert_eq!(located.error, None);
+    let stored = client
+        .request::<workspace::ReadSettings>(&())
+        .await
+        .unwrap();
+    assert_eq!(stored.backend_paths[&BackendId::claude_code()], picked);
+    // The refused picks sent nothing: the first change heard is the pick.
+    assert_eq!(
+        next_settings(&mut watcher).await.backend_paths,
+        stored.backend_paths
+    );
+    assert_eq!(
+        claude_status(&mut client).await.source,
+        Some(workspace::ExecutableSource::Setting)
+    );
+
+    client
+        .request::<workspace::WriteSettings>(&workspace::HostSettingsPatch {
+            backend_paths: Some(Default::default()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let cleared = claude_status(&mut client).await;
+    assert_eq!(
+        cleared.source,
+        Some(workspace::ExecutableSource::Discovered)
+    );
+    assert_eq!(cleared.version.as_deref(), Some("2.1.999 (Claude Code)"));
 
     host.stop(HostStopReason::Stop).await;
 }
