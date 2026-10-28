@@ -4,15 +4,19 @@
 //! answered by the host's renderer and content service.
 //!
 //! Every test makes its own folders and its own store, with a space in every
-//! path.
+//! path. The last section opens artifacts through a client connection to a
+//! running host, refusals and a file larger than one answer included.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Instant;
 
 use floti_host::config_console::{hash_content, normalize, snapshots};
+use floti_host::server::{HostConfig, HostRun, backends};
 use floti_host::store::Store;
 use floti_host::store::projects::{EMPTY_INVENTORY, cache_projects};
-use floti_host::testkit::TestDirs;
+use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs};
 use floti_host::workspace::content::ContentService;
 use floti_host::workspace::content::guard::ContentGuard;
 use floti_host::workspace::content::search::{MAX_HITS, build_corpus, search_corpus};
@@ -25,10 +29,15 @@ use floti_host::workspace::render::wikilinks::{
 };
 use floti_host::workspace::render::{editor_highlight, render_config, render_markdown};
 use floti_host::workspace::roots::KnownRoots;
+use floti_protocol::channel::{EventChannel, RequestChannel, from_payload, to_payload};
+use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::workspace::{
-    ConfigScopeKind, ConfigWriteReason, ContentFileKind, Project, ProjectKind, WriteConfigRequest,
-    WriteConfigResult,
+    ARTIFACT_PIECE_LEN, AppMode, ArtifactBytes, ArtifactBytesRequest, ArtifactHeader, ArtifactLink,
+    ConfigScopeKind, ConfigWriteReason, ContentFileKind, DiscoveryResult, DiscoveryUpdated,
+    HostSettingsPatch, ListContentScopes, OpenArtifact, Project, ProjectKind, ReadArtifactBytes,
+    ScanForProjects, ScanRequest, ScopedFile, WriteConfigRequest, WriteConfigResult, WriteSettings,
 };
+use floti_protocol::{Bytes, Message};
 use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
@@ -1391,4 +1400,343 @@ fn a_save_to_a_scope_that_is_neither_a_content_scope_nor_a_known_root_is_refused
             .is_err()
     );
     assert!(world.content.search(&shown(&stranger), "mine").is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Over a client connection: an artifact opened, and every load its frame
+// makes, answered by a running host through its socket.
+
+const CAPABILITIES: &[&str] = &["files", "terminal"];
+const DISCOVERY: u64 = 1;
+
+/// A host whose one scan root is main's artifact fixture, with a client
+/// connected to it that has made the folder a known scope.
+struct Wire {
+    host: Option<RunningHost>,
+    client: TestClient,
+    /// The scope as the scan found it.
+    scope: String,
+    notes: PathBuf,
+    /// Last: fields drop in order.
+    dirs: TestDirs,
+}
+
+impl Wire {
+    async fn start() -> Self {
+        let dirs = TestDirs::new();
+        let root = dirs.folder("alpha project");
+        let notes = root.join("notes");
+        put(&notes.join("first.md"), "# First\n\nSee [[second]].\n");
+        put(&notes.join("second.md"), "# Second\n");
+        put(
+            &notes.join("lesson.html"),
+            "<!doctype html><html><head><title>Lesson</title></head><body><p>Read [[second]] and [[unwritten]].</p></body></html>\n",
+        );
+        put(&notes.join("chart.js"), "window.chart = 1\n");
+        put(&root.join("secret.txt"), SECRET);
+
+        let endpoint = dirs.endpoint();
+        let host = RunningHost::start(HostConfig {
+            folders: dirs.folders(),
+            endpoint: endpoint.clone(),
+            backends: backends(&dirs.user_env(), None),
+            inherited_env: std::env::vars_os()
+                .filter(|(key, _)| key != "SHELL")
+                .chain([(OsString::from("SHELL"), OsString::from("/bin/sh"))])
+                .collect(),
+            run: HostRun {
+                mode: AppMode::Dev,
+                home: Some(dirs.home.clone()),
+            },
+        });
+        let mut client = TestClient::connect(&endpoint, CAPABILITIES).await;
+        settled(&mut client).await;
+
+        // The folder becomes a known scope the way a user makes it one: a
+        // scan root, scanned.
+        client
+            .request::<WriteSettings>(&HostSettingsPatch {
+                scan_roots: Some(vec![shown(&root)]),
+                ..HostSettingsPatch::default()
+            })
+            .await
+            .expect("the scan root is kept");
+        let found = client
+            .request::<ScanForProjects>(&ScanRequest {
+                include_git: Some(false),
+            })
+            .await
+            .expect("a scan answers");
+        let scope = found
+            .projects
+            .iter()
+            .find(|project| normalize(Path::new(&project.path)) == normalize(&root))
+            .unwrap_or_else(|| panic!("the scan did not find the folder: {found:?}"))
+            .path
+            .clone();
+        Self {
+            host: Some(host),
+            client,
+            scope,
+            notes: normalize(&notes),
+            dirs,
+        }
+    }
+
+    async fn stop(mut self) {
+        if let Some(host) = self.host.take() {
+            host.stop(HostStopReason::Stop).await;
+        }
+    }
+
+    async fn open(&mut self, scope: &str, file: &Path) -> Result<ArtifactLink, String> {
+        self.client
+            .request::<OpenArtifact>(&ScopedFile {
+                scope_path: scope.to_owned(),
+                path: shown(file),
+            })
+            .await
+            .map_err(|error| error.message)
+    }
+
+    async fn load(&mut self, url: &str, offset: u64) -> ArtifactBytes {
+        self.client
+            .request::<ReadArtifactBytes>(&ArtifactBytesRequest {
+                url: url.to_owned(),
+                offset,
+            })
+            .await
+            .unwrap_or_else(|error| panic!("{url} was not answered: {error:?}"))
+    }
+
+    /// The lesson's address and the folder part of it its neighbours share.
+    async fn lesson(&mut self) -> (ArtifactLink, String) {
+        let scope = self.scope.clone();
+        let lesson = self.notes.join("lesson.html");
+        let link = self.open(&scope, &lesson).await.expect("the lesson opens");
+        let base = link.url[..link.url.rfind('/').unwrap()].to_owned();
+        (link, base)
+    }
+}
+
+/// Waits out the scan a host runs as it starts, so the test's own scan is
+/// the one that answers.
+async fn settled(client: &mut TestClient) {
+    let start = client.subscribe_on(DISCOVERY, DiscoveryUpdated::NAME).await;
+    if let Message::Snapshot(snapshot) = &start {
+        let state: Option<DiscoveryResult> = from_payload(&snapshot.state).unwrap();
+        if state.is_some() {
+            return;
+        }
+    }
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match client.next(left).await {
+            Some(Message::Event(event)) if event.subscription == DISCOVERY => return,
+            Some(_) => continue,
+            None => panic!("the host's first scan did not finish within {PATIENCE:?}"),
+        }
+    }
+}
+
+fn header<'a>(answer: &'a ArtifactBytes, name: &str) -> Option<&'a str> {
+    answer
+        .headers
+        .iter()
+        .find(|header| header.name == name)
+        .map(|header| header.value.as_str())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_opens_an_artifact_and_its_neighbour_over_the_wire_under_a_policy_that_names_no_network()
+ {
+    let mut wire = Wire::start().await;
+    let (link, base) = wire.lesson().await;
+    assert!(
+        link.url
+            .starts_with(&format!("floti-artifact://{}/", link.token))
+    );
+    assert!(link.url.ends_with("/lesson.html"));
+
+    // A request that leaves the offset out is answered from the first byte.
+    let bare = to_payload(&json!({ "url": link.url })).unwrap();
+    let entry: ArtifactBytes = from_payload(
+        &wire
+            .client
+            .request_on(ReadArtifactBytes::NAME, bare)
+            .await
+            .expect("the entry is answered"),
+    )
+    .unwrap();
+    assert_eq!(entry.status, 200);
+    assert_eq!(
+        header(&entry, "content-type"),
+        Some("text/html; charset=utf-8")
+    );
+    assert_eq!(entry.total_bytes, entry.body.len() as u64);
+    let html = String::from_utf8(entry.body.0.clone()).unwrap();
+    let open = "<script type=\"application/json\" data-helm-wikilinks>";
+    let start = html.find(open).unwrap() + open.len();
+    let end = start + html[start..].find("</script>").unwrap();
+    let island: Value = serde_json::from_str(&html[start..end]).unwrap();
+    assert_eq!(island, json!({ "second": true, "unwritten": false }));
+    let lower = html.to_lowercase();
+    for path in [
+        wire.dirs.root().to_path_buf(),
+        PathBuf::from(&wire.scope),
+        wire.notes.clone(),
+    ] {
+        let path = shown(&path);
+        let escaped = serde_json::to_string(&path).unwrap();
+        for spelling in [
+            path.clone(),
+            path.replace('\\', "/"),
+            escaped[1..escaped.len() - 1].to_owned(),
+        ] {
+            assert!(
+                !lower.contains(&spelling.to_lowercase()),
+                "{spelling} leaked"
+            );
+        }
+    }
+
+    // The entry read from an offset is the same document, sliced.
+    let rest = wire.load(&link.url, 10).await;
+    assert_eq!(rest.status, 200);
+    assert_eq!(rest.total_bytes, entry.total_bytes);
+    assert_eq!(rest.body.as_slice(), &entry.body.as_slice()[10..]);
+
+    let sibling = wire.load(&format!("{base}/chart.js"), 0).await;
+    assert_eq!(sibling.status, 200);
+    assert_eq!(
+        sibling.body.as_slice(),
+        std::fs::read(wire.notes.join("chart.js")).unwrap()
+    );
+    assert_eq!(
+        header(&sibling, "content-type"),
+        Some("text/javascript; charset=utf-8")
+    );
+    assert_eq!(header(&sibling, "x-content-type-options"), Some("nosniff"));
+    assert_eq!(header(&sibling, "cache-control"), Some("no-store"));
+    let csp = header(&sibling, "content-security-policy").unwrap();
+    let directives: Vec<&str> = csp.split(';').map(str::trim).collect();
+    assert!(directives.contains(&"default-src 'none'"));
+    assert!(directives.contains(&"connect-src 'none'"));
+    assert!(!csp.contains("http:") && !csp.contains("https:"), "{csp}");
+
+    wire.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_is_refused_an_artifact_load_with_the_status_and_text_the_host_serves() {
+    let mut wire = Wire::start().await;
+    let (_, base) = wire.lesson().await;
+
+    for escape in [
+        "..%2fsecret.txt",
+        "../secret.txt",
+        "..%5csecret.txt",
+        "%2e%2e/secret.txt",
+    ] {
+        let answer = wire.load(&format!("{base}/{escape}"), 0).await;
+        assert_ne!(answer.status, 200, "{escape}");
+        assert!(
+            !String::from_utf8_lossy(answer.body.as_slice()).contains(SECRET),
+            "{escape} leaked"
+        );
+    }
+
+    let refused = |status: u16, text: &str| ArtifactBytes {
+        status,
+        headers: vec![ArtifactHeader {
+            name: "content-type".into(),
+            value: "text/plain; charset=utf-8".into(),
+        }],
+        total_bytes: text.len() as u64,
+        body: Bytes(text.as_bytes().to_vec()),
+    };
+    let forbidden = format!("{base}/..%2fsecret.txt");
+    assert_eq!(wire.load(&forbidden, 0).await, refused(403, "Forbidden"));
+    // A refusal is its whole text, whatever offset was asked for.
+    assert_eq!(wire.load(&forbidden, 4).await, refused(403, "Forbidden"));
+    assert_eq!(
+        wire.load("floti-artifact://0123456789abcdef/lesson.html", 0)
+            .await,
+        refused(404, "Not found")
+    );
+    assert_eq!(
+        wire.load(&format!("{base}/missing.css"), 0).await,
+        refused(404, "Not found")
+    );
+    assert_eq!(
+        wire.load("https://x.test/lesson.html", 0).await,
+        refused(400, "Bad request")
+    );
+    assert_eq!(
+        wire.load(&format!("{base}/%zz.js"), 0).await,
+        refused(400, "Bad request")
+    );
+
+    // Only a folder the host knows can be pinned.
+    let stranger = wire.dirs.folder("stranger");
+    put(&stranger.join("page.html"), "<p>x</p>");
+    let refused = wire
+        .open(&shown(&stranger), &stranger.join("page.html"))
+        .await
+        .unwrap_err();
+    assert!(refused.contains("is not a folder Floti knows"), "{refused}");
+
+    wire.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_artifact_larger_than_a_piece_reaches_the_client_byte_for_byte_and_the_connection_stays_up()
+ {
+    let mut wire = Wire::start().await;
+    // About two and a half pieces of bytes that are not text.
+    let len = ARTIFACT_PIECE_LEN as usize * 5 / 2 + 17;
+    let video: Vec<u8> = (0..len).map(|at| (at * 31 % 251) as u8 | 0x80).collect();
+    std::fs::write(wire.notes.join("clip.bin"), &video).unwrap();
+    let (_, base) = wire.lesson().await;
+    let url = format!("{base}/clip.bin");
+
+    let mut arrived = Vec::with_capacity(len);
+    let mut pieces = 0;
+    loop {
+        let piece = wire.load(&url, arrived.len() as u64).await;
+        assert_eq!(piece.status, 200);
+        assert_eq!(piece.total_bytes, len as u64);
+        assert_eq!(
+            header(&piece, "content-type"),
+            Some("application/octet-stream")
+        );
+        assert!(piece.body.len() as u64 <= ARTIFACT_PIECE_LEN);
+        assert!(!piece.body.is_empty(), "a piece before the end is empty");
+        arrived.extend_from_slice(piece.body.as_slice());
+        pieces += 1;
+        if arrived.len() as u64 == piece.total_bytes {
+            break;
+        }
+    }
+    assert_eq!(pieces, 3);
+    assert!(arrived == video, "the pieces do not add up to the file");
+
+    // Past the end there is nothing more, and that is not a refusal.
+    let past = wire.load(&url, len as u64 + 5).await;
+    assert_eq!((past.status, past.total_bytes), (200, len as u64));
+    assert!(past.body.is_empty());
+
+    // The same connection still answers.
+    let scopes = wire
+        .client
+        .request::<ListContentScopes>(&())
+        .await
+        .expect("the connection is still up");
+    assert!(
+        scopes.iter().any(|scope| scope.path == wire.scope),
+        "{scopes:?}"
+    );
+
+    wire.stop().await;
 }

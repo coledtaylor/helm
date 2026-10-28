@@ -5,17 +5,22 @@
 //! it ([`ContentService`]); rendering and highlighting read nothing from disk
 //! but what the request names. Walking a scope, reading a corpus and
 //! highlighting a file are disk and CPU work, so each runs off the workers.
+//!
+//! `content:artifact` mints an artifact's address and `content:artifactBytes`
+//! answers each load its frame makes, a piece at a time. A refused load is a
+//! normal answer carrying its status, as the frame would see it.
 
 #[cfg(test)]
 mod tests;
 
 use std::sync::Arc;
 
+use floti_protocol::Bytes;
 use floti_protocol::channel::Router;
 use floti_protocol::channels::workspace::{
-    HighlightSource, ListContentScopes, ListContentSnapshots, OpenArtifact, ReadContentDocument,
-    RenderConfigFile, RenderContent, ResolveWikilink, RestoreContentSnapshot, SearchContent,
-    WikilinkTarget, WriteContent,
+    ArtifactBytes, ArtifactHeader, HighlightSource, ListContentScopes, ListContentSnapshots,
+    OpenArtifact, ReadArtifactBytes, ReadContentDocument, RenderConfigFile, RenderContent,
+    ResolveWikilink, RestoreContentSnapshot, SearchContent, WikilinkTarget, WriteContent,
 };
 
 use super::config::off_the_workers;
@@ -62,6 +67,24 @@ impl Feature for Content {
             })
             .handle::<OpenArtifact>(|file| {
                 off_the_workers(|| content.artifact(&file.scope_path, &file.path))
+            })
+            .handle::<ReadArtifactBytes>(|request| {
+                let piece =
+                    off_the_workers(|| content.serve_artifact_piece(&request.url, request.offset));
+                Ok(ArtifactBytes {
+                    status: piece.response.status,
+                    headers: piece
+                        .response
+                        .headers
+                        .into_iter()
+                        .map(|(name, value)| ArtifactHeader {
+                            name: name.to_owned(),
+                            value,
+                        })
+                        .collect(),
+                    total_bytes: piece.total_bytes,
+                    body: Bytes(piece.response.body),
+                })
             })
             .handle::<ResolveWikilink>(|link| {
                 off_the_workers(|| {

@@ -28,11 +28,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use floti_protocol::channels::workspace::{
-    ArtifactLink, ConfigScopeKind, ConfigSnapshotMeta, ContentDocument, ContentFileKind,
-    ContentScope, ContentSearchResult, RenderedMarkdown, WriteConfigRequest, WriteConfigResult,
+    ARTIFACT_PIECE_LEN, ArtifactLink, ConfigScopeKind, ConfigSnapshotMeta, ContentDocument,
+    ContentFileKind, ContentScope, ContentSearchResult, RenderedMarkdown, WriteConfigRequest,
+    WriteConfigResult,
 };
 
-use self::artifact::{ArtifactResponse, Artifacts, artifact_wikilinks};
+use self::artifact::{ArtifactPiece, ArtifactResponse, Artifacts, artifact_wikilinks};
 use self::guard::{ContentGuard, rebuilt_below};
 use self::search::{ContentCorpus, MAX_HITS, build_corpus, corpus_is_current, search_corpus};
 use self::tree::{ContentTree, content_scope, describe_unlisted, read_content_tree};
@@ -324,9 +325,18 @@ impl ContentService {
     }
 
     /// What an artifact address answers. A frame's loads reach the host
-    /// through the client, which hands each address here.
+    /// through the client, which hands each address to
+    /// [`serve_artifact_piece`](Self::serve_artifact_piece) over
+    /// `content:artifactBytes`; this is the same answer whole.
     pub fn serve_artifact(&self, url: &str) -> ArtifactResponse {
         self.artifacts.serve(url)
+    }
+
+    /// What an artifact address answers from `offset` on, at most
+    /// [`ARTIFACT_PIECE_LEN`] bytes of it, with the same refusals as
+    /// [`serve_artifact`](Self::serve_artifact).
+    pub fn serve_artifact_piece(&self, url: &str, offset: u64) -> ArtifactPiece {
+        self.artifacts.serve_piece(url, offset, ARTIFACT_PIECE_LEN)
     }
 
     /// The file a `[[wikilink]]` an artifact's frame clicked names, preferring

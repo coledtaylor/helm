@@ -12,8 +12,14 @@
 //! rule, it has nowhere to be requested from. Inline script and style are
 //! allowed because a generated report is one file with its CSS and JS inside
 //! it; they can do nothing outside a frame with no network and no origin.
+//!
+//! A client asks for an address whole ([`Artifacts::serve`]) or a piece at a
+//! time ([`Artifacts::serve_piece`]), since one protocol answer must fit in
+//! one frame. Both resolve the address through the same step, so a refusal
+//! is the same 400, 403 or 404 either way.
 
 use std::collections::{HashMap, VecDeque};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
@@ -151,26 +157,67 @@ impl Artifacts {
     /// 400 for an address that is not one, 404 for a token or file that is
     /// not there, 403 for a path out of the pinned folder.
     pub fn serve(&self, url: &str) -> ArtifactResponse {
-        let Some(rest) = url
+        match self.resolve(url) {
+            Ok(found) => match found.whole() {
+                Ok(bytes) => found.respond(bytes),
+                Err(refusal) => refusal,
+            },
+            Err(refusal) => refusal,
+        }
+    }
+
+    /// What [`serve`](Self::serve) answers for `url`, with at most `max_len`
+    /// bytes of the body from `offset` on, and the whole body's length.
+    ///
+    /// A neighbour is read from `offset` with a seek, so a large file is
+    /// never held whole. The entry document is built whole, since its
+    /// wikilink bootstrap changes its length, and then sliced. An offset at
+    /// or past the end answers 200 with an empty body; a refusal answers its
+    /// whole text whatever the offset.
+    pub fn serve_piece(&self, url: &str, offset: u64, max_len: u64) -> ArtifactPiece {
+        let found = match self.resolve(url) {
+            Ok(found) => found,
+            Err(refusal) => return ArtifactPiece::whole(refusal),
+        };
+        let read = if found.bootstrap.is_some() {
+            found.whole().map(|bytes| {
+                let total = bytes.len() as u64;
+                let start = usize::try_from(offset.min(total)).unwrap_or(bytes.len());
+                let end = usize::try_from(offset.saturating_add(max_len).min(total))
+                    .unwrap_or(bytes.len());
+                (bytes[start..end].to_vec(), total)
+            })
+        } else {
+            found.piece(offset, max_len)
+        };
+        match read {
+            Ok((body, total_bytes)) => ArtifactPiece {
+                response: found.respond(body),
+                total_bytes,
+            },
+            Err(refusal) => ArtifactPiece::whole(refusal),
+        }
+    }
+
+    /// The file `url` names, or the refusal it gets: the address, the token,
+    /// the decoding, the containment check and the file being one are the
+    /// only places a refusal comes from, for a whole read and a piece alike.
+    fn resolve(&self, url: &str) -> Result<Resolved, ArtifactResponse> {
+        let rest = url
             .strip_prefix(ARTIFACT_SCHEME)
             .and_then(|rest| rest.strip_prefix("://"))
-        else {
-            return ArtifactResponse::plain(400, "Bad request");
-        };
+            .ok_or_else(|| ArtifactResponse::plain(400, "Bad request"))?;
         let rest = rest.split(['?', '#']).next().unwrap_or_default();
         let mut parts = rest.split('/').filter(|part| !part.is_empty());
         let token = parts.next().unwrap_or_default();
-        let Some(entry) = self.pinned(token) else {
-            return ArtifactResponse::plain(404, "Not found");
-        };
+        let entry = self
+            .pinned(token)
+            .ok_or_else(|| ArtifactResponse::plain(404, "Not found"))?;
 
-        let mut rel = Vec::new();
-        for part in parts {
-            match decode_component(part) {
-                Some(decoded) => rel.push(decoded),
-                None => return ArtifactResponse::plain(400, "Bad request"),
-            }
-        }
+        let rel = parts
+            .map(decode_component)
+            .collect::<Option<Vec<String>>>()
+            .ok_or_else(|| ArtifactResponse::plain(400, "Bad request"))?;
         let target = if rel.is_empty() {
             entry.file.clone()
         } else {
@@ -180,48 +227,101 @@ impl Artifacts {
             )
         };
         if segments_below(&entry.dir, &target).is_none() {
-            return ArtifactResponse::plain(403, "Forbidden");
+            return Err(ArtifactResponse::plain(403, "Forbidden"));
         }
-
-        let mut bytes = match std::fs::metadata(&target) {
-            Ok(meta) if meta.is_file() => match std::fs::read(&target) {
-                Ok(bytes) => bytes,
-                Err(_) => return ArtifactResponse::plain(404, "Not found"),
-            },
-            _ => return ArtifactResponse::plain(404, "Not found"),
-        };
+        if !std::fs::metadata(&target).is_ok_and(|meta| meta.is_file()) {
+            return Err(ArtifactResponse::plain(404, "Not found"));
+        }
 
         // The entry document, and only that one, gets the wikilink
         // bootstrap; a stylesheet or a script beside it is served verbatim.
         let ext = extension(&target);
         let is_entry = target.display().to_string().to_lowercase()
             == entry.file.display().to_string().to_lowercase();
-        if is_entry && (ext == ".html" || ext == ".htm") {
-            let html = String::from_utf8_lossy(&bytes).into_owned();
-            bytes = with_wikilinks(&html, &entry.links).into_bytes();
-        }
-
+        let bootstrap = (is_entry && (ext == ".html" || ext == ".htm")).then_some(entry.links);
         let content_type = MIME
             .iter()
             .find(|(known, _)| *known == ext)
             .map_or("application/octet-stream", |(_, mime)| mime);
+        Ok(Resolved {
+            target,
+            bootstrap,
+            content_type,
+        })
+    }
+
+    fn pinned(&self, token: &str) -> Option<Pinned> {
+        let open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        open.0.get(token).cloned()
+    }
+}
+
+/// Part of what an artifact address answers: the status and headers
+/// [`Artifacts::serve`] would give, a stretch of the body, and the whole
+/// body's length.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactPiece {
+    pub response: ArtifactResponse,
+    pub total_bytes: u64,
+}
+
+impl ArtifactPiece {
+    fn whole(response: ArtifactResponse) -> Self {
+        Self {
+            total_bytes: response.body.len() as u64,
+            response,
+        }
+    }
+}
+
+/// A file an address resolved to, inside its pinned folder.
+struct Resolved {
+    target: PathBuf,
+    /// The wikilinks to bootstrap, for the entry document only.
+    bootstrap: Option<Vec<ArtifactWikilink>>,
+    content_type: &'static str,
+}
+
+impl Resolved {
+    /// The whole body: the file, and for the entry document its bootstrap.
+    fn whole(&self) -> Result<Vec<u8>, ArtifactResponse> {
+        let bytes =
+            std::fs::read(&self.target).map_err(|_| ArtifactResponse::plain(404, "Not found"))?;
+        Ok(match &self.bootstrap {
+            Some(links) => with_wikilinks(&String::from_utf8_lossy(&bytes), links).into_bytes(),
+            None => bytes,
+        })
+    }
+
+    /// At most `max_len` bytes of the file from `offset`, read with a seek,
+    /// and the file's length.
+    fn piece(&self, offset: u64, max_len: u64) -> Result<(Vec<u8>, u64), ArtifactResponse> {
+        let not_found = |_| ArtifactResponse::plain(404, "Not found");
+        let mut file = std::fs::File::open(&self.target).map_err(not_found)?;
+        let total = file.metadata().map_err(not_found)?.len();
+        if offset >= total {
+            return Ok((Vec::new(), total));
+        }
+        file.seek(SeekFrom::Start(offset)).map_err(not_found)?;
+        let len = max_len.min(total - offset);
+        let mut body = Vec::with_capacity(usize::try_from(len).unwrap_or_default());
+        file.take(len).read_to_end(&mut body).map_err(not_found)?;
+        Ok((body, total))
+    }
+
+    fn respond(&self, body: Vec<u8>) -> ArtifactResponse {
         ArtifactResponse {
             status: 200,
             headers: vec![
-                ("content-type", content_type.to_owned()),
+                ("content-type", self.content_type.to_owned()),
                 ("content-security-policy", ARTIFACT_CSP.to_owned()),
                 ("x-content-type-options", "nosniff".to_owned()),
                 // A generated report is edited by hand afterwards; a cached
                 // copy of the version before the edit is the wrong answer.
                 ("cache-control", "no-store".to_owned()),
             ],
-            body: bytes,
+            body,
         }
-    }
-
-    fn pinned(&self, token: &str) -> Option<Pinned> {
-        let open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
-        open.0.get(token).cloned()
     }
 }
 

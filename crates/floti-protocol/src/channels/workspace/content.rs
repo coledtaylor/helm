@@ -3,10 +3,20 @@
 //!
 //! Rendering happens on the host, so a client carries no grammars and a
 //! preview never re-parses a note on its UI thread.
+//!
+//! An HTML artifact is framed by the client and read from the host: the
+//! client mints its address with `content:artifact`, and hands every load
+//! its frame makes to `content:artifactBytes`, which answers what the
+//! address serves. A refusal is an answer with its status, not an error, so a
+//! frame sees the same 400, 403 and 404 a browser would. A file travels in
+//! pieces of at most [`ARTIFACT_PIECE_LEN`] bytes, because one response must
+//! fit in one frame.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+
+use crate::bytes::Bytes;
 
 use super::{
     ConfigFileContent, ConfigScopeKind, ConfigSnapshotMeta, Millis, RestoreSnapshotRequest,
@@ -42,6 +52,11 @@ request_channel!(
     /// Mints the address a sandboxed frame may load an HTML artifact from,
     /// pinned to a token the host issued for that file.
     OpenArtifact = "content:artifact", ScopedFile => ArtifactLink, needs Files
+);
+request_channel!(
+    /// What an artifact address answers, from `offset` on: its status, its
+    /// headers and at most [`ARTIFACT_PIECE_LEN`] bytes of its body.
+    ReadArtifactBytes = "content:artifactBytes", ArtifactBytesRequest => ArtifactBytes, needs Files
 );
 request_channel!(
     /// Resolves a `[[wikilink]]` an artifact's frame clicked.
@@ -298,6 +313,52 @@ pub struct ContentSearchResult {
 pub struct ArtifactLink {
     pub url: String,
     pub token: String,
+}
+
+/// The most body bytes one `content:artifactBytes` answer carries: 4 MiB,
+/// a quarter of [`MAX_FRAME_LEN`](crate::MAX_FRAME_LEN), which leaves the
+/// headers and the framing all the room they need.
+pub const ARTIFACT_PIECE_LEN: u64 = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactBytesRequest {
+    /// An address `content:artifact` minted, or one beside it that a frame
+    /// loaded.
+    pub url: String,
+    /// Where in the body to start. Left out, the body starts at its first
+    /// byte, so a file within one piece takes one request.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub offset: u64,
+}
+
+/// What an artifact address answered, or the part of it from an offset.
+///
+/// A client reads from `offset + body.length` until it holds `totalBytes`.
+/// An offset at or past the end answers 200 with an empty body. A refusal
+/// answers its whole text whatever the offset.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactBytes {
+    /// 200, or the refusal: 400 for an address that is not one, 404 for a
+    /// token or file that is not there, 403 for a path out of the pinned
+    /// folder.
+    pub status: u16,
+    /// Every header the address is served with, `content-type` among them.
+    pub headers: Vec<ArtifactHeader>,
+    /// The length of the whole body.
+    #[ts(type = "number")]
+    pub total_bytes: u64,
+    pub body: Bytes,
+}
+
+/// One response header, its name lower-cased.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactHeader {
+    pub name: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

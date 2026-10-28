@@ -139,6 +139,7 @@ async fn every_content_channel_is_served_from_the_content_feature() {
         "content:snapshots",
         "content:restore",
         "content:artifact",
+        "content:artifactBytes",
         "content:wikilink",
         "config:render",
         "editor:highlight",
