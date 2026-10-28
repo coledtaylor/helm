@@ -66,10 +66,6 @@ pub const NOT_YET_SERVED: &[Later] = &[
         feature: "plugin tool families",
         channels: &["plugins:setTools"],
     },
-    Later {
-        feature: "plugin secrets",
-        channels: &["secrets:*"],
-    },
 ];
 
 /// The entry that lists `channel`, when it is not served yet.
@@ -185,13 +181,13 @@ mod tests {
         let catalogue = Catalogue::protocol();
         let mut served = all_unlisted(&catalogue);
         served.insert("agentBrowser:call");
-        served.insert("secrets:list");
+        served.insert("plugins:setTools");
         let drift = drift(&catalogue, &served);
         assert_eq!(
             drift.served_but_listed,
             vec![
                 ("agentBrowser:call", "agent tools listener"),
-                ("secrets:list", "plugin secrets")
+                ("plugins:setTools", "plugin tool families")
             ]
         );
         assert!(
@@ -200,7 +196,7 @@ mod tests {
         );
         let said = drift.to_string();
         assert!(said.contains("`agentBrowser:call` is served"), "{said}");
-        assert!(said.contains("`secrets:list` is served"), "{said}");
+        assert!(said.contains("`plugins:setTools` is served"), "{said}");
     }
 
     #[test]
@@ -236,7 +232,6 @@ mod tests {
             "plugin pages",
             "plugin services",
             "plugin tool families",
-            "plugin secrets",
         ] {
             assert!(features.contains(permanent), "{permanent} is missing");
         }

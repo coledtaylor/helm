@@ -117,6 +117,98 @@ pub struct OriginPattern {
     pub origin: String,
 }
 
+impl OriginPattern {
+    /// One origin as the user or a manifest wrote it, read as the SDK's
+    /// `parseOrigin` reads it: `http` or `https`, an optional `*.` in front
+    /// of a domain (every subdomain of it, not the domain itself), a host,
+    /// an optional port and an optional trailing slash. `None` for anything
+    /// else: a path, a query, credentials, another scheme, a wildcard
+    /// anywhere but the front or over an IP address.
+    pub fn parse(entry: &str) -> Option<Self> {
+        let entry = entry.trim();
+        let (scheme, rest) = entry.split_once("://")?;
+        let scheme = scheme.to_ascii_lowercase();
+        if scheme != "http" && scheme != "https" {
+            return None;
+        }
+        let rest = rest.strip_suffix('/').unwrap_or(rest);
+        let (wildcard, rest) = match rest.strip_prefix("*.") {
+            Some(rest) => (true, rest),
+            None => (false, rest),
+        };
+        if rest.is_empty()
+            || rest
+                .chars()
+                .any(|c| matches!(c, '/' | '?' | '#' | '@') || c.is_whitespace())
+        {
+            return None;
+        }
+        // A port is the digits after the last colon, when there are one to
+        // five of them and something before them.
+        let (raw_host, port) = match rest.rsplit_once(':') {
+            Some((host, digits))
+                if !host.is_empty()
+                    && (1..=5).contains(&digits.len())
+                    && digits.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                (host, Some(digits))
+            }
+            _ => (rest, None),
+        };
+        if raw_host.contains('*') {
+            return None;
+        }
+        let parsed = url::Url::parse(&format!("{scheme}://{raw_host}")).ok()?;
+        let host = parsed.host_str()?.to_owned();
+        if host.is_empty() {
+            return None;
+        }
+        let is_ip = host.starts_with('[') || host.parse::<std::net::Ipv4Addr>().is_ok();
+        if wildcard && (is_ip || !host.contains('.')) {
+            return None;
+        }
+        let default_port: u16 = if scheme == "https" { 443 } else { 80 };
+        let port = match port {
+            None => default_port,
+            Some(digits) => digits.parse::<u16>().ok().filter(|port| *port >= 1)?,
+        };
+        let origin = format!(
+            "{scheme}://{}{host}{}",
+            if wildcard { "*." } else { "" },
+            if port == default_port {
+                String::new()
+            } else {
+                format!(":{port}")
+            }
+        );
+        Some(Self {
+            scheme,
+            host,
+            wildcard,
+            port,
+            origin,
+        })
+    }
+
+    /// Whether `url` is one this pattern allows, as the SDK's
+    /// `originMatches` says: scheme and port exactly, and the host itself or,
+    /// for a wildcard, a subdomain of it.
+    pub fn matches(&self, url: &url::Url) -> bool {
+        if url.scheme() != self.scheme || url.port_or_known_default() != Some(self.port) {
+            return false;
+        }
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+        if self.wildcard {
+            host.strip_suffix(self.host.as_str())
+                .is_some_and(|prefix| prefix.len() > 1 && prefix.ends_with('.'))
+        } else {
+            host == self.host
+        }
+    }
+}
+
 /// A program the manifest names, with its fixed leading arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]

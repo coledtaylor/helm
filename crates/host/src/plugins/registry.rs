@@ -569,7 +569,6 @@ impl Inner {
 
     fn list(&self) -> Vec<PluginInfo> {
         let state = lock(&self.state);
-        let store = lock(&self.store);
         state
             .entries
             .iter()
@@ -585,8 +584,13 @@ impl Inner {
                 match &entry.load {
                     Load::Failed(failure) => info::failed(&live, failure),
                     Load::Loaded(plugin) => {
-                        let stored = store::read_settings(store.connection(), &plugin.manifest.id)
-                            .unwrap_or_default();
+                        // The store is let go before the secrets are asked:
+                        // they read it too.
+                        let stored = store::read_settings(
+                            lock(&self.store).connection(),
+                            &plugin.manifest.id,
+                        )
+                        .unwrap_or_default();
                         let values = settings::values(&plugin.manifest.settings, &stored);
                         info::loaded(&live, plugin, values, self.secrets.as_ref())
                     }

@@ -83,14 +83,33 @@ impl TestDirs {
             std::fs::create_dir_all(&path).expect("create a test folder");
             path
         };
-        Self {
+        let dirs = Self {
             home: make("home dir"),
             data: make("data dir"),
             logs: make("state dir"),
             config: make("config dir"),
             runtime: make("run"),
             root: Some(root),
-        }
+        };
+        dirs.mark_secret_seal(crate::plugins::secrets::seal::TEST_SEAL_KEY_FILE);
+        dirs
+    }
+
+    /// Makes a host over this tree's data folder a computer with no secret
+    /// store, as Linux with no Secret Service is: nothing can be sealed.
+    /// Otherwise a host here seals plugin secrets with a key file in the data
+    /// folder, and never with the user's own credential store.
+    pub fn without_secret_store(&self) {
+        self.mark_secret_seal(crate::plugins::secrets::seal::TEST_SEAL_UNAVAILABLE);
+    }
+
+    fn mark_secret_seal(&self, how: &str) {
+        std::fs::write(
+            self.data
+                .join(crate::plugins::secrets::seal::TEST_SEAL_MARKER),
+            how,
+        )
+        .expect("mark the test's data folder");
     }
 
     /// The temporary root everything else is in.

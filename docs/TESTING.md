@@ -114,9 +114,17 @@ when it runs, so a language the app highlights and the host does not fails it.
 compile-time OS conditional (`cfg(windows)`, `cfg!(unix)`, `target_os` and
 the like) appears outside `src/platform/mod.rs` and the per-OS
 implementations of the platform concerns (`startup`, `socket`, `folders`,
-`process_tree`, `process_table`, `links`, `launcher`). Behaviour that
-differs by OS goes behind one of those interfaces, with an implementation for
-each OS.
+`process_tree`, `process_table`, `links`, `launcher`, `secret_seal`).
+Behaviour that differs by OS goes behind one of those interfaces, with an
+implementation for each OS.
+
+No host test touches the user's credential store. Every `TestDirs` marks its
+data folder, and a host built with the testkit seals plugin secrets with a key
+file inside a marked folder (`TestDirs::without_secret_store` makes it a
+computer with no store instead); a production build never reads the marker.
+The Windows seal (DPAPI) has round-trip tests of its own, which store nothing;
+the Linux one is tested only where there is no session bus, where it reports
+that sealing is unavailable.
 
 ## Running them
 
