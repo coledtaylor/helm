@@ -9626,6 +9626,27 @@
     },
     {
       "capability": null,
+      "kind": "request",
+      "name": "git:refresh",
+      "request": {
+        "type": "null"
+      },
+      "response": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": "object"
+      }
+    },
+    {
+      "capability": null,
       "event": {
         "additionalProperties": {
           "anyOf": [

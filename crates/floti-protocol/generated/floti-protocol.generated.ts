@@ -2923,6 +2923,7 @@ export interface RequestChannels {
   "files:read": { request: FilesPathRequest; response: FileView; capability: "files" };
   "files:status": { request: FilesRoot; response: FilesStatus; capability: "files" };
   "files:watch": { request: FilesWatchRequest; response: null; capability: "files" };
+  "git:refresh": { request: null; response: { [key in string]?: GitState | null }; capability: null };
   "harness:create": { request: CreateHarnessRequest; response: CreateHarnessOutcome; capability: null };
   "history:projects": { request: null; response: Array<HistoryProject>; capability: null };
   "history:prompts": { request: HistorySessionRef; response: Array<HistoryPrompt>; capability: null };
@@ -3074,6 +3075,7 @@ export const CHANNELS = [
   { name: "files:read", kind: "request", capability: "files" },
   { name: "files:status", kind: "request", capability: "files" },
   { name: "files:watch", kind: "request", capability: "files" },
+  { name: "git:refresh", kind: "request", capability: null },
   { name: "git:updated", kind: "event", capability: null },
   { name: "harness:create", kind: "request", capability: null },
   { name: "history:changed", kind: "event", capability: null },

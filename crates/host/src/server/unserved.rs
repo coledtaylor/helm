@@ -44,22 +44,6 @@ fn entry_covers(entry: &str, channel: &str) -> bool {
 /// Every channel not served yet, by the feature that will serve it.
 pub const NOT_YET_SERVED: &[Later] = &[
     Later {
-        feature: "workspace",
-        channels: &[
-            "profile:delete",
-            "profile:export",
-            "profile:import",
-            "profile:list",
-            "profile:pin",
-            "profile:save",
-            "profiles:changed",
-            "harness:create",
-            "template:*",
-            "app:info",
-            "setup:*",
-        ],
-    },
-    Later {
         feature: "agent tools listener",
         channels: &["agentBrowser:*"],
     },
@@ -218,17 +202,17 @@ mod tests {
     fn the_list_names_an_entry_that_covers_no_channel() {
         let catalogue = Catalogue::protocol();
         let list = [Later {
-            feature: "workspace",
-            channels: &["discovery:*", "nothing:here"],
+            feature: "plugin runtime",
+            channels: &["plugins:*", "nothing:here"],
         }];
         let drift = drift_against(&catalogue, &served(&[]), &list);
-        assert_eq!(drift.stale, vec![("nothing:here", "workspace")]);
+        assert_eq!(drift.stale, vec![("nothing:here", "plugin runtime")]);
     }
 
     #[test]
     fn every_entry_is_labelled_with_the_feature_that_will_serve_it() {
         let features: BTreeSet<&str> = NOT_YET_SERVED.iter().map(|later| later.feature).collect();
-        for permanent in ["workspace", "agent tools listener", "plugin runtime"] {
+        for permanent in ["agent tools listener", "plugin runtime"] {
             assert!(features.contains(permanent), "{permanent} is missing");
         }
         assert!(

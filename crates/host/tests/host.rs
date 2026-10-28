@@ -27,13 +27,17 @@ use floti_protocol::channel::{from_payload, to_payload};
 use floti_protocol::channels::common::{SessionRecord, SessionStatus};
 use floti_protocol::channels::host::{HostStop, HostStopReason, HostStopRequest};
 use floti_protocol::channels::sessions::{
-    CloseSessionRequest, HistoryRefresh, LaunchSessionRequest, PtermOpen, PtermOpenRequest,
-    PtermStreamOpen, ReadUsage, RestoreSessionsRequest, SessionClose, SessionExit, SessionLaunch,
-    SessionList, SessionRestorable, SessionRestore, SessionStart, SessionToRestore,
-    StartSessionRequest, UsageSnapshot,
+    CloseSessionRequest, HistoryRefresh, LaunchSessionRequest, ProfileDelete, ProfileExport,
+    ProfileImport, ProfileList, ProfilePin, ProfileSave, ProfilesChanged, PtermOpen,
+    PtermOpenRequest, PtermStreamOpen, ReadUsage, RestoreSessionsRequest, SessionClose,
+    SessionExit, SessionLaunch, SessionList, SessionRestorable, SessionRestore, SessionStart,
+    SessionToRestore, StartSessionRequest, UsageSnapshot,
 };
+use floti_protocol::channels::workspace;
 use floti_protocol::message::ErrorCode;
-use floti_protocol::{BackendId, Catalogue, ChannelKind, EventChannel, Knowable, Message};
+use floti_protocol::{
+    BackendId, Catalogue, ChannelKind, EventChannel, Knowable, Message, RequestChannel,
+};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
@@ -1792,6 +1796,90 @@ async fn every_protocol_host_channel_is_served_or_listed_with_the_feature_that_w
         drift.is_empty(),
         "the not-yet-served list and the host disagree:\n{drift}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_calling_subscribing_to_or_opening_any_workspace_channel_is_served_rather_than_refused()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.endpoint();
+    let mut config = fake_config(&dirs, &endpoint, &agent, &[]);
+    config
+        .inherited_env
+        .retain(|(key, _)| key != std::ffi::OsStr::new("SHELL"));
+    config
+        .inherited_env
+        .push(("SHELL".into(), "/bin/sh".into()));
+    let host = RunningHost::start(config);
+    let mut client = TestClient::connect(&endpoint, &["files", "terminal"]).await;
+
+    // Every channel the workspace declares, so one added there is swept too,
+    // and the profile channels the sessions domain declares for it. Launching
+    // a profile starts a session, which the sessions tests cover.
+    let mut declared = Catalogue::new();
+    workspace::declare(&mut declared);
+    let names: Vec<&str> = declared
+        .channels()
+        .map(|decl| decl.name())
+        .chain([
+            ProfileList::NAME,
+            ProfileSave::NAME,
+            ProfileDelete::NAME,
+            ProfilePin::NAME,
+            ProfileExport::NAME,
+            ProfileImport::NAME,
+            ProfilesChanged::NAME,
+        ])
+        .collect();
+    assert!(!declared.is_empty());
+    let protocol = Catalogue::protocol();
+    let null = || to_payload(&()).unwrap();
+    for (n, name) in (100_u64..).zip(names) {
+        let decl = protocol
+            .get(name)
+            .unwrap_or_else(|| panic!("`{name}` is not in the protocol"));
+        match decl.kind() {
+            // A refusal to parse a null payload is the channel's own answer.
+            ChannelKind::Request => {
+                if let Err(error) = client.request_on(name, null()).await {
+                    assert!(
+                        !names_unserved_channel(&error, name),
+                        "`{name}` was refused as not served: {error:?}"
+                    );
+                }
+            }
+            ChannelKind::Event { snapshot: true } => match client.subscribe_on(n, name).await {
+                Message::Snapshot(_) => {}
+                other => {
+                    panic!("a subscription to `{name}` did not start with a snapshot: {other:?}")
+                }
+            },
+            ChannelKind::Event { snapshot: false } => {
+                client.subscribe_quietly(n, name).await;
+                // Anything the host says about the subscription comes before
+                // its answer to a request sent after it.
+                client.request::<SessionList>(&()).await.unwrap();
+                while let Some(message) = client.next(Duration::ZERO).await {
+                    if let Message::SubscriptionError(refused) = message {
+                        assert_ne!(refused.subscription, n, "`{name}` was refused: {refused:?}");
+                    }
+                }
+            }
+            ChannelKind::Stream => {
+                client.open_on(n, name, null()).await;
+                client.request::<SessionList>(&()).await.unwrap();
+                if let Some(Some(reason)) = client.stream_closed(n) {
+                    assert!(
+                        !reason.contains("does not serve"),
+                        "`{name}` was refused as not served: {reason}"
+                    );
+                }
+            }
+        }
+    }
+
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
