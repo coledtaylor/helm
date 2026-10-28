@@ -114,9 +114,13 @@ when it runs, so a language the app highlights and the host does not fails it.
 compile-time OS conditional (`cfg(windows)`, `cfg!(unix)`, `target_os` and
 the like) appears outside `src/platform/mod.rs` and the per-OS
 implementations of the platform concerns (`startup`, `socket`, `folders`,
-`process_tree`, `process_table`, `links`, `launcher`). Behaviour that
-differs by OS goes behind one of those interfaces, with an implementation for
-each OS.
+`process_tree`, `process_table`, `links`, `launcher`, `private_files`).
+Behaviour that differs by OS goes behind one of those interfaces, with an
+implementation for each OS. `private_files` is tested by what the OS reports
+for a written file: mode `0600` on macOS and Linux, and on Windows a
+protected access list with one entry, the current user's, read the way the
+pipe's is; each with a control file made the ordinary way that the check
+rejects.
 
 ## Running them
 
