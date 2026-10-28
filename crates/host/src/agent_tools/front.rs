@@ -15,13 +15,17 @@
 //! 4. **Method** (405, `Allow: POST`): nothing here pushes to a session, so
 //!    there is no SSE stream to GET.
 //! 5. **Body size** (413), read at most once and only now.
+//! 6. **JSON-RPC** (200 with an error): not JSON, a batch, or a method no
+//!    family has, answered as today's listener answers them.
 
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use bytes::Bytes;
-use http::header::{ALLOW, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ORIGIN, WWW_AUTHENTICATE};
+use http::header::{
+    ACCEPT, ALLOW, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ORIGIN, WWW_AUTHENTICATE,
+};
 use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
@@ -136,6 +140,15 @@ impl Router {
             Err(_) => return refusal(StatusCode::BAD_REQUEST, "The request's body was cut short."),
         };
 
+        if let Some(refused) = jsonrpc_refusal(&body, family.def.name()) {
+            return refused;
+        }
+        // Every answer here is JSON, so what the caller says it accepts
+        // changes nothing; `rmcp` would refuse a client that left
+        // `text/event-stream` out, which no rule here asks for.
+        parts
+            .headers
+            .insert(ACCEPT, HeaderValue::from_static(MCP_ACCEPT));
         parts.extensions.insert(caller);
         let mut answer = family
             .service
@@ -228,6 +241,63 @@ fn authorization(headers: &HeaderMap) -> Option<&HeaderValue> {
     let mut all = headers.get_all(AUTHORIZATION).iter();
     let first = all.next()?;
     all.next().is_none().then_some(first)
+}
+
+/// What a streamable-HTTP client accepts, as `rmcp` asks to see it.
+const MCP_ACCEPT: &str = "application/json, text/event-stream";
+
+/// The methods every family answers. A request for any other is answered
+/// here, in the family's own words, rather than as whatever a library makes
+/// of a method it was never given.
+const METHODS: [&str; 4] = ["initialize", "ping", "tools/list", "tools/call"];
+
+/// The JSON-RPC error a body is answered with before `rmcp` sees it, as
+/// today's listener answers: not JSON (-32700), a batch or anything but one
+/// request object (-32600), or a request for a method no family has
+/// (-32601). A notification, which has no id, is always `rmcp`'s to accept.
+fn jsonrpc_refusal(body: &[u8], family: &str) -> Option<Answer> {
+    let Ok(message) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return Some(rpc_error(
+            &serde_json::Value::Null,
+            -32700,
+            "Parse error: that was not JSON.",
+        ));
+    };
+    let Some(message) = message.as_object() else {
+        let said = if message.is_array() {
+            "Floti does not take batched requests."
+        } else {
+            "That was not a JSON-RPC request."
+        };
+        return Some(rpc_error(&serde_json::Value::Null, -32600, said));
+    };
+    let id = message.get("id").filter(|id| !id.is_null())?;
+    let method = message
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    (!METHODS.contains(&method)).then(|| {
+        rpc_error(
+            id,
+            -32601,
+            &format!("Floti's {family} server has no method \"{method}\"."),
+        )
+    })
+}
+
+fn rpc_error(id: &serde_json::Value, code: i64, message: &str) -> Answer {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": code, "message": message },
+    })
+    .to_string();
+    let mut answer = Response::new(Full::new(Bytes::from(body)).boxed());
+    answer
+        .headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    no_store(answer.headers_mut());
+    answer
 }
 
 fn refusal(status: StatusCode, error: &str) -> Answer {

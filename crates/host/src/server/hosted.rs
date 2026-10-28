@@ -39,6 +39,7 @@ use crate::session::{
     Terminals,
 };
 use crate::store::Store;
+use crate::workspace::discovery::git::read_git_branch;
 use crate::{Error, Result};
 
 /// How long a stop waits for each session to be reported ended after its
@@ -255,6 +256,7 @@ impl Hosted {
                     permission_mode: composition
                         .permission_mode
                         .map(records::permission_mode_name),
+                    ..SessionOrigin::default()
                 },
                 backend,
                 folder,
@@ -307,6 +309,7 @@ impl Hosted {
                         .or(request.project_path),
                     profile_id: request.profile_id.and_then(|id| i64::try_from(id).ok()),
                     permission_mode: request.permission_mode.map(records::permission_mode_name),
+                    ..SessionOrigin::default()
                 },
                 resume: history.map(|history| history.session_id),
                 backend,
@@ -343,6 +346,7 @@ impl Hosted {
                     permission_mode: composition
                         .permission_mode
                         .map(records::permission_mode_name),
+                    ..SessionOrigin::default()
                 },
                 composition,
                 resume: None,
@@ -437,7 +441,7 @@ impl Hosted {
             prompt,
             mut composition,
             resume,
-            origin,
+            mut origin,
         } = plan;
         if !folder.is_dir() {
             return Err(format!(
@@ -445,6 +449,9 @@ impl Hosted {
                 folder.display()
             ));
         }
+        // Before the spawn, so the row holds the branch the session started
+        // on whatever it checks out afterwards.
+        origin.branch = read_git_branch(&folder);
         let taken = self.taken_labels(None);
         let name = unique_session_name(&name, taken.iter().map(String::as_str));
         // Granted before the backend composes the launch, which writes the
@@ -806,6 +813,7 @@ impl Hosted {
                     project_path: row.project_path.clone(),
                     profile_id: row.profile_id,
                     permission_mode: row.permission_mode.map(records::permission_mode_name),
+                    ..SessionOrigin::default()
                 },
             },
             size,

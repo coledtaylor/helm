@@ -852,17 +852,88 @@ async fn a_notification_is_answered_202_with_no_body_and_a_ping_with_an_empty_re
     assert_eq!(ping.result(), json!({}));
     assert_eq!(ping.header("cache-control"), Some("no-store"));
 
-    // Not JSON at all is refused, never answered as a call.
-    let garbage = send(
+    world.listener.stop().await;
+}
+
+#[tokio::test]
+async fn what_it_does_not_speak_is_refused_as_a_json_rpc_error() {
+    let world = two_families();
+    let grant = world.grant();
+    let address = world.address();
+    let auth = format!("Bearer {}", token(&grant));
+    let error_of = |reply: &Reply| {
+        assert_eq!(reply.status, 200, "{reply:?}");
+        assert_eq!(reply.header("cache-control"), Some("no-store"));
+        let answer = reply.json();
+        (
+            answer["id"].clone(),
+            answer["error"]["code"].as_i64(),
+            answer,
+        )
+    };
+
+    let (id, code, answer) = error_of(
+        &rpc(
+            address,
+            "/mcp/test",
+            token(&grant),
+            "resources/list",
+            json!({}),
+        )
+        .await,
+    );
+    assert_eq!((id, code), (json!(1), Some(-32601)), "{answer}");
+    assert_eq!(
+        answer["error"]["message"],
+        "Floti's floti-test server has no method \"resources/list\"."
+    );
+
+    for (body, expected) in [
+        ("{ not json", -32700),
+        ("[]", -32600),
+        (r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#, -32600),
+        ("7", -32600),
+    ] {
+        let reply = send(
+            address,
+            "POST",
+            "/mcp/test",
+            &[("Authorization", &auth)],
+            body,
+        )
+        .await;
+        let (id, code, answer) = error_of(&reply);
+        assert_eq!(
+            (id, code),
+            (Value::Null, Some(expected)),
+            "{body}: {answer}"
+        );
+    }
+
+    // A client that does not say it accepts an event stream is still
+    // answered: every answer here is JSON.
+    let ping = json!({ "jsonrpc": "2.0", "id": 2, "method": "ping" }).to_string();
+    let reply = exchange(
         address,
-        "POST",
-        "/mcp/test",
-        &[("Authorization", &auth)],
-        "{ not json",
+        &head(
+            "POST",
+            address,
+            "/mcp/test",
+            &[
+                ("Authorization", &auth),
+                ("Content-Type", "application/json"),
+                ("Accept", "application/json"),
+            ],
+            ping.len(),
+        ),
+        ping.as_bytes(),
     )
     .await;
-    assert_ne!(garbage.status, 200);
-    assert_ne!(garbage.status, 202);
+    assert_eq!(reply.result(), json!({}));
+
+    // And a ping still answers after all that.
+    let ping = rpc(address, "/mcp/test", token(&grant), "ping", json!({})).await;
+    assert_eq!(ping.result(), json!({}));
 
     world.listener.stop().await;
 }

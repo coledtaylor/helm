@@ -14,17 +14,17 @@ use std::time::{Duration, Instant};
 use floti_host::agent::AgentBackend;
 use floti_host::agent::claude_code::{ClaudeCodeBackend, ClaudeCodeSettings};
 use floti_host::fake_agent;
-use floti_host::platform::process_tree::Native as NativeTree;
+use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree};
 use floti_host::platform::socket::Endpoint;
 use floti_host::server::HostConfig;
 use floti_host::testkit::{FakeAgent, GitRepo, PATIENCE, RunningHost, TestClient, TestDirs};
-use floti_protocol::BackendId;
 use floti_protocol::channels::common::SessionRecord;
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::sessions::{
     CloseSessionRequest, SessionClose, SessionStart, StartSessionRequest,
 };
 use floti_protocol::channels::workspace::{HostSettingsPatch, WriteSettings};
+use floti_protocol::{BackendId, Knowable};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -641,7 +641,15 @@ async fn s7_a_stopped_host_serves_no_tools_and_a_host_started_after_accepts_none
     assert_eq!(alpha.tools_list().await.status, 200);
     drop(client);
 
+    // Watched through the stop: once a session's program has ended, the
+    // listener must already be closed.
+    let watching = std::thread::spawn({
+        let pids = [alpha.pid, beta.pid];
+        move || listener_closes_before_any_of(&pids, old)
+    });
     host.stop(HostStopReason::Stop).await;
+    let watched = watching.join().expect("watch the stop");
+    assert_eq!(watched, Ok(()), "{watched:?}");
 
     // Its port accepts no connection.
     assert!(
@@ -662,6 +670,34 @@ async fn s7_a_stopped_host_serves_no_tools_and_a_host_started_after_accepts_none
     }
     close(&mut client, &gamma.record).await;
     host.stop(HostStopReason::Stop).await;
+}
+
+/// Samples `pids` and `address` until the address refuses a connection, and
+/// fails if it ever accepted one after any of `pids` had ended. Each sample
+/// looks at the processes first: a process seen ended before a connection
+/// was accepted ended while the listener was still serving.
+fn listener_closes_before_any_of(pids: &[u32], address: SocketAddr) -> Result<(), String> {
+    let deadline = Instant::now() + PATIENCE * 2;
+    while Instant::now() < deadline {
+        let ended: Vec<u32> = pids
+            .iter()
+            .copied()
+            .filter(|pid| NativeTree.is_alive(*pid) == Knowable::Known(false))
+            .collect();
+        match std::net::TcpStream::connect_timeout(&address, PATIENCE) {
+            Ok(_) if !ended.is_empty() => {
+                return Err(format!(
+                    "{address} still accepted after {ended:?} had ended"
+                ));
+            }
+            Ok(_) => std::thread::sleep(Duration::from_millis(2)),
+            Err(_) => return Ok(()),
+        }
+    }
+    Err(format!(
+        "{address} was still accepting {:?} later",
+        PATIENCE * 2
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1148,18 +1184,16 @@ async fn s17_another_hosted_session_is_detailed_as_itself_with_its_children_and_
         })
         .await
         .unwrap();
+    // The program saves its record before it starts its child, and again
+    // once the child is running.
     let run = world.agent_run_in(repo.path());
+    let run = world
+        .agent
+        .wait_for_record(run.pid, PATIENCE, |record| !record.children.is_empty());
     let child = run.children[0];
-    // The branch is the row's, which is what the detail reports: written
-    // here as a spawn records it, so the test reads the row and not git.
-    let db = rusqlite::Connection::open(world.dirs.data.join("floti.db")).unwrap();
-    db.busy_timeout(PATIENCE).unwrap();
-    db.execute(
-        "UPDATE sessions SET branch = 'main' WHERE id = ?1",
-        [i64::try_from(beta_record.id).unwrap()],
-    )
-    .unwrap();
-    drop(db);
+    // Checked out after the spawn: the detail still says the branch the
+    // session started on, which the host read before it spawned.
+    repo.git(&["checkout", "--quiet", "-b", "later"]);
     let port = world
         .agent
         .wait_for_record(child, PATIENCE, |record| record.listening.is_some())
