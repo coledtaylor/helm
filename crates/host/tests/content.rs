@@ -4,8 +4,11 @@
 //! answered by the host's renderer and content service.
 //!
 //! Every test makes its own folders and its own store, with a space in every
-//! path. The last section opens artifacts through a client connection to a
-//! running host, refusals and a file larger than one answer included.
+//! path. The last section drives every content channel through a client
+//! connection to a running host: a note read and rendered, a draft rendered,
+//! a scope searched, a wikilink resolved, a config file rendered, an editor's
+//! source highlighted, and artifacts opened, refusals and a file larger than
+//! one answer included.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -33,9 +36,12 @@ use floti_protocol::channel::{EventChannel, RequestChannel, from_payload, to_pay
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::workspace::{
     ARTIFACT_PIECE_LEN, AppMode, ArtifactBytes, ArtifactBytesRequest, ArtifactHeader, ArtifactLink,
-    ConfigScopeKind, ConfigWriteReason, ContentFileKind, DiscoveryResult, DiscoveryUpdated,
-    HostSettingsPatch, ListContentScopes, OpenArtifact, Project, ProjectKind, ReadArtifactBytes,
-    ScanForProjects, ScanRequest, ScopedFile, WriteConfigRequest, WriteConfigResult, WriteSettings,
+    ConfigScopeKind, ConfigWriteReason, ContentFileKind, ContentRenderRequest,
+    ContentSearchRequest, DiscoveryResult, DiscoveryUpdated, HighlightSource, HostSettingsPatch,
+    ListContentScopes, OpenArtifact, Project, ProjectKind, ReadArtifactBytes, ReadContentDocument,
+    RenderConfigFile, RenderContent, ResolveWikilink, ScanForProjects, ScanRequest, ScopedFile,
+    SearchContent, SourceToRender, WikilinkRequest, WriteConfigRequest, WriteConfigResult,
+    WriteSettings,
 };
 use floti_protocol::{Bytes, Message};
 use serde_json::{Value, json};
@@ -1423,6 +1429,12 @@ struct Wire {
 
 impl Wire {
     async fn start() -> Self {
+        Self::start_with(|_| {}).await
+    }
+
+    /// The same host, with `prepare` writing more into the folder before it
+    /// is scanned.
+    async fn start_with(prepare: impl FnOnce(&Path)) -> Self {
         let dirs = TestDirs::new();
         let root = dirs.folder("alpha project");
         let notes = root.join("notes");
@@ -1434,6 +1446,7 @@ impl Wire {
         );
         put(&notes.join("chart.js"), "window.chart = 1\n");
         put(&root.join("secret.txt"), SECRET);
+        prepare(&root);
 
         let endpoint = dirs.endpoint();
         let host = RunningHost::start(HostConfig {
@@ -1737,6 +1750,324 @@ async fn an_artifact_larger_than_a_piece_reaches_the_client_byte_for_byte_and_th
         scopes.iter().any(|scope| scope.path == wire.scope),
         "{scopes:?}"
     );
+
+    wire.stop().await;
+}
+
+/// A note with everything the renderer reports on: frontmatter, two
+/// headings, a live and a broken wikilink, a tag, markup that must not
+/// survive, a fence with a grammar and one without.
+const WIRE_NOTE: &str = "---\n\
+type: journal\n\
+date: 2026-08-10\n\
+---\n\
+\n\
+# Alpha\n\
+\n\
+## Two Words\n\
+\n\
+Links to [[second]] and [[nowhere]], tagged #wire.\n\
+\n\
+<script>alert(1)</script>\n\
+\n\
+<img src=x onerror=alert(1)>\n\
+\n\
+<a href=\"javascript:alert(1)\">x</a> <iframe src=\"https://x.test\"></iframe>\n\
+\n\
+```ts\n\
+const a: number = 1\n\
+```\n\
+\n\
+```notalanguage\n\
+hello\n\
+```\n";
+
+fn same_file(resolved: Option<&str>, expected: &Path) -> bool {
+    resolved.is_some_and(|path| {
+        shown(&normalize(Path::new(path))).to_lowercase() == shown(expected).to_lowercase()
+    })
+}
+
+fn assert_no_script_survives(html: &str) {
+    let lower = html.to_lowercase();
+    for banned in ["<script", "onerror", "javascript:", "<iframe"] {
+        assert!(!lower.contains(banned), "{banned} survived: {html}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_reads_and_renders_a_note_over_the_wire_sanitised_with_its_chips_headings_wikilinks_tags_and_counts()
+ {
+    let mut wire =
+        Wire::start_with(|root| put(&root.join("notes").join("alpha.md"), WIRE_NOTE)).await;
+    let scope = wire.scope.clone();
+    let alpha = wire.notes.join("alpha.md");
+
+    let document = wire
+        .client
+        .request::<ReadContentDocument>(&ScopedFile {
+            scope_path: scope.clone(),
+            path: shown(&alpha),
+        })
+        .await
+        .expect("the note is read");
+    assert_eq!(document.file.rel_path, "notes/alpha.md");
+    assert_eq!(document.file.kind, ContentFileKind::Markdown);
+    assert_eq!(document.file.note_type.as_deref(), Some("journal"));
+    assert_eq!(document.content.content, WIRE_NOTE);
+    assert_eq!(document.content.hash, hash_content(WIRE_NOTE));
+    assert_eq!(document.error, None);
+
+    let rendered = document.rendered.expect("a note is rendered");
+    assert_no_script_survives(&rendered.html);
+    assert!(
+        !rendered.html.contains("type: journal"),
+        "{}",
+        rendered.html
+    );
+    assert!(rendered.frontmatter.present);
+    let chips: Vec<(&str, &str)> = rendered
+        .frontmatter
+        .fields
+        .iter()
+        .map(|chip| (chip.key.as_str(), chip.value.as_str()))
+        .collect();
+    assert_eq!(chips, [("type", "journal"), ("date", "2026-08-10")]);
+    let headings: Vec<(u32, &str, &str)> = rendered
+        .headings
+        .iter()
+        .map(|heading| (heading.depth, heading.text.as_str(), heading.slug.as_str()))
+        .collect();
+    assert_eq!(
+        headings,
+        [(1, "Alpha", "alpha"), (2, "Two Words", "two-words")]
+    );
+    let second = rendered
+        .links
+        .iter()
+        .find(|link| link.target == "second")
+        .expect("the live link is listed");
+    assert!(
+        same_file(second.resolved.as_deref(), &wire.notes.join("second.md")),
+        "{second:?}"
+    );
+    let nowhere = rendered
+        .links
+        .iter()
+        .find(|link| link.target == "nowhere")
+        .expect("the broken link is listed");
+    assert_eq!(nowhere.resolved, None);
+    assert!(rendered.html.contains("wikilink-broken"));
+    assert_eq!(rendered.tags, ["wire"]);
+    assert_eq!(rendered.counts.headings, 2);
+    assert_eq!(rendered.counts.wikilinks, 2);
+    assert_eq!(rendered.counts.broken_wikilinks, 1);
+    assert_eq!(rendered.counts.tags, 1);
+    assert_eq!(rendered.counts.code_blocks, 2);
+    assert_eq!(rendered.counts.highlighted_blocks, 1);
+    assert!(rendered.html.contains("data-language=\"typescript\""));
+    assert!(rendered.html.contains("--shiki-light"));
+    assert!(rendered.html.contains("--shiki-dark"));
+    assert_eq!(rendered.unknown_languages, ["notalanguage"]);
+    assert!(rendered.words > 0);
+
+    // A draft renders against the same scope, before it is on disk.
+    let draft = wire
+        .client
+        .request::<RenderContent>(&ContentRenderRequest {
+            scope_path: scope.clone(),
+            path: shown(&alpha),
+            source: "# Draft\n\nNow [[first]] and [[gamma]].\n\n<script>alert(2)</script>\n"
+                .to_owned(),
+        })
+        .await
+        .expect("the draft is rendered");
+    assert_no_script_survives(&draft.html);
+    assert_eq!(draft.counts.wikilinks, 2);
+    assert_eq!(draft.counts.broken_wikilinks, 1);
+    assert!(
+        draft.links.iter().any(|link| link.target == "first"
+            && same_file(link.resolved.as_deref(), &wire.notes.join("first.md"))),
+        "{:?}",
+        draft.links
+    );
+    assert!(!draft.frontmatter.present);
+
+    // A file that went away says so; one outside every scope is refused.
+    let gone = wire
+        .client
+        .request::<ReadContentDocument>(&ScopedFile {
+            scope_path: scope.clone(),
+            path: shown(&wire.notes.join("gone.md")),
+        })
+        .await
+        .expect("a missing file is answered");
+    assert_eq!(
+        gone.error.as_deref(),
+        Some("That file is not there any more.")
+    );
+    assert!(!gone.content.exists);
+    let stranger = wire.dirs.folder("stranger");
+    put(&stranger.join("note.md"), "# Not here\n");
+    assert!(
+        wire.client
+            .request::<ReadContentDocument>(&ScopedFile {
+                scope_path: shown(&stranger),
+                path: shown(&stranger.join("note.md")),
+            })
+            .await
+            .is_err()
+    );
+
+    wire.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_searches_a_scope_and_resolves_a_wikilink_over_the_wire() {
+    let mut wire = Wire::start_with(|root| {
+        put(
+            &root.join("notes").join("beta.md"),
+            "# Beta\n\nAlpha mentions geofencing here.\n",
+        );
+    })
+    .await;
+    let scope = wire.scope.clone();
+
+    let search = |query: &str| ContentSearchRequest {
+        scope_path: scope.clone(),
+        query: query.to_owned(),
+    };
+    let first = wire
+        .client
+        .request::<SearchContent>(&search("geofenc"))
+        .await
+        .expect("the search answers");
+    assert_eq!(first.query, "geofenc");
+    assert!(first.cold);
+    assert_eq!(first.total_matches, 1);
+    let hit = match first.hits.as_slice() {
+        [hit] => hit,
+        hits => panic!("one file holds the term: {hits:?}"),
+    };
+    assert_eq!(hit.rel_path, "notes/beta.md");
+    assert_eq!(hit.matches, 1);
+    assert!(!hit.name_match);
+    let line = &hit.lines[0];
+    assert_eq!(line.line, 3);
+    assert_eq!(&line.text[line.from as usize..line.to as usize], "geofenc");
+    assert!(first.body_kinds.contains(&ContentFileKind::Markdown));
+    assert!(!first.body_kinds.contains(&ContentFileKind::Html));
+
+    // The second search is served warm; an HTML file matches by its name.
+    let warm = wire
+        .client
+        .request::<SearchContent>(&search("lesson"))
+        .await
+        .expect("the search answers");
+    assert!(!warm.cold);
+    assert!(
+        warm.hits
+            .iter()
+            .any(|hit| hit.rel_path == "notes/lesson.html" && hit.name_match),
+        "{:?}",
+        warm.hits
+    );
+    let none = wire
+        .client
+        .request::<SearchContent>(&search("nothing matches this"))
+        .await
+        .expect("the search answers");
+    assert_eq!((none.total_matches, none.hits.len()), (0, 0));
+
+    // A link an artifact's frame clicks resolves beside the artifact.
+    let lesson = shown(&wire.notes.join("lesson.html"));
+    let resolve = |target: &str| WikilinkRequest {
+        scope_path: scope.clone(),
+        target: target.to_owned(),
+        from: lesson.clone(),
+    };
+    let found = wire
+        .client
+        .request::<ResolveWikilink>(&resolve("second"))
+        .await
+        .expect("the link is resolved");
+    assert!(
+        same_file(found.path.as_deref(), &wire.notes.join("second.md")),
+        "{found:?}"
+    );
+    let missing = wire
+        .client
+        .request::<ResolveWikilink>(&resolve("unwritten"))
+        .await
+        .expect("a link to nothing is answered");
+    assert_eq!(missing.path, None);
+
+    wire.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_renders_a_config_file_and_highlights_an_editors_source_over_the_wire() {
+    let mut wire = Wire::start().await;
+
+    let note = wire
+        .client
+        .request::<RenderConfigFile>(&SourceToRender {
+            path: "CLAUDE.md".to_owned(),
+            source: "# Rules\n\n- one\n\n<script>alert(1)</script>\n".to_owned(),
+        })
+        .await
+        .expect("a config note renders");
+    assert!(note.code.is_none());
+    let markdown = note.markdown.expect("markdown renders as markdown");
+    assert!(markdown.html.contains("<h1"));
+    assert_no_script_survives(&markdown.html);
+
+    let settings = wire
+        .client
+        .request::<RenderConfigFile>(&SourceToRender {
+            path: "settings.json".to_owned(),
+            source: "{ \"model\": \"opus\" }\n".to_owned(),
+        })
+        .await
+        .expect("a settings file renders");
+    assert!(settings.markdown.is_none());
+    let code = settings.code.expect("json renders as source");
+    assert!(code.highlighted);
+    assert_eq!(code.language, "json");
+    assert!(code.html.contains("--shiki-light"));
+    assert!(code.html.contains("--shiki-dark"));
+
+    let small = wire
+        .client
+        .request::<HighlightSource>(&SourceToRender {
+            path: "notes/small.ts".to_owned(),
+            source: "const value = 1\nconst other = 2\n".to_owned(),
+        })
+        .await
+        .expect("a small source is highlighted");
+    assert!(small.highlighted);
+    assert!(!small.too_large);
+    assert_eq!(small.language, "typescript");
+    assert!(small.lines.len() >= 2, "{:?}", small.lines);
+    assert!(
+        small.lines[0].contains("--shiki-dark"),
+        "{}",
+        small.lines[0]
+    );
+
+    // Past the ceiling the editor is told so, and gets no lines.
+    let big = "const value = \"x\"\n".repeat((512 * 1024 + 1024) / 18 + 1);
+    let too_large = wire
+        .client
+        .request::<HighlightSource>(&SourceToRender {
+            path: "notes/big.ts".to_owned(),
+            source: big,
+        })
+        .await
+        .expect("a large source is answered");
+    assert!(too_large.too_large);
+    assert!(!too_large.highlighted);
+    assert!(too_large.lines.is_empty());
 
     wire.stop().await;
 }
