@@ -32,6 +32,9 @@ getrandom = "0.4"
 # Raw deflate for archived transcript bodies, on the pure-Rust backend so no OS
 # needs a C zlib.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# Parses the sanitiser's output back into a tree, so the Files view's own
+# transforms run after it. The version ammonia uses.
+html5ever = "0.40"
 # Local midnight in the host's own timezone. Default features: Windows bundles
 # the tz database, Unix reads the system zoneinfo.
 jiff = "0.2"

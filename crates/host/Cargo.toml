@@ -48,6 +48,7 @@ comrak.workspace = true
 flate2.workspace = true
 floti-protocol.workspace = true
 getrandom.workspace = true
+html5ever.workspace = true
 jiff.workspace = true
 notify.workspace = true
 portable-pty.workspace = true

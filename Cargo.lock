@@ -440,6 +440,7 @@ dependencies = [
  "floti-host",
  "floti-protocol",
  "getrandom",
+ "html5ever",
  "jiff",
  "junction",
  "libc",

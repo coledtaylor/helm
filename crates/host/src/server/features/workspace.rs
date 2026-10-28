@@ -39,10 +39,6 @@ use crate::workspace::{app, setup};
 /// What every workspace feature is built with.
 pub(crate) struct WorkspaceContext {
     pub settings: Arc<SettingsService>,
-    #[expect(
-        dead_code,
-        reason = "the Files and content features check every root against it"
-    )]
     pub roots: Arc<KnownRoots>,
     pub folders: Folders,
     pub run: HostRun,

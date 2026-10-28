@@ -55,13 +55,9 @@ pub const NOT_YET_SERVED: &[Later] = &[
             "profiles:changed",
             "harness:create",
             "files:*",
-            "content:*",
             "template:*",
             "app:info",
             "setup:*",
-            // These two share the Files view's renderer.
-            "config:render",
-            "editor:highlight",
         ],
     },
     Later {
