@@ -17,12 +17,14 @@
 //! - [`templates`]: harness templates.
 //! - [`content`]: notes and documents, and the renderer.
 //! - [`files`]: the Files view.
+//! - [`plugins`]: registered plugin folders and `plugins:changed`.
 
 mod config;
 mod content;
 mod discovery;
 mod files;
 mod history;
+mod plugins;
 mod profiles;
 mod resources;
 mod sessions;
@@ -158,6 +160,7 @@ impl Features {
             Box::new(templates::Templates::new(&context)?),
             Box::new(content::Content::new(&context)?),
             Box::new(files::Files::new(&context)?),
+            Box::new(plugins::Plugins::new(&context)?),
         ];
         Ok(Self {
             features,

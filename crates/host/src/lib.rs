@@ -23,6 +23,8 @@
 //! - [`workspace`]: the user's folders as the host serves them: settings,
 //!   setup, discovery, profiles, templates and the Files view.
 //! - [`session`]: sessions in ptys and the screens kept for them.
+//! - [`plugins`]: registered plugin folders, the isolate plugin scripts run
+//!   in, and the call layer every `floti.*` method goes through.
 //! - [`server`]: the local socket's clients and the protocol they speak.
 
 pub mod agent;
@@ -30,6 +32,7 @@ pub mod config_console;
 pub mod error;
 pub mod history;
 pub mod platform;
+pub mod plugins;
 pub mod resources;
 pub mod server;
 pub mod session;

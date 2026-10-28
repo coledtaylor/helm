@@ -48,8 +48,27 @@ pub const NOT_YET_SERVED: &[Later] = &[
         channels: &["agentBrowser:*"],
     },
     Later {
-        feature: "plugin runtime",
-        channels: &["plugins:*", "secrets:*"],
+        feature: "plugin pages",
+        channels: &[
+            "plugins:call",
+            "plugins:cancel",
+            "plugins:answer",
+            "plugins:session",
+            "plugins:ui",
+            "plugins:deliver",
+        ],
+    },
+    Later {
+        feature: "plugin services",
+        channels: &["plugins:log", "plugins:metrics"],
+    },
+    Later {
+        feature: "plugin tool families",
+        channels: &["plugins:setTools"],
+    },
+    Later {
+        feature: "plugin secrets",
+        channels: &["secrets:*"],
     },
 ];
 
@@ -166,13 +185,13 @@ mod tests {
         let catalogue = Catalogue::protocol();
         let mut served = all_unlisted(&catalogue);
         served.insert("agentBrowser:call");
-        served.insert("plugins:list");
+        served.insert("secrets:list");
         let drift = drift(&catalogue, &served);
         assert_eq!(
             drift.served_but_listed,
             vec![
                 ("agentBrowser:call", "agent tools listener"),
-                ("plugins:list", "plugin runtime")
+                ("secrets:list", "plugin secrets")
             ]
         );
         assert!(
@@ -181,7 +200,7 @@ mod tests {
         );
         let said = drift.to_string();
         assert!(said.contains("`agentBrowser:call` is served"), "{said}");
-        assert!(said.contains("`plugins:list` is served"), "{said}");
+        assert!(said.contains("`secrets:list` is served"), "{said}");
     }
 
     #[test]
@@ -202,17 +221,23 @@ mod tests {
     fn the_list_names_an_entry_that_covers_no_channel() {
         let catalogue = Catalogue::protocol();
         let list = [Later {
-            feature: "plugin runtime",
-            channels: &["plugins:*", "nothing:here"],
+            feature: "plugin secrets",
+            channels: &["secrets:*", "nothing:here"],
         }];
         let drift = drift_against(&catalogue, &served(&[]), &list);
-        assert_eq!(drift.stale, vec![("nothing:here", "plugin runtime")]);
+        assert_eq!(drift.stale, vec![("nothing:here", "plugin secrets")]);
     }
 
     #[test]
     fn every_entry_is_labelled_with_the_feature_that_will_serve_it() {
         let features: BTreeSet<&str> = NOT_YET_SERVED.iter().map(|later| later.feature).collect();
-        for permanent in ["agent tools listener", "plugin runtime"] {
+        for permanent in [
+            "agent tools listener",
+            "plugin pages",
+            "plugin services",
+            "plugin tool families",
+            "plugin secrets",
+        ] {
             assert!(features.contains(permanent), "{permanent} is missing");
         }
         assert!(

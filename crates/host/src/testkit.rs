@@ -109,6 +109,26 @@ impl TestDirs {
         path
     }
 
+    /// A plugin folder named `name` under the root: `manifest` as its
+    /// `helm-plugin.json`, written as given so a test can write a broken
+    /// one, and each of `files` at its path relative to the folder.
+    pub fn plugin_folder(&self, name: &str, manifest: &str, files: &[(&str, &str)]) -> PathBuf {
+        let folder = self.folder(name);
+        std::fs::write(
+            folder.join(crate::plugins::manifest::MANIFEST_FILE),
+            manifest,
+        )
+        .expect("write a plugin manifest");
+        for (relative, content) in files {
+            let path = folder.join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create a plugin's folder");
+            }
+            std::fs::write(&path, content).expect("write a plugin file");
+        }
+        folder
+    }
+
     /// Every host folder, inside this tree.
     pub fn folders(&self) -> Folders {
         Folders {

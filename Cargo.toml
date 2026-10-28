@@ -23,6 +23,8 @@ alacritty_terminal = "0.26"
 # The Files view's sanitiser: rendered markdown keeps no script, event handler
 # or address it does not allow.
 ammonia = "4"
+# A plugin's rail icon, inlined as a data: URL.
+base64 = "=0.22.1"
 # Seals plugin secrets under a key the OS keeps for this user.
 chacha20poly1305 = "=0.10.1"
 ciborium = "0.2"
@@ -32,6 +34,8 @@ comrak = { version = "0.59", default-features = false }
 # Plugin background scripts: one V8 isolate each, with no extension of
 # deno's beyond the core, so a script can do only what the host gives it.
 deno_core = "=0.413.0"
+# The error type a plugin isolate's ops throw: the version deno_core uses.
+deno_error = "=0.7.1"
 floti-protocol = { path = "crates/floti-protocol" }
 getrandom = "0.4"
 # Raw deflate for archived transcript bodies, on the pure-Rust backend so no OS
