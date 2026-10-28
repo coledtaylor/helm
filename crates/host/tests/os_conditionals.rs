@@ -4,8 +4,9 @@
 //!
 //! The concerns are the folders under `src/platform`: starting at sign-in
 //! (`startup`), the local socket (`socket`), data folders (`folders`),
-//! ending a process tree (`process_tree`), folder links (`links`) and
-//! starting a program (`launcher`). A compile-time OS conditional
+//! ending a process tree (`process_tree`), the process table and listening
+//! sockets (`process_table`), folder links (`links`) and starting a program
+//! (`launcher`). A compile-time OS conditional
 //! (`cfg`, `cfg!` or `cfg_attr` naming `windows`, `unix`, `target_os`,
 //! `target_family`, `target_vendor` or `target_env`) may appear only in
 //! those folders, and in `src/platform/mod.rs`, which refuses any other OS.
@@ -15,11 +16,12 @@
 use std::path::{Path, PathBuf};
 
 /// The folders whose files are per-OS implementations of a concern.
-const CONCERNS: [&str; 6] = [
+const CONCERNS: [&str; 7] = [
     "startup",
     "socket",
     "folders",
     "process_tree",
+    "process_table",
     "links",
     "launcher",
 ];

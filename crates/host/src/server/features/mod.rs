@@ -9,9 +9,11 @@
 //! - [`sessions`]: launch and live sessions, and plain terminals.
 //! - [`history`]: history, the transcript archive and usage.
 //! - [`config`]: the config console.
+//! - [`resources`]: processes and ports, what each hosted session holds.
 
 mod config;
 mod history;
+mod resources;
 mod sessions;
 
 use std::collections::{BTreeSet, HashMap};
@@ -24,6 +26,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use super::events::Events;
 use super::hosted::Hosted;
 use crate::session::{ClientId, Session, SessionOutput};
+pub use resources::ResourcesHandle;
 
 /// What every feature is built with.
 pub(crate) struct FeatureContext {
@@ -108,6 +111,7 @@ impl<'a> Streams<'a> {
 pub(crate) struct Features {
     features: Vec<Box<dyn Feature>>,
     events: Arc<Events>,
+    resources: ResourcesHandle,
 }
 
 impl Features {
@@ -118,19 +122,28 @@ impl Features {
             hosted,
             events: Arc::new(Events::new()),
         };
+        let resources = resources::Resources::new(&context)?;
+        let handle = resources.handle();
         let features: Vec<Box<dyn Feature>> = vec![
             Box::new(sessions::Sessions::new(&context)?),
             Box::new(history::History::new(&context)?),
             Box::new(config::Config::new(&context)?),
+            Box::new(resources),
         ];
         Ok(Self {
             features,
             events: context.events,
+            resources: handle,
         })
     }
 
     pub fn events(&self) -> &Events {
         &self.events
+    }
+
+    /// The processes-and-ports pass, for what inside the host asks for it.
+    pub fn resources(&self) -> &ResourcesHandle {
+        &self.resources
     }
 
     /// Registers every feature's request handlers for `client`.

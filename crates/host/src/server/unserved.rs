@@ -44,10 +44,6 @@ fn entry_covers(entry: &str, channel: &str) -> bool {
 /// Every channel not served yet, by the feature that will serve it.
 pub const NOT_YET_SERVED: &[Later] = &[
     Later {
-        feature: "processes and ports",
-        channels: &["sessions:resources", "sessions:watch"],
-    },
-    Later {
         feature: "workspace",
         channels: &[
             "profile:delete",
@@ -196,13 +192,13 @@ mod tests {
         let catalogue = Catalogue::protocol();
         let mut served = all_unlisted(&catalogue);
         served.insert("discovery:scan");
-        served.insert("sessions:watch");
+        served.insert("plugins:list");
         let drift = drift(&catalogue, &served);
         assert_eq!(
             drift.served_but_listed,
             vec![
                 ("discovery:scan", "workspace"),
-                ("sessions:watch", "processes and ports")
+                ("plugins:list", "plugin runtime")
             ]
         );
         assert!(
@@ -211,7 +207,7 @@ mod tests {
         );
         let said = drift.to_string();
         assert!(said.contains("`discovery:scan` is served"), "{said}");
-        assert!(said.contains("`sessions:watch` is served"), "{said}");
+        assert!(said.contains("`plugins:list` is served"), "{said}");
     }
 
     #[test]
@@ -242,12 +238,7 @@ mod tests {
     #[test]
     fn every_entry_is_labelled_with_the_feature_that_will_serve_it() {
         let features: BTreeSet<&str> = NOT_YET_SERVED.iter().map(|later| later.feature).collect();
-        for permanent in [
-            "processes and ports",
-            "workspace",
-            "agent tools listener",
-            "plugin runtime",
-        ] {
+        for permanent in ["workspace", "agent tools listener", "plugin runtime"] {
             assert!(features.contains(permanent), "{permanent} is missing");
         }
         assert!(

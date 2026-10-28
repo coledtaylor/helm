@@ -249,6 +249,10 @@ pub struct FakeAgentRecord {
     pub env_names: Vec<String>,
     /// The pids of the children it started.
     pub children: Vec<u32>,
+    /// The TCP port on 127.0.0.1 it listens on, for a run started with
+    /// `--fake-serve` (a child of `--fake-listen`).
+    #[serde(default)]
+    pub listening: Option<u16>,
     /// Every line it read, in order.
     pub input: Vec<String>,
 }

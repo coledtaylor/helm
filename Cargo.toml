@@ -56,7 +56,10 @@ tokio = { version = "1", features = [
 ] }
 ts-rs = { version = "11", features = ["serde-compat", "no-serde-warnings"] }
 windows-sys = { version = "0.61", features = [
+    "Wdk_System_Threading",
     "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",

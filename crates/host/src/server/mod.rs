@@ -42,6 +42,7 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
 use floti_protocol::channels::host::HostStopReason;
+use floti_protocol::channels::sessions::SessionResources;
 use floti_protocol::{BackendId, Catalogue, HostIdentity, PROTOCOL_VERSION};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -237,6 +238,14 @@ impl Host {
     /// Every protocol channel this host serves, of every kind.
     pub fn served_channels(&self) -> BTreeSet<&'static str> {
         connection::served_channels(&self.features)
+    }
+
+    /// What each running hosted session is holding (its process tree and
+    /// listening ports) from exactly one pass run for this ask, as a
+    /// session-detail call needs it. It joins a pass already running, and no
+    /// pass runs for it afterwards.
+    pub async fn session_resources(&self) -> Vec<SessionResources> {
+        self.features.resources().one_pass().await
     }
 
     /// Where clients connect.

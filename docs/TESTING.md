@@ -53,9 +53,12 @@ session and host tests need no Node. Each run records its arguments, folder,
 variable names, children and every line it read to `<pid>.json` in the folder
 `FLOTI_FAKE_AGENT_LOG` names. `--fake-print=<hex>` writes bytes at start,
 `--fake-child[=<ms>]` starts a child of its own, `--fake-gui-child[=<ms>]`
-starts `floti-fake-gui` (`testkit/fake_gui.rs`) as one, `--fake-exit=<code>`
-exits; otherwise it answers each line with `echo: <line>`, and `/exit <code>`,
-`/print <hex>`, `/child` and `/gui-child` do the same at its prompt.
+starts `floti-fake-gui` (`testkit/fake_gui.rs`) as one, `--fake-listen[=<ms>]`
+starts one that listens on a TCP port on 127.0.0.1 the OS picks and records
+the port as `listening` in its own record (it runs `--fake-serve=<ms>`), for
+the processes-and-ports tests, `--fake-exit=<code>` exits; otherwise it
+answers each line with `echo: <line>`, and `/exit <code>`, `/print <hex>`,
+`/child` and `/gui-child` do the same at its prompt.
 `floti-fake-gui` is built for the Windows `windows` subsystem, so there it has
 no console and the pseudoconsole closing does not reach it, as with a GUI app
 or a tool a CLI starts with its window hidden; elsewhere it is an ordinary
@@ -93,8 +96,9 @@ process tree is gone.
 compile-time OS conditional (`cfg(windows)`, `cfg!(unix)`, `target_os` and
 the like) appears outside `src/platform/mod.rs` and the per-OS
 implementations of the platform concerns (`startup`, `socket`, `folders`,
-`process_tree`, `links`, `launcher`). Behaviour that differs by OS goes behind one of those
-interfaces, with an implementation for each OS.
+`process_tree`, `process_table`, `links`, `launcher`). Behaviour that
+differs by OS goes behind one of those interfaces, with an implementation for
+each OS.
 
 ## Running them
 
