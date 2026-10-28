@@ -8,14 +8,16 @@
 //!
 //! The last section drives every `template:*` channel and `harness:create`
 //! as a client of the host does, over its socket, with the same inputs and
-//! expectations, links included, and scans over the socket for the harness a
-//! client made. The seeding at host start and the settings subscribers a new
-//! harness's scan root reaches are tested through the host's router in
-//! `server/features/templates.rs`.
+//! expectations, links included. It scans over the socket for the harness a
+//! client made and reads its scan root from the settings, which a
+//! `settings:changed` subscriber on another connection hears, and hears
+//! nothing of a refused one. The seeding at host start is tested through the
+//! host's router in `server/features/templates.rs`.
 
 use std::ffi::OsString;
 use std::fs;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use floti_host::agent::claude_code::ClaudeCodeSettings;
 use floti_host::config_console::snapshots;
@@ -23,7 +25,7 @@ use floti_host::platform::links;
 use floti_host::platform::socket::Endpoint;
 use floti_host::server::{HostConfig, HostRun, backends};
 use floti_host::store::Store;
-use floti_host::testkit::{RunningHost, TestClient, TestDirs, link_folder};
+use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs, link_folder};
 use floti_host::workspace::discovery::scan::scan;
 use floti_host::workspace::templates::authoring::{
     ImportFile, create_template, delete_template, import_into_template, make_substitutable,
@@ -38,17 +40,19 @@ use floti_host::workspace::templates::reader::{
 };
 use floti_host::workspace::templates::seed::{SHIPPED_TEMPLATES, seed_templates};
 use floti_host::workspace::templates::template_id_problems;
-use floti_protocol::channel::RequestChannel;
+use floti_protocol::Message;
+use floti_protocol::channel::{EventChannel, RequestChannel, from_payload};
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::workspace::{
     AppMode, CreateHarness, CreateHarnessOutcome, CreateHarnessRequest, CreateTemplate,
     CreateTemplateRequest, DeleteTemplate, FolderTemplateKind, FolderTemplatePreview,
-    FolderTemplateRequest, HarnessMode, ImportIntoTemplate, ImportIntoTemplateRequest,
-    ListTemplates, PreviewFolderTemplate, PreviewTemplate, ReadSettings, ReadTemplateDetail,
-    RenameTemplate, RenameTemplateRequest, SaveFolderAsTemplate, SaveFolderAsTemplateRequest,
-    SaveFolderAsTemplateResult, ScanForProjects, ScanRequest, SubstituteTemplateFile,
-    TemplateDetail, TemplateFileRequest, TemplateListing, TemplateMetadataRequest, TemplatePreview,
-    TemplatePreviewRequest, TemplateRef, TemplateWriteResult, WriteTemplateMetadata,
+    FolderTemplateRequest, HarnessMode, HostSettings, ImportIntoTemplate,
+    ImportIntoTemplateRequest, ListTemplates, PreviewFolderTemplate, PreviewTemplate, ReadSettings,
+    ReadTemplateDetail, RenameTemplate, RenameTemplateRequest, SaveFolderAsTemplate,
+    SaveFolderAsTemplateRequest, SaveFolderAsTemplateResult, ScanForProjects, ScanRequest,
+    SettingsChanged, SubstituteTemplateFile, TemplateDetail, TemplateFileRequest, TemplateListing,
+    TemplateMetadataRequest, TemplatePreview, TemplatePreviewRequest, TemplateRef,
+    TemplateWriteResult, WriteTemplateMetadata,
 };
 
 /// A folder of its own holding `templates/`, and a store for the writes that
@@ -1894,6 +1898,7 @@ fn refuses_a_name_that_is_taken_and_leaves_the_existing_template_alone() {
 struct Wire {
     host: RunningHost,
     client: TestClient,
+    endpoint: Endpoint,
     templates: PathBuf,
     /// Where a test's harnesses, folders and link targets go, outside the
     /// templates folder.
@@ -1952,6 +1957,7 @@ impl Wire {
         Self {
             host,
             client,
+            endpoint,
             templates: dirs.config.join("templates"),
             root,
             dirs,
@@ -2055,6 +2061,54 @@ impl Wire {
     async fn roots(&mut self) -> Vec<String> {
         self.ask::<ReadSettings>(&()).await.scan_roots
     }
+
+    /// Another client, subscribed to `settings:changed`, and the scan roots
+    /// it started with.
+    async fn settings_watcher(&self) -> (TestClient, Vec<String>) {
+        let mut watcher = TestClient::connect(&self.endpoint, &[]).await;
+        match watcher.subscribe_on(SETTINGS, SettingsChanged::NAME).await {
+            Message::Snapshot(snapshot) => {
+                let settings: HostSettings = from_payload(&snapshot.state).unwrap();
+                (watcher, settings.scan_roots)
+            }
+            other => panic!("`settings:changed` did not start with a snapshot: {other:?}"),
+        }
+    }
+}
+
+/// The subscription a settings watcher holds.
+const SETTINGS: u64 = 1;
+
+/// How long a watcher is given to hear a change that must not come.
+const QUIET: Duration = Duration::from_millis(500);
+
+/// Asserts that a write was refused and that its problems name every one of
+/// `sentences`.
+fn refused_with(ok: bool, problems: &[String], sentences: &[String], what: &str) {
+    assert!(!ok, "{what}: not refused");
+    assert!(!sentences.is_empty(), "{what}: nothing to name");
+    for sentence in sentences {
+        assert!(
+            problems.contains(sentence),
+            "{what}: {sentence:?} is not among {problems:?}"
+        );
+    }
+}
+
+/// The scan roots the next `settings:changed` event carries, or `None` when
+/// none comes within `wait`.
+async fn heard_roots(watcher: &mut TestClient, wait: Duration) -> Option<Vec<String>> {
+    let deadline = Instant::now() + wait;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match watcher.next(left).await? {
+            Message::Event(event) if event.subscription == SETTINGS => {
+                let settings: HostSettings = from_payload(&event.payload).unwrap();
+                return Some(settings.scan_roots);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Every file under `dir` with its bytes, a link listed and never entered:
@@ -2100,6 +2154,7 @@ async fn a_client_makes_a_harness_from_a_template_with_its_values_filled_in_and_
     }
     let parent = wire.root.join("harnesses");
     fs::create_dir_all(&parent).unwrap();
+    let (mut watcher, roots_before) = wire.settings_watcher().await;
 
     let outcome = wire.harness(&parent, "work", "demo").await;
 
@@ -2108,6 +2163,12 @@ async fn a_client_makes_a_harness_from_a_template_with_its_values_filled_in_and_
     assert!(outcome.problems.is_empty(), "{:?}", outcome.problems);
     assert_eq!(outcome.path.as_deref(), Some(path.as_str()));
     assert!(outcome.roots.contains(&path), "{:?}", outcome.roots);
+    assert!(!roots_before.contains(&path), "{roots_before:?}");
+    // The new harness joined the scan roots: a subscriber hears the whole
+    // settings with it, and a read finds it there.
+    let heard = heard_roots(&mut watcher, PATIENCE).await;
+    assert_eq!(heard.as_ref(), Some(&outcome.roots));
+    assert_eq!(wire.roots().await, outcome.roots);
     assert_eq!(
         tree(&harness),
         [
@@ -2161,19 +2222,44 @@ async fn a_client_is_refused_a_harness_with_a_bad_name_or_over_an_existing_folde
     let parent = wire.root.join("harnesses");
     fs::create_dir_all(&parent).unwrap();
     let roots = wire.roots().await;
+    let (mut watcher, watched) = wire.settings_watcher().await;
+    assert_eq!(watched, roots);
 
     for name in ["", "  ", "a/b", "a\\b", "a:b", "con", "trailing.", ".."] {
         let outcome = wire.harness(&parent, name, "minimal").await;
         assert_eq!(outcome.path, None, "{name:?}");
-        assert!(!outcome.problems.is_empty(), "{name:?}");
+        let expected = harness_name_problems(name);
+        assert!(!expected.is_empty(), "{name:?}");
+        for problem in &expected {
+            assert!(
+                outcome.problems.contains(problem),
+                "{name:?}: {:?}",
+                outcome.problems
+            );
+        }
         assert_eq!(outcome.roots, roots, "{name:?}");
         assert_eq!(tree(&wire.root), ["harnesses"], "{name:?}");
     }
 
-    for template in ["../escape", "..\\escape", "absent"] {
+    for (template, expected) in [
+        ("../escape", template_id_problems("../escape")),
+        ("..\\escape", template_id_problems("..\\escape")),
+        (
+            "absent",
+            vec!["There is no template called \"absent\".".to_owned()],
+        ),
+    ] {
         let outcome = wire.harness(&parent, "work", template).await;
         assert_eq!(outcome.path, None, "{template}");
-        assert!(!outcome.problems.is_empty(), "{template}");
+        assert!(!expected.is_empty(), "{template}");
+        for problem in &expected {
+            assert!(
+                outcome.problems.contains(problem),
+                "{template}: {:?}",
+                outcome.problems
+            );
+        }
+        assert_eq!(outcome.roots, roots, "{template}");
         assert_eq!(tree(&wire.root), ["harnesses"], "{template}");
     }
 
@@ -2188,7 +2274,10 @@ async fn a_client_is_refused_a_harness_with_a_bad_name_or_over_an_existing_folde
     assert_eq!(tree(&parent.join("work")), ["mine.txt"]);
     assert_eq!(read(&parent.join("work").join("mine.txt")), "mine");
 
+    // No root was added: a read finds the roots as they were, and the
+    // subscriber was told nothing.
     assert_eq!(wire.roots().await, roots);
+    assert_eq!(heard_roots(&mut watcher, QUIET).await, None);
     wire.stop().await;
 }
 
@@ -2365,22 +2454,33 @@ async fn a_client_is_refused_a_template_name_or_path_that_reaches_outside_the_te
     write(&sibling.join("keep.txt"), "kept");
     write(&config.join("outside.md"), "outside");
     assert!(wire.create("kit").await.ok);
+    let claude = wire.dirs.home.join(".claude");
+    let memory = claude.join("CLAUDE.md");
+    write(&memory, "# mine\n");
     let before = contents(&config);
 
     for name in ["../escape", "..\\escape", "/escape"] {
-        assert!(!wire.create(name).await.ok, "create {name}");
+        let sentences = template_id_problems(name);
+        let created = wire.create(name).await;
+        refused_with(created.ok, &created.problems, &sentences, "create");
         let renamed = wire
             .ask::<RenameTemplate>(&RenameTemplateRequest {
                 template: "kit".into(),
                 name: name.into(),
             })
             .await;
-        assert!(!renamed.ok, "rename to {name}");
+        refused_with(renamed.ok, &renamed.problems, &sentences, "rename to");
         let saved = wire.save_folder(&wire.root.clone(), name, vec![]).await;
-        assert!(!saved.ok, "save a folder as {name}");
+        refused_with(saved.ok, &saved.problems, &sentences, "save a folder as");
     }
     for template in ["../sibling", "..\\sibling"] {
-        assert!(!wire.delete(template).await, "delete {template}");
+        let sentences = template_id_problems(template);
+        let deleted = wire
+            .ask::<DeleteTemplate>(&TemplateRef {
+                template: template.into(),
+            })
+            .await;
+        refused_with(deleted.ok, &deleted.problems, &sentences, "delete");
         let described = wire
             .ask::<WriteTemplateMetadata>(&TemplateMetadataRequest {
                 template: template.into(),
@@ -2388,22 +2488,22 @@ async fn a_client_is_refused_a_template_name_or_path_that_reaches_outside_the_te
                 description: String::new(),
             })
             .await;
-        assert!(!described.ok, "describe {template}");
+        refused_with(described.ok, &described.problems, &sentences, "describe");
         let renamed = wire
             .ask::<RenameTemplate>(&RenameTemplateRequest {
                 template: template.into(),
                 name: "stolen".into(),
             })
             .await;
-        assert!(!renamed.ok, "rename {template}");
+        refused_with(renamed.ok, &renamed.problems, &sentences, "rename");
         let imported = wire
             .ask::<ImportIntoTemplate>(&ImportIntoTemplateRequest {
                 template: template.into(),
-                scope_path: wire.dirs.home.join(".claude").display().to_string(),
-                paths: Vec::new(),
+                scope_path: claude.display().to_string(),
+                paths: vec![memory.display().to_string()],
             })
             .await;
-        assert!(!imported.ok, "import into {template}");
+        refused_with(imported.ok, &imported.problems, &sentences, "import into");
     }
     for path in ["../../outside.md", "..\\..\\outside.md"] {
         let filled = wire
@@ -2412,7 +2512,8 @@ async fn a_client_is_refused_a_template_name_or_path_that_reaches_outside_the_te
                 path: path.into(),
             })
             .await;
-        assert!(!filled.ok, "fill {path}");
+        let sentence = format!("\"{path}\" is not a file in this template.");
+        refused_with(filled.ok, &filled.problems, &[sentence], "fill");
     }
 
     assert_eq!(contents(&config), before);
@@ -2564,6 +2665,8 @@ async fn a_link_in_a_template_is_never_walked_when_a_client_lists_previews_appli
         listing.problems
     );
 
+    assert_eq!(contents(&canary), before, "after the listing");
+
     // Previewed and read: the link is named, and nothing behind it is listed.
     let preview = wire.preview("hostile").await;
     assert_eq!(preview.entries, ["harness.yaml", "ok.txt"]);
@@ -2581,6 +2684,7 @@ async fn a_link_in_a_template_is_never_walked_when_a_client_lists_previews_appli
     listed.sort_unstable();
     assert_eq!(listed, [("escape", true), ("ok.txt", false)]);
     assert_eq!(detail.file_count, 1);
+    assert_eq!(contents(&canary), before, "after the preview and detail");
 
     // Applied: the harness has the template's own half and nothing else.
     let parent = wire.root.join("harnesses");
@@ -2596,13 +2700,15 @@ async fn a_link_in_a_template_is_never_walked_when_a_client_lists_previews_appli
         "{problems}"
     );
     assert_eq!(tree(&parent.join("work")), ["harness.yaml", "ok.txt"]);
+    assert_eq!(contents(&canary), before, "after the harness was made");
 
     // Deleted: the link inside is unlinked; a template that is a link is refused.
     assert!(wire.delete("hostile").await);
     assert!(!templates.join("hostile").exists());
     assert!(!wire.delete("linked").await);
+    assert!(links::is_link(&templates.join("linked")));
 
-    assert_eq!(contents(&canary), before);
+    assert_eq!(contents(&canary), before, "after the deletes");
     wire.stop().await;
 }
 
@@ -2631,6 +2737,7 @@ async fn a_link_in_a_folder_saved_as_a_template_is_never_walked_over_the_wire() 
         problems.contains("escape") && problems.contains("deep-escape"),
         "{problems}"
     );
+    assert_eq!(contents(&canary), before, "after the folder preview");
 
     let saved = wire.save_folder(&dir, "frozen", vec!["tools".into()]).await;
     assert!(saved.ok, "{:?}", saved.problems);
@@ -2643,6 +2750,7 @@ async fn a_link_in_a_folder_saved_as_a_template_is_never_walked_over_the_wire() 
         "{:?}",
         saved.problems
     );
+    assert_eq!(contents(&canary), before, "after the folder was saved");
 
     assert!(wire.delete("frozen").await);
     assert_eq!(contents(&canary), before);
