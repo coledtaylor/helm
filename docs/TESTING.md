@@ -42,8 +42,8 @@ fields drop in order. A test that starts a host in-process uses `RunningHost`
 and ends with `stop(..).await`, which ends the host's sessions and lets go of
 its store; dropping one unstopped fails the test. A test that kills the
 `floti host` executable kills that process alone, as a crash would: the host
-takes everything it started with it (a job object on Windows, the terminal
-hang-up on macOS and Linux). The test lists those processes before the kill
+takes everything it started with it (a job object on Windows, a guard process
+on macOS and Linux). The test lists those processes before the kill
 with `process_tree::descendants` (testkit only) and checks they have all
 ended, ending any that has not so it cannot outlive the test.
 

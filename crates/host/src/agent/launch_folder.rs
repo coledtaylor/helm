@@ -158,6 +158,10 @@ mod tests {
         fn end_tree_with_this_process(&self) -> Knowable<bool> {
             Knowable::Unknown
         }
+
+        fn tie_tree(&self, _: u32) {}
+
+        fn untie_tree(&self, _: u32) {}
     }
 
     fn owned_by(data: &Path, pids: &[u32]) -> PathBuf {

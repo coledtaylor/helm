@@ -120,6 +120,11 @@ impl ProcessTree for Native {
             })
             .clone()
     }
+
+    // The job holds every process the host starts, named or not.
+    fn tie_tree(&self, _root_pid: u32) {}
+
+    fn untie_tree(&self, _root_pid: u32) {}
 }
 
 /// Puts this process in a new job that ends every process in it when its
@@ -128,8 +133,8 @@ impl ProcessTree for Native {
 /// join this one too; one whose job forbids that is refused.
 ///
 /// A program that asks to leave the job (`CREATE_BREAKAWAY_FROM_JOB`) may,
-/// as one on macOS or Linux may leave its terminal's session to outlive the
-/// hang-up; refused, it would not start at all. Nothing the host starts
+/// as one on macOS or Linux may leave its session's process group to outlive
+/// the host; refused, it would not start at all. Nothing the host starts
 /// itself asks.
 fn join_a_job_that_ends_with_this_process() -> io::Result<()> {
     // SAFETY: no attributes (so the handle is not inherited) and no name.

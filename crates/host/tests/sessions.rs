@@ -5,6 +5,7 @@
 //! (`test/fake-agents/claude-code.mjs`) and the fake agent, never a real
 //! agent.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -15,9 +16,7 @@ use floti_host::fake_agent;
 use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree};
 use floti_host::platform::socket::Endpoint;
 use floti_host::server::HostConfig;
-use floti_host::testkit::{
-    FakeAgent, FakeAgentRecord, PATIENCE, RunningHost, TestClient, TestDirs,
-};
+use floti_host::testkit::{FakeAgent, PATIENCE, RunningHost, TestClient, TestDirs};
 use floti_protocol::channel::EventChannel;
 use floti_protocol::channel::from_payload;
 use floti_protocol::channels::common::{PermissionMode, SessionRecord, SessionStatus};
@@ -52,7 +51,13 @@ fn fake_config(
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: vec![Arc::new(agent.backend(args.iter().copied())) as Arc<dyn AgentBackend>],
-        inherited_env: std::env::vars_os().collect(),
+        // The shell a plain terminal opens: `%COMSPEC%` where it is set,
+        // which is Windows, and otherwise this, rather than the user's own
+        // shell and whatever its start-up files do.
+        inherited_env: std::env::vars_os()
+            .filter(|(key, _)| key != "SHELL")
+            .chain([(OsString::from("SHELL"), OsString::from("/bin/sh"))])
+            .collect(),
     }
 }
 
@@ -410,19 +415,22 @@ async fn assert_all_end(pids: &[u32]) {
 fn tree_in(agent: &FakeAgent, folder: &Path) -> Vec<u32> {
     let deadline = Instant::now() + PATIENCE;
     let real = resolved(folder);
-    let run: FakeAgentRecord = loop {
-        if let Some(run) = agent
-            .records()
-            .into_iter()
-            .find(|record| Path::new(&record.cwd) == folder || Path::new(&record.cwd) == real)
-        {
-            break run;
+    // The run that started a child, never the child: the fake agent runs
+    // its children itself, and each records itself in the same folder.
+    loop {
+        if let Some(run) = agent.records().into_iter().find(|record| {
+            (Path::new(&record.cwd) == folder || Path::new(&record.cwd) == real)
+                && !record.children.is_empty()
+        }) {
+            return std::iter::once(run.pid).chain(run.children).collect();
         }
-        assert!(Instant::now() < deadline, "no run in {}", folder.display());
+        assert!(
+            Instant::now() < deadline,
+            "no run in {} started a child",
+            folder.display()
+        );
         std::thread::sleep(Duration::from_millis(20));
-    };
-    let run = agent.wait_for_record(run.pid, PATIENCE, |record| !record.children.is_empty());
-    std::iter::once(run.pid).chain(run.children).collect()
+    }
 }
 
 fn listed_ids(sessions: &[SessionRecord]) -> Vec<u64> {
@@ -1132,17 +1140,14 @@ async fn an_exit_is_sent_for_a_notification_only_to_the_clients_whose_user_canno
 // Plain terminals
 // ---------------------------------------------------------------------------
 
-/// Polls until `file` holds `wanted`.
-async fn wait_for_file(file: &Path, wanted: &str) {
+/// Polls until the folder `path` exists.
+async fn wait_for_folder(path: &Path) {
     let deadline = Instant::now() + PATIENCE;
-    loop {
-        if std::fs::read_to_string(file).is_ok_and(|text| text.contains(wanted)) {
-            return;
-        }
+    while !path.is_dir() {
         assert!(
             Instant::now() < deadline,
-            "{} never held {wanted:?}",
-            file.display()
+            "{} was never made",
+            path.display()
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -1203,10 +1208,10 @@ async fn a_plain_terminal_runs_a_shell_in_its_folder_on_the_stream_and_says_when
         })
         .await
         .expect("the resize lands");
-    client
-        .type_into(11, b"echo floti-was-here > marker.txt\r")
-        .await;
-    wait_for_file(&folder.join("marker.txt"), "floti-was-here").await;
+    // `mkdir` does the same in every shell, and its mark has no encoding: a
+    // redirect in Windows PowerShell writes UTF-16.
+    client.type_into(11, b"mkdir floti-was-here\r").await;
+    wait_for_folder(&folder.join("floti-was-here")).await;
     let bytes = client
         .read_stream_until(11, |bytes| {
             String::from_utf8_lossy(bytes).contains("floti-was-here")

@@ -5,7 +5,7 @@
 //! The same concern ties the host's own tree to its life
 //! ([`ProcessTree::end_tree_with_this_process`]), so a host that is killed or
 //! crashes takes its sessions with it, as a stop does: a job object on
-//! Windows, the terminal hang-up on macOS and Linux.
+//! Windows, a guard process on macOS and Linux.
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -58,14 +58,25 @@ pub trait ProcessTree {
     fn is_alive(&self, pid: u32) -> Knowable<bool>;
 
     /// Ends the tree rooted at this process when this process ends, however
-    /// it ends: from now on, every program it runs in a terminal and
-    /// everything those start end with it, killed or crashed as much as
-    /// stopped. Asking again changes nothing.
+    /// it ends: from now on, every program it runs in a terminal (each named
+    /// with [`ProcessTree::tie_tree`]) and everything those start end with
+    /// it, killed or crashed as much as stopped. Asking again changes
+    /// nothing.
     ///
     /// Known(true) once that holds. Unknown when the OS would not arrange
     /// it, which is said once on stderr and is no reason to stop: the
     /// process keeps working, and what it started can outlive a crash.
     fn end_tree_with_this_process(&self) -> Knowable<bool>;
+
+    /// `root_pid`, a program this process has just started in a terminal,
+    /// is running: once [`ProcessTree::end_tree_with_this_process`] has
+    /// arranged it, its tree ends with this process until
+    /// [`ProcessTree::untie_tree`].
+    fn tie_tree(&self, root_pid: u32);
+
+    /// The program `root_pid` has exited and been reaped, so its id may be
+    /// handed to another process: its tree no longer ends with this one.
+    fn untie_tree(&self, root_pid: u32);
 }
 
 /// Every process under `root` in `table`, a list of (pid, parent pid): its
