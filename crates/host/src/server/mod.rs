@@ -29,7 +29,7 @@ mod connection;
 mod events;
 mod features;
 mod hosted;
-mod records;
+pub(crate) mod records;
 pub mod unserved;
 
 use std::collections::BTreeSet;

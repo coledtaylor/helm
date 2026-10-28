@@ -19,21 +19,21 @@ use floti_protocol::channels::workspace::{
 };
 use rusqlite::Connection;
 
-use super::files::{WriteGuard, hash_content, normalize, read_file, snapshot_key};
+use super::files::{PathGuard, hash_content, normalize, read_file, snapshot_key};
 use super::snapshots::{self, NewSnapshot};
 
 /// Writes config files, each after a snapshot of what it replaces.
 pub struct SnapshotWriter<'a> {
     conn: &'a Connection,
-    guard: &'a WriteGuard,
+    guard: &'a dyn PathGuard,
 }
 
 impl<'a> SnapshotWriter<'a> {
-    pub fn new(conn: &'a Connection, guard: &'a WriteGuard) -> Self {
+    pub fn new(conn: &'a Connection, guard: &'a dyn PathGuard) -> Self {
         Self { conn, guard }
     }
 
-    pub fn guard(&self) -> &WriteGuard {
+    pub fn guard(&self) -> &dyn PathGuard {
         self.guard
     }
 
