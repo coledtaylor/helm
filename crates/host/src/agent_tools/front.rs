@@ -8,7 +8,8 @@
 //! 2. **Token** (401, `WWW-Authenticate: Bearer`), before the route. A caller
 //!    without a token learns nothing about this server but that it is there:
 //!    a path that does not exist is answered exactly as one that does, and
-//!    the body is never read.
+//!    the body is never read: like every refusal before step 5, it is only
+//!    thrown away, unparsed, once the answer is decided.
 //! 3. **Route** (404): a path no family serves, or a switched-off family's.
 //!    After the token, so a switched-off family is a clean 404 to a session
 //!    that holds one.
@@ -26,10 +27,11 @@ use bytes::Bytes;
 use http::header::{
     ACCEPT, ALLOW, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ORIGIN, WWW_AUTHENTICATE,
 };
+use http::request::Parts;
 use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
-use hyper::body::Incoming;
+use hyper::body::{Body as _, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
@@ -37,15 +39,18 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 
-use super::ToolFamily;
 use super::mcp::{self, FamilyService};
 use super::tokens::Tokens;
+use super::{Caller, ToolFamily};
 
 /// The largest request body read: far past any tool call's arguments.
 pub(super) const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 /// How long a connection may take to send a request's headers.
 const HEADER_PATIENCE: Duration = Duration::from_secs(10);
+
+/// How long the body of a refused request is waited for, to be thrown away.
+const DISCARD_PATIENCE: Duration = Duration::from_secs(5);
 
 type Answer = Response<BoxBody<Bytes, Infallible>>;
 
@@ -88,47 +93,15 @@ impl Router {
     }
 
     async fn answer(&self, request: Request<Incoming>) -> Answer {
-        if !origin_allowed(request.headers()) {
-            return refusal(
-                StatusCode::FORBIDDEN,
-                "Floti serves its agent tools to local processes, not to web pages.",
-            );
-        }
-
-        let Some(caller) = authorization(request.headers())
-            .and_then(|value| self.tokens().resolve(value.as_bytes()))
-        else {
-            let mut answer = refusal(
-                StatusCode::UNAUTHORIZED,
-                "Floti's agent tools need the bearer token from the session's own tool configuration.",
-            );
-            answer
-                .headers_mut()
-                .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
-            return answer;
-        };
-
-        let path = request.uri().path();
-        let Some(family) = self
-            .families
-            .iter()
-            .find(|family| family.def.route() == path && family.def.is_on())
-        else {
-            return refusal(StatusCode::NOT_FOUND, "Not found.");
-        };
-
-        if request.method() != Method::POST {
-            let mut answer = refusal(
-                StatusCode::METHOD_NOT_ALLOWED,
-                "Floti's agent tools take POST only.",
-            );
-            answer
-                .headers_mut()
-                .insert(ALLOW, HeaderValue::from_static("POST"));
-            return answer;
-        }
-
         let (mut parts, body) = request.into_parts();
+        let (family, caller) = match self.admit(&parts) {
+            Ok(admitted) => admitted,
+            Err(refused) => {
+                discard(body);
+                return *refused;
+            }
+        };
+
         let body = match Limited::new(body, MAX_BODY_BYTES).collect().await {
             Ok(collected) => collected.to_bytes(),
             Err(err) if err.is::<LengthLimitError>() => {
@@ -157,6 +130,87 @@ impl Router {
         no_store(answer.headers_mut());
         answer
     }
+
+    /// The first four checks, made on the head alone: the family a request
+    /// is for and who is calling, or the refusal it gets.
+    fn admit(&self, parts: &Parts) -> Result<(&Family, Caller), Box<Answer>> {
+        if !origin_allowed(&parts.headers) {
+            return Err(Box::new(refusal(
+                StatusCode::FORBIDDEN,
+                "Floti serves its agent tools to local processes, not to web pages.",
+            )));
+        }
+
+        let Some(caller) =
+            authorization(&parts.headers).and_then(|value| self.tokens().resolve(value.as_bytes()))
+        else {
+            let mut answer = refusal(
+                StatusCode::UNAUTHORIZED,
+                "Floti's agent tools need the bearer token from the session's own tool configuration.",
+            );
+            answer
+                .headers_mut()
+                .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+            return Err(Box::new(answer));
+        };
+
+        let path = parts.uri.path();
+        let Some(family) = self
+            .families
+            .iter()
+            .find(|family| family.def.route() == path && family.def.is_on())
+        else {
+            return Err(Box::new(refusal(StatusCode::NOT_FOUND, "Not found.")));
+        };
+
+        if parts.method != Method::POST {
+            let mut answer = refusal(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "Floti's agent tools take POST only.",
+            );
+            answer
+                .headers_mut()
+                .insert(ALLOW, HeaderValue::from_static("POST"));
+            return Err(Box::new(answer));
+        }
+
+        Ok((family, caller))
+    }
+}
+
+/// Throws away the body of a request refused on its head, after the refusal
+/// was decided and while it is being sent. Nothing of the body is kept or
+/// looked at, and the refusal never waits for it.
+///
+/// Dropping the body unread would be wrong: hyper then stops reading and
+/// closes the connection, and body bytes still on their way, or unread in
+/// the socket, make the OS answer them with a reset. On Windows a reset
+/// discards what the client had received but not yet read, so the refusal
+/// is lost and the client sees the connection aborted. Draining it lets the
+/// connection close cleanly once the body is in, as Node's server does when
+/// it dumps an unread request body after the response.
+///
+/// The drain stops at `MAX_BODY_BYTES` or after `DISCARD_PATIENCE`, and a
+/// client that sends more or stalls longer may be cut off.
+fn discard(mut body: Incoming) {
+    if body.is_end_stream() {
+        return;
+    }
+    tokio::spawn(async move {
+        let drain = async {
+            let mut left = MAX_BODY_BYTES;
+            while let Some(Ok(frame)) = body.frame().await {
+                let Ok(data) = frame.into_data() else {
+                    continue;
+                };
+                match left.checked_sub(data.len()) {
+                    Some(rest) => left = rest,
+                    None => break,
+                }
+            }
+        };
+        let _ = tokio::time::timeout(DISCARD_PATIENCE, drain).await;
+    });
 }
 
 /// Accepts connections until `stopped` resolves (sent or dropped), then

@@ -633,6 +633,96 @@ async fn s6_answers_a_path_no_family_serves_404_and_any_method_but_post_405() {
     world.listener.stop().await;
 }
 
+/// The length of the first whole answer in `bytes`, once all of it is there.
+fn whole_reply_length(bytes: &[u8]) -> Option<usize> {
+    let end_of_head = bytes.windows(4).position(|window| window == b"\r\n\r\n")?;
+    let head = std::str::from_utf8(&bytes[..end_of_head]).ok()?;
+    let length = head
+        .split("\r\n")
+        .filter_map(|line| line.split_once(':'))
+        .find(|(key, _)| key.trim().eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.trim().parse::<usize>().ok())?;
+    let whole = end_of_head + 4 + length;
+    (bytes.len() >= whole).then_some(whole)
+}
+
+/// One request whose body is sent only after its answer has arrived whole
+/// and the server has had time to close, then read to the end. A client
+/// that writes the head and the body apart meets this whenever the answer
+/// is quicker than the body.
+async fn answered_before_its_body(address: SocketAddr, head: &str, body: &[u8]) -> Reply {
+    tokio::time::timeout(PATIENCE, async {
+        let mut stream = TcpStream::connect(address).await.expect("connect");
+        stream.write_all(head.as_bytes()).await.expect("send head");
+        let mut peeked = vec![0u8; 8192];
+        loop {
+            let seen = stream.peek(&mut peeked).await.expect("peek the answer");
+            assert!(seen > 0, "the connection closed before an answer");
+            if whole_reply_length(&peeked[..seen]).is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        stream.write_all(body).await.expect("send body");
+        let reply = read_reply(&mut stream, true).await;
+        let mut rest = Vec::new();
+        stream
+            .read_to_end(&mut rest)
+            .await
+            .expect("the connection closes cleanly after the answer");
+        assert!(rest.is_empty(), "nothing follows the answer: {rest:?}");
+        reply
+    })
+    .await
+    .expect("an answer within the patience")
+}
+
+#[tokio::test]
+async fn a_refusal_reaches_its_client_whole_when_the_body_arrives_after_it() {
+    let world = two_families();
+    let grant = world.grant();
+    let address = world.address();
+    let auth = format!("Bearer {}", token(&grant));
+    world.other.switch(false);
+
+    let body = vec![b' '; 64 * 1024];
+    let refusals = [
+        ("POST", "/mcp/test", vec![], 401),
+        (
+            "POST",
+            "/nothing-here",
+            vec![("Authorization", "Bearer wrong")],
+            401,
+        ),
+        (
+            "POST",
+            "/mcp/test",
+            vec![("Authorization", &auth), ("Origin", "https://example.com")],
+            403,
+        ),
+        ("POST", "/nothing-here", vec![("Authorization", &auth)], 404),
+        ("POST", "/mcp/other", vec![("Authorization", &auth)], 404),
+        ("PUT", "/mcp/test", vec![("Authorization", &auth)], 405),
+    ];
+    for (method, path, mut headers, status) in refusals {
+        headers.extend([("Accept", MCP_ACCEPT), ("Content-Type", "application/json")]);
+        let reply = answered_before_its_body(
+            address,
+            &head(method, address, path, &headers, body.len()),
+            &body,
+        )
+        .await;
+        assert_eq!(reply.status, status, "{method} {path}");
+        assert!(
+            reply.json()["error"].is_string(),
+            "{method} {path}: {reply:?}"
+        );
+    }
+
+    world.listener.stop().await;
+}
+
 #[tokio::test]
 async fn stopping_closes_the_port_and_a_listener_started_after_knows_no_earlier_token() {
     let world = two_families();
