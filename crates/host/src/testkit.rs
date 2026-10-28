@@ -707,10 +707,13 @@ mod tests {
         repo.write("notes/readme.md", "line one\r\nline two\n");
         repo.commit_all("first");
 
-        let log = repo.git(&["log", "-1", "--format=%an|%ae|%aI|%cn|%cI|%s"]);
+        // Seconds since the epoch, because git's strict ISO dates write UTC as
+        // `+00:00` or `Z` depending on its version. 1767323045 is
+        // 2026-01-02T03:04:05Z.
+        let log = repo.git(&["log", "-1", "--format=%an|%ae|%at|%cn|%ct|%s"]);
         assert_eq!(
             log.trim(),
-            "Floti Tests|tests@floti.invalid|2026-01-02T03:04:05+00:00|Floti Tests|2026-01-02T03:04:05+00:00|first"
+            "Floti Tests|tests@floti.invalid|1767323045|Floti Tests|1767323045|first"
         );
         assert_eq!(repo.git(&["branch", "--show-current"]).trim(), "main");
         // Only the repository's own config and this fixture's settings.
