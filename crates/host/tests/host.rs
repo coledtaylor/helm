@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use floti_host::agent::AgentBackend;
 use floti_host::agent::claude_code::ClaudeCodeSettings;
 use floti_host::platform::folders::{CONFIG_DIR_VAR, DATA_DIR_VAR, LOG_DIR_VAR, RUNTIME_DIR_VAR};
-use floti_host::platform::process_tree::{Ending, Native as NativeTree, ProcessTree};
+use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree, descendants};
 use floti_host::platform::socket::{self, Endpoint, LocalSocket, Native as NativeSocket};
 use floti_host::platform::startup;
 use floti_host::server::{Host, HostConfig, SOCKET_NAME, unserved};
@@ -27,9 +27,10 @@ use floti_protocol::channel::{from_payload, to_payload};
 use floti_protocol::channels::common::{SessionRecord, SessionStatus};
 use floti_protocol::channels::host::{HostStop, HostStopReason, HostStopRequest};
 use floti_protocol::channels::sessions::{
-    CloseSessionRequest, HistoryRefresh, LaunchSessionRequest, ReadUsage, RestoreSessionsRequest,
-    SessionClose, SessionExit, SessionLaunch, SessionList, SessionRestorable, SessionRestore,
-    SessionStart, SessionToRestore, StartSessionRequest, UsageSnapshot,
+    CloseSessionRequest, HistoryRefresh, LaunchSessionRequest, PtermOpen, PtermOpenRequest,
+    PtermStreamOpen, ReadUsage, RestoreSessionsRequest, SessionClose, SessionExit, SessionLaunch,
+    SessionList, SessionRestorable, SessionRestore, SessionStart, SessionToRestore,
+    StartSessionRequest, UsageSnapshot,
 };
 use floti_protocol::message::ErrorCode;
 use floti_protocol::{BackendId, Catalogue, ChannelKind, EventChannel, Knowable, Message};
@@ -104,8 +105,9 @@ fn rows(data: &Path) -> Vec<Row> {
         .unwrap()
 }
 
-/// Waits until every process in `pids` has ended.
-async fn assert_all_end(pids: &[u32]) {
+/// The processes in `pids` still running once every one has ended or
+/// [`PATIENCE`] has passed, whichever comes first.
+async fn running_after_patience(pids: &[u32]) -> Vec<u32> {
     let deadline = Instant::now() + PATIENCE;
     loop {
         let alive: Vec<u32> = pids
@@ -113,15 +115,20 @@ async fn assert_all_end(pids: &[u32]) {
             .copied()
             .filter(|pid| NativeTree.is_alive(*pid) != Knowable::Known(false))
             .collect();
-        if alive.is_empty() {
-            return;
+        if alive.is_empty() || Instant::now() >= deadline {
+            return alive;
         }
-        assert!(
-            Instant::now() < deadline,
-            "processes still running after {PATIENCE:?}: {alive:?}"
-        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// Waits until every process in `pids` has ended.
+async fn assert_all_end(pids: &[u32]) {
+    let alive = running_after_patience(pids).await;
+    assert!(
+        alive.is_empty(),
+        "processes still running after {PATIENCE:?}: {alive:?}"
+    );
 }
 
 /// Ends what a test left behind, so a failure does not leave processes.
@@ -135,6 +142,15 @@ fn end_all(pids: &[u32]) {
 fn tree_of(agent: &FakeAgent, pid: u32) -> Vec<u32> {
     let record = agent.wait_for_record(pid, PATIENCE, |record| !record.children.is_empty());
     std::iter::once(record.pid).chain(record.children).collect()
+}
+
+/// The fake agent's run in `cwd` once it has started `count` children.
+fn run_with_children_in(agent: &FakeAgent, cwd: &Path, count: usize) -> Option<FakeAgentRecord> {
+    let real = resolved(cwd);
+    agent.records().into_iter().find(|record| {
+        (Path::new(&record.cwd) == cwd || Path::new(&record.cwd) == real)
+            && record.children.len() >= count
+    })
 }
 
 /// The pids of the fake agent's runs in `cwd`, its children aside; waits
@@ -208,17 +224,38 @@ fn binary_endpoint(dirs: &TestDirs) -> Endpoint {
     NativeSocket.endpoint(&dirs.runtime, SOCKET_NAME)
 }
 
-/// Kills the host `child` and everything it started, as a crash takes a
-/// host down: no stop runs and nothing is recorded. Its sessions go with it,
-/// so the test leaves none behind; a Windows pseudoconsole's program would
-/// otherwise outlive the host that started it.
-fn kill_with_its_tree(child: &mut Child) {
-    let _ = NativeTree.end_tree(child.id(), Ending::Forced);
+/// Kills the host `child` and nothing else, as a crash takes a host down: no
+/// stop runs and nothing is recorded. What the host started goes with it,
+/// which the host arranges itself.
+fn kill_alone(child: &mut Child) {
     let _ = child.kill();
     child.wait().expect("reap the host");
 }
 
-/// Waits for `child` to exit, killing it and its tree after [`PATIENCE`].
+/// Every process the host `child` started that is still running, and every
+/// process those started: its sessions' and terminals' programs, what they
+/// started and, on Windows, each pseudoconsole's `conhost.exe`.
+fn started_by(child: &Child) -> Vec<u32> {
+    match descendants(child.id()) {
+        Knowable::Known(pids) => pids,
+        Knowable::Unknown => panic!("the OS would not list what the host started"),
+    }
+}
+
+/// Kills the host `child` alone, then waits until every process in
+/// `started` has ended with it. One still running after [`PATIENCE`] fails
+/// the test, and is ended here rather than outliving it.
+async fn kill_host(child: &mut Child, started: &[u32]) {
+    kill_alone(child);
+    let left = running_after_patience(started).await;
+    if !left.is_empty() {
+        end_all(&left);
+        panic!("the killed host left what it started running after {PATIENCE:?}: {left:?}");
+    }
+}
+
+/// Waits for `child` to exit, killing it after [`PATIENCE`], which takes
+/// what it started with it.
 fn wait_exit(child: &mut Child) -> ExitStatus {
     let deadline = Instant::now() + PATIENCE;
     loop {
@@ -226,7 +263,7 @@ fn wait_exit(child: &mut Child) -> ExitStatus {
             return status;
         }
         if Instant::now() >= deadline {
-            kill_with_its_tree(child);
+            kill_alone(child);
             panic!("the host did not exit within {PATIENCE:?}");
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -241,10 +278,10 @@ fn output_of(child: Child) -> (String, String) {
     )
 }
 
-/// The command line that runs the fake agent with a child of its own, typed
-/// at a shell prompt.
-fn fake_agent_command_line(agent: &FakeAgent) -> String {
-    format!("\"{}\" --fake-child\r", agent.exe().display())
+/// The command line that runs the fake agent with `args`, typed at a shell
+/// prompt.
+fn fake_agent_command_line(agent: &FakeAgent, args: &str) -> String {
+    format!("\"{}\" {args}\r", agent.exe().display())
 }
 
 fn id_of(record: &SessionRecord) -> u64 {
@@ -815,7 +852,10 @@ async fn stop_floti_host_with(signal: fn(u32) -> std::io::Result<()>) {
     // The shell's prompt first, so what is typed reaches a shell reading it.
     client.read_stream_until(1, |bytes| !bytes.is_empty()).await;
     client
-        .type_into(1, fake_agent_command_line(&agent).as_bytes())
+        .type_into(
+            1,
+            fake_agent_command_line(&agent, "--fake-child").as_bytes(),
+        )
         .await;
     let has_child = || {
         agent
@@ -899,6 +939,85 @@ fn a_host_dropped_without_a_stop_ends_every_tree_it_started() {
     let after = rows(&dirs.data);
     assert_eq!(after.len(), 1);
     assert_eq!(after[0].status, "running", "{after:?}");
+}
+
+/// A host that is killed, with no stop and nothing recorded, takes with it
+/// every process its sessions and plain terminals started, as a stop does:
+/// their programs, each terminal's own host process, and what the programs
+/// started, among them a program with no console, which on Windows the
+/// pseudoconsole closing does not reach.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_killed_floti_host_takes_every_process_its_sessions_and_terminals_started_with_it() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let (log_var, log_dir) = agent.log_env();
+    let mut host = floti_host_command(&dirs)
+        .env(log_var, log_dir)
+        .spawn()
+        .expect("run floti host");
+    let mut client = TestClient::connect(&binary_endpoint(&dirs), TERMINAL).await;
+
+    // A session: the shell, running the fake agent, which starts a child on
+    // its console and one with none.
+    let in_session = dirs.folder("a project");
+    let session = client
+        .request::<SessionStart>(&start_request(&in_session))
+        .await
+        .unwrap();
+    client.attach(1, session.id).await;
+    client.read_stream_until(1, |bytes| !bytes.is_empty()).await;
+    client
+        .type_into(
+            1,
+            fake_agent_command_line(&agent, "--fake-child --fake-gui-child").as_bytes(),
+        )
+        .await;
+    client
+        .read_stream_until(1, |_| {
+            run_with_children_in(&agent, &in_session, 2).is_some()
+        })
+        .await;
+
+    // A plain terminal running the fake agent itself, told to do the same.
+    let in_terminal = dirs.folder("another project");
+    let terminal = client
+        .request::<PtermOpen>(&PtermOpenRequest {
+            path: in_terminal.to_string_lossy().into_owned(),
+            cols: 80,
+            rows: 24,
+            shell: Some(agent.exe().to_string_lossy().into_owned()),
+            separate: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(terminal.problem, None, "{terminal:?}");
+    client
+        .open_on(
+            2,
+            "pterm:data",
+            to_payload(&PtermStreamOpen { id: terminal.id }).unwrap(),
+        )
+        .await;
+    client.type_into(2, b"/child\r/gui-child\r").await;
+    client
+        .read_stream_until(2, |_| {
+            run_with_children_in(&agent, &in_terminal, 2).is_some()
+        })
+        .await;
+
+    let started = started_by(&host);
+    for folder in [&in_session, &in_terminal] {
+        let run = run_with_children_in(&agent, folder, 2).expect("the fake agent started both");
+        for pid in std::iter::once(run.pid).chain(run.children) {
+            assert!(
+                started.contains(&pid),
+                "{pid} is not among what the host started: {started:?}"
+            );
+        }
+    }
+    drop(client);
+
+    kill_host(&mut host, &started).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,8 +1135,9 @@ async fn s12_after_floti_host_is_killed_the_next_start_offers_its_sessions_and_s
         .unwrap();
     drop(client);
 
-    // Killed: no stop, nothing recorded.
-    kill_with_its_tree(&mut host);
+    // Killed: no stop, nothing recorded, and nothing it started left running.
+    let started = started_by(&host);
+    kill_host(&mut host, &started).await;
     assert_eq!(rows(&dirs.data)[0].status, "running");
 
     let again = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));

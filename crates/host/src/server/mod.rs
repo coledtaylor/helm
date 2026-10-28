@@ -9,7 +9,9 @@
 //! Clients speak `floti-protocol`, starting at `hello`. Sessions outlive
 //! them: a client leaving ends nothing. Stopping the host ends every
 //! session's process tree; a plain stop records each row as exited first, a
-//! stop for an update leaves them for the next start to find lost.
+//! stop for an update leaves them for the next start to find lost. Sessions
+//! never outlive the host: one that is killed or crashes takes every process
+//! it started with it, and leaves the rows for the next start to find lost.
 //!
 //! What it serves is one module per feature under `features`: today launch
 //! and live sessions (the session list, start, the launcher's launch, a
@@ -47,7 +49,7 @@ use tokio::task::JoinHandle;
 use crate::agent::claude_code::{ClaudeCodeBackend, ClaudeCodeSettings};
 use crate::agent::{AgentBackend, PlainCommandBackend, sweep_launch_folders};
 use crate::platform::folders::{self, Folders, UserEnv};
-use crate::platform::process_tree;
+use crate::platform::process_tree::{self, ProcessTree};
 use crate::platform::socket::{self, Endpoint, LocalListener, LocalSocket};
 use crate::session::ClientId;
 use crate::store::Store;
@@ -167,9 +169,10 @@ pub struct Host {
 }
 
 impl Host {
-    /// Starts a host: takes the data folder and the socket, opens and
-    /// reconciles the store, and starts accepting clients. Refuses, opening
-    /// nothing more, when another host has the data folder or the socket.
+    /// Starts a host: ties what this process starts to its life, takes the
+    /// data folder and the socket, opens and reconciles the store, and starts
+    /// accepting clients. Refuses, opening nothing more, when another host
+    /// has the data folder or the socket.
     ///
     /// Call it from inside a Tokio runtime.
     pub fn start(config: HostConfig) -> Result<Self> {
@@ -179,6 +182,10 @@ impl Host {
             backends,
             inherited_env,
         } = config;
+        // Before any session starts, so that every process the host starts
+        // ends when it does, however it ends. Where the OS will not arrange
+        // it, that was said and the host serves anyway.
+        process_tree::Native.end_tree_with_this_process();
         let lock = lock_data_folder(&folders)?;
         // Launch folders a crashed run left, once their owners are gone.
         sweep_launch_folders(&folders.data, &process_tree::Native);

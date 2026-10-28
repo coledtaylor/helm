@@ -13,6 +13,10 @@
 //! - `--fake-print=<hex>`: writes these bytes to stdout at start.
 //! - `--fake-child` or `--fake-child=<ms>`: starts a child of its own that
 //!   lives `<ms>` milliseconds (ten minutes by default), recorded by pid.
+//! - `--fake-gui-child` or `--fake-gui-child=<ms>`: the same with
+//!   `floti-fake-gui`, built beside it, as the child: a program that on
+//!   Windows has no console, as a GUI app has, so the console it was started
+//!   from closing does not reach it.
 //! - `--fake-exit=<code>`: exits with `code` once the above are done.
 //! - `--fake-sleep=<ms>`: does nothing for `<ms>` milliseconds, then exits 0.
 //!   This is what a child runs.
@@ -21,8 +25,8 @@
 //!
 //! Otherwise it reads stdin a line at a time and answers each with
 //! `echo: <line>`. At its prompt, `/exit <code>` exits with `code`,
-//! `/print <hex>` writes those bytes and `/child` starts a child. It exits 0
-//! when stdin ends.
+//! `/print <hex>` writes those bytes, and `/child` and `/gui-child` start a
+//! child. It exits 0 when stdin ends.
 
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
@@ -116,10 +120,11 @@ fn main() {
     if let Some(hex) = flag_value(&argv, "--fake-print") {
         print_hex(hex);
     }
-    if argv.iter().any(|arg| arg == "--fake-child") {
-        start_child(&mut record, DEFAULT_CHILD_MS);
-    } else if let Some(ms) = flag_value(&argv, "--fake-child") {
-        start_child(&mut record, parse_ms(ms));
+    if let Some(ms) = child_ms(&argv, "--fake-child") {
+        start_child(&mut record, Child::Console, ms);
+    }
+    if let Some(ms) = child_ms(&argv, "--fake-gui-child") {
+        start_child(&mut record, Child::Gui, ms);
     }
     if let Some(code) = flag_value(&argv, "--fake-exit") {
         std::process::exit(code.parse().unwrap_or(1));
@@ -145,7 +150,9 @@ fn main() {
         } else if let Some(hex) = line.strip_prefix("/print ") {
             print_hex(hex.trim());
         } else if line == "/child" {
-            start_child(&mut record, DEFAULT_CHILD_MS);
+            start_child(&mut record, Child::Console, DEFAULT_CHILD_MS);
+        } else if line == "/gui-child" {
+            start_child(&mut record, Child::Gui, DEFAULT_CHILD_MS);
         } else {
             write_out(format!("echo: {line}\r\n").as_bytes());
         }
@@ -174,7 +181,25 @@ fn parse_ms(ms: &str) -> u64 {
     ms.parse().unwrap_or(DEFAULT_CHILD_MS)
 }
 
-fn start_child(record: &mut Record, ms: u64) {
+/// How long a child asked for with `flag` or `flag=<ms>` lives, when one
+/// was.
+fn child_ms(argv: &[String], flag: &str) -> Option<u64> {
+    if argv.iter().any(|arg| arg == flag) {
+        return Some(DEFAULT_CHILD_MS);
+    }
+    flag_value(argv, flag).map(parse_ms)
+}
+
+/// The program a child runs.
+#[derive(Clone, Copy)]
+enum Child {
+    /// This program, sharing its console.
+    Console,
+    /// `floti-fake-gui`, beside it, with no console on Windows.
+    Gui,
+}
+
+fn start_child(record: &mut Record, kind: Child, ms: u64) {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(err) => {
@@ -182,7 +207,11 @@ fn start_child(record: &mut Record, ms: u64) {
             return;
         }
     };
-    let child = Command::new(exe)
+    let program = match kind {
+        Child::Console => exe,
+        Child::Gui => exe.with_file_name(format!("floti-fake-gui{}", std::env::consts::EXE_SUFFIX)),
+    };
+    let child = Command::new(program)
         .arg(format!("--fake-sleep={ms}"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())

@@ -55,6 +55,10 @@ impl ProcessTree for Machine {
             .cloned()
             .unwrap_or(Knowable::Known(false))
     }
+
+    fn end_tree_with_this_process(&self) -> Knowable<bool> {
+        Knowable::Unknown
+    }
 }
 
 /// The fake `claude`.

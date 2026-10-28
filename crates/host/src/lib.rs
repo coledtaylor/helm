@@ -4,7 +4,8 @@
 //! Clients connect on a local socket only this user can open and speak
 //! `floti-protocol`. Sessions run in ptys, each screen kept off-screen so a
 //! client that attaches late draws it as it is, and they outlive their
-//! clients: closing every client ends nothing, stopping the host ends them.
+//! clients: closing every client ends nothing. They never outlive the host:
+//! stopping it ends them, and so does killing it.
 //!
 //! The modules, one concern each:
 //!

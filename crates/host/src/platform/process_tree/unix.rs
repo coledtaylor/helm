@@ -4,6 +4,11 @@
 //! it the leader of a process group that everything it starts joins unless
 //! it moves itself out. Signalling the group reaches the whole tree: SIGTERM
 //! to ask, SIGKILL to end it, as today's app does.
+//!
+//! The same pty ends the tree when the host ends, however it ends: the pty
+//! is that session's controlling terminal, and when the host's end of it
+//! closes the kernel hangs the terminal up, sending SIGHUP to the program
+//! and to the process group in the foreground.
 
 use std::io;
 
@@ -63,4 +68,40 @@ impl ProcessTree for Native {
             _ => Knowable::Unknown,
         }
     }
+
+    fn end_tree_with_this_process(&self) -> Knowable<bool> {
+        // Nothing to arrange: the terminal hang-up does it. A process ends
+        // with its files closed, the pty's master among them, whether it
+        // returned, crashed or was killed.
+        Knowable::Known(true)
+    }
+}
+
+/// Every process running now that `root_pid` started, and every process
+/// those started, by parent process id, as `ps` lists them on macOS and
+/// Linux alike. A process whose parent ends is handed to another, so a
+/// parent id always names the live parent. Unknown when `ps` would not run.
+#[cfg(any(test, feature = "testkit"))]
+pub fn descendants(root_pid: u32) -> Knowable<Vec<u32>> {
+    use std::process::{Command, Stdio};
+
+    let Ok(output) = Command::new("ps")
+        .args(["-A", "-o", "pid=", "-o", "ppid="])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Knowable::Unknown;
+    };
+    if !output.status.success() {
+        return Knowable::Unknown;
+    }
+    let table: Vec<(u32, u32)> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut ids = line.split_whitespace().map(str::parse::<u32>);
+            Some((ids.next()?.ok()?, ids.next()?.ok()?))
+        })
+        .collect();
+    Knowable::Known(super::tree_under(&table, root_pid, |_, _| true))
 }

@@ -25,6 +25,15 @@ path = "testkit/fake_agent.rs"
 test = false
 doc = false
 
+# A program with no console on Windows, which the fake agent starts as a
+# child for `--fake-gui-child`. Built beside it for the same tests; nothing
+# ships it.
+[[bin]]
+name = "floti-fake-gui"
+path = "testkit/fake_gui.rs"
+test = false
+doc = false
+
 [features]
 # Test support (temporary folders, unique socket names, the fake agent's
 # backend and records) for the crate's integration tests. The crate turns it

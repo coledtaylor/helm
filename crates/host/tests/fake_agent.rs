@@ -1,13 +1,16 @@
 //! The fake agent CLI does what the host's tests rely on: it records its
 //! arguments and folder, echoes what it reads, prints the bytes it is given,
-//! exits with the code it is given and starts a child of its own.
+//! exits with the code it is given and starts a child of its own, on its
+//! console or with none.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use floti_host::fake_agent;
+use floti_host::platform::process_tree::{Ending, Native as NativeTree, ProcessTree};
 use floti_host::testkit::TestDirs;
+use floti_protocol::Knowable;
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -96,6 +99,29 @@ fn starts_a_child_of_its_own() {
     assert_eq!(parent.children.len(), 1);
     let child = agent.wait_for_record(parent.children[0], WAIT, |_| true);
     assert_eq!(child.argv, ["--fake-sleep=1000"]);
+}
+
+#[test]
+fn starts_a_program_with_no_console_as_a_child_of_its_own() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let status = command(&agent, dirs.root())
+        .args(["--fake-gui-child", "--fake-exit=0"])
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(0));
+
+    let records = agent.records();
+    assert_eq!(
+        records.len(),
+        1,
+        "only the agent records itself: {records:?}"
+    );
+    assert_eq!(records[0].children.len(), 1);
+    let child = records[0].children[0];
+    let running = NativeTree.is_alive(child);
+    NativeTree.end_tree(child, Ending::Forced).unwrap();
+    assert_eq!(running, Knowable::Known(true), "the child lives on");
 }
 
 /// The pid of the only run recorded so far.
