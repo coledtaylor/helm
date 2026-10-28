@@ -62,6 +62,7 @@ use crate::agent::{AgentBackend, PlainCommandBackend, sweep_launch_folders};
 use crate::devices::DeviceRegistry;
 use crate::keys::{load_or_create_key_pair, read_key_pair};
 use crate::platform::folders::{self, Folders, UserEnv};
+use crate::platform::private_files::sweep_stale_temps;
 use crate::platform::process_tree::{self, ProcessTree};
 use crate::platform::socket::{self, Endpoint, LocalListener, LocalSocket};
 use crate::session::ClientId;
@@ -258,6 +259,13 @@ impl Host {
         // it, that was said and the host serves anyway.
         process_tree::Native.end_tree_with_this_process();
         let lock = lock_data_folder(&folders)?;
+        // What a key or registry write killed partway left, once the process
+        // that made it is gone.
+        sweep_stale_temps(
+            &folders.data,
+            &[HOST_KEY_FILE, DEVICES_FILE],
+            &process_tree::Native,
+        );
         // Before the socket: a host that answers has its key.
         let host_key: Arc<KeyPair> =
             Arc::new(load_or_create_key_pair(&folders.data.join(HOST_KEY_FILE))?);

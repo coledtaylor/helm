@@ -838,6 +838,67 @@ async fn s11_a_client_that_used_a_host_keeps_its_device_key_and_the_pinned_host_
     );
 }
 
+#[test]
+fn s11_a_new_file_a_killed_key_write_left_goes_when_the_client_opens_its_folder() {
+    let dirs = TestDirs::new();
+    let folder = dirs.folder("client");
+    // A process that has ended, standing for one killed while it wrote.
+    let mut gone = Command::new(std::env::current_exe().unwrap())
+        .arg("--list")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let gone_pid = gone.id();
+    gone.wait().unwrap();
+    let left = folder.join(format!(".{DEVICE_KEY_FILE}.{gone_pid}-0.tmp"));
+    std::fs::write(&left, [7u8; 32]).unwrap();
+    let pinned_left = folder.join(format!(".{PINNED_HOST_FILE}.{gone_pid}-1.tmp"));
+    std::fs::write(&pinned_left, b"part of a pin").unwrap();
+
+    ClientKeys::open(&folder).expect("set up the client's keys");
+
+    let mut kept: Vec<PathBuf> = std::fs::read_dir(&folder)
+        .unwrap()
+        .map(|entry| PathBuf::from(entry.unwrap().file_name()))
+        .collect();
+    kept.sort();
+    assert_eq!(kept, [PathBuf::from(DEVICE_KEY_FILE)]);
+}
+
+#[test]
+fn s12_clients_setting_up_one_empty_folder_at_the_same_moment_present_the_key_on_disk() {
+    const CLIENTS: usize = 8;
+    let dirs = TestDirs::new();
+    let folder = dirs.root().join("an empty client folder");
+    let start = std::sync::Barrier::new(CLIENTS);
+    let keys: Vec<PublicKey> = std::thread::scope(|scope| {
+        let clients: Vec<_> = (0..CLIENTS)
+            .map(|_| {
+                scope.spawn(|| {
+                    start.wait();
+                    ClientKeys::open(&folder).unwrap().device_key()
+                })
+            })
+            .collect();
+        clients
+            .into_iter()
+            .map(|client| client.join().unwrap())
+            .collect()
+    });
+
+    let on_disk = ClientKeys::open(&folder).unwrap().device_key();
+    assert!(
+        keys.iter().all(|key| *key == on_disk),
+        "{keys:?} vs {on_disk:?}"
+    );
+    let kept: Vec<PathBuf> = std::fs::read_dir(&folder)
+        .unwrap()
+        .map(|entry| PathBuf::from(entry.unwrap().file_name()))
+        .collect();
+    assert_eq!(kept, [PathBuf::from(DEVICE_KEY_FILE)]);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn s12_a_client_set_up_again_from_its_folder_presents_the_same_device_key_and_never_prints_it()
  {

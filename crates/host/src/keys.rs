@@ -39,6 +39,10 @@ pub fn read_key_pair(path: &Path) -> Result<Option<KeyPair>> {
 
 /// The key pair kept in the file at `path`, made and written there, owner-
 /// only, when there is none yet. The folder must exist.
+///
+/// The file is made once and never replaced: when two processes find no key
+/// at the same moment, one makes the file and the other reads that one back,
+/// so every caller answers the key that is on disk.
 pub fn load_or_create_key_pair(path: &Path) -> Result<KeyPair> {
     if let Some(pair) = read_key_pair(path)? {
         return Ok(pair);
@@ -49,8 +53,15 @@ pub fn load_or_create_key_pair(path: &Path) -> Result<KeyPair> {
             path.display()
         ))
     })?;
-    Native.write(path, pair.private().expose_secret())?;
-    Ok(pair)
+    if Native.write_new(path, pair.private().expose_secret())? {
+        return Ok(pair);
+    }
+    read_key_pair(path)?.ok_or_else(|| {
+        Error::Refused(format!(
+            "The key at {} was removed while it was being made.",
+            path.display()
+        ))
+    })
 }
 
 fn not_a_key(path: &Path) -> Error {
@@ -78,6 +89,39 @@ mod tests {
             made.public()
         );
         assert!(Native.owner_only(&path).unwrap());
+    }
+
+    #[test]
+    fn callers_racing_to_make_the_first_key_all_answer_the_one_on_disk() {
+        const RACERS: usize = 8;
+        let dirs = TestDirs::new();
+        let path = dirs.data.join("device.key");
+        let start = std::sync::Barrier::new(RACERS);
+        let keys: Vec<_> = std::thread::scope(|scope| {
+            let racers: Vec<_> = (0..RACERS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        load_or_create_key_pair(&path).unwrap().public()
+                    })
+                })
+                .collect();
+            racers
+                .into_iter()
+                .map(|racer| racer.join().unwrap())
+                .collect()
+        });
+        let on_disk = read_key_pair(&path).unwrap().unwrap().public();
+        assert!(
+            keys.iter().all(|key| *key == on_disk),
+            "{keys:?} vs {on_disk:?}"
+        );
+        assert!(Native.owner_only(&path).unwrap());
+        let left: Vec<_> = std::fs::read_dir(&dirs.data)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, ["device.key"], "no new file left behind");
     }
 
     #[test]

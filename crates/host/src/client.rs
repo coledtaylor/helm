@@ -23,7 +23,8 @@ use floti_protocol::{FrameDecoder, Message, ProtocolError, encode_frame};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::keys::load_or_create_key_pair;
-use crate::platform::private_files::{Native as NativeFiles, PrivateFiles};
+use crate::platform::private_files::{Native as NativeFiles, PrivateFiles, sweep_stale_temps};
+use crate::platform::process_tree;
 use crate::platform::socket::{Endpoint, LocalSocket, LocalStream, Native as NativeSocket};
 use crate::server::HANDSHAKE_DEADLINE;
 use crate::{Error, Result};
@@ -49,6 +50,13 @@ impl ClientKeys {
     pub fn open(folder: &Path) -> Result<Self> {
         std::fs::create_dir_all(folder)
             .map_err(|source| Error::path("create the client's folder", folder, source))?;
+        // A key write killed partway leaves its new file; it goes once the
+        // process that made it is gone, so the folder holds the two files.
+        sweep_stale_temps(
+            folder,
+            &[DEVICE_KEY_FILE, PINNED_HOST_FILE],
+            &process_tree::Native,
+        );
         let device = load_or_create_key_pair(&folder.join(DEVICE_KEY_FILE))?;
         let pinned_path = folder.join(PINNED_HOST_FILE);
         let pinned = NativeFiles
