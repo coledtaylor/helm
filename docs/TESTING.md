@@ -28,7 +28,7 @@ The host's tests get their support from `crates/host/src/testkit.rs`, which
 the crate's own tests turn on through its `testkit` feature: `TestDirs`, a
 temporary tree with spaces in its paths holding a home, data, log, config and
 runtime folder; `unique_name` for a pipe or socket no other test is using;
-`RunningHost`, a host serving in the test's runtime; and the fake agent. Every
+`RunningHost`, a host serving on a thread and runtime of its own; and the fake agent. Every
 folder and socket a host test uses is in a `TestDirs`, never the real
 `%LOCALAPPDATA%`, Application Support, XDG data folder or `~/.config/floti`,
 and no test registers anything to start at sign-in.
@@ -40,7 +40,10 @@ naming the folder; Windows refuses to remove an open file, so that is where
 such a test fails. A struct holding a `TestDirs` declares it last, since
 fields drop in order. A test that starts a host in-process uses `RunningHost`
 and ends with `stop(..).await`, which ends the host's sessions and lets go of
-its store; dropping one unstopped fails the test. A test that kills the
+its store. Dropping one unstopped, a panicking test's unwind included, stops
+it the same way and waits for it before the `TestDirs` goes, so a failing test
+leaves nothing behind and fails with its own message; a test that ends without
+stopping its host still fails, saying so, once the host is stopped. A test that kills the
 `floti host` executable kills that process alone, as a crash would: the host
 takes everything it started with it (a job object on Windows, a guard process
 on macOS and Linux). The test lists those processes before the kill
@@ -167,7 +170,10 @@ vitest runs five projects (`vitest.config.ts`):
   below.
 - **desktop** - main-process services, in Node. `vi.mock('electron')` with
   `test/electron.ts` stands in for Electron; ptys are real and run the fake
-  `claude`. `sessions.test.ts` is the example.
+  `claude`. The faked app's folders are in a temporary folder that
+  `test/electron-setup.ts`, the project's global setup, makes for each run and
+  removes when the run ends, passing or failing. `sessions.test.ts` is the
+  example.
 - **sdk** - the plugin SDK in `packages/plugin-sdk/test`: its validator,
   schema and command in Node, the package as npm publishes it, and its React
   and Vue helpers in jsdom against the fake bridge in `test/bridge.ts`.

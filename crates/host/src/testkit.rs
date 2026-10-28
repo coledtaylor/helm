@@ -10,12 +10,13 @@
 //!   (`floti-fake-agent`, in `testkit/fake_agent.rs`), its records and a
 //!   backend that runs it. Integration tests get one with
 //!   [`fake_agent!`](crate::fake_agent).
-//! - [`RunningHost`]: a host serving in the test's runtime, which the test
-//!   stops.
+//! - [`RunningHost`]: a host serving on a thread and runtime of its own,
+//!   which the test stops.
 //!
 //! A test leaves nothing behind: [`TestDirs`] fails the test that leaves a
-//! file in its tree open, and [`RunningHost`] fails the test that never
-//! stopped its host.
+//! file in its tree open, and a dropped [`RunningHost`] stops its host before
+//! the test's folders go, a panicking test's included, then fails the test
+//! that never stopped it.
 
 mod client;
 
@@ -25,13 +26,13 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use floti_protocol::BackendId;
 use floti_protocol::channels::host::HostStopReason;
 use serde::Deserialize;
 use tempfile::TempDir;
-use tokio::task::JoinHandle;
 
 use crate::Result;
 use crate::agent::{
@@ -166,29 +167,125 @@ impl Drop for TestDirs {
     }
 }
 
-/// A host serving in the test's runtime.
+/// A host serving on a thread and a multi-thread Tokio runtime of its own,
+/// so that it can be stopped from anywhere, a panicking test's unwind
+/// included, whatever runtime the test runs on.
 ///
 /// The test stops it with [`Self::stop`], or waits with [`Self::stopped`]
 /// for a stop a client asked for: stopping is what ends its sessions and
 /// lets go of its store and data folder, which dropping a [`Host`] does not.
-/// Dropping one the test never stopped fails the test.
+///
+/// Dropping one unstopped stops it too, and waits until it has let go of its
+/// store and its thread has ended, so a [`TestDirs`] declared after it can
+/// remove its tree. A test that panicked fails with its own message alone;
+/// one that ended without stopping its host fails, once the host is stopped,
+/// saying so.
 pub struct RunningHost {
     stopper: Stopper,
-    /// `None` once the test has waited for it to stop.
-    running: Option<JoinHandle<Result<HostStopReason>>>,
+    /// `None` once the host has been waited for.
+    running: Option<HostThread>,
+}
+
+/// The thread a [`RunningHost`] serves on.
+struct HostThread {
+    /// How the host's run ended, sent once its runtime has gone, so nothing
+    /// it ran still holds the store.
+    done: mpsc::Receiver<Result<HostStopReason>>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+impl HostThread {
+    /// Waits, blocking the calling thread for at most [`PATIENCE`], until
+    /// the host has stopped and its thread has ended. It uses std's blocking
+    /// alone, so it is safe inside a Tokio runtime and during an unwind.
+    fn wait(self) -> std::result::Result<HostStopReason, String> {
+        match self.done.recv_timeout(PATIENCE) {
+            Ok(ended) => {
+                let joined = self.thread.join();
+                match (ended, joined) {
+                    (Ok(reason), Ok(())) => Ok(reason),
+                    (Err(err), _) => Err(format!("the host did not stop cleanly: {err}")),
+                    (Ok(_), Err(_)) => Err("the host's thread panicked".to_owned()),
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err(format!("the host did not stop within {PATIENCE:?}"))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = self.thread.join();
+                Err("the host's thread panicked before the host stopped".to_owned())
+            }
+        }
+    }
 }
 
 impl RunningHost {
-    /// Starts a host on `config` and serves. Call it inside a Tokio runtime.
+    /// Starts a host on `config` and serves.
     pub fn start(config: HostConfig) -> Self {
-        Self::run(Host::start(config).expect("start the host"))
+        Self::start_with(config, |_| ()).0
     }
 
-    /// Serves `host`, for a test that looks at it before it serves.
-    pub fn run(host: Host) -> Self {
-        Self {
-            stopper: host.stopper(),
-            running: Some(tokio::spawn(host.run_until_stopped())),
+    /// Starts a host on `config`, hands it to `look` before it serves, and
+    /// serves: for a test that looks at the host itself, such as at the
+    /// channels it serves. `look` runs on the host's thread.
+    pub fn start_with<T: Send + 'static>(
+        config: HostConfig,
+        look: impl FnOnce(&Host) -> T + Send + 'static,
+    ) -> (Self, T) {
+        let (started_tx, started) = mpsc::channel::<Result<(Stopper, T)>>();
+        let (done_tx, done) = mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("floti test host".to_owned())
+            .spawn(move || {
+                // Multi-thread: the host moves blocking work off its workers
+                // with `block_in_place`, which a current-thread runtime refuses.
+                let runtime = match tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(err) => {
+                        let _ =
+                            started_tx.send(Err(crate::Error::io("build the host's runtime", err)));
+                        return;
+                    }
+                };
+                // The host binds its socket and starts accepting on the
+                // runtime it starts in.
+                let started_host = {
+                    let _entered = runtime.enter();
+                    Host::start(config)
+                };
+                let host = match started_host {
+                    Ok(host) => host,
+                    Err(err) => {
+                        let _ = started_tx.send(Err(err));
+                        return;
+                    }
+                };
+                let looked = look(&host);
+                let _ = started_tx.send(Ok((host.stopper(), looked)));
+                let ended = runtime.block_on(host.run_until_stopped());
+                runtime.shutdown_timeout(PATIENCE);
+                let _ = done_tx.send(ended);
+            })
+            .expect("start the host's thread");
+        match started.recv() {
+            Ok(Ok((stopper, looked))) => (
+                Self {
+                    stopper,
+                    running: Some(HostThread { done, thread }),
+                },
+                looked,
+            ),
+            Ok(Err(err)) => {
+                let _ = thread.join();
+                panic!("start the host: {err:?}");
+            }
+            Err(_) => {
+                let _ = thread.join();
+                panic!("the host's thread ended before the host started");
+            }
         }
     }
 
@@ -198,26 +295,42 @@ impl RunningHost {
         self.stopped().await
     }
 
-    /// Waits for the host to finish stopping, however it was asked.
+    /// Waits for the host to finish stopping, however it was asked, without
+    /// blocking the test's runtime.
     pub async fn stopped(mut self) -> HostStopReason {
         let running = self.running.take().expect("a host is waited for once");
-        tokio::time::timeout(PATIENCE, running)
+        tokio::task::spawn_blocking(move || running.wait())
             .await
-            .expect("the host stops in time")
-            .expect("the host's task")
-            .expect("the host stops cleanly")
+            .expect("wait for the host")
+            .unwrap_or_else(|problem| panic!("{problem}"))
     }
 }
 
 impl Drop for RunningHost {
     fn drop(&mut self) {
-        // A test that is already failing says why itself.
-        if self.running.is_some() && !std::thread::panicking() {
-            panic!(
-                "the test did not stop its host: end it with `stop(..).await`, which ends its \
-                 sessions and lets go of its data folder"
-            );
+        let Some(running) = self.running.take() else {
+            return;
+        };
+        // Stopped before anything is said, so the test's folders can go
+        // however it ended. Nothing here may panic during an unwind: a panic
+        // inside a drop while panicking aborts the whole test binary.
+        self.stopper.stop(HostStopReason::Stop);
+        let stopped = running.wait();
+        if std::thread::panicking() {
+            // A test that is already failing says why itself.
+            if let Err(problem) = stopped {
+                eprintln!("floti testkit: stopping a failed test's host: {problem}");
+            }
+            return;
         }
+        let problem = stopped
+            .err()
+            .map(|problem| format!(" ({problem})"))
+            .unwrap_or_default();
+        panic!(
+            "the test did not stop its host: end it with `stop(..).await`, which ends its \
+             sessions and lets go of its data folder{problem}"
+        );
     }
 }
 
