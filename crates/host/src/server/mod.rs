@@ -25,11 +25,13 @@
 //! is on the not-yet-served list ([`unserved`]) with the feature that will
 //! serve it, and is answered with an error naming it.
 
+mod agent_tools;
 mod connection;
 mod events;
 mod features;
 mod hosted;
 pub(crate) mod records;
+mod session_tools;
 pub mod unserved;
 
 use std::collections::BTreeSet;
@@ -57,9 +59,11 @@ use crate::session::ClientId;
 use crate::store::Store;
 use crate::{Error, Result};
 
+use agent_tools::HostAgentTools;
 use connection::ConnectionContext;
 use features::Features;
 use hosted::Hosted;
+use session_tools::HostWorld;
 
 /// The socket's name in the runtime folder.
 pub const SOCKET_NAME: &str = "floti";
@@ -199,6 +203,8 @@ impl Stopper {
 pub struct Host {
     hosted: Arc<Hosted>,
     features: Arc<Features>,
+    /// The agent tools listener and the tokens its sessions hold.
+    agent_tools: Arc<HostAgentTools>,
     endpoint: Endpoint,
     stopper: Stopper,
     stop_requested: watch::Receiver<Option<HostStopReason>>,
@@ -253,6 +259,7 @@ impl Host {
             lost,
         )?);
         let features = Arc::new(Features::new(Arc::clone(&hosted), folders, run)?);
+        let agent_tools = start_agent_tools(&hosted, &features)?;
 
         let (stop_tx, stop_requested) = watch::channel(None);
         let stopper = Stopper(Arc::new(stop_tx));
@@ -267,6 +274,7 @@ impl Host {
         Ok(Self {
             hosted,
             features,
+            agent_tools,
             endpoint,
             stopper,
             stop_requested,
@@ -320,6 +328,9 @@ impl Host {
         };
         self.accepting.abort();
         let _ = (&mut self.accepting).await;
+        // Before the sessions end: no session's tools answer once the host
+        // is going, and none is answered while its session is being ended.
+        self.agent_tools.stop().await;
         let hosted = Arc::clone(&self.hosted);
         tokio::task::spawn_blocking(move || hosted.stop(reason))
             .await
@@ -349,6 +360,34 @@ impl Host {
         drop(lock);
         Ok(reason)
     }
+}
+
+/// The host's agent tools: the listener with its families switched as the
+/// settings say, following every change to them, answering from the
+/// sessions, the activity pass and the processes-and-ports pass, given to
+/// every launch from now on, and revoking each session's token as it ends.
+fn start_agent_tools(hosted: &Arc<Hosted>, features: &Features) -> Result<Arc<HostAgentTools>> {
+    let tools = Arc::new(HostAgentTools::new());
+    let settings = features.settings();
+    tools.follow(&settings.read()?);
+    let following = Arc::downgrade(&tools);
+    settings.on_change(move |settings| {
+        if let Some(tools) = following.upgrade() {
+            tools.follow(settings);
+        }
+    });
+    tools.answer_from(Arc::new(HostWorld {
+        hosted: Arc::downgrade(hosted),
+        activity: features.activity().clone(),
+        resources: features.resources().clone(),
+    }));
+    tokio::spawn(agent_tools::revoke_at_exit(
+        hosted.ledger().exits(),
+        Arc::downgrade(&tools),
+        Arc::downgrade(hosted),
+    ));
+    hosted.use_agent_tools(Arc::clone(&tools));
+    Ok(tools)
 }
 
 /// Takes the data folder's lock, creating the folder if it is new. Refused

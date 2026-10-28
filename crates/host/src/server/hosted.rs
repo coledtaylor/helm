@@ -12,7 +12,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use floti_protocol::channels::common::SessionRecord;
@@ -26,11 +26,13 @@ use floti_protocol::channels::sessions::{
 };
 use floti_protocol::{BackendId, Knowable};
 
+use super::agent_tools::HostAgentTools;
 use super::records::{self, HostLedger, LostRow};
 use crate::agent::claude_code::{parse_instant, sanitize_session_name, unique_session_name};
 use crate::agent::{
     AgentBackend, Composition, Launch, LaunchFolder, LaunchRequest, LiveRecord, ResumeRequest,
 };
+use crate::agent_tools::Grant;
 use crate::platform::process_tree;
 use crate::session::{
     ClientId, HostedView, Session, SessionHost, SessionId, SessionOrigin, StartSession, TermSize,
@@ -73,6 +75,9 @@ pub(crate) struct Hosted {
     offer: Mutex<Option<Vec<LostRow>>>,
     /// Set by the first stop; a host dropped without one stops as it goes.
     stopped: AtomicBool,
+    /// The host's agent tools, once it has built them. A launch before then,
+    /// or on a host without them, is given none.
+    agent_tools: OnceLock<Arc<HostAgentTools>>,
 }
 
 impl Hosted {
@@ -103,7 +108,36 @@ impl Hosted {
             backends,
             offer: Mutex::new(Some(lost)),
             stopped: AtomicBool::new(false),
+            agent_tools: OnceLock::new(),
         })
+    }
+
+    /// Gives every launch from now on the host's agent tools. Only the first
+    /// given are kept.
+    pub fn use_agent_tools(&self, tools: Arc<HostAgentTools>) {
+        let _ = self.agent_tools.set(tools);
+    }
+
+    /// A token and the families on for a launch on `backend`, when it takes
+    /// agent tools and any family is on. A listener that cannot bind is a
+    /// launch without tools and a warning saying so, not a launch refused.
+    fn grant_agent_tools(
+        &self,
+        backend: &Arc<dyn AgentBackend>,
+    ) -> (Option<(Arc<HostAgentTools>, Grant)>, Option<String>) {
+        let Some(tools) = self.agent_tools.get() else {
+            return (None, None);
+        };
+        if backend.agent_tools().is_none() {
+            return (None, None);
+        }
+        match tools.grant() {
+            Ok(grant) => (grant.map(|grant| (Arc::clone(tools), grant)), None),
+            Err(err) => (
+                None,
+                Some(format!("This session has no Floti agent tools: {err}.")),
+            ),
+        }
     }
 
     pub fn sessions(&self) -> &SessionHost {
@@ -401,7 +435,7 @@ impl Hosted {
             folder,
             name,
             prompt,
-            composition,
+            mut composition,
             resume,
             origin,
         } = plan;
@@ -413,6 +447,14 @@ impl Hosted {
         }
         let taken = self.taken_labels(None);
         let name = unique_session_name(&name, taken.iter().map(String::as_str));
+        // Granted before the backend composes the launch, which writes the
+        // token into the launch's own folder.
+        let (grant, tools_warning) = self.grant_agent_tools(&backend);
+        composition.agent_tools = grant
+            .as_ref()
+            .map(|(_, grant)| grant.servers.clone())
+            .unwrap_or_default();
+        let grant = grant.map(|(tools, grant)| (tools, grant.id));
         let started = match resume {
             Some(conversation_id) => {
                 let request = ResumeRequest {
@@ -439,7 +481,23 @@ impl Hosted {
                 })
             }
         };
-        started.map_err(|err| err.to_string())
+        match (started, grant) {
+            (Ok((mut launched, id)), grant) => {
+                if let Some((tools, grant)) = grant {
+                    tools.started(grant, id);
+                }
+                if let Some(warning) = tools_warning {
+                    launched.warnings.push(warning);
+                }
+                Ok(launched)
+            }
+            (Err(err), grant) => {
+                if let Some((tools, grant)) = grant {
+                    tools.failed(grant);
+                }
+                Err(err.to_string())
+            }
+        }
     }
 
     /// Composes a launch in a launch folder of its own and starts it. The
@@ -453,7 +511,7 @@ impl Hosted {
         client: ClientId,
         origin: SessionOrigin,
         compose: impl FnOnce(&LaunchFolder) -> Result<Launch>,
-    ) -> Result<LaunchedSession> {
+    ) -> Result<(LaunchedSession, SessionId)> {
         let launch_folder = LaunchFolder::create(&self.data)?;
         let started = compose(&launch_folder).and_then(|launch| {
             let Launch {
@@ -493,13 +551,14 @@ impl Hosted {
         if let Err(err) = launch_folder.add_owner(session.pid()) {
             eprintln!("floti host: {err}");
         }
-        Ok(LaunchedSession {
+        let launched = LaunchedSession {
             session: self.record(session.id())?,
             overlays,
             composed_instructions,
             warnings,
             not_taken,
-        })
+        };
+        Ok((launched, session.id()))
     }
 
     /// Gives session `id`'s tab `label`, made unique against the other
@@ -825,7 +884,7 @@ fn composition_of(profile: Option<&Profile>) -> Composition {
         effort: profile.effort,
         permission_mode: profile.permission_mode,
         agent: profile.agent.clone(),
-        // Floti's agent tools come with the agent tools listener.
+        // Granted per launch, in `run`: a profile names no token.
         agent_tools: Vec::new(),
     }
 }

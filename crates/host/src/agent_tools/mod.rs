@@ -92,6 +92,14 @@ pub trait ToolFamily: Send + Sync + 'static {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GrantId(u64);
 
+#[cfg(test)]
+impl GrantId {
+    /// A grant id for a family's own tests, which call it with no listener.
+    pub(crate) fn for_tests(id: u64) -> Self {
+        Self(id)
+    }
+}
+
 /// Who is calling, as the token that arrived resolves it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Caller {
