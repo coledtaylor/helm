@@ -10,6 +10,8 @@
 //! The modules, one concern each:
 //!
 //! - [`agent`]: the `AgentBackend` trait every agent CLI is run through.
+//! - [`agent_tools`]: the loopback listener that serves Floti's agent tools
+//!   to the sessions it hosts, one bearer token per session.
 //! - [`config_console`]: an agent's config files, read through its backend and
 //!   changed only through one snapshot-first writer; served to clients as
 //!   `config:*`.
@@ -26,6 +28,7 @@
 //! - [`server`]: the local socket's clients and the protocol they speak.
 
 pub mod agent;
+pub mod agent_tools;
 pub mod config_console;
 pub mod error;
 pub mod history;
