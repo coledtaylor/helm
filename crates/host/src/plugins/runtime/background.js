@@ -443,7 +443,7 @@ async function answerTool(message) {
   const controller = new AbortController();
   answering.set(message.id, controller);
   let ok = false;
-  let text = "";
+  let text;
   try {
     const handler = await handlerFor(message.name, controller.signal, message.waitMs);
     if (controller.signal.aborted) return;

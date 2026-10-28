@@ -233,9 +233,28 @@ pub fn json_schema(catalogue: &Catalogue) -> String {
         "x-channels": channels,
         "$defs": defs,
     });
-    let mut text = serde_json::to_string_pretty(&document).expect("a JSON value always serialises");
+    let mut text = serde_json::to_string_pretty(&sorted_keys(document))
+        .expect("a JSON value always serialises");
     text.push('\n');
     text
+}
+
+/// The value with every object's keys in sorted order. serde_json keeps
+/// insertion order instead when any crate in the build turns on its
+/// `preserve_order` feature, and the schema has to read the same whichever
+/// crates were built beside this one.
+fn sorted_keys(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let sorted: BTreeMap<String, Value> = map
+                .into_iter()
+                .map(|(key, value)| (key, sorted_keys(value)))
+                .collect();
+            Value::Object(sorted.into_iter().collect())
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(sorted_keys).collect()),
+        other => other,
+    }
 }
 
 fn tsconfig() -> String {

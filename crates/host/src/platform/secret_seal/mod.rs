@@ -13,6 +13,12 @@
 //! Where no store answers (Linux with no Secret Service, as in WSL and CI),
 //! [`SecretSeal::available`] is false and every seal is refused: a value is
 //! stored sealed or not at all.
+//!
+//! Floti's secrets start empty. `floti.db` sits in Floti's own data folder and
+//! nothing copies the desktop app's secrets table into it, so no value Electron
+//! sealed reaches this module; the user saves each secret again in Floti. A
+//! value that does not unseal here, however it got into the table, fails the
+//! call that needs it with "could not be decrypted on this computer".
 
 use std::fmt;
 
