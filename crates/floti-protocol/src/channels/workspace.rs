@@ -72,6 +72,7 @@ pub fn declare(catalogue: &mut Catalogue) {
         .event::<DiscoveryUpdated>()
         .event::<ScanStatusChanged>()
         .event::<GitUpdated>()
+        .request::<RefreshGit>()
         .request::<SuggestRoots>()
         .request::<AcceptRoot>()
         .request::<RemoveRoot>()

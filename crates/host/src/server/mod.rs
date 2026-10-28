@@ -113,8 +113,9 @@ impl HostConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostRun {
     pub mode: AppMode,
-    /// The user's home folder, for a client to show a long path from `~`.
-    /// Shown, never acted on.
+    /// The user's home folder, for a client to show a long path from `~`,
+    /// and where `roots:suggest` looks for a `.harness` folder. Nothing in
+    /// it is written.
     pub home: Option<PathBuf>,
 }
 

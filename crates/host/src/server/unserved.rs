@@ -53,16 +53,11 @@ pub const NOT_YET_SERVED: &[Later] = &[
             "profile:pin",
             "profile:save",
             "profiles:changed",
-            "discovery:*",
-            "scan:status",
-            "git:updated",
-            "roots:*",
             "harness:create",
             "files:*",
             "content:*",
             "template:*",
             "app:info",
-            "settings:*",
             "setup:*",
             // These two share the Files view's renderer.
             "config:render",
@@ -191,13 +186,13 @@ mod tests {
     fn the_list_names_each_served_channel_left_on_it() {
         let catalogue = Catalogue::protocol();
         let mut served = all_unlisted(&catalogue);
-        served.insert("discovery:scan");
+        served.insert("agentBrowser:call");
         served.insert("plugins:list");
         let drift = drift(&catalogue, &served);
         assert_eq!(
             drift.served_but_listed,
             vec![
-                ("discovery:scan", "workspace"),
+                ("agentBrowser:call", "agent tools listener"),
                 ("plugins:list", "plugin runtime")
             ]
         );
@@ -206,7 +201,7 @@ mod tests {
             "{drift}"
         );
         let said = drift.to_string();
-        assert!(said.contains("`discovery:scan` is served"), "{said}");
+        assert!(said.contains("`agentBrowser:call` is served"), "{said}");
         assert!(said.contains("`plugins:list` is served"), "{said}");
     }
 
@@ -250,10 +245,10 @@ mod tests {
 
     #[test]
     fn a_refusal_names_the_channel_and_its_feature() {
-        let later = later("discovery:scan").unwrap();
+        let later = later("agentBrowser:call").unwrap();
         assert_eq!(
-            refusal("discovery:scan", later),
-            "This host does not serve `discovery:scan` yet: it comes with the workspace."
+            refusal("agentBrowser:call", later),
+            "This host does not serve `agentBrowser:call` yet: it comes with the agent tools listener."
         );
     }
 }

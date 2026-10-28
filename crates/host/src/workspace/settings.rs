@@ -402,6 +402,31 @@ impl SettingsService {
         Ok(settings)
     }
 
+    /// Applies the patch `edit` makes of the settings as they are now, with
+    /// no other write between the read and the write, so two edits of one
+    /// list never lose each other's change. `edit` answering `None` writes
+    /// nothing, tells nobody and answers the settings as they are.
+    pub fn update(
+        &self,
+        edit: impl FnOnce(&HostSettings) -> Option<HostSettingsPatch>,
+    ) -> std::result::Result<HostSettings, SettingsWriteError> {
+        let _order = lock(&self.writing);
+        let current = self.read()?;
+        let Some(patch) = edit(&current) else {
+            return Ok(current);
+        };
+        let settings = write(self.store().connection_mut(), &patch)?;
+        for listener in self
+            .listeners
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+        {
+            listener(&settings);
+        }
+        Ok(settings)
+    }
+
     /// Calls `listener` with the whole settings after every accepted write.
     pub fn on_change(&self, listener: impl Fn(&HostSettings) + Send + Sync + 'static) {
         self.listeners

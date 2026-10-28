@@ -39,6 +39,8 @@ const DECLARED: &[(&str, ChannelKind, Option<Capability>)] = &[
     ("discovery:updated", STATE, None),
     ("scan:status", STATE, None),
     ("git:updated", STATE, None),
+    // Not in ipc.ts: the desktop's main process saw its window's focus itself.
+    ("git:refresh", REQUEST, None),
     ("roots:suggest", REQUEST, None),
     ("roots:accept", REQUEST, None),
     ("roots:remove", REQUEST, None),

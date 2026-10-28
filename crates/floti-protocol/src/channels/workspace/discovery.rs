@@ -27,6 +27,14 @@ event_channel!(
     GitUpdated = "git:updated", state BTreeMap<String, Option<GitState>>
 );
 request_channel!(
+    /// The client's window came back to the front: git state is read again
+    /// for the projects the last scan found (the cached ones before any
+    /// scan), sent on `git:updated` and answered. One asked while a refresh
+    /// runs waits for that one and answers what it read. Not in ipc.ts,
+    /// where the desktop's main process saw its own window's focus.
+    RefreshGit = "git:refresh", () => BTreeMap<String, Option<GitState>>
+);
+request_channel!(
     /// Best guesses for a first-run scan root; may be empty.
     SuggestRoots = "roots:suggest", () => Vec<String>
 );
