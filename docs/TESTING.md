@@ -95,6 +95,21 @@ host's own process group, the only console event one process can send
 another. Every test ends every process it started and checks that each
 process tree is gone.
 
+What a client browses around its sessions is tested through `TestClient`
+against a `RunningHost`, one file per feature in `crates/host/tests/`:
+`discovery.rs`, `settings.rs`, `profiles.rs`, `templates.rs`, `content.rs`,
+`files.rs` and `highlighting.rs`, with the processes-and-ports pass in
+`resources.rs`. They carry core's and main's cases for discovery, roots,
+harnesses, settings, profiles, templates, content and the Files view with the
+same inputs and expectations. A test that needs a repository makes one with
+`GitRepo` (testkit), which commits with a fixed author and date and none of
+the machine's git configuration. One that needs a link makes it with
+`link_folder`, a junction on Windows and a symlink on macOS and Linux, and
+checks that every file at its target is still there afterwards.
+`highlighting.rs` reads today's languages from
+`packages/core/src/content/highlight.ts` and `packages/ui/src/lib/languages.ts`
+when it runs, so a language the app highlights and the host does not fails it.
+
 `crates/host/tests/os_conditionals.rs` fails, naming each `file:line`, when a
 compile-time OS conditional (`cfg(windows)`, `cfg!(unix)`, `target_os` and
 the like) appears outside `src/platform/mod.rs` and the per-OS
