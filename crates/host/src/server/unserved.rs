@@ -54,7 +54,6 @@ pub const NOT_YET_SERVED: &[Later] = &[
             "profile:save",
             "profiles:changed",
             "harness:create",
-            "files:*",
             "template:*",
             "app:info",
             "setup:*",
