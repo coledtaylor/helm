@@ -617,8 +617,32 @@ impl HostWorld {
 
     async fn save(&mut self, name: &str) -> SaveProfileResult {
         let draft = self.draft(name);
+        self.save_draft(None, draft).await
+    }
+
+    async fn save_draft(&mut self, id: Option<u64>, draft: ProfileDraft) -> SaveProfileResult {
         self.client
-            .request::<ProfileSave>(&SaveProfileRequest { id: None, draft })
+            .request::<ProfileSave>(&SaveProfileRequest { id, draft })
+            .await
+            .unwrap()
+    }
+
+    async fn list(&mut self) -> Vec<Profile> {
+        self.client.request::<ProfileList>(&()).await.unwrap()
+    }
+
+    async fn delete(&mut self, id: u64) -> bool {
+        let deleted: ProfileDeleted = self
+            .client
+            .request::<ProfileDelete>(&ProfileRef { id })
+            .await
+            .unwrap();
+        deleted.deleted
+    }
+
+    async fn pin(&mut self, ids: Vec<u64>) -> Vec<Profile> {
+        self.client
+            .request::<ProfilePin>(&PinProfilesRequest { ids })
             .await
             .unwrap()
     }
@@ -763,8 +787,26 @@ async fn over_a_client_connection_an_export_is_the_profiles_yaml_document_and_an
     ] {
         assert!(document.yaml.contains(line), "{}", document.yaml);
     }
+    assert_eq!(
+        document.yaml,
+        profile_to_yaml(&profile_draft(&saved), Some(&world.dirs.home)),
+        "the export is the document the profile writes, against the host's home"
+    );
 
     let (mut watcher, _) = world.watcher().await;
+    let rootless: ImportProfileResult = world
+        .client
+        .request::<ProfileImport>(&ProfileDocument {
+            file_name: "broken.yaml".into(),
+            yaml: "name: x\n".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(rootless.profile, None);
+    assert_eq!(
+        rootless.error.as_deref(),
+        Some("broken.yaml: A profile needs a `root`.")
+    );
     let refused: ImportProfileResult = world
         .client
         .request::<ProfileImport>(&ProfileDocument {
@@ -804,6 +846,90 @@ async fn over_a_client_connection_an_export_is_the_profiles_yaml_document_and_an
         .await
         .unwrap_err();
     assert_eq!(gone.message, "That profile no longer exists.");
+
+    world.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn over_a_client_connection_a_saved_profile_is_listed_whole_every_problem_is_named_and_saving_over_one_that_has_gone_says_so()
+ {
+    let mut world = HostWorld::start().await;
+    let (mut watcher, _) = world.watcher().await;
+
+    let saved = world.save_draft(None, world.draft("  hub dev  ")).await;
+    assert_eq!(saved.problems, Vec::<String>::new());
+    let saved = saved.profile.unwrap();
+    let listed = world.list().await;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, saved.id);
+    assert_eq!(profile_draft(&listed[0]), world.draft("hub dev"));
+
+    let broken = ProfileDraft {
+        root: " ".into(),
+        ..world.draft("  ")
+    };
+    let every_problem = validate_profile(&broken);
+    assert_eq!(every_problem.len(), 2, "{every_problem:?}");
+    let invalid = world.save_draft(None, broken).await;
+    assert_eq!(invalid.profile, None);
+    assert_eq!(invalid.problems, every_problem);
+
+    let gone = world.save_draft(Some(42), world.draft("elsewhere")).await;
+    assert_eq!(gone.profile, None);
+    assert_eq!(gone.problems, ["That profile no longer exists."]);
+    assert_eq!(names_of(&world.list().await), ["hub dev"]);
+
+    let resaved = world
+        .save_draft(
+            Some(saved.id),
+            ProfileDraft {
+                model: Some("haiku".into()),
+                ..world.draft("hub dev")
+            },
+        )
+        .await;
+    assert_eq!(resaved.problems, Vec::<String>::new());
+    assert_eq!(resaved.profile.unwrap().model.as_deref(), Some("haiku"));
+
+    assert!(world.delete(saved.id).await);
+    assert!(!world.delete(saved.id).await);
+    assert!(world.list().await.is_empty());
+
+    // The refusals told nobody: the watcher heard the save, the save over
+    // it and the delete, and nothing between them.
+    assert_eq!(next_list(&mut watcher).await, ["hub dev"]);
+    assert_eq!(next_list(&mut watcher).await, ["hub dev"]);
+    assert_eq!(next_list(&mut watcher).await, Vec::<String>::new());
+
+    world.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn over_a_client_connection_pins_keep_the_order_given_and_a_profile_left_out_is_unpinned() {
+    let mut world = HostWorld::start().await;
+    let alpha = world.save("Alpha").await.profile.unwrap();
+    let beta = world.save("Beta").await.profile.unwrap();
+    let gamma = world.save("Gamma").await.profile.unwrap();
+
+    let pinned = world.pin(vec![gamma.id, alpha.id]).await;
+    assert_eq!(names_of(&pinned), ["Gamma", "Alpha", "Beta"]);
+    let unpinned = pinned.iter().find(|profile| profile.id == beta.id).unwrap();
+    assert_eq!(unpinned.pinned_order, None);
+
+    let (mut watcher, start) = world.watcher().await;
+    assert_eq!(start, ["Gamma", "Alpha", "Beta"]);
+    let repinned = world.pin(vec![beta.id]).await;
+    assert_eq!(names_of(&repinned), ["Beta", "Alpha", "Gamma"]);
+    for profile in &repinned {
+        assert_eq!(
+            profile.pinned_order.is_some(),
+            profile.id == beta.id,
+            "{} is pinned only if it was in the list",
+            profile.name
+        );
+    }
+    assert_eq!(next_list(&mut watcher).await, ["Beta", "Alpha", "Gamma"]);
+    assert_eq!(names_of(&world.list().await), ["Beta", "Alpha", "Gamma"]);
 
     world.stop().await;
 }
