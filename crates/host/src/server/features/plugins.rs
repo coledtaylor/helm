@@ -20,12 +20,16 @@ use floti_protocol::channels::plugins::{
 };
 
 use super::{Feature, FeatureContext};
-use crate::plugins::background::NoBackground;
+use crate::plugins::runtime::IsolateRuntime;
 use crate::plugins::{Registry, RegistryParts};
 use crate::session::ClientId;
 
 pub(crate) struct Plugins {
     registry: Registry,
+    /// Every background script; the plugin pages and tool families reach
+    /// them through it.
+    #[allow(dead_code)]
+    runtime: IsolateRuntime,
     secrets: secrets::Secrets,
 }
 
@@ -33,9 +37,10 @@ impl Plugins {
     pub fn new(context: &FeatureContext) -> crate::Result<Self> {
         let events = Arc::clone(&context.events);
         let secrets = secrets::Secrets::new(context)?;
+        let runtime = IsolateRuntime::new();
         let registry = Registry::new(RegistryParts {
             store: context.hosted.ledger().shared_store(),
-            background: Arc::new(NoBackground),
+            background: Arc::new(runtime.clone()),
             secrets: secrets.store(),
             publish: Box::new(move |list| {
                 // A list nobody could be sent is not a reason to fail the
@@ -43,12 +48,17 @@ impl Plugins {
                 let _ = events.set_state::<PluginsChanged, _>(list);
             }),
         });
+        runtime.connect(&registry);
         crate::plugins::secrets::register_methods(registry.methods(), secrets.store());
         registry.start()?;
         context
             .events
             .serve_state::<PluginsChanged, _>(&registry.list())?;
-        Ok(Self { registry, secrets })
+        Ok(Self {
+            registry,
+            runtime,
+            secrets,
+        })
     }
 }
 

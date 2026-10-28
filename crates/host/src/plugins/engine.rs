@@ -7,10 +7,11 @@
 //! installs is in place, every global outside ECMAScript's, the web types
 //! and the names the caller keeps is removed.
 
+use std::rc::Rc;
 use std::sync::Once;
 
 use deno_core::url::{Url, form_urlencoded, quirks};
-use deno_core::{Extension, JsRuntime, OpState, RuntimeOptions, op2, v8};
+use deno_core::{Extension, JsRuntime, ModuleLoader, OpState, RuntimeOptions, op2, v8};
 use deno_error::JsErrorBox;
 
 /// Starts the V8 platform, once for the whole process. Every isolate is made
@@ -56,23 +57,36 @@ pub struct IsolateOptions {
     /// Globals the extensions add that scripts may reach.
     pub keep: Vec<&'static str>,
     pub console: Option<ConsoleSink>,
+    /// Where `import` finds modules. Without one, a script imports nothing.
+    pub module_loader: Option<Rc<dyn ModuleLoader>>,
+    /// The isolate's heap limits. V8's own without.
+    pub create_params: Option<v8::CreateParams>,
 }
 
 /// A new isolate with the web's data types, confined to them, ECMAScript's
 /// own globals and `options.keep`.
 pub fn base_runtime(options: IsolateOptions) -> Result<JsRuntime, String> {
     start_platform();
+    let IsolateOptions {
+        extensions: more,
+        keep,
+        console,
+        module_loader,
+        create_params,
+    } = options;
     let mut extensions = vec![floti_web::init()];
-    extensions.extend(options.extensions);
+    extensions.extend(more);
     let mut runtime = JsRuntime::try_new(RuntimeOptions {
         extensions,
+        module_loader,
+        create_params,
         ..Default::default()
     })
     .map_err(|err| format!("could not start a plugin isolate: {err}"))?;
-    if let Some(sink) = options.console {
+    if let Some(sink) = console {
         runtime.op_state().borrow_mut().put(sink);
     }
-    let keep = serde_json::to_string(&options.keep).map_err(|err| err.to_string())?;
+    let keep = serde_json::to_string(&keep).map_err(|err| err.to_string())?;
     runtime
         .execute_script(
             "floti:confine",

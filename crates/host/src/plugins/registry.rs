@@ -31,7 +31,9 @@ use floti_protocol::channels::plugins::{
     PluginSurfaceKind,
 };
 
-use super::background::{BackgroundEvent, BackgroundLaunch, BackgroundReporter, BackgroundRuntime};
+use super::background::{
+    BackgroundEvent, BackgroundLaunch, BackgroundReporter, BackgroundRuntime, ToolAnswer, ToolCall,
+};
 use super::call::{
     CallContext, CallResult, CancelToken, Methods, PluginCallError, answer, nothing,
 };
@@ -76,6 +78,19 @@ pub struct PluginCall {
 #[derive(Clone)]
 pub struct Registry {
     inner: Arc<Inner>,
+}
+
+/// A registry that does not keep it alive: what the background runtime
+/// holds, since the registry holds the runtime.
+#[derive(Clone)]
+pub struct WeakRegistry {
+    inner: Weak<Inner>,
+}
+
+impl WeakRegistry {
+    pub fn upgrade(&self) -> Option<Registry> {
+        self.inner.upgrade().map(|inner| Registry { inner })
+    }
 }
 
 struct Inner {
@@ -191,6 +206,12 @@ impl Registry {
         });
         register_standard(&inner.methods, &inner.myself);
         Self { inner }
+    }
+
+    pub fn downgrade(&self) -> WeakRegistry {
+        WeakRegistry {
+            inner: Arc::downgrade(&self.inner),
+        }
     }
 
     /// The methods every call goes through, for a feature to register its
@@ -449,6 +470,41 @@ impl Registry {
             answer = running => answer,
             () = cancel.cancelled() => Err(PluginCallError::aborted()),
         }
+    }
+
+    /// Hands a session's call to one of a plugin's tools to its background
+    /// script. A plugin that is not on, or a tool its manifest does not
+    /// declare, is refused here, before anything reaches the script; the
+    /// answer is the sentence the session reads.
+    pub async fn call_tool(&self, call: ToolCall, cancel: CancelToken) -> ToolAnswer {
+        if self.inner.stopped.load(Ordering::SeqCst) {
+            return Err("The host is shutting down.".to_owned());
+        }
+        {
+            let state = lock(&self.inner.state);
+            let plugin = by_id(&state, &call.plugin).and_then(Entry::live);
+            let Some((name, agent)) = plugin.and_then(|plugin| {
+                plugin
+                    .manifest
+                    .agent
+                    .as_ref()
+                    .map(|agent| (&plugin.manifest.name, agent))
+            }) else {
+                return Err(
+                    "The plugin is not offering tools any more: it was turned off or removed."
+                        .to_owned(),
+                );
+            };
+            if !agent.tools.iter().any(|tool| tool.name == call.tool) {
+                let offered: Vec<&str> = agent.tools.iter().map(|tool| tool.name.as_str()).collect();
+                return Err(format!(
+                    "{name} has no tool called \"{}\". It has: {}.",
+                    call.tool,
+                    offered.join(", ")
+                ));
+            }
+        }
+        self.inner.background.call_tool(call, cancel).await
     }
 
     /// The background runtime's word on one background, for the read it was

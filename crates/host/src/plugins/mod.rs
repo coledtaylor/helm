@@ -16,6 +16,7 @@
 //!   store and the background runtime, with stand-ins that hold and run
 //!   nothing.
 //! - [`registry`]: every registered folder and what it is doing.
+//! - [`runtime`]: the background runtime, one isolate per background script.
 
 pub mod background;
 pub mod call;
@@ -24,8 +25,9 @@ pub mod info;
 pub mod loader;
 pub mod manifest;
 pub mod registry;
+pub mod runtime;
 pub mod secrets;
 pub mod settings;
 pub mod store;
 
-pub use registry::{PluginCall, Registry, RegistryParts};
+pub use registry::{PluginCall, Registry, RegistryParts, WeakRegistry};
