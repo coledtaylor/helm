@@ -1,5 +1,15 @@
-//! Syntax highlighting, with syntect's bundled grammars and themes and its
-//! pure-Rust regex engine.
+//! Syntax highlighting, with syntect on its pure-Rust regex engine: two-face's
+//! grammars (bat's set, which holds syntect's own and adds TypeScript, TSX,
+//! TOML, Dockerfile, INI, Kotlin, Swift, Vue, Svelte and more), syntect's
+//! bundled themes, and grammars of Floti's own under `grammars/` for what
+//! two-face carries only for Oniguruma (PowerShell).
+//!
+//! The languages are today's: [`ALIASES`] and [`PLAIN`] are the tables
+//! `packages/core/src/content/highlight.ts` resolves a name with, and
+//! `tests/highlighting.rs` reads that file and the app's language names and
+//! checks each one highlights over a client connection. A language with its
+//! own grammar in the set is highlighted with it; [`STAND_INS`] holds only the
+//! few that have none, with the nearest grammar that runs.
 //!
 //! Every token carries both themes' colours as `--shiki-light` and
 //! `--shiki-dark`, the custom properties today's shiki output writes, so a
@@ -16,7 +26,9 @@ use std::time::Instant;
 
 use floti_protocol::channels::workspace::{EditorHighlight, Millis};
 use syntect::highlighting::{Color, FontStyle, Highlighter, Style, Theme, ThemeSet};
-use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
+use syntect::parsing::{
+    ParseState, ScopeStack, SyntaxDefinition, SyntaxReference, SyntaxSet, SyntaxSetBuilder,
+};
 
 /// The ceiling on highlighting an editor's whole source. Past it the source
 /// is marked too large and shows as plain text, rather than holding a
@@ -33,8 +45,9 @@ const THEME_CLASSES: &str = "shiki shiki-themes inspired-github base16-ocean-dar
 /// A tab counts for this many columns of a line's indentation.
 const TAB_COLUMNS: usize = 2;
 
-/// What people type in a fence, as the language it means.
-const ALIASES: &[(&str, &str)] = &[
+/// What people type in a fence, as the language it means: highlight.ts's
+/// `ALIASES`, entry for entry.
+pub const ALIASES: &[(&str, &str)] = &[
     ("sh", "shellscript"),
     ("bash", "shellscript"),
     ("shell", "shellscript"),
@@ -68,31 +81,39 @@ const ALIASES: &[(&str, &str)] = &[
     ("", "plaintext"),
 ];
 
-/// Languages with no grammar of their own in syntect's set, highlighted
-/// with the nearest one it has, by the token syntect finds it under.
-const STAND_INS: &[(&str, &str)] = &[
-    ("javascript", "js"),
-    ("typescript", "js"),
-    ("tsx", "js"),
-    ("jsx", "js"),
-    ("jsonc", "json"),
-    ("json5", "json"),
+/// Languages whose own grammar the set files under another token: shiki's
+/// name for it, and the token it is found by.
+const TOKENS: &[(&str, &str)] = &[
     ("shellscript", "sh"),
     ("csharp", "cs"),
-    ("vue", "html"),
-    ("svelte", "html"),
-    ("astro", "html"),
-    ("scss", "css"),
-    ("sass", "css"),
-    ("less", "css"),
-    ("objective-c", "m"),
+    ("docker", "dockerfile"),
 ];
 
-/// Names that are plain text, not a language without a grammar.
-const PLAIN: &[&str] = &["plaintext", "text", "txt", "ansi"];
+/// Languages with no grammar of their own in the set, highlighted with the
+/// nearest one that runs on the pure-Rust engine, by the token it is found
+/// by. JSX is TypeScriptReact's: bat's JSX grammar (JavaScript (Babel)) is
+/// Oniguruma-only, and TSX parses every JSX file.
+const STAND_INS: &[(&str, &str)] = &[
+    ("jsx", "tsx"),
+    ("jsonc", "json"),
+    ("json5", "json"),
+    ("mdx", "md"),
+    ("astro", "html"),
+];
+
+/// Names that are plain text, not a language without a grammar:
+/// highlight.ts's initial `loaded` set.
+pub const PLAIN: &[&str] = &["plaintext", "text", "txt", "ansi"];
+
+/// Floti's own grammars, as sublime-syntax sources, for languages two-face
+/// carries only for Oniguruma.
+const OWN_GRAMMARS: &[&str] = &[include_str!("grammars/PowerShell.sublime-syntax")];
 
 struct Grammars {
+    /// two-face's set.
     syntaxes: SyntaxSet,
+    /// Floti's own, looked in first.
+    own: SyntaxSet,
     light: Theme,
     dark: Theme,
 }
@@ -102,11 +123,43 @@ fn grammars() -> &'static Grammars {
     GRAMMARS.get_or_init(|| {
         let mut themes = ThemeSet::load_defaults().themes;
         Grammars {
-            syntaxes: SyntaxSet::load_defaults_newlines(),
+            syntaxes: two_face::syntax::extra_newlines(),
+            own: own_grammars(),
             light: themes.remove(LIGHT_THEME).unwrap_or_default(),
             dark: themes.remove(DARK_THEME).unwrap_or_default(),
         }
     })
+}
+
+/// The set of Floti's own grammars. One that does not load is left out, so
+/// its language is plain text; a unit test loads each one.
+fn own_grammars() -> SyntaxSet {
+    let mut builder = SyntaxSetBuilder::new();
+    for source in OWN_GRAMMARS {
+        if let Ok(definition) = SyntaxDefinition::load_from_str(source, true, None) {
+            builder.add(definition);
+        }
+    }
+    builder.build()
+}
+
+/// A grammar and the set it belongs to, which parsing it needs.
+#[derive(Clone, Copy)]
+struct Grammar {
+    syntax: &'static SyntaxReference,
+    set: &'static SyntaxSet,
+}
+
+/// The grammar a set files under `token`, Floti's own first.
+fn find_grammar(token: &str) -> Option<Grammar> {
+    let grammars = grammars();
+    [&grammars.own, &grammars.syntaxes]
+        .into_iter()
+        .find_map(|set| {
+            set.find_syntax_by_token(token)
+                .map(|syntax| Grammar { syntax, set })
+        })
+        .filter(|grammar| grammar.syntax.name != "Plain Text")
 }
 
 /// `raw` as the language name it means, lower-cased.
@@ -128,18 +181,19 @@ fn safe_language(name: &str) -> bool {
 }
 
 /// The language `raw` names and its grammar, or `plaintext` and none.
-fn grammar_for(raw: &str) -> (String, Option<&'static SyntaxReference>) {
+fn grammar_for(raw: &str) -> (String, Option<Grammar>) {
     let name = normalise_language(raw);
     if PLAIN.contains(&name.as_str()) || !safe_language(&name) {
         return ("plaintext".to_owned(), None);
     }
-    let token = STAND_INS
+    let token = TOKENS
         .iter()
+        .chain(STAND_INS)
         .find(|(language, _)| *language == name)
         .map_or(name.as_str(), |(_, token)| token);
-    match grammars().syntaxes.find_syntax_by_token(token) {
-        Some(syntax) if syntax.name != "Plain Text" => (name, Some(syntax)),
-        _ => ("plaintext".to_owned(), None),
+    match find_grammar(token) {
+        Some(grammar) => (name, Some(grammar)),
+        None => ("plaintext".to_owned(), None),
     }
 }
 
@@ -175,16 +229,16 @@ fn source_lines(code: &str) -> Vec<&str> {
 }
 
 /// Every line's tokens, or `None` when the grammar fails on the source.
-fn tokenise<'a>(lines: &[&'a str], syntax: &SyntaxReference) -> Option<Vec<Vec<Token<'a>>>> {
+fn tokenise<'a>(lines: &[&'a str], grammar: Grammar) -> Option<Vec<Vec<Token<'a>>>> {
     let grammars = grammars();
     let light = Highlighter::new(&grammars.light);
     let dark = Highlighter::new(&grammars.dark);
-    let mut state = ParseState::new(syntax);
+    let mut state = ParseState::new(grammar.syntax);
     let mut stack = ScopeStack::new();
     let mut out = Vec::with_capacity(lines.len());
     for line in lines {
         let fed = format!("{line}\n");
-        let ops = state.parse_line(&fed, &grammars.syntaxes).ok()?;
+        let ops = state.parse_line(&fed, grammar.set).ok()?;
         // Runs of the line as (start, end, light, dark), next to each other.
         let mut runs: Vec<(usize, usize, Style, Style)> = Vec::new();
         let mut last = 0;
@@ -411,6 +465,83 @@ pub fn editor_highlight(path: &str, source: &str) -> EditorHighlight {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The grammar `raw` is highlighted with, by its name in the set.
+    fn grammar_name(raw: &str) -> Option<&'static str> {
+        grammar_for(raw)
+            .1
+            .map(|grammar| grammar.syntax.name.as_str())
+    }
+
+    #[test]
+    fn typescript_and_tsx_are_highlighted_by_their_own_grammars() {
+        for name in ["typescript", "ts", "mts", "cts"] {
+            assert_eq!(grammar_name(name), Some("TypeScript"), "{name}");
+        }
+        assert_eq!(grammar_name("tsx"), Some("TypeScriptReact"));
+        assert_eq!(grammar_name("javascript"), Some("JavaScript"));
+    }
+
+    #[test]
+    fn powershell_toml_dockerfile_and_ini_are_highlighted_by_their_own_grammars() {
+        for name in ["powershell", "ps", "ps1", "pwsh"] {
+            assert_eq!(grammar_name(name), Some("PowerShell"), "{name}");
+        }
+        assert_eq!(grammar_name("toml"), Some("TOML"));
+        assert_eq!(grammar_name("docker"), Some("Dockerfile"));
+        assert_eq!(grammar_name("dockerfile"), Some("Dockerfile"));
+        assert_eq!(grammar_name("ini"), Some("INI"));
+    }
+
+    #[test]
+    fn every_own_grammar_loads() {
+        for source in OWN_GRAMMARS {
+            let loaded = SyntaxDefinition::load_from_str(source, true, None);
+            assert!(loaded.is_ok(), "{:?}", loaded.err());
+        }
+        assert_eq!(grammars().own.syntaxes().len(), OWN_GRAMMARS.len());
+    }
+
+    #[test]
+    fn a_powershell_script_is_coloured_by_what_each_part_is() {
+        let out = highlight_lines(
+            "# note\n$name = \"hi $env:USER\"\nGet-Item -Path $name -ErrorAction Stop\nif ($n -gt 42) { return }",
+            "ps1",
+        );
+        assert!(out.highlighted);
+        assert_eq!(out.language, "powershell");
+        let colours: std::collections::BTreeSet<&str> = out
+            .lines
+            .iter()
+            .flat_map(|line| line.split("--shiki-light:").skip(1))
+            .filter_map(|rest| rest.get(..7))
+            .collect();
+        assert!(colours.len() >= 4, "{colours:?} in {:?}", out.lines);
+    }
+
+    #[test]
+    fn a_stand_in_is_kept_only_for_a_language_with_no_grammar_of_its_own() {
+        for (language, token) in STAND_INS {
+            assert!(
+                find_grammar(language).is_none(),
+                "{language} has a grammar of its own"
+            );
+            assert!(
+                find_grammar(token).is_some(),
+                "{language}'s stand-in {token}"
+            );
+        }
+        for (language, token) in TOKENS {
+            assert!(
+                find_grammar(language).is_none(),
+                "{language} is found by itself"
+            );
+            assert!(
+                find_grammar(token).is_some(),
+                "{language}'s grammar {token}"
+            );
+        }
+    }
 
     #[test]
     fn a_fence_is_highlighted_in_both_themes_with_its_indentation_carried() {

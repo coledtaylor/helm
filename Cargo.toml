@@ -56,7 +56,12 @@ serde_json = "1"
 # serde_yaml, which is no longer maintained.
 serde_yaml_ng = "0.10"
 # Code highlighting with the pure-Rust regex engine, so no OS needs Oniguruma.
+# Its themes are syntect's own; its grammars are two-face's below.
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+# bat's grammar set on top of syntect's, so TypeScript, TSX, PowerShell, TOML,
+# Dockerfile, INI and the rest of the languages the Files view highlights
+# today each have their own grammar. On the same pure-Rust regex engine.
+two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = [

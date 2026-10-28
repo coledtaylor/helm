@@ -1,0 +1,152 @@
+%YAML 1.2
+---
+# PowerShell, as Floti's own grammar. two-face carries bat's PowerShell
+# grammar only for Oniguruma, and the host runs syntect on the pure-Rust
+# regex engine, so this one is written for it: no construct here needs more
+# than fancy-regex has. It colours what a reader looks for in a script -
+# comments, strings and what is interpolated into them, variables, types,
+# commands, parameters, operators, keywords and numbers - and nothing finer.
+name: PowerShell
+file_extensions: [ps1, psm1, psd1]
+scope: source.powershell
+
+variables:
+  word: '[[:alpha:]_][[:alnum:]_]*'
+
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: variables
+    - include: types
+    - include: commands
+    - include: operators
+    - include: keywords
+    - include: numbers
+    - include: groups
+
+  comments:
+    - match: '<#'
+      scope: punctuation.definition.comment.begin.powershell
+      push: block-comment
+    - match: '(#).*$\n?'
+      scope: comment.line.number-sign.powershell
+      captures:
+        1: punctuation.definition.comment.powershell
+
+  block-comment:
+    - meta_scope: comment.block.powershell
+    - match: '#>'
+      scope: punctuation.definition.comment.end.powershell
+      pop: true
+
+  strings:
+    - match: '@"[ \t]*$'
+      scope: punctuation.definition.string.begin.powershell
+      push: here-double
+    - match: "@'[ \\t]*$"
+      scope: punctuation.definition.string.begin.powershell
+      push: here-single
+    - match: '"'
+      scope: punctuation.definition.string.begin.powershell
+      push: double-string
+    - match: "'"
+      scope: punctuation.definition.string.begin.powershell
+      push: single-string
+
+  here-double:
+    - meta_scope: string.quoted.double.heredoc.powershell
+    - match: '^"@'
+      scope: punctuation.definition.string.end.powershell
+      pop: true
+    - include: interpolation
+
+  here-single:
+    - meta_scope: string.quoted.single.heredoc.powershell
+    - match: "^'@"
+      scope: punctuation.definition.string.end.powershell
+      pop: true
+
+  double-string:
+    - meta_scope: string.quoted.double.powershell
+    - match: '""'
+      scope: constant.character.escape.powershell
+    - match: '"'
+      scope: punctuation.definition.string.end.powershell
+      pop: true
+    - include: interpolation
+
+  single-string:
+    - meta_scope: string.quoted.single.powershell
+    - match: "''"
+      scope: constant.character.escape.powershell
+    - match: "'"
+      scope: punctuation.definition.string.end.powershell
+      pop: true
+
+  interpolation:
+    - match: '`.'
+      scope: constant.character.escape.powershell
+    - match: '\$\('
+      scope: punctuation.section.embedded.begin.powershell
+      push: subexpression
+    - include: variables
+
+  subexpression:
+    - clear_scopes: 1
+    - meta_scope: meta.embedded.subexpression.powershell
+    - match: '\)'
+      scope: punctuation.section.embedded.end.powershell
+      pop: true
+    - include: main
+
+  groups:
+    - match: '\('
+      scope: punctuation.section.group.begin.powershell
+      push: group
+    - match: '\)'
+      scope: invalid.illegal.stray-bracket.powershell
+
+  group:
+    - match: '\)'
+      scope: punctuation.section.group.end.powershell
+      pop: true
+    - include: main
+
+  variables:
+    - match: '(\$)(?i:true|false|null)\b'
+      scope: constant.language.powershell
+      captures:
+        1: punctuation.definition.variable.powershell
+    - match: '(\$)(?:((?i:global|local|private|script|using|env|variable|function|alias)):)?({{word}}|\{[^}]*\}|[$?^])'
+      scope: variable.other.readwrite.powershell
+      captures:
+        1: punctuation.definition.variable.powershell
+        2: storage.modifier.scope.powershell
+
+  types:
+    - match: '(\[)([[:alpha:]_][[:alnum:]_.]*(?:\[\])?)(\])'
+      captures:
+        1: punctuation.section.bracket.begin.powershell
+        2: storage.type.powershell
+        3: punctuation.section.bracket.end.powershell
+
+  commands:
+    - match: '\b[[:alpha:]]+-[[:alpha:]][[:alnum:]]*\b'
+      scope: support.function.powershell
+
+  operators:
+    - match: '(?<![[:alnum:]_-])-(?i:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|replace|split|join|and|or|not|xor|band|bor|bxor|bnot|shl|shr|is|isnot|as|f)\b'
+      scope: keyword.operator.word.powershell
+    - match: '(?<![[:alnum:]_-])-{{word}}'
+      scope: variable.parameter.powershell
+    - match: '\|\||&&|[=+*/%!<>|&-]'
+      scope: keyword.operator.powershell
+
+  keywords:
+    - match: '\b(?i:begin|break|catch|class|continue|data|do|dynamicparam|else|elseif|end|enum|exit|filter|finally|for|foreach|function|if|in|param|process|return|switch|throw|trap|try|until|using|while|workflow)\b'
+      scope: keyword.control.powershell
+
+  numbers:
+    - match: '\b(?i:0x[[:xdigit:]]+|[0-9]+(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?)(?i:kb|mb|gb|tb|pb)?\b'
+      scope: constant.numeric.powershell
