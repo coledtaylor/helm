@@ -121,6 +121,13 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   `safeStorage` and refuses to store when encryption is unavailable; a value is
   filled in by main, for a host and a plugin the user allowed, and never sent
   to any window. Helm never reads a Claude or GitHub credential to put there.
+- Floti also keeps its host key (`host.key`) and device registry
+  (`devices.json`) in its data folder, and each client keeps its device key
+  (`device.key`) and the host key it pinned. Each is an owner-only file
+  (`platform/private_files`): `0600` on macOS and Linux, an access list naming
+  only the user on Windows. A private key is never logged, printed or sent;
+  logs name a key by its fingerprint. Keys and the Noise sessions they prove
+  come from snow, through `floti_protocol::noise`; never hand-rolled crypto.
 - The network posture is stated identically in README, docs/PACKAGING.md, the
   `update:check` comment in `shared/ipc.ts` and SPEC 5; change all four
   together. Helm contacts nothing on its own except the update check, and it
