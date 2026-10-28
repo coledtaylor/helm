@@ -21,6 +21,10 @@ impl ProgramLauncher for Native {
             _ => as_given(program, args),
         }
     }
+
+    fn find(&self, program: &OsStr) -> Option<PathBuf> {
+        find_program(program)
+    }
 }
 
 /// `%ComSpec%`, or `cmd.exe` on `PATH` when it is not set.

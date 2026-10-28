@@ -17,6 +17,11 @@ pub(super) fn account() -> Account {
     }
 }
 
+/// Windows' build number, which no other OS has.
+pub(super) fn windows_build() -> Option<u32> {
+    None
+}
+
 /// The signals that stop the host, registered while this lives.
 pub(super) struct Signals {
     interrupt: Signal,

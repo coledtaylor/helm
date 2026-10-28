@@ -107,6 +107,15 @@ pub fn read_file(path: &Path) -> ConfigFileContent {
     }
 }
 
+/// Which paths one surface may write through the
+/// [`SnapshotWriter`](super::SnapshotWriter): the writer's snapshot, conflict
+/// and text rules are the same for every surface, and the guard is the one
+/// thing each decides for itself.
+pub trait PathGuard: Send + Sync {
+    /// Refuses, in a sentence, a write of `path` under `scope`.
+    fn check(&self, scope: &Path, path: &Path) -> Result<(), String>;
+}
+
 /// Which paths the console may write: configuration, inside the scope a
 /// request names. The agent's own config folder is configuration throughout,
 /// whatever it is called.
@@ -156,6 +165,12 @@ impl WriteGuard {
                 absolute.display()
             ))
         }
+    }
+}
+
+impl PathGuard for WriteGuard {
+    fn check(&self, scope: &Path, path: &Path) -> Result<(), String> {
+        WriteGuard::check(self, scope, path)
     }
 }
 

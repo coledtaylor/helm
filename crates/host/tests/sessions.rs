@@ -48,6 +48,7 @@ fn fake_config(
     args: &[&str],
 ) -> HostConfig {
     HostConfig {
+        run: Default::default(),
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: vec![Arc::new(agent.backend(args.iter().copied())) as Arc<dyn AgentBackend>],
@@ -92,6 +93,7 @@ fn text(path: &Path) -> String {
 /// is the fake keeping its records in `claude_config`.
 fn todays_backends(dirs: &TestDirs, endpoint: &Endpoint, claude_config: &Path) -> HostConfig {
     let claude = ClaudeCodeSettings {
+        search_first: Vec::new(),
         program: "node".into(),
         leading_args: vec![fake_claude().into_os_string()],
         config_dir: claude_config.to_path_buf(),
@@ -99,6 +101,7 @@ fn todays_backends(dirs: &TestDirs, endpoint: &Endpoint, claude_config: &Path) -
         api_key_set: false,
     };
     HostConfig {
+        run: Default::default(),
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: floti_host::server::backends(&dirs.user_env(), Some(claude)),

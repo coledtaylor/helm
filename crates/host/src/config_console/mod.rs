@@ -24,7 +24,7 @@ mod mcp;
 mod names;
 mod sha256;
 pub mod snapshots;
-mod time;
+pub(crate) mod time;
 mod tree;
 mod watch;
 mod writer;
@@ -51,7 +51,9 @@ use crate::store::Store;
 pub use command::{AgentCommand, RunOutcome};
 pub use doctor::parse_rows as doctor_rows;
 pub use effective::{EffectiveInput, effective_view, project_entry};
-pub use files::{WriteGuard, hash_content, normalize, read_file, snapshot_key};
+pub use files::{
+    PathGuard, WriteGuard, hash_content, mtime_ms, normalize, read_file, snapshot_key,
+};
 pub use json::Json;
 pub use mcp::diff_lines;
 pub use names::{FilePlan, check_name, config_unit, parse_frontmatter, plan_file};

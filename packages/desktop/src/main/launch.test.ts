@@ -116,10 +116,15 @@ describe('launching from the new-session launcher', () => {
   /** The fake CLI's record of the run that registered under `sessionId`. */
   const runOf = async (sessionId: string | null): Promise<FakeClaudeLog> => {
     let found: FakeClaudeLog | undefined
-    await vi.waitFor(() => {
-      found = fakeClaudeLogs(world).find((log) => log.sessionId === sessionId)
-      expect(found).toBeDefined()
-    })
+    // The fake CLI writes its record once Node has started it, which takes
+    // over a second on a busy Windows runner.
+    await vi.waitFor(
+      () => {
+        found = fakeClaudeLogs(world).find((log) => log.sessionId === sessionId)
+        expect(found).toBeDefined()
+      },
+      { timeout: 10_000 }
+    )
     return found as FakeClaudeLog
   }
 

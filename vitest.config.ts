@@ -71,7 +71,13 @@ export default defineConfig({
       },
       {
         extends: true,
-        test: { name: 'desktop', include: ['packages/desktop/src/main/**/*.test.ts'], environment: 'node' }
+        test: {
+          name: 'desktop',
+          include: ['packages/desktop/src/main/**/*.test.ts', 'packages/desktop/test/**/*.test.ts'],
+          environment: 'node',
+          // The faked Electron app's folder, one per run, removed when it ends.
+          globalSetup: ['packages/desktop/test/electron-setup.ts']
+        }
       },
       {
         extends: true,

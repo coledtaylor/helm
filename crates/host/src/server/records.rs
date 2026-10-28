@@ -193,13 +193,12 @@ pub(crate) fn record_stopped(store: &Store, ids: &[SessionId]) -> Result<()> {
     Ok(())
 }
 
-/// The columns [`read_profile`] reads, in its order.
-const PROFILE_COLUMNS: &str = "id, name, root, overlays, access, model, effort, permission_mode, \
-     agent, mcp, opening_prompt, pinned_order, created_at, updated_at";
+/// The columns [`profile_row`] reads, in its order.
+pub(crate) const PROFILE_COLUMNS: &str = "id, name, root, overlays, access, model, effort, \
+     permission_mode, agent, mcp, opening_prompt, pinned_order, created_at, updated_at";
 
 /// Profile `id` as its row in `profiles` holds it, or `None` when it has
-/// been deleted. A value the row holds that this host does not know, such
-/// as an effort level from a later app, reads as not chosen.
+/// been deleted.
 pub(crate) fn read_profile(store: &Store, id: u64) -> Result<Option<Profile>> {
     let Ok(id) = i64::try_from(id) else {
         return Ok(None);
@@ -209,35 +208,40 @@ pub(crate) fn read_profile(store: &Store, id: u64) -> Result<Option<Profile>> {
         .query_row(
             &format!("SELECT {PROFILE_COLUMNS} FROM profiles WHERE id = ?1"),
             [id],
-            |row| {
-                let list = |index: usize| -> rusqlite::Result<Vec<String>> {
-                    let text: Option<String> = row.get(index)?;
-                    Ok(text
-                        .and_then(|text| serde_json::from_str(&text).ok())
-                        .unwrap_or_default())
-                };
-                Ok(Profile {
-                    id: unsigned(row.get(0)?),
-                    name: row.get(1)?,
-                    root: row.get(2)?,
-                    overlays: list(3)?,
-                    access: list(4)?,
-                    model: non_empty(row.get(5)?),
-                    effort: named(row.get(6)?),
-                    permission_mode: named(row.get(7)?),
-                    agent: non_empty(row.get(8)?),
-                    mcp: list(9)?,
-                    opening_prompt: non_empty(row.get(10)?),
-                    pinned_order: row
-                        .get::<_, Option<i64>>(11)?
-                        .and_then(|order| u32::try_from(order).ok()),
-                    created_at: row.get(12)?,
-                    updated_at: row.get(13)?,
-                })
-            },
+            profile_row,
         )
         .optional()
         .map_err(sql("read a profile"))
+}
+
+/// A `profiles` row selected with [`PROFILE_COLUMNS`]. A value the row
+/// holds that this host does not know, such as an effort level from a later
+/// app, reads as not chosen.
+pub(crate) fn profile_row(row: &Row<'_>) -> rusqlite::Result<Profile> {
+    let list = |index: usize| -> rusqlite::Result<Vec<String>> {
+        let text: Option<String> = row.get(index)?;
+        Ok(text
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default())
+    };
+    Ok(Profile {
+        id: unsigned(row.get(0)?),
+        name: row.get(1)?,
+        root: row.get(2)?,
+        overlays: list(3)?,
+        access: list(4)?,
+        model: non_empty(row.get(5)?),
+        effort: named(row.get(6)?),
+        permission_mode: named(row.get(7)?),
+        agent: non_empty(row.get(8)?),
+        mcp: list(9)?,
+        opening_prompt: non_empty(row.get(10)?),
+        pinned_order: row
+            .get::<_, Option<i64>>(11)?
+            .and_then(|order| u32::try_from(order).ok()),
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+    })
 }
 
 /// A value stored under its protocol name, such as `acceptEdits`, or `None`

@@ -13,6 +13,7 @@ use ts_rs::TS;
 
 use super::*;
 use crate::backend::{BackendId, Knowable};
+use crate::bytes::Bytes;
 use crate::capability::Capability;
 use crate::channel::{
     Catalogue, ChannelKind, EventChannel, RequestChannel, from_payload, to_payload,
@@ -39,6 +40,8 @@ const DECLARED: &[(&str, ChannelKind, Option<Capability>)] = &[
     ("discovery:updated", STATE, None),
     ("scan:status", STATE, None),
     ("git:updated", STATE, None),
+    // Not in ipc.ts: the desktop's main process saw its window's focus itself.
+    ("git:refresh", REQUEST, None),
     ("roots:suggest", REQUEST, None),
     ("roots:accept", REQUEST, None),
     ("roots:remove", REQUEST, None),
@@ -83,6 +86,9 @@ const DECLARED: &[(&str, ChannelKind, Option<Capability>)] = &[
     ("content:snapshots", REQUEST, FILES),
     ("content:restore", REQUEST, FILES),
     ("content:artifact", REQUEST, FILES),
+    // Not in ipc.ts: the desktop's main process answered the frame's loads
+    // from its own protocol handler.
+    ("content:artifactBytes", REQUEST, FILES),
     ("content:wikilink", REQUEST, FILES),
     ("files:dir", REQUEST, FILES),
     ("files:status", REQUEST, FILES),
@@ -1358,6 +1364,69 @@ fn content_payloads_survive_the_wire() {
         },
         WikilinkTarget { path: None },
     );
+
+    // An image's bytes are not UTF-8, and arrive as they left.
+    let png = artifact_bytes(vec![
+        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0xFF, 0x00,
+    ]);
+    exchange::<ReadArtifactBytes>(
+        ArtifactBytesRequest {
+            url: "floti-artifact://3f2a/chart.png".into(),
+            offset: 4_194_304,
+        },
+        png.clone(),
+    );
+    let wire = encoded(&png);
+    assert_eq!(
+        field(&wire, "body"),
+        Some(&Value::Bytes(png.body.0.clone())),
+        "the body is a CBOR byte string"
+    );
+    assert_eq!(field(&wire, "totalBytes"), Some(&Value::Integer(10.into())));
+    assert!(field(&wire, "headers").unwrap().as_array().is_some());
+
+    // A request that leaves the offset out starts at the first byte.
+    let bare = to_payload(&BTreeMap::from([("url", "floti-artifact://3f2a/x.html")])).unwrap();
+    let request: ArtifactBytesRequest = from_payload(&bare).unwrap();
+    assert_eq!(request.offset, 0);
+}
+
+fn artifact_bytes(body: Vec<u8>) -> ArtifactBytes {
+    ArtifactBytes {
+        status: 200,
+        headers: vec![
+            ArtifactHeader {
+                name: "content-type".into(),
+                value: "image/png".into(),
+            },
+            ArtifactHeader {
+                name: "content-security-policy".into(),
+                value: "default-src 'none'; connect-src 'none'".repeat(8),
+            },
+            ArtifactHeader {
+                name: "x-content-type-options".into(),
+                value: "nosniff".into(),
+            },
+            ArtifactHeader {
+                name: "cache-control".into(),
+                value: "no-store".into(),
+            },
+        ],
+        total_bytes: body.len() as u64,
+        body: Bytes(body),
+    }
+}
+
+#[test]
+fn a_full_artifact_piece_and_its_framing_fit_in_one_frame() {
+    let piece = artifact_bytes(vec![0xFF; ARTIFACT_PIECE_LEN as usize]);
+    let frame = encode_frame(&Message::Response(Response {
+        id: u64::MAX,
+        payload: to_payload(&piece).unwrap(),
+    }))
+    .expect("a full piece is one frame");
+    assert!(frame.len() <= crate::frame::MAX_FRAME_LEN as usize + 4);
+    assert!(ARTIFACT_PIECE_LEN * 2 < u64::from(crate::frame::MAX_FRAME_LEN));
 }
 
 #[test]

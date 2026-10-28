@@ -62,6 +62,7 @@ impl World {
         let other = dirs.folder("someone else");
         let backend = Arc::new(ClaudeCodeBackend::new(
             ClaudeCodeSettings {
+                search_first: Vec::new(),
                 program: "node".into(),
                 leading_args: vec![fake_claude().into_os_string()],
                 config_dir: claude.clone(),
@@ -689,6 +690,7 @@ const CHANGES: u64 = 9;
 /// config in `claude`.
 async fn host_over(dirs: &TestDirs, endpoint: &Endpoint, claude: &Path) -> RunningHost {
     let settings = ClaudeCodeSettings {
+        search_first: Vec::new(),
         program: "node".into(),
         leading_args: vec![fake_claude().into_os_string()],
         config_dir: claude.to_path_buf(),
@@ -696,6 +698,7 @@ async fn host_over(dirs: &TestDirs, endpoint: &Endpoint, claude: &Path) -> Runni
         api_key_set: false,
     };
     RunningHost::start(HostConfig {
+        run: Default::default(),
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: backends(&dirs.user_env(), Some(settings)),
@@ -1257,6 +1260,7 @@ mod over_the_protocol {
                 backends(
                     &dirs.user_env(),
                     Some(ClaudeCodeSettings {
+                        search_first: Vec::new(),
                         program: "node".into(),
                         leading_args: vec![fake_claude().into_os_string()],
                         config_dir: claude.to_path_buf(),
@@ -1275,6 +1279,7 @@ mod over_the_protocol {
             let other = dirs.folder("someone else");
             let endpoint = dirs.endpoint();
             let host = RunningHost::start(HostConfig {
+                run: Default::default(),
                 folders: dirs.folders(),
                 endpoint: endpoint.clone(),
                 backends: backends(&dirs, &claude),

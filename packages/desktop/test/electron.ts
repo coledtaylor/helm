@@ -1,6 +1,21 @@
 import { mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { inject } from 'vitest'
+import { ELECTRON_FAKE_ROOT } from './electron-setup'
+
+/**
+ * The run's app folder, which `electron-setup.ts` makes and removes. There is
+ * no fallback: a fixed folder shared between runs would outlive them all.
+ */
+function appRoot(): string {
+  const root = inject(ELECTRON_FAKE_ROOT)
+  if (!root) {
+    throw new Error(
+      'electronFake: no app folder for this run; the desktop project runs packages/desktop/test/electron-setup.ts as its globalSetup'
+    )
+  }
+  return root
+}
 
 /**
  * A stand-in for the `electron` module, for main-process integration tests:
@@ -13,13 +28,13 @@ import { join } from 'node:path'
  * loudly rather than reaching the real thing.
  */
 export function electronFake(): Record<string, unknown> {
-  const appRoot = join(tmpdir(), 'helm-electron-fake')
+  const root = appRoot()
   const noop = (): void => undefined
   return {
     app: {
       isPackaged: false,
       getPath: (name: string) => {
-        const dir = join(appRoot, name)
+        const dir = join(root, name)
         mkdirSync(dir, { recursive: true })
         return dir
       },

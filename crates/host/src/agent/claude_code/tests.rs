@@ -137,6 +137,7 @@ impl World {
         let dirs = TestDirs::new();
         let config = real(&dirs.folder("claude config"));
         let mut settings = ClaudeCodeSettings {
+            search_first: Vec::new(),
             program: "node".into(),
             leading_args: vec![fake_claude().into_os_string()],
             config_dir: config.clone(),

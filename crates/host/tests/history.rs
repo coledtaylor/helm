@@ -1187,6 +1187,7 @@ impl Claude {
     fn backend(&self) -> ClaudeCodeBackend {
         ClaudeCodeBackend::new(
             ClaudeCodeSettings {
+                search_first: Vec::new(),
                 program: "claude".into(),
                 leading_args: Vec::new(),
                 config_dir: self.config.clone(),
@@ -1248,6 +1249,7 @@ impl Claude {
 
     fn config(&self) -> HostConfig {
         HostConfig {
+            run: Default::default(),
             folders: self.dirs.folders(),
             endpoint: self.dirs.endpoint(),
             backends: vec![Arc::new(self.backend()) as Arc<dyn AgentBackend>],
@@ -2191,6 +2193,7 @@ async fn a_host_with_no_backend_that_keeps_history_answers_with_an_empty_index()
     let shell = floti_host::server::shell_backend(&dirs.user_env());
     let endpoint = dirs.endpoint();
     let host = RunningHost::start(HostConfig {
+        run: Default::default(),
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: vec![Arc::new(shell) as Arc<dyn AgentBackend>],

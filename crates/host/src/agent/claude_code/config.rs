@@ -35,12 +35,13 @@ impl ClaudeCodeBackend {
                 .parent()
                 .map_or_else(|| settings.config_dir.clone(), Path::to_path_buf)
         };
+        let (program, args) = self.command();
         AgentConfig {
             config_dir: settings.config_dir.clone(),
             global_config: global_dir.join(".claude.json"),
             command: AgentCommand {
-                program: settings.program.clone(),
-                args: settings.leading_args.clone(),
+                program,
+                args,
                 env: self.session_env(),
             },
         }

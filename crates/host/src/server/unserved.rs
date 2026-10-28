@@ -44,36 +44,6 @@ fn entry_covers(entry: &str, channel: &str) -> bool {
 /// Every channel not served yet, by the feature that will serve it.
 pub const NOT_YET_SERVED: &[Later] = &[
     Later {
-        feature: "processes and ports",
-        channels: &["sessions:resources", "sessions:watch"],
-    },
-    Later {
-        feature: "workspace",
-        channels: &[
-            "profile:delete",
-            "profile:export",
-            "profile:import",
-            "profile:list",
-            "profile:pin",
-            "profile:save",
-            "profiles:changed",
-            "discovery:*",
-            "scan:status",
-            "git:updated",
-            "roots:*",
-            "harness:create",
-            "files:*",
-            "content:*",
-            "template:*",
-            "app:info",
-            "settings:*",
-            "setup:*",
-            // These two share the Files view's renderer.
-            "config:render",
-            "editor:highlight",
-        ],
-    },
-    Later {
         feature: "agent tools listener",
         channels: &["agentBrowser:*"],
     },
@@ -195,14 +165,14 @@ mod tests {
     fn the_list_names_each_served_channel_left_on_it() {
         let catalogue = Catalogue::protocol();
         let mut served = all_unlisted(&catalogue);
-        served.insert("discovery:scan");
-        served.insert("sessions:watch");
+        served.insert("agentBrowser:call");
+        served.insert("plugins:list");
         let drift = drift(&catalogue, &served);
         assert_eq!(
             drift.served_but_listed,
             vec![
-                ("discovery:scan", "workspace"),
-                ("sessions:watch", "processes and ports")
+                ("agentBrowser:call", "agent tools listener"),
+                ("plugins:list", "plugin runtime")
             ]
         );
         assert!(
@@ -210,8 +180,8 @@ mod tests {
             "{drift}"
         );
         let said = drift.to_string();
-        assert!(said.contains("`discovery:scan` is served"), "{said}");
-        assert!(said.contains("`sessions:watch` is served"), "{said}");
+        assert!(said.contains("`agentBrowser:call` is served"), "{said}");
+        assert!(said.contains("`plugins:list` is served"), "{said}");
     }
 
     #[test]
@@ -232,22 +202,17 @@ mod tests {
     fn the_list_names_an_entry_that_covers_no_channel() {
         let catalogue = Catalogue::protocol();
         let list = [Later {
-            feature: "workspace",
-            channels: &["discovery:*", "nothing:here"],
+            feature: "plugin runtime",
+            channels: &["plugins:*", "nothing:here"],
         }];
         let drift = drift_against(&catalogue, &served(&[]), &list);
-        assert_eq!(drift.stale, vec![("nothing:here", "workspace")]);
+        assert_eq!(drift.stale, vec![("nothing:here", "plugin runtime")]);
     }
 
     #[test]
     fn every_entry_is_labelled_with_the_feature_that_will_serve_it() {
         let features: BTreeSet<&str> = NOT_YET_SERVED.iter().map(|later| later.feature).collect();
-        for permanent in [
-            "processes and ports",
-            "workspace",
-            "agent tools listener",
-            "plugin runtime",
-        ] {
+        for permanent in ["agent tools listener", "plugin runtime"] {
             assert!(features.contains(permanent), "{permanent} is missing");
         }
         assert!(
@@ -259,10 +224,10 @@ mod tests {
 
     #[test]
     fn a_refusal_names_the_channel_and_its_feature() {
-        let later = later("discovery:scan").unwrap();
+        let later = later("agentBrowser:call").unwrap();
         assert_eq!(
-            refusal("discovery:scan", later),
-            "This host does not serve `discovery:scan` yet: it comes with the workspace."
+            refusal("agentBrowser:call", later),
+            "This host does not serve `agentBrowser:call` yet: it comes with the agent tools listener."
         );
     }
 }

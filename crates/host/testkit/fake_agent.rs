@@ -17,9 +17,16 @@
 //!   `floti-fake-gui`, built beside it, as the child: a program that on
 //!   Windows has no console, as a GUI app has, so the console it was started
 //!   from closing does not reach it.
+//! - `--fake-listen` or `--fake-listen=<ms>`: the same with a child that
+//!   listens on a TCP port on 127.0.0.1 the OS picks, and records the port
+//!   as `listening` in its own record. The child runs this program with
+//!   `--fake-serve=<ms>`.
 //! - `--fake-exit=<code>`: exits with `code` once the above are done.
 //! - `--fake-sleep=<ms>`: does nothing for `<ms>` milliseconds, then exits 0.
 //!   This is what a child runs.
+//! - `--fake-serve=<ms>`: listens on a TCP port on 127.0.0.1, records it, and
+//!   holds it for `<ms>` milliseconds, then exits 0. This is what a listening
+//!   child runs.
 //! - `--fake-tick=<ms>`: writes `tick <n>` every `<ms>` milliseconds while it
 //!   runs, counting from 1, whether or not anyone types.
 //!
@@ -51,6 +58,8 @@ struct Record {
     env: BTreeMap<String, String>,
     env_names: Vec<String>,
     children: Vec<u32>,
+    /// The TCP port it listens on, for a run with `--fake-serve`.
+    listening: Option<u16>,
     input: Vec<String>,
 }
 
@@ -79,6 +88,7 @@ impl Record {
             env,
             env_names,
             children: Vec::new(),
+            listening: None,
             input: Vec::new(),
         }
     }
@@ -94,6 +104,7 @@ impl Record {
             "env": self.env,
             "envNames": self.env_names,
             "children": self.children,
+            "listening": self.listening,
             "input": self.input,
         });
         let partial = path.with_extension("json.partial");
@@ -113,6 +124,10 @@ fn main() {
     let mut record = Record::new(argv.clone());
     record.save();
 
+    if let Some(ms) = flag_value(&argv, "--fake-serve") {
+        serve(&mut record, parse_ms(ms));
+        return;
+    }
     if let Some(ms) = flag_value(&argv, "--fake-sleep") {
         thread::sleep(Duration::from_millis(parse_ms(ms)));
         return;
@@ -125,6 +140,9 @@ fn main() {
     }
     if let Some(ms) = child_ms(&argv, "--fake-gui-child") {
         start_child(&mut record, Child::Gui, ms);
+    }
+    if let Some(ms) = child_ms(&argv, "--fake-listen") {
+        start_child(&mut record, Child::Listener, ms);
     }
     if let Some(code) = flag_value(&argv, "--fake-exit") {
         std::process::exit(code.parse().unwrap_or(1));
@@ -197,6 +215,24 @@ enum Child {
     Console,
     /// `floti-fake-gui`, beside it, with no console on Windows.
     Gui,
+    /// This program, listening on a TCP port.
+    Listener,
+}
+
+/// Listens on a port on 127.0.0.1 the OS picks, records it, and holds it for
+/// `ms` milliseconds.
+fn serve(record: &mut Record, ms: u64) {
+    let listener = match std::net::TcpListener::bind(("127.0.0.1", 0)) {
+        Ok(listener) => listener,
+        Err(err) => {
+            eprintln!("floti-fake-agent: could not listen: {err}");
+            return;
+        }
+    };
+    record.listening = listener.local_addr().ok().map(|addr| addr.port());
+    record.save();
+    thread::sleep(Duration::from_millis(ms));
+    drop(listener);
 }
 
 fn start_child(record: &mut Record, kind: Child, ms: u64) {
@@ -207,12 +243,16 @@ fn start_child(record: &mut Record, kind: Child, ms: u64) {
             return;
         }
     };
-    let program = match kind {
-        Child::Console => exe,
-        Child::Gui => exe.with_file_name(format!("floti-fake-gui{}", std::env::consts::EXE_SUFFIX)),
+    let (program, run) = match kind {
+        Child::Console => (exe, "--fake-sleep"),
+        Child::Gui => (
+            exe.with_file_name(format!("floti-fake-gui{}", std::env::consts::EXE_SUFFIX)),
+            "--fake-sleep",
+        ),
+        Child::Listener => (exe, "--fake-serve"),
     };
     let child = Command::new(program)
-        .arg(format!("--fake-sleep={ms}"))
+        .arg(format!("{run}={ms}"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

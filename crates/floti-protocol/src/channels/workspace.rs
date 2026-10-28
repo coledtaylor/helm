@@ -26,6 +26,9 @@
 //!   `files:changed` are events without state.
 //! - Every `content:*` and `files:*` channel, and `files:changed`, needs the
 //!   `files` capability.
+//! - `content:artifactBytes` is not in ipc.ts: the desktop's main process
+//!   answered its frames' artifact loads from its own protocol handler. A
+//!   client that frames an artifact asks the host for each load instead.
 //! - `roots:add`, `files:editor`, `files:openInEditor` and
 //!   `content:artifactConsole` stay in the client:
 //!   [`CLIENT_ONLY`](super::boundary::CLIENT_ONLY) says why.
@@ -72,6 +75,7 @@ pub fn declare(catalogue: &mut Catalogue) {
         .event::<DiscoveryUpdated>()
         .event::<ScanStatusChanged>()
         .event::<GitUpdated>()
+        .request::<RefreshGit>()
         .request::<SuggestRoots>()
         .request::<AcceptRoot>()
         .request::<RemoveRoot>()
@@ -119,6 +123,7 @@ pub fn declare(catalogue: &mut Catalogue) {
         .request::<ListContentSnapshots>()
         .request::<RestoreContentSnapshot>()
         .request::<OpenArtifact>()
+        .request::<ReadArtifactBytes>()
         .request::<ResolveWikilink>()
         // The Files view.
         .request::<ReadFilesDir>()

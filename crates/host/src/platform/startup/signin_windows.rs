@@ -16,6 +16,20 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken}
 use super::Account;
 use crate::{Error, Result};
 
+/// The machine's Windows build number, from `RtlGetVersion`, which answers
+/// the real version where `GetVersionEx` answers what the program's manifest
+/// claims to support.
+pub(super) fn windows_build() -> Option<u32> {
+    use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
+    use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
+    // SAFETY: a zeroed OSVERSIONINFOW with its size set is what
+    // RtlGetVersion fills; it writes only inside it.
+    let mut info: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
+    info.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
+    let status = unsafe { RtlGetVersion(&mut info) };
+    (status == 0).then_some(info.dwBuildNumber)
+}
+
 /// The service accounts a host must never run as, by their well-known SIDs.
 const SERVICE_ACCOUNTS: [(&str, &str); 3] = [
     ("S-1-5-18", "the SYSTEM account"),

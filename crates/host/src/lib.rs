@@ -17,7 +17,11 @@
 //!   outside its per-OS files is conditional on the OS.
 //! - [`store`]: `floti.db`, which only the host opens.
 //! - [`history`]: the history index and the transcript archive in it.
+//! - [`resources`]: what each hosted session is holding (its process tree
+//!   and listening ports), shaped from one read of the machine.
 //! - [`usage`]: each backend's latest usage reading.
+//! - [`workspace`]: the user's folders as the host serves them: settings,
+//!   setup, discovery, profiles, templates and the Files view.
 //! - [`session`]: sessions in ptys and the screens kept for them.
 //! - [`server`]: the local socket's clients and the protocol they speak.
 
@@ -26,10 +30,12 @@ pub mod config_console;
 pub mod error;
 pub mod history;
 pub mod platform;
+pub mod resources;
 pub mod server;
 pub mod session;
 pub mod store;
 pub mod usage;
+pub mod workspace;
 
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;

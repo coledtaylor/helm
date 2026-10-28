@@ -27,13 +27,17 @@ use floti_protocol::channel::{from_payload, to_payload};
 use floti_protocol::channels::common::{SessionRecord, SessionStatus};
 use floti_protocol::channels::host::{HostStop, HostStopReason, HostStopRequest};
 use floti_protocol::channels::sessions::{
-    CloseSessionRequest, HistoryRefresh, LaunchSessionRequest, PtermOpen, PtermOpenRequest,
-    PtermStreamOpen, ReadUsage, RestoreSessionsRequest, SessionClose, SessionExit, SessionLaunch,
-    SessionList, SessionRestorable, SessionRestore, SessionStart, SessionToRestore,
-    StartSessionRequest, UsageSnapshot,
+    CloseSessionRequest, HistoryRefresh, LaunchSessionRequest, ProfileDelete, ProfileExport,
+    ProfileImport, ProfileList, ProfilePin, ProfileSave, ProfilesChanged, PtermOpen,
+    PtermOpenRequest, PtermStreamOpen, ReadUsage, RestoreSessionsRequest, SessionClose,
+    SessionExit, SessionLaunch, SessionList, SessionRestorable, SessionRestore, SessionStart,
+    SessionToRestore, StartSessionRequest, UsageSnapshot,
 };
+use floti_protocol::channels::workspace;
 use floti_protocol::message::ErrorCode;
-use floti_protocol::{BackendId, Catalogue, ChannelKind, EventChannel, Knowable, Message};
+use floti_protocol::{
+    BackendId, Catalogue, ChannelKind, EventChannel, Knowable, Message, RequestChannel,
+};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
@@ -52,6 +56,7 @@ fn fake_config(
     args: &[&str],
 ) -> HostConfig {
     HostConfig {
+        run: Default::default(),
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: vec![Arc::new(agent.backend(args.iter().copied())) as Arc<dyn AgentBackend>],
@@ -941,6 +946,139 @@ fn a_host_dropped_without_a_stop_ends_every_tree_it_started() {
     assert_eq!(after[0].status, "running", "{after:?}");
 }
 
+/// What a host test that never stopped its host left: how it failed, its
+/// temporary root and every process its session started.
+struct UnstoppedHostTest {
+    panic: Box<dyn std::any::Any + Send>,
+    root: PathBuf,
+    pids: Vec<u32>,
+}
+
+const ON_PURPOSE: &str = "the host test failed on purpose";
+
+/// Runs, on `runtime`, a host test that starts a host over its temporary
+/// folders, connects a client and starts a session whose process and child
+/// run in one of those folders, then never stops the host: it panics when
+/// `panics` is set and otherwise just ends. Its locals drop as any test's do,
+/// the host before its `TestDirs`.
+fn run_unstopped_host_test(runtime: tokio::runtime::Runtime, panics: bool) -> UnstoppedHostTest {
+    let seen = std::sync::Mutex::new((None::<PathBuf>, Vec::<u32>::new()));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.block_on(async {
+            let dirs = TestDirs::new();
+            seen.lock().unwrap().0 = Some(dirs.root().to_path_buf());
+            let agent = fake_agent!(&dirs);
+            let endpoint = dirs.endpoint();
+            let folder = dirs.folder("a project");
+            let mut config = fake_config(&dirs, &endpoint, &agent, &["--fake-child"]);
+            config
+                .inherited_env
+                .retain(|(key, _)| key != std::ffi::OsStr::new("SHELL"));
+            config
+                .inherited_env
+                .push(("SHELL".into(), "/bin/sh".into()));
+            let _host = RunningHost::start(config);
+            let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+            client
+                .request::<SessionStart>(&start_request(&folder))
+                .await
+                .unwrap();
+            seen.lock().unwrap().1 = tree_of(&agent, run_of(&agent, &folder)[0]);
+            if panics {
+                panic!("{ON_PURPOSE}");
+            }
+        });
+    }));
+    drop(runtime);
+    let (root, pids) = seen.into_inner().unwrap();
+    UnstoppedHostTest {
+        panic: outcome.expect_err("a host test that never stops its host fails"),
+        root: root.expect("the test made its folders"),
+        pids,
+    }
+}
+
+/// The panic's message, whether it was formatted or not.
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+    panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("the failure is a message")
+}
+
+/// Checks that `test` left no folder and no process behind, ending any
+/// process it left so the check itself leaves nothing.
+fn assert_nothing_left(test: &UnstoppedHostTest) {
+    assert!(!test.pids.is_empty(), "the session's processes were seen");
+    let alive = tokio::runtime::Runtime::new()
+        .expect("a runtime")
+        .block_on(running_after_patience(&test.pids));
+    end_all(&test.pids);
+    let root_left = test.root.exists();
+    if root_left {
+        let _ = std::fs::remove_dir_all(&test.root);
+    }
+    assert!(alive.is_empty(), "processes still running: {alive:?}");
+    assert!(!root_left, "{} was left behind", test.root.display());
+}
+
+fn current_thread_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime")
+}
+
+fn multi_thread_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime")
+}
+
+fn assert_a_panicking_host_test_leaves_nothing_behind(runtime: tokio::runtime::Runtime) {
+    let test = run_unstopped_host_test(runtime, true);
+    assert_nothing_left(&test);
+    assert_eq!(panic_message(&*test.panic), ON_PURPOSE);
+}
+
+fn assert_an_unstopped_host_test_fails_after_leaving_nothing_behind(
+    runtime: tokio::runtime::Runtime,
+) {
+    let test = run_unstopped_host_test(runtime, false);
+    assert_nothing_left(&test);
+    let message = panic_message(&*test.panic);
+    assert!(
+        message.starts_with("the test did not stop its host"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_host_test_that_panics_on_a_single_threaded_runtime_fails_with_its_own_message_and_leaves_nothing_behind()
+ {
+    assert_a_panicking_host_test_leaves_nothing_behind(current_thread_runtime());
+}
+
+#[test]
+fn a_host_test_that_panics_on_a_multi_threaded_runtime_fails_with_its_own_message_and_leaves_nothing_behind()
+ {
+    assert_a_panicking_host_test_leaves_nothing_behind(multi_thread_runtime());
+}
+
+#[test]
+fn a_host_test_on_a_single_threaded_runtime_that_never_stops_its_host_leaves_nothing_behind_and_still_fails()
+ {
+    assert_an_unstopped_host_test_fails_after_leaving_nothing_behind(current_thread_runtime());
+}
+
+#[test]
+fn a_host_test_on_a_multi_threaded_runtime_that_never_stops_its_host_leaves_nothing_behind_and_still_fails()
+ {
+    assert_an_unstopped_host_test_fails_after_leaving_nothing_behind(multi_thread_runtime());
+}
+
 /// A host that is killed, with no stop and nothing recorded, takes with it
 /// every process its sessions and plain terminals started, as a stop does:
 /// their programs, each terminal's own host process, and what the programs
@@ -1319,6 +1457,7 @@ fn resolved(path: &Path) -> PathBuf {
 /// `claude_config`.
 fn todays_backends(dirs: &TestDirs, endpoint: &Endpoint, claude_config: &Path) -> HostConfig {
     let claude = ClaudeCodeSettings {
+        search_first: Vec::new(),
         program: "node".into(),
         leading_args: vec![fake_claude().into_os_string()],
         config_dir: claude_config.to_path_buf(),
@@ -1326,6 +1465,7 @@ fn todays_backends(dirs: &TestDirs, endpoint: &Endpoint, claude_config: &Path) -
         api_key_set: false,
     };
     HostConfig {
+        run: Default::default(),
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: floti_host::server::backends(&dirs.user_env(), Some(claude)),
@@ -1645,19 +1785,101 @@ async fn every_protocol_host_channel_is_served_or_listed_with_the_feature_that_w
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
-    let host = Host::start(fake_config(&dirs, &endpoint, &agent, &[])).expect("start the host");
+    let (host, served) = RunningHost::start_with(
+        fake_config(&dirs, &endpoint, &agent, &[]),
+        Host::served_channels,
+    );
+    host.stop(HostStopReason::Stop).await;
 
-    let drift = unserved::drift(&Catalogue::protocol(), &host.served_channels());
+    let drift = unserved::drift(&Catalogue::protocol(), &served);
     assert!(
         drift.is_empty(),
         "the not-yet-served list and the host disagree:\n{drift}"
     );
+}
 
-    host.stop(HostStopReason::Stop);
-    tokio::time::timeout(PATIENCE, host.run_until_stopped())
-        .await
-        .expect("the host stops in time")
-        .expect("the host stops cleanly");
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_calling_subscribing_to_or_opening_any_workspace_channel_is_served_rather_than_refused()
+ {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let endpoint = dirs.endpoint();
+    let mut config = fake_config(&dirs, &endpoint, &agent, &[]);
+    config
+        .inherited_env
+        .retain(|(key, _)| key != std::ffi::OsStr::new("SHELL"));
+    config
+        .inherited_env
+        .push(("SHELL".into(), "/bin/sh".into()));
+    let host = RunningHost::start(config);
+    let mut client = TestClient::connect(&endpoint, &["files", "terminal"]).await;
+
+    // Every channel the workspace declares, so one added there is swept too,
+    // and the profile channels the sessions domain declares for it. Launching
+    // a profile starts a session, which the sessions tests cover.
+    let mut declared = Catalogue::new();
+    workspace::declare(&mut declared);
+    let names: Vec<&str> = declared
+        .channels()
+        .map(|decl| decl.name())
+        .chain([
+            ProfileList::NAME,
+            ProfileSave::NAME,
+            ProfileDelete::NAME,
+            ProfilePin::NAME,
+            ProfileExport::NAME,
+            ProfileImport::NAME,
+            ProfilesChanged::NAME,
+        ])
+        .collect();
+    assert!(!declared.is_empty());
+    let protocol = Catalogue::protocol();
+    let null = || to_payload(&()).unwrap();
+    for (n, name) in (100_u64..).zip(names) {
+        let decl = protocol
+            .get(name)
+            .unwrap_or_else(|| panic!("`{name}` is not in the protocol"));
+        match decl.kind() {
+            // A refusal to parse a null payload is the channel's own answer.
+            ChannelKind::Request => {
+                if let Err(error) = client.request_on(name, null()).await {
+                    assert!(
+                        !names_unserved_channel(&error, name),
+                        "`{name}` was refused as not served: {error:?}"
+                    );
+                }
+            }
+            ChannelKind::Event { snapshot: true } => match client.subscribe_on(n, name).await {
+                Message::Snapshot(_) => {}
+                other => {
+                    panic!("a subscription to `{name}` did not start with a snapshot: {other:?}")
+                }
+            },
+            ChannelKind::Event { snapshot: false } => {
+                client.subscribe_quietly(n, name).await;
+                // Anything the host says about the subscription comes before
+                // its answer to a request sent after it.
+                client.request::<SessionList>(&()).await.unwrap();
+                while let Some(message) = client.next(Duration::ZERO).await {
+                    if let Message::SubscriptionError(refused) = message {
+                        assert_ne!(refused.subscription, n, "`{name}` was refused: {refused:?}");
+                    }
+                }
+            }
+            ChannelKind::Stream => {
+                client.open_on(n, name, null()).await;
+                client.request::<SessionList>(&()).await.unwrap();
+                if let Some(Some(reason)) = client.stream_closed(n) {
+                    assert!(
+                        !reason.contains("does not serve"),
+                        "`{name}` was refused as not served: {reason}"
+                    );
+                }
+            }
+        }
+    }
+
+    host.stop(HostStopReason::Stop).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

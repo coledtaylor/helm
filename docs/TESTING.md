@@ -28,7 +28,7 @@ The host's tests get their support from `crates/host/src/testkit.rs`, which
 the crate's own tests turn on through its `testkit` feature: `TestDirs`, a
 temporary tree with spaces in its paths holding a home, data, log, config and
 runtime folder; `unique_name` for a pipe or socket no other test is using;
-`RunningHost`, a host serving in the test's runtime; and the fake agent. Every
+`RunningHost`, a host serving on a thread and runtime of its own; and the fake agent. Every
 folder and socket a host test uses is in a `TestDirs`, never the real
 `%LOCALAPPDATA%`, Application Support, XDG data folder or `~/.config/floti`,
 and no test registers anything to start at sign-in.
@@ -40,7 +40,10 @@ naming the folder; Windows refuses to remove an open file, so that is where
 such a test fails. A struct holding a `TestDirs` declares it last, since
 fields drop in order. A test that starts a host in-process uses `RunningHost`
 and ends with `stop(..).await`, which ends the host's sessions and lets go of
-its store; dropping one unstopped fails the test. A test that kills the
+its store. Dropping one unstopped, a panicking test's unwind included, stops
+it the same way and waits for it before the `TestDirs` goes, so a failing test
+leaves nothing behind and fails with its own message; a test that ends without
+stopping its host still fails, saying so, once the host is stopped. A test that kills the
 `floti host` executable kills that process alone, as a crash would: the host
 takes everything it started with it (a job object on Windows, a guard process
 on macOS and Linux). The test lists those processes before the kill
@@ -53,9 +56,12 @@ session and host tests need no Node. Each run records its arguments, folder,
 variable names, children and every line it read to `<pid>.json` in the folder
 `FLOTI_FAKE_AGENT_LOG` names. `--fake-print=<hex>` writes bytes at start,
 `--fake-child[=<ms>]` starts a child of its own, `--fake-gui-child[=<ms>]`
-starts `floti-fake-gui` (`testkit/fake_gui.rs`) as one, `--fake-exit=<code>`
-exits; otherwise it answers each line with `echo: <line>`, and `/exit <code>`,
-`/print <hex>`, `/child` and `/gui-child` do the same at its prompt.
+starts `floti-fake-gui` (`testkit/fake_gui.rs`) as one, `--fake-listen[=<ms>]`
+starts one that listens on a TCP port on 127.0.0.1 the OS picks and records
+the port as `listening` in its own record (it runs `--fake-serve=<ms>`), for
+the processes-and-ports tests, `--fake-exit=<code>` exits; otherwise it
+answers each line with `echo: <line>`, and `/exit <code>`, `/print <hex>`,
+`/child` and `/gui-child` do the same at its prompt.
 `floti-fake-gui` is built for the Windows `windows` subsystem, so there it has
 no console and the pseudoconsole closing does not reach it, as with a GUI app
 or a tool a CLI starts with its window hidden; elsewhere it is an ordinary
@@ -89,12 +95,28 @@ host's own process group, the only console event one process can send
 another. Every test ends every process it started and checks that each
 process tree is gone.
 
+What a client browses around its sessions is tested through `TestClient`
+against a `RunningHost`, one file per feature in `crates/host/tests/`:
+`discovery.rs`, `settings.rs`, `profiles.rs`, `templates.rs`, `content.rs`,
+`files.rs` and `highlighting.rs`, with the processes-and-ports pass in
+`resources.rs`. They carry core's and main's cases for discovery, roots,
+harnesses, settings, profiles, templates, content and the Files view with the
+same inputs and expectations. A test that needs a repository makes one with
+`GitRepo` (testkit), which commits with a fixed author and date and none of
+the machine's git configuration. One that needs a link makes it with
+`link_folder`, a junction on Windows and a symlink on macOS and Linux, and
+checks that every file at its target is still there afterwards.
+`highlighting.rs` reads today's languages from
+`packages/core/src/content/highlight.ts` and `packages/ui/src/lib/languages.ts`
+when it runs, so a language the app highlights and the host does not fails it.
+
 `crates/host/tests/os_conditionals.rs` fails, naming each `file:line`, when a
 compile-time OS conditional (`cfg(windows)`, `cfg!(unix)`, `target_os` and
 the like) appears outside `src/platform/mod.rs` and the per-OS
 implementations of the platform concerns (`startup`, `socket`, `folders`,
-`process_tree`, `links`, `launcher`). Behaviour that differs by OS goes behind one of those
-interfaces, with an implementation for each OS.
+`process_tree`, `process_table`, `links`, `launcher`). Behaviour that
+differs by OS goes behind one of those interfaces, with an implementation for
+each OS.
 
 ## Running them
 
@@ -163,7 +185,10 @@ vitest runs five projects (`vitest.config.ts`):
   below.
 - **desktop** - main-process services, in Node. `vi.mock('electron')` with
   `test/electron.ts` stands in for Electron; ptys are real and run the fake
-  `claude`. `sessions.test.ts` is the example.
+  `claude`. The faked app's folders are in a temporary folder that
+  `test/electron-setup.ts`, the project's global setup, makes for each run and
+  removes when the run ends, passing or failing. `sessions.test.ts` is the
+  example.
 - **sdk** - the plugin SDK in `packages/plugin-sdk/test`: its validator,
   schema and command in Node, the package as npm publishes it, and its React
   and Vue helpers in jsdom against the fake bridge in `test/bridge.ts`.

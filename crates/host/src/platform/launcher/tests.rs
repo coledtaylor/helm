@@ -100,3 +100,20 @@ fn a_batch_file_gets_each_argument_unchanged() {
         ]
     );
 }
+
+#[test]
+fn a_program_named_by_its_path_is_found_there_and_a_missing_one_is_not_found() {
+    let this = std::env::current_exe().unwrap();
+    assert_eq!(Native.find(this.as_os_str()), Some(this.clone()));
+    let gone = this.with_file_name("floti-no-such-program-anywhere");
+    assert_eq!(Native.find(gone.as_os_str()), None);
+    assert_eq!(
+        Native.find(std::ffi::OsStr::new("floti-no-such-program-anywhere")),
+        None
+    );
+    let home = Path::new("/home dir");
+    assert_eq!(
+        Native.user_bin_folders(home).first(),
+        Some(&home.join(".local").join("bin"))
+    );
+}

@@ -26,7 +26,7 @@ mod tests;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use floti_protocol::channels::common::PermissionMode;
 use floti_protocol::channels::sessions::{SessionActivity, UsageSnapshot};
@@ -35,9 +35,9 @@ use floti_protocol::{BackendId, HarnessPart, HarnessSupport, Knowable};
 
 use super::{
     AgentBackend, AgentToolServer, AgentTools, Composition, ConfigSource, Conversation,
-    HistorySource, Launch, LaunchFolder, LaunchRequest, LaunchSpec, Permissions, PromptRecord,
-    PromptTail, Registration, ResumeRequest, Resumer, SessionRef, SignIn, SignInCheck,
-    StatusSource, TestedVersions, Transcript, UsageSource, Version, VersionCheck,
+    ExecutableSetup, HistorySource, Launch, LaunchFolder, LaunchRequest, LaunchSpec, Permissions,
+    PromptRecord, PromptTail, Registration, ResumeRequest, Resumer, SessionRef, SignIn,
+    SignInCheck, StatusSource, TestedVersions, Transcript, UsageSource, Version, VersionCheck,
 };
 use crate::platform::folders::UserEnv;
 use crate::platform::launcher::{self, Program, ProgramLauncher};
@@ -78,15 +78,21 @@ pub struct ClaudeCodeSettings {
     /// Whether `ANTHROPIC_API_KEY` is set for the host. Only whether: the
     /// value is never read.
     pub api_key_set: bool,
+    /// Folders `program`, when it is a bare name, is looked for in before
+    /// `PATH`: the user's program folders a host started at sign-in may not
+    /// have on its `PATH`, where the native installer puts `claude`.
+    pub search_first: Vec<PathBuf>,
 }
 
 impl ClaudeCodeSettings {
-    /// `claude` on `PATH`, with the config folder the user's environment
-    /// gives it. `None` without a home folder to find it in.
+    /// `claude` in the user's program folders or on `PATH`, with the config
+    /// folder the user's environment gives it. `None` without a home folder
+    /// to find it in.
     pub fn from_env(env: &UserEnv) -> Option<Self> {
+        let home = env.home.as_ref()?;
         let (config_dir, pass) = match env.absolute_var("CLAUDE_CONFIG_DIR") {
             Some(dir) => (dir, true),
-            None => (env.home.as_ref()?.join(".claude"), false),
+            None => (home.join(".claude"), false),
         };
         Some(Self {
             program: "claude".into(),
@@ -96,6 +102,7 @@ impl ClaudeCodeSettings {
             api_key_set: env
                 .var("ANTHROPIC_API_KEY")
                 .is_some_and(|value| !value.is_empty()),
+            search_first: launcher::Native.user_bin_folders(home),
         })
     }
 }
@@ -105,7 +112,12 @@ pub struct ClaudeCodeBackend {
     id: BackendId,
     settings: ClaudeCodeSettings,
     tree: Arc<dyn ProcessTree + Send + Sync>,
-    version: OnceLock<VersionCheck>,
+    /// The executable the user chose in setup, run in place of the one
+    /// `settings` name, with no leading arguments.
+    chosen: RwLock<Option<PathBuf>>,
+    /// The version check of whichever executable launches now, asked once
+    /// per executable.
+    version: Mutex<Option<VersionCheck>>,
 }
 
 impl ClaudeCodeBackend {
@@ -116,7 +128,8 @@ impl ClaudeCodeBackend {
             id: BackendId::claude_code(),
             settings,
             tree,
-            version: OnceLock::new(),
+            chosen: RwLock::new(None),
+            version: Mutex::new(None),
         }
     }
 
@@ -124,19 +137,30 @@ impl ClaudeCodeBackend {
         &self.settings
     }
 
-    /// The installed version against [`TESTED_VERSIONS`], asked once.
+    /// The installed version against [`TESTED_VERSIONS`], asked once for
+    /// each executable launched.
     pub fn version_check(&self) -> VersionCheck {
-        self.version
-            .get_or_init(|| match self.version_output() {
-                Some(output) => TESTED_VERSIONS.check(&output),
-                None => VersionCheck::Unknown,
+        let mut cached = self.version.lock().unwrap_or_else(PoisonError::into_inner);
+        cached
+            .get_or_insert_with(|| {
+                let (program, leading) = self.command();
+                match self.version_output(&program, &leading) {
+                    Some(output) => TESTED_VERSIONS.check(&output),
+                    None => VersionCheck::Unknown,
+                }
             })
             .clone()
     }
 
-    /// What `claude --version` prints, or `None` when it would not run.
-    fn version_output(&self) -> Option<String> {
-        let program = self.program(vec!["--version".into()]);
+    /// What `program`, with `leading` before it, prints for `--version`, or
+    /// `None` when it would not run.
+    fn version_output(&self, program: &OsString, leading: &[OsString]) -> Option<String> {
+        let args: Vec<OsString> = leading
+            .iter()
+            .cloned()
+            .chain(["--version".into()])
+            .collect();
+        let program = launcher::Native.resolve(program, &args);
         let output = Command::new(&program.program)
             .args(&program.args)
             .envs(self.session_env())
@@ -148,20 +172,28 @@ impl ClaudeCodeBackend {
         output
             .status
             .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .filter(|text| !text.is_empty())
+    }
+
+    /// The executable launched now and the arguments before every launch's
+    /// own: the one the user chose, alone, or the one `settings` name.
+    fn command(&self) -> (OsString, Vec<OsString>) {
+        match &*self.chosen.read().unwrap_or_else(PoisonError::into_inner) {
+            Some(chosen) => (chosen.clone().into_os_string(), Vec::new()),
+            None => (
+                self.settings.program.clone(),
+                self.settings.leading_args.clone(),
+            ),
+        }
     }
 
     /// `claude` with `args` after its leading ones, as the OS has to start
     /// it: a batch-file install on Windows goes through `cmd.exe`.
     fn program(&self, args: Vec<OsString>) -> Program {
-        let args: Vec<OsString> = self
-            .settings
-            .leading_args
-            .iter()
-            .cloned()
-            .chain(args)
-            .collect();
-        launcher::Native.resolve(&self.settings.program, &args)
+        let (program, leading) = self.command();
+        let args: Vec<OsString> = leading.into_iter().chain(args).collect();
+        launcher::Native.resolve(&program, &args)
     }
 
     fn session_env(&self) -> Vec<(OsString, OsString)> {
@@ -347,6 +379,10 @@ impl AgentBackend for ClaudeCodeBackend {
         Some(self)
     }
 
+    fn executable(&self) -> Option<&dyn ExecutableSetup> {
+        Some(self)
+    }
+
     /// `.credentials.json`, and every `<pid>.<hash>.key` beside the session
     /// records, found by name from a listing that opens none of them.
     fn credential_paths(&self) -> Vec<PathBuf> {
@@ -485,5 +521,49 @@ impl ConfigSource for ClaudeCodeBackend {
 impl SignInCheck for ClaudeCodeBackend {
     fn signed_in(&self) -> SignIn {
         sign_in::signed_in(&self.settings.config_dir, self.settings.api_key_set)
+    }
+}
+
+/// `claude` as setup finds it: a bare name in the user's program folders
+/// first, then on `PATH`; a path where it names one.
+impl ExecutableSetup for ClaudeCodeBackend {
+    fn discovered(&self) -> Option<PathBuf> {
+        let program = &self.settings.program;
+        let bare =
+            Path::new(program).components().count() == 1 && !Path::new(program).is_absolute();
+        if bare
+            && let Some(found) = self
+                .settings
+                .search_first
+                .iter()
+                .find_map(|folder| launcher::Native.find(folder.join(program).as_os_str()))
+        {
+            return Some(found);
+        }
+        launcher::Native.find(program)
+    }
+
+    fn version(&self, chosen: Option<&Path>) -> Option<String> {
+        match chosen {
+            Some(chosen) => self.version_output(&chosen.as_os_str().to_owned(), &[]),
+            None => self.version_output(&self.settings.program, &self.settings.leading_args),
+        }
+    }
+
+    fn version_command(&self) -> &str {
+        "claude --version"
+    }
+
+    fn use_executable(&self, chosen: Option<PathBuf>) {
+        let mut current = self.chosen.write().unwrap_or_else(PoisonError::into_inner);
+        if *current != chosen {
+            *current = chosen;
+            // A different binary answers for itself.
+            *self.version.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        }
+    }
+
+    fn config_dir(&self) -> Option<PathBuf> {
+        Some(self.settings.config_dir.clone())
     }
 }

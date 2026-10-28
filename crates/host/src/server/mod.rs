@@ -29,7 +29,7 @@ mod connection;
 mod events;
 mod features;
 mod hosted;
-mod records;
+pub(crate) mod records;
 pub mod unserved;
 
 use std::collections::BTreeSet;
@@ -42,6 +42,8 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
 use floti_protocol::channels::host::HostStopReason;
+use floti_protocol::channels::sessions::SessionResources;
+use floti_protocol::channels::workspace::AppMode;
 use floti_protocol::{BackendId, Catalogue, HostIdentity, PROTOCOL_VERSION};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -82,6 +84,8 @@ pub struct HostConfig {
     pub backends: Vec<Arc<dyn AgentBackend>>,
     /// The environment sessions inherit, less what every session drops.
     pub inherited_env: Vec<(OsString, OsString)>,
+    /// How it was started and for whom, as `app:info` reports it.
+    pub run: HostRun,
 }
 
 impl HostConfig {
@@ -100,7 +104,45 @@ impl HostConfig {
                 .iter()
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect(),
+            run: HostRun::from_env(env),
         })
+    }
+}
+
+/// How a host was started and for whom.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostRun {
+    pub mode: AppMode,
+    /// The user's home folder, for a client to show a long path from `~`,
+    /// and where `roots:suggest` looks for a `.harness` folder. Nothing in
+    /// it is written.
+    pub home: Option<PathBuf>,
+}
+
+impl HostRun {
+    /// A host on the OS's own folders is the installed one; a host whose
+    /// data folder was moved (`FLOTI_DATA_DIR`) runs on data of its own, as
+    /// a development run does.
+    pub fn from_env(env: &UserEnv) -> Self {
+        let moved = env.var(folders::DATA_DIR_VAR).is_some();
+        Self {
+            mode: if moved {
+                AppMode::Dev
+            } else {
+                AppMode::Installed
+            },
+            home: env.home.clone(),
+        }
+    }
+}
+
+/// A development run with no home folder to show: what a test's host is.
+impl Default for HostRun {
+    fn default() -> Self {
+        Self {
+            mode: AppMode::Dev,
+            home: None,
+        }
     }
 }
 
@@ -181,6 +223,7 @@ impl Host {
             endpoint,
             backends,
             inherited_env,
+            run,
         } = config;
         // Before any session starts, so that every process the host starts
         // ends when it does, however it ends. Where the OS will not arrange
@@ -209,7 +252,7 @@ impl Host {
             inherited_env,
             lost,
         )?);
-        let features = Arc::new(Features::new(Arc::clone(&hosted))?);
+        let features = Arc::new(Features::new(Arc::clone(&hosted), folders, run)?);
 
         let (stop_tx, stop_requested) = watch::channel(None);
         let stopper = Stopper(Arc::new(stop_tx));
@@ -237,6 +280,14 @@ impl Host {
     /// Every protocol channel this host serves, of every kind.
     pub fn served_channels(&self) -> BTreeSet<&'static str> {
         connection::served_channels(&self.features)
+    }
+
+    /// What each running hosted session is holding (its process tree and
+    /// listening ports) from exactly one pass run for this ask, as a
+    /// session-detail call needs it. It joins a pass already running, and no
+    /// pass runs for it afterwards.
+    pub async fn session_resources(&self) -> Vec<SessionResources> {
+        self.features.resources().one_pass().await
     }
 
     /// Where clients connect.

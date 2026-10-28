@@ -51,6 +51,7 @@ impl Claude {
     fn backend(&self) -> ClaudeCodeBackend {
         ClaudeCodeBackend::new(
             ClaudeCodeSettings {
+                search_first: Vec::new(),
                 program: "claude".into(),
                 leading_args: Vec::new(),
                 config_dir: self.config.clone(),
@@ -87,6 +88,7 @@ impl Claude {
 
     fn config(&self) -> HostConfig {
         HostConfig {
+            run: Default::default(),
             folders: self.dirs.folders(),
             endpoint: self.dirs.endpoint(),
             backends: vec![Arc::new(self.backend()) as Arc<dyn AgentBackend>],
@@ -763,6 +765,7 @@ async fn a_host_whose_backends_declare_no_usage_answers_with_no_readings() {
     let dirs = TestDirs::new();
     let endpoint = dirs.endpoint();
     let host = RunningHost::start(HostConfig {
+        run: Default::default(),
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: vec![Arc::new(shell_backend(&dirs.user_env())) as Arc<dyn AgentBackend>],

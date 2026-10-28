@@ -144,6 +144,44 @@ impl Events {
         Ok(())
     }
 
+    /// Serves `C`, a channel that carries state whose snapshot is not its
+    /// events' type (one that is null until the first event, say), starting
+    /// from `snapshot`. Publish on it with [`Self::set_state_as`].
+    pub fn serve_state_from<C: EventChannel>(&self, snapshot: &C::Snapshot) -> crate::Result<()> {
+        const {
+            assert!(
+                C::SNAPSHOT,
+                "serve_state_from is for a channel that carries state"
+            )
+        };
+        let state = encode::<C, C::Snapshot>(snapshot)?;
+        self.declare(C::NAME, Numbering::Shared(0), Some(state));
+        Ok(())
+    }
+
+    /// `C`'s state is now `snapshot`, which later subscriptions start with,
+    /// and `event`, which says the same, goes to every subscription now as
+    /// the next event.
+    pub fn set_state_as<C: EventChannel>(
+        &self,
+        event: &C::Event,
+        snapshot: &C::Snapshot,
+    ) -> crate::Result<()> {
+        let payload = encode::<C, C::Event>(event)?;
+        let state = encode::<C, C::Snapshot>(snapshot)?;
+        let mut served = self.lock();
+        let channel = channel(&mut served, C::NAME);
+        channel.state = Some(state);
+        let seq = channel.next_shared(C::NAME);
+        let _ = self.published.send(Publication {
+            channel: C::NAME,
+            to: None,
+            seq,
+            payload,
+        });
+        Ok(())
+    }
+
     /// Serves `C`, a channel whose events carry no state, to every
     /// subscriber alike.
     pub fn serve_events<C: EventChannel>(&self) {

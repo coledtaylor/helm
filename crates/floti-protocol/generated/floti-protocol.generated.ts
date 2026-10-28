@@ -137,6 +137,46 @@ capturedAt: string,
 evictedAt: string | null, messages: Array<ArchiveMessage>, };
 
 /**
+ * What an artifact address answered, or the part of it from an offset.
+ *
+ * A client reads from `offset + body.length` until it holds `totalBytes`.
+ * An offset at or past the end answers 200 with an empty body. A refusal
+ * answers its whole text whatever the offset.
+ */
+export type ArtifactBytes = { 
+/**
+ * 200, or the refusal: 400 for an address that is not one, 404 for a
+ * token or file that is not there, 403 for a path out of the pinned
+ * folder.
+ */
+status: number, 
+/**
+ * Every header the address is served with, `content-type` among them.
+ */
+headers: Array<ArtifactHeader>, 
+/**
+ * The length of the whole body.
+ */
+totalBytes: number, body: Uint8Array, };
+
+export type ArtifactBytesRequest = { 
+/**
+ * An address `content:artifact` minted, or one beside it that a frame
+ * loaded.
+ */
+url: string, 
+/**
+ * Where in the body to start. Left out, the body starts at its first
+ * byte, so a file within one piece takes one request.
+ */
+offset: number, };
+
+/**
+ * One response header, its name lower-cased.
+ */
+export type ArtifactHeader = { name: string, value: string, };
+
+/**
  * Where a frame may load an HTML artifact from.
  */
 export type ArtifactLink = { url: string, token: string, };
@@ -2907,6 +2947,7 @@ export interface RequestChannels {
   "config:watch": { request: WatchConfigRequest; response: null; capability: null };
   "config:write": { request: WriteConfigRequest; response: WriteConfigResult; capability: null };
   "content:artifact": { request: ScopedFile; response: ArtifactLink; capability: "files" };
+  "content:artifactBytes": { request: ArtifactBytesRequest; response: ArtifactBytes; capability: "files" };
   "content:document": { request: ScopedFile; response: ContentDocument; capability: "files" };
   "content:render": { request: ContentRenderRequest; response: RenderedMarkdown; capability: "files" };
   "content:restore": { request: RestoreSnapshotRequest; response: WriteConfigResult; capability: "files" };
@@ -2923,6 +2964,7 @@ export interface RequestChannels {
   "files:read": { request: FilesPathRequest; response: FileView; capability: "files" };
   "files:status": { request: FilesRoot; response: FilesStatus; capability: "files" };
   "files:watch": { request: FilesWatchRequest; response: null; capability: "files" };
+  "git:refresh": { request: null; response: { [key in string]?: GitState | null }; capability: null };
   "harness:create": { request: CreateHarnessRequest; response: CreateHarnessOutcome; capability: null };
   "history:projects": { request: null; response: Array<HistoryProject>; capability: null };
   "history:prompts": { request: HistorySessionRef; response: Array<HistoryPrompt>; capability: null };
@@ -3056,6 +3098,7 @@ export const CHANNELS = [
   { name: "config:watch", kind: "request", capability: null },
   { name: "config:write", kind: "request", capability: null },
   { name: "content:artifact", kind: "request", capability: "files" },
+  { name: "content:artifactBytes", kind: "request", capability: "files" },
   { name: "content:document", kind: "request", capability: "files" },
   { name: "content:render", kind: "request", capability: "files" },
   { name: "content:restore", kind: "request", capability: "files" },
@@ -3074,6 +3117,7 @@ export const CHANNELS = [
   { name: "files:read", kind: "request", capability: "files" },
   { name: "files:status", kind: "request", capability: "files" },
   { name: "files:watch", kind: "request", capability: "files" },
+  { name: "git:refresh", kind: "request", capability: null },
   { name: "git:updated", kind: "event", capability: null },
   { name: "harness:create", kind: "request", capability: null },
   { name: "history:changed", kind: "event", capability: null },

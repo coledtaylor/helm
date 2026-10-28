@@ -338,6 +338,76 @@
       ],
       "type": "object"
     },
+    "ArtifactBytes": {
+      "description": "What an artifact address answered, or the part of it from an offset.\n\nA client reads from `offset + body.length` until it holds `totalBytes`.\nAn offset at or past the end answers 200 with an empty body. A refusal\nanswers its whole text whatever the offset.",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/Bytes"
+        },
+        "headers": {
+          "description": "Every header the address is served with, `content-type` among them.",
+          "items": {
+            "$ref": "#/$defs/ArtifactHeader"
+          },
+          "type": "array"
+        },
+        "status": {
+          "description": "200, or the refusal: 400 for an address that is not one, 404 for a\ntoken or file that is not there, 403 for a path out of the pinned\nfolder.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "totalBytes": {
+          "description": "The length of the whole body.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status",
+        "headers",
+        "totalBytes",
+        "body"
+      ],
+      "type": "object"
+    },
+    "ArtifactBytesRequest": {
+      "properties": {
+        "offset": {
+          "default": 0,
+          "description": "Where in the body to start. Left out, the body starts at its first\nbyte, so a file within one piece takes one request.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "description": "An address `content:artifact` minted, or one beside it that a frame\nloaded.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "ArtifactHeader": {
+      "description": "One response header, its name lower-cased.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    },
     "ArtifactLink": {
       "description": "Where a frame may load an HTML artifact from.",
       "properties": {
@@ -9415,6 +9485,17 @@
     {
       "capability": "files",
       "kind": "request",
+      "name": "content:artifactBytes",
+      "request": {
+        "$ref": "#/$defs/ArtifactBytesRequest"
+      },
+      "response": {
+        "$ref": "#/$defs/ArtifactBytes"
+      }
+    },
+    {
+      "capability": "files",
+      "kind": "request",
       "name": "content:document",
       "request": {
         "$ref": "#/$defs/ScopedFile"
@@ -9622,6 +9703,27 @@
       },
       "response": {
         "type": "null"
+      }
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "git:refresh",
+      "request": {
+        "type": "null"
+      },
+      "response": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": "object"
       }
     },
     {
