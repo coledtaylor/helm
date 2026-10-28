@@ -2,12 +2,17 @@
 //!
 //! Every client builds against this crate: the desktop and the website through
 //! the TypeScript it generates, the TUI by linking it, the phone through the
-//! JSON Schema. It says nothing about how bytes get from one side to the other;
-//! the host wraps it in its own transport, so there is no async runtime and no
+//! JSON Schema. It says nothing about how bytes get from one side to the other,
+//! but it does say what they look like on the way: the session layer is part of
+//! the contract, so every client encrypts and authenticates the same way. Each
+//! side wraps it in its own transport, so there is no async runtime and no
 //! OS-specific code here.
 //!
 //! The pieces, in the order a connection meets them:
 //!
+//! - [`noise`]: the Noise session, a handshake proving the device key and the
+//!   pinned host key, then every byte sealed under keys fresh to the
+//!   connection. Not in the generated schema: no message carries it.
 //! - [`frame`]: length-prefixed CBOR, one [`Message`] per frame.
 //! - [`handshake`] and [`version`]: `hello`, then `welcome` or `refused`.
 //! - [`capability`] and [`delivery`]: what a client can draw, declared at
@@ -33,6 +38,7 @@ pub mod frame;
 pub mod generate;
 pub mod handshake;
 pub mod message;
+pub mod noise;
 pub mod subscription;
 pub mod version;
 
