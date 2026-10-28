@@ -41,18 +41,26 @@ such a test fails. A struct holding a `TestDirs` declares it last, since
 fields drop in order. A test that starts a host in-process uses `RunningHost`
 and ends with `stop(..).await`, which ends the host's sessions and lets go of
 its store; dropping one unstopped fails the test. A test that kills the
-`floti host` executable kills its process tree with it, as a crash would, so
-no session it started outlives the test.
+`floti host` executable kills that process alone, as a crash would: the host
+takes everything it started with it (a job object on Windows, a guard process
+on macOS and Linux). The test lists those processes before the kill
+with `process_tree::descendants` (testkit only) and checks they have all
+ended, ending any that has not so it cannot outlive the test.
 
 The fake agent (`crates/host/testkit/fake_agent.rs`, the `floti-fake-agent`
 binary) is a stand-in for any program a session runs, written in Rust so the
 session and host tests need no Node. Each run records its arguments, folder,
 variable names, children and every line it read to `<pid>.json` in the folder
 `FLOTI_FAKE_AGENT_LOG` names. `--fake-print=<hex>` writes bytes at start,
-`--fake-child[=<ms>]` starts a child of its own, `--fake-exit=<code>` exits;
-otherwise it answers each line with `echo: <line>`, and `/exit <code>`,
-`/print <hex>` and `/child` do the same at its prompt. `--fake-tick=<ms>`
-writes `tick <n>` on that interval, for output made while no client watches.
+`--fake-child[=<ms>]` starts a child of its own, `--fake-gui-child[=<ms>]`
+starts `floti-fake-gui` (`testkit/fake_gui.rs`) as one, `--fake-exit=<code>`
+exits; otherwise it answers each line with `echo: <line>`, and `/exit <code>`,
+`/print <hex>`, `/child` and `/gui-child` do the same at its prompt.
+`floti-fake-gui` is built for the Windows `windows` subsystem, so there it has
+no console and the pseudoconsole closing does not reach it, as with a GUI app
+or a tool a CLI starts with its window hidden; elsewhere it is an ordinary
+program. `--fake-tick=<ms>` writes `tick <n>` on that interval, for output
+made while no client watches.
 An integration test gets one with `fake_agent!(&dirs)`, and
 `FakeAgent::backend` runs it as an agent backend that resumes with
 `--resume <id>`.

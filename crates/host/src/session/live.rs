@@ -174,6 +174,7 @@ impl SessionHost {
         drop(pair.slave);
         let master = pair.master;
         let pid = child.process_id().unwrap_or(0);
+        let tied = TiedTree::new(Arc::clone(&self.shared.tree), pid);
 
         let opened = master
             .try_clone_reader()
@@ -235,7 +236,9 @@ impl SessionHost {
         let shared = Arc::clone(&self.shared);
         let waiting = Arc::clone(&session);
         spawn_thread(format!("session {id} exit"), move || {
-            let exit = match child.wait() {
+            let waited = child.wait();
+            drop(tied);
+            let exit = match waited {
                 Ok(status) => SessionExit {
                     code: status.exit_code(),
                     signal: status.signal().map(str::to_owned),
@@ -264,6 +267,27 @@ impl SessionHost {
     /// Every running session, oldest first.
     pub fn list(&self) -> Vec<Arc<Session>> {
         lock(&self.shared.sessions).values().cloned().collect()
+    }
+}
+
+/// A program the host started, its tree tied to the host's life
+/// ([`ProcessTree::tie_tree`]) until this is dropped: once the program has
+/// been reaped, or its start has failed.
+struct TiedTree {
+    tree: Arc<dyn ProcessTree + Send + Sync>,
+    pid: u32,
+}
+
+impl TiedTree {
+    fn new(tree: Arc<dyn ProcessTree + Send + Sync>, pid: u32) -> Self {
+        tree.tie_tree(pid);
+        Self { tree, pid }
+    }
+}
+
+impl Drop for TiedTree {
+    fn drop(&mut self) {
+        self.tree.untie_tree(self.pid);
     }
 }
 
