@@ -10,11 +10,24 @@
 //! - [`history`]: history, the transcript archive and usage.
 //! - [`config`]: the config console.
 //! - [`resources`]: processes and ports, what each hosted session holds.
+//! - [`workspace`]: the host's identity, settings and setup, and what the
+//!   workspace features below share.
+//! - [`discovery`]: project discovery, scan roots and harnesses.
+//! - [`profiles`]: saved profiles.
+//! - [`templates`]: harness templates.
+//! - [`content`]: notes and documents, and the renderer.
+//! - [`files`]: the Files view.
 
 mod config;
+mod content;
+mod discovery;
+mod files;
 mod history;
+mod profiles;
 mod resources;
 mod sessions;
+mod templates;
+mod workspace;
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -23,15 +36,19 @@ use floti_protocol::Payload;
 use floti_protocol::channel::{Router, StreamChannel, from_payload};
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use super::HostRun;
 use super::events::Events;
 use super::hosted::Hosted;
+use crate::platform::folders::Folders;
 use crate::session::{ClientId, Session, SessionOutput};
 pub use resources::ResourcesHandle;
+pub(crate) use workspace::WorkspaceContext;
 
 /// What every feature is built with.
 pub(crate) struct FeatureContext {
     pub hosted: Arc<Hosted>,
     pub events: Arc<Events>,
+    pub workspace: Arc<WorkspaceContext>,
 }
 
 /// One feature of the host.
@@ -117,10 +134,16 @@ pub(crate) struct Features {
 impl Features {
     /// Builds each feature. Call it from inside a Tokio runtime: a feature
     /// may start the tasks that feed its events.
-    pub fn new(hosted: Arc<Hosted>) -> crate::Result<Self> {
+    ///
+    /// The workspace's shared state is built first: it points each backend
+    /// at the executable the settings choose before any feature captures how
+    /// a backend runs.
+    pub fn new(hosted: Arc<Hosted>, folders: Folders, run: HostRun) -> crate::Result<Self> {
+        let workspace = Arc::new(WorkspaceContext::new(&hosted, folders, run)?);
         let context = FeatureContext {
             hosted,
             events: Arc::new(Events::new()),
+            workspace,
         };
         let resources = resources::Resources::new(&context)?;
         let handle = resources.handle();
@@ -129,6 +152,12 @@ impl Features {
             Box::new(history::History::new(&context)?),
             Box::new(config::Config::new(&context)?),
             Box::new(resources),
+            Box::new(workspace::Workspace::new(&context)?),
+            Box::new(discovery::Discovery::new(&context)?),
+            Box::new(profiles::Profiles::new(&context)?),
+            Box::new(templates::Templates::new(&context)?),
+            Box::new(content::Content::new(&context)?),
+            Box::new(files::Files::new(&context)?),
         ];
         Ok(Self {
             features,

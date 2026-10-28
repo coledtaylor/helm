@@ -120,7 +120,7 @@ impl Feature for Config {
 /// Runs `work`, which may wait on a child process for a long time, without
 /// holding up a runtime worker: on a multi-threaded runtime the worker's
 /// other tasks move to another thread while it runs.
-fn off_the_workers<T>(work: impl FnOnce() -> T) -> T {
+pub(super) fn off_the_workers<T>(work: impl FnOnce() -> T) -> T {
     match Handle::try_current() {
         Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
             tokio::task::block_in_place(work)

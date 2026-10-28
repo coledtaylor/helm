@@ -29,6 +29,7 @@ pub use macos::Native;
 pub use windows::Native;
 
 use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 
 /// A program ready to start: what to run, its arguments, and variables it
 /// needs on top of the session's environment.
@@ -44,6 +45,18 @@ pub trait ProgramLauncher {
     /// What to start for `program` with `args`, each argument reaching the
     /// program as one argument, unchanged.
     fn resolve(&self, program: &OsStr, args: &[OsString]) -> Program;
+
+    /// The file `program` names, found as the OS would start it: as given
+    /// when it names a folder, otherwise in each `PATH` folder. Only a file
+    /// this user may run counts. `None` when there is none.
+    fn find(&self, program: &OsStr) -> Option<PathBuf>;
+
+    /// Folders a user's command-line programs are installed in that a
+    /// program started at sign-in may not have on its `PATH`, looked in
+    /// before it: `~/.local/bin` everywhere, which native installers use.
+    fn user_bin_folders(&self, home: &Path) -> Vec<PathBuf> {
+        vec![home.join(".local").join("bin")]
+    }
 }
 
 /// `program` with `args`, unchanged.

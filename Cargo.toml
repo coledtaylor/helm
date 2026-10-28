@@ -20,7 +20,13 @@ publish = false
 
 [workspace.dependencies]
 alacritty_terminal = "0.26"
+# The Files view's sanitiser: rendered markdown keeps no script, event handler
+# or address it does not allow.
+ammonia = "4"
 ciborium = "0.2"
+# GitHub-flavoured markdown for the Files view, without the CLI or its own
+# highlighter: code fences go through syntect below.
+comrak = { version = "0.59", default-features = false }
 floti-protocol = { path = "crates/floti-protocol" }
 getrandom = "0.4"
 # Raw deflate for archived transcript bodies, on the pure-Rust backend so no OS
@@ -33,6 +39,8 @@ jiff = "0.2"
 # elevation or developer mode.
 junction = "1.4"
 libc = "0.2"
+# Recursive folder watching for the Files view, on each OS's own events.
+notify = "8"
 portable-pty = "0.9"
 # Bundled, so the host needs no SQLite on the machine and every OS runs the
 # same version.
@@ -41,6 +49,11 @@ schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1"
+# Profiles, templates and harness manifests are YAML. A maintained fork of
+# serde_yaml, which is no longer maintained.
+serde_yaml_ng = "0.10"
+# Code highlighting with the pure-Rust regex engine, so no OS needs Oniguruma.
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = [
@@ -56,6 +69,7 @@ tokio = { version = "1", features = [
 ] }
 ts-rs = { version = "11", features = ["serde-compat", "no-serde-warnings"] }
 windows-sys = { version = "0.61", features = [
+    "Wdk_System_SystemServices",
     "Wdk_System_Threading",
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
@@ -69,6 +83,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_RemoteDesktop",
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Shell",
 ] }

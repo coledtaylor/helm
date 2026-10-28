@@ -35,6 +35,7 @@ fn fake_config(
     args: &[&str],
 ) -> HostConfig {
     HostConfig {
+        run: Default::default(),
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: vec![Arc::new(agent.backend(args.iter().copied())) as Arc<dyn AgentBackend>],

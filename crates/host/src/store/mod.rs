@@ -10,6 +10,7 @@
 //! session row added. The tests open copies of it and never the file itself.
 
 pub mod migrations;
+pub mod projects;
 
 #[cfg(test)]
 mod tests;

@@ -221,6 +221,126 @@ impl Drop for RunningHost {
     }
 }
 
+/// The author and committer every [`GitRepo`] commit is made by.
+pub const GIT_AUTHOR: (&str, &str) = ("Floti Tests", "tests@floti.invalid");
+
+/// The date every [`GitRepo`] commit is made at.
+pub const GIT_DATE: &str = "2026-01-02T03:04:05+00:00";
+
+/// A git repository for a test, made and changed by running `git` with a
+/// fixed author and date and none of the machine's own configuration: no
+/// system or global config file, no hooks or signing they might name, and
+/// no line-ending conversion, so a test sees the same repository on every
+/// machine and OS.
+#[derive(Debug, Clone)]
+pub struct GitRepo {
+    path: PathBuf,
+}
+
+impl GitRepo {
+    /// A new repository on `main` at `path`, made if it is not there.
+    pub fn init(path: impl Into<PathBuf>) -> Self {
+        let repo = Self { path: path.into() };
+        std::fs::create_dir_all(&repo.path).expect("create the repository's folder");
+        repo.git(&["init", "-q", "-b", "main"]);
+        repo
+    }
+
+    /// The working tree.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// `git` in the working tree with no configuration but the repository's
+    /// own and this fixture's fixed author, date and settings.
+    pub fn command(&self) -> std::process::Command {
+        let mut command = std::process::Command::new("git");
+        command
+            .current_dir(&self.path)
+            .args([
+                "-c",
+                "core.autocrlf=false",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "tag.gpgsign=false",
+                "-c",
+                "init.defaultBranch=main",
+            ])
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            // A file that is never made: git reads it as an empty global
+            // config, and the user's own is never read.
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                self.path.join(".floti-test-no-global-gitconfig"),
+            )
+            .env("GIT_AUTHOR_NAME", GIT_AUTHOR.0)
+            .env("GIT_AUTHOR_EMAIL", GIT_AUTHOR.1)
+            .env("GIT_AUTHOR_DATE", GIT_DATE)
+            .env("GIT_COMMITTER_NAME", GIT_AUTHOR.0)
+            .env("GIT_COMMITTER_EMAIL", GIT_AUTHOR.1)
+            .env("GIT_COMMITTER_DATE", GIT_DATE)
+            .env("GIT_TERMINAL_PROMPT", "0");
+        for inherited in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_CONFIG",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_CONFIG_COUNT",
+        ] {
+            command.env_remove(inherited);
+        }
+        command
+    }
+
+    /// Runs `git` with `args` and answers what it printed, failing the test
+    /// with what it said when it fails.
+    pub fn git(&self, args: &[&str]) -> String {
+        let output = self
+            .command()
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {} failed in {}: {}",
+            args.join(" "),
+            self.path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// Writes `content` to `relative`, making its folders.
+    pub fn write(&self, relative: &str, content: &str) {
+        let path = self.path.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create a folder in the repository");
+        }
+        std::fs::write(path, content).expect("write a file in the repository");
+    }
+
+    /// Stages everything and commits it as `message`.
+    pub fn commit_all(&self, message: &str) {
+        self.git(&["add", "-A"]);
+        self.git(&["commit", "-q", "--allow-empty", "-m", message]);
+    }
+}
+
+/// Makes `link` a link to the folder `target`, the OS's way: a junction on
+/// Windows, a symlink on macOS and Linux. Neither needs elevation.
+pub fn link_folder(target: &Path, link: &Path) {
+    use crate::platform::links::FolderLinks;
+    crate::platform::links::Native
+        .link_folder(target, link)
+        .expect("link a folder");
+}
+
 /// A short name for a pipe or socket that no other test, in this process or
 /// another, is using: the pid, a counter, and the clock against a reused pid.
 pub fn unique_name() -> String {
@@ -465,6 +585,56 @@ mod tests {
                 assert!(message.contains(&root.display().to_string()), "{message}");
             }
         }
+    }
+
+    #[test]
+    fn a_git_repository_commits_with_the_fixed_author_and_date_and_no_machine_config() {
+        let dirs = TestDirs::new();
+        let repo = GitRepo::init(dirs.folder("a repo"));
+        repo.write("notes/readme.md", "line one\r\nline two\n");
+        repo.commit_all("first");
+
+        let log = repo.git(&["log", "-1", "--format=%an|%ae|%aI|%cn|%cI|%s"]);
+        assert_eq!(
+            log.trim(),
+            "Floti Tests|tests@floti.invalid|2026-01-02T03:04:05+00:00|Floti Tests|2026-01-02T03:04:05+00:00|first"
+        );
+        assert_eq!(repo.git(&["branch", "--show-current"]).trim(), "main");
+        // Only the repository's own config and this fixture's settings.
+        let origins = repo.git(&["config", "--list", "--show-origin"]);
+        for line in origins.lines() {
+            assert!(
+                line.starts_with("command line:") || line.starts_with("file:.git/config"),
+                "{line}"
+            );
+        }
+        // No line-ending conversion: the bytes committed are the bytes written.
+        assert_eq!(
+            repo.git(&["show", "HEAD:notes/readme.md"]),
+            "line one\r\nline two\n"
+        );
+    }
+
+    #[test]
+    fn a_folder_link_is_a_link_and_removing_it_leaves_its_target() {
+        let dirs = TestDirs::new();
+        let target = dirs.folder("real folder");
+        std::fs::write(target.join("kept.txt"), "still here").unwrap();
+        let tree = dirs.folder("a tree");
+        let link = tree.join("linked");
+        link_folder(&target, &link);
+        assert!(crate::platform::links::is_link(&link));
+        assert_eq!(
+            std::fs::read_to_string(link.join("kept.txt")).unwrap(),
+            "still here"
+        );
+
+        crate::platform::links::remove_tree(&crate::platform::links::Native, &tree).unwrap();
+        assert!(!tree.exists());
+        assert_eq!(
+            std::fs::read_to_string(target.join("kept.txt")).unwrap(),
+            "still here"
+        );
     }
 
     #[test]

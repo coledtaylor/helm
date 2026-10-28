@@ -67,6 +67,13 @@ pub fn account() -> Account {
     signin::account()
 }
 
+/// The build number of the Windows the host runs on, for a client's
+/// terminal renderer and its ConPTY quirks; `None` on any other OS, or when
+/// Windows would not say.
+pub fn windows_build() -> Option<u32> {
+    signin::windows_build()
+}
+
 /// Why the host must not start here, as one sentence, or `None` when it may.
 /// It starts at the user's sign-in as that user, so a start from an SSH
 /// session, as root or as a Windows service account is refused before

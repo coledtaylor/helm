@@ -91,6 +91,12 @@ pub trait AgentBackend: Send + Sync {
         None
     }
 
+    /// The agent's executable as setup sees it: where the host finds it, the
+    /// version it reports, and one the user chose instead.
+    fn executable(&self) -> Option<&dyn ExecutableSetup> {
+        None
+    }
+
     /// Every path holding one of the agent's credentials. Nothing in the host
     /// opens these; a backend's readers skip them by name.
     fn credential_paths(&self) -> Vec<PathBuf> {
@@ -237,6 +243,31 @@ pub trait ConfigSource: Send + Sync {
 /// Whether the agent is signed in.
 pub trait SignInCheck: Send + Sync {
     fn signed_in(&self) -> SignIn;
+}
+
+/// The agent's executable, for setup.
+pub trait ExecutableSetup: Send + Sync {
+    /// The executable the backend runs when the user has chosen none, found
+    /// the way the backend looks for it, or `None` when there is none.
+    fn discovered(&self) -> Option<PathBuf>;
+
+    /// What an executable says its version is, in its own words: `chosen`,
+    /// a file the user picked, or the discovered one run as the backend runs
+    /// it when `None`. `None` when it would not run or did not answer.
+    fn version(&self, chosen: Option<&Path>) -> Option<String>;
+
+    /// The command its own version is asked with, for a sentence saying it
+    /// did not answer, such as `claude --version`.
+    fn version_command(&self) -> &str;
+
+    /// Launches `chosen` from now on, or the discovered executable again for
+    /// `None`. Called at start with the stored choice and on every change.
+    fn use_executable(&self, chosen: Option<PathBuf>);
+
+    /// The agent's config folder, or `None` for an agent without one.
+    fn config_dir(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 /// A new session.

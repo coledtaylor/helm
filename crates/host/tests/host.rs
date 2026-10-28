@@ -52,6 +52,7 @@ fn fake_config(
     args: &[&str],
 ) -> HostConfig {
     HostConfig {
+        run: Default::default(),
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: vec![Arc::new(agent.backend(args.iter().copied())) as Arc<dyn AgentBackend>],
@@ -1319,6 +1320,7 @@ fn resolved(path: &Path) -> PathBuf {
 /// `claude_config`.
 fn todays_backends(dirs: &TestDirs, endpoint: &Endpoint, claude_config: &Path) -> HostConfig {
     let claude = ClaudeCodeSettings {
+        search_first: Vec::new(),
         program: "node".into(),
         leading_args: vec![fake_claude().into_os_string()],
         config_dir: claude_config.to_path_buf(),
@@ -1326,6 +1328,7 @@ fn todays_backends(dirs: &TestDirs, endpoint: &Endpoint, claude_config: &Path) -
         api_key_set: false,
     };
     HostConfig {
+        run: Default::default(),
         folders: dirs.folders(),
         endpoint: endpoint.clone(),
         backends: floti_host::server::backends(&dirs.user_env(), Some(claude)),
@@ -1646,18 +1649,16 @@ async fn every_protocol_host_channel_is_served_or_listed_with_the_feature_that_w
     let agent = fake_agent!(&dirs);
     let endpoint = dirs.endpoint();
     let host = Host::start(fake_config(&dirs, &endpoint, &agent, &[])).expect("start the host");
+    let served = host.served_channels();
+    // Stopped before the assertion, so a failing one leaves no host holding
+    // the test's folders.
+    RunningHost::run(host).stop(HostStopReason::Stop).await;
 
-    let drift = unserved::drift(&Catalogue::protocol(), &host.served_channels());
+    let drift = unserved::drift(&Catalogue::protocol(), &served);
     assert!(
         drift.is_empty(),
         "the not-yet-served list and the host disagree:\n{drift}"
     );
-
-    host.stop(HostStopReason::Stop);
-    tokio::time::timeout(PATIENCE, host.run_until_stopped())
-        .await
-        .expect("the host stops in time")
-        .expect("the host stops cleanly");
 }
 
 #[tokio::test(flavor = "multi_thread")]

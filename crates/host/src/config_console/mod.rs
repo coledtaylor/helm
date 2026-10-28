@@ -24,7 +24,7 @@ mod mcp;
 mod names;
 mod sha256;
 pub mod snapshots;
-mod time;
+pub(crate) mod time;
 mod tree;
 mod watch;
 mod writer;
