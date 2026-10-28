@@ -20,6 +20,8 @@ use floti_protocol::channels::plugins::{
 };
 
 use super::{Feature, FeatureContext};
+use crate::plugins::net::Net;
+use crate::plugins::net::service::NoServices;
 use crate::plugins::runtime::IsolateRuntime;
 use crate::plugins::{Registry, RegistryParts};
 use crate::session::ClientId;
@@ -50,6 +52,11 @@ impl Plugins {
         });
         runtime.connect(&registry);
         crate::plugins::secrets::register_methods(registry.methods(), secrets.store());
+        crate::plugins::exec::register_methods(registry.methods(), secrets.store());
+        crate::plugins::net::register_methods(
+            registry.methods(),
+            Arc::new(Net::new(secrets.store(), Arc::new(NoServices))),
+        );
         registry.start()?;
         context
             .events

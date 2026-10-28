@@ -18,7 +18,7 @@
 //!   with no row, from the shells [`detect_shells`] finds.
 
 mod activity;
-mod env;
+pub(crate) mod env;
 mod ledger;
 mod live;
 mod redraw;
