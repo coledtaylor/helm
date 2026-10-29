@@ -334,10 +334,17 @@ describe('the leftover check around a step', () => {
     await clearUp(left)
   })
 
-  it("exits with the command's own status when the command fails", () => {
-    const run = script(process.execPath, '-e', 'process.exitCode = 3')
-    expect(run.status).toBe(3)
-    expect(run.stdout).toContain('the step left nothing behind')
+  it("exits with the command's own status when the command fails", async () => {
+    // Polled for the reason `expectPasses` gives: the check must come to
+    // finding nothing, and the status stays the command's either way.
+    await vi.waitFor(
+      () => {
+        const run = script(process.execPath, '-e', 'process.exitCode = 3')
+        expect(run.status).toBe(3)
+        expect(run.stdout, run.stderr).toContain('the step left nothing behind')
+      },
+      { timeout: PATIENCE, interval: 0 }
+    )
   })
 
   it('passes a command that left nothing behind', async () => {
