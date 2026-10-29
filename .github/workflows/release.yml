@@ -40,6 +40,7 @@ jobs:
       version: ${{ steps.gate.outputs.version }}
       tag: ${{ steps.gate.outputs.tag }}
       release: ${{ steps.gate.outputs.release }}
+      preview: ${{ steps.gate.outputs.preview }}
     steps:
       - uses: actions/checkout@v5
 
@@ -62,6 +63,19 @@ jobs:
           tag="v$version"
           echo "version=$version" >>"$GITHUB_OUTPUT"
           echo "tag=$tag" >>"$GITHUB_OUTPUT"
+
+          # A version with a pre-release part (2.4.1-preview.1) is a preview:
+          # built and uploaded like any release, but left as a draft
+          # pre-release that only the repository's owner sees, never `latest`.
+          # /releases/latest ignores drafts and pre-releases, so no installed
+          # Helm is offered it. The in-app check reads only the
+          # <major>.<minor>.<patch> part, so a preview of 2.4.1 is newer than
+          # 2.4.0 and older than the next release after it.
+          if [[ $version == *-* ]]; then
+            echo "preview=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "preview=false" >>"$GITHUB_OUTPUT"
+          fi
 
           # The decision goes to stdout as well as the summary. When the release
           # job is skipped there are two possible reasons - this gate said no, or
@@ -152,6 +166,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.version }}
       TAG: ${{ needs.version.outputs.tag }}
+      PREVIEW: ${{ needs.version.outputs.preview }}
 
     steps:
       - uses: actions/checkout@v5
@@ -226,7 +241,8 @@ jobs:
           # file is touched for a reason a user sees and for a reason they never
           # will, and only the person who wrote it knows which. So it is written
           # down rather than derived.
-          previous=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          # A preview's tag is not a release a later one is measured from.
+          previous=$(git tag --list 'v*' --sort=-v:refname | grep -v -- - | head -n1 || true)
 
           # The note at the top of release-body.md is addressed to whoever edits
           # that file, not to somebody downloading Helm. An HTML comment does not
@@ -324,9 +340,41 @@ jobs:
             "packages/desktop/dist-app/Helm-$VERSION-arm64.dmg" \
             "packages/desktop/dist-app/Helm-$VERSION-arm64-mac.zip"
 
-          gh release edit "$TAG" --draft=false --latest
+          if [[ $PREVIEW == true ]]; then
+            # A preview stays a draft. Its tag is made here, once every asset
+            # is up, so the version gate sees it and the next push to main does
+            # not build the same preview again; a run that fails before this
+            # line leaves only a draft, which the next push replaces.
+            gh release edit "$TAG" --prerelease
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" >/dev/null
+          else
+            gh release edit "$TAG" --draft=false --latest
+          fi
+
+      - name: Confirm the preview is a draft with its assets, and not latest
+        if: env.PREVIEW == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release=$(gh release view "$TAG" --json isDraft,isPrerelease,assets)
+          assets=$(jq -r '[.assets[].name] | sort | join(", ")' <<<"$release")
+          expected="Helm-$VERSION-arm64-mac.zip, Helm-$VERSION-arm64.dmg, Helm-$VERSION-portable.exe, Helm-$VERSION-setup.exe"
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+
+          [[ $(jq -r .isDraft <<<"$release") == true ]]      || { echo "::error::$TAG is not a draft"; exit 1; }
+          [[ $(jq -r .isPrerelease <<<"$release") == true ]] || { echo "::error::$TAG is not a pre-release"; exit 1; }
+          [[ $assets == "$expected" ]]                        || { echo "::error::assets are [$assets], expected [$expected]"; exit 1; }
+          [[ $latest != "$TAG" ]]                             || { echo "::error::/releases/latest answers with the preview $TAG"; exit 1; }
+
+          {
+            echo "**Preview \`$TAG\`**, a draft pre-release: open it from the repository's Releases page."
+            echo
+            echo "- \`/releases/latest\` still answers \`$latest\`; $assets"
+          } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Confirm /releases/latest answers with it
+        if: env.PREVIEW != 'true'
         shell: bash
         run: |
           set -euo pipefail

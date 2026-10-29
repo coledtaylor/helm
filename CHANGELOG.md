@@ -14,6 +14,25 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.4.1-preview.1
+
+A preview, not a release: nothing offers it as an update.
+
+**Sessions**
+
+- Settings > Sessions has a new switch, "Run sessions in the local host", off
+  by default. On, sessions and terminals run in a host program that Helm
+  starts and stops itself, and a window that reloads draws each session's
+  screen as it was, then carries on. The switch takes effect the next time
+  Helm starts; turn it off and restart to go back.
+- With the switch on, sessions do not get Helm's agent tools (the browser,
+  the sessions list and plugin tools), and starting a session with a saved
+  profile, or from a plugin, says it is not available yet. History, usage,
+  the config console and the Files view still come from Helm itself, and may
+  not yet see a session that runs in the host.
+- On Windows, closing a session's tab ends the `claude` it started. Before,
+  a `claude` installed through npm could keep running after its tab closed.
+
 ## 2.4.0
 
 **macOS**
