@@ -130,19 +130,26 @@ describe('useBrowsers - whether the native view paints', () => {
   })
 
   it('leaves the view up when what covered it is gone before the still arrives', async () => {
-    let answer: (url: string | null) => void = () => undefined
-    bridge.answer('browser:snapshot', () => new Promise<string | null>((resolve) => (answer = resolve)))
-    const { result } = renderHook(() => useBrowsers([]))
-    act(() => result.current.sendBounds(3, RECT, true))
-    bridge.clearRecords()
-    act(() => result.current.setSuppressed('address-list', true))
-    act(() => result.current.setSuppressed('address-list', false))
-    await act(async () => {
-      answer(still(3))
-      await new Promise((resolve) => setTimeout(resolve, 300))
-    })
-    expect(bounds().map((sent) => sent['visible'])).toEqual([true])
-    expect(result.current.stills.size).toBe(0)
+    vi.useFakeTimers()
+    try {
+      let answer: (url: string | null) => void = () => undefined
+      bridge.answer('browser:snapshot', () => new Promise<string | null>((resolve) => (answer = resolve)))
+      const { result } = renderHook(() => useBrowsers([]))
+      act(() => result.current.sendBounds(3, RECT, true))
+      bridge.clearRecords()
+      act(() => result.current.setSuppressed('address-list', true))
+      act(() => result.current.setSuppressed('address-list', false))
+      await act(async () => {
+        answer(still(3))
+        // The still's whole chain, and every timer either cover set.
+        await vi.runAllTimersAsync()
+      })
+      expect(vi.getTimerCount()).toBe(0)
+      expect(bounds().map((sent) => sent['visible'])).toEqual([true])
+      expect(result.current.stills.size).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('stands a view down when its tab goes behind another, and puts it back where it was', () => {

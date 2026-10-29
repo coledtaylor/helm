@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { readSessions, sessionLabel, type SessionRecord } from '@helm/core'
 import { DISPOSE_TIMEOUT_MS, hostInWorld, processAlive, type HostedWorld } from '../../test/hosted'
 import type { ConfirmRequest } from './sessions'
+import { PATIENCE } from '../../../../test/patience'
 
 const notifications = vi.hoisted(() => [] as { title: string; body: string }[])
 
@@ -87,7 +88,7 @@ describe('session lifecycle', () => {
   const end = async (...records: SessionRecord[]): Promise<void> => {
     for (const record of records) await h.host.close({ id: record.id, force: true })
     await vi.waitFor(() => expect(records.filter((r) => h.host.pid(r.id) !== null)).toEqual([]), {
-      timeout: 10_000
+      timeout: PATIENCE
     })
   }
 
@@ -136,7 +137,7 @@ describe('session lifecycle', () => {
         expect(row(back.id)).toMatchObject({ status: 'exited', exitCode: 0 })
         expect(row(front.id)).toMatchObject({ status: 'exited', exitCode: 3 })
       },
-      { timeout: 10_000 }
+      { timeout: PATIENCE }
     )
     expect(row(back.id)?.durationMs).toBeGreaterThan(0)
     expect(row(front.id)?.durationMs).toBeGreaterThan(0)
@@ -199,8 +200,8 @@ describe('session lifecycle', () => {
     await expect(h.host.close({ id: record.id })).resolves.toEqual({ closed: true })
     expect(asked).toHaveLength(2)
     expect(listed(record.id)).toBeUndefined()
-    await vi.waitFor(() => expect(processAlive(run.pid)).toBe(false), { timeout: 10_000 })
-    await vi.waitFor(() => expect(row(record.id)?.status).toBe('exited'), { timeout: 10_000 })
+    await vi.waitFor(() => expect(processAlive(run.pid)).toBe(false), { timeout: PATIENCE })
+    await vi.waitFor(() => expect(row(record.id)?.status).toBe('exited'), { timeout: PATIENCE })
     expect(row(record.id)?.durationMs).toBeGreaterThan(0)
   })
 
@@ -208,7 +209,7 @@ describe('session lifecycle', () => {
     const first = await start(h.world.projects.alpha, 'alpha')
     await h.ready(first.id)
     h.host.input(first.id, '/exit\r')
-    await vi.waitFor(() => expect(listed(first.id)?.status).toBe('exited'), { timeout: 10_000 })
+    await vi.waitFor(() => expect(listed(first.id)?.status).toBe('exited'), { timeout: PATIENCE })
 
     const second = await start(h.world.projects.alpha, 'alpha')
     expect(first.name).toBe('alpha')

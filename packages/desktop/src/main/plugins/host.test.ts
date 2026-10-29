@@ -10,6 +10,7 @@ import type { PluginHost, PluginHostOptions, PluginSessionLaunch } from './host'
 import type { BackgroundHost } from './background'
 import type { SendHop } from './net'
 import type { ServiceLauncher } from './service'
+import { PATIENCE } from '../../../../../test/patience'
 
 vi.mock('electron', async () => ({
   ...(await import('../../../test/electron')).electronFake(),
@@ -221,7 +222,7 @@ describe('reading folders', () => {
       settingValues: { server: 'https://api.example.com', limit: 5, unread: null, order: 'new' }
     })
     // `start: "enable"`: launched once a port is found, with nothing waiting on it.
-    await vi.waitFor(() => expect(launched).toBe(1))
+    await vi.waitFor(() => expect(launched).toBe(1), { timeout: PATIENCE })
   })
 
   it('opens the background host a turn after start, not before the window', async () => {
@@ -266,7 +267,7 @@ describe('reading folders', () => {
 describe('switching off, reloading and removing', () => {
   it('switching off stops what it runs, forgets what it said, and moves it to a new revision', async () => {
     start()
-    await vi.waitFor(() => expect(launched).toBe(1))
+    await vi.waitFor(() => expect(launched).toBe(1), { timeout: PATIENCE })
     await call('status.set', [{ text: 'hi' }])
     await call('badge.set', [3])
     const before = info().revision
@@ -281,7 +282,7 @@ describe('switching off, reloading and removing', () => {
     expect(await call('settings.get')).toMatchObject({ ok: false, code: 'unavailable' })
     host.setEnabled(sampleDir, true)
     expect(info().enabled).toBe(true)
-    await vi.waitFor(() => expect(launched).toBe(2))
+    await vi.waitFor(() => expect(launched).toBe(2), { timeout: PATIENCE })
   })
 
   it('reloading reads the folder again under a new revision', () => {
@@ -449,7 +450,7 @@ describe('bridge calls', () => {
       callId: 'slow-1',
       sender: 1
     })
-    await vi.waitFor(() => expect(hops).toHaveLength(1))
+    await vi.waitFor(() => expect(hops).toHaveLength(1), { timeout: PATIENCE })
     host.cancel('slow-1', 2)
     host.cancel('slow-1', 1)
     expect(await pending).toMatchObject({ ok: false, code: 'aborted' })
@@ -463,13 +464,13 @@ describe('bridge calls', () => {
         sender: 1
       })
     const off = slow('slow-off')
-    await vi.waitFor(() => expect(hops).toHaveLength(1))
+    await vi.waitFor(() => expect(hops).toHaveLength(1), { timeout: PATIENCE })
     host.setEnabled(sampleDir, false)
     expect(await off).toMatchObject({ ok: false, code: 'aborted' })
 
     host.setEnabled(sampleDir, true)
     const reloaded = slow('slow-reload')
-    await vi.waitFor(() => expect(hops).toHaveLength(2))
+    await vi.waitFor(() => expect(hops).toHaveLength(2), { timeout: PATIENCE })
     host.reload(sampleDir)
     expect(await reloaded).toMatchObject({ ok: false, code: 'aborted' })
   })
@@ -621,7 +622,7 @@ describe('tools for sessions', () => {
     start([trackerDir])
     running()
     const answer = callTool('add_card')
-    await vi.waitFor(() => expect(toolCalls()).toHaveLength(1))
+    await vi.waitFor(() => expect(toolCalls()).toHaveLength(1), { timeout: PATIENCE })
     const sentCall = toolCalls()[0]!
     expect(sentCall).toEqual({ id: expect.any(String) as string, plugin: 'tracker', name: 'add_card', args: { all: true }, session: SESSION })
 
@@ -657,7 +658,7 @@ describe('tools for sessions', () => {
     await tick()
     expect(toolCalls()).toEqual([])
     running()
-    await vi.waitFor(() => expect(toolCalls()).toHaveLength(1))
+    await vi.waitFor(() => expect(toolCalls()).toHaveLength(1), { timeout: PATIENCE })
     host.toolResult({ id: toolCalls()[0]!.id, ok: true, text: 'two cards' }, 2)
     await expect(answer).resolves.toEqual({ ok: true, text: 'two cards' })
 
@@ -674,14 +675,14 @@ describe('tools for sessions', () => {
     start([trackerDir])
     running()
     const first = callTool()
-    await vi.waitFor(() => expect(toolCalls()).toHaveLength(1))
+    await vi.waitFor(() => expect(toolCalls()).toHaveLength(1), { timeout: PATIENCE })
     host.setTools(trackerDir, false)
     await expect(first).resolves.toEqual({ ok: false, message: "The user turned this plugin's tools off in Helm." })
     expect(events('plugins:toolCancel', 'background')).toEqual([{ id: toolCalls()[0]!.id }])
 
     host.setTools(trackerDir, true)
     const second = callTool()
-    await vi.waitFor(() => expect(toolCalls()).toHaveLength(2))
+    await vi.waitFor(() => expect(toolCalls()).toHaveLength(2), { timeout: PATIENCE })
     host.reload(trackerDir)
     await expect(second).resolves.toMatchObject({ ok: false, message: expect.stringContaining('stopped before it answered') as string })
   })
@@ -691,13 +692,13 @@ describe('tools for sessions', () => {
     running()
     const controller = new AbortController()
     const cancelled = callTool('list_cards', controller.signal)
-    await vi.waitFor(() => expect(toolCalls()).toHaveLength(1))
+    await vi.waitFor(() => expect(toolCalls()).toHaveLength(1), { timeout: PATIENCE })
     controller.abort()
     await expect(cancelled).resolves.toEqual({ ok: false, message: 'The call was cancelled.' })
     expect(events('plugins:toolCancel', 'background')).toEqual([{ id: toolCalls()[0]!.id }])
 
     const waiting = callTool()
-    await vi.waitFor(() => expect(toolCalls()).toHaveLength(2))
+    await vi.waitFor(() => expect(toolCalls()).toHaveLength(2), { timeout: PATIENCE })
     host.shutdown()
     await expect(waiting).resolves.toEqual({ ok: false, message: 'Helm is shutting down.' })
     expect(await callTool()).toEqual({ ok: false, message: 'Helm is shutting down.' })
@@ -934,7 +935,7 @@ describe('opening a link', () => {
 describe('shutdown', () => {
   it('answers a waiting secret request, stops the service and closes the background host', async () => {
     start()
-    await vi.waitFor(() => expect(launched).toBe(1))
+    await vi.waitFor(() => expect(launched).toBe(1), { timeout: PATIENCE })
     const pending = call('secrets.request', ['token'])
     await tick()
     host.shutdown()

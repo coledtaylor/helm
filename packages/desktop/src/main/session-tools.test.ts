@@ -21,6 +21,7 @@ import type { ResourcesService } from './resources'
 import type { SessionToolsWorld } from './session-tools'
 import type { SessionHost } from './sessions'
 import type { Services } from './services'
+import { PATIENCE } from '../../../../test/patience'
 
 vi.mock('electron', async () => (await import('../../test/electron')).electronFake())
 
@@ -92,7 +93,7 @@ describe('the session tools', () => {
     await vi.waitFor(() => {
       found = fakeClaudeLogs(world).find((log) => log.sessionId === record.claudeSessionId)
       expect(found).toBeDefined()
-    })
+    }, { timeout: PATIENCE })
     return found as FakeClaudeLog
   }
 
@@ -113,7 +114,7 @@ describe('the session tools', () => {
   }
 
   const ready = (record: SessionRecord): Promise<void> =>
-    vi.waitFor(() => expect(output.get(record.id)).toContain('? for shortcuts'), { timeout: 10_000 })
+    vi.waitFor(() => expect(output.get(record.id)).toContain('? for shortcuts'), { timeout: PATIENCE })
 
   const list = (who: Hosted): Promise<ToolAnswer> => callTool(who.url, who.token, 'sessions_list')
   const detail = (who: Hosted, args: Record<string, unknown> = {}): Promise<ToolAnswer> =>
@@ -225,13 +226,13 @@ describe('the session tools', () => {
 
     // Beta's first message, which is now in its transcript and in history.jsonl.
     host.input(beta.record.id, `${firstMessage}\r`)
-    await vi.waitFor(() => expect(output.get(beta.record.id)).toContain(`You said: ${firstMessage}`))
+    await vi.waitFor(() => expect(output.get(beta.record.id)).toContain(`You said: ${firstMessage}`), { timeout: PATIENCE })
 
     // Every hosted session joined to its registry record.
     await vi.waitFor(() => {
       activity.refresh()
       expect(activity.overview().sessions.filter((s) => s.helmSessionId !== null && s.registered)).toHaveLength(3)
-    })
+    }, { timeout: PATIENCE })
   })
 
   afterAll(async () => {
@@ -239,7 +240,7 @@ describe('the session tools', () => {
       if (session.status === 'running') await host.close({ id: session.id, force: true })
     }
     await vi.waitFor(() => expect(host.list().filter((s) => s.status === 'running')).toEqual([]), {
-      timeout: 10_000
+      timeout: PATIENCE
     })
     // In before-quit's order: the endpoint, then the sessions - a killed pty
     // can report its exit later, and the host must not write it to a store
@@ -359,10 +360,10 @@ describe('the session tools', () => {
     host.input(beta.record.id, '/wait\r')
     await vi.waitFor(async () => {
       expect(blockFor((await list(alpha)).text, beta.run.pid)).toContain('status       waiting on the user (permission prompt)')
-    })
+    }, { timeout: PATIENCE })
     expect((await detail(alpha, { pid: beta.run.pid })).text).toContain('status       waiting on the user (permission prompt)')
     host.input(beta.record.id, 'y')
-    await vi.waitFor(() => expect(output.get(beta.record.id)).toContain('Allowed.'))
+    await vi.waitFor(() => expect(output.get(beta.record.id)).toContain('Allowed.'), { timeout: PATIENCE })
   })
 
   it('never answers with any part of another session’s conversation or launch', async () => {
@@ -432,7 +433,7 @@ describe('the session tools', () => {
   it('forgets a session that has ended: no list entry, no detail, no token and no config file', async () => {
     host.input(prompted.record.id, '/exit\r')
     await vi.waitFor(() => expect(host.list().find((s) => s.id === prompted.record.id)?.status).toBe('exited'), {
-      timeout: 10_000
+      timeout: PATIENCE
     })
 
     expect(existsSync(prompted.configFile)).toBe(false)

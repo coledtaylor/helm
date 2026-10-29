@@ -211,6 +211,16 @@ function inHelm<T>(helm: Helm, script: string, frameUrl?: string): Promise<T> {
   )
 }
 
+/**
+ * Waits until Helm's window holds no user activation: Chromium ends a click's
+ * a few seconds after it. Asked through main, which grants none; Playwright's
+ * `evaluate` counts as a gesture of its own, so a call made through it is
+ * always "from a click".
+ */
+async function activationLapsed(helm: Helm): Promise<void> {
+  await expect.poll(() => inHelm<boolean>(helm, 'navigator.userActivation.isActive')).toBe(false)
+}
+
 test('a plugin page that crashes says so in its own place, and Reload brings it back', async ({ helm, sample }) => {
   const ui = helm.window
   await storeToken(ui, sample.server.url)
@@ -601,17 +611,11 @@ test('a plugin page starts a session from a click, once the user has seen what i
   await expect(item.locator('h1')).toHaveText('Second item')
 
   // Asked for without a click, it is refused before Helm draws anything.
-  // Long enough after any click that the page's activation has lapsed.
-  const unasked = await item.evaluate(
-    (cwd) =>
-      new Promise<string>((resolve) => {
-        setTimeout(() => {
-          ;(window as unknown as PluginWindow).helm.sessions
-            .start({ cwd, prompt: 'hello' })
-            .then(resolve, (error: { code: string }) => resolve(error.code))
-        }, 6000)
-      }),
-    world.projects.alpha
+  await activationLapsed(helm)
+  const unasked = await inHelm<string>(
+    helm,
+    `helm.sessions.start({ cwd: ${JSON.stringify(world.projects.alpha)}, prompt: 'hello' }).then(() => 'started', (error) => error.code)`,
+    item.url()
   )
   expect(unasked).toBe('not-allowed')
 
@@ -661,17 +665,11 @@ test('a plugin page opens a link in the Browser tab from a click, held to the re
     const browserPages = ui.getByRole('tablist', { name: 'Browser tabs' })
 
     // Without a click, nothing opens.
-    const unasked = await item.evaluate(
-      (url) =>
-        new Promise<string>((resolve) => {
-          setTimeout(() => {
-            ;(window as unknown as PluginWindow).helm.open(url).then(
-              () => resolve('opened'),
-              (error: { code: string }) => resolve(error.code)
-            )
-          }, 6000)
-        }),
-      `${fixture.httpsLoopback}/two`
+    await activationLapsed(helm)
+    const unasked = await inHelm<string>(
+      helm,
+      `helm.open(${JSON.stringify(`${fixture.httpsLoopback}/two`)}).then(() => 'opened', (error) => error.code)`,
+      item.url()
     )
     expect(unasked).toBe('not-allowed')
     await expect(browserPages).toHaveCount(0)
@@ -686,6 +684,8 @@ test('a plugin page opens a link in the Browser tab from a click, held to the re
     await item.locator('[data-sample-link-address]').fill(`${fixture.httpsLoopback}/two`)
     await item.locator('[data-sample-link-open]').click()
     await expect(ui.getByRole('tab', { name: /Helm fixture two/ })).toHaveAttribute('aria-selected', 'true')
+    // Main had taken the link by now, so it took it before this.
+    const opened = await helm.app.evaluate(() => Date.now())
     await expect(ui.getByRole('textbox', { name: 'Address' })).toHaveValue(`${fixture.httpsLoopback}/two`)
     await expect(item.locator('[data-sample-link-error]')).toHaveCount(0)
 
@@ -693,8 +693,9 @@ test('a plugin page opens a link in the Browser tab from a click, held to the re
     await ui.evaluate(() => (window as unknown as HelmWindow).helm.invoke('settings:write', { browserReach: 'local' }))
     await ui.getByRole('tab', { name: /^Second item/ }).click()
     await item.locator('[data-sample-link-address]').fill(`${fixture.httpsNamed}/two`)
-    // One link a second per plugin (a double click's second is refused; see host.test.ts).
-    await ui.waitForTimeout(1000)
+    // One link a second per plugin (`LINK_SPACING_MS`; host.test.ts steps it),
+    // read on the clock main measures it by.
+    await expect.poll(() => helm.app.evaluate(() => Date.now())).toBeGreaterThanOrEqual(opened + 1000)
     await item.locator('[data-sample-link-open]').click()
     await expect(ui.getByRole('status').filter({ hasText: 'This machine only' })).toContainText(
       fixture.httpsNamed.replace('https://', '')

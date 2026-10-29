@@ -10,6 +10,7 @@ import type { BrowserHost, BrowserOpener } from './browser'
 import { createBrowserMcp, type BrowserMcpHost, type BrowserMcpRegistration } from './browser-mcp'
 import type { ToolAnswer, ToolCallRequest, ToolServer } from './plugins/tools'
 import type { BrowserConsoleEntry, BrowserState } from '../shared/ipc'
+import { PATIENCE } from '../../../../test/patience'
 
 /**
  * Helm's one inbound listener, over real HTTP on 127.0.0.1: what it binds, who
@@ -1145,7 +1146,7 @@ describe('the tool endpoint', () => {
         body: JSON.stringify({ jsonrpc: '2.0', id: 77, method: 'tools/call', params: { name: 'list_cards', arguments: {} } }),
         headers: auth(alpha)
       })
-      await vi.waitFor(() => expect(calls).toHaveLength(1))
+      await vi.waitFor(() => expect(calls).toHaveLength(1), { timeout: PATIENCE })
       expect((await cancel(beta, 77)).status).toBe(202)
       expect((await cancel(alpha, 78)).status).toBe(202)
       expect(calls[0]?.signal.aborted).toBe(false)
@@ -1157,16 +1158,16 @@ describe('the tool endpoint', () => {
       const req = request(trackerUrl(alpha), { method: 'POST', agent: false, headers: { 'content-type': 'application/json', ...auth(alpha) } })
       req.on('error', () => undefined)
       req.end(JSON.stringify({ jsonrpc: '2.0', id: 'x', method: 'tools/call', params: { name: 'list_cards', arguments: {} } }))
-      await vi.waitFor(() => expect(calls).toHaveLength(2))
+      await vi.waitFor(() => expect(calls).toHaveLength(2), { timeout: PATIENCE })
       req.destroy()
-      await vi.waitFor(() => expect(calls[1]?.signal.aborted).toBe(true))
+      await vi.waitFor(() => expect(calls[1]?.signal.aborted).toBe(true), { timeout: PATIENCE })
 
       // Released: the session ended with a call in flight.
       void send(trackerUrl(beta), {
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_cards', arguments: {} } }),
         headers: auth(beta)
       }).catch(() => undefined)
-      await vi.waitFor(() => expect(calls).toHaveLength(3))
+      await vi.waitFor(() => expect(calls).toHaveLength(3), { timeout: PATIENCE })
       endpoint.release(beta.token)
       expect(calls[2]?.signal.aborted).toBe(true)
     })

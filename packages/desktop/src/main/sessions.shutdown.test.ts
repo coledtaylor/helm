@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
 import { readSessions } from '@helm/core'
 import { hostInWorld, processAlive } from '../../test/hosted'
+import { PATIENCE } from '../../../../test/patience'
 
 vi.mock('electron', async () => (await import('../../test/electron')).electronFake())
 
@@ -35,7 +36,7 @@ describe('session host shutdown', () => {
           child = Number(/child (\d+)/.exec(h.output.get(alpha.id) ?? '')?.[1] ?? 0)
           expect(child).toBeGreaterThan(0)
         },
-        { timeout: 10_000 }
+        { timeout: PATIENCE }
       )
       const runs = await Promise.all([h.run(alpha), h.run(beta)])
       const ptys = [h.host.pid(alpha.id), h.host.pid(beta.id)].filter((pid) => pid !== null)
@@ -54,7 +55,7 @@ describe('session host shutdown', () => {
         expect(row.durationMs).not.toBeNull()
       }
       expect(h.host.list()).toEqual([])
-      await vi.waitFor(() => expect(tree.filter(processAlive)).toEqual([]), { timeout: 10_000 })
+      await vi.waitFor(() => expect(tree.filter(processAlive)).toEqual([]), { timeout: PATIENCE })
 
       // The next start: nothing was left claiming to run, and each row is as it was.
       h.services.store.close()

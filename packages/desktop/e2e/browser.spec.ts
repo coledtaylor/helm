@@ -90,13 +90,12 @@ const pressInPage = (
   modifiers: Array<'control' | 'shift'> = []
 ): Promise<void> =>
   helm.app.evaluate(
-    async ({ webContents }, { at, key, mods }) => {
+    ({ webContents }, { at, key, mods }) => {
       const wc = webContents.getAllWebContents().find((candidate) => candidate.getURL().startsWith(at))
       if (wc === undefined) throw new Error(`no page at ${at}`)
       wc.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: mods })
       if (key.length === 1 && !mods.includes('control')) wc.sendInputEvent({ type: 'char', keyCode: key, modifiers: mods })
       wc.sendInputEvent({ type: 'keyUp', keyCode: key, modifiers: mods })
-      await new Promise((resolve) => setTimeout(resolve, 50))
     },
     { at: prefix, key: keyCode, mods: modifiers }
   )
@@ -379,10 +378,11 @@ test("the keyboard: the browser's keys work with the caret in the page, and ever
   await expect(pages(ui).getByRole('tab')).toHaveText(['Helm fixture tools', 'New tab'])
   await expect(address(ui)).toBeFocused()
 
-  // A key that is not the browser's reaches the page, and none of the above did.
+  // A key that is not the browser's reaches the page, and none of the above
+  // did: the page takes its keys in order, so one of them would be first.
   await pressInPage(helm, url, 'a')
   await pressInPage(helm, url, 'a', ['control'])
-  expect(await keys()).toEqual(['a', 'Control+a'])
+  await expect.poll(keys).toEqual(['a', 'Control+a'])
 
   await pages(ui).getByRole('tab', { name: /Helm fixture tools/ }).click()
   await pressInPage(helm, url, 'w', ['control'])
@@ -407,6 +407,12 @@ test('the address list: the page stands down for it and stays down, so a remembe
   await go(ui, find)
   await expect(await pageAt(helm, find)).toHaveTitle('Helm fixture find')
   await expect.poll(() => viewsShown(helm)).toEqual([true])
+  // Every bounds the window sends main from here on, in order.
+  await helm.app.evaluate(({ ipcMain }) => {
+    const sent: boolean[] = []
+    ;(globalThis as { boundsSent?: boolean[] }).boundsSent = sent
+    ipcMain.on('browser:bounds', (_event, bounds: { visible: boolean }) => sent.push(bounds.visible))
+  })
 
   await address(ui).click()
   const list = ui.locator('[data-browser-recent]')
@@ -415,16 +421,23 @@ test('the address list: the page stands down for it and stays down, so a remembe
   // And it stays down while the list is open. The page is a native view over
   // the window, so a view that came back for a moment would be under the
   // pointer instead of the list, and a person's click would go to the page.
-  // (Playwright clicks the window's own document and cannot tell.)
-  for (let look = 0; look < 12; look += 1) {
-    expect(await viewsShown(helm), `look ${String(look)}`).toEqual([false])
-    await ui.waitForTimeout(100)
-  }
+  // (Playwright clicks the window's own document and cannot tell.) A key
+  // typed renders the pane again with the list still open, which is what
+  // once brought the view back.
+  await address(ui).press('End')
+  await address(ui).press('x')
+  await expect(address(ui)).toHaveValue(`${find}x`)
+  await expect(list).toBeVisible()
 
   await list.locator(`[data-browser-recent-url="${two}"]`).click()
   await expect(list).toHaveCount(0)
   await expect(address(ui)).toHaveValue(two)
   await expect.poll(() => viewsShown(helm)).toEqual([true])
+  // Down once for the list, and up again only when it closed: never back up
+  // for a moment in between.
+  const sent = await helm.app.evaluate(() => (globalThis as { boundsSent?: boolean[] }).boundsSent ?? [])
+  const runs = sent.filter((visible, at) => at === 0 || visible !== sent[at - 1])
+  expect(runs.slice(runs.indexOf(false))).toEqual([false, true])
 })
 
 test('the menu: zoom, width, DevTools and clearing data are behind More, opened over a still of the page', async ({

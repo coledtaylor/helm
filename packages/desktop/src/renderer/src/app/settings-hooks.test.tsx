@@ -14,6 +14,7 @@ import { useLauncher } from './useLauncher'
 import { useSetup } from './useSetup'
 import { useThemes } from './useThemes'
 import { useUpdate } from './useUpdate'
+import { PATIENCE } from '../../../../../../test/patience'
 
 vi.mock('./bridge', () => import('./bridge.testkit'))
 // The terminal registries live outside React and are not what these tests are
@@ -61,7 +62,7 @@ describe('useThemes', () => {
     bridge.answer('themes:list', () => ({ dir: 'C:\\themes', themes: [...BUILTIN_THEMES], errors: [] }))
     const { result } = renderHook(() => useThemes())
 
-    await vi.waitFor(() => expect(result.current.state?.applied.id).toBe('graphite'))
+    await vi.waitFor(() => expect(result.current.state?.applied.id).toBe('graphite'), { timeout: PATIENCE })
     const root = document.documentElement
     expect(root.dataset['theme']).toBe('graphite')
     expect(root.classList.contains('dark')).toBe(true)
@@ -76,7 +77,7 @@ describe('useThemes', () => {
   it('takes a new listing when the themes folder changes, with no restart', async () => {
     bridge.answer('themes:list', () => ({ dir: 'C:\\themes', themes: [...BUILTIN_THEMES], errors: [] }))
     const { result } = renderHook(() => useThemes())
-    await vi.waitFor(() => expect(result.current.listing?.themes).toHaveLength(BUILTIN_THEMES.length))
+    await vi.waitFor(() => expect(result.current.listing?.themes).toHaveLength(BUILTIN_THEMES.length), { timeout: PATIENCE })
 
     const ink: ThemeDefinition = { ...theme('nocturne'), id: 'ink', name: 'Ink', builtin: false, file: 'ink.json' }
     const next: ThemeListing = {
@@ -96,7 +97,7 @@ describe('useThemes', () => {
 
     act(() => result.current.duplicate('graphite'))
     expect(bridge.invoked('themes:duplicate')).toEqual([{ id: 'graphite' }])
-    await vi.waitFor(() => expect(bridge.invoked('shell:showItem')).toEqual([{ path: 'C:\\themes\\graphite-copy.json' }]))
+    await vi.waitFor(() => expect(bridge.invoked('shell:showItem')).toEqual([{ path: 'C:\\themes\\graphite-copy.json' }]), { timeout: PATIENCE })
   })
 })
 
@@ -178,15 +179,15 @@ describe('useLauncher', () => {
     bridge.answer('roots:add', () => ['C:\\one', 'C:\\my repos'])
     bridge.answer('roots:remove', () => ['C:\\my repos'])
     const { result } = renderHook(() => useLauncher())
-    await vi.waitFor(() => expect(result.current.settings?.scanRoots).toEqual(['C:\\one']))
+    await vi.waitFor(() => expect(result.current.settings?.scanRoots).toEqual(['C:\\one']), { timeout: PATIENCE })
 
     act(() => result.current.addRoot())
-    await vi.waitFor(() => expect(result.current.settings?.scanRoots).toEqual(['C:\\one', 'C:\\my repos']))
+    await vi.waitFor(() => expect(result.current.settings?.scanRoots).toEqual(['C:\\one', 'C:\\my repos']), { timeout: PATIENCE })
     expect(bridge.invoked('discovery:scan')).toHaveLength(1)
 
     act(() => result.current.removeRoot('C:\\one'))
     expect(bridge.invoked('roots:remove')).toEqual([{ path: 'C:\\one' }])
-    await vi.waitFor(() => expect(result.current.settings?.scanRoots).toEqual(['C:\\my repos']))
+    await vi.waitFor(() => expect(result.current.settings?.scanRoots).toEqual(['C:\\my repos']), { timeout: PATIENCE })
     expect(bridge.invoked('discovery:scan')).toHaveLength(2)
   })
 
@@ -196,7 +197,7 @@ describe('useLauncher', () => {
 
     act(() => result.current.clearClaudePath())
     expect(bridge.invoked('settings:write')).toEqual([{ claudePath: null }])
-    await vi.waitFor(() => expect(result.current.settings?.claudePath).toBeNull())
+    await vi.waitFor(() => expect(result.current.settings?.claudePath).toBeNull(), { timeout: PATIENCE })
   })
 })
 
@@ -223,11 +224,11 @@ describe('useSetup', () => {
     const { result, rerender } = renderHook(({ settings }) => useSetup(settings, () => undefined), {
       initialProps: { settings: picked }
     })
-    await vi.waitFor(() => expect(result.current.status?.source).toBe('setting'))
+    await vi.waitFor(() => expect(result.current.status?.source).toBe('setting'), { timeout: PATIENCE })
 
     answer = status({ source: 'discovered' })
     rerender({ settings: { ...picked, claudePath: null } })
-    await vi.waitFor(() => expect(result.current.status?.source).toBe('discovered'))
+    await vi.waitFor(() => expect(result.current.status?.source).toBe('discovered'), { timeout: PATIENCE })
     expect(result.current.status?.path).toBe('C:\\bin\\claude.cmd')
     expect(bridge.invoked('setup:status')).toHaveLength(2)
   })

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { descendantsIn, POSIX_OWN_GROUP, treeKill } from './treekill'
+import { PATIENCE } from '../../../../test/patience'
 
 /**
  * Ending a process with everything it started, on the OS running the tests: a
@@ -84,7 +85,7 @@ describe('treeKill', () => {
       const all = [top.pid ?? -1, ...below]
       expect(all.every(alive)).toBe(true)
       treeKill(top.pid ?? -1, sync)
-      await vi.waitFor(() => expect(all.filter(alive)).toEqual([]), { timeout: 10_000 })
+      await vi.waitFor(() => expect(all.filter(alive)).toEqual([]), { timeout: PATIENCE })
     })
   }
 
@@ -94,7 +95,7 @@ describe('treeKill', () => {
       const { top, below } = await startTree({ detached: false })
       const all = [top.pid ?? -1, ...below]
       treeKill(top.pid ?? -1, true)
-      await vi.waitFor(() => expect(all.filter(alive)).toEqual([]), { timeout: 10_000 })
+      await vi.waitFor(() => expect(all.filter(alive)).toEqual([]), { timeout: PATIENCE })
     }
   )
 })

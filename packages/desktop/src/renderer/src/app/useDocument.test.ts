@@ -100,8 +100,15 @@ describe('useDocument', () => {
       initialProps: options()
     })
     await waitFor(() => expect(result.current.document).not.toBeNull())
-    act(() => result.current.setDraft('typed'))
-    await new Promise((resolve) => setTimeout(resolve, 250))
+    // Typing paused, stepped: the debounce runs out and nothing is rendered.
+    vi.useFakeTimers()
+    try {
+      act(() => result.current.setDraft('typed'))
+      act(() => vi.runAllTimers())
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
     expect(bridge.invoked('content:render')).toEqual([])
     expect(result.current.preview).toBeNull()
 

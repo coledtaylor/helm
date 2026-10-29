@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openStore, type Store, type UsageSnapshot } from '@helm/core'
 import { createUsageService, type UsageService } from './usage'
+import { PATIENCE } from '../../../../test/patience'
 
 /** Set to make `fs.watch` unavailable, as it is documented to be on some systems. */
 const fsState = vi.hoisted(() => ({ noWatch: false }))
@@ -99,7 +100,7 @@ describe('the usage service', () => {
 
     writeReading(42)
 
-    await vi.waitFor(() => expect(latest()).toBe(42), { timeout: 5000 })
+    await vi.waitFor(() => expect(latest()).toBe(42), { timeout: PATIENCE })
   })
 
   it('falls back to its poll when the watch is unavailable, and reads once per burst of writes', async () => {
@@ -111,7 +112,7 @@ describe('the usage service', () => {
     usage.start()
     // The transcript index catches up on its own (setImmediate) and adds its
     // estimate to the reading; let that land before the file changes.
-    await vi.waitFor(() => expect(readings.at(-1)?.spend).not.toBeNull())
+    await vi.waitFor(() => expect(readings.at(-1)?.spend).not.toBeNull(), { timeout: PATIENCE })
     const before = readings.length
 
     writeReading(42)

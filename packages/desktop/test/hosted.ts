@@ -3,6 +3,7 @@ import type { SessionRecord } from '@helm/core'
 import type { SessionHost, SessionHostDeps } from '../src/main/sessions'
 import type { Services } from '../src/main/services'
 import { createWorld, disposeWorld, fakeClaudeLogs, type FakeClaudeLog, type World } from './world'
+import { PATIENCE } from '../../../test/patience'
 
 /**
  * A session host running the fake `claude` in a world of its own, for the
@@ -73,14 +74,14 @@ export async function hostInWorld(options: HostOptions = {}): Promise<HostedWorl
     host,
     output,
     ready: (id) =>
-      vi.waitFor(() => expect(output.get(id)).toContain('? for shortcuts'), { timeout: 10_000 }),
+      vi.waitFor(() => expect(output.get(id)).toContain('? for shortcuts'), { timeout: PATIENCE }),
     run: async (record) => {
       expect(record.claudeSessionId).not.toBeNull()
       let found: FakeClaudeLog | undefined
       await vi.waitFor(() => {
         found = fakeClaudeLogs(world).find((log) => log.sessionId === record.claudeSessionId)
         expect(found).toBeDefined()
-      }, { timeout: 10_000 })
+      }, { timeout: PATIENCE })
       return found as FakeClaudeLog
     },
     dispose: async () => {
@@ -89,13 +90,13 @@ export async function hostInWorld(options: HostOptions = {}): Promise<HostedWorl
       // A closed tab's entry is forgotten once its pty reports the exit, so
       // nothing is left holding a file inside the world when it is removed.
       await vi.waitFor(() => expect(ids.filter((id) => host.pid(id) !== null)).toEqual([]), {
-        timeout: 10_000
+        timeout: PATIENCE
       })
       services.store.close()
       // The pty reports its exit when its own process ends; the `claude` under
       // it can take a moment longer to leave its working directory, which
       // Windows will not remove while anything is in it.
-      await vi.waitFor(() => disposeWorld(world), { timeout: 15_000, interval: 250 })
+      await vi.waitFor(() => disposeWorld(world), { timeout: PATIENCE, interval: 250 })
     }
   }
 }

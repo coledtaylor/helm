@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createFilesService, vscodeUrl, type FilesService } from './files'
+import { PATIENCE } from '../../../../test/patience'
 
 /**
  * The Files view's main half, over a real repository: every call is scoped to
@@ -84,15 +85,24 @@ describe('the Files service', () => {
         writeFileSync(join(root, 'src', 'a.ts'), `changed ${++write}\n`)
         expect(changes.flatMap((change) => change.paths ?? [])).toContain('src/a.ts')
       },
-      { timeout: 5000, interval: 250 }
+      { timeout: PATIENCE, interval: 250 }
     )
     expect(changes[0]?.root.toLowerCase()).toBe(root.toLowerCase())
 
     service.watch([])
     const before = changes.length
     writeFileSync(join(root, 'src', 'b.ts'), 'after\n')
-    await new Promise((resolve) => setTimeout(resolve, 600))
-    expect(changes.length).toBe(before)
+    // Watched again, a later write is told; a watch that had outlived being
+    // let go would have told the earlier one first.
+    service.watch([root])
+    await vi.waitFor(
+      () => {
+        writeFileSync(join(root, 'src', 'c.ts'), `barrier ${++write}\n`)
+        expect(changes.slice(before).flatMap((change) => change.paths ?? [])).toContain('src/c.ts')
+      },
+      { timeout: PATIENCE, interval: 250 }
+    )
+    expect(changes.slice(before).flatMap((change) => change.paths ?? [])).not.toContain('src/b.ts')
   })
 
   it('opens a file in VS Code at a line through its URL handler, and only a file Helm knows', async () => {

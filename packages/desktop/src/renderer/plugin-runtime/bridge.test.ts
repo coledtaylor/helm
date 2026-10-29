@@ -3,6 +3,7 @@ import type { HelmBridge, HelmContext, HelmError, HelmTheme } from '@coledtaylor
 import type { PluginFetchRequest, PluginFetchResponse } from '../../shared/ipc'
 import { installBridge } from './bridge'
 import { CONNECT, HELLO, contextName, type FrameMessage } from './wire'
+import { PATIENCE } from '../../../../../test/patience'
 
 /**
  * `window.helm`, as a plugin page gets it: installed into a real jsdom frame
@@ -351,7 +352,7 @@ describe('events', () => {
     helm.on('action', after)
     port.postMessage({ t: 'event', name: 'action', data: { id: 'add' } })
     expect(after).toHaveBeenCalledWith({ id: 'add' })
-    await vi.waitFor(() => expect(reported).toHaveLength(1))
+    await vi.waitFor(() => expect(reported).toHaveLength(1), { timeout: PATIENCE })
     expect((reported[0] as Error).message).toBe('plugin bug')
   })
 
@@ -402,8 +403,9 @@ describe('keys', () => {
   async function press(win: Window, init: KeyboardEventInit): Promise<void> {
     const KeyboardEventInPage = (win as unknown as typeof globalThis).KeyboardEvent
     win.document.body.dispatchEvent(new KeyboardEventInPage('keydown', { bubbles: true, cancelable: true, ...init }))
-    // The bridge looks again after the page's handlers, on the page's own timer.
-    await new Promise((resolve) => win.setTimeout(resolve, 5))
+    // The bridge looks again after the page's handlers, on a timer of the
+    // page's; one set after it runs after it.
+    await new Promise((resolve) => win.setTimeout(resolve, 0))
   }
 
   const keys = (port: FakePort): unknown[] => sent(port).filter((entry) => entry.t === 'key')

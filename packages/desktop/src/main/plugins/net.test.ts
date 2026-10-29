@@ -7,6 +7,7 @@ import { validateManifest, type NormalizedManifest } from '@coledtaylor/helm-plu
 import type { PluginFetchRequest } from '../../shared/ipc'
 import type { FetchContext, Hop, SendHop } from './net'
 import type { SecretStore } from './secrets'
+import { PATIENCE } from '../../../../../test/patience'
 
 /**
  * Chromium's side of `electronSender`: `net.request` and the plugin
@@ -467,7 +468,7 @@ describe('cancelling', () => {
   it('ends a request in flight as aborted', async () => {
     const controller = new AbortController()
     const pending = pluginFetch(req(`${a.url}/slow`), context({ signal: controller.signal }))
-    await vi.waitFor(() => expect(a.seen.map((one) => one.path)).toContain('/slow'))
+    await vi.waitFor(() => expect(a.seen.map((one) => one.path)).toContain('/slow'), { timeout: PATIENCE })
     controller.abort()
     expect(await refusal(pending)).toMatchObject({ code: 'aborted' })
   })
@@ -725,11 +726,11 @@ describe('the transport, over Chromium', () => {
       req(`${API}?page=1`, { headers: [['authorization', 'Bearer {{token}}']] }),
       context({ manifest: listed.manifest, send: electronSender })
     )
-    await vi.waitFor(() => expect(requests).toHaveLength(1))
+    await vi.waitFor(() => expect(requests).toHaveLength(1), { timeout: PATIENCE })
     expect(requests[0]!.headers).toEqual([['authorization', 'Bearer s3cret']])
     requests[0]!.emit('redirect', 301, 'GET', '/items?page=2', {})
 
-    await vi.waitFor(() => expect(requests).toHaveLength(2))
+    await vi.waitFor(() => expect(requests).toHaveLength(2), { timeout: PATIENCE })
     const response = new FakeResponse(200, 'OK', { 'content-type': 'text/plain' })
     requests[1]!.emit('response', response)
     response.emit('data', Buffer.from('page 2'))

@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { NormalizedExec } from '@coledtaylor/helm-plugin-sdk/manifest'
+import { PATIENCE } from '../../../../../test/patience'
 
 vi.mock('electron', async () => (await import('../../../test/electron')).electronFake())
 
@@ -33,12 +34,19 @@ beforeAll(() => {
   writeFileSync(join(dir, 'echo.mjs'), ECHO)
   writeFileSync(join(dir, 'fail.mjs'), `process.stderr.write('bad things'); process.stdout.write('some'); process.exit(3)`)
   // Starts a grandchild that would outlive a kill of its parent alone, says
-  // its pid, and then waits forever.
+  // its pid - and, given a file, writes it there whole once it has - and
+  // then waits forever.
   writeFileSync(
     join(dir, 'tree.mjs'),
     `import { spawn } from 'node:child_process'
+import { renameSync, writeFileSync } from 'node:fs'
 const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
 process.stdout.write(String(child.pid) + '\\n')
+const ready = process.argv[2]
+if (ready !== undefined) {
+  writeFileSync(ready + '.part', String(child.pid))
+  renameSync(ready + '.part', ready)
+}
 setInterval(() => {}, 1000)`
   )
   writeFileSync(join(dir, 'bin', 'echo args.cmd'), `@echo off\r\n"${node}" "${join(dir, 'echo.mjs')}" %*\r\n`)
@@ -64,6 +72,17 @@ const run = (exec: NormalizedExec, args: string[] = [], options: { timeoutMs?: n
     request: { args, stdin: null, timeoutMs: options.timeoutMs ?? 30_000 },
     signal: options.signal ?? new AbortController().signal
   })
+
+/** The pid of the child `tree.mjs` started, once it has written it to `ready`. */
+const started = (ready: string): Promise<number> =>
+  vi.waitFor(
+    () => {
+      const pid = Number(readFileSync(ready, 'utf8'))
+      expect(pid).toBeGreaterThan(0)
+      return pid
+    },
+    { timeout: PATIENCE }
+  )
 
 function alive(pid: number): boolean {
   try {
@@ -170,19 +189,32 @@ describe('runProgram', () => {
   })
 
   it('stops the whole tree at its timeout and says it timed out', async () => {
-    const pending = run(spec(node, ['tree.mjs']), [], { timeoutMs: 1500 })
-    const result = await pending
-    expect(result).toMatchObject({ exitCode: null, timedOut: true })
-    const grandchild = Number(result.stdout.trim())
-    expect(grandchild).toBeGreaterThan(0)
-    await vi.waitFor(() => expect(alive(grandchild)).toBe(false), { timeout: 5000 })
+    // The timeout runs on the test's clock, so it runs out once the program
+    // has started its child, however long that took. (`vi.waitFor` moves a
+    // fake clock on by as long as it waits, which stays short of a minute.)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const ready = join(root, 'timed out')
+      const pending = run(spec(node, ['tree.mjs']), [ready], { timeoutMs: 60_000 })
+      const grandchild = await started(ready)
+      vi.advanceTimersByTime(60_000)
+      const result = await pending
+      expect(result).toMatchObject({ exitCode: null, timedOut: true })
+      expect(Number(result.stdout.trim())).toBe(grandchild)
+      await vi.waitFor(() => expect(alive(grandchild)).toBe(false), { timeout: PATIENCE })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('ends the program when the page cancels', async () => {
     const controller = new AbortController()
-    const pending = run(spec(node, ['tree.mjs']), [], { signal: controller.signal })
-    setTimeout(() => controller.abort(), 300)
+    const ready = join(root, 'cancelled')
+    const pending = run(spec(node, ['tree.mjs']), [ready], { signal: controller.signal })
+    const grandchild = await started(ready)
+    controller.abort()
     await expect(pending).rejects.toMatchObject({ code: 'aborted' })
+    await vi.waitFor(() => expect(alive(grandchild)).toBe(false), { timeout: PATIENCE })
   })
 
   it('starts nothing for a call cancelled before the program was reached', async () => {

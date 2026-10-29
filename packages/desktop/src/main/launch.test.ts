@@ -9,6 +9,7 @@ import type { IpcContext } from './ipc'
 import type { SessionHost } from './sessions'
 import type { Services } from './services'
 import type { LaunchedSession, LaunchSessionRequest } from '../shared/ipc'
+import { PATIENCE } from '../../../../test/patience'
 
 const handlers = vi.hoisted(() => new Map<string, IpcHandler>())
 vi.mock('electron', async () => (await import('../../test/history-fixture')).electronRecordingIpc(handlers))
@@ -88,7 +89,7 @@ describe('launching from the new-session launcher', () => {
       if (session.status === 'running') await host.close({ id: session.id, force: true })
     }
     await vi.waitFor(() => expect(host.list().filter((s) => s.status === 'running')).toEqual([]), {
-      timeout: 10_000
+      timeout: PATIENCE
     })
     host.shutdown()
     services.store.close()
@@ -123,7 +124,7 @@ describe('launching from the new-session launcher', () => {
         found = fakeClaudeLogs(world).find((log) => log.sessionId === sessionId)
         expect(found).toBeDefined()
       },
-      { timeout: 10_000 }
+      { timeout: PATIENCE }
     )
     return found as FakeClaudeLog
   }

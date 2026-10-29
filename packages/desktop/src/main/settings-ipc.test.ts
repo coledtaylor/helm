@@ -9,6 +9,7 @@ import type { EventChannel, RequestChannel, RequestPayload, RequestResult } from
 import type { Services } from './services'
 import type { ThemeService } from './themes'
 import type * as UpdateModule from './update'
+import { PATIENCE } from '../../../../test/patience'
 
 /**
  * Electron as `registerIpc` meets it: the request handlers are captured so the
@@ -219,14 +220,14 @@ describe('settings over IPC', () => {
       writeFileSync(file, JSON.stringify({ name: 'Ink', kind: 'dark', colors: { bg: '#000000' } }))
       await vi.waitFor(() => {
         expect(emitted<ThemeListing>('themes:changed').at(-1)?.themes.map((t) => t.id)).toContain('ink')
-      }, { timeout: 5000 })
+      }, { timeout: PATIENCE })
 
       await invoke('settings:write', { theme: 'dark', themeDark: 'ink' })
       expect(lastTheme()?.applied).toMatchObject({ id: 'ink', fallback: false })
       expect(win.setBackgroundColor).toHaveBeenLastCalledWith('#000000')
 
       writeFileSync(file, JSON.stringify({ name: 'Ink', kind: 'dark', colors: { bg: '#101820' } }))
-      await vi.waitFor(() => expect(lastTheme()?.applied.tokens.bg).toBe('#101820'), { timeout: 5000 })
+      await vi.waitFor(() => expect(lastTheme()?.applied.tokens.bg).toBe('#101820'), { timeout: PATIENCE })
       expect(win.setBackgroundColor).toHaveBeenLastCalledWith('#101820')
       if (process.platform === 'win32') {
         expect(win.setTitleBarOverlay).toHaveBeenLastCalledWith(expect.objectContaining({ color: '#101820' }))
@@ -238,7 +239,7 @@ describe('settings over IPC', () => {
       writeFileSync(file, JSON.stringify({ name: 'Ink', kind: 'dark', colors: { bg: '#000000' } }))
       await vi.waitFor(() => {
         expect(emitted<ThemeListing>('themes:changed').at(-1)?.themes.map((t) => t.id)).toContain('ink')
-      }, { timeout: 5000 })
+      }, { timeout: PATIENCE })
       await invoke('settings:write', { theme: 'dark', themeDark: 'ink' })
       expect(lastTheme()?.applied.id).toBe('ink')
 
@@ -247,8 +248,8 @@ describe('settings over IPC', () => {
         const listing = emitted<ThemeListing>('themes:changed').at(-1)
         expect(listing?.errors.map((error) => error.file)).toContain('ink.json')
         expect(listing?.themes.map((t) => t.id)).not.toContain('ink')
-      }, { timeout: 5000 })
-      await vi.waitFor(() => expect(lastTheme()?.applied).toMatchObject({ id: 'nocturne', kind: 'dark', fallback: true }))
+      }, { timeout: PATIENCE })
+      await vi.waitFor(() => expect(lastTheme()?.applied).toMatchObject({ id: 'nocturne', kind: 'dark', fallback: true }), { timeout: PATIENCE })
       expect(win.setBackgroundColor).toHaveBeenLastCalledWith('#12131f')
     })
 

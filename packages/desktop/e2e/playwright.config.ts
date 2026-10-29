@@ -11,6 +11,9 @@ export default defineConfig({
   testDir: '.',
   testMatch: '**/*.spec.ts',
   timeout: 60_000,
+  // This tier's patience: every `expect` and `expect.poll` in a spec waits
+  // this long and no other. Longer than the vitest tier's (`test/patience.ts`)
+  // because each wait crosses a built Electron app and its windows.
   expect: { timeout: 15_000 },
   retries: 0,
   // Each test starts its own app and its own sessions; running them one at a

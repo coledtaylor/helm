@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createWorld, disposeWorld, fakeClaudeLogs, type FakeClaudeLog, type World } from '../../test/world'
 import type { SessionHost } from './sessions'
 import type { Services } from './services'
+import { PATIENCE } from '../../../../test/patience'
 
 vi.mock('electron', async () => (await import('../../test/electron')).electronFake())
 
@@ -45,7 +46,7 @@ describe('session host', () => {
     }
     // A pty reports its exit after it has been killed, and the host records it.
     await vi.waitFor(() => expect(host.list().filter((s) => s.status === 'running')).toEqual([]), {
-      timeout: 10_000
+      timeout: PATIENCE
     })
     // As before-quit does: a killed pty can report its exit after this, and
     // the host must not write it to a store that has been closed.
@@ -59,7 +60,7 @@ describe('session host', () => {
     await vi.waitFor(() => {
       found = fakeClaudeLogs(world).find((log) => log.cwd.toLowerCase() === cwd.toLowerCase())
       expect(found).toBeDefined()
-    })
+    }, { timeout: PATIENCE })
     return found as FakeClaudeLog
   }
 
@@ -68,7 +69,7 @@ describe('session host', () => {
 
     expect(record.status).toBe('running')
     expect(record.branch).toBe('main')
-    await vi.waitFor(() => expect(output.get(record.id)).toContain('Claude Code v2.1.999 (fake)'))
+    await vi.waitFor(() => expect(output.get(record.id)).toContain('Claude Code v2.1.999 (fake)'), { timeout: PATIENCE })
 
     const run = await runIn(world.projects.alpha)
     const sessionId = run.argv[run.argv.indexOf('--session-id') + 1]
@@ -78,23 +79,23 @@ describe('session host', () => {
 
   it('passes keystrokes to the session and a resize to its pty', async () => {
     const record = await host.start({ cwd: world.projects.beta, projectPath: world.projects.beta, name: 'beta', cols: 100, rows: 30 })
-    await vi.waitFor(() => expect(output.get(record.id)).toContain('? for shortcuts'))
+    await vi.waitFor(() => expect(output.get(record.id)).toContain('? for shortcuts'), { timeout: PATIENCE })
 
     host.input(record.id, 'hello\r')
-    await vi.waitFor(() => expect(output.get(record.id)).toContain('You said: hello'))
+    await vi.waitFor(() => expect(output.get(record.id)).toContain('You said: hello'), { timeout: PATIENCE })
     host.resize(record.id, 120, 40)
 
     await vi.waitFor(async () => {
       const run = await runIn(world.projects.beta)
       expect(run.received).toEqual(['hello'])
       expect(run.resized).toContainEqual({ cols: 120, rows: 40 })
-    })
+    }, { timeout: PATIENCE })
     expect(host.grid(record.id)).toEqual({ cols: 120, rows: 40 })
   })
 
   it('records how a session ended, with its exit code and how long it ran', async () => {
     const record = await host.start({ cwd: world.projects.alpha, projectPath: world.projects.alpha, name: 'alpha', cols: 80, rows: 24 })
-    await vi.waitFor(() => expect(output.get(record.id)).toContain('? for shortcuts'))
+    await vi.waitFor(() => expect(output.get(record.id)).toContain('? for shortcuts'), { timeout: PATIENCE })
 
     host.input(record.id, '/crash\r')
     await vi.waitFor(() => {
@@ -102,6 +103,6 @@ describe('session host', () => {
       expect(ended?.status).toBe('exited')
       expect(ended?.exitCode).toBe(3)
       expect(ended?.durationMs).toBeGreaterThan(0)
-    }, { timeout: 10_000 })
+    }, { timeout: PATIENCE })
   })
 })

@@ -12,6 +12,7 @@ import type { SessionHandle, SessionSpawnOptions } from './pty'
 import type { SessionHost } from './sessions'
 import type * as ServicesModule from './services'
 import type { Services } from './services'
+import { PATIENCE } from '../../../../test/patience'
 
 /**
  * Which executable a project shell runs, and that a Claude session is never
@@ -168,7 +169,7 @@ afterAll(async () => {
     if (session.status === 'running') await sessions.close({ id: session.id, force: true })
   }
   await vi.waitFor(() => expect(sessions.list().filter((s) => s.status === 'running')).toEqual([]), {
-    timeout: 10_000
+    timeout: PATIENCE
   })
   // As before-quit does: a killed pty can report its exit after this, and
   // the host must not write it to a store that has been closed.
@@ -331,7 +332,7 @@ describe('Claude sessions', () => {
     await vi.waitFor(() => {
       const run = fakeClaudeLogs(world).find((log) => log.sessionId === record.claudeSessionId)
       expect(run?.cwd.toLowerCase()).toBe(world.projects.alpha.toLowerCase())
-    })
+    }, { timeout: PATIENCE })
     expect(ptys.spawned.some((spawn) => spawn.file === shell)).toBe(false)
   })
 })

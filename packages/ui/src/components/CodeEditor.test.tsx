@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { highlightLines, type EditorHighlight } from '@helm/core'
 import { CodeEditor } from './CodeEditor'
 import { installExecCommand, installLayoutStandIns, type ExecCommandStandIn } from './CodeEditor.testkit'
+import { PATIENCE } from '../../../../test/patience'
 
 installLayoutStandIns()
 
@@ -85,7 +86,7 @@ describe('CodeEditor: the text', () => {
   it('paints each line of the tokeniser’s answer with both themes’ colours', async () => {
     const { container } = render(<Editor initial={'{ "a": 1 }\n{ "b": true }\n'} onHighlight={realHighlight} />)
 
-    await vi.waitFor(() => expect(container.querySelector('.helm-editor')?.getAttribute('data-editor-coloured')).toBe('true'))
+    await vi.waitFor(() => expect(container.querySelector('.helm-editor')?.getAttribute('data-editor-coloured')).toBe('true'), { timeout: PATIENCE })
     const lines = [...layer(container, 'highlight').querySelectorAll<HTMLElement>('.line')]
     expect(lines.map((line) => line.textContent)).toEqual(['{ "a": 1 }', '{ "b": true }', ''])
     const tokens = [...lines[0]!.querySelectorAll<HTMLElement>('span[style]')]
@@ -353,7 +354,7 @@ describe('CodeEditor: colour arriving late, or not at all', () => {
       Promise.resolve({ lines: [], language: 'plaintext', highlighted: false, tooLarge: true, tookMs: 0 })
     const { container } = render(<Editor initial={'a\nb'} path="C:\\scope\\big.txt" onHighlight={tooLarge} />)
 
-    await vi.waitFor(() => expect(container.querySelector('.helm-editor')?.getAttribute('data-editor-plain')).toBe('true'))
+    await vi.waitFor(() => expect(container.querySelector('.helm-editor')?.getAttribute('data-editor-plain')).toBe('true'), { timeout: PATIENCE })
     expect(layer(container, 'highlight').querySelectorAll('.line')).toHaveLength(0)
     expect(layer(container, 'underlay').textContent).toBe('')
     expect(container.querySelectorAll('[data-editor-line-number]')).toHaveLength(0)

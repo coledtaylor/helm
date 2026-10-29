@@ -24,6 +24,7 @@ import {
 import type { HistoryIndex, HistoryIndexDeps } from './history'
 import type { IpcContext } from './ipc'
 import type { Services } from './services'
+import { PATIENCE } from '../../../../test/patience'
 
 const handlers = vi.hoisted(() => new Map<string, IpcHandler>())
 vi.mock('electron', async () => (await import('../../test/history-fixture')).electronRecordingIpc(handlers))
@@ -180,7 +181,7 @@ describe('the session index', () => {
 
     appendPrompts(c.tree, [{ sessionId: sessionUuid(2), project: c.beta, display: 'from a terminal', at: T0 + HOUR }])
 
-    await vi.waitFor(() => expect(summaries.at(-1)?.sessions).toBe(2), { timeout: 10_000 })
+    await vi.waitFor(() => expect(summaries.at(-1)?.sessions).toBe(2), { timeout: PATIENCE })
     expect(readHistorySessions(c.store).sessions.map((s) => s.title)).toEqual(['from a terminal', 'already here'])
   })
 
@@ -286,7 +287,7 @@ describe('the transcript archive', () => {
       { role: 'assistant', text: 'Still working on it.', at: T0 + 1000 }
     ])
     // How soon a watch reports is the OS's business: macOS's can take over a second.
-    await vi.waitFor(() => expect(vi.getTimerCount()).toBe(armed + 1), { timeout: 10_000, interval: 10 })
+    await vi.waitFor(() => expect(vi.getTimerCount()).toBe(armed + 1), { timeout: PATIENCE, interval: 10 })
     expect(archiveStateOf(c.store, id)).toBeNull()
 
     // At most one pass per fifteen seconds, deferred rather than dropped.

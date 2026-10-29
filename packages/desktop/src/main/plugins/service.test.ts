@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import type { NormalizedService } from '@coledtaylor/helm-plugin-sdk/manifest'
 import type { PluginLogLine } from '../../shared/ipc'
 import type { ServiceLauncher, ServiceSupervisor } from './service'
+import { PATIENCE } from '../../../../../test/patience'
 
 vi.mock('electron', async () => (await import('../../../test/electron')).electronFake())
 
@@ -133,7 +134,7 @@ describe('a service', () => {
       claude: null
     })
     expect(service.info()).toMatchObject({ state: 'running', pid: env['pid'], port: Number(env['port']), restarts: 0, error: null })
-    await vi.waitFor(() => expect(log).toContainEqual({ stream: 'out', text: 'listening' }))
+    await vi.waitFor(() => expect(log).toContainEqual({ stream: 'out', text: 'listening' }), { timeout: PATIENCE })
     expect(await service.ensure()).toEqual(endpoint)
   })
 
@@ -149,8 +150,8 @@ describe('a service', () => {
     const pid = Number((await ask(endpoint))['pid'])
     service.stop(false)
     expect(service.info()).toMatchObject({ state: 'stopped', pid: null, port: null })
-    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5000 })
-    await vi.waitFor(() => expect(log).toContainEqual({ stream: 'out', text: 'partial' }))
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: PATIENCE })
+    await vi.waitFor(() => expect(log).toContainEqual({ stream: 'out', text: 'partial' }), { timeout: PATIENCE })
     expect(log).toContainEqual({ stream: 'helm', text: 'stopped' })
   })
 
@@ -161,7 +162,7 @@ describe('a service', () => {
     const { pid, child } = (await response.json()) as { pid: number; child: number }
     expect(alive(child)).toBe(true)
     service.stop(false)
-    await vi.waitFor(() => expect([alive(pid), alive(child)]).toEqual([false, false]), { timeout: 5000 })
+    await vi.waitFor(() => expect([alive(pid), alive(child)]).toEqual([false, false]), { timeout: PATIENCE })
   })
 
   it('is started again after it dies, as another process', async () => {
@@ -169,7 +170,7 @@ describe('a service', () => {
     const first = await service.ensure()
     const firstPid = (await ask(first))['pid']
     await fetch(`${first.origin}/die`, { headers: { 'helm-service-token': first.token } })
-    await vi.waitFor(() => expect(service.info().restarts).toBe(1), { timeout: 5000 })
+    await vi.waitFor(() => expect(service.info().restarts).toBe(1), { timeout: PATIENCE })
     const second = await service.ensure()
     expect((await ask(second))['pid']).not.toBe(firstPid)
     expect(second.token).not.toBe(first.token)
@@ -196,12 +197,12 @@ describe('a service', () => {
     const { service, log } = make('service/silent.mjs', { timing: { readyMs: 400, backoffMinMs: 60_000 } })
     const pending = service.ensure()
     await vi.waitFor(() => expect(log.some((line) => line.stream === 'helm' && /did not listen/.test(line.text))).toBe(true), {
-      timeout: 5000
+      timeout: PATIENCE
     })
     expect(service.info().state).toBe('crashed')
     const pid = Number(log.find((line) => line.stream === 'out')?.text)
     expect(pid).toBeGreaterThan(0)
-    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5000 })
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: PATIENCE })
     service.stop(false)
     await expect(pending).rejects.toMatchObject({ code: 'unavailable' })
   })
@@ -233,6 +234,6 @@ describe('a service', () => {
   it('starts without anyone waiting, for a plugin that asks for it on enable', async () => {
     const { service } = make('service/main.mjs')
     service.start()
-    await vi.waitFor(() => expect(service.info().state).toBe('running'), { timeout: 10_000 })
+    await vi.waitFor(() => expect(service.info().state).toBe('running'), { timeout: PATIENCE })
   })
 })

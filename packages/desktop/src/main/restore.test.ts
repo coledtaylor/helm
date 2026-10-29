@@ -21,6 +21,7 @@ import type { IpcContext } from './ipc'
 import type { SessionHost } from './sessions'
 import type { Services } from './services'
 import type { RestoreSessionsRequest, RestoreSessionsResult } from '../shared/ipc'
+import { PATIENCE } from '../../../../test/patience'
 
 const handlers = vi.hoisted(() => new Map<string, IpcHandler>())
 vi.mock('electron', async () => (await import('../../test/history-fixture')).electronRecordingIpc(handlers))
@@ -185,11 +186,11 @@ describe('restoring what a crash took', () => {
       if (session.status === 'running') await host.close({ id: session.id, force: true })
     }
     await vi.waitFor(() => expect(host.list().filter((s) => s.status === 'running')).toEqual([]), {
-      timeout: 10_000
+      timeout: PATIENCE
     })
     host.shutdown()
     services.store.close()
-    await vi.waitFor(() => disposeWorld(world), { timeout: 15_000, interval: 250 })
+    await vi.waitFor(() => disposeWorld(world), { timeout: PATIENCE, interval: 250 })
   })
 
   const call = async <T>(channel: string, payload?: unknown): Promise<T> => {
@@ -203,7 +204,7 @@ describe('restoring what a crash took', () => {
     await vi.waitFor(() => {
       found = fakeClaudeLogs(world).find((log) => log.sessionId === sessionId)
       expect(found).toBeDefined()
-    }, { timeout: 10_000 })
+    }, { timeout: PATIENCE })
     return found as FakeClaudeLog
   }
 

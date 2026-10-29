@@ -8,6 +8,7 @@ import type { SessionActivityState, SessionRecord } from '@helm/core'
 import { DISPOSE_TIMEOUT_MS, hostInWorld, processAlive, type HostedWorld } from '../../test/hosted'
 import type { ActivityService } from './activity'
 import type { SessionHost } from './sessions'
+import { PATIENCE } from '../../../../test/patience'
 
 vi.mock('electron', async () => (await import('../../test/electron')).electronFake())
 
@@ -38,7 +39,7 @@ describe('activity service', () => {
       await h.dispose()
     }, DISPOSE_TIMEOUT_MS)
 
-    const WAIT = { timeout: 10_000 }
+    const WAIT = { timeout: PATIENCE }
 
     const stateOf = (id: number): SessionActivityState | undefined => {
       activity.refresh()

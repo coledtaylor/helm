@@ -52,7 +52,7 @@ test('quitting Helm ends every session and everything a session started', async 
   expect(pids.every(processAlive)).toBe(true)
 
   await helm.app.close()
-  await expect.poll(() => pids.filter(processAlive), { timeout: 10_000 }).toEqual([])
+  await expect.poll(() => pids.filter(processAlive)).toEqual([])
 })
 
 test('a session tab is renamed, then closed with confirmation', async ({ helm, world }) => {
@@ -94,7 +94,7 @@ test('a session tab is renamed, then closed with confirmation', async ({ helm, w
   await pane.getByRole('button', { name: 'Close review' }).click()
   await dialog.getByRole('button', { name: 'End session' }).click()
   await expect(window.getByRole('tab', { name: /^review/ })).toHaveCount(0)
-  await expect.poll(() => processAlive(run.pid), { timeout: 10_000 }).toBe(false)
+  await expect.poll(() => processAlive(run.pid)).toBe(false)
   await expect(window.getByRole('contentinfo')).toContainText('No sessions running')
 })
 

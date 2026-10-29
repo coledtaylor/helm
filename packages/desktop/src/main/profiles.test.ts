@@ -7,6 +7,7 @@ import { createWorld, disposeWorld, fakeClaudeLogs, type FakeClaudeLog, type Wor
 import type * as profilesModule from './profiles'
 import type { SessionHost } from './sessions'
 import type * as servicesModule from './services'
+import { PATIENCE } from '../../../../test/patience'
 
 vi.mock('electron', async () => (await import('../../test/electron')).electronFake())
 
@@ -40,7 +41,7 @@ describe('profiles', () => {
       if (session.status === 'running') await host.close({ id: session.id, force: true })
     }
     await vi.waitFor(() => expect(host.list().filter((s) => s.status === 'running')).toEqual([]), {
-      timeout: 10_000
+      timeout: PATIENCE
     })
     // As before-quit does: a killed pty can report its exit after this, and
     // the host must not write it to a store that has been closed.
@@ -73,7 +74,7 @@ describe('profiles', () => {
     await vi.waitFor(() => {
       found = fakeClaudeLogs(world).find((log) => log.cwd.toLowerCase() === cwd.toLowerCase())
       expect(found).toBeDefined()
-    })
+    }, { timeout: PATIENCE })
     return found as FakeClaudeLog
   }
 

@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import type * as core from '@helm/core'
 import { createWorld, disposeWorld, type World } from '../../test/world'
 import type * as servicesModule from './services'
+import { PATIENCE } from '../../../../test/patience'
 
 vi.mock('electron', async () => (await import('../../test/electron')).electronFake())
 
@@ -66,7 +67,7 @@ describe('overlapping scans', () => {
     mod.updateSettings(services, { scanRoots: roots })
     const before = held.length
     const done = mod.runScan(services, { includeGit: false })
-    await vi.waitFor(() => expect(held.length).toBe(before + 1))
+    await vi.waitFor(() => expect(held.length).toBe(before + 1), { timeout: PATIENCE })
     return { done }
   }
 

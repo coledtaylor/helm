@@ -11,6 +11,7 @@
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
     "test/**/*.ts",
+    "../../test/patience.ts",
     "electron.vite.config.ts",
     "inline-script.ts"
   ]

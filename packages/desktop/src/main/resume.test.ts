@@ -7,6 +7,7 @@ import type { HistoryIndex } from './history'
 import type { IpcContext } from './ipc'
 import type { SessionHost } from './sessions'
 import type { Services } from './services'
+import { PATIENCE } from '../../../../test/patience'
 
 const handlers = vi.hoisted(() => new Map<string, IpcHandler>())
 vi.mock('electron', async () => (await import('../../test/history-fixture')).electronRecordingIpc(handlers))
@@ -64,7 +65,7 @@ describe('resuming a session from history', () => {
       if (session.status === 'running') await host.close({ id: session.id, force: true })
     }
     await vi.waitFor(() => expect(host.list().filter((s) => s.status === 'running')).toEqual([]), {
-      timeout: 10_000
+      timeout: PATIENCE
     })
     // As before-quit does: a killed pty can report its exit after this, and
     // the host must not write it to a store that has been closed.
@@ -116,7 +117,7 @@ describe('resuming a session from history', () => {
     await vi.waitFor(() => {
       run = fakeClaudeLogs(world).find((log) => log.resumed)
       expect(run).toBeDefined()
-    })
+    }, { timeout: PATIENCE })
     const argv = (run as FakeClaudeLog).argv
     expect(argv[argv.indexOf('--resume') + 1]).toBe(id)
     for (const flag of ['-n', '--name', '--session-id']) expect(argv).not.toContain(flag)

@@ -3,6 +3,7 @@ import { readSessions } from '@helm/core'
 import { hostInWorld } from '../../test/hosted'
 import type * as Pty from './pty'
 import type { SessionSpawnOptions } from './pty'
+import { PATIENCE } from '../../../../test/patience'
 
 vi.mock('electron', async () => (await import('../../test/electron')).electronFake())
 
@@ -53,7 +54,7 @@ describe('quitting right after a tab was closed', () => {
       expect(readSessions(h.services.store).find((row) => row.id === record.id)?.status).toBe('exited')
       h.services.store.close()
 
-      await vi.waitFor(() => expect(exits.handled).toContain(String(record.id)), { timeout: 10_000 })
+      await vi.waitFor(() => expect(exits.handled).toContain(String(record.id)), { timeout: PATIENCE })
       expect(exits.threw).toEqual([])
     } finally {
       await h.dispose()
