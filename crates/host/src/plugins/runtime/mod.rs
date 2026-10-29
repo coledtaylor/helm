@@ -6,7 +6,8 @@
 //!   `Send`), so a script stuck in a loop holds nothing but its own thread.
 //! - Its `floti.*` calls go to the registry's call layer and are answered on
 //!   the host's runtime, through one task per isolate that takes them in the
-//!   order the script made them.
+//!   order the script made them. The calls of one pass of the isolate's
+//!   event loop go as one batch, so what they paint is pushed together.
 //! - A script that throws at its top level, or runs past its memory limit
 //!   ([`HEAP_LIMIT_BYTES`]), is reported crashed and is never restarted; a
 //!   reload starts a new isolate. Switching it off, reloading or removing
@@ -30,8 +31,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-use deno_core::futures::StreamExt;
 use deno_core::futures::stream::FuturesUnordered;
+use deno_core::futures::{FutureExt, StreamExt};
 use deno_core::v8;
 use floti_protocol::Payload;
 use floti_protocol::channels::plugins::{PluginBackgroundState, PluginLogLine, PluginLogStream};
@@ -518,13 +519,26 @@ impl Inner {
 /// Takes one script's calls to the call layer, in the order it made them,
 /// and answers each when the layer does. Calls queued together are started
 /// together, so what they paint goes out in one push.
-async fn forward(mut jobs: mpsc::UnboundedReceiver<Job>, registry: Option<WeakRegistry>) {
+async fn forward(mut jobs: mpsc::UnboundedReceiver<Vec<Job>>, registry: Option<WeakRegistry>) {
     let mut running = FuturesUnordered::new();
     loop {
         tokio::select! {
             biased;
-            job = jobs.recv() => match job {
-                Some(job) => running.push(answer(job, registry.clone())),
+            batch = jobs.recv() => match batch {
+                Some(batch) => {
+                    // Every call in the batch is started, and what it
+                    // painted applied, before one push carries all of it.
+                    let _held = registry
+                        .as_ref()
+                        .and_then(WeakRegistry::upgrade)
+                        .map(|registry| registry.hold_pushes());
+                    for job in batch {
+                        let mut answering = Box::pin(answer(job, registry.clone()));
+                        if (&mut answering).now_or_never().is_none() {
+                            running.push(answering);
+                        }
+                    }
+                }
                 // The script ended: what it had in flight was cancelled
                 // with it, and nobody is waiting for the answers.
                 None => return,

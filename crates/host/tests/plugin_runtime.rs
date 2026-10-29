@@ -1289,6 +1289,55 @@ floti.on("command", async ({ id }) => {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_status_and_a_badge_set_in_one_turn_are_never_published_apart() {
+    let world = World::new();
+    let folder = world.plugin(
+        "pairs",
+        r"
+for (let n = 1; n <= 30; n++) {
+  floti.status.set({ text: `n${n}` });
+  floti.badge.set(n);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+console.log('painted');
+",
+        "",
+    );
+    world.add(&folder);
+    world.line("pairs", "painted").await;
+    world
+        .until("pairs", "the last pair shown", |info| {
+            info.badge == Some(30)
+        })
+        .await;
+
+    let published = world.published.lock().unwrap().clone();
+    let mut pairs = 0;
+    for list in &published {
+        let Some(shown) = list
+            .iter()
+            .find(|plugin| plugin.id.as_deref() == Some("pairs"))
+        else {
+            continue;
+        };
+        let Some(status) = &shown.status else {
+            assert_eq!(shown.badge, None, "a badge without its status: {shown:#?}");
+            continue;
+        };
+        let n: u32 = status.text.trim_start_matches('n').parse().unwrap();
+        assert_eq!(
+            shown.badge,
+            Some(n),
+            "{} shown with another badge",
+            status.text
+        );
+        pairs += 1;
+    }
+    assert!(pairs > 0, "no push showed a pair: {published:#?}");
+    world.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_malformed_status_item_or_badge_is_refused_as_invalid() {
     let world = World::new();
     let folder = world.plugin(

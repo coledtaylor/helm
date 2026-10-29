@@ -49,7 +49,7 @@ pub(super) struct Spawn {
     pub module: String,
     pub control: Arc<Control>,
     pub inbound: mpsc::UnboundedReceiver<Inbound>,
-    pub jobs: mpsc::UnboundedSender<Job>,
+    pub jobs: mpsc::UnboundedSender<Vec<Job>>,
     pub tools: ToolTable,
     pub logs: Arc<Logs>,
     pub channels: tokio::sync::broadcast::Sender<ChannelMessage>,
@@ -84,7 +84,7 @@ pub(super) fn run(spawn: Spawn) {
     let setup = Setup {
         plugin: plugin.clone(),
         inbound: Rc::new(tokio::sync::Mutex::new(inbound)),
-        jobs,
+        outbox: Rc::new(Outbox::new(jobs)),
         isolate: control.cancel.clone(),
         cancels: RefCell::new(HashMap::new()),
         tools: Arc::clone(&tools),
@@ -153,6 +153,7 @@ async fn drive(
     };
     let logs_plugin = running.plugin.to_owned();
     let logs = Arc::clone(running.logs);
+    let outbox = Rc::clone(&setup.outbox);
     let mut js = match engine::base_runtime(IsolateOptions {
         extensions: vec![floti_background::init(setup)],
         keep: KEEP.to_vec(),
@@ -185,7 +186,7 @@ async fn drive(
     let evaluated = tokio::select! {
         biased;
         () = stop.cancelled() => return Ended::Stopped,
-        evaluated = evaluate(&mut js, &main) => evaluated,
+        evaluated = in_passes(evaluate(&mut js, &main), &outbox) => evaluated,
     };
     if let Err(error) = evaluated {
         return ended(control, &error);
@@ -201,10 +202,11 @@ async fn drive(
         reporter.report(PluginBackgroundState::Running, None);
     });
 
+    let event_loop = in_passes(js.run_event_loop(PollEventLoopOptions::default()), &outbox);
     let finished = tokio::select! {
         biased;
         () = stop.cancelled() => return Ended::Stopped,
-        finished = js.run_event_loop(PollEventLoopOptions::default()) => finished,
+        finished = event_loop => finished,
     };
     match finished {
         // Nothing is left to wake it: the host let go of it.
@@ -248,11 +250,57 @@ fn ended(control: &Control, error: &deno_core::error::CoreError) -> Ended {
     })
 }
 
+/// The calls the script made in the pass of its event loop now running,
+/// sent to the host as one batch when the pass ends ([`in_passes`]).
+struct Outbox {
+    jobs: mpsc::UnboundedSender<Vec<Job>>,
+    batch: RefCell<Vec<Job>>,
+}
+
+impl Outbox {
+    fn new(jobs: mpsc::UnboundedSender<Vec<Job>>) -> Self {
+        Self {
+            jobs,
+            batch: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// False when the host takes no more calls.
+    fn push(&self, job: Job) -> bool {
+        if self.jobs.is_closed() {
+            return false;
+        }
+        self.batch.borrow_mut().push(job);
+        true
+    }
+
+    fn send(&self) {
+        let batch = std::mem::take(&mut *self.batch.borrow_mut());
+        if !batch.is_empty() {
+            // A batch the host no longer takes drops its replies, and each
+            // call is answered that the host stopped.
+            let _ = self.jobs.send(batch);
+        }
+    }
+}
+
+/// Runs `work`, the isolate's event loop or its script's first evaluation,
+/// sending the calls made during each poll of it, one pass, as one batch.
+async fn in_passes<F: Future>(work: F, outbox: &Outbox) -> F::Output {
+    let mut work = std::pin::pin!(work);
+    std::future::poll_fn(|cx| {
+        let polled = work.as_mut().poll(cx);
+        outbox.send();
+        polled
+    })
+    .await
+}
+
 /// What the ops find in the isolate's state.
 struct Setup {
     plugin: String,
     inbound: Rc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Inbound>>>,
-    jobs: mpsc::UnboundedSender<Job>,
+    outbox: Rc<Outbox>,
     /// Cancelled when the script ends: every call it makes is a child.
     isolate: CancelToken,
     /// The calls in flight, by the id the script gave them.
@@ -335,7 +383,7 @@ async fn op_floti_bg_call(
             args,
             cancel,
         };
-        setup.jobs.send(Job { call, reply }).ok().map(|()| answer)
+        setup.outbox.push(Job { call, reply }).then_some(answer)
     };
     let result = match reply {
         Some(answer) => answer.await.unwrap_or_else(|_| {

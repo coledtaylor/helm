@@ -17,8 +17,12 @@
 //! goes to every subscriber of `plugins:changed` before the answer does.
 //! What a plugin does itself (its status, its badge, its background
 //! starting) is pushed once per turn, however many changes the turn made.
+//! A background script's calls from one pass of its event loop come as one
+//! batch, and every call in it is started before anything is pushed
+//! ([`Registry::hold_pushes`]).
 //!
-//! Locks are taken in one order: publishing, then the state, then the store.
+//! Locks are taken in one order: publishing, then held, then the state, then
+//! the store.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -105,8 +109,37 @@ struct Inner {
     publishing: Mutex<()>,
     /// A push is already on its way for this turn.
     pending: AtomicBool,
+    /// Taken after `publishing`, never before it.
+    held: Mutex<Held>,
     stopped: AtomicBool,
     myself: Weak<Inner>,
+}
+
+/// The batches of calls being started ([`Registry::hold_pushes`]), and
+/// whether a push waits for them to be.
+#[derive(Default)]
+struct Held {
+    batches: usize,
+    waiting: bool,
+}
+
+/// Holds back what plugins paint until it is dropped; then one push carries
+/// all of it.
+pub struct PushesHeld {
+    inner: Arc<Inner>,
+}
+
+impl Drop for PushesHeld {
+    fn drop(&mut self) {
+        let waiting = {
+            let mut held = lock(&self.inner.held);
+            held.batches -= 1;
+            held.batches == 0 && std::mem::take(&mut held.waiting)
+        };
+        if waiting {
+            self.inner.changed_soon();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -201,6 +234,7 @@ impl Registry {
             state: Mutex::new(State::default()),
             publishing: Mutex::new(()),
             pending: AtomicBool::new(false),
+            held: Mutex::new(Held::default()),
             stopped: AtomicBool::new(false),
             myself: myself.clone(),
         });
@@ -218,6 +252,17 @@ impl Registry {
     /// own on.
     pub fn methods(&self) -> &Methods {
         &self.inner.methods
+    }
+
+    /// Holds back what plugins paint while a batch of calls is started, so
+    /// a status and a badge set together reach clients in one push. A push
+    /// already being made finishes first, and holds nothing of the batch.
+    pub fn hold_pushes(&self) -> PushesHeld {
+        let _publishing = lock(&self.inner.publishing);
+        lock(&self.inner.held).batches += 1;
+        PushesHeld {
+            inner: Arc::clone(&self.inner),
+        }
     }
 
     /// Reads every registered folder, in the order they were added. Sends
@@ -694,6 +739,14 @@ impl Inner {
             return;
         }
         let _publishing = lock(&self.publishing);
+        {
+            let mut held = lock(&self.held);
+            if held.batches > 0 {
+                // The last batch to be started sends it.
+                held.waiting = true;
+                return;
+            }
+        }
         let list = self.list();
         (self.publish)(&list);
     }
