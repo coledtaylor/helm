@@ -1044,8 +1044,8 @@ async fn the_watching_client_alone_is_told_which_files_changed_and_not_once_it_l
     );
 
     // A root left out of the next request is let go; the one named stays.
-    // Watched again, the root's first changes are not the one made while
-    // it was let go.
+    // While it is let go nothing about it is told: a write in it, then a
+    // barrier in the root still watched, and nothing about it came first.
     world
         .client
         .request::<WatchFiles>(&FilesWatchRequest {
@@ -1055,6 +1055,15 @@ async fn the_watching_client_alone_is_told_which_files_changed_and_not_once_it_l
         .unwrap();
     until_told(&mut world.client, &other.join("probe.txt"), "probe.txt").await;
     write(&root.join("src").join("after.ts"), "after\n");
+    let told = settled(&mut world.client, &other).await;
+    assert!(
+        told.iter()
+            .all(|change| change.root.to_lowercase() == text(&other).to_lowercase()),
+        "a root let go is not watched: {told:?}"
+    );
+    // Watched again, its changes are told again. Its first telling may name
+    // the write made just before (macOS's FSEvents reports one), which is
+    // true: the file did change.
     world
         .client
         .request::<WatchFiles>(&FilesWatchRequest {
@@ -1062,25 +1071,33 @@ async fn the_watching_client_alone_is_told_which_files_changed_and_not_once_it_l
         })
         .await
         .unwrap();
-    let told = until_told(
+    until_told(
         &mut world.client,
         &root.join("watched again.txt"),
         "watched again.txt",
     )
     .await;
-    assert!(
-        told.iter().all(|change| !names(change, "src/after.ts")),
-        "a root let go is not watched: {told:?}"
-    );
 
-    // Watching nothing, nothing is told; watched again, the first change
-    // told is not the one made in between.
+    // Watching nothing, nothing is told: once the bystander, which still
+    // watches the root, has been told of a write, and the client has had an
+    // answer since, the client has been told nothing.
     world
         .client
         .request::<WatchFiles>(&FilesWatchRequest { roots: vec![] })
         .await
         .unwrap();
-    write(&other.join("probe.txt"), "last\n");
+    until_told(&mut bystander, &other.join("probe.txt"), "probe.txt").await;
+    world
+        .client
+        .request::<WatchFiles>(&FilesWatchRequest { roots: vec![] })
+        .await
+        .unwrap();
+    assert_eq!(
+        next_change(&mut world.client, Duration::ZERO).await,
+        None,
+        "nothing watched is told"
+    );
+    // Watched again, changes are told again.
     world
         .client
         .request::<WatchFiles>(&FilesWatchRequest {
@@ -1088,16 +1105,12 @@ async fn the_watching_client_alone_is_told_which_files_changed_and_not_once_it_l
         })
         .await
         .unwrap();
-    let told = until_told(
+    until_told(
         &mut world.client,
         &other.join("watched once more.txt"),
         "watched once more.txt",
     )
     .await;
-    assert!(
-        told.iter().all(|change| !names(change, "probe.txt")),
-        "nothing watched is told: {told:?}"
-    );
     world.stop().await;
 }
 
