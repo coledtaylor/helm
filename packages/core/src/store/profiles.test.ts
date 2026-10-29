@@ -1,4 +1,3 @@
-import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -16,17 +15,18 @@ import {
   uniqueProfileName
 } from './profiles'
 
-let dir: string
+/** A folder the rows name. Nothing is made there: the rows are only data. */
+const dir = join(tmpdir(), 'helm-profiles')
 let store: Store
 
-beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'helm-profiles-'))
-  store = openStore({ file: join(dir, 'helm.db') })
+// The rows are about the store, not the file it lives in, so they live in
+// memory.
+beforeEach(() => {
+  store = openStore({ file: ':memory:' })
 })
 
-afterEach(async () => {
+afterEach(() => {
   store.close()
-  await rm(dir, { recursive: true, force: true })
 })
 
 const draft = (overrides: Partial<ProfileDraft> = {}): ProfileDraft => ({

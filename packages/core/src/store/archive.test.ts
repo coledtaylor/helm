@@ -24,7 +24,9 @@ let store: Store
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'helm-archive-'))
-  store = openStore({ file: join(dir, 'helm.db') })
+  // The transcripts are files, which is what the archive reads; the rows it
+  // writes are about the store, not its file, so the store is in memory.
+  store = openStore({ file: ':memory:' })
 })
 
 afterEach(async () => {

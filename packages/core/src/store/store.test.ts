@@ -33,18 +33,36 @@ import {
   SettingsValidationError
 } from './settings'
 
-let dir: string
+/** A folder the rows name. Nothing is made there: the rows are only data. */
+const dir = join(tmpdir(), 'helm-store')
 let store: Store
 
-beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'helm-store-'))
-  store = openStore({ file: join(dir, 'helm.db') })
+// The rows are about the store, not the file it lives in, so they live in
+// memory; the tests about the file make one (`withFile`).
+beforeEach(() => {
+  store = openStore({ file: ':memory:' })
 })
 
-afterEach(async () => {
+afterEach(() => {
   store.close()
-  await rm(dir, { recursive: true, force: true })
 })
+
+/**
+ * Runs `test` against a store on a database file in a new temp folder, for
+ * the tests about the file itself, and removes the folder afterwards. The
+ * test may close the store and reopen the file.
+ */
+async function withFile(test: (file: string, onFile: Store) => void): Promise<void> {
+  const folder = await mkdtemp(join(tmpdir(), 'helm-store-'))
+  const file = join(folder, 'helm.db')
+  const onFile = openStore({ file })
+  try {
+    test(file, onFile)
+  } finally {
+    if (onFile.raw.open) onFile.close()
+    await rm(folder, { recursive: true, force: true })
+  }
+}
 
 const project = (overrides: Partial<Project> = {}): Project => ({
   path: join(dir, 'repos', 'alpha'),
@@ -58,10 +76,17 @@ const project = (overrides: Partial<Project> = {}): Project => ({
 })
 
 describe('openStore', () => {
-  it('creates the file and applies every migration', () => {
-    expect(existsSync(store.file)).toBe(true)
+  it('creates the file and applies every migration', async () => {
+    await withFile((file, onFile) => {
+      expect(onFile.file).toBe(file)
+      expect(existsSync(file)).toBe(true)
+      expect(onFile.migrations.applied).toEqual(knownMigrations())
+      expect(knownMigrations().length).toBeGreaterThan(0)
+    })
+  })
+
+  it('applies every migration to a database in memory too', () => {
     expect(store.migrations.applied).toEqual(knownMigrations())
-    expect(knownMigrations().length).toBeGreaterThan(0)
   })
 
   it('creates every declared table', () => {
@@ -84,23 +109,27 @@ describe('openStore', () => {
     )
   })
 
-  it('runs in WAL mode', () => {
-    const [mode] = store.raw.pragma('journal_mode') as Array<{ journal_mode: string }>
-    expect(mode?.journal_mode).toBe('wal')
+  it('runs in WAL mode', async () => {
+    await withFile((_file, onFile) => {
+      const [mode] = onFile.raw.pragma('journal_mode') as Array<{ journal_mode: string }>
+      expect(mode?.journal_mode).toBe('wal')
+    })
   })
 
-  it('is idempotent: reopening applies nothing and loses nothing', () => {
-    writeSetting(store, 'theme', 'dark')
-    store.close()
+  it('is idempotent: reopening applies nothing and loses nothing', async () => {
+    await withFile((file, onFile) => {
+      writeSetting(onFile, 'theme', 'dark')
+      onFile.close()
 
-    const reopened = openStore({ file: join(dir, 'helm.db') })
-    try {
-      expect(reopened.migrations.applied).toEqual([])
-      expect(reopened.migrations.alreadyApplied).toEqual(knownMigrations())
-      expect(readSettings(reopened).theme).toBe('dark')
-    } finally {
-      reopened.close()
-    }
+      const reopened = openStore({ file })
+      try {
+        expect(reopened.migrations.applied).toEqual([])
+        expect(reopened.migrations.alreadyApplied).toEqual(knownMigrations())
+        expect(readSettings(reopened).theme).toBe('dark')
+      } finally {
+        reopened.close()
+      }
+    })
   })
 })
 
@@ -182,16 +211,18 @@ describe('settings', () => {
     expect(Object.keys(written).sort()).toEqual(Object.keys(DEFAULT_SETTINGS).sort())
   })
 
-  it('survives a restart', () => {
-    writeSettings(store, { theme: 'dark', scanRoots: [dir] })
-    store.close()
+  it('survives a restart', async () => {
+    await withFile((file, onFile) => {
+      writeSettings(onFile, { theme: 'dark', scanRoots: [dir] })
+      onFile.close()
 
-    const reopened = openStore({ file: join(dir, 'helm.db') })
-    try {
-      expect(readSettings(reopened)).toMatchObject({ theme: 'dark', scanRoots: [dir] })
-    } finally {
-      reopened.close()
-    }
+      const reopened = openStore({ file })
+      try {
+        expect(readSettings(reopened)).toMatchObject({ theme: 'dark', scanRoots: [dir] })
+      } finally {
+        reopened.close()
+      }
+    })
   })
 
   it('ignores keys it does not recognise instead of surfacing them', () => {
