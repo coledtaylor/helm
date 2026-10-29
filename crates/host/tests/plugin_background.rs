@@ -439,9 +439,11 @@ async fn a_background_script_hears_each_command_setting_and_secret_change_a_clie
         }),
         LISTENER,
     );
-    world.add(&folder).await;
+    // Subscribed before the plugin is added, so the push that shows it
+    // running comes after each subscription's snapshot.
     let mut first = world.watcher().await;
     let mut second = world.watcher().await;
+    world.add(&folder).await;
     for watcher in [&mut first, &mut second] {
         push_where(watcher, "the listener running", |listed| {
             state(by_id(listed, "listener")) == PluginBackgroundState::Running
@@ -654,12 +656,13 @@ async fn a_plugin_like_the_sample_plugin_has_each_of_its_background_calls_answer
     let origin = server.origin();
     let mut world = HostWorld::start().await;
     let folder = world.plugin("sample", &sample_manifest(&origin), SAMPLE);
+    // Subscribed before the plugin is added, so the push that shows the
+    // script's first status comes after each subscription's snapshot.
+    let mut first = world.watcher().await;
+    let mut second = world.watcher().await;
     let added = world.add(&folder).await;
     let tools = by_id(&added, "sample").agent.as_ref().expect("its tools");
     assert_eq!(tools.tools[0].name, "list_items");
-
-    let mut first = world.watcher().await;
-    let mut second = world.watcher().await;
 
     // No secret yet: secrets.state is missing, and every client says so.
     for watcher in [&mut first, &mut second] {

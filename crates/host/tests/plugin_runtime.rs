@@ -1224,9 +1224,11 @@ floti.on("command", async ({ id }) => {
         r#""commands": [{ "id": "paint", "title": "Paint" }, { "id": "zero", "title": "Zero" },
            { "id": "huge", "title": "Huge" }, { "id": "null", "title": "Null" }]"#,
     );
-    world.add(&folder).await;
+    // Subscribed before the plugin is added, so the push that shows it
+    // running comes after each subscription's snapshot.
     let mut watcher = world.watcher().await;
     let mut second = world.watcher().await;
+    world.add(&folder).await;
     pushes_until(&mut watcher, "painter running", |listed| {
         state(by_id(listed, "painter")) == PluginBackgroundState::Running
     })

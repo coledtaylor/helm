@@ -95,7 +95,9 @@ mod tests {
     fn callers_racing_to_make_the_first_key_all_answer_the_one_on_disk() {
         const RACERS: usize = 8;
         let dirs = TestDirs::new();
-        let path = dirs.data.join("device.key");
+        // A folder of its own: the data folder holds the testkit's markers.
+        let folder = dirs.folder("keys");
+        let path = folder.join("device.key");
         let start = std::sync::Barrier::new(RACERS);
         let keys: Vec<_> = std::thread::scope(|scope| {
             let racers: Vec<_> = (0..RACERS)
@@ -117,7 +119,7 @@ mod tests {
             "{keys:?} vs {on_disk:?}"
         );
         assert!(Native.owner_only(&path).unwrap());
-        let left: Vec<_> = std::fs::read_dir(&dirs.data)
+        let left: Vec<_> = std::fs::read_dir(&folder)
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
