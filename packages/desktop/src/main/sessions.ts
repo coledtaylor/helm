@@ -218,6 +218,37 @@ function nativeConfirm(window: () => BrowserWindow | null): Confirm {
   }
 }
 
+/** How Helm asks before a running session ends: in the window, with the native box behind it. */
+export function sessionConfirm(window: () => BrowserWindow | null): Confirm {
+  return rendererConfirm(window, nativeConfirm(window))
+}
+
+/**
+ * The OS notification for a session that ended where nobody could see it.
+ * Clicking it brings the window forward on that session's tab. False when
+ * this OS shows none.
+ */
+export function showExitNotification(window: () => BrowserWindow | null, record: SessionRecord): boolean {
+  if (!Notification.isSupported()) return false
+  const outcome = record.exitCode === 0 ? 'finished' : `exited with code ${String(record.exitCode ?? '?')}`
+  const notification = new Notification({
+    // The tab's label: this notification's job is to send someone back to a
+    // tab, so it has to name the one they will be looking for.
+    title: `${sessionLabel(record)} ${outcome}`,
+    body: record.cwd
+  })
+  notification.on('click', () => {
+    const target = window()
+    if (!target || target.isDestroyed()) return
+    if (target.isMinimized()) target.restore()
+    target.show()
+    target.focus()
+    emit(target, 'session:activate', { id: record.id })
+  })
+  notification.show()
+  return true
+}
+
 export interface SessionHost {
   start: (req: StartSessionRequest) => Promise<SessionRecord>
   /**
@@ -244,6 +275,12 @@ export interface SessionHost {
   rename: (req: RenameSessionRequest) => SessionRecord
   /** Sessions this process is hosting, running or exited-but-not-yet-closed. */
   list: () => SessionRecord[]
+  /**
+   * Settles once `list` can be answered: at once for Helm's own sessions, and
+   * once the first connection to the local host has listed its sessions, or
+   * failed to, when they run there.
+   */
+  settled: () => Promise<void>
   input: (id: number, data: string) => void
   resize: (id: number, cols: number, rows: number) => void
   /** The grid the pane last reported, which is what the pty is actually at. */
@@ -450,26 +487,8 @@ export function createSessionHost({
     // "Non-focused" is two conditions, not one: a session in a background tab
     // of a focused window is just as unwatched as one in a minimised window.
     const watched = win !== null && !win.isDestroyed() && win.isFocused() && focused.has(record.id)
-    if (watched || !Notification.isSupported()) return
-
-    const outcome =
-      record.exitCode === 0 ? 'finished' : `exited with code ${String(record.exitCode ?? '?')}`
-    const notification = new Notification({
-      // The tab's label: this notification's job is to send someone back to a
-      // tab, so it has to name the one they will be looking for.
-      title: `${sessionLabel(record)} ${outcome}`,
-      body: record.cwd
-    })
-    notification.on('click', () => {
-      const target = window()
-      if (!target || target.isDestroyed()) return
-      if (target.isMinimized()) target.restore()
-      target.show()
-      target.focus()
-      emit(target, 'session:activate', { id: record.id })
-    })
-    notification.show()
-    observer?.onNotified?.(record)
+    if (watched) return
+    if (showExitNotification(window, record)) observer?.onNotified?.(record)
   }
 
   /**
@@ -961,6 +980,8 @@ export function createSessionHost({
     },
 
     list: () => [...hosted.values()].filter((h) => !h.closed).map((h) => h.record),
+
+    settled: () => Promise.resolve(),
 
     input(id, data) {
       hosted.get(id)?.handle.write(data)

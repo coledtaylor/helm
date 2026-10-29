@@ -66,7 +66,8 @@ export interface OpenedShell {
 }
 
 export interface PtermHost {
-  open: (request: OpenShellRequest) => OpenedShell
+  /** Synchronous for Helm's own shells; a promise where the shell runs on the local host. */
+  open: (request: OpenShellRequest) => OpenedShell | Promise<OpenedShell>
   input: (id: number, data: string) => void
   resize: (id: number, cols: number, rows: number) => void
   close: (id: number) => void
@@ -81,6 +82,12 @@ export interface PtermHost {
     opened: { cols: number; rows: number }
   }>
   /** Shells found on this machine, for the pickers. */
+  detected: () => DetectedShell[] | Promise<DetectedShell[]>
+}
+
+/** Helm's own shells, whose calls all answer at once. */
+export type LocalPtermHost = Omit<PtermHost, 'open' | 'detected'> & {
+  open: (request: OpenShellRequest) => OpenedShell
   detected: () => DetectedShell[]
 }
 
@@ -335,7 +342,7 @@ export interface PtermDeps {
   defaultShell: () => string | null
 }
 
-export function createPtermHost(deps: PtermDeps): PtermHost {
+export function createPtermHost(deps: PtermDeps): LocalPtermHost {
   let nextId = 1
   const byId = new Map<number, ShellRecord>()
   const byPath = new Map<string, ShellRecord>()

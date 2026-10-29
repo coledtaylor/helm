@@ -147,6 +147,11 @@ export interface IpcContext {
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
   /**
+   * Called when the `claude` path or the terminal shell changes, when sessions
+   * run in the local host, which is told both. Absent otherwise.
+   */
+  hostSettingsChanged?: (() => void) | undefined
+  /**
    * Stands in for the native file and directory pickers.
    *
    * A native dialog has no automation surface, so the first-run driver - which
@@ -219,6 +224,9 @@ export function registerIpc(ctx: IpcContext): void {
       // written through this channel has to reach it too - otherwise sessions
       // launch from one path and `claude mcp add` from another.
       if (patch.claudePath !== undefined) setClaudeOverride(next.claudePath)
+      // Sessions in the local host run the `claude` and open the shell the
+      // host was told, so it is told again when either changes.
+      if (patch.claudePath !== undefined || patch.terminalShell !== undefined) ctx.hostSettingsChanged?.()
       /*
        * The endpoint follows its own tick, immediately.
        *
@@ -478,7 +486,10 @@ export function registerIpc(ctx: IpcContext): void {
     'session:restorable': () => ctx.restore.offer(),
     'session:restore': (request) => ctx.restore.restore(request),
     'session:close': (request) => ctx.sessions.close(request),
-    'session:list': () => ctx.sessions.list(),
+    'session:list': async () => {
+      await ctx.sessions.settled()
+      return ctx.sessions.list()
+    },
     // A read of what main already holds, not a fresh pass: the poller is what
     // decides when the registry is re-read, and a channel that forced a read
     // would let a renderer set the poll rate.

@@ -6,7 +6,7 @@ import { createWorld, disposeWorld, fakeClaudeLogs, type World } from '../../tes
 import type * as ChildProcess from 'node:child_process'
 import type { IpcContext } from './ipc'
 import type * as PtermModule from './pterm'
-import type { PtermHost } from './pterm'
+import type { LocalPtermHost } from './pterm'
 import type * as PtyModule from './pty'
 import type { SessionHandle, SessionSpawnOptions } from './pty'
 import type { SessionHost } from './sessions'
@@ -184,7 +184,7 @@ beforeEach(() => {
 })
 
 /** A host wired the way the app wires it: the setting read at every open. */
-function shellHost(): PtermHost {
+function shellHost(): LocalPtermHost {
   return pterm.createPtermHost({ window: () => null, defaultShell: () => services.settings.terminalShell })
 }
 

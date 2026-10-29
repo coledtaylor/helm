@@ -30,13 +30,16 @@ import type { RestoreSessionsRequest, RestoreSessionsResult } from '../shared/ip
  */
 export interface RestoreService {
   /** What there is to reopen, or null when there is nothing or it was answered. */
-  offer: () => RestoreOffer | null
+  offer: () => RestoreOffer | null | Promise<RestoreOffer | null>
   /**
    * Reopens the sessions asked for, one at a time, and answers the offer.
    * Asking for none is "not now".
    */
   restore: (req: RestoreSessionsRequest) => Promise<RestoreSessionsResult>
 }
+
+/** The offer from Helm's own database, which answers at once. */
+export type LocalRestoreService = Omit<RestoreService, 'offer'> & { offer: () => RestoreOffer | null }
 
 export interface RestoreDeps {
   lost: { sessions: readonly LostSession[]; layout: SavedPaneLayout | null }
@@ -83,7 +86,7 @@ export function createRestoreService({
   sessions,
   refreshHistory,
   liveConversations
-}: RestoreDeps): RestoreService {
+}: RestoreDeps): LocalRestoreService {
   let answered = false
   let refreshed = false
   const order = tabOrder(lost.layout)

@@ -63,15 +63,22 @@ import { sessionToolsWorld, type SessionToolsWorld } from './session-tools'
 import { createHistoryIndex } from './history'
 import { createUsageService } from './usage'
 import { maybeCheckForUpdate } from './update'
-import { createSessionHost, type Confirm, type SessionObserver } from './sessions'
+import {
+  createSessionHost,
+  sessionConfirm,
+  type Confirm,
+  type SessionHost,
+  type SessionObserver
+} from './sessions'
+import { createDesktopHost, type DesktopHost } from './host/desktop'
 import { createActivityService } from './activity'
-import { createRestoreService } from './restore'
+import { createRestoreService, type RestoreService } from './restore'
 import { createResourcesService } from './resources'
 import { createCollector, type CheckContext } from './checkkit'
 import { applicationMenuTemplate, windowChromeFor } from './chrome'
 import { createQuitGate } from './quit'
 import { requestSmallCorners } from './corners'
-import { createPtermHost } from './pterm'
+import { createPtermHost, type PtermHost } from './pterm'
 import { runSelftest } from './selftest'
 import { runFidelity } from './fidelity'
 import { runClaudeChecks } from './claudecheck'
@@ -438,13 +445,45 @@ function startApp(options: AppOptions = {}): void {
    */
   let sessionTools: SessionToolsWorld | null = null
 
-  const sessions = createSessionHost({
-    services,
-    window: () => win,
-    browserMcp: () => browserMcp,
-    observer: options.observer,
-    confirm: options.confirm
-  })
+  /*
+   * Where sessions and terminals run, decided once, here: in Helm's own main
+   * process, or - behind "Run sessions in the local host" - in the local host,
+   * which Helm connects to now and starts when none answers. A change to the
+   * setting takes effect the next time Helm starts.
+   */
+  const desktopHost: DesktopHost | null = services.settings.sessionsInHost
+    ? createDesktopHost({
+        services,
+        window: () => win,
+        confirm: options.confirm ?? sessionConfirm(() => win),
+        onActivityChange: () => plugins.sessionsChanged()
+      })
+    : null
+  if (desktopHost !== null) {
+    void desktopHost.link.connection().catch((err: unknown) => {
+      console.warn(err instanceof Error ? err.message : String(err))
+    })
+    // A page that starts loading gets nothing more of what the last one was
+    // sent; once it is listening, each terminal is drawn from the host's
+    // screen and then streams (`rendererReady` below).
+    win.webContents.on('did-start-navigation', (details) => {
+      if (details.isMainFrame && !details.isSameDocument) desktopHost.streams.suspend()
+    })
+    // The host judges whether an exit is worth a notification from what this
+    // window can show, and a window that is not in front shows nobody anything.
+    win.on('focus', () => desktopHost.refocus())
+    win.on('blur', () => desktopHost.refocus())
+  }
+
+  const sessions: SessionHost =
+    desktopHost?.sessions ??
+    createSessionHost({
+      services,
+      window: () => win,
+      browserMcp: () => browserMcp,
+      observer: options.observer,
+      confirm: options.confirm
+    })
 
   // One question about running sessions, shared by the menu's Quit Helm and
   // the window's close, asked before anything ends (quit.ts).
@@ -468,10 +507,12 @@ function startApp(options: AppOptions = {}): void {
   // The setting is read through a function rather than passed by value: the
   // default shell has to be able to change while the app is running, and a
   // captured value would make it a property of when Helm started.
-  const pterm = createPtermHost({
-    window: () => win,
-    defaultShell: () => services.settings.terminalShell
-  })
+  const pterm: PtermHost =
+    desktopHost?.pterm ??
+    createPtermHost({
+      window: () => win,
+      defaultShell: () => services.settings.terminalShell
+    })
 
   /*
    * The archive, and the session index that feeds it. `createHistoryIndex`
@@ -587,12 +628,14 @@ function startApp(options: AppOptions = {}): void {
    * `.claude` tree everything else that reads one is - so a check that hands
    * over a fixture home gets a registry from that home rather than the user's.
    */
-  const activity = createActivityService({
-    sessions,
-    window: () => win,
-    ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
-    onChange: () => plugins.sessionsChanged()
-  })
+  const activity =
+    desktopHost?.activity ??
+    createActivityService({
+      sessions,
+      window: () => win,
+      ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
+      onChange: () => plugins.sessionsChanged()
+    })
   // A pass after every spawn, exit, close and rename, and the plugins told
   // after it whatever it found: a session that started is listed even before
   // the registry knows what it is doing.
@@ -602,23 +645,25 @@ function startApp(options: AppOptions = {}): void {
   })
   pluginSessionList = () => describePluginSessions(sessions.pluginSessions(), activity.overview().sessions)
 
-  const restore = createRestoreService({
-    lost: services.lost,
-    store: services.store,
-    sessions,
-    refreshHistory: () => {
-      history.refresh()
-    },
-    // Read here rather than from the activity poller's last pass, which only
-    // starts once the window is up and would answer "nothing is running" to
-    // a window that asked first.
-    liveConversations: () =>
-      new Set(
-        readSessionRegistry(sessionRegistryDir(options.claudeHome ?? claudeHome())).flatMap((entry) =>
-          entry.sessionId === null ? [] : [entry.sessionId]
+  const restore: RestoreService =
+    desktopHost?.restore ??
+    createRestoreService({
+      lost: services.lost,
+      store: services.store,
+      sessions,
+      refreshHistory: () => {
+        history.refresh()
+      },
+      // Read here rather than from the activity poller's last pass, which only
+      // starts once the window is up and would answer "nothing is running" to
+      // a window that asked first.
+      liveConversations: () =>
+        new Set(
+          readSessionRegistry(sessionRegistryDir(options.claudeHome ?? claudeHome())).flatMap((entry) =>
+            entry.sessionId === null ? [] : [entry.sessionId]
+          )
         )
-      )
-  })
+    })
 
   /*
    * What each hosted session is *holding* - its process tree and its ports.
@@ -666,7 +711,10 @@ function startApp(options: AppOptions = {}): void {
     ...(options.claudeHome !== undefined ? { claudeHome: options.claudeHome } : {}),
     ...(options.chooseDirectory !== undefined ? { chooseDirectory: options.chooseDirectory } : {}),
     ...(options.chooseFile !== undefined ? { chooseFile: options.chooseFile } : {}),
+    ...(desktopHost !== null ? { hostSettingsChanged: () => desktopHost.link.writeSettings() } : {}),
     rendererReady: () => {
+      // Every terminal drawn afresh into the page that has just loaded.
+      desktopHost?.streams.resume()
       emit(win, 'settings:changed', services.settings)
       pushTheme({ services, themes, plugins, window: () => win })
       // The first scan is kicked off by the main process rather than waited on
@@ -816,7 +864,29 @@ function startApp(options: AppOptions = {}): void {
     }
   })
 
-  app.on('before-quit', () => {
+  /*
+   * Sessions in the local host end with the host Helm started, and that takes
+   * a round trip: the first `before-quit` is held while the host stops - every
+   * session ended and recorded as ended, then both programs exited, bounded by
+   * `HOST_STOP_DEADLINE_MS` - and the quit then goes on as it always has. A
+   * Helm that ends any other way takes the host with it: its standard input
+   * closes.
+   */
+  let hostStop: 'running' | 'stopping' | 'stopped' = desktopHost === null ? 'stopped' : 'running'
+  app.on('before-quit', (event) => {
+    if (desktopHost !== null && hostStop !== 'stopped') {
+      event.preventDefault()
+      if (hostStop === 'running') {
+        hostStop = 'stopping'
+        desktopHost.sessions.shutdown()
+        desktopHost.pterm.shutdown()
+        void desktopHost.link.stop().finally(() => {
+          hostStop = 'stopped'
+          app.quit()
+        })
+      }
+      return
+    }
     // Flush whatever the debounce is still holding.
     if (boundsTimer) clearTimeout(boundsTimer)
     boundsTimer = null
