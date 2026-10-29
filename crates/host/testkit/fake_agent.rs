@@ -28,7 +28,8 @@
 //!   holds it for `<ms>` milliseconds, then exits 0. This is what a listening
 //!   child runs.
 //! - `--fake-tick=<ms>`: writes `tick <n>` every `<ms>` milliseconds while it
-//!   runs, counting from 1, whether or not anyone types.
+//!   runs, counting from 1, whether or not anyone types, and records the last
+//!   `n` written in `<pid>.ticks` beside its record.
 //!
 //! Otherwise it reads stdin a line at a time and answers each with
 //! `echo: <line>`. At its prompt, `/exit <code>` exits with `code`,
@@ -149,10 +150,19 @@ fn main() {
     }
     if let Some(ms) = flag_value(&argv, "--fake-tick") {
         let every = Duration::from_millis(parse_ms(ms));
+        let ticks = record
+            .path
+            .as_ref()
+            .map(|path| path.with_extension("ticks"));
         thread::spawn(move || {
             for n in 1u64..=u64::MAX {
                 thread::sleep(every);
                 write_out(format!("tick {n}\r\n").as_bytes());
+                if let Some(ticks) = &ticks {
+                    let partial = ticks.with_extension("ticks.partial");
+                    let _ = std::fs::write(&partial, n.to_string())
+                        .and_then(|()| replace(&partial, ticks));
+                }
             }
         });
     }

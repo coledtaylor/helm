@@ -2079,9 +2079,6 @@ impl Wire {
 /// The subscription a settings watcher holds.
 const SETTINGS: u64 = 1;
 
-/// How long a watcher is given to hear a change that must not come.
-const QUIET: Duration = Duration::from_millis(500);
-
 /// Asserts that a write was refused and that its problems name every one of
 /// `sentences`.
 fn refused_with(ok: bool, problems: &[String], sentences: &[String], what: &str) {
@@ -2275,9 +2272,12 @@ async fn a_client_is_refused_a_harness_with_a_bad_name_or_over_an_existing_folde
     assert_eq!(read(&parent.join("work").join("mine.txt")), "mine");
 
     // No root was added: a read finds the roots as they were, and the
-    // subscriber was told nothing.
+    // subscriber was told nothing. A harness made after is the barrier: the
+    // first the subscriber hears is the roots with it.
     assert_eq!(wire.roots().await, roots);
-    assert_eq!(heard_roots(&mut watcher, QUIET).await, None);
+    let made = wire.harness(&parent, "made after", "minimal").await;
+    assert!(made.problems.is_empty(), "{:?}", made.problems);
+    assert_eq!(heard_roots(&mut watcher, PATIENCE).await, Some(made.roots));
     wire.stop().await;
 }
 

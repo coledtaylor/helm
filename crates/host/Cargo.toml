@@ -102,3 +102,5 @@ secret-service.workspace = true
 
 [dev-dependencies]
 floti-host = { path = ".", features = ["testkit"] }
+# Paused time, for tests that step an interval rather than wait it out.
+tokio = { workspace = true, features = ["test-util"] }

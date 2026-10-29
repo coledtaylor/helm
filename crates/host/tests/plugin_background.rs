@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use floti_host::platform::socket::Endpoint;
 use floti_host::server::{HostConfig, HostRun, backends};
-use floti_host::testkit::{RunningHost, TestClient, TestDirs};
+use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs};
 use floti_protocol::Message;
 use floti_protocol::channel::{EventChannel, from_payload};
 use floti_protocol::channels::host::HostStopReason;
@@ -34,9 +34,6 @@ use floti_protocol::channels::plugins::{
 };
 use floti_protocol::channels::workspace::AppMode;
 use serde_json::{Value, json};
-
-/// How long a test waits on a script, a push or a request.
-const WAIT: Duration = Duration::from_secs(10);
 
 const PLUGINS_CHANGED: u64 = 1;
 
@@ -127,14 +124,14 @@ impl ItemsServer {
     /// Waits until a request the server was sent passes `check`, and answers
     /// the last one that does.
     async fn until(&self, what: &str, check: impl Fn(&Seen) -> bool) -> Seen {
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + PATIENCE;
         loop {
             if let Some(found) = self.seen().into_iter().rev().find(|seen| check(seen)) {
                 return found;
             }
             assert!(
                 Instant::now() < deadline,
-                "the server was never sent {what} within {WAIT:?}: {:#?}",
+                "the server was never sent {what} within {PATIENCE:?}: {:#?}",
                 self.seen()
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -356,7 +353,7 @@ async fn push_where(
     what: &str,
     check: impl Fn(&[PluginInfo]) -> bool,
 ) -> Vec<PluginInfo> {
-    let deadline = Instant::now() + WAIT;
+    let deadline = Instant::now() + PATIENCE;
     let mut last = None;
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
@@ -370,7 +367,9 @@ async fn push_where(
             }
             Some(_) => {}
             None => {
-                panic!("no plugins:changed push showed {what} within {WAIT:?}; the last: {last:#?}")
+                panic!(
+                    "no plugins:changed push showed {what} within {PATIENCE:?}; the last: {last:#?}"
+                )
             }
         }
     }

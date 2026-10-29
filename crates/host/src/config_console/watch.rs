@@ -203,4 +203,41 @@ mod tests {
         assert!(watched.look().is_none());
         assert!(watched.look().is_none());
     }
+
+    #[test]
+    fn a_change_the_host_made_is_never_told_and_an_outside_one_after_it_is() {
+        let dirs = TestDirs::new();
+        let file = dirs.root().join("CLAUDE.md");
+        std::fs::write(&file, "one\n").unwrap();
+        let told = Arc::new(Mutex::new(Vec::new()));
+        // Built without its polling thread, so each look is a step the test
+        // takes.
+        let watches = Watches {
+            by_client: Mutex::new(HashMap::new()),
+            sink: Box::new({
+                let told = Arc::clone(&told);
+                move |client, change: &ConfigExternalChange| {
+                    told.lock().unwrap().push((client, change.hash.clone()));
+                }
+            }),
+        };
+        watches.watch(ClientId(1), Some(&file));
+
+        {
+            let mut changing = watches.changing();
+            std::fs::write(&file, "two\n").unwrap();
+            changing.changed([file.as_path()]);
+        }
+        watches.look();
+        watches.look();
+        assert!(told.lock().unwrap().is_empty());
+
+        std::fs::write(&file, "three\n").unwrap();
+        watches.look();
+        watches.look();
+        assert_eq!(
+            *told.lock().unwrap(),
+            [(ClientId(1), hash_content("three\n"))]
+        );
+    }
 }

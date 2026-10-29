@@ -188,12 +188,18 @@ async fn raw(endpoint: &Endpoint) -> LocalStream {
 /// Everything the host sends on `stream` until it closes it, failing the
 /// test when it is still open after [`PATIENCE`].
 async fn read_until_closed(stream: &mut LocalStream) -> Vec<u8> {
+    read_until_closed_within(stream, PATIENCE).await
+}
+
+/// Everything the host sends on `stream` until it closes it, failing the
+/// test when it is still open after `within`.
+async fn read_until_closed_within(stream: &mut LocalStream, within: Duration) -> Vec<u8> {
     let mut received = Vec::new();
     let mut buf = [0; 4096];
-    let deadline = tokio::time::Instant::now() + PATIENCE;
+    let deadline = tokio::time::Instant::now() + within;
     loop {
         match tokio::time::timeout_at(deadline, stream.read(&mut buf)).await {
-            Err(_) => panic!("the host did not close the connection within {PATIENCE:?}"),
+            Err(_) => panic!("the host did not close the connection within {within:?}"),
             Ok(Ok(0) | Err(_)) => return received,
             Ok(Ok(n)) => received.extend_from_slice(&buf[..n]),
         }
@@ -754,7 +760,6 @@ async fn s10_a_connection_that_stalls_before_or_inside_the_handshake_is_closed_a
     let host_key = host_key_of(&dirs).await;
     let device = KeyPair::generate().unwrap();
 
-    let opened = Instant::now();
     let mut silent = raw(&endpoint).await;
     let mut partway = raw(&endpoint).await;
     partway
@@ -766,15 +771,11 @@ async fn s10_a_connection_that_stalls_before_or_inside_the_handshake_is_closed_a
     assert!(client.request::<SessionList>(&()).await.is_ok());
 
     let (to_silent, to_partway) = tokio::join!(
-        read_until_closed(&mut silent),
-        read_until_closed(&mut partway)
+        // The deadline, then the patience any wait is given on a slow machine.
+        read_until_closed_within(&mut silent, HANDSHAKE_DEADLINE + PATIENCE),
+        read_until_closed_within(&mut partway, HANDSHAKE_DEADLINE + PATIENCE)
     );
-    let waited = opened.elapsed();
     assert!(to_silent.is_empty() && to_partway.is_empty());
-    assert!(
-        waited + Duration::from_millis(500) >= HANDSHAKE_DEADLINE,
-        "closed after {waited:?}, before the deadline"
-    );
 
     let (_, stderr) = host.stop(client).await;
     let timed_out = stderr

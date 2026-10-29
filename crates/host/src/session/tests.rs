@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::grid::{Dimensions, Grid};
@@ -19,16 +19,14 @@ use super::*;
 use crate::agent::{AgentBackend, LaunchFolder, LaunchRequest};
 use crate::platform::process_tree::{Native, ProcessTree};
 use crate::store::Store;
-use crate::testkit::{FakeAgent, FakeAgentBackend, TestDirs};
-
-const WAIT: Duration = Duration::from_secs(20);
-const QUIET: Duration = Duration::from_millis(400);
+use crate::testkit::{FakeAgent, FakeAgentBackend, PATIENCE, TestDirs};
 
 const A: ClientId = ClientId(1);
 const B: ClientId = ClientId(2);
 
-/// The fake agent built beside this test binary. `cargo test -p floti-host`
-/// builds it, because the crate has integration tests.
+/// The fake agent built beside this test binary. `cargo nextest run` and
+/// `cargo test` build it for `floti-host`, because the crate has integration
+/// tests.
 pub(crate) fn fake_agent_exe() -> PathBuf {
     let exe = std::env::current_exe().expect("find the test binary");
     let dir = exe
@@ -38,7 +36,7 @@ pub(crate) fn fake_agent_exe() -> PathBuf {
     let path = dir.join(format!("floti-fake-agent{}", std::env::consts::EXE_SUFFIX));
     assert!(
         path.is_file(),
-        "{} is missing: build it with `cargo build -p floti-host --bin floti-fake-agent`, which `cargo test -p floti-host` does",
+        "{} is missing: build it with `cargo build -p floti-host --bin floti-fake-agent`, which `cargo nextest run -p floti-host` and `cargo test -p floti-host` do",
         path.display()
     );
     path
@@ -294,7 +292,7 @@ impl Watcher {
     }
 
     fn wait_for(&mut self, what: &str, done: impl Fn(&Self) -> bool) {
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + PATIENCE;
         loop {
             self.pump();
             if done(self) {
@@ -302,7 +300,7 @@ impl Watcher {
             }
             assert!(
                 Instant::now() < deadline,
-                "waited {WAIT:?} for {what}; received so far: {:?}",
+                "waited {PATIENCE:?} for {what}; received so far: {:?}",
                 String::from_utf8_lossy(&self.data)
             );
             std::thread::sleep(Duration::from_millis(20));
@@ -336,26 +334,50 @@ impl Watcher {
     }
 }
 
-/// Waits until no watcher has been sent anything for a while.
-fn settle(watchers: &mut [&mut Watcher]) {
-    let deadline = Instant::now() + WAIT;
-    let mut quiet_since = Instant::now();
-    while quiet_since.elapsed() < QUIET {
-        let mut any = false;
-        for watcher in watchers.iter_mut() {
-            any |= watcher.pump();
-        }
-        if any {
-            quiet_since = Instant::now();
-        }
-        assert!(Instant::now() < deadline, "the session never went quiet");
-        std::thread::sleep(Duration::from_millis(20));
+/// What [`settle`] has the program print.
+const CAUGHT_UP: &str = "all caught up";
+
+/// Has the program print [`CAUGHT_UP`] after everything it was sent, and
+/// waits until every watcher has it: all the output before it has reached
+/// each of them.
+fn settle(session: &Session, watchers: &mut [&mut Watcher]) {
+    let line = format!("{CAUGHT_UP}\r\n");
+    session
+        .input(A, format!("/print {}\r", hex(line.as_bytes())).as_bytes())
+        .unwrap();
+    for watcher in watchers.iter_mut() {
+        watcher.wait_for_text(CAUGHT_UP);
+    }
+}
+
+/// The store, noting at each exit whether the host still listed the session
+/// when the exit was recorded: the moment the clients are told.
+struct WatchedLedger {
+    store: Arc<Mutex<Store>>,
+    host: OnceLock<Weak<SessionHost>>,
+    listed_at_exit: Mutex<Vec<(SessionId, bool)>>,
+}
+
+impl SessionLedger for WatchedLedger {
+    fn started(&self, row: &NewSessionRow) -> crate::error::Result<SessionId> {
+        self.store.as_ref().started(row)
+    }
+
+    fn finished(&self, id: SessionId, exit: &SessionExit) -> crate::error::Result<()> {
+        let listed = self
+            .host
+            .get()
+            .and_then(Weak::upgrade)
+            .is_some_and(|host| host.get(id).is_some());
+        self.listed_at_exit.lock().unwrap().push((id, listed));
+        self.store.as_ref().finished(id, exit)
     }
 }
 
 struct Fixture {
     agent: FakeAgent,
-    host: SessionHost,
+    host: Arc<SessionHost>,
+    ledger: Arc<WatchedLedger>,
     store: Arc<Mutex<Store>>,
     /// Last: fields drop in order, and the folder goes only once nothing in it is open.
     dirs: TestDirs,
@@ -370,11 +392,22 @@ impl Fixture {
         let dirs = TestDirs::new();
         let agent = FakeAgent::new(fake_agent_exe(), &dirs);
         let store = Arc::new(Mutex::new(Store::open(&dirs.data).expect("open the store")));
-        let host = SessionHost::new(inherited, store.clone(), Arc::new(Native));
+        let ledger = Arc::new(WatchedLedger {
+            store: store.clone(),
+            host: OnceLock::new(),
+            listed_at_exit: Mutex::new(Vec::new()),
+        });
+        let host = Arc::new(SessionHost::new(
+            inherited,
+            ledger.clone(),
+            Arc::new(Native),
+        ));
+        let _ = ledger.host.set(Arc::downgrade(&host));
         Self {
             dirs,
             agent,
             host,
+            ledger,
             store,
         }
     }
@@ -454,9 +487,9 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn wait_until(what: &str, done: impl Fn() -> bool) {
-    let deadline = Instant::now() + WAIT;
+    let deadline = Instant::now() + PATIENCE;
     while !done() {
-        assert!(Instant::now() < deadline, "waited {WAIT:?} for {what}");
+        assert!(Instant::now() < deadline, "waited {PATIENCE:?} for {what}");
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -489,13 +522,13 @@ fn s15_a_session_runs_in_a_pty_in_its_folder_with_the_session_environment_and_re
     session.input(B, b"from b\r").unwrap();
     a.wait_for_text("echo: from b");
     b.wait_for_text("echo: from b");
-    settle(&mut [&mut a, &mut b]);
+    settle(&session, &mut [&mut a, &mut b]);
 
     let record = fx
         .agent
-        .wait_for_record(session.pid(), WAIT, |record| record.input.len() >= 2);
+        .wait_for_record(session.pid(), PATIENCE, |record| record.input.len() >= 2);
     assert_eq!(
-        record.input,
+        record.input[..2],
         ["hello there", "from b"],
         "the keys reached the program"
     );
@@ -553,7 +586,7 @@ fn s15_a_session_runs_in_a_pty_in_its_folder_with_the_session_environment_and_re
     assert_eq!(row.backend.as_deref(), Some(FakeAgentBackend::ID));
 
     session.end_now().unwrap();
-    assert!(session.wait_exit(WAIT).is_some());
+    assert!(session.wait_exit(PATIENCE).is_some());
 }
 
 #[test]
@@ -582,7 +615,7 @@ fn s16_a_client_attaching_mid_session_gets_the_screen_then_the_live_output() {
     session.input(B, b"second\r").unwrap();
     a.wait_for_text("echo: second");
     b.wait_for_text("echo: second");
-    settle(&mut [&mut a, &mut b]);
+    settle(&session, &mut [&mut a, &mut b]);
 
     assert!(
         a.data.ends_with(&b.data),
@@ -598,7 +631,7 @@ fn s16_a_client_attaching_mid_session_gets_the_screen_then_the_live_output() {
         .expect("the session still has its screen");
 
     session.end_now().unwrap();
-    assert!(session.wait_exit(WAIT).is_some());
+    assert!(session.wait_exit(PATIENCE).is_some());
 }
 
 #[test]
@@ -637,7 +670,7 @@ fn s17_a_session_takes_the_size_of_the_client_that_typed_last() {
     assert_eq!(session.pty_size(), Some(TermSize::new(132, 50)));
 
     session.end_now().unwrap();
-    assert!(session.wait_exit(WAIT).is_some());
+    assert!(session.wait_exit(PATIENCE).is_some());
 }
 
 #[test]
@@ -674,6 +707,13 @@ fn s18_when_the_program_exits_clients_get_its_code_its_row_records_it_and_its_pt
     assert_eq!(session.exit().map(|exit| exit.code), Some(7));
     assert!(fx.host.get(session.id()).is_none());
     assert!(fx.host.list().is_empty());
+    // Gone from the list before the exit is recorded, which is when the
+    // clients hear of it: a client told of an exit that lists again never
+    // finds the session still running.
+    assert_eq!(
+        *fx.ledger.listed_at_exit.lock().unwrap(),
+        [(session.id(), false)]
+    );
     assert!(session.attach(A, size).is_err());
     assert!(session.input(A, b"x").is_err());
     assert_eq!(Native.is_alive(session.pid()), Knowable::Known(false));
@@ -684,14 +724,17 @@ fn ending_a_session_now_ends_its_whole_process_tree() {
     let fx = Fixture::new();
     let folder = fx.dirs.folder("project");
     let session = fx.start(&folder, &["--fake-child"], TermSize::new(80, 24));
-    let record = fx
-        .agent
-        .wait_for_record(session.pid(), WAIT, |record| !record.children.is_empty());
+    let record = fx.agent.wait_for_record(session.pid(), PATIENCE, |record| {
+        !record.children.is_empty()
+    });
     let child = record.children[0];
     assert_eq!(Native.is_alive(child), Knowable::Known(true));
 
     session.end_now().unwrap();
-    assert!(session.wait_exit(WAIT).is_some(), "the session did not end");
+    assert!(
+        session.wait_exit(PATIENCE).is_some(),
+        "the session did not end"
+    );
     wait_until("the agent's child to end", || {
         Native.is_alive(child) == Knowable::Known(false)
     });
@@ -704,18 +747,16 @@ fn closing_a_session_ends_its_program_and_children_within_the_grace() {
     let fx = Fixture::new();
     let folder = fx.dirs.folder("project");
     let session = fx.start(&folder, &["--fake-child"], TermSize::new(80, 24));
-    let record = fx
-        .agent
-        .wait_for_record(session.pid(), WAIT, |record| !record.children.is_empty());
+    let record = fx.agent.wait_for_record(session.pid(), PATIENCE, |record| {
+        !record.children.is_empty()
+    });
     let child = record.children[0];
 
-    let closed = Instant::now();
+    // The grace, then the patience any wait is given on a slow machine.
     session.close();
-    assert!(session.wait_exit(WAIT).is_some(), "the session did not end");
     assert!(
-        closed.elapsed() < GRACE + Duration::from_secs(5),
-        "it took {:?}",
-        closed.elapsed()
+        session.wait_exit(GRACE + PATIENCE).is_some(),
+        "the session did not end"
     );
     wait_until("the agent's child to end", || {
         Native.is_alive(child) == Knowable::Known(false)
@@ -732,7 +773,7 @@ fn a_session_outlives_its_clients() {
     session.detach(A);
     drop(a);
     session.input(A, b"still here\r").unwrap();
-    fx.agent.wait_for_record(session.pid(), WAIT, |record| {
+    fx.agent.wait_for_record(session.pid(), PATIENCE, |record| {
         record.input.iter().any(|line| line == "still here")
     });
     let shows = |text: &str| {

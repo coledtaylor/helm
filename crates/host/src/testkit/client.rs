@@ -19,7 +19,9 @@ use crate::client::{self, ClientError, Connection};
 use crate::platform::socket::Endpoint;
 use crate::server::host_public_key;
 
-/// How long a test waits for the host before it gives up.
+/// How long a test waits for anything before it fails, naming what it
+/// waited for: the one bound every Rust test's waits share, the same 20 s as
+/// `PATIENCE` in the TypeScript tests' `test/patience.ts` (docs/TESTING.md).
 pub const PATIENCE: Duration = Duration::from_secs(20);
 
 /// One client connection.

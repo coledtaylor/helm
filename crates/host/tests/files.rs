@@ -9,6 +9,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use floti_host::agent::AgentBackend;
@@ -23,7 +24,6 @@ use floti_host::workspace::files::changes::parse_zero_context_diff;
 use floti_host::workspace::files::listing::FILE_LIST_MAX;
 use floti_host::workspace::files::status::parse_status_z;
 use floti_host::workspace::files::view::FILE_VIEW_MAX_BYTES;
-use floti_host::workspace::files::watch::SETTLE;
 use floti_protocol::Message;
 use floti_protocol::channel::{EventChannel, from_payload};
 use floti_protocol::channels::common::SessionRecord;
@@ -229,35 +229,68 @@ async fn next_change(client: &mut TestClient, timeout: Duration) -> Option<Files
     }
 }
 
-/// Every change told within `quiet` of the last, until it goes quiet.
-async fn changes_until_quiet(client: &mut TestClient, quiet: Duration) -> Vec<FilesChange> {
-    let mut seen = Vec::new();
-    while let Some(change) = next_change(client, quiet).await {
-        seen.push(change);
-    }
-    seen
+fn names(change: &FilesChange, rel: &str) -> bool {
+    change
+        .paths
+        .as_ref()
+        .is_some_and(|paths| paths.iter().any(|path| path == rel))
 }
 
 /// Writes `path` again and again until `client` is told about it: a
 /// watch's first moments may miss a write (macOS's FSEvents), and nothing
-/// says when it is live. Then waits for quiet.
-async fn until_told(client: &mut TestClient, path: &Path, rel: &str) {
+/// says when it is live. A write is given a while to be told before the next;
+/// one it misses is written again, never failed on. Answers every change
+/// told meanwhile, the one naming `rel` last.
+async fn until_told(client: &mut TestClient, path: &Path, rel: &str) -> Vec<FilesChange> {
     let deadline = Instant::now() + PATIENCE;
+    let mut seen = Vec::new();
     let mut n = 0;
     loop {
         n += 1;
         write(path, format!("changed {n}\n"));
-        if let Some(change) = next_change(client, Duration::from_millis(500)).await
-            && change
-                .paths
-                .as_ref()
-                .is_some_and(|paths| paths.iter().any(|p| p == rel))
-        {
-            break;
+        while let Some(change) = next_change(client, Duration::from_millis(500)).await {
+            let told = names(&change, rel);
+            seen.push(change);
+            if told {
+                return seen;
+            }
         }
-        assert!(Instant::now() < deadline, "the watch never told of {rel}");
+        assert!(
+            Instant::now() < deadline,
+            "the watch never told of {rel}: {seen:?}"
+        );
     }
-    changes_until_quiet(client, Duration::from_millis(600)).await;
+}
+
+/// Writes a file of its own into the watched `root`, once, and answers every
+/// change told until the one naming it, that one last. A root's changes are
+/// told in order, so everything written in it before has been told by then.
+async fn settled(client: &mut TestClient, root: &Path) -> Vec<FilesChange> {
+    static NEXT: AtomicUsize = AtomicUsize::new(1);
+    let rel = format!("barrier {}.txt", NEXT.fetch_add(1, Ordering::SeqCst));
+    write(&root.join(&rel), "barrier\n");
+    let deadline = Instant::now() + PATIENCE;
+    let mut seen = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let Some(change) = next_change(client, left).await else {
+            panic!("never told of {rel}: {seen:?}");
+        };
+        let told = names(&change, &rel);
+        seen.push(change);
+        if told {
+            return seen;
+        }
+    }
+}
+
+/// The paths `changes` name, but for the files [`settled`] wrote.
+fn named(changes: &[FilesChange]) -> Vec<String> {
+    changes
+        .iter()
+        .flat_map(|change| change.paths.clone().unwrap_or_default())
+        .filter(|path| !path.starts_with("barrier "))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -928,8 +961,7 @@ async fn a_folder_is_known_once_a_session_starts_in_it_and_not_once_the_session_
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_watching_client_alone_is_told_which_files_changed_once_per_burst_and_not_once_it_lets_go()
- {
+async fn the_watching_client_alone_is_told_which_files_changed_and_not_once_it_lets_go() {
     let mut world = World::start().await;
     let repo = GitRepo::init(world.folder("helm files-ipc"));
     repo.write("src/a.ts", "one\ntwo\nthree\n");
@@ -963,50 +995,57 @@ async fn the_watching_client_alone_is_told_which_files_changed_once_per_burst_an
         "src/a.ts",
     )
     .await;
+    settled(&mut world.client, &root).await;
 
-    // One burst, told 250 ms after its first event, naming every path.
-    let at = Instant::now();
+    // A burst is told by its root, naming every path. (How a burst is
+    // gathered into one telling is the watch's own tests'.)
     write(&root.join("src").join("b.ts"), "b\n");
     write(&root.join("src").join("c d.ts"), "c\n");
     write(&root.join("e.md"), "e\n");
-    let first = next_change(&mut world.client, PATIENCE)
-        .await
-        .expect("the burst is told");
-    assert!(
-        at.elapsed() >= SETTLE,
-        "told {:?} after the first write",
-        at.elapsed()
-    );
-    let mut seen = vec![first];
-    seen.extend(changes_until_quiet(&mut world.client, Duration::from_millis(800)).await);
-    assert_eq!(seen.len(), 1, "one burst, one telling: {seen:?}");
-    assert_eq!(seen[0].root.to_lowercase(), text(&root).to_lowercase());
-    let paths = seen[0].paths.clone().expect("a burst this small is named");
+    let told = settled(&mut world.client, &root).await;
+    for change in &told {
+        assert_eq!(change.root.to_lowercase(), text(&root).to_lowercase());
+    }
+    let paths = named(&told);
     for rel in ["src/b.ts", "src/c d.ts", "e.md"] {
-        assert!(paths.iter().any(|path| path == rel), "{rel} in {paths:?}");
+        assert!(paths.iter().any(|path| path == rel), "{rel} in {told:?}");
     }
 
     // A commit moves the index, HEAD and refs, told as `.git`; git's other
     // churn is not told.
     repo.commit_all("second");
-    let told = changes_until_quiet(&mut world.client, Duration::from_millis(1500)).await;
-    let paths: Vec<String> = told
-        .iter()
-        .flat_map(|change| change.paths.clone().unwrap_or_default())
-        .collect();
+    let told = settled(&mut world.client, &root).await;
+    let paths = named(&told);
     assert!(paths.iter().any(|path| path == ".git"), "{told:?}");
     assert!(
         paths.iter().all(|path| !path.starts_with(".git/")),
         "{told:?}"
     );
 
-    // The bystander, subscribed but watching nothing, heard none of it.
-    assert_eq!(
-        next_change(&mut bystander, Duration::from_millis(300)).await,
-        None
+    // The bystander, subscribed but watching nothing, heard none of it:
+    // given a root of its own, all it has heard is about that root.
+    bystander
+        .request::<WatchFiles>(&FilesWatchRequest {
+            roots: vec![text(&other)],
+        })
+        .await
+        .unwrap();
+    let heard = until_told(
+        &mut bystander,
+        &other.join("bystander.txt"),
+        "bystander.txt",
+    )
+    .await;
+    assert!(
+        heard
+            .iter()
+            .all(|change| change.root.to_lowercase() == text(&other).to_lowercase()),
+        "{heard:?}"
     );
 
     // A root left out of the next request is let go; the one named stays.
+    // Watched again, the root's first changes are not the one made while
+    // it was let go.
     world
         .client
         .request::<WatchFiles>(&FilesWatchRequest {
@@ -1016,18 +1055,48 @@ async fn the_watching_client_alone_is_told_which_files_changed_once_per_burst_an
         .unwrap();
     until_told(&mut world.client, &other.join("probe.txt"), "probe.txt").await;
     write(&root.join("src").join("after.ts"), "after\n");
-    let after = changes_until_quiet(&mut world.client, Duration::from_millis(800)).await;
-    assert!(after.is_empty(), "a root let go is not watched: {after:?}");
+    world
+        .client
+        .request::<WatchFiles>(&FilesWatchRequest {
+            roots: vec![text(&other), text(&root)],
+        })
+        .await
+        .unwrap();
+    let told = until_told(
+        &mut world.client,
+        &root.join("watched again.txt"),
+        "watched again.txt",
+    )
+    .await;
+    assert!(
+        told.iter().all(|change| !names(change, "src/after.ts")),
+        "a root let go is not watched: {told:?}"
+    );
 
+    // Watching nothing, nothing is told; watched again, the first change
+    // told is not the one made in between.
     world
         .client
         .request::<WatchFiles>(&FilesWatchRequest { roots: vec![] })
         .await
         .unwrap();
     write(&other.join("probe.txt"), "last\n");
-    assert_eq!(
-        next_change(&mut world.client, Duration::from_millis(800)).await,
-        None
+    world
+        .client
+        .request::<WatchFiles>(&FilesWatchRequest {
+            roots: vec![text(&other)],
+        })
+        .await
+        .unwrap();
+    let told = until_told(
+        &mut world.client,
+        &other.join("watched once more.txt"),
+        "watched once more.txt",
+    )
+    .await;
+    assert!(
+        told.iter().all(|change| !names(change, "probe.txt")),
+        "nothing watched is told: {told:?}"
     );
     world.stop().await;
 }

@@ -825,7 +825,8 @@ async fn closing_a_running_session_asks_first_and_ends_its_tree_only_on_yes() {
         })
         .await
         .expect_err("a question is answered once");
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // A no is settled in its request: the session is listed and its tree
+    // alive once it is answered, and the close below is asked again.
     assert_eq!(
         listed_ids(&client.request::<SessionList>(&()).await.unwrap()),
         [session.id]

@@ -834,8 +834,17 @@ async fn s10_a_session_outlives_every_client_and_a_later_client_finds_and_attach
     drop(first);
 
     // Nobody is attached; the program keeps running and writing.
-    tokio::time::sleep(Duration::from_millis(800)).await;
     let pid = run_of(&agent, &folder)[0];
+    let deadline = Instant::now() + PATIENCE;
+    while agent.ticks(pid).unwrap_or(0) < last_seen + 4 {
+        assert!(
+            Instant::now() < deadline,
+            "tick {} unwritten within {PATIENCE:?}; the last was {:?}",
+            last_seen + 4,
+            agent.ticks(pid)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert_eq!(NativeTree.is_alive(pid), Knowable::Known(true));
 
     let mut later = TestClient::connect(&endpoint, TERMINAL).await;

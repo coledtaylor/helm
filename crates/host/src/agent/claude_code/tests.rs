@@ -26,7 +26,7 @@ use super::*;
 use crate::agent::{BackendAnswers, Composition, sweep_launch_folders};
 use crate::platform::links::is_link;
 use crate::platform::process_tree::{self, Ending, ProcessTree};
-use crate::testkit::TestDirs;
+use crate::testkit::{PATIENCE, TestDirs};
 
 // ---------------------------------------------------------------------------
 // The world a test runs in
@@ -822,7 +822,7 @@ fn a_running_session_is_read_from_the_record_its_cli_keeps_and_the_key_beside_it
         conversation_id: launch.spec.conversation_id.clone(),
     };
 
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         if world.backend.read_status(&session) == Knowable::Known(Some(SessionActivity::Idle)) {
             break;

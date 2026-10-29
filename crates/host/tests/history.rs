@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use floti_host::Result;
 use floti_host::agent::claude_code::{ClaudeCodeBackend, ClaudeCodeSettings};
@@ -2210,6 +2210,5 @@ async fn a_host_with_no_backend_that_keeps_history_answers_with_an_empty_index()
         .await
         .unwrap();
     assert!(page.sessions.is_empty());
-    tokio::time::sleep(Duration::from_millis(10)).await;
     host.stop(HostStopReason::Stop).await;
 }

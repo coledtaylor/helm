@@ -327,7 +327,8 @@ fn millis(duration: Duration) -> u64 {
 
 impl Worker {
     /// Ends the script and waits, for at most [`STOP_WAIT`], for its thread.
-    fn end(mut self) {
+    /// False when the thread was not back in that time.
+    fn end(mut self) -> bool {
         self.control.stop();
         drop(self.inbound);
         // A session waiting on a handler hears the plugin stopped.
@@ -336,11 +337,13 @@ impl Worker {
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 // Terminated and still not back: it is left to end on its
                 // own rather than hold the host.
+                false
             }
             Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 if let Some(thread) = self.thread.take() {
                     let _ = thread.join();
                 }
+                true
             }
         }
     }
@@ -406,8 +409,17 @@ impl BackgroundRuntime for IsolateRuntime {
 
     fn stop(&self, plugin: &str) {
         let worker = lock(&self.inner.workers).remove(plugin);
-        if let Some(worker) = worker {
-            worker.end();
+        if let Some(worker) = worker
+            && !worker.end()
+        {
+            self.inner.logs.push(
+                plugin,
+                PluginLogStream::Host,
+                format!(
+                    "background script did not end within {} seconds of being stopped; it is left to end on its own",
+                    STOP_WAIT.as_secs()
+                ),
+            );
         }
     }
 

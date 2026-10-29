@@ -656,17 +656,20 @@ async fn set_setting_refuses_a_value_that_does_not_fit_its_spec_with_a_sentence(
             .unwrap_err(),
         "nobody is not a loaded plugin"
     );
-    // Nothing refused was kept or sent.
+    // Nothing refused was kept or sent: once a value that fits is set, the
+    // first list the watcher is sent is the one with it.
     let plugin = only(&world.list().await).clone();
     assert_eq!(
         plugin.setting_values["interval"],
         PluginSettingValue::Number(30.0)
     );
-    assert!(
-        watcher
-            .next(std::time::Duration::from_millis(300))
-            .await
-            .is_none(),
+    world
+        .set_setting("factory", "interval", PluginSettingValue::Number(45.0))
+        .await
+        .unwrap();
+    assert_eq!(
+        only(&next_list(&mut watcher).await).setting_values["interval"],
+        PluginSettingValue::Number(45.0),
         "a refused setting sends nothing"
     );
     world.stop().await;
@@ -864,17 +867,44 @@ impl RegistryWorld {
             .await
     }
 
-    /// The last list published, once this turn's push has gone.
-    async fn last_published(&self) -> Vec<PluginInfo> {
-        tokio::task::yield_now().await;
+    /// How many lists have been published.
+    fn published_count(&self) -> usize {
+        self.published.lock().unwrap().len()
+    }
+
+    /// The first list published after the first `count`: changes made in one
+    /// turn go out in one push, so it is the one with all of them.
+    async fn published_after(&self, count: usize) -> Vec<PluginInfo> {
         let deadline = Instant::now() + PATIENCE;
         loop {
-            let count = self.published.lock().unwrap().len();
-            if count > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-                return self.published.lock().unwrap().last().cloned().unwrap();
+            if let Some(listed) = self.published.lock().unwrap().get(count) {
+                return listed.clone();
             }
             assert!(Instant::now() < deadline, "nothing was published");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Waits until the last list published passes `check`, and answers it.
+    async fn published_until(
+        &self,
+        what: &str,
+        check: impl Fn(&[PluginInfo]) -> bool,
+    ) -> Vec<PluginInfo> {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let last = self.published.lock().unwrap().last().cloned();
+            if let Some(listed) = last {
+                if check(&listed) {
+                    return listed;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "no list published {what}; the last: {listed:#?}"
+                );
+            } else {
+                assert!(Instant::now() < deadline, "nothing was published");
+            }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }
@@ -905,6 +935,7 @@ async fn a_read_starts_the_background_of_a_plugin_that_loaded_and_of_nothing_els
     );
 
     // Reported running for that read; a report for an older read is ignored.
+    let before = world.published_count();
     world.registry.background_state(
         "good",
         plugin.revision,
@@ -917,7 +948,7 @@ async fn a_read_starts_the_background_of_a_plugin_that_loaded_and_of_nothing_els
         PluginBackgroundState::Crashed,
         None,
     );
-    let listed = world.last_published().await;
+    let listed = world.published_after(before).await;
     assert_eq!(
         listed[0].background.as_ref().unwrap().state,
         PluginBackgroundState::Running
@@ -994,7 +1025,11 @@ async fn status_and_badge_are_painted_while_the_plugin_is_on_and_checked_as_toda
         )
         .await
         .unwrap();
-    let listed = world.last_published().await;
+    let listed = world
+        .published_until("with the status and the badge", |listed| {
+            listed[0].status.is_some() && listed[0].badge.is_some()
+        })
+        .await;
     assert_eq!(
         listed[0].status,
         Some(PluginStatusItem {

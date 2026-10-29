@@ -5,14 +5,11 @@
 
 use std::io::Write;
 use std::process::{Command, Stdio};
-use std::time::Duration;
 
 use floti_host::fake_agent;
 use floti_host::platform::process_tree::{Ending, Native as NativeTree, ProcessTree};
-use floti_host::testkit::TestDirs;
+use floti_host::testkit::{PATIENCE, TestDirs};
 use floti_protocol::Knowable;
-
-const WAIT: Duration = Duration::from_secs(10);
 
 fn command(agent: &floti_host::testkit::FakeAgent, cwd: &std::path::Path) -> Command {
     let (name, value) = agent.log_env();
@@ -97,7 +94,7 @@ fn starts_a_child_of_its_own() {
         .find(|record| record.argv.contains(&"--fake-child=1000".to_owned()))
         .expect("the agent recorded its run");
     assert_eq!(parent.children.len(), 1);
-    let child = agent.wait_for_record(parent.children[0], WAIT, |_| true);
+    let child = agent.wait_for_record(parent.children[0], PATIENCE, |_| true);
     assert_eq!(child.argv, ["--fake-sleep=1000"]);
 }
 

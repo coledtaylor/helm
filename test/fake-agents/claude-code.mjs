@@ -29,7 +29,7 @@
 //   `.claude.json` in `CLAUDE_CONFIG_DIR` when that is set and in the home
 //   folder otherwise. `doctor` prints a report and exits 0, or prints and
 //   exits with what `<config>/fake-doctor.json` says ({ output, exitCode,
-//   delayMs }).
+//   held }).
 //
 // Everything it was given, loaded and received is written to
 // `<config>/fake-agent/<pid>.json` in the shared run-log shape (`common.mjs`),
@@ -223,10 +223,13 @@ if (parsed.command === 'mcp' && parsed.rest[0] === 'list') {
 }
 
 // `claude doctor`: a report shaped like the real one, or the one
-// `<config>/fake-doctor.json` gives, with its exit code, after its
-// `delayMs` when it gives one (the real doctor takes seconds).
+// `<config>/fake-doctor.json` gives, with its exit code. A `held` one stands
+// for the real doctor taking seconds: it writes `fake-doctor.running` beside
+// the script once it has started and answers once the test has written
+// `fake-doctor.release` there.
 if (parsed.command === 'doctor') {
-  const scripted = join(configHome || join(homedir(), '.claude'), 'fake-doctor.json')
+  const config = configHome || join(homedir(), '.claude')
+  const scripted = join(config, 'fake-doctor.json')
   const report = existsSync(scripted)
     ? JSON.parse(readFileSync(scripted, 'utf8'))
     : {
@@ -238,7 +241,12 @@ if (parsed.command === 'doctor') {
         ].join('\n'),
         exitCode: 0
       }
-  if (report.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, report.delayMs))
+  if (report.held) {
+    writeFileSync(join(config, 'fake-doctor.running'), '')
+    while (!existsSync(join(config, 'fake-doctor.release'))) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
   out(`${report.output}\n`)
   process.exit(report.exitCode ?? 0)
 }

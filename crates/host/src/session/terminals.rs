@@ -280,11 +280,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
     use crate::platform::process_tree;
-    use crate::testkit::TestDirs;
+    use crate::testkit::{PATIENCE, TestDirs};
 
     const A: ClientId = ClientId(1);
 
@@ -322,7 +320,10 @@ mod tests {
         assert_eq!(session.pty_size(), Some(TermSize::new(132, 41)));
         assert_eq!(session.size(), TermSize::new(132, 41));
         terminals.end_all();
-        assert!(session.wait_exit(Duration::from_secs(10)).is_some());
+        assert!(
+            session.wait_exit(PATIENCE).is_some(),
+            "the terminal's shell did not end within {PATIENCE:?}"
+        );
     }
 
     #[test]

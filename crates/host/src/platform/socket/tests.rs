@@ -7,12 +7,11 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
-use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::{Endpoint, LocalListener, LocalSocket, LocalStream, Native, network_listeners};
-use crate::testkit::TestDirs;
+use crate::testkit::{PATIENCE, TestDirs};
 
 /// The variable that hands [`child_host`] its endpoint.
 const CHILD_ENDPOINT_VAR: &str = "FLOTI_SOCKET_TEST_ENDPOINT";
@@ -83,7 +82,7 @@ impl HostProcess {
         });
         let host = Self(child);
         ready_rx
-            .recv_timeout(Duration::from_secs(60))
+            .recv_timeout(PATIENCE)
             .expect("the stand-in host says it is listening");
         host
     }

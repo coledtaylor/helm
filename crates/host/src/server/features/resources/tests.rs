@@ -2,10 +2,13 @@
 //! which sessions it reports and at which pid, and when it is allowed to
 //! cost anything at all. Today's service cases, with the same inputs and
 //! expectations, and the per-client watching the host adds.
+//!
+//! Each runs on paused time, so an interval passes when a test steps it and
+//! never because the machine was slow.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use floti_protocol::channels::sessions::{SessionPort, SessionResources};
 use tokio::sync::broadcast;
@@ -14,6 +17,7 @@ use super::{LiveRoot, Passes};
 use crate::platform::process_table::{PortRow, ProcessRow, ProcessTable};
 use crate::server::events::{Events, Publication};
 use crate::session::ClientId;
+use crate::testkit::PATIENCE;
 use crate::{Error, Result};
 
 const A: ClientId = ClientId(1);
@@ -23,7 +27,8 @@ const LISTENER: ClientId = ClientId(99);
 
 /// Long enough that no interval falls inside a test that does not want one.
 const NEVER: Duration = Duration::from_secs(600);
-/// Short enough that a test sees several intervals.
+/// The interval a test steps through; on paused time its length is only a
+/// number.
 const BRISK: Duration = Duration::from_millis(200);
 
 /// What the arranged machine answers.
@@ -194,12 +199,28 @@ impl World {
 }
 
 /// Waits until `done` holds, and fails naming `what` when it never does.
+///
+/// The paused clock is stepped by hand: it does not move on its own while a
+/// pass reads on a blocking thread, as a held one does. The read itself goes
+/// on in real time, which the deadline is kept in.
 async fn until(what: &str, done: impl Fn() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + PATIENCE;
     while !done() {
         assert!(Instant::now() < deadline, "{what} never happened");
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::advance(Duration::from_millis(10)).await;
+        std::thread::sleep(Duration::from_millis(1));
     }
+}
+
+/// The wall clock a pass stamps its result with, in milliseconds.
+fn epoch_ms() -> u64 {
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap()
 }
 
 /// A session's id, root and each process's (pid, depth).
@@ -223,7 +244,7 @@ fn shape(resources: &[SessionResources]) -> Vec<Shape> {
         .collect()
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(start_paused = true)]
 async fn s12_each_running_session_is_reported_once_at_its_terminals_pid_and_only_a_change_is_sent()
 {
     let mut world = World::new(machine(), NEVER);
@@ -255,7 +276,8 @@ async fn s12_each_running_session_is_reported_once_at_its_terminals_pid_and_only
     assert_eq!(world.pushes(), std::slice::from_ref(&landed));
 
     // The same machine again, read later, moves nothing, so nothing is sent.
-    tokio::time::sleep(Duration::from_millis(5)).await;
+    let read_at = landed[0].at_ms;
+    until("the wall clock to move on", || epoch_ms() > read_at).await;
     let again = world.passes.one_pass().await;
     assert_eq!(world.machine.reads(), 2);
     assert!(world.pushes().is_empty());
@@ -283,13 +305,13 @@ async fn s12_each_running_session_is_reported_once_at_its_terminals_pid_and_only
     world.stop();
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(start_paused = true)]
 async fn s6_s7_s8_nothing_is_read_unwatched_a_running_pass_is_joined_and_passes_run_while_any_client_watches()
  {
     let world = World::new(machine(), BRISK);
 
     // Sessions running, nobody looking: the machine is not read.
-    tokio::time::sleep(BRISK * 4).await;
+    tokio::time::advance(BRISK * 4).await;
     assert_eq!(world.machine.reads(), 0);
 
     // Watching starts a pass at once. While it runs, an ask, a second
@@ -303,7 +325,9 @@ async fn s6_s7_s8_nothing_is_read_unwatched_a_running_pass_is_joined_and_passes_
     });
     world.passes.watch(B, true);
     world.passes.session_ended();
-    tokio::time::sleep(BRISK * 3).await;
+    for _ in 0..3 {
+        tokio::time::advance(BRISK).await;
+    }
     assert_eq!(world.machine.reads(), 1, "a second pass started");
     world.machine.release();
     let landed = asked.await.unwrap();
@@ -324,18 +348,22 @@ async fn s6_s7_s8_nothing_is_read_unwatched_a_running_pass_is_joined_and_passes_
     })
     .await;
 
-    // The last watcher leaving stops them, and the last result is kept.
+    // The last watcher leaving stops them, and the last result is kept. An
+    // ask joins a pass the interval already started, so once it lands no
+    // pass is under way.
     world.passes.stopped_watching(A);
-    tokio::time::sleep(BRISK).await;
+    world.passes.one_pass().await;
     let stopped_at = world.machine.reads();
-    tokio::time::sleep(BRISK * 4).await;
+    for _ in 0..4 {
+        tokio::time::advance(BRISK).await;
+    }
     assert_eq!(world.machine.reads(), stopped_at);
     assert_eq!(shape(&world.passes.current()).len(), 2);
     assert_eq!(world.machine.most_at_once.load(Ordering::SeqCst), 1);
     world.stop();
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(start_paused = true)]
 async fn s9_a_session_detail_ask_with_nobody_watching_runs_exactly_one_pass() {
     let world = World::new(machine(), BRISK);
     let landed = world.passes.one_pass().await;
@@ -347,17 +375,19 @@ async fn s9_a_session_detail_ask_with_nobody_watching_runs_exactly_one_pass() {
     assert_eq!(landed, world.passes.current());
 
     // It costs nothing afterwards.
-    tokio::time::sleep(BRISK * 4).await;
+    for _ in 0..4 {
+        tokio::time::advance(BRISK).await;
+    }
     assert_eq!(world.machine.reads(), 1);
 
     // A session ending with nobody looking reads nothing either.
     world.passes.session_ended();
-    tokio::time::sleep(BRISK).await;
+    tokio::time::advance(BRISK).await;
     assert_eq!(world.machine.reads(), 1);
     world.stop();
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(start_paused = true)]
 async fn s8_a_session_ending_runs_a_pass_while_somebody_watches() {
     let world = World::new(machine(), NEVER);
     world.passes.watch(A, true);
@@ -374,7 +404,7 @@ async fn s8_a_session_ending_runs_a_pass_while_somebody_watches() {
     world.stop();
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(start_paused = true)]
 async fn s13_a_machine_that_could_not_be_asked_is_unknown_and_a_reader_that_fails_outright_changes_nothing()
  {
     let mut world = World::new(Answer::Unknown, BRISK);

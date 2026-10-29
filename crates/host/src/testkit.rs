@@ -114,10 +114,6 @@ fn data_folder_of(endpoint: &Endpoint) -> PathBuf {
         })
 }
 
-/// How long a dropped [`TestDirs`] keeps trying to remove its tree: an OS can
-/// let go of an exited process's files a moment after the exit.
-const REMOVE_WAIT: Duration = Duration::from_secs(3);
-
 /// A temporary folder tree for one test, removed when it is dropped.
 ///
 /// A test leaves nothing behind. When the tree cannot be removed because
@@ -260,7 +256,8 @@ impl Drop for TestDirs {
         };
         let path = root.path().to_path_buf();
         let mut removed = root.close();
-        let deadline = Instant::now() + REMOVE_WAIT;
+        // An OS can let go of an exited process's files a moment after the exit.
+        let deadline = Instant::now() + PATIENCE;
         while removed.is_err() && path.exists() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(50));
             removed = std::fs::remove_dir_all(&path);
@@ -677,6 +674,12 @@ impl FakeAgent {
     pub fn record(&self, pid: u32) -> Option<FakeAgentRecord> {
         let path = self.log_dir.join(format!("{pid}.json"));
         serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+    }
+
+    /// The last tick run `pid` has written, for a run with `--fake-tick`.
+    pub fn ticks(&self, pid: u32) -> Option<u64> {
+        let path = self.log_dir.join(format!("{pid}.ticks"));
+        std::fs::read_to_string(path).ok()?.trim().parse().ok()
     }
 
     /// Waits up to `timeout` for a record of run `pid` that `done` accepts,

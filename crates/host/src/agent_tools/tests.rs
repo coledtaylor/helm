@@ -11,9 +11,7 @@ use tokio::net::TcpStream;
 
 use super::front::MAX_BODY_BYTES;
 use super::*;
-
-/// How long a test waits on a connection or an answer.
-const PATIENCE: Duration = Duration::from_secs(10);
+use crate::testkit::PATIENCE;
 
 const MCP_ACCEPT: &str = "application/json, text/event-stream";
 

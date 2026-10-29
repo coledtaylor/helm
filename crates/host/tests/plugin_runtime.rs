@@ -10,7 +10,10 @@
 //! built the way the host builds them, over the test's own `floti.db`.
 
 use std::ffi::OsString;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -22,7 +25,7 @@ use floti_host::plugins::secrets::NoSecrets;
 use floti_host::plugins::{Registry, RegistryParts};
 use floti_host::server::{HostConfig, HostRun, backends};
 use floti_host::store::Store;
-use floti_host::testkit::{RunningHost, TestClient, TestDirs, link_folder};
+use floti_host::testkit::{PATIENCE, RunningHost, TestClient, TestDirs, link_folder};
 use floti_protocol::Message;
 use floti_protocol::Payload;
 use floti_protocol::channel::{EventChannel, from_payload};
@@ -33,9 +36,6 @@ use floti_protocol::channels::plugins::{
     PluginsList, PluginsReload, PluginsSetEnabled,
 };
 use floti_protocol::channels::workspace::AppMode;
-
-/// How long a test waits on a script, a thread or a push.
-const WAIT: Duration = Duration::from_secs(10);
 
 /// A version 2 manifest whose background is `bg.js`, with `extra` fields.
 fn manifest(id: &str, extra: &str) -> String {
@@ -156,7 +156,7 @@ impl World {
 
     /// Waits until `check` holds of `id`'s entry in the list.
     async fn until(&self, id: &str, what: &str, check: impl Fn(&PluginInfo) -> bool) -> PluginInfo {
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + PATIENCE;
         loop {
             let info = self.info(id);
             if check(&info) {
@@ -164,7 +164,7 @@ impl World {
             }
             assert!(
                 Instant::now() < deadline,
-                "{id}: {what} within {WAIT:?}; it is {info:#?}\nlog: {:#?}",
+                "{id}: {what} within {PATIENCE:?}; it is {info:#?}\nlog: {:#?}",
                 self.runtime.log(id)
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -191,7 +191,7 @@ impl World {
     /// Waits for a line `id`'s script logs that starts with `prefix`, and
     /// answers it.
     async fn line(&self, id: &str, prefix: &str) -> String {
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + PATIENCE;
         loop {
             if let Some(line) = self
                 .output(id)
@@ -202,7 +202,7 @@ impl World {
             }
             assert!(
                 Instant::now() < deadline,
-                "{id} logged no line starting {prefix:?} within {WAIT:?}: {:#?}",
+                "{id} logged no line starting {prefix:?} within {PATIENCE:?}: {:#?}",
                 self.runtime.log(id)
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -230,7 +230,7 @@ impl World {
     /// Waits until the stand-in for `floti.fetch` has seen `count` calls
     /// `started` or `ended`.
     async fn fetched(&self, what: &str, count: usize) {
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + PATIENCE;
         loop {
             let seen = self.fetches.lock().unwrap().clone();
             if seen.iter().filter(|line| line.starts_with(what)).count() >= count {
@@ -238,7 +238,7 @@ impl World {
             }
             assert!(
                 Instant::now() < deadline,
-                "{count} fetches {what} within {WAIT:?}: {seen:?}
+                "{count} fetches {what} within {PATIENCE:?}: {seen:?}
 flight: {:#?}
 other: {:#?}",
                 self.runtime.log("flight"),
@@ -255,11 +255,11 @@ other: {:#?}",
         registry.shutdown();
         let weak = registry.downgrade();
         drop(registry);
-        let deadline = Instant::now() + WAIT;
+        let deadline = Instant::now() + PATIENCE;
         while weak.upgrade().is_some() {
             assert!(
                 Instant::now() < deadline,
-                "the registry was still held after {WAIT:?}"
+                "the registry was still held after {PATIENCE:?}"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -430,7 +430,7 @@ async fn pushes_until(
     what: &str,
     check: impl Fn(&[PluginInfo]) -> bool,
 ) -> Vec<Vec<PluginInfo>> {
-    let deadline = Instant::now() + WAIT;
+    let deadline = Instant::now() + PATIENCE;
     let mut seen = Vec::new();
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
@@ -444,7 +444,82 @@ async fn pushes_until(
                 }
             }
             Some(_) => {}
-            None => panic!("no plugins:changed push showed {what} within {WAIT:?}: {seen:#?}"),
+            None => panic!("no plugins:changed push showed {what} within {PATIENCE:?}: {seen:#?}"),
+        }
+    }
+}
+
+/// A loopback server a script knocks on with `floti.fetch`: it counts the
+/// requests it is sent and answers each with nothing. It shows a script
+/// running when no client is there to see it.
+struct Knocks {
+    port: u16,
+    count: Arc<AtomicUsize>,
+    stop: Arc<AtomicBool>,
+    accept: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Knocks {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let count = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let accept = {
+            let (count, stop) = (Arc::clone(&count), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if stop.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let Ok(mut stream) = stream else { continue };
+                    let mut head = Vec::new();
+                    let mut byte = [0u8; 1];
+                    while !head.ends_with(b"\r\n\r\n") && matches!(stream.read(&mut byte), Ok(1)) {
+                        head.push(byte[0]);
+                    }
+                    count.fetch_add(1, Ordering::SeqCst);
+                    let _ =
+                        stream.write_all(b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n");
+                }
+            })
+        };
+        Self {
+            port,
+            count,
+            stop,
+            accept: Some(accept),
+        }
+    }
+
+    fn origin(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+
+    fn count(&self) -> usize {
+        self.count.load(Ordering::SeqCst)
+    }
+
+    /// Waits until the server has been sent `count` requests.
+    async fn reached(&self, count: usize) {
+        let deadline = Instant::now() + PATIENCE;
+        while self.count() < count {
+            assert!(
+                Instant::now() < deadline,
+                "{count} knocks within {PATIENCE:?}; there were {}",
+                self.count()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+}
+
+impl Drop for Knocks {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        if let Some(accept) = self.accept.take() {
+            let _ = accept.join();
         }
     }
 }
@@ -457,10 +532,14 @@ async fn pushes_until(
 async fn a_background_script_runs_in_its_own_isolate_from_starting_to_running_with_or_without_a_client()
  {
     let mut world = HostWorld::start().await;
+    let knocks = Knocks::start();
     let ticker = world.plugin(
         "ticker",
-        "let n = 0; setInterval(() => floti.badge.set(++n), 100);",
-        "",
+        &format!(
+            r#"let n = 0; setInterval(() => {{ floti.badge.set(++n); floti.fetch("{}/knock").catch(() => {{}}); }}, 100);"#,
+            knocks.origin()
+        ),
+        &format!(r#""network": ["{}"]"#, knocks.origin()),
     );
     let mut watcher = world.watcher().await;
 
@@ -489,17 +568,15 @@ async fn a_background_script_runs_in_its_own_isolate_from_starting_to_running_wi
     })
     .await;
 
-    // With no client connected, it keeps running.
+    // With no client connected, it keeps running: it goes on knocking, and
+    // the badge it painted meanwhile is there when one connects again.
     drop(watcher);
     let before = by_id(&world.list().await, "ticker").badge.unwrap_or(0);
     world.client = None;
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    knocks.reached(knocks.count() + 5).await;
     world.connect().await;
     let after = by_id(&world.list().await, "ticker").badge.unwrap_or(0);
-    assert!(
-        after >= before + 4,
-        "the badge went from {before} to {after}"
-    );
+    assert!(after > before, "the badge went from {before} to {after}");
 
     // A host that starts with it registered starts it.
     world.restart().await;
@@ -649,7 +726,7 @@ setInterval(() => console.log("tick " + (++ticks)), 50);
     assert_eq!(world.line("quiet", "shared ").await, "shared undefined");
 
     // The host side hears loud's channel as loud's.
-    let message = tokio::time::timeout(WAIT, heard.recv())
+    let message = tokio::time::timeout(PATIENCE, heard.recv())
         .await
         .unwrap()
         .unwrap();
@@ -666,7 +743,7 @@ setInterval(() => console.log("tick " + (++ticks)), 50);
             state(info) == PluginBackgroundState::Crashed
         })
         .await;
-    let deadline = Instant::now() + WAIT;
+    let deadline = Instant::now() + PATIENCE;
     while world.count("quiet", "tick ") < ticks + 5 {
         assert!(Instant::now() < deadline, "quiet stopped ticking");
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -735,19 +812,25 @@ async fn switching_off_reloading_or_stopping_ends_every_timer() {
     world.add(&ticker);
     world.line("ticker", "tick 3").await;
 
-    async fn still(world: &World) {
-        let before = world.output("ticker").len();
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        assert_eq!(
-            world.output("ticker").len(),
-            before,
+    // Switching off and shutting down return once the script's thread has
+    // ended, or note in its log that it did not. That return is the barrier:
+    // with the thread gone, no timer of its can fire.
+    fn still(world: &World) {
+        assert!(!world.runtime.is_running("ticker"));
+        assert!(
+            !world
+                .runtime
+                .log("ticker")
+                .iter()
+                .any(|line| line.stream == PluginLogStream::Host
+                    && line.text.contains("did not end")),
             "{:#?}",
-            world.output("ticker")
+            world.runtime.log("ticker")
         );
     }
 
     world.registry().set_enabled(&text(&ticker), false).unwrap();
-    still(&world).await;
+    still(&world);
     assert_eq!(world.count("ticker", "late"), 0);
 
     // Reloaded, the old isolate's timers are gone and the new one counts
@@ -757,7 +840,7 @@ async fn switching_off_reloading_or_stopping_ends_every_timer() {
     world.registry().reload(&text(&ticker)).unwrap();
     let from = world.output("ticker").len();
     world.running("ticker").await;
-    let deadline = Instant::now() + WAIT;
+    let deadline = Instant::now() + PATIENCE;
     while !world.output("ticker")[from..]
         .iter()
         .any(|line| line == "tick 3")
@@ -779,7 +862,7 @@ async fn switching_off_reloading_or_stopping_ends_every_timer() {
     );
 
     world.registry().shutdown();
-    still(&world).await;
+    still(&world);
     world.stop().await;
 }
 
@@ -834,7 +917,7 @@ catch (error) { console.log("closed post " + error.name); }
     );
 
     // What it posted reached the host side as the protocol carries it.
-    let message = tokio::time::timeout(WAIT, heard.recv())
+    let message = tokio::time::timeout(PATIENCE, heard.recv())
         .await
         .unwrap()
         .unwrap();
@@ -865,7 +948,16 @@ catch (error) { console.log("closed post " + error.name); }
     world
         .line("channels", "other heard \"from the host\"")
         .await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // A second post is the barrier: the script hears posts in order, so once
+    // both channels have heard it, the first has reached every channel it
+    // ever will.
+    assert!(
+        world
+            .runtime
+            .post_to_channel("channels", "board", Payload::Text("barrier".into()))
+    );
+    world.line("channels", "sender heard \"barrier\"").await;
+    world.line("channels", "other heard \"barrier\"").await;
     for never in ["sender heard {", "closed heard", "elsewhere heard"] {
         assert_eq!(
             world.count("channels", never),
@@ -930,19 +1022,20 @@ throw new Error("on purpose");
             .any(|line| line.stream == PluginLogStream::Host && line.text.contains("on purpose"))
     );
 
-    // Not restarted, and nothing else stopped.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(
-        state(&world.info("thrower")),
-        PluginBackgroundState::Crashed
-    );
-    assert_eq!(world.count("thrower", "painted"), 1);
+    // Nothing else stopped, and, once the registry has painted another of
+    // steady's badges since the crash, it has handled the crash: not
+    // restarted.
     let badge = world.info("steady").badge.unwrap();
     world
         .until("steady", "still counting", |info| {
             info.badge.unwrap_or(0) > badge
         })
         .await;
+    assert_eq!(
+        state(&world.info("thrower")),
+        PluginBackgroundState::Crashed
+    );
+    assert_eq!(world.count("thrower", "painted"), 1);
 
     // Fixed and reloaded, it starts afresh.
     std::fs::write(thrower.join("bg.js"), "console.log('fixed');").unwrap();
@@ -1003,10 +1096,12 @@ async fn a_script_in_an_endless_loop_is_ended_within_ten_seconds_and_the_host_se
         "let n = 0; setInterval(() => floti.badge.set(++n), 50);",
         "",
     );
-    // Running first, then stuck in a timer; and stuck at its top level.
+    // Running first, then stuck in a timer; and stuck at its top level. The
+    // spinner's badge 2 is answered just before it spins: with nothing else
+    // to do, it is in its loop once steady has counted on after that.
     let spinner = world.plugin(
         "spinner",
-        "floti.badge.set(1); setTimeout(() => { for (;;) {} }, 50);",
+        "floti.badge.set(1); setTimeout(async () => { await floti.badge.set(2); for (;;) {} }, 50);",
         "",
     );
     let stuck = world.plugin("stuck", "for (;;) {}", "");
@@ -1014,12 +1109,15 @@ async fn a_script_in_an_endless_loop_is_ended_within_ten_seconds_and_the_host_se
     world.add(&spinner).await;
     world.add(&stuck).await;
     let mut watcher = world.watcher().await;
-    pushes_until(&mut watcher, "steady and spinner running", |listed| {
-        state(by_id(listed, "steady")) == PluginBackgroundState::Running
-            && state(by_id(listed, "spinner")) == PluginBackgroundState::Running
-    })
+    pushes_until(
+        &mut watcher,
+        "steady running and spinner about to spin",
+        |listed| {
+            state(by_id(listed, "steady")) == PluginBackgroundState::Running
+                && by_id(listed, "spinner").badge == Some(2)
+        },
+    )
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     // The host and the other plugins are served while two scripts spin.
     let listed = world.list().await;
@@ -1036,7 +1134,7 @@ async fn a_script_in_an_endless_loop_is_ended_within_ten_seconds_and_the_host_se
     let began = Instant::now();
     let off = world.switch(&spinner, false).await;
     assert!(
-        began.elapsed() < WAIT,
+        began.elapsed() < PATIENCE,
         "switching off took {:?}",
         began.elapsed()
     );
@@ -1048,7 +1146,7 @@ async fn a_script_in_an_endless_loop_is_ended_within_ten_seconds_and_the_host_se
     let began = Instant::now();
     let reloaded = world.reload(&stuck).await;
     assert!(
-        began.elapsed() < WAIT,
+        began.elapsed() < PATIENCE,
         "reloading took {:?}",
         began.elapsed()
     );
@@ -1062,15 +1160,24 @@ async fn a_script_in_an_endless_loop_is_ended_within_ten_seconds_and_the_host_se
         state(by_id(listed, "spinner")) == PluginBackgroundState::Running
     })
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(
-        state(by_id(&world.list().await, "steady")),
-        PluginBackgroundState::Running
-    );
+    pushes_until(&mut watcher, "spinner about to spin again", |listed| {
+        by_id(listed, "spinner").badge == Some(2)
+    })
+    .await;
+    let badge = by_id(&world.list().await, "steady").badge.unwrap_or(0);
+    pushes_until(
+        &mut watcher,
+        "steady counting past a spinner again",
+        |listed| {
+            state(by_id(listed, "steady")) == PluginBackgroundState::Running
+                && by_id(listed, "steady").badge.unwrap_or(0) > badge
+        },
+    )
+    .await;
 
     drop(watcher);
     let took = world.stop_host().await;
-    assert!(took < WAIT, "stopping the host took {took:?}");
+    assert!(took < PATIENCE, "stopping the host took {took:?}");
     world.stop().await;
 }
 
@@ -1494,14 +1601,17 @@ async fn a_tool_call_reaches_the_handler_with_the_session_and_is_answered_as_too
 #[tokio::test(flavor = "multi_thread")]
 async fn a_tool_call_waits_for_a_starting_script_and_for_its_handler_then_says_why_not() {
     let world = World::new();
-    world.runtime.set_tool_wait(Duration::from_millis(1500));
+    // Long enough that each wait here ends on what the script does; it is
+    // set to nothing where running out is the point.
+    world.runtime.set_tool_wait(PATIENCE);
     let folder = world.plugin(
         "slowstart",
         r#"
 await new Promise((resolve) => setTimeout(resolve, 600));
 floti.tools.handle("echo", () => "up");
+new BroadcastChannel("go").onmessage = () => floti.tools.handle("later", () => "late");
 "#,
-        r#""agent": { "tools": { "echo": { "description": "Echoes." }, "never": { "description": "Never." } } }"#,
+        r#""agent": { "tools": { "echo": { "description": "Echoes." }, "later": { "description": "Later." }, "never": { "description": "Never." } } }"#,
     );
     world.add(&folder);
     assert_eq!(
@@ -1515,19 +1625,53 @@ floti.tools.handle("echo", () => "up");
         Ok("up".into())
     );
 
-    let began = Instant::now();
+    // A call to a tool with no handler yet is answered once one is
+    // registered.
+    let registry = world.registry().clone();
+    let later = tokio::spawn(async move {
+        registry
+            .call_tool(
+                tool_call("slowstart", "later", serde_json::json!({})),
+                CancelToken::new(),
+            )
+            .await
+    });
+    let deadline = Instant::now() + PATIENCE;
+    while !world
+        .runtime
+        .log("slowstart")
+        .iter()
+        .any(|line| line.text == r#"later called by session "alpha""#)
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the call never reached the script: {:#?}",
+            world.runtime.log("slowstart")
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        world
+            .runtime
+            .post_to_channel("slowstart", "go", Payload::Null)
+    );
+    assert_eq!(
+        tokio::time::timeout(PATIENCE, later)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok("late".into())
+    );
+
+    // With the wait run out, a tool with no handler says why not.
+    world.runtime.set_tool_wait(Duration::ZERO);
     let missing = world
         .call_tool("slowstart", "never", serde_json::json!({}))
         .await
         .unwrap_err();
-    assert!(
-        began.elapsed() >= Duration::from_millis(1400),
-        "{:?}",
-        began.elapsed()
-    );
     assert!(missing.contains("has no handler for never"), "{missing}");
 
-    // A script that never finishes starting is waited for, then given up on.
+    // So does a script that has not finished starting.
     let stuck = world.plugin(
         "stuckstart",
         "await new Promise(() => {});",
@@ -1547,6 +1691,11 @@ floti.tools.handle("echo", () => "up");
         r#""agent": { "tools": { "echo": { "description": "Echoes." } } }"#,
     );
     world.add(&crashing);
+    world
+        .until("crashing", "crashed", |info| {
+            state(info) == PluginBackgroundState::Crashed
+        })
+        .await;
     let crashed = world
         .call_tool("crashing", "echo", serde_json::json!({}))
         .await
@@ -1588,14 +1737,18 @@ async fn cancelling_a_tool_call_aborts_the_handlers_signal_and_stopping_the_plug
             )
             .await
     });
-    let deadline = Instant::now() + WAIT;
+    let deadline = Instant::now() + PATIENCE;
     while world.count("cards", "slow started") < 2 {
-        assert!(Instant::now() < deadline);
+        assert!(
+            Instant::now() < deadline,
+            "both slow calls did not start within {PATIENCE:?}: {:#?}",
+            world.output("cards")
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     world.registry().set_enabled(&text(&folder), false).unwrap();
     assert_eq!(
-        tokio::time::timeout(WAIT, call).await.unwrap().unwrap(),
+        tokio::time::timeout(PATIENCE, call).await.unwrap().unwrap(),
         Err("The plugin stopped before it answered.".into())
     );
     assert_eq!(

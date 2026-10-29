@@ -627,7 +627,7 @@ fn when_no_snapshot_can_be_taken_a_write_create_rename_delete_or_restore_aborts_
 // --- Watching the open file -------------------------------------------------
 
 fn wait_for(world: &World, wanted: impl Fn(&[ConfigExternalChange]) -> bool) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while Instant::now() < deadline {
         if wanted(&world.changes.lock().unwrap()) {
             return true;
@@ -647,38 +647,46 @@ fn a_watched_file_changed_outside_the_host_is_told_and_a_write_through_the_host_
         .watch(ClientId(1), Some(&file.display().to_string()))
         .unwrap();
 
-    // A write through the host sends nothing.
+    // A write through the host sends nothing: the next change told is the
+    // outside edit after it. (The watch's own tests step the looks that
+    // could have seen it.)
     let read = world.console.read(&file.display().to_string()).unwrap();
     assert!(
         world
             .write(&world.claude, &file, "two\n", Some(read.hash))
             .ok
     );
-    std::thread::sleep(Duration::from_millis(800));
-    assert!(
-        world.changes.lock().unwrap().is_empty(),
-        "{:?}",
-        world.changes.lock().unwrap()
-    );
 
-    // An edit from elsewhere is told, once, with the bytes' new hash.
+    // An edit from elsewhere is told with the bytes' new hash.
     std::fs::write(&file, "three\n").unwrap();
     assert!(wait_for(&world, |changes| !changes.is_empty()));
-    std::thread::sleep(Duration::from_millis(500));
     let changes = world.changes.lock().unwrap().clone();
     assert_eq!(changes.len(), 1, "{changes:?}");
     assert!(same(&changes[0].path, &file));
     assert_eq!(changes[0].hash, hash_content("three\n"));
     assert!(changes[0].exists);
 
-    // Removing it is an outside change too; no watch, no news.
+    // Removing it is an outside change too, and the next one told: the edit
+    // before it was told once.
     std::fs::remove_file(&file).unwrap();
-    assert!(wait_for(&world, |changes| changes.len() == 2));
-    assert!(!world.changes.lock().unwrap()[1].exists);
+    assert!(wait_for(&world, |changes| changes.len() >= 2));
+    let changes = world.changes.lock().unwrap().clone();
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    assert!(!changes[1].exists);
+
+    // No watch, no news: watched again, the next change told is the edit
+    // made after that, not the one made while nothing watched.
     world.console.watch(ClientId(1), None).unwrap();
     world.put(&file, "four\n");
-    std::thread::sleep(Duration::from_millis(600));
-    assert_eq!(world.changes.lock().unwrap().len(), 2);
+    world
+        .console
+        .watch(ClientId(1), Some(&file.display().to_string()))
+        .unwrap();
+    std::fs::write(&file, "five\n").unwrap();
+    assert!(wait_for(&world, |changes| changes.len() >= 3));
+    let changes = world.changes.lock().unwrap().clone();
+    assert_eq!(changes.len(), 3, "{changes:?}");
+    assert_eq!(changes[2].hash, hash_content("five\n"));
 }
 
 // --- Watching through the host, one client at a time -----------------------
@@ -704,25 +712,6 @@ async fn host_over(dirs: &TestDirs, endpoint: &Endpoint, claude: &Path) -> Runni
         backends: backends(&dirs.user_env(), Some(settings)),
         inherited_env: std::env::vars_os().collect(),
     })
-}
-
-/// Every outside change `client` is sent within `wait`, with its number.
-async fn changes_within(
-    client: &mut TestClient,
-    wait: Duration,
-) -> Vec<(u64, ConfigExternalChange)> {
-    let deadline = tokio::time::Instant::now() + wait;
-    let mut changes = Vec::new();
-    loop {
-        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-        match client.next(left).await {
-            Some(Message::Event(event)) if event.subscription == CHANGES => {
-                changes.push((event.seq, from_payload(&event.payload).expect("a change")));
-            }
-            Some(_) => {}
-            None => return changes,
-        }
-    }
 }
 
 /// The next outside change `client` is sent, with its number.
@@ -795,14 +784,10 @@ async fn an_outside_change_is_told_only_to_the_clients_watching_that_file() {
         .await
         .unwrap();
     assert!(written.ok, "{written:?}");
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    for client in [&mut memory_a, &mut memory_b, &mut on_settings, &mut no_file] {
-        let heard = changes_within(client, Duration::from_millis(50)).await;
-        assert!(heard.is_empty(), "{heard:?}");
-    }
 
     // An outside edit of the memory file is told to each client that has it
-    // open, once, numbered for that client alone.
+    // open, numbered for that client alone: as its first change, so the write
+    // through the host was not one.
     std::fs::write(&memory, "three\n").unwrap();
     for client in [&mut memory_a, &mut memory_b] {
         let (seq, change) = next_change(client).await;
@@ -820,11 +805,26 @@ async fn an_outside_change_is_told_only_to_the_clients_watching_that_file() {
     assert!(same(&change.path, &settings), "{change:?}");
 
     // Nobody heard anything else: not the other file's change, not twice,
-    // and nothing at all with no file open.
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    for client in [&mut memory_a, &mut memory_b, &mut on_settings, &mut no_file] {
-        let heard = changes_within(client, Duration::from_millis(50)).await;
-        assert!(heard.is_empty(), "{heard:?}");
+    // and nothing at all with no file open. One more outside edit of each
+    // file is the barrier: each client's next change is its next number,
+    // and the client that had no file open, given one, hears its first.
+    no_file
+        .request::<WatchConfigFile>(&WatchConfigRequest {
+            path: Some(memory.display().to_string()),
+        })
+        .await
+        .unwrap();
+    std::fs::write(&memory, "four\n").unwrap();
+    std::fs::write(&settings, "{\"model\":\"c\"}\n").unwrap();
+    for (client, wanted, file) in [
+        (&mut memory_a, 2, &memory),
+        (&mut memory_b, 2, &memory),
+        (&mut on_settings, 2, &settings),
+        (&mut no_file, 1, &memory),
+    ] {
+        let (seq, change) = next_change(client).await;
+        assert_eq!(seq, wanted, "{change:?}");
+        assert!(same(&change.path, file), "{change:?}");
     }
 
     host.stop(HostStopReason::Stop).await;
@@ -1379,21 +1379,20 @@ mod over_the_protocol {
         }
     }
 
-    /// The next outside change on `subscription` within `within`, or `None`.
+    /// The next outside change on `subscription`, with its number.
     async fn next_change(
         client: &mut TestClient,
         subscription: u64,
-        within: Duration,
-    ) -> Option<ConfigExternalChange> {
-        let deadline = Instant::now() + within;
+    ) -> (u64, ConfigExternalChange) {
+        let deadline = Instant::now() + PATIENCE;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             match client.next(left).await {
                 Some(Message::Event(event)) if event.subscription == subscription => {
-                    return Some(from_payload(&event.payload).unwrap());
+                    return (event.seq, from_payload(&event.payload).unwrap());
                 }
                 Some(_) => {}
-                None => return None,
+                None => panic!("no outside change within {PATIENCE:?}"),
             }
         }
     }
@@ -1706,32 +1705,33 @@ mod over_the_protocol {
             .await
             .unwrap();
         assert!(written.ok, "{written:?}");
-        assert_eq!(
-            next_change(&mut editor, 7, Duration::from_millis(900)).await,
-            None
-        );
 
-        // An edit from elsewhere is told, with the path and the new hash.
+        // An edit from elsewhere is told, with the path and the new hash, as
+        // the first change: the write through the host was none.
         std::fs::write(&notes, "three\n").unwrap();
-        let change = next_change(&mut editor, 7, PATIENCE)
-            .await
-            .expect("the outside change is told");
+        let (seq, change) = next_change(&mut editor, 7).await;
+        assert_eq!(seq, 1, "{change:?}");
         assert!(same(&change.path, &notes), "{change:?}");
         assert_eq!(change.hash, hash_content("three\n"));
         assert!(change.exists);
 
         // The editor goes: its watch goes with it, so nobody is told of the
-        // next change.
+        // next change. Another client that opens the file after it hears
+        // the edit after that as its first.
         drop(editor);
         let mut other = served.client().await;
         other.subscribe_quietly(8, ConfigChangedOutside::NAME).await;
-        assert!(other.request::<ListConfigScopes>(&()).await.is_ok());
-        tokio::time::sleep(Duration::from_millis(300)).await;
         std::fs::write(&notes, "four\n").unwrap();
-        assert_eq!(
-            next_change(&mut other, 8, Duration::from_millis(900)).await,
-            None
-        );
+        other
+            .request::<WatchConfigFile>(&WatchConfigRequest {
+                path: Some(file(&notes)),
+            })
+            .await
+            .unwrap();
+        std::fs::write(&notes, "five\n").unwrap();
+        let (seq, change) = next_change(&mut other, 8).await;
+        assert_eq!(seq, 1, "{change:?}");
+        assert_eq!(change.hash, hash_content("five\n"));
         served.stop().await;
     }
 
@@ -1844,39 +1844,52 @@ mod over_the_protocol {
         served.stop().await;
     }
 
+    /// Lets a held fake doctor answer when dropped, so a failing test leaves
+    /// no doctor running.
+    struct Release(PathBuf);
+
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.0, "");
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_slow_doctor_keeps_no_other_client_waiting() {
         let served = Served::start();
         put(
             &served.claude.join("fake-doctor.json"),
-            &json!({"output": "Diagnostics\nSearch: ok", "exitCode": 0, "delayMs": 3000})
-                .to_string(),
+            &json!({"output": "Diagnostics\nSearch: ok", "exitCode": 0, "held": true}).to_string(),
         );
+        let release = Release(served.claude.join("fake-doctor.release"));
         let mut slow = served.client().await;
         let mut quick = served.client().await;
 
-        let doctor = async {
+        let doctor = tokio::spawn(async move {
             let report = slow.request::<RunDoctor>(&()).await.unwrap();
-            (report, Instant::now())
-        };
-        let scopes = async {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            let started = Instant::now();
-            let scopes = quick.request::<ListConfigScopes>(&()).await.unwrap();
-            (scopes, started, Instant::now())
-        };
-        let ((report, doctor_done), (scopes, asked, answered)) = tokio::join!(doctor, scopes);
-        assert_eq!(report.exit_code, Some(0));
+            (slow, report)
+        });
+
+        // With the doctor running and held, another client is answered.
+        let running = served.claude.join("fake-doctor.running");
+        let deadline = Instant::now() + PATIENCE;
+        while !running.exists() {
+            assert!(Instant::now() < deadline, "the doctor never started");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let scopes = quick.request::<ListConfigScopes>(&()).await.unwrap();
         assert!(!scopes.is_empty());
         assert!(
-            answered < doctor_done,
-            "the other client was answered only after the doctor finished"
+            !doctor.is_finished(),
+            "the doctor answered before it was let go"
         );
-        assert!(
-            answered - asked < Duration::from_secs(2),
-            "the other client waited {:?}",
-            answered - asked
-        );
+
+        drop(release);
+        let (_slow, report) = tokio::time::timeout(PATIENCE, doctor)
+            .await
+            .expect("the doctor answers once let go")
+            .unwrap();
+        assert_eq!(report.exit_code, Some(0));
         served.stop().await;
     }
 

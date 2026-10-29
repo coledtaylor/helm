@@ -566,10 +566,12 @@ impl Session {
         drop(lock(&self.pty).take());
         let _ = drained.recv_timeout(DRAIN);
 
+        // Unlisted first: recording the exit tells the clients, and one that
+        // lists again on hearing it must not find the session still there.
+        lock(&shared.sessions).remove(&self.id);
         if let Err(err) = shared.ledger.finished(self.id, &exit) {
             eprintln!("floti host: {err}");
         }
-        lock(&shared.sessions).remove(&self.id);
 
         let mut state = lock(&self.state);
         if let Some(opening) = state.opening.take().filter(|bytes| !bytes.is_empty()) {

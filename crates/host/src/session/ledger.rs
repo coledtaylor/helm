@@ -65,7 +65,8 @@ pub trait SessionLedger: Send + Sync {
     fn started(&self, row: &NewSessionRow) -> Result<SessionId>;
 
     /// Records that session `id` ended with `exit`. A row that is no longer
-    /// running is left as it is.
+    /// running is left as it is. The host no longer lists the session by
+    /// then.
     fn finished(&self, id: SessionId, exit: &SessionExit) -> Result<()>;
 }
 
