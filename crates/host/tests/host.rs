@@ -997,6 +997,142 @@ async fn s11_sigterm_ends_every_tree_and_records_rows_exited() {
     stop_floti_host_with(startup::terminate).await;
 }
 
+// ---------------------------------------------------------------------------
+// A host that ends with the program that started it
+// ---------------------------------------------------------------------------
+
+/// `floti host --until-stdin-closes` with every folder in `dirs`, its
+/// standard input a pipe the test holds.
+fn host_until_stdin_closes(dirs: &TestDirs) -> HostProcess {
+    HostProcess::spawn(
+        floti_host_command(dirs)
+            .arg("--until-stdin-closes")
+            .stdin(Stdio::piped()),
+    )
+}
+
+/// Starts a shell session in a new folder through `client`, and every
+/// process the host `child` has started once it has started one.
+async fn a_session_and_its_processes(
+    dirs: &TestDirs,
+    client: &mut TestClient,
+    child: &Child,
+) -> (SessionRecord, Vec<u32>) {
+    let folder = dirs.folder("a project");
+    let session = client
+        .request::<SessionStart>(&start_request(&folder))
+        .await
+        .unwrap();
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let started = started_by(child);
+        if !started.is_empty() {
+            return (session, started);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the host started nothing for its session within {PATIENCE:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s16_a_host_asked_to_stop_before_its_stdin_closes_stops_as_a_plain_stop() {
+    let dirs = TestDirs::new();
+    let mut host = host_until_stdin_closes(&dirs);
+    let mut client = TestClient::connect(&binary_endpoint(&dirs), TERMINAL).await;
+    let (_, pids) = a_session_and_its_processes(&dirs, &mut client, &host).await;
+
+    client
+        .request::<HostStop>(&HostStopRequest {
+            reason: HostStopReason::Stop,
+        })
+        .await
+        .expect("the stop is answered");
+    drop(host.stdin.take());
+    let status = wait_exit(&mut host);
+    let (stdout, stderr) = output_of(host);
+    assert!(status.success(), "{status}: {stdout}{stderr}");
+    assert!(
+        stdout
+            .lines()
+            .next()
+            .is_some_and(|line| line.starts_with("Floti host is listening at ")),
+        "{stdout}{stderr}"
+    );
+    assert!(stdout.contains("Floti host stopped."), "{stdout}{stderr}");
+    assert!(
+        !stdout.contains("the program that started it"),
+        "{stdout}{stderr}"
+    );
+    assert_all_end(&pids).await;
+    let after = rows(&dirs.data);
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].status, "exited", "{after:?}");
+    assert!(after[0].ended_at.is_some(), "{after:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s16_a_host_whose_stdin_closes_ends_every_tree_and_its_next_start_offers_the_sessions_once()
+{
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    let mut host = host_until_stdin_closes(&dirs);
+    let endpoint = binary_endpoint(&dirs);
+    let mut client = TestClient::connect(&endpoint, TERMINAL).await;
+    let (session, pids) = a_session_and_its_processes(&dirs, &mut client, &host).await;
+
+    drop(host.stdin.take());
+    assert!(client.wait_closed(PATIENCE).await, "the connection closes");
+    let status = wait_exit(&mut host);
+    let (stdout, stderr) = output_of(host);
+    assert!(status.success(), "{status}: {stdout}{stderr}");
+    assert!(
+        stdout
+            .lines()
+            .next()
+            .is_some_and(|line| line.starts_with("Floti host is listening at ")),
+        "{stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("Floti host is stopping: the program that started it has gone."),
+        "{stdout}{stderr}"
+    );
+    assert!(!stdout.contains("Floti host stopped."), "{stdout}{stderr}");
+    assert_all_end(&pids).await;
+    assert_eq!(rows(&dirs.data)[0].status, "running");
+
+    let again = RunningHost::start(fake_config(&dirs, &endpoint, &agent, &[]));
+    let mut first = TestClient::connect(&endpoint, TERMINAL).await;
+    let offer = first
+        .request::<SessionRestorable>(&())
+        .await
+        .unwrap()
+        .expect("the sessions are offered back");
+    assert_eq!(
+        offer
+            .sessions
+            .iter()
+            .map(|lost| lost.id)
+            .collect::<Vec<_>>(),
+        [session.id]
+    );
+    assert_eq!(rows(&dirs.data)[0].status, "lost");
+    assert_eq!(first.request::<SessionList>(&()).await.unwrap(), vec![]);
+    first
+        .request::<SessionRestore>(&RestoreSessionsRequest { sessions: vec![] })
+        .await
+        .unwrap();
+    let mut second = TestClient::connect(&endpoint, TERMINAL).await;
+    assert_eq!(
+        second.request::<SessionRestorable>(&()).await.unwrap(),
+        None,
+        "offered once"
+    );
+    again.stop(HostStopReason::Stop).await;
+}
+
 /// A host that goes away without a stop, as one whose run a panic dropped
 /// does, still ends every process it started. Its rows are left running, as
 /// a stop for an update leaves them, for the next start to offer.

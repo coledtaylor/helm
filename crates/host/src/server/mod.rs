@@ -160,7 +160,7 @@ impl HostConfig {
     /// [`backends`] it gives.
     pub fn from_env(env: &UserEnv) -> Result<Self> {
         let folders = folders::resolve(env)?;
-        let endpoint = socket::Native.endpoint(&folders.runtime, SOCKET_NAME);
+        let endpoint = local_endpoint(&folders);
         Ok(Self {
             folders,
             endpoint,
@@ -173,6 +173,12 @@ impl HostConfig {
             run: HostRun::from_env(env),
         })
     }
+}
+
+/// Where the host over `folders` listens: the socket in its runtime folder.
+/// A client on this computer finds the host the same way.
+pub fn local_endpoint(folders: &Folders) -> Endpoint {
+    socket::Native.endpoint(&folders.runtime, SOCKET_NAME)
 }
 
 /// How a host was started and for whom.
@@ -250,14 +256,16 @@ pub fn shell_backend(env: &UserEnv) -> PlainCommandBackend {
 pub struct Stopper(Arc<watch::Sender<Option<HostStopReason>>>);
 
 impl Stopper {
-    pub fn stop(&self, reason: HostStopReason) {
+    /// Asks for a stop for `reason`; whether this was the first ask, which
+    /// the host stops for.
+    pub fn stop(&self, reason: HostStopReason) -> bool {
         self.0.send_if_modified(|current| {
             if current.is_some() {
                 return false;
             }
             *current = Some(reason);
             true
-        });
+        })
     }
 }
 

@@ -1,5 +1,5 @@
 //! A client's side of a connection, for the clients that link this crate
-//! (the TUI and `floti connect`): its keys on disk, and a Noise session to a
+//! (the TUI, `floti connect` and `floti bridge`): its keys on disk, and a Noise session to a
 //! host on the local socket.
 //!
 //! In the folder a client names it keeps two files and nothing else: its
@@ -386,6 +386,12 @@ impl Connection {
             self.decoder.push(&opened);
         }
     }
+
+    /// Closes the connection: everything sent before it reaches the host,
+    /// which then reads the connection as ended.
+    pub async fn close(mut self) {
+        let _ = self.stream.shutdown().await;
+    }
 }
 
 impl fmt::Debug for Connection {
@@ -399,7 +405,7 @@ impl fmt::Debug for Connection {
 
 /// A read error that is the other end having closed: what a pipe reports on
 /// Windows where a Unix socket reads as ended.
-fn is_closed(err: &std::io::Error) -> bool {
+pub(crate) fn is_closed(err: &std::io::Error) -> bool {
     matches!(
         err.kind(),
         ErrorKind::BrokenPipe | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted
