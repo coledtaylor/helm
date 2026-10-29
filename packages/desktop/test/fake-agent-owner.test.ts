@@ -22,9 +22,16 @@ beforeEach(() => {
   world = createWorld()
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // A fake writes its run log as it exits, so the world goes only once every
+  // process the test started has.
+  const exits = started
+    .filter((child) => child.exitCode === null && child.signalCode === null)
+    .map((child) => once(child, 'exit'))
   for (const child of started) child.kill()
   for (const pid of strays) if (isRunning(pid)) process.kill(pid)
+  await Promise.all(exits)
+  await vi.waitFor(() => expect(strays.filter(isRunning)).toEqual([]), { timeout: PATIENCE })
   started.length = 0
   strays.length = 0
   disposeWorld(world)
