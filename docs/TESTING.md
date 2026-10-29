@@ -1,20 +1,35 @@
 # Testing Helm
 
 Helm's tests come with the repository so that anyone working on it can ship
-with confidence. There are two tiers of test, plus a set of diagnostic tools
-that are not tests.
+with confidence. There are three tiers of test, plus a set of diagnostic tools
+that are not tests. A test sits in the lowest tier that can show what it
+checks.
 
-| tier | tool | covers | command |
+| tier | tests | with | how many |
 |---|---|---|---|
-| unit and integration | vitest | all app behaviour, as close to the code as it can be tested | `pnpm test` (part of `pnpm check`), with coverage |
-| end to end | Playwright for Electron | the high-level user workflows, through the built app | `pnpm test:e2e` |
-| Rust crates | cargo-nextest | the Floti protocol crate (`crates/floti-protocol`) and host (`crates/host`) | `cargo nextest run --workspace`, and `cargo test --doc --workspace` for doctests |
+| unit | one module's logic, in process | the disk, processes, network and clock faked; an in-memory database | most tests, milliseconds each |
+| integration | how the parts meet the OS and each other: ptys, process trees, the host over its socket, links on a real file system, the database file | real processes and temporary folders where meeting them is the point, and the fake agents (never a real one) | fewer, up to seconds each |
+| end to end | the main workflows, on their happy paths, through the built app | Playwright for Electron | very few: one per workflow |
 
-Both tiers run locally, before a change is merged. CI also runs the unit and
-integration tier, as `pnpm check`, on Windows, macOS and Linux runners on every
-push. All three jobs are required: a failure on any one fails the run and, from
-the release workflow, stops the release. The end-to-end tier runs locally only,
-never in CI.
+| tool | runs | command |
+|---|---|---|
+| vitest | the TypeScript unit and integration tests | `pnpm test` (part of `pnpm check`), with coverage |
+| cargo-nextest | the Rust unit and integration tests, of the Floti protocol crate (`crates/floti-protocol`) and host (`crates/host`) | `cargo nextest run --workspace`, and `cargo test --doc --workspace` for doctests |
+| Playwright | the end-to-end tests | `pnpm test:e2e` |
+
+CI runs the unit and integration tests, as `pnpm check` and the host tests, on
+Windows, macOS and Linux runners on every push. All three jobs are required: a
+failure on any one fails the run and, from the release workflow, stops the
+release, and a branch merges only once all three passed. The end-to-end tier
+runs locally only, never in CI.
+
+**While building, run only the tests for what changed**: the test file beside
+the code (`pnpm vitest run <file>`), the host tests whose names match
+(`cargo nextest run -p floti-host <filter>`), and `pnpm test:posix <file>`
+for code that differs by OS. A full suite is a regression check, and CI is
+where it runs: push the branch and read the results on all three OSes, rather
+than running it locally. Locally, a full suite runs only for what CI does not
+run, `pnpm test:e2e` for a change to a user workflow.
 
 The protocol crate generates JSON Schema and TypeScript into
 `crates/floti-protocol/generated/`. A test fails when those files are out of
@@ -268,7 +283,11 @@ under Linux the same way.
 
 vitest runs five projects (`vitest.config.ts`):
 
-- **core** - pure logic in `packages/core`, in Node.
+- **core** - `packages/core`, in Node: unit tests of its logic, and
+  integration tests of the code whose job is the file system (discovery,
+  content, files, templates and the store's database file) against real
+  temporary folders, links and git repositories. A store test about rows uses
+  an in-memory database; only one about the file itself opens a file.
 - **ui** - components in `packages/ui` and modules in the renderer, in jsdom
   with Testing Library. Find elements by role and accessible name. jsdom does
   no layout, so anything about where something lands belongs in the tier
@@ -322,8 +341,10 @@ automatically. A targeted `vitest run` measures nothing, so it never trips them.
 
 ## End-to-end tests
 
-`packages/desktop/e2e/`. One test per user workflow; detail belongs in the
-tier above, so keep this one small.
+`packages/desktop/e2e/`. One test per user workflow, on its happy path; detail
+belongs in the tier above, so keep this one small. A refusal or an edge case is
+tested here only when nothing but the real app can show it: a native view drawn
+over the window, or Electron's own guards on a page.
 
 | spec | workflows |
 |---|---|
@@ -437,11 +458,16 @@ backend code: the backend's tests drive the fake, never the real CLI.
   there first.** An empty expectation matches everything and passes with no
   evidence.
 - A bug gets a failing test before its fix.
-- **A test leaves nothing behind**: no temporary folder, no process, no read of
-  the real home. A failed test is the only exception. CI fails a run that
-  leaves a test temp folder or a process behind, and
+- **A test leaves nothing behind, by construction**: no temporary folder, no
+  process, no read of the real home, whether it passes, fails or its process
+  crashes. Cleanup never depends on the test reaching its own teardown, which a
+  crash or a kill skips. Every folder a test makes is under its run's root,
+  which the process that outlives the tests removes when the run ends, and
+  every process it starts ends with it: a fake agent exits once the test
+  process that owns it is gone. Nobody cleans up by hand after a test run. CI
+  fails a run that leaves a test temp folder or a process behind, and
   `node scripts/test-leftovers.mjs <test command>` is the same check locally
-  (see "Running them").
+  (see "Running them"); it is a tripwire for when that breaks, not a cleanup.
 
 ## Waiting
 
@@ -459,10 +485,11 @@ a slower one, so no test has one.
   `e2e/playwright.config.ts`; and `PATIENCE` in the host's testkit
   (`testkit/client.rs`) for Rust, which no test shadows with a wait of its
   own. A passing test never comes near it.
-- **A duration is asserted only when it is the behavior under test**, and
-  then the bound is that duration plus the patience: a session ends within its
-  grace, a handshake is cut at its deadline. Anything else measured against a
-  bound waits on the event instead, or steps the logic.
+- **No test waits out a real deadline, grace or interval.** When a duration is
+  the behavior under test (a session ends within its grace, a handshake is cut
+  at its deadline), the test steps time, as below; an integration test of the
+  same path shows only that the event happens and what it leads to. Anything
+  else measured against a bound waits on the event instead.
 - **A test that says something did not happen proves it with a barrier.**
   After the action that must cause nothing, it causes a second, known event
   and waits for it; the first event to arrive must be that one. `files.test.ts`

@@ -42,17 +42,36 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
 
 ## Testing
 
-- `pnpm check` is the gate. Every change passes it, and `pnpm test:e2e`
-  when it touches a user workflow.
-- CI runs `pnpm check` on Windows, macOS and Linux on every push, then
-  builds. All three jobs are required: a failure on any one fails the run and
-  stops the release. `pnpm test:e2e` runs locally only, never in CI.
+- Three tiers, and a test sits in the lowest one that can show what it checks:
+  - **Unit** tests are most of them and take milliseconds each: one module's
+    logic, with the disk, processes, network and clock faked.
+  - **Integration** tests are fewer: real processes, ptys, sockets, folders,
+    links and database files where meeting them is the point, with the fake
+    agents in place of real ones.
+  - **End-to-end** tests are very few: the main workflows, on their happy
+    paths, through the built app.
+- While building, run only the tests for what changed. A full suite is a
+  regression check, and it runs on CI: push the branch and read its results
+  on Windows, macOS and Linux. Run a full suite locally only for what CI does
+  not run (`pnpm test:e2e`).
+- `pnpm check` is the gate. CI runs it on Windows, macOS and Linux on every
+  push, then builds. All three jobs are required: a failure on any one fails
+  the run and stops the release, and a branch merges only once all three
+  passed. `pnpm test:e2e` runs locally only, never in CI, for a change that
+  touches a user workflow.
 - `pnpm test:posix` runs the processes-and-ports, overlay, process-tree and
   data-directory tests where that code is the POSIX one: natively on macOS and
   Linux, and under Linux in WSL from Windows.
-- A test leaves nothing behind, and CI fails a run whose tests leave a test
-  temp folder or a process: `node scripts/test-leftovers.mjs <test command>`
-  is the same check locally. It reports and fails; it never deletes or kills.
+- A test cleans up by construction, never by reaching its own teardown, which
+  a crash skips: every folder it makes is under its run's root, which the
+  process that outlives the tests removes, and every process it starts ends
+  with it. Nobody cleans up by hand after a test run. CI fails a run whose
+  tests leave a test temp folder or a process behind, and
+  `node scripts/test-leftovers.mjs <test command>` is the same check locally.
+  It reports and fails; it never deletes or kills.
+- A test waits on an event or a polled condition, bounded by the shared
+  patience, never on time. Logic driven by a timer, deadline or grace is tested
+  by stepping time; no test waits one out.
 - Every change ships with its tests: a bug gets a failing test before the fix,
   a feature gets tests that cover it. [docs/TESTING.md](docs/TESTING.md) says
   which kind.
