@@ -12,6 +12,8 @@
     "src/shared/**/*.ts",
     "test/**/*.ts",
     "../../test/patience.ts",
+    "../../test/run-root.ts",
+    "../../vitest.config.ts",
     "electron.vite.config.ts",
     "inline-script.ts"
   ]
