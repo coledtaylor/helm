@@ -14,10 +14,12 @@
 //!   which the test stops.
 //! - [`TestClient`]: a protocol client that runs the Noise handshake as the
 //!   testkit's device ([`test_device_key`]). [`RunningHost`] pairs that
-//!   device into its host's registry before serving and records where the
-//!   host keeps its key, so a test connects with an endpoint and nothing
-//!   else; [`pair_test_device`] does the same for a host started another
-//!   way, such as the `floti host` executable.
+//!   device into its host's registry as an admin before serving, so the host
+//!   holds no enrolment code, and records where the host keeps its key, so a
+//!   test connects with an endpoint and nothing else; [`pair_test_device`]
+//!   does the same for a host started another way, such as the `floti host`
+//!   executable. A test of enrolment starts its host unpaired
+//!   ([`RunningHost::start_unpaired`]).
 //!
 //! A test leaves nothing behind: [`TestDirs`] fails the test that leaves a
 //! file in its tree open, and a dropped [`RunningHost`] stops its host before
@@ -50,7 +52,7 @@ use crate::agent::{
     AgentBackend, AgentToolServer, AgentTools, Composition, Launch, LaunchFolder, LaunchRequest,
     LaunchSpec, Registration, ResumeRequest, Resumer,
 };
-use crate::devices::DeviceRegistry;
+use crate::devices::{DeviceRegistry, Role};
 use crate::platform::folders::{Folders, UserEnv};
 use crate::platform::socket::{Endpoint, LocalSocket, Native as NativeSocket};
 use crate::server::{Host, HostConfig, Stopper};
@@ -97,9 +99,11 @@ pub fn pair_test_device(endpoint: &Endpoint, data: &Path) {
     pair_into(data);
 }
 
+/// Pairs the testkit's device as an admin, so a host started after it holds
+/// no enrolment code and every test that does not enrol is served as before.
 fn pair_into(data: &Path) {
     DeviceRegistry::in_data_folder(data)
-        .pair(test_device_key(), TEST_DEVICE_NAME)
+        .pair(test_device_key(), TEST_DEVICE_NAME, Role::Admin)
         .unwrap_or_else(|err| panic!("pair the testkit's device in {}: {err}", data.display()));
 }
 
@@ -359,6 +363,14 @@ impl RunningHost {
         Self::start_with(config, |_| ()).0
     }
 
+    /// Starts a host on `config` without pairing the testkit's device first,
+    /// and serves: for a test of a host waiting for its first admin. A
+    /// [`TestClient`] connecting to it pairs the testkit's device then.
+    pub fn start_unpaired(config: HostConfig) -> Self {
+        record_host(&config.endpoint, &config.folders.data);
+        Self::serve(config, |_| ()).0
+    }
+
     /// Starts a host on `config`, hands it to `look` before it serves, and
     /// serves: for a test that looks at the host itself, such as at the
     /// channels it serves. `look` runs on the host's thread.
@@ -368,6 +380,13 @@ impl RunningHost {
     ) -> (Self, T) {
         // Before it serves: a test's first client is let in.
         pair_test_device(&config.endpoint, &config.folders.data);
+        Self::serve(config, look)
+    }
+
+    fn serve<T: Send + 'static>(
+        config: HostConfig,
+        look: impl FnOnce(&Host) -> T + Send + 'static,
+    ) -> (Self, T) {
         let (started_tx, started) = mpsc::channel::<Result<(Stopper, T)>>();
         let (done_tx, done) = mpsc::channel();
         let thread = std::thread::Builder::new()
@@ -624,6 +643,11 @@ pub struct FakeAgentRecord {
     pub listening: Option<u16>,
     /// Every line it read, in order.
     pub input: Vec<String>,
+    /// For a run started with `--fake-env-search=<file>`, the names of the
+    /// variables whose values hold any line of that file, sorted; `None`
+    /// for a run without it.
+    #[serde(default)]
+    pub env_holding: Option<Vec<String>>,
 }
 
 /// The fake agent CLI, recording into a folder of its own.

@@ -22,23 +22,29 @@ fn declared_len(prefix: [u8; PREFIX_LEN]) -> usize {
     usize::from(u16::from_be_bytes(prefix))
 }
 
-/// One handshake message, whose length the pattern fixes, gathered from
-/// bytes however they are split. It takes only the bytes the message lacks,
-/// so whatever follows it stays with the caller.
+/// One handshake message, of one of the few lengths the pattern and its
+/// payloads allow, gathered from bytes however they are split. It takes only
+/// the bytes the message lacks, so whatever follows it stays with the caller.
 #[derive(Debug)]
 pub(super) struct OneMessage {
-    expected: usize,
+    /// Every length this step takes.
+    accepted: &'static [usize],
+    /// The length the prefix named, once it has arrived.
+    expected: Option<usize>,
     buffer: Vec<u8>,
 }
 
-/// The prefix named a length other than the one this step takes.
+/// The prefix named a length other than the ones this step takes.
 pub(super) struct WrongLength;
 
 impl OneMessage {
-    pub(super) fn new(expected: usize) -> Self {
+    /// A message of one of the `accepted` lengths.
+    pub(super) fn new(accepted: &'static [usize]) -> Self {
+        let longest = accepted.iter().copied().max().unwrap_or(0);
         Self {
-            expected,
-            buffer: Vec::with_capacity(PREFIX_LEN + expected),
+            accepted,
+            expected: None,
+            buffer: Vec::with_capacity(PREFIX_LEN + longest),
         }
     }
 
@@ -46,17 +52,23 @@ impl OneMessage {
     /// how many it took. Fails as soon as the prefix names another length.
     pub(super) fn fill(&mut self, bytes: &[u8]) -> Result<usize, WrongLength> {
         let mut used = 0;
-        if self.buffer.len() < PREFIX_LEN {
-            used = (PREFIX_LEN - self.buffer.len()).min(bytes.len());
-            self.buffer.extend_from_slice(&bytes[..used]);
-            let Some(prefix) = self.buffer.first_chunk::<PREFIX_LEN>() else {
-                return Ok(used);
-            };
-            if declared_len(*prefix) != self.expected {
-                return Err(WrongLength);
+        let expected = match self.expected {
+            Some(expected) => expected,
+            None => {
+                used = (PREFIX_LEN - self.buffer.len()).min(bytes.len());
+                self.buffer.extend_from_slice(&bytes[..used]);
+                let Some(prefix) = self.buffer.first_chunk::<PREFIX_LEN>() else {
+                    return Ok(used);
+                };
+                let declared = declared_len(*prefix);
+                if !self.accepted.contains(&declared) {
+                    return Err(WrongLength);
+                }
+                self.expected = Some(declared);
+                declared
             }
-        }
-        let wanted = PREFIX_LEN + self.expected - self.buffer.len();
+        };
+        let wanted = PREFIX_LEN + expected - self.buffer.len();
         let take = wanted.min(bytes.len() - used);
         self.buffer.extend_from_slice(&bytes[used..used + take]);
         Ok(used + take)
@@ -64,7 +76,8 @@ impl OneMessage {
 
     /// The message's body, once all of it has arrived.
     pub(super) fn message(&self) -> Option<&[u8]> {
-        (self.buffer.len() == PREFIX_LEN + self.expected).then(|| &self.buffer[PREFIX_LEN..])
+        let expected = self.expected?;
+        (self.buffer.len() == PREFIX_LEN + expected).then(|| &self.buffer[PREFIX_LEN..])
     }
 }
 

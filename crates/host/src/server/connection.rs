@@ -5,12 +5,16 @@
 //! The handshake runs on the raw stream within the admission's deadline
 //! ([`HANDSHAKE_DEADLINE`](super::HANDSHAKE_DEADLINE) in a host). The
 //! device's key arrives in its first message and is checked against the
-//! device registry before the host writes anything; a connection that is not
-//! a handshake, whose first message does not decrypt, whose key is unknown or
-//! revoked, that ends or that runs out of time is closed without a byte
-//! written, and the host's log gets one line naming the client, the reason
-//! and, where there is one, the key's fingerprint. Never key material, never
-//! the client's bytes. From the host's answer on every frame is sealed on the
+//! device registry before the host writes anything. A key the registry does
+//! not know is let in only when its first message carried the host's unused
+//! one-time code while no admin exists: it is paired as the first admin and
+//! the code used up before the host answers (`super::enrolment`). A
+//! connection that is not a handshake, whose first message does not decrypt,
+//! whose key is unknown or revoked (whatever code it carried), that ends or
+//! that runs out of time is closed without a byte written, and the host's
+//! log gets one line naming the client, the reason and, where there is one,
+//! the key's fingerprint. Never key material, never a code, never the
+//! client's bytes. From the host's answer on every frame is sealed on the
 //! way out and opened on the way in; one that does not open ends the
 //! connection.
 //!
@@ -47,6 +51,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, Wr
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 
+use super::enrolment::{Enrolment, FIRST_ADMIN_NAME};
 use super::events::{Publication, Start};
 use super::features::Features;
 use super::{CATALOGUE, Stopper, unserved};
@@ -88,11 +93,13 @@ pub(crate) fn served_channels(features: &Features) -> BTreeSet<&'static str> {
 }
 
 /// What the handshake needs: the host's key, the registry it checks each
-/// device against, and how long a connection has to finish it.
+/// device against, the enrolment of a first admin, and how long a
+/// connection has to finish it.
 #[derive(Clone)]
 pub(crate) struct Admission {
     pub host_key: Arc<KeyPair>,
     pub devices: Arc<DeviceRegistry>,
+    pub enrolment: Arc<Enrolment>,
     pub deadline: Duration,
 }
 
@@ -228,7 +235,19 @@ async fn admit(
                 match admission.devices.standing(&key) {
                     Ok(Standing::Paired) => {}
                     Ok(Standing::Revoked) => return Err(Some(Refusal::Revoked(key))),
-                    Ok(Standing::Unknown) => return Err(Some(Refusal::Unknown(key))),
+                    Ok(Standing::Unknown) => {
+                        let Some(code) = device.enrolment_code() else {
+                            return Err(Some(Refusal::Unknown(key)));
+                        };
+                        match admission.enrolment.enrol(&admission.devices, key, code) {
+                            Ok(Some(_)) => eprintln!(
+                                "floti host: enrolled device {} as the first admin, named \"{FIRST_ADMIN_NAME}\"",
+                                key.fingerprint()
+                            ),
+                            Ok(None) => return Err(Some(Refusal::Unknown(key))),
+                            Err(err) => return Err(Some(Refusal::Unchecked(key, err))),
+                        }
+                    }
                     Err(err) => return Err(Some(Refusal::Unchecked(key, err))),
                 }
                 let (transport, answer) =

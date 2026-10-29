@@ -11,13 +11,21 @@
 //! crosses the socket, and refuses a host that does not prove the pinned key
 //! without sending it anything more than the first handshake message, which
 //! only the pinned key can read.
+//!
+//! A client on the host's own computer that has pinned no host yet enrols
+//! with [`ClientKeys::connect_local`]: while the host waits for its first
+//! admin, its data folder holds the enrolment file
+//! ([`ENROLMENT_FILE`](crate::server::ENROLMENT_FILE)) naming its key and a
+//! one-time code. The client carries the code in its first handshake
+//! message, holds the host to the file's key, and pins that key only once
+//! the host has proven it. The code is never printed or stored by the client.
 
 use std::fmt;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use floti_protocol::noise::{
-    Initiator, InitiatorStep, KeyPair, NoiseError, Opener, PublicKey, Sealer,
+    EnrolmentCode, Initiator, InitiatorStep, KeyPair, NoiseError, Opener, PublicKey, Sealer,
 };
 use floti_protocol::{FrameDecoder, Message, ProtocolError, encode_frame};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -26,7 +34,7 @@ use crate::keys::load_or_create_key_pair;
 use crate::platform::private_files::{Native as NativeFiles, PrivateFiles, sweep_stale_temps};
 use crate::platform::process_tree;
 use crate::platform::socket::{Endpoint, LocalSocket, LocalStream, Native as NativeSocket};
-use crate::server::HANDSHAKE_DEADLINE;
+use crate::server::{HANDSHAKE_DEADLINE, read_enrolment};
 use crate::{Error, Result};
 
 /// The client's device key in its folder.
@@ -109,6 +117,47 @@ impl ClientKeys {
         let pinned = self.pinned.ok_or(ClientError::NotPinned)?;
         connect(endpoint, &self.device, &pinned).await
     }
+
+    /// Connects to the host on this computer at `endpoint`, whose data
+    /// folder is `host_data`. While that host waits for its first admin, its
+    /// enrolment file is there: a client that has pinned no host enrols with
+    /// it, holding the host to the file's key, and pins that key once the
+    /// host has proven it; one pinned to the file's key carries the code
+    /// too. Otherwise it connects as [`Self::connect`] does, and a client
+    /// with no pinned key reports [`ClientError::NotPinned`] without
+    /// connecting.
+    pub async fn connect_local(
+        &mut self,
+        endpoint: &Endpoint,
+        host_data: &Path,
+    ) -> Result<Connection, ClientError> {
+        let enrolment = read_enrolment(host_data).map_err(ClientError::Local)?;
+        match (self.pinned, enrolment) {
+            (None, Some(enrolment)) => {
+                let host = enrolment.host_key;
+                let connection = connect_with(endpoint, &self.device, &host, Some(&enrolment.code))
+                    .await
+                    .map_err(|err| match err {
+                        ClientError::HostNotProven { endpoint, .. }
+                        | ClientError::HostClosed { endpoint, .. } => {
+                            ClientError::EnrolmentNotProven {
+                                endpoint,
+                                host: host.fingerprint(),
+                            }
+                        }
+                        other => other,
+                    })?;
+                drop(enrolment);
+                self.pin_host(connection.host_key())
+                    .map_err(ClientError::Local)?;
+                Ok(connection)
+            }
+            (Some(pinned), Some(enrolment)) if enrolment.host_key == pinned => {
+                connect_with(endpoint, &self.device, &pinned, Some(&enrolment.code)).await
+            }
+            _ => self.connect(endpoint).await,
+        }
+    }
 }
 
 impl fmt::Debug for ClientKeys {
@@ -150,6 +199,20 @@ pub enum ClientError {
     )]
     HostClosed { endpoint: Endpoint, pinned: String },
 
+    /// The host on the socket is not the one the enrolment file names: it
+    /// holds another key, so it could not read the first message and closed
+    /// the connection, or its answer was not the one that key makes. Nothing
+    /// more was sent to it and no key was pinned.
+    #[error(
+        "the host at {endpoint} did not prove the key its enrolment file names ({host}), so nothing more was sent to it and no host key was pinned"
+    )]
+    EnrolmentNotProven { endpoint: Endpoint, host: String },
+
+    /// A file of the client's or the host's enrolment file could not be read
+    /// or written.
+    #[error("{0}")]
+    Local(Error),
+
     #[error("the host at {endpoint} did not finish the handshake within {HANDSHAKE_DEADLINE:?}")]
     TimedOut { endpoint: Endpoint },
 
@@ -171,6 +234,17 @@ pub async fn connect(
     device: &KeyPair,
     host: &PublicKey,
 ) -> Result<Connection, ClientError> {
+    connect_with(endpoint, device, host, None).await
+}
+
+/// [`connect`], carrying `code` in the first handshake message when there is
+/// one.
+async fn connect_with(
+    endpoint: &Endpoint,
+    device: &KeyPair,
+    host: &PublicKey,
+    code: Option<&EnrolmentCode>,
+) -> Result<Connection, ClientError> {
     let mut stream =
         NativeSocket
             .connect(endpoint)
@@ -179,7 +253,10 @@ pub async fn connect(
                 endpoint: endpoint.clone(),
                 source,
             })?;
-    let handshake = tokio::time::timeout(HANDSHAKE_DEADLINE, handshake(&mut stream, device, host));
+    let handshake = tokio::time::timeout(
+        HANDSHAKE_DEADLINE,
+        handshake(&mut stream, device, host, code),
+    );
     let (transport, rest) = match handshake.await {
         Ok(Ok(done)) => done,
         Ok(Err(Handshake::NotProven)) => {
@@ -228,9 +305,13 @@ async fn handshake(
     stream: &mut LocalStream,
     device: &KeyPair,
     host: &PublicKey,
+    code: Option<&EnrolmentCode>,
 ) -> std::result::Result<(floti_protocol::noise::Transport, Vec<u8>), Handshake> {
-    let (mut initiator, first) =
-        Initiator::start(device, host).map_err(|err| Handshake::Failed(err.into()))?;
+    let started = match code {
+        Some(code) => Initiator::start_enrolling(device, host, code),
+        None => Initiator::start(device, host),
+    };
+    let (mut initiator, first) = started.map_err(|err| Handshake::Failed(err.into()))?;
     stream
         .write_all(&first)
         .await

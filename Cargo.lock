@@ -1160,11 +1160,13 @@ name = "floti-protocol"
 version = "1.0.0"
 dependencies = [
  "ciborium",
+ "getrandom 0.4.3",
  "schemars",
  "serde",
  "serde_bytes",
  "serde_json",
  "snow",
+ "subtle",
  "thiserror 2.0.21",
  "ts-rs",
  "zeroize",

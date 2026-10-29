@@ -69,16 +69,8 @@ impl FromStr for PublicKey {
 
     /// 64 hex digits, either case.
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let (pairs, []) = text.as_bytes().as_chunks::<2>() else {
-            return Err(NoiseError::InvalidKey);
-        };
-        if pairs.len() != KEY_LEN {
-            return Err(NoiseError::InvalidKey);
-        }
         let mut bytes = [0; KEY_LEN];
-        for (byte, pair) in bytes.iter_mut().zip(pairs) {
-            *byte = (nibble(pair[0])? << 4) | nibble(pair[1])?;
-        }
+        from_hex(text, &mut bytes)?;
         Ok(Self(bytes))
     }
 }
@@ -175,14 +167,33 @@ pub(super) fn public_from(bytes: Option<&[u8]>) -> Option<PublicKey> {
     bytes.and_then(PublicKey::from_slice)
 }
 
-fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+pub(super) fn hex(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len() * 2);
+    push_hex(&mut text, bytes);
+    text
+}
+
+/// Writes `bytes` as lowercase hex onto the end of `text`.
+pub(super) fn push_hex(text: &mut String, bytes: &[u8]) {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     for byte in bytes {
         text.push(char::from(DIGITS[usize::from(byte >> 4)]));
         text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
-    text
+}
+
+/// Fills `bytes` from `text`, exactly twice as many hex digits, either case.
+pub(super) fn from_hex(text: &str, bytes: &mut [u8]) -> Result<(), NoiseError> {
+    let (pairs, []) = text.as_bytes().as_chunks::<2>() else {
+        return Err(NoiseError::InvalidKey);
+    };
+    if pairs.len() != bytes.len() {
+        return Err(NoiseError::InvalidKey);
+    }
+    for (byte, pair) in bytes.iter_mut().zip(pairs) {
+        *byte = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+    }
+    Ok(())
 }
 
 fn nibble(digit: u8) -> Result<u8, NoiseError> {

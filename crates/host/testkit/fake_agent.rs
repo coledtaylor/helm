@@ -30,6 +30,10 @@
 //! - `--fake-tick=<ms>`: writes `tick <n>` every `<ms>` milliseconds while it
 //!   runs, counting from 1, whether or not anyone types, and records the last
 //!   `n` written in `<pid>.ticks` beside its record.
+//! - `--fake-env-search=<file>`: records as `envHolding` the names of the
+//!   variables whose values hold any line of `file`, ignoring case, so a test
+//!   learns whether a secret reached the environment without any value being
+//!   recorded.
 //!
 //! Otherwise it reads stdin a line at a time and answers each with
 //! `echo: <line>`. At its prompt, `/exit <code>` exits with `code`,
@@ -71,10 +75,13 @@ struct Record {
     /// The TCP port it listens on, for a run with `--fake-serve`.
     listening: Option<u16>,
     input: Vec<String>,
+    /// For `--fake-env-search`, the variables holding a line of its file.
+    env_holding: Option<Vec<String>>,
 }
 
 impl Record {
     fn new(argv: Vec<String>) -> Self {
+        let env_holding = flag_value(&argv, "--fake-env-search").map(env_holding);
         let path = std::env::var_os(LOG_VAR)
             .filter(|dir| !dir.is_empty())
             .map(|dir| PathBuf::from(dir).join(format!("{}.json", std::process::id())));
@@ -100,6 +107,7 @@ impl Record {
             children: Vec::new(),
             listening: None,
             input: Vec::new(),
+            env_holding,
         }
     }
 
@@ -116,6 +124,7 @@ impl Record {
             "children": self.children,
             "listening": self.listening,
             "input": self.input,
+            "envHolding": self.env_holding,
         });
         let partial = path.with_extension("json.partial");
         let written =
@@ -127,6 +136,27 @@ impl Record {
             );
         }
     }
+}
+
+/// The names of the variables whose values hold any line of the file at
+/// `needles`, ignoring case, sorted. A file that cannot be read searches for
+/// nothing.
+fn env_holding(needles: &str) -> Vec<String> {
+    let needles: Vec<String> = std::fs::read_to_string(needles)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| line.trim().to_lowercase())
+        .filter(|line| !line.is_empty())
+        .collect();
+    let mut holding: Vec<String> = std::env::vars_os()
+        .filter(|(_, value)| {
+            let value = value.to_string_lossy().to_lowercase();
+            needles.iter().any(|needle| value.contains(needle))
+        })
+        .map(|(name, _)| name.to_string_lossy().into_owned())
+        .collect();
+    holding.sort();
+    holding
 }
 
 fn main() {

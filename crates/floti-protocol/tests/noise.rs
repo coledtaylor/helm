@@ -3,8 +3,9 @@
 
 use floti_protocol::message::{ClientInfo, ClientKind, Hello, StreamData};
 use floti_protocol::noise::{
-    Initiator, InitiatorStep, KeyPair, MAX_MESSAGE_LEN, MAX_PLAINTEXT_LEN, NoiseError, Opener,
-    PendingDevice, PrivateKey, PublicKey, Responder, ResponderStep, Sealer, TAG_LEN, Transport,
+    ENROLMENT_CODE_LEN, EnrolmentCode, Initiator, InitiatorStep, KeyPair, MAX_MESSAGE_LEN,
+    MAX_PLAINTEXT_LEN, NoiseError, Opener, PendingDevice, PrivateKey, PublicKey, Responder,
+    ResponderStep, Sealer, TAG_LEN, Transport,
 };
 use floti_protocol::{Bytes, FrameDecoder, Message, ProtocolVersion, encode_frame};
 
@@ -342,6 +343,90 @@ fn a_first_message_that_is_not_a_handshake_fails_at_once() {
         receive(&host, &message_1).unwrap_err(),
         NoiseError::FirstMessageUnreadable
     );
+}
+
+#[test]
+fn an_enrolling_device_carries_its_code_to_the_host_inside_the_first_message_and_completes() {
+    let device = keys();
+    let host = keys();
+    let code = EnrolmentCode::generate().unwrap();
+
+    let (initiator, message_1) =
+        Initiator::start_enrolling(&device, &host.public(), &code).unwrap();
+    assert_eq!(message_1.len(), 2 + 96 + ENROLMENT_CODE_LEN);
+    assert_eq!(&message_1[..2], &[0x00, 128]);
+    assert!(
+        !message_1
+            .windows(ENROLMENT_CODE_LEN)
+            .any(|window| window == code.expose_secret()),
+        "the code crossed the wire in the clear"
+    );
+
+    let pending = receive(&host, &message_1).unwrap();
+    assert_eq!(pending.device_key(), device.public());
+    let carried = pending.enrolment_code().expect("the host finds the code");
+    assert!(carried.matches(&code));
+    let printed = format!("{pending:?}");
+    assert!(!printed.contains(code.expose_hex().as_str()), "{printed}");
+    assert!(printed.contains("enrolling: true"), "{printed}");
+
+    let (mut host_side, message_2) = pending.accept().unwrap();
+    let mut device_side = finish(initiator, &message_2).unwrap();
+    assert_eq!(device_side.peer(), host.public());
+    let sealed = device_side.seal(b"hello").unwrap();
+    assert_eq!(host_side.open(&sealed).unwrap(), b"hello");
+}
+
+#[test]
+fn a_first_message_with_no_payload_carries_no_code_and_is_the_same_length_as_before() {
+    let host = keys();
+    let (_, message_1) = Initiator::start(&keys(), &host.public()).unwrap();
+    assert_eq!(message_1.len(), 2 + 96);
+    let pending = receive(&host, &message_1).unwrap();
+    assert!(pending.enrolment_code().is_none());
+}
+
+#[test]
+fn an_enrolling_first_message_made_for_another_host_key_is_not_read() {
+    let host = keys();
+    let another = keys();
+    let code = EnrolmentCode::generate().unwrap();
+    let (_, message_1) = Initiator::start_enrolling(&keys(), &another.public(), &code).unwrap();
+    assert_eq!(
+        receive(&host, &message_1).unwrap_err(),
+        NoiseError::FirstMessageUnreadable
+    );
+}
+
+#[test]
+fn a_first_message_of_any_length_but_the_two_a_device_sends_fails_at_its_prefix() {
+    let host = keys();
+    for len in [0_u16, 95, 97, 112, 127, 129, 512] {
+        assert!(
+            matches!(
+                Responder::new(&host).unwrap().push(&len.to_be_bytes()),
+                Err(NoiseError::FirstMessageUnreadable)
+            ),
+            "a first message of {len} bytes"
+        );
+    }
+    // Split anywhere, the two lengths a device sends are still gathered.
+    let code = EnrolmentCode::generate().unwrap();
+    let (_, message_1) = Initiator::start_enrolling(&keys(), &host.public(), &code).unwrap();
+    let mut responder = Responder::new(&host).unwrap();
+    for byte in &message_1[..message_1.len() - 1] {
+        responder = match responder.push(std::slice::from_ref(byte)).unwrap() {
+            ResponderStep::Pending(next) => next,
+            ResponderStep::Received { .. } => panic!("received before the last byte"),
+        };
+    }
+    match responder.push(&message_1[message_1.len() - 1..]).unwrap() {
+        ResponderStep::Received { device, used } => {
+            assert_eq!(used, 1);
+            assert!(device.enrolment_code().unwrap().matches(&code));
+        }
+        ResponderStep::Pending(_) => panic!("the whole message did not complete it"),
+    }
 }
 
 #[test]

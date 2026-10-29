@@ -16,11 +16,13 @@ path = "src/bin/generate.rs"
 
 [dependencies]
 ciborium.workspace = true
+getrandom.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true
 serde_json.workspace = true
 snow.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
 ts-rs.workspace = true
 zeroize.workspace = true

@@ -4,13 +4,17 @@
 //! Starting takes, in this order and before anything else is opened: the
 //! data folder's lock, so the host alone opens `floti.db`; the host key
 //! ([`HOST_KEY_FILE`]), made on the first start and read on every later one,
-//! so a socket that answers always has its key; the socket, which refuses an
-//! endpoint a live host holds; then the store, whose rows a crash or an
-//! update left running are reconciled to lost and offered back once.
+//! so a socket that answers always has its key; while no device is an admin,
+//! a fresh one-time code in [`ENROLMENT_FILE`] (see `enrolment`), so a client
+//! on this computer can enrol from the first connection on; the socket,
+//! which refuses an endpoint a live host holds; then the store, whose rows a
+//! crash or an update left running are reconciled to lost and offered back
+//! once.
 //!
 //! Every connection starts with a Noise handshake (`floti_protocol::noise`),
 //! in which the host proves its key and the client its device key, checked
-//! against the device registry ([`DEVICES_FILE`], read fresh each time). A
+//! against the device registry ([`DEVICES_FILE`], read fresh each time), or,
+//! for a key the registry does not know, the one-time code it carried. A
 //! connection that fails it, presents a key that is unknown or revoked, or
 //! does not finish within [`HANDSHAKE_DEADLINE`] is closed without a byte
 //! written, and the host's log (its stderr) gets one line saying why. Inside
@@ -35,6 +39,7 @@
 
 mod agent_tools;
 mod connection;
+mod enrolment;
 mod events;
 mod features;
 mod hosted;
@@ -73,6 +78,8 @@ use crate::{Error, Result};
 
 use agent_tools::HostAgentTools;
 use connection::{Admission, ConnectionContext};
+use enrolment::Enrolment;
+pub use enrolment::{FIRST_ADMIN_NAME, LocalEnrolment, read_enrolment};
 use features::Features;
 use hosted::Hosted;
 use session_tools::HostWorld;
@@ -88,6 +95,10 @@ pub const HOST_KEY_FILE: &str = "host.key";
 
 /// The device registry in the data folder, owner-only.
 pub const DEVICES_FILE: &str = "devices.json";
+
+/// The host's key and its one-time enrolment code in the data folder,
+/// owner-only, while the host waits for its first admin.
+pub const ENROLMENT_FILE: &str = "enrolment.json";
 
 /// How long a connection has, from when it is accepted, to finish the Noise
 /// handshake before the host closes it.
@@ -291,13 +302,20 @@ impl Host {
         // that made it is gone.
         sweep_stale_temps(
             &folders.data,
-            &[HOST_KEY_FILE, DEVICES_FILE],
+            &[HOST_KEY_FILE, DEVICES_FILE, ENROLMENT_FILE],
             &process_tree::Native,
         );
         // Before the socket: a host that answers has its key.
         let host_key: Arc<KeyPair> =
             Arc::new(load_or_create_key_pair(&folders.data.join(HOST_KEY_FILE))?);
         let devices = Arc::new(DeviceRegistry::in_data_folder(&folders.data));
+        // Before the socket too: a host waiting for its first admin has the
+        // code a client on this computer enrols with from the first connection.
+        let enrolment = Arc::new(Enrolment::prepare(
+            &folders.data,
+            host_key.public(),
+            &devices,
+        ));
         let deadline = handshake_deadline(&folders.data);
         // Launch folders a crashed run left, once their owners are gone.
         sweep_launch_folders(&folders.data, &process_tree::Native);
@@ -333,6 +351,7 @@ impl Host {
             Admission {
                 host_key,
                 devices,
+                enrolment,
                 deadline,
             },
             identity,
