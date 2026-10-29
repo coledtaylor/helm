@@ -52,7 +52,10 @@ The host's tests get their support from `crates/host/src/testkit.rs`, which
 the crate's own tests turn on through its `testkit` feature: `TestDirs`, a
 temporary tree with spaces in its paths holding a home, data, log, config and
 runtime folder; `unique_name` for a pipe or socket no other test is using;
-`RunningHost`, a host serving on a thread and runtime of its own; and the fake agent. Every
+`RunningHost`, a host serving on a thread and runtime of its own; and the fake agent. A
+`TestDirs` names the test process in a `test-owner` file at its root
+(`testkit/owner.rs`), and every fake started in it exits once that process is
+gone, so a test that crashed or was killed leaves no fake running. Every
 folder and socket a host test uses is in a `TestDirs`, never the real
 `%LOCALAPPDATA%`, Application Support, XDG data folder or `~/.config/floti`,
 and no test registers anything to start at sign-in.
@@ -91,6 +94,11 @@ no console and the pseudoconsole closing does not reach it, as with a GUI app
 or a tool a CLI starts with its window hidden; elsewhere it is an ordinary
 program. `--fake-tick=<ms>` writes `tick <n>` on that interval, for output
 made while no client watches.
+It, and every child it starts, exits once the test process that owns it is
+gone: the one the `test-owner` file nearest above its record folder names.
+That is the test process, never the fake's parent, so a session that leaves
+its agent running when it is closed still leaves it running while its test
+does, and the test that says it must not fails.
 An integration test gets one with `fake_agent!(&dirs)`, and
 `FakeAgent::backend` runs it as an agent backend that resumes with
 `--resume <id>`.
@@ -116,7 +124,11 @@ the same for the executable, so a test still connects with an endpoint and
 its capabilities alone. `noise_sessions.rs` tests the handshake itself: what
 crosses the socket, read through a tap that relays one endpoint to another,
 and clients that misbehave, built as raw sockets from the protocol's Noise
-layer, against the executable, whose stderr is the host's log. Most tests run a `Host` in the test
+layer, against the executable, whose stderr is the host's log. The stalled
+handshake runs on a deadline of its own (`TestDirs::with_handshake_deadline`,
+a marker in the data folder that only a test build reads); the real
+deadline's length is stepped on tokio's paused clock in
+`server/connection/tests.rs`. Most tests run a `Host` in the test
 process on a `TestDirs`; the ones about the executable (one instance per data
 folder and socket, the SSH refusal, Ctrl+C and SIGTERM, a killed host) run the
 built `floti host` with `FLOTI_DATA_DIR`, `FLOTI_RUNTIME_DIR` and the other
@@ -221,7 +233,8 @@ node scripts/test-leftovers.mjs cargo nextest run --workspace   # the same aroun
 
 `scripts/test-leftovers.mjs` is the check CI runs after `pnpm check` and after
 the host tests, on every runner. Around a command it runs it, then lists each
-test temp folder (`floti test *`, `helm world-*`, `helm-test-posix-*`) the
+test temp folder (`helm-test-run-*`, a vitest or Playwright run's root,
+`floti test *`, `helm world-*`, `helm-test-posix-*`) the
 command left in the temp folder and each process of a kind tests start
 (`floti*`, Node, shells, `conhost`) that the command started and is still
 running, with its pid, name and command line. It exits with the command's
@@ -294,15 +307,29 @@ vitest runs five projects (`vitest.config.ts`):
   below.
 - **desktop** - main-process services, in Node. `vi.mock('electron')` with
   `test/electron.ts` stands in for Electron; ptys are real and run the fake
-  `claude`. The faked app's folders are in a temporary folder that
-  `test/electron-setup.ts`, the project's global setup, makes for each run and
-  removes when the run ends, passing or failing. `sessions.test.ts` is the
-  example.
+  `claude`. The faked app's folders are in the run's root (below).
+  `sessions.test.ts` is the example.
 - **sdk** - the plugin SDK in `packages/plugin-sdk/test`: its validator,
   schema and command in Node, the package as npm publishes it, and its React
   and Vue helpers in jsdom against the fake bridge in `test/bridge.ts`.
 - **sdk-svelte** - a compiled Svelte component reading the SDK's stores, in
   jsdom. Apart from `sdk` because it resolves Svelte's browser build.
+
+Every project runs one global setup, `test/run-root.ts`, set in the root
+config, which every project extends. It makes the run's root, a
+`helm-test-run-*` folder in the OS temp folder, and points `TMPDIR`, `TEMP` and
+`TMP` at it before any worker starts; the workers are forked with that
+environment, so every temp folder a test, the code under test or a process
+either starts makes is in the root, by construction, a world (`createWorld`)
+and a store test's file included. The teardown, which runs in the main vitest
+process and so outlives a worker that crashed, puts the variables back and
+removes the root. The root keeps the path the OS gives its temp folder (macOS's
+`/var`, a runner's 8.3 alias), not its real path.
+`packages/desktop/test/run-root.test.ts` shows it, crash included: it runs a
+vitest run of its own (`packages/desktop/test/crash-run/`) whose
+test makes a world, starts the fake `claude` in a pty and kills its worker,
+and checks the root, the world and the fake are gone afterwards. Playwright's
+global setup (`e2e/run-root.ts`) takes the same root for the end-to-end run.
 
 Tests live beside the code as `*.test.ts` or `*.test.tsx`. Logic tangled with
 Electron or React moves into a module that can be tested on its own, as
@@ -363,7 +390,8 @@ over the window, or Electron's own guards on a page.
 | `plugins` | the sample plugin against a server of its own: its background page, a secret it asks for, its panel, badge, status and a tab with parameters; `helm.fetch` held to the manifest's origins on every redirect; Helm's shortcuts from inside a plugin page and its commands from Ctrl+Shift+P; a crashed plugin page and Reload; an unsupported `apiVersion` said in Settings, and a plugin turned off and on; a theme change reaching a page without reloading it; a session calling the plugin's tools, answered by its background page, and losing them when they are turned off in Settings |
 
 - **Each test gets a world** (`test/world.ts`): a temporary root with a space in
-  its path, holding a home directory with its own `.claude`, the fake `claude`
+  its path, in the run's root, named owner of its fake agents (a `test-owner`
+  file holding the test process's pid), holding a home directory with its own `.claude`, the fake `claude`
   (a `.cmd` shim on Windows, an `sh` script elsewhere), two git projects, and the app's data
   directory (`PORTABLE_EXECUTABLE_DIR`). Settings are seeded through the app's
   own store before it starts: the projects folder scanned, the fake `claude`
@@ -408,6 +436,13 @@ is: tests never launch a real agent. The pattern every fake follows:
   `settings` (each source in load order), `instructionFiles` (outermost
   first), `composedInstructions`, `openingPrompt`, `mcpServers`, `received`
   and `exitCode`, then fields of the backend's own.
+- **It exits once the test process that owns it is gone**: the one a
+  `test-owner` file names in its config folder or a folder above it
+  (`watchOwner` in `common.mjs`), which a world and a `TestDirs` write. It
+  polls on an interval that keeps nothing alive. The owner is the test, never
+  the fake's parent, and a file rather than a variable or an argument because
+  the arguments are the CLI's and the host clears a session's environment. A
+  long-lived child it starts does the same.
 - **Its version is overridable**: `FAKE_AGENT_VERSION` changes what
   `--version` answers, so a tested-range check can be driven to either side.
 - **It writes the artefacts the real CLI writes** that Helm or Floti read: its
