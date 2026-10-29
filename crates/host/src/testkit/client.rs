@@ -1,6 +1,7 @@
 //! A protocol client for the host's tests: it connects on the local socket,
-//! says `hello`, makes typed requests and reads session terminals, granting
-//! credit back as it reads, as a real client would.
+//! runs the Noise handshake as the testkit's device, paired with the host and
+//! pinned to its key, says `hello`, makes typed requests and reads session
+//! terminals, granting credit back as it reads, as a real client would.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
@@ -11,21 +12,19 @@ use floti_protocol::message::{
     ClientInfo, ClientKind, ErrorCode, ErrorReply, Hello, Request, StreamCredit, StreamData,
     StreamOpen, Subscribe, Welcome,
 };
-use floti_protocol::{
-    Bytes, FrameDecoder, Message, PROTOCOL_VERSION, Payload, StreamChannel, encode_frame,
-};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use floti_protocol::{Bytes, Message, PROTOCOL_VERSION, Payload, StreamChannel};
 use tokio::time::Instant;
 
-use crate::platform::socket::{Endpoint, LocalSocket, LocalStream, Native};
+use crate::client::{self, ClientError, Connection};
+use crate::platform::socket::Endpoint;
+use crate::server::host_public_key;
 
 /// How long a test waits for the host before it gives up.
 pub const PATIENCE: Duration = Duration::from_secs(20);
 
 /// One client connection.
 pub struct TestClient {
-    stream: LocalStream,
-    decoder: FrameDecoder,
+    connection: Connection,
     next_request: u64,
     /// Messages read while waiting for something else.
     pending: VecDeque<Message>,
@@ -39,25 +38,50 @@ pub struct TestClient {
 }
 
 impl TestClient {
-    /// Connects to the host at `endpoint` and is welcomed with
+    /// Connects to the host at `endpoint` as the testkit's device, paired
+    /// with that host and pinned to its key, and is welcomed with
     /// `capabilities`, retrying while the host is still starting.
+    ///
+    /// The host is the one [`RunningHost`](super::RunningHost) started, or
+    /// one whose endpoint came from [`TestDirs::endpoint`](super::TestDirs)
+    /// or was named to [`pair_test_device`](super::pair_test_device).
     pub async fn connect(endpoint: &Endpoint, capabilities: &[&str]) -> Self {
+        let data = super::data_folder_of(endpoint);
         let deadline = Instant::now() + PATIENCE;
-        let stream = loop {
-            match Native.connect(endpoint).await {
-                Ok(stream) => break stream,
-                Err(err) => {
-                    assert!(
-                        Instant::now() < deadline,
-                        "no host answered at {endpoint} within {PATIENCE:?}: {err}"
-                    );
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut paired = false;
+        let connection = loop {
+            let waited = match host_public_key(&data) {
+                Ok(Some(host)) => {
+                    if !paired {
+                        super::pair_into(&data);
+                        paired = true;
+                    }
+                    match client::connect(endpoint, super::test_device(), &host).await {
+                        Ok(connection) => break connection,
+                        Err(err @ ClientError::Unreachable { .. }) => err.to_string(),
+                        Err(err) => {
+                            panic!("the host at {endpoint} did not let the client in: {err}")
+                        }
+                    }
                 }
-            }
+                Ok(None) => format!("{} has no host key yet", data.display()),
+                Err(err) => err.to_string(),
+            };
+            assert!(
+                Instant::now() < deadline,
+                "no host answered at {endpoint} within {PATIENCE:?}: {waited}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
         };
+        Self::over(connection, capabilities).await
+    }
+
+    /// Says `hello` on `connection`, a handshake already done, and is
+    /// welcomed with `capabilities`: for a test that connects as a device
+    /// of its own.
+    pub async fn over(connection: Connection, capabilities: &[&str]) -> Self {
         let mut client = Self {
-            stream,
-            decoder: FrameDecoder::new(),
+            connection,
             next_request: 1,
             pending: VecDeque::new(),
             stream_bytes: HashMap::new(),
@@ -87,11 +111,15 @@ impl TestClient {
         client
     }
 
-    /// Sends one message.
+    /// The key the host proved in the handshake.
+    pub fn host_key(&self) -> floti_protocol::noise::PublicKey {
+        self.connection.host_key()
+    }
+
+    /// Sends one message, sealed.
     pub async fn send(&mut self, message: &Message) {
-        let frame = encode_frame(message).expect("encode a message");
-        self.stream
-            .write_all(&frame)
+        self.connection
+            .send(message)
             .await
             .expect("write to the host");
     }
@@ -278,43 +306,45 @@ impl TestClient {
         true
     }
 
-    /// Reads what arrives within `timeout` and files it. False when nothing
-    /// came or the connection has ended.
+    /// Reads the next message to arrive within `timeout` and files it. False
+    /// when nothing came or the connection has ended.
     async fn pump(&mut self, timeout: Duration) -> bool {
         if self.ended {
             return false;
         }
-        let mut buf = vec![0; 64 * 1024];
-        let read = tokio::time::timeout(timeout, self.stream.read(&mut buf)).await;
-        let n = match read {
+        let message = match tokio::time::timeout(timeout, self.connection.next()).await {
             Err(_) => return false,
-            Ok(Ok(0) | Err(_)) => {
+            Ok(Ok(Some(message))) => message,
+            Ok(Ok(None)) => {
                 self.ended = true;
                 return false;
             }
-            Ok(Ok(n)) => n,
-        };
-        self.decoder.push(&buf[..n]);
-        while let Some(message) = self.decoder.next_message().expect("a well-formed frame") {
-            match message {
-                Message::StreamData(data) => {
-                    let len = data.data.0.len() as u64;
-                    self.stream_bytes
-                        .entry(data.stream)
-                        .or_default()
-                        .extend_from_slice(&data.data.0);
-                    self.send(&Message::StreamCredit(StreamCredit {
-                        stream: data.stream,
-                        bytes: len,
-                    }))
-                    .await;
-                }
-                Message::StreamClose(close) => {
-                    self.closed_streams.insert(close.stream, close.reason);
-                }
-                Message::StreamCredit(_) => {}
-                other => self.pending.push_back(other),
+            Ok(Err(err @ (ClientError::Protocol(_) | ClientError::Session(_)))) => {
+                panic!("the host sent what a client cannot read: {err}")
             }
+            Ok(Err(_)) => {
+                self.ended = true;
+                return false;
+            }
+        };
+        match message {
+            Message::StreamData(data) => {
+                let len = data.data.0.len() as u64;
+                self.stream_bytes
+                    .entry(data.stream)
+                    .or_default()
+                    .extend_from_slice(&data.data.0);
+                self.send(&Message::StreamCredit(StreamCredit {
+                    stream: data.stream,
+                    bytes: len,
+                }))
+                .await;
+            }
+            Message::StreamClose(close) => {
+                self.closed_streams.insert(close.stream, close.reason);
+            }
+            Message::StreamCredit(_) => {}
+            other => self.pending.push_back(other),
         }
         true
     }

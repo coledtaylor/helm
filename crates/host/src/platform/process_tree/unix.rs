@@ -120,6 +120,10 @@ impl ProcessTree for Native {
     fn untie_tree(&self, root_pid: u32) {
         tell_guard(UNTIE, root_pid);
     }
+
+    fn prepare_root(&self, command: &mut std::process::Command) {
+        std::os::unix::process::CommandExt::process_group(command, 0);
+    }
 }
 
 /// Tells the guard, once it runs, that the program `pid` started ([`TIE`])

@@ -28,4 +28,9 @@ impl ProgramLauncher for Native {
             PathBuf::from("/usr/local/bin"),
         ]
     }
+
+    #[cfg(any(test, feature = "testkit"))]
+    fn write_wrapper_script(&self, folder: &Path, name: &str, program: &Path) -> String {
+        unix::Native.write_wrapper_script(folder, name, program)
+    }
 }

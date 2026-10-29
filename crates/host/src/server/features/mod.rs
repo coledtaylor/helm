@@ -17,12 +17,14 @@
 //! - [`templates`]: harness templates.
 //! - [`content`]: notes and documents, and the renderer.
 //! - [`files`]: the Files view.
+//! - [`plugins`]: registered plugin folders and `plugins:changed`.
 
 mod config;
 mod content;
 mod discovery;
 mod files;
 mod history;
+mod plugins;
 mod profiles;
 mod resources;
 mod sessions;
@@ -42,7 +44,10 @@ use super::hosted::Hosted;
 use crate::platform::folders::Folders;
 use crate::session::{ClientId, Session, SessionOutput};
 pub use resources::ResourcesHandle;
+pub(crate) use sessions::ActivityHandle;
 pub(crate) use workspace::WorkspaceContext;
+
+use crate::workspace::settings::SettingsService;
 
 /// What every feature is built with.
 pub(crate) struct FeatureContext {
@@ -129,6 +134,8 @@ pub(crate) struct Features {
     features: Vec<Box<dyn Feature>>,
     events: Arc<Events>,
     resources: ResourcesHandle,
+    activity: ActivityHandle,
+    settings: Arc<SettingsService>,
 }
 
 impl Features {
@@ -147,8 +154,10 @@ impl Features {
         };
         let resources = resources::Resources::new(&context)?;
         let handle = resources.handle();
+        let sessions = sessions::Sessions::new(&context)?;
+        let activity = sessions.activity();
         let features: Vec<Box<dyn Feature>> = vec![
-            Box::new(sessions::Sessions::new(&context)?),
+            Box::new(sessions),
             Box::new(history::History::new(&context)?),
             Box::new(config::Config::new(&context)?),
             Box::new(resources),
@@ -158,16 +167,29 @@ impl Features {
             Box::new(templates::Templates::new(&context)?),
             Box::new(content::Content::new(&context)?),
             Box::new(files::Files::new(&context)?),
+            Box::new(plugins::Plugins::new(&context)?),
         ];
         Ok(Self {
             features,
             events: context.events,
             resources: handle,
+            activity,
+            settings: Arc::clone(&context.workspace.settings),
         })
     }
 
     pub fn events(&self) -> &Events {
         &self.events
+    }
+
+    /// The activity pass, for what inside the host reads the listing now.
+    pub fn activity(&self) -> &ActivityHandle {
+        &self.activity
+    }
+
+    /// The host's settings, for what inside the host follows them.
+    pub fn settings(&self) -> &Arc<SettingsService> {
+        &self.settings
     }
 
     /// The processes-and-ports pass, for what inside the host asks for it.

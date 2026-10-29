@@ -93,7 +93,8 @@ export interface NormalizedAgent {
 
 /** A manifest that passed, with every optional part filled in and every path in one spelling. */
 export interface NormalizedManifest {
-  apiVersion: 1
+  /** 1 for Helm; 2 for Floti's host, where `background` is a module rather than a page. */
+  apiVersion: 1 | 2
   id: string
   name: string
   version: string | null
@@ -123,8 +124,16 @@ export type ManifestResult =
   | { ok: true; manifest: NormalizedManifest; warnings: string[] }
   | { ok: false; errors: string[]; warnings: string[] }
 
+export interface ValidateOptions {
+  /**
+   * The bridge versions the caller runs. Floti's host passes `[2]`; left out,
+   * it is `SUPPORTED_API_VERSIONS`, what Helm speaks.
+   */
+  apiVersions?: readonly number[]
+}
+
 /** Reads a parsed `helm-plugin.json`. Pure: whether the files it names exist is the caller's question. */
-export function validateManifest(value: unknown): ManifestResult
+export function validateManifest(value: unknown, options?: ValidateOptions): ManifestResult
 
 /** Every `{{key}}` in a string, in order. */
 export function placeholders(text: string): string[]

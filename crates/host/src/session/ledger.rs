@@ -54,6 +54,9 @@ pub struct SessionOrigin {
     /// The permission mode it was launched with, as the agent spells it, so
     /// a restore reopens it in the mode it had.
     pub permission_mode: Option<String>,
+    /// The branch its folder had checked out when it was launched, read
+    /// before the spawn: what a session's detail calls the branch at spawn.
+    pub branch: Option<String>,
 }
 
 /// The record of sessions: a row on spawn, its end when the program ends.
@@ -78,8 +81,8 @@ impl SessionLedger for Mutex<Store> {
             .connection()
             .query_row(
                 "INSERT INTO sessions (name, cwd, argv, claude_session_id, backend, \
-                 project_path, profile_id, permission_mode, status) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'running') RETURNING id",
+                 project_path, profile_id, permission_mode, branch, status) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'running') RETURNING id",
                 params![
                     row.name,
                     row.cwd.to_string_lossy(),
@@ -88,7 +91,8 @@ impl SessionLedger for Mutex<Store> {
                     row.backend.as_str(),
                     row.origin.project_path,
                     row.origin.profile_id,
-                    row.origin.permission_mode
+                    row.origin.permission_mode,
+                    row.origin.branch
                 ],
                 |found| found.get(0),
             )

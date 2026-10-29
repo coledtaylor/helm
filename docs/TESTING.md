@@ -93,8 +93,15 @@ desktop against a backend waits until the desktop talks to the Rust host.
 
 The host process itself is tested in `crates/host/tests/host.rs`, through
 `TestClient` (`testkit/client.rs`): a protocol client that connects on the
-local socket, says `hello`, makes typed requests and reads a session's
-terminal, granting credit as it reads. Most tests run a `Host` in the test
+local socket, runs the Noise handshake as the testkit's device, paired with
+that host and pinned to its key, says `hello`, makes typed requests and reads
+a session's terminal, granting credit as it reads. `RunningHost` pairs the
+device into its host's registry before serving, and `pair_test_device` does
+the same for the executable, so a test still connects with an endpoint and
+its capabilities alone. `noise_sessions.rs` tests the handshake itself: what
+crosses the socket, read through a tap that relays one endpoint to another,
+and clients that misbehave, built as raw sockets from the protocol's Noise
+layer, against the executable, whose stderr is the host's log. Most tests run a `Host` in the test
 process on a `TestDirs`; the ones about the executable (one instance per data
 folder and socket, the SSH refusal, Ctrl+C and SIGTERM, a killed host) run the
 built `floti host` with `FLOTI_DATA_DIR`, `FLOTI_RUNTIME_DIR` and the other
@@ -119,13 +126,62 @@ checks that every file at its target is still there afterwards.
 `packages/core/src/content/highlight.ts` and `packages/ui/src/lib/languages.ts`
 when it runs, so a language the app highlights and the host does not fails it.
 
+The agent tools listener is tested at three levels. `src/agent_tools/tests.rs`
+drives the listener with families made in the test: loopback only, 401 before
+the body is read, 404 for a family switched off, Origin refused, one token
+per session. `src/server/session_tools/tests.rs` calls floti-sessions on a
+world made in the test, for what a real host cannot be put in on demand (a
+listing not ready yet, a token whose session is not live). And
+`crates/host/tests/agent_tools.rs` runs a `RunningHost` with sessions on the
+fake agent (`FakeAgent::backend(..).with_agent_tools()`, which takes agent
+tools as Claude Code does) and the fake `claude`, reads each session's URL
+and token out of the `--mcp-config` file it was launched with, and calls the
+listener over HTTP as a session would: registration and the launch folder,
+revocation at exit and at stop, the settings switch, the sweep at start, and
+what `sessions_list` and `session_detail` answer, with nothing of another
+session's conversation in any answer.
+
 `crates/host/tests/os_conditionals.rs` fails, naming each `file:line`, when a
 compile-time OS conditional (`cfg(windows)`, `cfg!(unix)`, `target_os` and
 the like) appears outside `src/platform/mod.rs` and the per-OS
 implementations of the platform concerns (`startup`, `socket`, `folders`,
-`process_tree`, `process_table`, `links`, `launcher`). Behaviour that
-differs by OS goes behind one of those interfaces, with an implementation for
-each OS.
+`process_tree`, `process_table`, `links`, `launcher`, `private_files`,
+`secret_seal`). Behaviour that differs by OS goes behind one of those
+interfaces, with an implementation for each OS. `private_files` is tested by
+what the OS reports for a written file: mode `0600` on macOS and Linux, and on
+Windows a protected access list with one entry, the current user's, read the
+way the pipe's is; each with a control file made the ordinary way that the
+check rejects.
+
+The plugin runtime is tested the same way, one file per part in
+`crates/host/tests/`: `plugins.rs` (folders, the registry and settings),
+`plugin_secrets.rs`, `plugin_runtime.rs` (the isolates: globals, imports,
+timers, BroadcastChannel, crashes, endless loops, tool calls),
+`plugin_exec.rs` and `plugin_fetch.rs`, and `plugin_background.rs`, which
+adds a plugin like the sample plugin to a `RunningHost` and drives its
+background script end to end over client connections. They carry today's
+`desktop/main/plugins` cases with the same inputs and expectations. Each
+plugin is a folder a test writes into its `TestDirs` with
+`TestDirs::plugin_folder`, its background a script in the test. A script is
+read where a user would see it, by the status item and badge in every
+client's `plugins:changed` push, or, where there is no channel for it yet (a
+session's tool call, a plugin's own log), through a registry and an
+`IsolateRuntime` the test builds the way the host does. The program a
+manifest's `exec` names is `floti-fake-program`
+(`crates/host/testkit/fake_program.rs`), which reports its arguments, folder,
+chosen variables and standard input as JSON, and can start a child, write a
+pid file, write a flood of output, sleep and exit with a code. `floti.fetch`
+goes to a plain HTTP server the test starts on `127.0.0.1:0`, or a TLS one
+with a self-signed certificate made for that file alone, which records every
+request it is sent; nothing a plugin test does leaves the computer.
+
+No host test touches the user's credential store. Every `TestDirs` marks its
+data folder, and a host built with the testkit seals plugin secrets with a key
+file inside a marked folder (`TestDirs::without_secret_store` makes it a
+computer with no store instead); a production build never reads the marker.
+The Windows seal (DPAPI) has round-trip tests of its own, which store nothing;
+the Linux one is tested only where there is no session bus, where it reports
+that sealing is unavailable.
 
 ## Running them
 

@@ -13,7 +13,7 @@ mod macos;
 #[cfg(unix)]
 mod unix;
 #[cfg(target_os = "windows")]
-mod windows;
+pub(crate) mod windows;
 
 #[cfg(target_os = "linux")]
 pub use linux::{Listener, Native};

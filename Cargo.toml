@@ -23,18 +23,33 @@ alacritty_terminal = "0.26"
 # The Files view's sanitiser: rendered markdown keeps no script, event handler
 # or address it does not allow.
 ammonia = "4"
+# A plugin's rail icon, inlined as a data: URL.
+base64 = "=0.22.1"
+bytes = "1"
+# Seals plugin secrets under a key the OS keeps for this user.
+chacha20poly1305 = "=0.10.1"
 ciborium = "0.2"
 # GitHub-flavoured markdown for the Files view, without the CLI or its own
 # highlighter: code fences go through syntect below.
 comrak = { version = "0.59", default-features = false }
+# Plugin background scripts: one V8 isolate each, with no extension of
+# deno's beyond the core, so a script can do only what the host gives it.
+deno_core = "=0.413.0"
+# The error type a plugin isolate's ops throw: the version deno_core uses.
+deno_error = "=0.7.1"
 floti-protocol = { path = "crates/floti-protocol" }
 getrandom = "0.4"
+# The agent tools listener's HTTP: HTTP/1.1 only, on loopback, with no TLS.
+http = "1"
+http-body-util = "0.1"
 # Raw deflate for archived transcript bodies, on the pure-Rust backend so no OS
 # needs a C zlib.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 # Parses the sanitiser's output back into a tree, so the Files view's own
 # transforms run after it. The version ammonia uses.
 html5ever = "0.40"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 # Local midnight in the host's own timezone. Default features: Windows bundles
 # the tz database, Unix reads the system zoneinfo.
 jiff = "0.2"
@@ -45,16 +60,51 @@ libc = "0.2"
 # Recursive folder watching for the Files view, on each OS's own events.
 notify = "8"
 portable-pty = "0.9"
+# floti.fetch's transport: rustls with ring (no C toolchain beyond the
+# compiler, and a static Linux binary), the system proxy, and no cookies,
+# cache or redirects of its own. The host follows each redirect itself.
+reqwest = { version = "=0.13.5", default-features = false, features = [
+    "http2",
+    "rustls-no-provider",
+    "system-proxy",
+] }
+rustls = { version = "=0.23.46", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+] }
+# The MCP protocol of the agent tools listener: its server side over
+# streamable HTTP, without the macros or a client.
+rmcp = { version = "3.8", default-features = false, features = [
+    "server",
+    "transport-streamable-http-server",
+] }
 # Bundled, so the host needs no SQLite on the machine and every OS runs the
 # same version.
 rusqlite = { version = "0.41", features = ["bundled"] }
 schemars = "1"
+# Floti's own secrets on Linux: the Secret Service over D-Bus, in pure Rust
+# so the binary stays static.
+secret-service = { version = "=5.2.0", features = ["rt-tokio-crypto-rust"] }
+# Floti's own secrets on macOS: the Keychain.
+security-framework = "=3.7.0"
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1"
 # Profiles, templates and harness manifests are YAML. A maintained fork of
 # serde_yaml, which is no longer maintained.
 serde_yaml_ng = "0.10"
+# The Noise sessions every client connection runs, never hand-rolled. Only the
+# pure-Rust primitives Noise_IK_25519_ChaChaPoly_BLAKE2s needs: its `std`
+# feature would pull in ring's C and assembly, and snow needs only `alloc`.
+snow = { version = "0.10", default-features = false, features = [
+    "use-blake2",
+    "use-chacha20poly1305",
+    "use-curve25519",
+    "use-getrandom",
+] }
+# Constant-time comparison of the agent tools listener's bearer tokens.
+subtle = "2"
 # Code highlighting with the pure-Rust regex engine, so no OS needs Oniguruma.
 # Its themes are syntect's own; its grammars are two-face's below.
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
@@ -76,6 +126,8 @@ tokio = { version = "1", features = [
     "time",
 ] }
 ts-rs = { version = "11", features = ["serde-compat", "no-serde-warnings"] }
+# WHATWG URLs, for a plugin isolate's URL and URLSearchParams.
+url = "=2.5.8"
 windows-sys = { version = "0.61", features = [
     "Wdk_System_SystemServices",
     "Wdk_System_Threading",
@@ -84,6 +136,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_Security_Credentials",
+    "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Console",
@@ -95,3 +149,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_UI_Shell",
 ] }
+# Wipes a private key's bytes when it is dropped. The version snow's own
+# ciphers already use.
+zeroize = "1"

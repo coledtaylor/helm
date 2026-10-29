@@ -210,11 +210,12 @@ fn clear_stale(endpoint: &Endpoint) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::os::unix::net::UnixListener as StdUnixListener;
+    use std::time::{Duration, Instant};
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
-    use crate::testkit::TestDirs;
+    use crate::testkit::{PATIENCE, TestDirs};
 
     fn mode(path: &Path) -> u32 {
         fs::symlink_metadata(path).unwrap().mode() & 0o777
@@ -310,6 +311,20 @@ mod tests {
         assert!(endpoint.as_path().exists());
         drop(listener);
         assert!(!endpoint.as_path().exists());
-        Native.bind(&endpoint).expect("bind again");
+        // A fork another test makes meanwhile (a pty's child before it execs,
+        // the process-tree guard before it closes what it inherited) holds a
+        // copy of the lock's descriptor for a moment, so the lock comes free
+        // soon after the drop rather than at once.
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            match Native.bind(&endpoint) {
+                Ok(_) => break,
+                Err(e) if Instant::now() < deadline => {
+                    assert!(e.to_string().contains("already running"), "{e}");
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(e) => panic!("bind again: {e}"),
+            }
+        }
     }
 }

@@ -16,9 +16,12 @@
 //!   records, for what each is doing and every live session on the machine.
 //! - [`Terminals`] are plain terminals: a shell in a folder, run the same way
 //!   with no row, from the shells [`detect_shells`] finds.
+//! - [`describe`] says, in words, what one session may be told about the
+//!   others, and has no field for anything of a conversation.
 
 mod activity;
-mod env;
+pub mod describe;
+pub(crate) mod env;
 mod ledger;
 mod live;
 mod redraw;

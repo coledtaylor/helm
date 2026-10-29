@@ -2,12 +2,20 @@
 //! clients on the local socket.
 //!
 //! Starting takes, in this order and before anything else is opened: the
-//! data folder's lock, so the host alone opens `floti.db`; the socket, which
-//! refuses an endpoint a live host holds; then the store, whose rows a crash
-//! or an update left running are reconciled to lost and offered back once.
+//! data folder's lock, so the host alone opens `floti.db`; the host key
+//! ([`HOST_KEY_FILE`]), made on the first start and read on every later one,
+//! so a socket that answers always has its key; the socket, which refuses an
+//! endpoint a live host holds; then the store, whose rows a crash or an
+//! update left running are reconciled to lost and offered back once.
 //!
-//! Clients speak `floti-protocol`, starting at `hello`. Sessions outlive
-//! them: a client leaving ends nothing. Stopping the host ends every
+//! Every connection starts with a Noise handshake (`floti_protocol::noise`),
+//! in which the host proves its key and the client its device key, checked
+//! against the device registry ([`DEVICES_FILE`], read fresh each time). A
+//! connection that fails it, presents a key that is unknown or revoked, or
+//! does not finish within [`HANDSHAKE_DEADLINE`] is closed without a byte
+//! written, and the host's log (its stderr) gets one line saying why. Inside
+//! the session clients speak `floti-protocol`, starting at `hello`, every
+//! frame sealed. Sessions outlive them: a client leaving ends nothing. Stopping the host ends every
 //! session's process tree; a plain stop records each row as exited first, a
 //! stop for an update leaves them for the next start to find lost. Sessions
 //! never outlive the host: one that is killed or crashes takes every process
@@ -25,18 +33,20 @@
 //! is on the not-yet-served list ([`unserved`]) with the feature that will
 //! serve it, and is answered with an error naming it.
 
+mod agent_tools;
 mod connection;
 mod events;
 mod features;
 mod hosted;
 pub(crate) mod records;
+mod session_tools;
 pub mod unserved;
 
 use std::collections::BTreeSet;
 
 use std::ffi::OsString;
 use std::fs::{File, TryLockError};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
@@ -44,22 +54,28 @@ use std::time::Duration;
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::sessions::SessionResources;
 use floti_protocol::channels::workspace::AppMode;
+use floti_protocol::noise::{KeyPair, PublicKey};
 use floti_protocol::{BackendId, Catalogue, HostIdentity, PROTOCOL_VERSION};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::agent::claude_code::{ClaudeCodeBackend, ClaudeCodeSettings};
 use crate::agent::{AgentBackend, PlainCommandBackend, sweep_launch_folders};
+use crate::devices::DeviceRegistry;
+use crate::keys::{load_or_create_key_pair, read_key_pair};
 use crate::platform::folders::{self, Folders, UserEnv};
+use crate::platform::private_files::sweep_stale_temps;
 use crate::platform::process_tree::{self, ProcessTree};
 use crate::platform::socket::{self, Endpoint, LocalListener, LocalSocket};
 use crate::session::ClientId;
 use crate::store::Store;
 use crate::{Error, Result};
 
-use connection::ConnectionContext;
+use agent_tools::HostAgentTools;
+use connection::{Admission, ConnectionContext};
 use features::Features;
 use hosted::Hosted;
+use session_tools::HostWorld;
 
 /// The socket's name in the runtime folder.
 pub const SOCKET_NAME: &str = "floti";
@@ -67,9 +83,26 @@ pub const SOCKET_NAME: &str = "floti";
 /// The file in the data folder whose lock says a host is using that folder.
 pub const LOCK_FILE: &str = "host.lock";
 
+/// The host's private key in the data folder, owner-only.
+pub const HOST_KEY_FILE: &str = "host.key";
+
+/// The device registry in the data folder, owner-only.
+pub const DEVICES_FILE: &str = "devices.json";
+
+/// How long a connection has, from when it is accepted, to finish the Noise
+/// handshake before the host closes it.
+pub const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
+
 /// How long a stop waits, once the sessions have ended, for the store to be
 /// let go before it releases the data folder anyway.
 const RELEASE_WAIT: Duration = Duration::from_secs(10);
+
+/// The public half of the host key kept in the data folder `data`, or
+/// `None` before a host has started there. For pairing a device and pinning
+/// a client to the host; the private half never leaves the host.
+pub fn host_public_key(data: &Path) -> Result<Option<PublicKey>> {
+    Ok(read_key_pair(&data.join(HOST_KEY_FILE))?.map(|pair| pair.public()))
+}
 
 /// Every channel of the protocol, built once.
 static CATALOGUE: LazyLock<Catalogue> = LazyLock::new(Catalogue::protocol);
@@ -199,6 +232,8 @@ impl Stopper {
 pub struct Host {
     hosted: Arc<Hosted>,
     features: Arc<Features>,
+    /// The agent tools listener and the tokens its sessions hold.
+    agent_tools: Arc<HostAgentTools>,
     endpoint: Endpoint,
     stopper: Stopper,
     stop_requested: watch::Receiver<Option<HostStopReason>>,
@@ -212,7 +247,7 @@ pub struct Host {
 
 impl Host {
     /// Starts a host: ties what this process starts to its life, takes the
-    /// data folder and the socket, opens and reconciles the store, and starts
+    /// data folder, loads or makes its key, takes the socket, opens and reconciles the store, and starts
     /// accepting clients. Refuses, opening nothing more, when another host
     /// has the data folder or the socket.
     ///
@@ -230,6 +265,17 @@ impl Host {
         // it, that was said and the host serves anyway.
         process_tree::Native.end_tree_with_this_process();
         let lock = lock_data_folder(&folders)?;
+        // What a key or registry write killed partway left, once the process
+        // that made it is gone.
+        sweep_stale_temps(
+            &folders.data,
+            &[HOST_KEY_FILE, DEVICES_FILE],
+            &process_tree::Native,
+        );
+        // Before the socket: a host that answers has its key.
+        let host_key: Arc<KeyPair> =
+            Arc::new(load_or_create_key_pair(&folders.data.join(HOST_KEY_FILE))?);
+        let devices = Arc::new(DeviceRegistry::in_data_folder(&folders.data));
         // Launch folders a crashed run left, once their owners are gone.
         sweep_launch_folders(&folders.data, &process_tree::Native);
         let listener = socket::Native.bind(&endpoint)?;
@@ -253,6 +299,7 @@ impl Host {
             lost,
         )?);
         let features = Arc::new(Features::new(Arc::clone(&hosted), folders, run)?);
+        let agent_tools = start_agent_tools(&hosted, &features)?;
 
         let (stop_tx, stop_requested) = watch::channel(None);
         let stopper = Stopper(Arc::new(stop_tx));
@@ -260,6 +307,7 @@ impl Host {
         let accepting = tokio::spawn(accept(
             listener,
             Arc::clone(&features),
+            Admission { host_key, devices },
             identity,
             stopper.clone(),
             shutdown_rx,
@@ -267,6 +315,7 @@ impl Host {
         Ok(Self {
             hosted,
             features,
+            agent_tools,
             endpoint,
             stopper,
             stop_requested,
@@ -320,6 +369,9 @@ impl Host {
         };
         self.accepting.abort();
         let _ = (&mut self.accepting).await;
+        // Before the sessions end: no session's tools answer once the host
+        // is going, and none is answered while its session is being ended.
+        self.agent_tools.stop().await;
         let hosted = Arc::clone(&self.hosted);
         tokio::task::spawn_blocking(move || hosted.stop(reason))
             .await
@@ -351,6 +403,34 @@ impl Host {
     }
 }
 
+/// The host's agent tools: the listener with its families switched as the
+/// settings say, following every change to them, answering from the
+/// sessions, the activity pass and the processes-and-ports pass, given to
+/// every launch from now on, and revoking each session's token as it ends.
+fn start_agent_tools(hosted: &Arc<Hosted>, features: &Features) -> Result<Arc<HostAgentTools>> {
+    let tools = Arc::new(HostAgentTools::new());
+    let settings = features.settings();
+    tools.follow(&settings.read()?);
+    let following = Arc::downgrade(&tools);
+    settings.on_change(move |settings| {
+        if let Some(tools) = following.upgrade() {
+            tools.follow(settings);
+        }
+    });
+    tools.answer_from(Arc::new(HostWorld {
+        hosted: Arc::downgrade(hosted),
+        activity: features.activity().clone(),
+        resources: features.resources().clone(),
+    }));
+    tokio::spawn(agent_tools::revoke_at_exit(
+        hosted.ledger().exits(),
+        Arc::downgrade(&tools),
+        Arc::downgrade(hosted),
+    ));
+    hosted.use_agent_tools(Arc::clone(&tools));
+    Ok(tools)
+}
+
 /// Takes the data folder's lock, creating the folder if it is new. Refused
 /// when another host holds it, before `floti.db` is opened.
 fn lock_data_folder(folders: &Folders) -> Result<File> {
@@ -376,6 +456,7 @@ fn lock_data_folder(folders: &Folders) -> Result<File> {
 async fn accept(
     mut listener: socket::Listener,
     features: Arc<Features>,
+    admission: Admission,
     identity: Arc<HostIdentity>,
     stopper: Stopper,
     shutdown: watch::Receiver<bool>,
@@ -390,6 +471,7 @@ async fn accept(
                     client,
                     ConnectionContext {
                         features: Arc::clone(&features),
+                        admission: admission.clone(),
                         identity: Arc::clone(&identity),
                         stopper: stopper.clone(),
                         shutdown: shutdown.clone(),

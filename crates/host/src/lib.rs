@@ -1,8 +1,9 @@
 //! The Floti host: one process per user that owns the sessions on this
 //! computer and serves them to clients.
 //!
-//! Clients connect on a local socket only this user can open and speak
-//! `floti-protocol`. Sessions run in ptys, each screen kept off-screen so a
+//! Clients connect on a local socket only this user can open, prove a paired
+//! device key in a Noise handshake with the host key they pinned, and speak
+//! `floti-protocol` inside that session. Sessions run in ptys, each screen kept off-screen so a
 //! client that attaches late draws it as it is, and they outlive their
 //! clients: closing every client ends nothing. They never outlive the host:
 //! stopping it ends them, and so does killing it.
@@ -10,6 +11,8 @@
 //! The modules, one concern each:
 //!
 //! - [`agent`]: the `AgentBackend` trait every agent CLI is run through.
+//! - [`agent_tools`]: the loopback listener that serves Floti's agent tools
+//!   to the sessions it hosts, one bearer token per session.
 //! - [`config_console`]: an agent's config files, read through its backend and
 //!   changed only through one snapshot-first writer; served to clients as
 //!   `config:*`.
@@ -23,13 +26,29 @@
 //! - [`workspace`]: the user's folders as the host serves them: settings,
 //!   setup, discovery, profiles, templates and the Files view.
 //! - [`session`]: sessions in ptys and the screens kept for them.
-//! - [`server`]: the local socket's clients and the protocol they speak.
+//! - [`plugins`]: registered plugin folders; each one's background script in
+//!   a deno_core isolate of its own; and the call layer every `floti.*`
+//!   method goes through, with `floti.exec`, `floti.fetch`, settings and the
+//!   sealed secret store behind it.
+//! - [`server`]: the local socket's clients, the Noise session each one
+//!   opens with, and the protocol they speak inside it.
+//! - [`keys`]: the key pairs Floti keeps on disk, the host's and a
+//!   client's, each in an owner-only file; never printed, logged or sent.
+//! - [`devices`]: the device registry, which device keys are paired with
+//!   this host and which were revoked.
+//! - [`client`]: a client's side, for the clients that link this crate: its
+//!   device key and pinned host key on disk, and a Noise session to a host.
 
 pub mod agent;
+pub mod agent_tools;
+pub mod client;
 pub mod config_console;
+pub mod devices;
 pub mod error;
 pub mod history;
+pub mod keys;
 pub mod platform;
+pub mod plugins;
 pub mod resources;
 pub mod server;
 pub mod session;

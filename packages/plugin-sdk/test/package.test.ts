@@ -46,7 +46,10 @@ function npm(args: string[], cwd: string): Run {
       npm_config_offline: 'true',
       npm_config_update_notifier: 'false',
       npm_config_audit: 'false',
-      npm_config_fund: 'false'
+      npm_config_fund: 'false',
+      // npm turns on Node's compile cache, which it keeps in the system temp
+      // folder rather than in the cache above, so it is turned off here.
+      NODE_DISABLE_COMPILE_CACHE: '1'
     }
   })
   return { status: result.status, stdout: result.stdout, stderr: result.stderr }

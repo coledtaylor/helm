@@ -12,6 +12,12 @@
 //!   [`fake_agent!`](crate::fake_agent).
 //! - [`RunningHost`]: a host serving on a thread and runtime of its own,
 //!   which the test stops.
+//! - [`TestClient`]: a protocol client that runs the Noise handshake as the
+//!   testkit's device ([`test_device_key`]). [`RunningHost`] pairs that
+//!   device into its host's registry before serving and records where the
+//!   host keeps its key, so a test connects with an endpoint and nothing
+//!   else; [`pair_test_device`] does the same for a host started another
+//!   way, such as the `floti host` executable.
 //!
 //! A test leaves nothing behind: [`TestDirs`] fails the test that leaves a
 //! file in its tree open, and a dropped [`RunningHost`] stops its host before
@@ -22,28 +28,91 @@ mod client;
 
 pub use client::{PATIENCE, TestClient, names_unserved_channel};
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::mpsc;
+use std::sync::{LazyLock, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use floti_protocol::BackendId;
 use floti_protocol::channels::host::HostStopReason;
+use floti_protocol::noise::{KeyPair, PublicKey};
 use serde::Deserialize;
 use tempfile::TempDir;
 
 use crate::Result;
 use crate::agent::{
-    AgentBackend, Launch, LaunchFolder, LaunchRequest, LaunchSpec, ResumeRequest, Resumer,
+    AgentBackend, AgentToolServer, AgentTools, Composition, Launch, LaunchFolder, LaunchRequest,
+    LaunchSpec, Registration, ResumeRequest, Resumer,
 };
+use crate::devices::DeviceRegistry;
 use crate::platform::folders::{Folders, UserEnv};
 use crate::platform::socket::{Endpoint, LocalSocket, Native as NativeSocket};
 use crate::server::{Host, HostConfig, Stopper};
 
 /// The variable naming the folder the fake agent records each run in.
 pub const FAKE_AGENT_LOG_VAR: &str = "FLOTI_FAKE_AGENT_LOG";
+
+/// The name the testkit's device is paired under.
+pub const TEST_DEVICE_NAME: &str = "floti host tests";
+
+/// The device every [`TestClient`] in this test process connects as. Its key
+/// lives in memory only.
+static TEST_DEVICE: LazyLock<KeyPair> =
+    LazyLock::new(|| KeyPair::generate().expect("make the testkit's device key"));
+
+/// For each endpoint a test host serves at, the data folder that host keeps
+/// its key and registry in.
+static HOSTS: LazyLock<Mutex<HashMap<Endpoint, PathBuf>>> = LazyLock::new(Default::default);
+
+fn test_device() -> &'static KeyPair {
+    &TEST_DEVICE
+}
+
+/// The public key of the device [`TestClient`] connects as.
+pub fn test_device_key() -> PublicKey {
+    TEST_DEVICE.public()
+}
+
+/// Says the host serving at `endpoint` keeps its data in `data`, so a
+/// [`TestClient`] pins that host's key, without pairing anything yet.
+fn record_host(endpoint: &Endpoint, data: &Path) {
+    HOSTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(endpoint.clone(), data.to_path_buf());
+}
+
+/// Pairs the testkit's device with the host whose data folder is `data`,
+/// and records that the host serving at `endpoint` is that one: what
+/// [`RunningHost`] does before it serves, for a host started another way,
+/// such as the `floti host` executable. The folder is made if it is new.
+pub fn pair_test_device(endpoint: &Endpoint, data: &Path) {
+    record_host(endpoint, data);
+    pair_into(data);
+}
+
+fn pair_into(data: &Path) {
+    DeviceRegistry::in_data_folder(data)
+        .pair(test_device_key(), TEST_DEVICE_NAME)
+        .unwrap_or_else(|err| panic!("pair the testkit's device in {}: {err}", data.display()));
+}
+
+/// The data folder of the host serving at `endpoint`.
+fn data_folder_of(endpoint: &Endpoint) -> PathBuf {
+    HOSTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(endpoint)
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!(
+                "no test host is known at {endpoint}: start it with RunningHost, take its \
+                 endpoint from TestDirs::endpoint, or name it to pair_test_device"
+            )
+        })
+}
 
 /// How long a dropped [`TestDirs`] keeps trying to remove its tree: an OS can
 /// let go of an exited process's files a moment after the exit.
@@ -83,14 +152,33 @@ impl TestDirs {
             std::fs::create_dir_all(&path).expect("create a test folder");
             path
         };
-        Self {
+        let dirs = Self {
             home: make("home dir"),
             data: make("data dir"),
             logs: make("state dir"),
             config: make("config dir"),
             runtime: make("run"),
             root: Some(root),
-        }
+        };
+        dirs.mark_secret_seal(crate::plugins::secrets::seal::TEST_SEAL_KEY_FILE);
+        dirs
+    }
+
+    /// Makes a host over this tree's data folder a computer with no secret
+    /// store, as Linux with no Secret Service is: nothing can be sealed.
+    /// Otherwise a host here seals plugin secrets with a key file in the data
+    /// folder, and never with the user's own credential store.
+    pub fn without_secret_store(&self) {
+        self.mark_secret_seal(crate::plugins::secrets::seal::TEST_SEAL_UNAVAILABLE);
+    }
+
+    fn mark_secret_seal(&self, how: &str) {
+        std::fs::write(
+            self.data
+                .join(crate::plugins::secrets::seal::TEST_SEAL_MARKER),
+            how,
+        )
+        .expect("mark the test's data folder");
     }
 
     /// The temporary root everything else is in.
@@ -107,6 +195,26 @@ impl TestDirs {
         let path = self.root().join(name);
         std::fs::create_dir_all(&path).expect("create a test folder");
         path
+    }
+
+    /// A plugin folder named `name` under the root: `manifest` as its
+    /// `helm-plugin.json`, written as given so a test can write a broken
+    /// one, and each of `files` at its path relative to the folder.
+    pub fn plugin_folder(&self, name: &str, manifest: &str, files: &[(&str, &str)]) -> PathBuf {
+        let folder = self.folder(name);
+        std::fs::write(
+            folder.join(crate::plugins::manifest::MANIFEST_FILE),
+            manifest,
+        )
+        .expect("write a plugin manifest");
+        for (relative, content) in files {
+            let path = folder.join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create a plugin's folder");
+            }
+            std::fs::write(&path, content).expect("write a plugin file");
+        }
+        folder
     }
 
     /// Every host folder, inside this tree.
@@ -129,9 +237,13 @@ impl TestDirs {
     }
 
     /// A socket endpoint no other test is using: a uniquely named pipe on
-    /// Windows, a socket in this tree's runtime folder elsewhere.
+    /// Windows, a socket in this tree's runtime folder elsewhere. A
+    /// [`TestClient`] connecting to it pins the key of a host whose data is
+    /// in this tree's data folder.
     pub fn endpoint(&self) -> Endpoint {
-        NativeSocket.endpoint(&self.runtime, &unique_name())
+        let endpoint = NativeSocket.endpoint(&self.runtime, &unique_name());
+        record_host(&endpoint, &self.data);
+        endpoint
     }
 }
 
@@ -232,6 +344,8 @@ impl RunningHost {
         config: HostConfig,
         look: impl FnOnce(&Host) -> T + Send + 'static,
     ) -> (Self, T) {
+        // Before it serves: a test's first client is let in.
+        pair_test_device(&config.endpoint, &config.folders.data);
         let (started_tx, started) = mpsc::channel::<Result<(Stopper, T)>>();
         let (done_tx, done) = mpsc::channel();
         let thread = std::thread::Builder::new()
@@ -537,6 +651,7 @@ impl FakeAgent {
             id: BackendId::new(FakeAgentBackend::ID),
             agent: self.clone(),
             args: args.into_iter().map(Into::into).collect(),
+            agent_tools: false,
         }
     }
 
@@ -597,25 +712,80 @@ pub struct FakeAgentBackend {
     id: BackendId,
     agent: FakeAgent,
     args: Vec<OsString>,
+    /// Whether it takes agent tools, as [`Self::with_agent_tools`] says.
+    agent_tools: bool,
 }
 
 impl FakeAgentBackend {
     pub const ID: &'static str = "fake-agent";
 
+    /// This backend, taking agent tools as Claude Code does: one
+    /// `--mcp-config <file>` per launch, the file in the launch's own folder
+    /// naming each family at its URL with the session's bearer token, and
+    /// nothing with no family.
+    #[must_use]
+    pub fn with_agent_tools(mut self) -> Self {
+        self.agent_tools = true;
+        self
+    }
+
     fn spec(
         &self,
         cwd: &Path,
+        composition: &Composition,
         extra: impl IntoIterator<Item = OsString>,
         conversation_id: String,
         folder: &LaunchFolder,
-    ) -> Launch {
-        Launch::plain(LaunchSpec {
+    ) -> Result<Launch> {
+        let tools = match self.agent_tools() {
+            Some(tools) => tools.register(&composition.agent_tools, folder)?,
+            None => Registration::default(),
+        };
+        let mut env = vec![self.agent.log_env()];
+        env.extend(tools.env);
+        Ok(Launch::plain(LaunchSpec {
             program: self.agent.exe.clone().into_os_string(),
-            args: self.args.iter().cloned().chain(extra).collect(),
+            args: self
+                .args
+                .iter()
+                .cloned()
+                .chain(tools.args)
+                .chain(extra)
+                .collect(),
             cwd: cwd.to_path_buf(),
-            env: vec![self.agent.log_env()],
+            env,
             conversation_id: Some(conversation_id),
             launch_folder: Some(folder.path().to_path_buf()),
+        }))
+    }
+}
+
+impl AgentTools for FakeAgentBackend {
+    fn register(&self, servers: &[AgentToolServer], folder: &LaunchFolder) -> Result<Registration> {
+        if servers.is_empty() {
+            return Ok(Registration::default());
+        }
+        let servers: serde_json::Map<String, serde_json::Value> = servers
+            .iter()
+            .map(|server| {
+                (
+                    server.name.clone(),
+                    serde_json::json!({
+                        "type": "http",
+                        "url": server.url,
+                        "headers": { "Authorization": format!("Bearer {}", server.token) },
+                    }),
+                )
+            })
+            .collect();
+        let document = serde_json::json!({ "mcpServers": servers });
+        let file = folder.write(
+            "mcp.json",
+            serde_json::to_vec_pretty(&document).expect("json"),
+        )?;
+        Ok(Registration {
+            args: vec!["--mcp-config".into(), file.into_os_string()],
+            env: Vec::new(),
         })
     }
 }
@@ -632,27 +802,33 @@ impl AgentBackend for FakeAgentBackend {
     /// A new launch is given a conversation id of its own, as Claude Code's
     /// `--session-id` gives one, so its session can be restored.
     fn launch(&self, request: &LaunchRequest, folder: &LaunchFolder) -> Result<Launch> {
-        Ok(self.spec(
+        self.spec(
             &request.folder,
+            &request.composition,
             request.prompt.iter().map(OsString::from),
             format!("fake-conversation-{}", unique_name()),
             folder,
-        ))
+        )
     }
 
     fn resumer(&self) -> Option<&dyn Resumer> {
         Some(self)
     }
+
+    fn agent_tools(&self) -> Option<&dyn AgentTools> {
+        if self.agent_tools { Some(self) } else { None }
+    }
 }
 
 impl Resumer for FakeAgentBackend {
     fn resume(&self, request: &ResumeRequest, folder: &LaunchFolder) -> Result<Launch> {
-        Ok(self.spec(
+        self.spec(
             &request.folder,
+            &request.composition,
             ["--resume".into(), request.conversation_id.clone().into()],
             request.conversation_id.clone(),
             folder,
-        ))
+        )
     }
 }
 
