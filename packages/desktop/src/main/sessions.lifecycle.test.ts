@@ -139,15 +139,17 @@ describe('session lifecycle', () => {
     // `front` is the tab on screen; `back` sits behind it, in a focused window.
     h.host.setFocus([front.id])
 
+    // One after the other: two ptys ending in the same instant race in
+    // node-pty's Windows backend (see `endQueue` in pty.ts), which is not what
+    // this test is about.
     h.host.input(back.id, '/exit\r')
+    await vi.waitFor(() => expect(row(back.id)).toMatchObject({ status: 'exited', exitCode: 0 }), {
+      timeout: PATIENCE
+    })
     h.host.input(front.id, '/crash\r')
-    await vi.waitFor(
-      () => {
-        expect(row(back.id)).toMatchObject({ status: 'exited', exitCode: 0 })
-        expect(row(front.id)).toMatchObject({ status: 'exited', exitCode: 3 })
-      },
-      { timeout: PATIENCE }
-    )
+    await vi.waitFor(() => expect(row(front.id)).toMatchObject({ status: 'exited', exitCode: 3 }), {
+      timeout: PATIENCE
+    })
     expect(row(back.id)?.durationMs).toBeGreaterThan(0)
     expect(row(front.id)?.durationMs).toBeGreaterThan(0)
 

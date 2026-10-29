@@ -286,6 +286,24 @@ async function clearUp({ pid, folder }: { pid: number; folder: string }): Promis
   rmSync(folder, { recursive: true, force: true })
 }
 
+/**
+ * Runs a check until it passes, within the patience. The check reads the whole
+ * machine's process table, and in the full suite another file can be ending a
+ * process tree at that instant, whose child, for the moment its parent is gone
+ * and it is not yet, is an orphan like the fixture's. What this test left is
+ * already gone, so a pass is what the check comes to.
+ */
+async function expectPasses(run: () => { status: number | null; stderr: string }): Promise<void> {
+  await vi.waitFor(
+    () => {
+      const result = run()
+      expect(result.stderr, 'the check reported nothing').toBe('')
+      expect(result.status).toBe(0)
+    },
+    { timeout: PATIENCE, interval: 0 }
+  )
+}
+
 function expectReported(stderr: string, { pid, folder }: { pid: number; folder: string }): void {
   expect(stderr).toContain(`  folder   ${folder}`)
   expect(stderr).toMatch(new RegExp(`  process  ${pid} node .*leaky-step-child`))
@@ -305,9 +323,7 @@ describe('the leftover check around a step', () => {
     expect(alive(left.pid)).toBe(true)
 
     await clearUp(left)
-    const passed = script('after', state)
-    expect(passed.stderr).toBe('')
-    expect(passed.status).toBe(0)
+    await expectPasses(() => script('after', state))
   })
 
   it('runs a command as the one local command and fails it for what it left', async () => {
@@ -324,10 +340,8 @@ describe('the leftover check around a step', () => {
     expect(run.stdout).toContain('the step left nothing behind')
   })
 
-  it('passes a command that left nothing behind', () => {
-    const run = script(process.execPath, '-e', 'const done = true')
-    expect(run.stderr).toBe('')
-    expect(run.status).toBe(0)
+  it('passes a command that left nothing behind', async () => {
+    await expectPasses(() => script(process.execPath, '-e', 'const done = true'))
   })
 
   it('refuses no command at all', () => {

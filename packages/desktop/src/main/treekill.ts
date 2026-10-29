@@ -71,7 +71,7 @@ export function treeKill(pid: number, sync: boolean, done: () => void = () => un
  *   `claude`) is `cmd.exe`: the agent under it keeps running, orphaned, in the
  *   session's folder, and once its parent is gone `/T` no longer finds it. So
  *   `taskkill /T` goes while the root still names its children, and the pty is
- *   released when it has finished.
+ *   released once it has finished and the pty has reported the exit.
  * - **macOS and Linux**: hangup first. The pty's `SIGHUP` reaches the whole
  *   group and is what a program expects at a closed terminal; the tree kill
  *   follows only if the root outlives the grace.

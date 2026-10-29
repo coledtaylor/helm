@@ -184,9 +184,14 @@ export interface SessionHandle {
 
 interface LiveSession extends SessionHandle {
   pty: pty.IPty
+  /** The grace timer of the session's turn to end; its exit clears it. */
   hardKillTimer: NodeJS.Timeout | null
   /** Set by the first `killSession`, so a second close starts nothing more. */
   ending: boolean
+  /** Whether the pty has reported its process's exit. */
+  exited: boolean
+  /** What the session's turn to end does once the exit is reported. */
+  whenExited: (() => void) | null
 }
 
 const live = new Map<string, LiveSession>()
@@ -198,8 +203,37 @@ export interface SessionSpawnOptions extends SpawnOptions {
   onExit: (exitCode: number, signal: number | undefined) => void
 }
 
+/**
+ * What node-pty's Windows agent has, private, for the console sweep its
+ * `kill()` runs. The other platforms' ptys have no agent.
+ */
+interface SweepingAgent {
+  _getConsoleProcessList?: () => Promise<number[]>
+}
+
+/**
+ * Turns off the console sweep node-pty runs when a Windows pty is killed, so
+ * that releasing a session's pty ends nothing but its pseudoconsole.
+ *
+ * The sweep forks `conpty_console_list_agent`, which attaches to the console of
+ * the shell's pid and lists every process there for `kill()` to end; when that
+ * fails it ends the shell's pid itself, five seconds on. Where the tree goes
+ * first a session is released once its exit is reported, so the shell is gone
+ * and its pid names nobody, or whatever has taken the number since, which can
+ * be a process on the host's own console, whose list holds the host itself.
+ * Even released first, the sweep starts after `ClosePseudoConsole` has ended
+ * the shell. The tree kill is what ends a session's processes.
+ */
+function withoutConsoleSweep(p: pty.IPty): pty.IPty {
+  const agent = (p as unknown as { _agent?: SweepingAgent })._agent
+  if (typeof agent?._getConsoleProcessList === 'function') {
+    agent._getConsoleProcessList = () => Promise.resolve([])
+  }
+  return p
+}
+
 export function spawnSession(opts: SessionSpawnOptions): SessionHandle {
-  const p = open(opts)
+  const p = withoutConsoleSweep(open(opts))
   let code: number | null = null
 
   const session: LiveSession = {
@@ -208,6 +242,8 @@ export function spawnSession(opts: SessionSpawnOptions): SessionHandle {
     pty: p,
     hardKillTimer: null,
     ending: false,
+    exited: false,
+    whenExited: null,
     write: (data) => {
       try {
         p.write(data)
@@ -229,9 +265,14 @@ export function spawnSession(opts: SessionSpawnOptions): SessionHandle {
   p.onData(opts.onData)
   p.onExit(({ exitCode, signal }) => {
     code = exitCode
+    session.exited = true
     if (session.hardKillTimer) clearTimeout(session.hardKillTimer)
+    session.hardKillTimer = null
     live.delete(opts.id)
     opts.onExit(exitCode, signal)
+    const then = session.whenExited
+    session.whenExited = null
+    then?.()
   })
 
   live.set(opts.id, session)
@@ -247,27 +288,87 @@ export function liveSessionIds(): string[] {
 }
 
 /**
+ * Closed sessions waiting for their turn to end, and the one ending now.
+ *
+ * Sessions end one at a time. node-pty's Windows backend keeps every pty in
+ * one list, and each pty's exit thread removes its own entry from it with no
+ * lock (the prebuilt `conpty.node` of 1.1.0 keeps the `assert` that does the
+ * removal; later versions guard the list with a mutex). Two ptys ending in the
+ * same instant race on that list: the host process crashes, or an exit is
+ * never reported and its tab stays running. Helm cannot stop two sessions from
+ * exiting on their own at once, but it never makes them: a turn lasts until
+ * the pty has reported its exit, or the grace and the tree kill are spent.
+ */
+const endQueue: LiveSession[] = []
+let endingNow: LiveSession | null = null
+
+/**
  * Ends a session and everything it started, in the order `TREE_BEFORE_HANGUP`
- * gives for this OS. Idempotent: a second call while the first is ending it
- * does nothing.
+ * gives for this OS, once the sessions closed before it have ended.
+ * Idempotent: a second call while the first is ending it does nothing.
  */
 export function killSession(id: string): void {
   const session = live.get(id)
   if (!session || session.ending) return
   session.ending = true
+  endQueue.push(session)
+  endNext()
+}
 
-  if (TREE_BEFORE_HANGUP) {
-    // The tree goes while its root still names its children, as at quit; the
-    // pty is released once the kill has finished, whether or not its exit has
-    // been reported by then.
-    treeKill(session.pid, false, () => releasePty(session))
+function endNext(): void {
+  while (endingNow === null) {
+    const next = endQueue.shift()
+    if (next === undefined) return
+    endingNow = next
+    endInTurn(next)
+  }
+}
+
+function finishTurn(session: LiveSession): void {
+  if (endingNow !== session) return
+  endingNow = null
+  endNext()
+}
+
+function endInTurn(session: LiveSession): void {
+  if (session.exited) {
+    // It ended on its own while it waited, and its pid may name another
+    // process by now: there is no tree left to kill.
+    releasePty(session)
+    finishTurn(session)
     return
   }
+
+  if (TREE_BEFORE_HANGUP) {
+    // The tree goes while its root still names its children, as at quit. The
+    // pty is released once its exit is reported, because `IPty.kill()` looks
+    // it up in the list its exit thread removes it from.
+    const release = (): void => {
+      releasePty(session)
+      finishTurn(session)
+    }
+    treeKill(session.pid, false, () => {
+      if (session.exited) {
+        release()
+        return
+      }
+      session.whenExited = release
+      session.hardKillTimer = setTimeout(() => {
+        session.hardKillTimer = null
+        session.whenExited = null
+        release()
+      }, GRACE_MS)
+    })
+    return
+  }
+
   releasePty(session)
+  session.whenExited = () => finishTurn(session)
   // `onExit` clears this. If it has not fired by then the process outlived the
   // polite kill, which is exactly the case deviation #8 predicted.
   session.hardKillTimer = setTimeout(() => {
-    if (live.has(id)) treeKill(session.pid, false)
+    session.hardKillTimer = null
+    treeKill(session.pid, false, () => finishTurn(session))
   }, GRACE_MS)
 }
 
@@ -298,8 +399,11 @@ export function killAllSessionsSync(): void {
       // Expected: the tree kill above already took it.
     }
     if (session.hardKillTimer) clearTimeout(session.hardKillTimer)
+    session.whenExited = null
   }
   live.clear()
+  endQueue.length = 0
+  endingNow = null
 }
 
 // ---------------------------------------------------------------------------
