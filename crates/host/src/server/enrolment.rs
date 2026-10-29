@@ -14,17 +14,28 @@
 //! The client proves the code inside the Noise handshake, holding the host
 //! to the key the file names ([`Initiator::start_enrolling`](floti_protocol::noise::Initiator::start_enrolling)).
 //! The host checks the code only for a key its registry does not know. Under
-//! one lock it checks that the code is the one it holds and unused, pairs the
-//! key as the admin named [`FIRST_ADMIN_NAME`] while no other admin exists,
-//! and drops the code and removes the file, and only then answers. Every
-//! other device is refused exactly as an unknown one is: closed without a
-//! byte. The code is never logged, printed, sent to a client or put in a
-//! session's environment.
+//! one lock it checks that the code is the one it holds, that no other device
+//! holds it now and that no admin exists, and the device then holds it
+//! ([`Claim`]) while the host answers. Every other device is refused exactly
+//! as an unknown one is: closed without a byte.
+//!
+//! The device is paired only once it has shown it can read the answer, which
+//! only a client that holds the host to its key and has pinned it can: its
+//! `hello`, sealed under the session's keys. Then, under the same lock, the
+//! key is paired as the admin named [`FIRST_ADMIN_NAME`] while no other admin
+//! exists, the code is dropped and the file removed. A device that goes
+//! before its `hello`, or whose answer cannot be written, or a host stopping
+//! meanwhile, lets go of the code with nothing paired: the file and the code
+//! stay for that client, or another, to enrol with. So there is no admin a
+//! client never learned the host key of.
+//!
+//! The code is never logged, printed, sent to a client or put in a session's
+//! environment.
 
 use std::fmt::{self, Write as _};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use floti_protocol::noise::{ENROLMENT_CODE_LEN, EnrolmentCode, PublicKey};
 use serde::Deserialize;
@@ -45,8 +56,24 @@ pub const FIRST_ADMIN_NAME: &str = "This computer";
 /// admin, and the file a client on this computer reads it from.
 pub(crate) struct Enrolment {
     path: PathBuf,
+    held: Mutex<Held>,
+}
+
+/// The code and whether a device holds it, behind one lock.
+struct Held {
     /// `None` once used, and when the host is not waiting for a first admin.
-    code: Mutex<Option<EnrolmentCode>>,
+    code: Option<EnrolmentCode>,
+    /// Whether a device that proved the code is being answered now.
+    claimed: bool,
+}
+
+/// A device that proved the host's code and is being answered: it holds the
+/// code until it is paired as the first admin ([`Self::commit`]), and lets
+/// go of it, with nothing paired, when dropped before that.
+pub(crate) struct Claim {
+    enrolment: Arc<Enrolment>,
+    devices: Arc<DeviceRegistry>,
+    key: PublicKey,
 }
 
 impl Enrolment {
@@ -87,46 +114,94 @@ impl Enrolment {
         }
         Self {
             path,
-            code: Mutex::new(code),
+            held: Mutex::new(Held {
+                code,
+                claimed: false,
+            }),
         }
+    }
+
+    fn held(&self) -> MutexGuard<'_, Held> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Whether the host holds a code no device has used yet.
     #[cfg(test)]
     pub(crate) fn waiting(&self) -> bool {
-        self.code
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_some()
+        self.held().code.is_some()
     }
 
-    /// Enrols `key`, which `devices` does not know, as the first admin when
-    /// `offered` is the unused code and no admin exists yet: the device it
-    /// paired, or `None` when it enrolled nothing. The code is used up by
-    /// the enrolment, and by finding an admin paired some other way.
-    pub(crate) fn enrol(
-        &self,
-        devices: &DeviceRegistry,
+    /// Lets `key`, which `devices` does not know, hold the code while the
+    /// host answers it, when `offered` is the code, no other device holds it
+    /// and no admin exists yet; `None` when it may not. Finding an admin
+    /// paired some other way uses the code up.
+    pub(crate) fn claim(
+        self: &Arc<Self>,
+        devices: &Arc<DeviceRegistry>,
         key: PublicKey,
         offered: &EnrolmentCode,
-    ) -> Result<Option<Device>> {
-        let mut held = self.code.lock().unwrap_or_else(PoisonError::into_inner);
-        if !held.as_ref().is_some_and(|code| code.matches(offered)) {
+    ) -> Result<Option<Claim>> {
+        let mut held = self.held();
+        if held.claimed || !held.code.as_ref().is_some_and(|code| code.matches(offered)) {
             return Ok(None);
         }
-        match devices.pair_first_admin(key, FIRST_ADMIN_NAME)? {
+        if devices.has_admin()? {
+            self.use_up(&mut held);
+            return Ok(None);
+        }
+        held.claimed = true;
+        Ok(Some(Claim {
+            enrolment: Arc::clone(self),
+            devices: Arc::clone(devices),
+            key,
+        }))
+    }
+
+    /// Drops the code and removes the file: no device enrols after this.
+    fn use_up(&self, held: &mut Held) {
+        held.code = None;
+        remove(&self.path);
+    }
+}
+
+impl Claim {
+    /// The key of the device holding the code.
+    pub(crate) fn key(&self) -> PublicKey {
+        self.key
+    }
+
+    /// Pairs the device as the first admin, once it has shown it read the
+    /// host's answer: the device it paired, or `None` when an admin was
+    /// paired some other way meanwhile, which uses the code up, or the key
+    /// was, which keeps it. A registry that cannot be written keeps it too.
+    pub(crate) fn commit(self) -> Result<Option<Device>> {
+        // `held` is dropped before `self`, whose drop takes the lock again.
+        let mut held = self.enrolment.held();
+        match self.devices.pair_first_admin(self.key, FIRST_ADMIN_NAME)? {
             FirstAdmin::Enrolled(device) => {
-                *held = None;
-                remove(&self.path);
+                self.enrolment.use_up(&mut held);
                 Ok(Some(device))
             }
             FirstAdmin::AdminExists => {
-                *held = None;
-                remove(&self.path);
+                self.enrolment.use_up(&mut held);
                 Ok(None)
             }
             FirstAdmin::KeyKnown => Ok(None),
         }
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        self.enrolment.held().claimed = false;
+    }
+}
+
+impl fmt::Debug for Claim {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Claim")
+            .field("key", &self.key)
+            .finish_non_exhaustive()
     }
 }
 
@@ -213,7 +288,7 @@ mod tests {
     use floti_protocol::noise::KeyPair;
 
     use super::*;
-    use crate::devices::Role;
+    use crate::devices::{Role, Standing};
     use crate::testkit::TestDirs;
 
     fn key() -> PublicKey {
@@ -269,36 +344,76 @@ mod tests {
         assert!(!dirs.data.join(ENROLMENT_FILE).exists());
     }
 
+    /// A host waiting for its first admin, its registry and its code.
+    fn waiting(dirs: &TestDirs) -> (Arc<Enrolment>, Arc<DeviceRegistry>, EnrolmentCode) {
+        let devices = Arc::new(DeviceRegistry::in_data_folder(&dirs.data));
+        let enrolment = Arc::new(Enrolment::prepare(&dirs.data, key(), &devices));
+        let code = read_enrolment(&dirs.data).unwrap().unwrap().code;
+        (enrolment, devices, code)
+    }
+
     #[test]
     fn the_code_enrols_one_device_as_admin_once_and_the_file_goes() {
         let dirs = TestDirs::new();
-        let devices = DeviceRegistry::in_data_folder(&dirs.data);
-        let enrolment = Enrolment::prepare(&dirs.data, key(), &devices);
-        let code = read_enrolment(&dirs.data).unwrap().unwrap().code;
+        let (enrolment, devices, code) = waiting(&dirs);
 
         let wrong = EnrolmentCode::generate().unwrap();
-        assert_eq!(enrolment.enrol(&devices, key(), &wrong).unwrap(), None);
+        assert!(enrolment.claim(&devices, key(), &wrong).unwrap().is_none());
         assert!(enrolment.waiting());
 
         let desk = key();
-        let device = enrolment.enrol(&devices, desk, &code).unwrap().unwrap();
+        let claim = enrolment.claim(&devices, desk, &code).unwrap().unwrap();
+        assert!(
+            devices.devices().unwrap().is_empty(),
+            "paired before it said hello"
+        );
+        let device = claim.commit().unwrap().unwrap();
         assert_eq!((device.key, device.role), (desk, Role::Admin));
         assert_eq!(device.name, FIRST_ADMIN_NAME);
         assert!(!enrolment.waiting());
         assert!(!dirs.data.join(ENROLMENT_FILE).exists());
-        assert_eq!(enrolment.enrol(&devices, key(), &code).unwrap(), None);
+        assert!(enrolment.claim(&devices, key(), &code).unwrap().is_none());
         assert_eq!(devices.devices().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn while_one_device_holds_the_code_no_other_can_and_letting_go_pairs_nothing_and_keeps_it() {
+        let dirs = TestDirs::new();
+        let (enrolment, devices, code) = waiting(&dirs);
+
+        let gone = enrolment.claim(&devices, key(), &code).unwrap().unwrap();
+        assert!(enrolment.claim(&devices, key(), &code).unwrap().is_none());
+        drop(gone);
+
+        assert!(devices.devices().unwrap().is_empty());
+        assert!(enrolment.waiting());
+        assert!(dirs.data.join(ENROLMENT_FILE).exists());
+        let desk = key();
+        let claim = enrolment.claim(&devices, desk, &code).unwrap().unwrap();
+        assert_eq!(claim.commit().unwrap().unwrap().key, desk);
     }
 
     #[test]
     fn an_admin_paired_another_way_uses_the_code_up() {
         let dirs = TestDirs::new();
-        let devices = DeviceRegistry::in_data_folder(&dirs.data);
-        let enrolment = Enrolment::prepare(&dirs.data, key(), &devices);
-        let code = read_enrolment(&dirs.data).unwrap().unwrap().code;
+        let (enrolment, devices, code) = waiting(&dirs);
         devices.pair(key(), "desk", Role::Admin).unwrap();
 
-        assert_eq!(enrolment.enrol(&devices, key(), &code).unwrap(), None);
+        assert!(enrolment.claim(&devices, key(), &code).unwrap().is_none());
+        assert!(!enrolment.waiting());
+        assert!(!dirs.data.join(ENROLMENT_FILE).exists());
+    }
+
+    #[test]
+    fn an_admin_paired_another_way_while_a_device_is_answered_pairs_it_not_and_uses_the_code_up() {
+        let dirs = TestDirs::new();
+        let (enrolment, devices, code) = waiting(&dirs);
+        let late = key();
+        let claim = enrolment.claim(&devices, late, &code).unwrap().unwrap();
+        devices.pair(key(), "desk", Role::Admin).unwrap();
+
+        assert!(claim.commit().unwrap().is_none());
+        assert_eq!(devices.standing(&late).unwrap(), Standing::Unknown);
         assert!(!enrolment.waiting());
         assert!(!dirs.data.join(ENROLMENT_FILE).exists());
     }

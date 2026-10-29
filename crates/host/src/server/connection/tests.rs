@@ -7,15 +7,15 @@
 //! by the executable while another client is served, on a short deadline.
 //!
 //! Enrolment: while no admin exists, a new device carrying the host's code
-//! is paired as the first admin and answered, once; every other device
-//! carrying a code is refused as it would be without one, before a byte.
+//! is answered, once, and paired as the first admin at its `hello`; every
+//! other device carrying a code is refused as it would be without one,
+//! before a byte. A device that goes before its `hello`, or whose answer is
+//! never written, pairs nothing and leaves the code to enrol with.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use floti_protocol::noise::{
-    EnrolmentCode, Initiator, InitiatorStep, KeyPair, PublicKey, Transport,
-};
+use floti_protocol::noise::{EnrolmentCode, Initiator, InitiatorStep, KeyPair, PublicKey};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -31,7 +31,7 @@ use crate::testkit::TestDirs;
 /// Room for both handshake messages and more.
 const PIPE: usize = 64 * 1024;
 
-type Admitted = Result<(Transport, Vec<u8>), Option<Refusal>>;
+type Admitted = Result<super::Admitted, Option<Refusal>>;
 
 struct Fixture {
     admission: Admission,
@@ -129,6 +129,14 @@ fn enrolling(device: &KeyPair, host: &PublicKey, code: &EnrolmentCode) -> (Initi
     Initiator::start_enrolling(device, host, code).expect("start an enrolling handshake")
 }
 
+/// What the device's `hello` does for a new device the handshake let in:
+/// pairs it as the first admin, with the role it was given.
+fn say_hello(admitted: Admitted) -> Option<Role> {
+    let admitted = admitted.unwrap_or_else(|_| panic!("the device was refused"));
+    let claim = admitted.enrolling.expect("the device holds the code");
+    claim.commit().unwrap().map(|device| device.role)
+}
+
 /// The refusal's log text, or `None` when the device was let in.
 fn refusal(admitted: &Admitted) -> Option<String> {
     match admitted {
@@ -142,9 +150,7 @@ fn unknown(key: &KeyPair) -> Option<String> {
     Some(format!("unknown device {}", key.public().fingerprint()))
 }
 
-fn timed_out_at(
-    refused: &Result<(floti_protocol::noise::Transport, Vec<u8>), Option<Refusal>>,
-) -> Option<Duration> {
+fn timed_out_at(refused: &Admitted) -> Option<Duration> {
     match refused {
         Err(Some(Refusal::TimedOut(deadline))) => Some(*deadline),
         _ => None,
@@ -194,8 +200,8 @@ async fn a_paired_device_that_finishes_just_inside_the_deadline_is_admitted() {
         send_late
     );
 
-    let (_, rest) = admitted.unwrap_or_else(|_| panic!("the device was refused"));
-    assert!(rest.is_empty());
+    let admitted = admitted.unwrap_or_else(|_| panic!("the device was refused"));
+    assert!(admitted.rest.is_empty());
 }
 
 #[test]
@@ -215,7 +221,8 @@ fn a_host_gives_the_real_deadline_unless_a_test_build_finds_its_marker() {
 }
 
 #[tokio::test]
-async fn s3_a_new_device_with_the_right_code_is_paired_as_the_first_admin_then_answered() {
+async fn s3_a_new_device_with_the_right_code_is_answered_and_paired_as_the_first_admin_at_its_hello()
+ {
     let fx = waiting_fixture();
     let desk = KeyPair::generate().unwrap();
     let (initiator, first) = enrolling(&desk, &fx.host(), &fx.code());
@@ -227,6 +234,8 @@ async fn s3_a_new_device_with_the_right_code_is_paired_as_the_first_admin_then_a
         InitiatorStep::Done { transport, .. } => assert_eq!(transport.peer(), fx.host()),
         InitiatorStep::Pending(_) => panic!("the host's answer did not finish the handshake"),
     }
+    assert_eq!(fx.role_of(&desk.public()), None, "paired before its hello");
+    assert_eq!(say_hello(admitted), Some(Role::Admin));
     let devices = fx.admission.devices.devices().unwrap();
     let enrolled = devices.iter().find(|device| device.key == desk.public());
     let enrolled = enrolled.expect("the device is in the registry");
@@ -237,13 +246,80 @@ async fn s3_a_new_device_with_the_right_code_is_paired_as_the_first_admin_then_a
 }
 
 #[tokio::test]
+async fn a_new_device_gone_before_its_hello_pairs_nothing_and_the_code_stays_for_it_to_enrol_again()
+{
+    let fx = waiting_fixture();
+    let code = fx.code();
+    let desk = KeyPair::generate().unwrap();
+
+    let (admitted, answer) = fx.admit(&enrolling(&desk, &fx.host(), &code).1).await;
+    assert_eq!(refusal(&admitted), None);
+    assert!(!answer.is_empty());
+    // The device goes without a hello, and its connection with it.
+    drop(admitted);
+
+    assert_eq!(fx.role_of(&desk.public()), None);
+    assert!(fx.admission.enrolment.waiting());
+    assert!(fx.code().matches(&code));
+    let (admitted, _) = fx.admit(&enrolling(&desk, &fx.host(), &code).1).await;
+    assert_eq!(say_hello(admitted), Some(Role::Admin));
+}
+
+#[tokio::test]
+async fn a_new_device_whose_answer_cannot_be_written_pairs_nothing_and_the_code_is_kept() {
+    let fx = waiting_fixture();
+    let code = fx.code();
+    let desk = KeyPair::generate().unwrap();
+    let (mut client, mut host) = duplex(PIPE);
+    client
+        .write_all(&enrolling(&desk, &fx.host(), &code).1)
+        .await
+        .unwrap();
+    // The device vanishes once its first message is on the way.
+    drop(client);
+    let mut shutdown = fx.shutdown.subscribe();
+
+    let admitted = admit_within_deadline(&mut host, &fx.admission, &mut shutdown).await;
+
+    assert!(matches!(admitted, Err(Some(Refusal::ReadFailed(_)))));
+    assert_eq!(fx.role_of(&desk.public()), None);
+    assert!(fx.admission.enrolment.waiting());
+    assert!(fx.dirs.data.join(ENROLMENT_FILE).exists());
+    let (admitted, _) = fx.admit(&enrolling(&desk, &fx.host(), &code).1).await;
+    assert_eq!(say_hello(admitted), Some(Role::Admin));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_device_cut_off_at_the_deadline_while_answered_pairs_nothing_and_the_code_is_kept() {
+    let fx = waiting_fixture();
+    let code = fx.code();
+    let desk = KeyPair::generate().unwrap();
+    // Smaller than the host's answer: the host's write waits on a device
+    // that sent its first message and reads nothing.
+    let (mut client, mut host) = duplex(16);
+    let first = enrolling(&desk, &fx.host(), &code).1;
+    let mut shutdown = fx.shutdown.subscribe();
+
+    let (admitted, ()) = tokio::join!(
+        admit_within_deadline(&mut host, &fx.admission, &mut shutdown),
+        async { client.write_all(&first).await.unwrap() }
+    );
+
+    assert_eq!(timed_out_at(&admitted), Some(HANDSHAKE_DEADLINE));
+    assert_eq!(fx.role_of(&desk.public()), None);
+    assert!(fx.admission.enrolment.waiting());
+    let (admitted, _) = fx.admit(&enrolling(&desk, &fx.host(), &code).1).await;
+    assert_eq!(say_hello(admitted), Some(Role::Admin));
+}
+
+#[tokio::test]
 async fn s4_a_used_code_from_another_device_is_refused_unanswered_and_the_admin_comes_back_pinned()
 {
     let fx = waiting_fixture();
     let code = fx.code();
     let desk = KeyPair::generate().unwrap();
     let (admitted, _) = fx.admit(&enrolling(&desk, &fx.host(), &code).1).await;
-    assert_eq!(refusal(&admitted), None);
+    assert_eq!(say_hello(admitted), Some(Role::Admin));
 
     let other = KeyPair::generate().unwrap();
     let (admitted, written) = fx.admit(&enrolling(&other, &fx.host(), &code).1).await;
@@ -283,7 +359,7 @@ async fn s5_a_wrong_code_or_none_is_refused_as_unknown_and_the_code_is_kept_for_
     assert!(fx.dirs.data.join(ENROLMENT_FILE).exists());
     let desk = KeyPair::generate().unwrap();
     let (admitted, _) = fx.admit(&enrolling(&desk, &fx.host(), &code).1).await;
-    assert_eq!(refusal(&admitted), None);
+    assert_eq!(say_hello(admitted), Some(Role::Admin));
     assert_eq!(fx.role_of(&desk.public()), Some(Role::Admin));
 }
 
@@ -319,6 +395,7 @@ async fn a_paired_device_carrying_the_code_is_let_in_on_its_pairing_and_the_code
         .admit(&enrolling(&fx.device, &fx.host(), &fx.code()).1)
         .await;
     assert_eq!(refusal(&admitted), None);
+    assert!(admitted.is_ok_and(|admitted| admitted.enrolling.is_none()));
     assert_eq!(fx.role_of(&fx.device.public()), Some(Role::Operator));
     assert!(fx.admission.enrolment.waiting());
 }
@@ -343,7 +420,14 @@ async fn s6_of_two_new_devices_with_the_right_code_at_once_exactly_one_is_enroll
     let let_in: Vec<_> = outcomes.iter().filter(|(r, _, _)| r.is_none()).collect();
     assert_eq!(let_in.len(), 1, "exactly one is enrolled");
     let (_, _, enrolled) = let_in[0];
-    assert_eq!(fx.role_of(&enrolled.public()), Some(Role::Admin));
+    let enrolled = enrolled.public();
+    let winner = if admitted_one.is_ok() {
+        admitted_one
+    } else {
+        admitted_two
+    };
+    assert_eq!(say_hello(winner), Some(Role::Admin));
+    assert_eq!(fx.role_of(&enrolled), Some(Role::Admin));
     let (refused, written, other) = outcomes
         .iter()
         .find(|(r, _, _)| r.is_some())

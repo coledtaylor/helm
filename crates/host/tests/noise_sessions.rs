@@ -39,8 +39,10 @@ use floti_protocol::channels::host::{HostStop, HostStopReason, HostStopRequest};
 use floti_protocol::channels::sessions::{SessionList, SessionStart, StartSessionRequest};
 use floti_protocol::channels::workspace::{FilesPathRequest, ReadFile, ScanStatusChanged};
 use floti_protocol::message::{ClientInfo, ClientKind, Hello};
-use floti_protocol::noise::{ENROLMENT_CODE_LEN, EnrolmentCode, Initiator, KeyPair, PublicKey};
-use floti_protocol::{Message, PROTOCOL_VERSION, encode_frame};
+use floti_protocol::noise::{
+    ENROLMENT_CODE_LEN, EnrolmentCode, Initiator, InitiatorStep, KeyPair, PublicKey,
+};
+use floti_protocol::{FrameDecoder, Message, PROTOCOL_VERSION, encode_frame};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinHandle;
 
@@ -1059,6 +1061,70 @@ async fn answer_or_close(stream: &mut LocalStream) -> Vec<u8> {
     received
 }
 
+/// Finishes the handshake `initiator` began on `stream` with the host's
+/// `answer`, then says hello: the host's reply.
+async fn finish_and_say_hello(
+    stream: &mut LocalStream,
+    initiator: Initiator,
+    answer: &[u8],
+) -> Message {
+    let InitiatorStep::Done { mut transport, .. } =
+        initiator.push(answer).expect("the host proves its key")
+    else {
+        panic!("the host's answer did not finish the handshake");
+    };
+    let hello = encode_frame(&Message::Hello(Hello {
+        protocol: PROTOCOL_VERSION,
+        client: ClientInfo {
+            name: "a raw client".to_owned(),
+            kind: ClientKind::Tui,
+        },
+        capabilities: vec!["terminal".to_owned()],
+    }))
+    .unwrap();
+    stream
+        .write_all(&transport.seal(&hello).unwrap())
+        .await
+        .unwrap();
+    let mut decoder = FrameDecoder::new();
+    let mut buf = [0; 4096];
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    loop {
+        if let Some(message) = decoder.next_message().unwrap() {
+            return message;
+        }
+        match tokio::time::timeout_at(deadline, stream.read(&mut buf)).await {
+            Err(_) => panic!("the host did not answer hello within {PATIENCE:?}"),
+            Ok(Ok(0) | Err(_)) => {
+                panic!("the host closed the connection instead of answering hello")
+            }
+            Ok(Ok(n)) => decoder.push(&transport.open(&buf[..n]).unwrap()),
+        }
+    }
+}
+
+/// `keys` enrolled with the host on this computer at `endpoint`, whose data
+/// is `data`, retrying while that host is starting or a device it answered
+/// before still holds the code.
+async fn enrol_when_free(keys: &mut ClientKeys, endpoint: &Endpoint, data: &Path) -> Connection {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        match keys.connect_local(endpoint, data).await {
+            Ok(connection) => return connection,
+            Err(
+                err @ (ClientError::Unreachable { .. }
+                | ClientError::EnrolmentNotProven { .. }
+                | ClientError::HostClosed { .. }),
+            ) => assert!(
+                Instant::now() < deadline,
+                "the host at {endpoint} did not let the client enrol within {PATIENCE:?}: {err}"
+            ),
+            Err(err) => panic!("the host at {endpoint} did not let the client in: {err}"),
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 fn enrolling_message(device: &KeyPair, host: &PublicKey, code: &EnrolmentCode) -> Vec<u8> {
     Initiator::start_enrolling(device, host, code)
         .expect("start an enrolling handshake")
@@ -1147,7 +1213,8 @@ async fn enrolment_s4_a_used_code_is_refused_unanswered_and_logged_and_the_admin
     let written = enrolment_of(&dirs, None).await;
     let folder = dirs.folder("desk");
     let mut keys = ClientKeys::open(&folder).unwrap();
-    drop(connect_local_when_up(&mut keys, &endpoint, &dirs.data).await);
+    let enrolled = connect_local_when_up(&mut keys, &endpoint, &dirs.data).await;
+    drop(TestClient::over(enrolled, CAPABILITIES).await);
 
     let other = KeyPair::generate().unwrap();
     let mut stream = raw(&endpoint).await;
@@ -1250,8 +1317,12 @@ async fn enrolment_s6_of_two_devices_with_the_right_code_at_once_exactly_one_is_
     let written = enrolment_of(&dirs, None).await;
     let devices = [KeyPair::generate().unwrap(), KeyPair::generate().unwrap()];
     let mut streams = [raw(&endpoint).await, raw(&endpoint).await];
-    let [first_a, first_b] = [&devices[0], &devices[1]]
-        .map(|device| enrolling_message(device, &written.host_key, &written.code));
+    let [(initiator_a, first_a), (initiator_b, first_b)] =
+        [&devices[0], &devices[1]].map(|device| {
+            Initiator::start_enrolling(device, &written.host_key, &written.code)
+                .expect("start an enrolling handshake")
+        });
+    let mut initiators = [Some(initiator_a), Some(initiator_b)];
     let [stream_a, stream_b] = &mut streams;
     let (sent_a, sent_b) = tokio::join!(stream_a.write_all(&first_a), stream_b.write_all(&first_b));
     sent_a.unwrap();
@@ -1266,8 +1337,16 @@ async fn enrolment_s6_of_two_devices_with_the_right_code_at_once_exactly_one_is_
         .collect();
     assert_eq!(answered.len(), 1, "exactly one is answered");
     let (winner, loser) = (&devices[answered[0]], &devices[1 - answered[0]]);
-    assert_eq!([&got_a, &got_b][answered[0]].len(), MESSAGE_2);
+    let answer = [&got_a, &got_b][answered[0]];
+    assert_eq!(answer.len(), MESSAGE_2);
     let registry = DeviceRegistry::in_data_folder(&dirs.data);
+    assert!(
+        registry.devices().unwrap().is_empty(),
+        "paired before its hello"
+    );
+    let initiator = initiators[answered[0]].take().unwrap();
+    let welcome = finish_and_say_hello(&mut streams[answered[0]], initiator, answer).await;
+    assert!(matches!(welcome, Message::Welcome(_)), "{welcome:?}");
     let enrolled = registry.devices().unwrap();
     assert_eq!(enrolled.len(), 1, "{enrolled:?}");
     assert_eq!(
@@ -1288,6 +1367,81 @@ async fn enrolment_s6_of_two_devices_with_the_right_code_at_once_exactly_one_is_
     );
     let enrolments = stderr.matches("enrolled device").count();
     assert_eq!(enrolments, 1, "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn enrolment_a_client_gone_before_its_hello_is_not_enrolled_and_enrols_when_it_comes_back() {
+    let dirs = TestDirs::new();
+    let host = HostProcess::start_unpaired(&dirs);
+    let endpoint = binary_endpoint(&dirs);
+    let written = enrolment_of(&dirs, None).await;
+    let registry = DeviceRegistry::in_data_folder(&dirs.data);
+
+    // A device gone the moment its first message is sent, before the host
+    // could answer it: it learned and pinned nothing.
+    let vanished = KeyPair::generate().unwrap();
+    let mut stream = raw(&endpoint).await;
+    stream
+        .write_all(&enrolling_message(
+            &vanished,
+            &written.host_key,
+            &written.code,
+        ))
+        .await
+        .unwrap();
+    drop(stream);
+
+    // The desk is answered and pins the host's key, then goes before its
+    // hello.
+    let folder = dirs.folder("desk");
+    let mut keys = ClientKeys::open(&folder).unwrap();
+    drop(enrol_when_free(&mut keys, &endpoint, &dirs.data).await);
+    assert_eq!(keys.pinned_host(), Some(written.host_key));
+    assert!(
+        registry.devices().unwrap().is_empty(),
+        "paired before its hello"
+    );
+    let kept = read_enrolment(&dirs.data)
+        .unwrap()
+        .expect("the code is kept");
+    assert!(kept.code.matches(&written.code));
+
+    // Started again from its folder, the desk enrols with the code it finds
+    // and becomes the first admin.
+    let mut again = ClientKeys::open(&folder).unwrap();
+    let connection = enrol_when_free(&mut again, &endpoint, &dirs.data).await;
+    let mut client = TestClient::over(connection, CAPABILITIES).await;
+    assert!(client.request::<SessionList>(&()).await.is_ok());
+    let devices = registry.devices().unwrap();
+    assert_eq!(devices.len(), 1, "{devices:?}");
+    assert_eq!(
+        (devices[0].key, devices[0].role),
+        (keys.device_key(), Role::Admin)
+    );
+    assert_eq!(
+        registry.standing(&vanished.public()).unwrap(),
+        Standing::Unknown
+    );
+    assert!(read_enrolment(&dirs.data).unwrap().is_none());
+    assert_eq!(
+        names_in(&folder),
+        [
+            PathBuf::from(DEVICE_KEY_FILE),
+            PathBuf::from(PINNED_HOST_FILE)
+        ]
+    );
+
+    let (stdout, stderr) = host.stop(client).await;
+    assert_eq!(stderr.matches("enrolled device").count(), 1, "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "enrolled device {} as the first admin",
+            keys.device_key().fingerprint()
+        )),
+        "{stderr}"
+    );
+    assert_code_absent(&written.code, stdout.as_bytes(), "the host's output");
+    assert_code_absent(&written.code, stderr.as_bytes(), "the host's log");
 }
 
 #[tokio::test(flavor = "multi_thread")]

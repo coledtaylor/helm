@@ -6,9 +6,11 @@
 //! ([`HANDSHAKE_DEADLINE`](super::HANDSHAKE_DEADLINE) in a host). The
 //! device's key arrives in its first message and is checked against the
 //! device registry before the host writes anything. A key the registry does
-//! not know is let in only when its first message carried the host's unused
-//! one-time code while no admin exists: it is paired as the first admin and
-//! the code used up before the host answers (`super::enrolment`). A
+//! not know is answered only when its first message carried the host's
+//! unused one-time code while no admin exists and no other device holds it,
+//! and it is paired as the first admin, the code used up, only once its
+//! `hello` arrives under the session's keys; one that goes before that pairs
+//! nothing and the code is kept (`super::enrolment`). A
 //! connection that is not a handshake, whose first message does not decrypt,
 //! whose key is unknown or revoked (whatever code it carried), that ends or
 //! that runs out of time is closed without a byte written, and the host's
@@ -51,7 +53,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, Wr
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 
-use super::enrolment::{Enrolment, FIRST_ADMIN_NAME};
+use super::enrolment::{Claim, Enrolment, FIRST_ADMIN_NAME};
 use super::events::{Publication, Start};
 use super::features::Features;
 use super::{CATALOGUE, Stopper, unserved};
@@ -101,6 +103,16 @@ pub(crate) struct Admission {
     pub devices: Arc<DeviceRegistry>,
     pub enrolment: Arc<Enrolment>,
     pub deadline: Duration,
+}
+
+/// A device the handshake let in.
+pub(crate) struct Admitted {
+    pub transport: Transport,
+    /// Bytes read past the device's first message, which belong to the session.
+    pub rest: Vec<u8>,
+    /// The code a new device proved, held until its `hello` pairs it as the
+    /// first admin; `None` for a paired device.
+    pub enrolling: Option<Claim>,
 }
 
 /// Why a connection was closed before `hello`, as the host's log says it.
@@ -155,7 +167,11 @@ struct OpenStream {
 pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: ConnectionContext) {
     let mut shutdown = context.shutdown;
     let admitted = admit_within_deadline(&mut stream, &context.admission, &mut shutdown).await;
-    let (transport, rest) = match admitted {
+    let Admitted {
+        transport,
+        rest,
+        enrolling,
+    } = match admitted {
         Ok(admitted) => admitted,
         Err(refusal) => {
             // A host stopping closes a handshake in flight without a word.
@@ -185,7 +201,10 @@ pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: Co
     if connection.received(&rest).is_err() {
         return;
     }
-    let Some(channels) = connection.hello(&context.identity, &mut shutdown).await else {
+    let Some(channels) = connection
+        .hello(&context.identity, enrolling, &mut shutdown)
+        .await
+    else {
         return;
     };
     connection.run(channels, shutdown).await;
@@ -199,20 +218,21 @@ async fn admit_within_deadline(
     stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     admission: &Admission,
     shutdown: &mut watch::Receiver<bool>,
-) -> Result<(Transport, Vec<u8>), Option<Refusal>> {
+) -> Result<Admitted, Option<Refusal>> {
     tokio::time::timeout(admission.deadline, admit(stream, admission, shutdown))
         .await
         .unwrap_or(Err(Some(Refusal::TimedOut(admission.deadline))))
 }
 
-/// The responder's half of the handshake, on the raw stream: the session and
-/// any bytes read past the device's first message, which belong to it. The
-/// error is why the device was refused, or `None` when the host is stopping.
+/// The responder's half of the handshake, on the raw stream. The error is why
+/// the device was refused, or `None` when the host is stopping. A new device
+/// that proved the code holds it from before the host answers; a failure from
+/// there on, or the handshake being cut off, lets go of it with nothing paired.
 async fn admit(
     stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     admission: &Admission,
     shutdown: &mut watch::Receiver<bool>,
-) -> Result<(Transport, Vec<u8>), Option<Refusal>> {
+) -> Result<Admitted, Option<Refusal>> {
     let mut responder =
         Responder::new(&admission.host_key).map_err(|err| Some(Refusal::Failed(err)))?;
     let mut buf = vec![0; READ_CHUNK];
@@ -232,31 +252,32 @@ async fn admit(
                 let key = device.device_key();
                 // Read fresh: a device paired or revoked since the last
                 // connection counts from this one.
-                match admission.devices.standing(&key) {
-                    Ok(Standing::Paired) => {}
+                let enrolling = match admission.devices.standing(&key) {
+                    Ok(Standing::Paired) => None,
                     Ok(Standing::Revoked) => return Err(Some(Refusal::Revoked(key))),
                     Ok(Standing::Unknown) => {
                         let Some(code) = device.enrolment_code() else {
                             return Err(Some(Refusal::Unknown(key)));
                         };
-                        match admission.enrolment.enrol(&admission.devices, key, code) {
-                            Ok(Some(_)) => eprintln!(
-                                "floti host: enrolled device {} as the first admin, named \"{FIRST_ADMIN_NAME}\"",
-                                key.fingerprint()
-                            ),
+                        match admission.enrolment.claim(&admission.devices, key, code) {
+                            Ok(Some(claim)) => Some(claim),
                             Ok(None) => return Err(Some(Refusal::Unknown(key))),
                             Err(err) => return Err(Some(Refusal::Unchecked(key, err))),
                         }
                     }
                     Err(err) => return Err(Some(Refusal::Unchecked(key, err))),
-                }
+                };
                 let (transport, answer) =
                     device.accept().map_err(|err| Some(Refusal::Failed(err)))?;
                 stream
                     .write_all(&answer)
                     .await
                     .map_err(|err| Some(Refusal::ReadFailed(err)))?;
-                return Ok((transport, buf[used..n].to_vec()));
+                return Ok(Admitted {
+                    transport,
+                    rest: buf[used..n].to_vec(),
+                    enrolling,
+                });
             }
             Err(err) => return Err(Some(Refusal::Failed(err))),
         }
@@ -312,9 +333,15 @@ impl Connection {
 
     /// Waits for `hello` and answers it. The capabilities the client was
     /// welcomed with, or `None` when it was refused or went away.
+    ///
+    /// A device `enrolling` is paired as the first admin when its `hello` is
+    /// welcomed, before the welcome is written: by then it has read the
+    /// host's answer and pinned the key. Going away or being refused before
+    /// that drops the claim, which keeps the code.
     async fn hello(
         &mut self,
         identity: &HostIdentity,
+        enrolling: Option<Claim>,
         shutdown: &mut watch::Receiver<bool>,
     ) -> Option<ClientChannels<'static>> {
         let mut buf = vec![0; READ_CHUNK];
@@ -322,6 +349,12 @@ impl Connection {
             match self.decoder.next_message() {
                 Ok(Some(Message::Hello(hello))) => {
                     let (answer, capabilities) = identity.answer(&hello);
+                    if capabilities.is_some()
+                        && let Some(claim) = enrolling
+                        && !self.enrol(claim)
+                    {
+                        return None;
+                    }
                     self.write(&answer).await.ok()?;
                     return capabilities.map(|caps| ClientChannels::new(&CATALOGUE, caps));
                 }
@@ -338,6 +371,25 @@ impl Connection {
                 _ = shutdown.changed() => return None,
             }
         }
+    }
+
+    /// Pairs the device holding `claim` as the first admin and says so in the
+    /// log: whether it was. One that was not is refused as an unknown device.
+    fn enrol(&self, claim: Claim) -> bool {
+        let key = claim.key();
+        let refusal = match claim.commit() {
+            Ok(Some(_)) => {
+                eprintln!(
+                    "floti host: enrolled device {} as the first admin, named \"{FIRST_ADMIN_NAME}\"",
+                    key.fingerprint()
+                );
+                return true;
+            }
+            Ok(None) => Refusal::Unknown(key),
+            Err(err) => Refusal::Unchecked(key, err),
+        };
+        eprintln!("floti host: refused client {}: {refusal}", self.client.0);
+        false
     }
 
     async fn run(

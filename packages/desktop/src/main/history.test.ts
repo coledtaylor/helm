@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import type * as NodeFs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
@@ -282,12 +282,24 @@ describe('the transcript archive', () => {
     // A session talking without submitting a prompt: its transcript grows and
     // `history.jsonl` does not, so only the watch over `projects/` can see it.
     const id = sessionUuid(1)
-    appendTranscript(c.tree, { sessionId: id, cwd: c.alpha }, [
+    const transcript = appendTranscript(c.tree, { sessionId: id, cwd: c.alpha }, [
       { role: 'user', text: 'keep going', at: T0 },
       { role: 'assistant', text: 'Still working on it.', at: T0 + 1000 }
     ])
-    // How soon a watch reports is the OS's business: macOS's can take over a second.
-    await vi.waitFor(() => expect(vi.getTimerCount()).toBe(armed + 1), { timeout: PATIENCE, interval: 10 })
+    // How soon a watch reports is the OS's business: macOS's can take over a
+    // second, and can miss a write made just as the watch starts. So until the
+    // watch has seen the transcript, it is touched again, as a live session's
+    // next write would.
+    await vi.waitFor(
+      () => {
+        if (vi.getTimerCount() !== armed + 1) {
+          const { atime, mtime } = statSync(transcript)
+          utimesSync(transcript, atime, new Date(mtime.getTime() + 1))
+        }
+        expect(vi.getTimerCount()).toBe(armed + 1)
+      },
+      { timeout: PATIENCE, interval: 10 }
+    )
     expect(archiveStateOf(c.store, id)).toBeNull()
 
     // At most one pass per fifteen seconds, deferred rather than dropped.
