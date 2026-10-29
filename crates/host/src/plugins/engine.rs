@@ -64,8 +64,16 @@ pub struct IsolateOptions {
 }
 
 /// A new isolate with the web's data types, confined to them, ECMAScript's
-/// own globals and `options.keep`.
+/// own globals and `options.keep`, made on the tokio runtime the caller is
+/// in.
+///
+/// V8 posts delayed tasks (its memory reducer's, whenever a heap grows) to
+/// the runtime an isolate was made in, and deno_core aborts the process when
+/// there was none. So outside a runtime there is no isolate, only an error.
 pub fn base_runtime(options: IsolateOptions) -> Result<JsRuntime, String> {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return Err("could not start a plugin isolate outside a tokio runtime".to_owned());
+    }
     start_platform();
     let IsolateOptions {
         extensions: more,
@@ -246,7 +254,33 @@ mod tests {
     }
 
     #[test]
-    fn an_isolate_has_the_web_data_types_and_nothing_of_deno() {
+    fn an_isolate_is_refused_outside_a_runtime() {
+        let Err(error) = base_runtime(IsolateOptions::default()) else {
+            panic!("an isolate started outside a runtime");
+        };
+        assert_eq!(
+            error,
+            "could not start a plugin isolate outside a tokio runtime"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_heap_that_grows_leaves_its_collector_work_to_the_runtime() {
+        // Growing the heap this far makes V8 post a delayed task, which
+        // aborted the process when the isolate had no runtime.
+        let mut runtime = isolate();
+        assert_eq!(
+            eval(
+                &mut runtime,
+                "const a = []; for (let i = 0; i < 400000; i++) a.push({ i, s: 'x' + i }); \
+                 String(a.length)",
+            ),
+            "400000"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_isolate_has_the_web_data_types_and_nothing_of_deno() {
         let mut runtime = isolate();
         let present = eval(
             &mut runtime,
@@ -263,8 +297,8 @@ mod tests {
         assert_eq!(gone, "");
     }
 
-    #[test]
-    fn urls_and_their_search_params_read_as_the_standard_has_them() {
+    #[tokio::test]
+    async fn urls_and_their_search_params_read_as_the_standard_has_them() {
         let mut runtime = isolate();
         assert_eq!(
             eval(
@@ -298,8 +332,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn headers_text_abort_and_clone_behave_as_in_a_browser() {
+    #[tokio::test]
+    async fn headers_text_abort_and_clone_behave_as_in_a_browser() {
         let mut runtime = isolate();
         assert_eq!(
             eval(
@@ -341,8 +375,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn console_writes_to_the_sink_the_host_gives_it() {
+    #[tokio::test]
+    async fn console_writes_to_the_sink_the_host_gives_it() {
         let lines: Arc<Mutex<Vec<(ConsoleLevel, String)>>> = Arc::default();
         let into = Arc::clone(&lines);
         let mut runtime = base_runtime(IsolateOptions {
