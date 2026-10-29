@@ -8,7 +8,7 @@ that are not tests.
 |---|---|---|---|
 | unit and integration | vitest | all app behaviour, as close to the code as it can be tested | `pnpm test` (part of `pnpm check`), with coverage |
 | end to end | Playwright for Electron | the high-level user workflows, through the built app | `pnpm test:e2e` |
-| Rust crates | `cargo test` | the Floti protocol crate (`crates/floti-protocol`) and host (`crates/host`) | `cargo test -p floti-protocol`, `cargo test -p floti-host` |
+| Rust crates | cargo-nextest | the Floti protocol crate (`crates/floti-protocol`) and host (`crates/host`) | `cargo nextest run --workspace`, and `cargo test --doc --workspace` for doctests |
 
 Both tiers run locally, before a change is merged. CI also runs the unit and
 integration tier, as `pnpm check`, on Windows, macOS and Linux runners on every
@@ -23,6 +23,15 @@ date and names the command that rewrites them:
 checked under the repository's strict settings with
 `tsc -p crates/floti-protocol/generated/tsconfig.json`. Crate tests write only
 to temporary directories.
+
+The crates' tests run under cargo-nextest (`cargo install cargo-nextest
+--locked`), which runs each test in a process of its own, so no test depends on
+another having run first in the same process. `.config/nextest.toml` holds its
+profiles: a test still running after a minute is named each minute and ended
+after five, and CI's `ci` profile runs every test even after one fails and
+never retries one. nextest does not run doctests; `cargo test --doc
+--workspace` does. `cargo test` still runs everything, one process per test
+binary.
 
 The host's tests get their support from `crates/host/src/testkit.rs`, which
 the crate's own tests turn on through its `testkit` feature: `TestDirs`, a
@@ -128,8 +137,11 @@ pnpm test:posix                    # the POSIX code's tests: under Linux in WSL 
 pnpm test:posix <file> ...         # the same, for these files
 pnpm test:e2e                      # builds, then runs every workflow
 pnpm --filter @helm/desktop exec playwright test -c e2e panes   # one spec, after a build
-cargo test -p floti-protocol       # the protocol crate, its ipc.ts coverage and generated-file check included
-cargo test -p floti-host           # the host, with the fake agents (Node on PATH)
+cargo nextest run --workspace      # every crate's tests; CI adds --profile ci
+cargo nextest run -p floti-protocol   # the protocol crate, its ipc.ts coverage and generated-file check included
+cargo nextest run -p floti-host    # the host, with the fake agents (Node on PATH)
+cargo nextest run -p floti-host <filter>   # the tests whose names contain <filter>
+cargo test --doc --workspace       # the doctests, which nextest does not run
 cargo run -p floti-protocol --bin generate                      # rewrite the generated schema and TypeScript
 pnpm exec tsc -p crates/floti-protocol/generated/tsconfig.json  # the generated TypeScript under strict settings
 ```

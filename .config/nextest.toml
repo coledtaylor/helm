@@ -1,0 +1,24 @@
+# cargo-nextest runs every Rust test in a process of its own, so no test
+# depends on another having run first in the same process, and a test that
+# hangs is ended and named rather than holding up the run.
+#
+# `cargo nextest run --workspace` runs the default profile; CI runs `--profile
+# ci`. Doctests are not run by nextest: `cargo test --doc --workspace` runs
+# them. `cargo test --workspace` still runs everything, one process per test
+# binary.
+
+[profile.default]
+# A test still running after a minute is reported by name each minute, and
+# ended after five. No test waits on anything for longer than the testkit's
+# PATIENCE (20 s) at a time, so five minutes is a hang, not a slow machine.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci]
+# Every test binary runs to the end, so one failure does not hide another.
+fail-fast = false
+# A test that fails once is a failure. Retrying would hide a flaky test, and a
+# flaky test is a broken one.
+retries = 0
+slow-timeout = { period = "60s", terminate-after = 5 }
+# Failures are printed as they happen and again at the end of the run.
+failure-output = "immediate-final"

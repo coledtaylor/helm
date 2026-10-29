@@ -20,6 +20,7 @@ on:
       # The agent backends' tests run these fake CLIs.
       - "test/fake-agents/**"
       - ".github/workflows/host.yml"
+      - ".config/nextest.toml"
   pull_request:
     paths:
       - "crates/**"
@@ -30,6 +31,7 @@ on:
       - "packages/desktop/src/shared/ipc.ts"
       - "test/fake-agents/**"
       - ".github/workflows/host.yml"
+      - ".config/nextest.toml"
 
 concurrency:
   group: host-${{ github.workflow }}-${{ github.ref }}
@@ -77,5 +79,16 @@ jobs:
       - name: Build
         run: cargo build --workspace --all-targets --locked
 
+      # nextest runs each test in a process of its own and ends a hung one by
+      # name (.config/nextest.toml). Pinned, so a new release cannot change
+      # how the suite runs between two pushes.
+      - uses: taiki-e/install-action@v2.87.33
+        with:
+          tool: cargo-nextest@0.9.150
+
       - name: Test
-        run: cargo test --workspace --locked
+        run: cargo nextest run --workspace --locked --profile ci
+
+      # nextest does not run doctests.
+      - name: Doctests
+        run: cargo test --doc --workspace --locked
