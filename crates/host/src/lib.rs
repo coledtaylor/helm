@@ -26,6 +26,10 @@
 //! - [`workspace`]: the user's folders as the host serves them: settings,
 //!   setup, discovery, profiles, templates and the Files view.
 //! - [`session`]: sessions in ptys and the screens kept for them.
+//! - [`plugins`]: registered plugin folders; each one's background script in
+//!   a deno_core isolate of its own; and the call layer every `floti.*`
+//!   method goes through, with `floti.exec`, `floti.fetch`, settings and the
+//!   sealed secret store behind it.
 //! - [`server`]: the local socket's clients, the Noise session each one
 //!   opens with, and the protocol they speak inside it.
 //! - [`keys`]: the key pairs Floti keeps on disk, the host's and a
@@ -44,6 +48,7 @@ pub mod error;
 pub mod history;
 pub mod keys;
 pub mod platform;
+pub mod plugins;
 pub mod resources;
 pub mod server;
 pub mod session;

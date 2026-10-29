@@ -29,6 +29,17 @@ impl ProgramLauncher for Native {
             .map(|dir| dir.join(named))
             .find(|candidate| runnable(candidate))
     }
+
+    #[cfg(any(test, feature = "testkit"))]
+    fn write_wrapper_script(&self, folder: &Path, name: &str, program: &Path) -> String {
+        let quoted = program.display().to_string().replace('\'', r"'\''");
+        let path = folder.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\nexec '{quoted}' \"$@\"\n"))
+            .expect("write a shell script");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make the script runnable");
+        name.to_owned()
+    }
 }
 
 /// A file, following links, with an execute bit set.

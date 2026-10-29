@@ -57,6 +57,13 @@ pub trait ProgramLauncher {
     fn user_bin_folders(&self, home: &Path) -> Vec<PathBuf> {
         vec![home.join(".local").join("bin")]
     }
+
+    /// For a test: writes in `folder` the script this OS's users write to
+    /// run another program, which runs `program` with every argument it is
+    /// given: a batch file on Windows, a shell script with its execute bit
+    /// set on macOS and Linux. Answers the script's file name.
+    #[cfg(any(test, feature = "testkit"))]
+    fn write_wrapper_script(&self, folder: &Path, name: &str, program: &Path) -> String;
 }
 
 /// `program` with `args`, unchanged.

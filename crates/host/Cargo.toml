@@ -34,6 +34,14 @@ path = "testkit/fake_gui.rs"
 test = false
 doc = false
 
+# The program plugin tests' manifests name in `exec`. Built beside the fake
+# agent for the same tests; nothing ships it.
+[[bin]]
+name = "floti-fake-program"
+path = "testkit/fake_program.rs"
+test = false
+doc = false
+
 [features]
 # Test support (temporary folders, unique socket names, the fake agent's
 # backend and records) for the crate's integration tests. The crate turns it
@@ -43,9 +51,13 @@ testkit = ["dep:tempfile"]
 [dependencies]
 alacritty_terminal.workspace = true
 ammonia.workspace = true
+base64.workspace = true
 bytes.workspace = true
+chacha20poly1305.workspace = true
 ciborium.workspace = true
 comrak.workspace = true
+deno_core.workspace = true
+deno_error.workspace = true
 flate2.workspace = true
 floti-protocol.workspace = true
 getrandom.workspace = true
@@ -57,9 +69,12 @@ hyper-util.workspace = true
 jiff.workspace = true
 notify.workspace = true
 portable-pty.workspace = true
+reqwest.workspace = true
 rmcp.workspace = true
 rusqlite.workspace = true
+rustls.workspace = true
 serde.workspace = true
+serde_bytes.workspace = true
 serde_json.workspace = true
 serde_yaml_ng.workspace = true
 subtle.workspace = true
@@ -68,6 +83,7 @@ tempfile = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 two-face.workspace = true
+url.workspace = true
 zeroize.workspace = true
 
 # Only the per-OS implementations under src/platform use these.
@@ -77,6 +93,12 @@ windows-sys.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service.workspace = true
 
 [dev-dependencies]
 floti-host = { path = ".", features = ["testkit"] }

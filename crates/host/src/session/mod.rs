@@ -21,7 +21,7 @@
 
 mod activity;
 pub mod describe;
-mod env;
+pub(crate) mod env;
 mod ledger;
 mod live;
 mod redraw;

@@ -25,6 +25,14 @@ impl ProgramLauncher for Native {
     fn find(&self, program: &OsStr) -> Option<PathBuf> {
         find_program(program)
     }
+
+    #[cfg(any(test, feature = "testkit"))]
+    fn write_wrapper_script(&self, folder: &Path, name: &str, program: &Path) -> String {
+        let file = format!("{name}.cmd");
+        let script = format!("@\"{}\" %*\r\n", program.display());
+        std::fs::write(folder.join(&file), script).expect("write a batch file");
+        file
+    }
 }
 
 /// `%ComSpec%`, or `cmd.exe` on `PATH` when it is not set.

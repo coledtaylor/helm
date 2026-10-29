@@ -125,6 +125,10 @@ impl ProcessTree for Native {
     fn tie_tree(&self, _root_pid: u32) {}
 
     fn untie_tree(&self, _root_pid: u32) {}
+
+    fn prepare_root(&self, command: &mut Command) {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
 }
 
 /// Puts this process in a new job that ends every process in it when its

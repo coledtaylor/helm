@@ -148,6 +148,36 @@ describe('validateManifest - apiVersion', () => {
     })
   })
 
+  it('reads version 2 only for a caller that runs it, where background is a module', () => {
+    const host = { apiVersions: [2] }
+    for (const background of ['dist/background.js', 'background.mjs']) {
+      const manifest = accepted(validateManifest({ ...MINIMAL, apiVersion: 2, background }, host))
+      expect(manifest.apiVersion).toBe(2)
+      expect(manifest.background).toBe(background)
+    }
+    expect(validateManifest({ ...MINIMAL, apiVersion: 2, background: 'background.html' }, host).ok).toBe(false)
+    // Every other field reads as in version 1.
+    const { apiVersion: one, ...rest } = accepted(validateManifest(MINIMAL))
+    const { apiVersion: two, ...restTwo } = accepted(validateManifest({ ...MINIMAL, apiVersion: 2 }, host))
+    expect([one, two]).toEqual([1, 2])
+    expect(restTwo).toEqual(rest)
+  })
+
+  it('tells a host that runs version 2 that a version 1 plugin is not one it runs', () => {
+    expect(validateManifest(MINIMAL, { apiVersions: [2] })).toMatchObject({
+      ok: false,
+      errors: ['apiVersion 1 is not supported: this host runs apiVersion 2 plugins']
+    })
+  })
+
+  it('keeps Helm on version 1 when no caller says otherwise', () => {
+    expect(validateManifest({ ...MINIMAL, apiVersion: 2, background: 'background.js' })).toMatchObject({
+      ok: false,
+      errors: ['apiVersion 2 is not supported by this Helm, which supports 1']
+    })
+    expect(accepted(validateManifest({ ...MINIMAL, background: 'background.html' })).background).toBe('background.html')
+  })
+
   it('refuses anything that is not an object', () => {
     for (const value of [null, [], 'helm', 1]) {
       expect(validateManifest(value)).toMatchObject({ ok: false, errors: ['helm-plugin.json must be a JSON object'] })

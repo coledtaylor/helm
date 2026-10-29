@@ -6,8 +6,8 @@
 //! (`startup`), the local socket (`socket`), data folders (`folders`),
 //! ending a process tree (`process_tree`), the process table and listening
 //! sockets (`process_table`), folder links (`links`), starting a program
-//! (`launcher`) and files only the user can open (`private_files`). A
-//! compile-time OS conditional
+//! (`launcher`), files only the user can open (`private_files`) and sealing
+//! plugin secrets (`secret_seal`). A compile-time OS conditional
 //! (`cfg`, `cfg!` or `cfg_attr` naming `windows`, `unix`, `target_os`,
 //! `target_family`, `target_vendor` or `target_env`) may appear only in
 //! those folders, and in `src/platform/mod.rs`, which refuses any other OS.
@@ -26,6 +26,7 @@ const CONCERNS: &[&str] = &[
     "links",
     "launcher",
     "private_files",
+    "secret_seal",
 ];
 
 /// The words that make a `cfg` depend on the OS.

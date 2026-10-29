@@ -136,13 +136,43 @@ session's conversation in any answer.
 compile-time OS conditional (`cfg(windows)`, `cfg!(unix)`, `target_os` and
 the like) appears outside `src/platform/mod.rs` and the per-OS
 implementations of the platform concerns (`startup`, `socket`, `folders`,
-`process_tree`, `process_table`, `links`, `launcher`, `private_files`).
-Behaviour that differs by OS goes behind one of those interfaces, with an
-implementation for each OS. `private_files` is tested by what the OS reports
-for a written file: mode `0600` on macOS and Linux, and on Windows a
-protected access list with one entry, the current user's, read the way the
-pipe's is; each with a control file made the ordinary way that the check
-rejects.
+`process_tree`, `process_table`, `links`, `launcher`, `private_files`,
+`secret_seal`). Behaviour that differs by OS goes behind one of those
+interfaces, with an implementation for each OS. `private_files` is tested by
+what the OS reports for a written file: mode `0600` on macOS and Linux, and on
+Windows a protected access list with one entry, the current user's, read the
+way the pipe's is; each with a control file made the ordinary way that the
+check rejects.
+
+The plugin runtime is tested the same way, one file per part in
+`crates/host/tests/`: `plugins.rs` (folders, the registry and settings),
+`plugin_secrets.rs`, `plugin_runtime.rs` (the isolates: globals, imports,
+timers, BroadcastChannel, crashes, endless loops, tool calls),
+`plugin_exec.rs` and `plugin_fetch.rs`, and `plugin_background.rs`, which
+adds a plugin like the sample plugin to a `RunningHost` and drives its
+background script end to end over client connections. They carry today's
+`desktop/main/plugins` cases with the same inputs and expectations. Each
+plugin is a folder a test writes into its `TestDirs` with
+`TestDirs::plugin_folder`, its background a script in the test. A script is
+read where a user would see it, by the status item and badge in every
+client's `plugins:changed` push, or, where there is no channel for it yet (a
+session's tool call, a plugin's own log), through a registry and an
+`IsolateRuntime` the test builds the way the host does. The program a
+manifest's `exec` names is `floti-fake-program`
+(`crates/host/testkit/fake_program.rs`), which reports its arguments, folder,
+chosen variables and standard input as JSON, and can start a child, write a
+pid file, write a flood of output, sleep and exit with a code. `floti.fetch`
+goes to a plain HTTP server the test starts on `127.0.0.1:0`, or a TLS one
+with a self-signed certificate made for that file alone, which records every
+request it is sent; nothing a plugin test does leaves the computer.
+
+No host test touches the user's credential store. Every `TestDirs` marks its
+data folder, and a host built with the testkit seals plugin secrets with a key
+file inside a marked folder (`TestDirs::without_secret_store` makes it a
+computer with no store instead); a production build never reads the marker.
+The Windows seal (DPAPI) has round-trip tests of its own, which store nothing;
+the Linux one is tested only where there is no session bus, where it reports
+that sealing is unavailable.
 
 ## Running them
 

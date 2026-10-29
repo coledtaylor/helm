@@ -77,6 +77,15 @@ pub trait ProcessTree {
     /// The program `root_pid` has exited and been reaped, so its id may be
     /// handed to another process: its tree no longer ends with this one.
     fn untie_tree(&self, root_pid: u32);
+
+    /// Makes `command`, about to be started outside a terminal, the root of
+    /// a tree [`ProcessTree::end_tree`] can end: on macOS and Linux the
+    /// leader of a process group of its own, since a group is the tree; on
+    /// Windows, started with no console window, since `taskkill /T` finds
+    /// the tree by parent. Nothing else about how it starts changes.
+    fn prepare_root(&self, command: &mut std::process::Command) {
+        let _ = command;
+    }
 }
 
 /// Every process under `root` in `table`, a list of (pid, parent pid): its
