@@ -10,7 +10,10 @@ import type { TerminalStreams } from './streams'
  * that reloads draws the shell's current screen and then streams.
  *
  * One shell per project path, as Helm's own: reopening a project's terminal
- * is the shell it already had. A terminal tab asks for one of its own.
+ * is the shell it already had. A terminal tab asks for one of its own - and a
+ * page that has just loaded asks again for each terminal tab it had, so the
+ * shells the last page had are given back to the first asks for their folder,
+ * one each, before any new shell is opened.
  */
 
 export interface HostPtermDeps {
@@ -27,15 +30,22 @@ interface ShellRecord {
   grid: { cols: number; rows: number }
   opened: { cols: number; rows: number }
   separate: boolean
+  /** Shown by the page loaded now. A terminal tab's shell that is not is waiting to be asked for again. */
+  claimed: boolean
 }
 
-export function createHostPtermHost(deps: HostPtermDeps): PtermHost & { shutdown: () => void } {
+export function createHostPtermHost(deps: HostPtermDeps): PtermHost & { windowLoading: () => void; shutdown: () => void } {
   const { link, streams } = deps
   const byId = new Map<number, ShellRecord>()
   let subscription: HostSubscription | null = null
 
   const byPath = (path: string): ShellRecord | undefined =>
     [...byId.values()].find((record) => !record.separate && record.path.toLowerCase() === path.toLowerCase())
+
+  const unclaimed = (path: string): ShellRecord | undefined =>
+    [...byId.values()].find(
+      (record) => record.separate && !record.claimed && record.path.toLowerCase() === path.toLowerCase()
+    )
 
   const drop = (id: number): void => {
     byId.delete(id)
@@ -60,8 +70,11 @@ export function createHostPtermHost(deps: HostPtermDeps): PtermHost & { shutdown
   return {
     async open(request) {
       const separate = request.separate === true
-      const existing = separate ? undefined : byPath(request.path)
-      if (existing !== undefined) return { id: existing.id, shell: existing.shell, requested: null, problem: null }
+      const existing = separate ? unclaimed(request.path) : byPath(request.path)
+      if (existing !== undefined) {
+        existing.claimed = true
+        return { id: existing.id, shell: existing.shell, requested: null, problem: null }
+      }
 
       const connection = await link.connection()
       const opened = await connection.request('pterm:open', {
@@ -72,7 +85,7 @@ export function createHostPtermHost(deps: HostPtermDeps): PtermHost & { shutdown
         separate
       })
       const grid = { cols: request.cols, rows: request.rows }
-      byId.set(opened.id, { id: opened.id, path: request.path, shell: opened.shell, grid, opened: grid, separate })
+      byId.set(opened.id, { id: opened.id, path: request.path, shell: opened.shell, grid, opened: grid, separate, claimed: true })
       streams.open('pterm:data', opened.id)
       return opened
     },
@@ -111,6 +124,10 @@ export function createHostPtermHost(deps: HostPtermDeps): PtermHost & { shutdown
     async detected() {
       const connection = await link.connection()
       return connection.request('pterm:shells', null)
+    },
+
+    windowLoading() {
+      for (const record of byId.values()) record.claimed = false
     },
 
     shutdown() {

@@ -72,6 +72,24 @@ describe('plain terminals through the local host', () => {
     expect(w.connection.streamsFor('pterm:data', 1)[0]?.closed).toBe(true)
   })
 
+  it('gives a page that has just loaded the terminal tabs’ shells it had, one each, then opens new ones', async () => {
+    const w = world()
+    await w.pterm.open({ path: '/work/app', cols: 80, rows: 24, separate: true })
+    await w.pterm.open({ path: '/work/app', cols: 80, rows: 24, separate: true })
+    w.pterm.windowLoading()
+
+    await expect(w.pterm.open({ path: '/work/app', cols: 80, rows: 24, separate: true })).resolves.toMatchObject({
+      id: 1
+    })
+    await expect(w.pterm.open({ path: '/work/app', cols: 80, rows: 24, separate: true })).resolves.toMatchObject({
+      id: 2
+    })
+    await expect(w.pterm.open({ path: '/work/app', cols: 80, rows: 24, separate: true })).resolves.toMatchObject({
+      id: 3
+    })
+    expect(w.connection.payloads('pterm:open')).toHaveLength(3)
+  })
+
   it('lists the host’s shells for the pickers', async () => {
     const w = world()
     w.connection.answer('pterm:shells', () => [{ path: '/bin/bash', name: 'bash', label: 'Bash', args: [] }])

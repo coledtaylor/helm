@@ -467,7 +467,9 @@ function startApp(options: AppOptions = {}): void {
     // sent; once it is listening, each terminal is drawn from the host's
     // screen and then streams (`rendererReady` below).
     win.webContents.on('did-start-navigation', (details) => {
-      if (details.isMainFrame && !details.isSameDocument) desktopHost.streams.suspend()
+      if (!details.isMainFrame || details.isSameDocument) return
+      desktopHost.streams.suspend()
+      desktopHost.pterm.windowLoading()
     })
     // The host judges whether an exit is worth a notification from what this
     // window can show, and a window that is not in front shows nobody anything.
