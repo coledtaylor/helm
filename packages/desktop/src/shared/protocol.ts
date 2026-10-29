@@ -71,6 +71,29 @@ export type ProbeOp =
   | { op: 'unicodeVersion' }
   | { op: 'lastWheel' }
   | { op: 'helperTextarea' }
+  | { op: 'screen' }
+  /** Resolves once everything written so far has been parsed. */
+  | { op: 'flush' }
+  /**
+   * A second terminal beside the first, for C10: opened empty, written only
+   * what the main process hands it, and read back with `mirrorScreen`.
+   */
+  | { op: 'mirrorOpen'; cols: number; rows: number; windowsBuild?: number }
+  | { op: 'mirrorWrite'; data: string }
+  | { op: 'mirrorScreen' }
+  | { op: 'mirrorClose' }
+
+/** The screen of a terminal's active buffer, every cell of it, and where its cursor is. */
+export interface ScreenProbe {
+  cols: number
+  rows: number
+  /** 'normal' or 'alternate'. */
+  bufferType: string
+  cursorX: number
+  cursorY: number
+  /** `cells[row][col]`, rows from the top of the screen. */
+  cells: CellProbe[][]
+}
 
 /**
  * The state of xterm's own helper textarea, which is where the native editing

@@ -9,8 +9,9 @@ import { emit } from '../ipc'
 import { appMode, dataDir } from '../paths'
 import { showExitNotification, type Confirm } from '../sessions'
 import type { Services } from '../services'
-import { startLocalHost, type HostChild } from './launcher'
+import { startLocalHost, type HostChild, type LocalHost } from './launcher'
 import { createHostLink, type HostLink } from './link'
+import type { HostSettingsPatch } from './protocol'
 import { createHostPtermHost } from './pterm'
 import { createHostSessions, hostSettingsFor, type Emit, type HostSessions } from './sessions'
 import { createTerminalStreams, type TerminalStreams } from './streams'
@@ -37,35 +38,48 @@ export interface DesktopHostDeps {
 /** The checkout an unpackaged build runs from: `out/main` is three folders inside it. */
 const repoRoot = (): string => resolve(__dirname, '..', '..', '..', '..')
 
-export function createDesktopHost({ services, window, confirm, onActivityChange }: DesktopHostDeps): DesktopHost {
-  const log = (line: string): void => console.log(line)
-  const link = createHostLink({
-    start: () =>
-      startLocalHost(
-        {
-          appMode,
-          dataDir,
-          packaged: app.isPackaged,
-          resourcesPath: process.resourcesPath,
-          repoRoot: repoRoot()
-        },
-        {
-          platform: process.platform,
-          env: process.env,
-          tmpdir,
-          exists: existsSync,
-          spawn: (command, args, options): HostChild => spawn(command, args, options),
-          appVersion: app.getVersion(),
-          log,
-          setTimeout: (run, ms) => setTimeout(run, ms),
-          clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
-        }
-      ),
-    settings: () => hostSettingsFor(services.settings, findClaudeExecutable()),
+/** One connection to this run's local host, through a bridge of its own; the host is started when none answers. */
+export function connectLocalHost(log: (line: string) => void): Promise<LocalHost> {
+  return startLocalHost(
+    {
+      appMode,
+      dataDir,
+      packaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      repoRoot: repoRoot()
+    },
+    {
+      platform: process.platform,
+      env: process.env,
+      tmpdir,
+      exists: existsSync,
+      spawn: (command, args, options): HostChild => spawn(command, args, options),
+      appVersion: app.getVersion(),
+      log,
+      setTimeout: (run, ms) => setTimeout(run, ms),
+      clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
+    }
+  )
+}
+
+/**
+ * A link to the local host for this run of Helm: its folders inside this run's
+ * data directory (`hostEnvironment`), `floti` from where this build carries it,
+ * and a host started when none answers.
+ */
+export function createLocalHostLink(settings: () => HostSettingsPatch, log: (line: string) => void): HostLink {
+  return createHostLink({
+    start: () => connectLocalHost(log),
+    settings,
     log,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
   })
+}
+
+export function createDesktopHost({ services, window, confirm, onActivityChange }: DesktopHostDeps): DesktopHost {
+  const log = (line: string): void => console.log(line)
+  const link = createLocalHostLink(() => hostSettingsFor(services.settings, findClaudeExecutable()), log)
   const send: Emit = (channel, payload) => emit(window(), channel, payload)
   const streams = createTerminalStreams({
     connection: () => link.current(),

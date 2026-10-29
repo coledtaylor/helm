@@ -17,6 +17,7 @@ import {
   type Modifier
 } from './bridge'
 import { spawnPty, killPty, pwshPath, windowsBuildNumber, type PtyHandle } from './pty'
+import { checkHostRedraw } from './fidelity-host'
 import type {
   CellProbe,
   GeometryProbe,
@@ -1191,5 +1192,7 @@ export async function runFidelity(
   await run('C9', () => checkThroughput(ctx))
 
   killPty()
+  // Last, on a terminal nothing else writes to any more.
+  await run('C10', () => checkHostRedraw(win, dataDir, ctx.cols, ctx.rows, windowsBuildNumber()))
   return checks
 }

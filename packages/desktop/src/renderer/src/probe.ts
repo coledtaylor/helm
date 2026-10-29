@@ -6,6 +6,7 @@ import type {
   GeometryProbe,
   HelperTextareaProbe,
   ProbeOp,
+  ScreenProbe,
   ViewportProbe
 } from '../../shared/protocol'
 
@@ -103,6 +104,31 @@ export function makeProbeHandler(
         }
         return { cells }
       }
+
+      case 'screen': {
+        const cells: CellProbe[][] = []
+        for (let y = 0; y < term.rows; y++) {
+          const line = buf.getLine(buf.baseY + y)
+          const row: CellProbe[] = []
+          for (let x = 0; x < term.cols; x++) {
+            const cell = line?.getCell(x)
+            if (cell) row.push(cellProbe(cell))
+          }
+          cells.push(row)
+        }
+        const screen: ScreenProbe = {
+          cols: term.cols,
+          rows: term.rows,
+          bufferType: buf.type,
+          cursorX: buf.cursorX,
+          cursorY: buf.cursorY,
+          cells
+        }
+        return screen
+      }
+
+      case 'flush':
+        return new Promise((resolve) => term.write('', () => resolve({ ok: true })))
 
       case 'write':
         term.write(req.data)
