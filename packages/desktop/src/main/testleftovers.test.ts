@@ -1,17 +1,22 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PATIENCE } from '../../../../test/patience'
 import {
   formatLeftovers,
+  inspectProcess,
+  parseLsofCwd,
   parsePsTable,
   parseWindowsTable,
   processName,
   readProcessTable,
   selectLeftovers,
-  type ProcessRow
+  type InspectIo,
+  type ProcessRow,
+  type ProcessTraits,
+  type State
 } from '../../../../scripts/test-leftovers.mjs'
 import { REPO_ROOT } from '../../scripts/test-posix.mjs'
 
@@ -25,6 +30,18 @@ import { REPO_ROOT } from '../../scripts/test-posix.mjs'
 const SCRIPT = join(REPO_ROOT, 'scripts', 'test-leftovers.mjs')
 const FIXTURE = join(REPO_ROOT, 'test', 'fixtures', 'leaky-step.mjs')
 const TMP = join('/', 'tmp')
+const CHECKOUT = join('/', 'work', 'helm')
+const PLACES = { temps: [TMP], checkouts: [CHECKOUT] }
+
+/** What the OS says of a process it will say nothing about. */
+const UNREADABLE: ProcessTraits = { marked: false, cwd: null }
+
+/** An `inspect` answering from a hand-written list; any other pid is unreadable. */
+function inspector(traits: Record<number, Partial<ProcessTraits>> = {}): (pid: number) => ProcessTraits {
+  return (pid) => ({ ...UNREADABLE, ...traits[pid] })
+}
+
+const unreadable = inspector()
 
 /** One row of a hand-written table. */
 function row(pid: number, parentPid: number, name: string, start: number, commandLine = `${name} ${pid}`): ProcessRow {
@@ -53,7 +70,8 @@ describe('what the leftover check selects', () => {
       ...BEFORE,
       // An orphan on Windows names a parent that is gone.
       row(40, 999, 'floti', 10, 'floti host --listen 127.0.0.1:0'),
-      // An orphan on POSIX was re-parented to init, the check's ancestor.
+      // An orphan on POSIX was re-parented to init, the check's ancestor, and
+      // carries the step's mark.
       row(41, 1, 'floti-fake-agent', 11),
       // A process under a process the step left is the step's too.
       row(42, 40, 'node', 12),
@@ -66,7 +84,9 @@ describe('what the leftover check selects', () => {
         folders: ['helm world-old', 'floti test abc', 'helm world-xyz', 'helm-test-posix-1']
       },
       self: 50,
-      tmp: TMP
+      tmp: TMP,
+      places: PLACES,
+      inspect: inspector({ 41: { marked: true } })
     })
     expect(leftovers.folders).toEqual([join(TMP, 'floti test abc'), join(TMP, 'helm world-xyz'), join(TMP, 'helm-test-posix-1')])
     expect(pids(leftovers.processes)).toEqual([40, 41, 42])
@@ -79,7 +99,9 @@ describe('what the leftover check selects', () => {
       before: { processes: BEFORE, folders: [] },
       after: { processes: [...BEFORE, row(50, 30, 'node', 20)], folders: [] },
       self: 50,
-      tmp: TMP
+      tmp: TMP,
+      places: PLACES,
+      inspect: unreadable
     })
     expect(leftovers).toEqual({ folders: [], processes: [] })
     expect(formatLeftovers(leftovers)).toEqual([])
@@ -98,7 +120,9 @@ describe('what the leftover check selects', () => {
       before: { processes: BEFORE, folders: ['floti test earlier run', 'helm world-earlier'] },
       after: { processes: after, folders: ['floti test earlier run', 'helm world-earlier'] },
       self: 50,
-      tmp: TMP
+      tmp: TMP,
+      places: PLACES,
+      inspect: unreadable
     })
     expect(leftovers).toEqual({ folders: [], processes: [] })
   })
@@ -119,7 +143,9 @@ describe('what the leftover check selects', () => {
       before: { processes: BEFORE, folders: [] },
       after: { processes: after, folders: [] },
       self: 50,
-      tmp: TMP
+      tmp: TMP,
+      places: PLACES,
+      inspect: unreadable
     })
     expect(leftovers).toEqual({ folders: [], processes: [] })
   })
@@ -131,9 +157,91 @@ describe('what the leftover check selects', () => {
       before: { processes: before, folders: [] },
       after: { processes: after, folders: [] },
       self: 50,
-      tmp: TMP
+      tmp: TMP,
+      places: PLACES,
+      inspect: inspector({ 43: { marked: true }, 44: { cwd: join(TMP, 'floti test 7', 'session') } })
     })
     expect(pids(leftovers.processes)).toEqual([43, 44])
+  })
+
+  describe('telling an orphan the step left from a daemon a reaper started', () => {
+    // On macOS every launchd job, and on Linux every systemd service, is a
+    // child of pid 1 like an adopted orphan, so a process under a reaper is
+    // the step's only when the step marked it.
+    const adopted = (traits: Record<number, Partial<ProcessTraits>>, name = 'bash'): number[] | null =>
+      pids(
+        selectLeftovers({
+          before: { processes: BEFORE, folders: [] },
+          after: { processes: [...BEFORE, row(45, 1, name, 12, `${name} 45`), row(50, 30, 'node', 20)], folders: [] },
+          self: 50,
+          tmp: TMP,
+          places: PLACES,
+          inspect: inspector(traits)
+        }).processes
+      )
+
+    it('reports one carrying the mark', () => {
+      expect(adopted({ 45: { marked: true, cwd: '/' } })).toEqual([45])
+    })
+
+    it('reports one running in a test temp folder, as a host session the host started with a cleared environment does', () => {
+      expect(adopted({ 45: { cwd: join(TMP, 'floti test abc') } }, 'floti')).toEqual([45])
+      expect(adopted({ 45: { cwd: join(TMP, 'helm world-xyz', 'project a') } })).toEqual([45])
+    })
+
+    it('reports one running in the checkout', () => {
+      expect(adopted({ 45: { cwd: CHECKOUT } })).toEqual([45])
+      expect(adopted({ 45: { cwd: join(CHECKOUT, 'crates', 'host') } })).toEqual([45])
+    })
+
+    it("never reports one with neither, as the macOS runner's own updater is", () => {
+      expect(adopted({ 45: { cwd: '/' } })).toEqual([])
+      // The temp folder itself, a folder in it that no test makes, and a
+      // folder beside the checkout whose name only starts like it.
+      expect(adopted({ 45: { cwd: TMP } })).toEqual([])
+      expect(adopted({ 45: { cwd: join(TMP, 'com.apple.launchd.x') } })).toEqual([])
+      expect(adopted({ 45: { cwd: `${CHECKOUT}-other` } })).toEqual([])
+    })
+
+    it('never reports one whose environment and working folder cannot be read', () => {
+      expect(adopted({})).toEqual([])
+    })
+
+    it('reports a process under an orphan the step marked, and asks about each process once', () => {
+      // A leaked host (in its test folder) and its session's shell, which the
+      // host started with a cleared environment in a folder of its own.
+      const asked: number[] = []
+      const traits: Record<number, Partial<ProcessTraits>> = { 46: { cwd: join(TMP, 'floti test abc') } }
+      const leftovers = selectLeftovers({
+        before: { processes: BEFORE, folders: [] },
+        after: { processes: [...BEFORE, row(46, 1, 'floti', 12), row(47, 46, 'bash', 13), row(50, 30, 'node', 20)], folders: [] },
+        self: 50,
+        tmp: TMP,
+        places: PLACES,
+        inspect: (pid) => {
+          asked.push(pid)
+          return { ...UNREADABLE, ...traits[pid] }
+        }
+      })
+      expect(pids(leftovers.processes)).toEqual([46, 47])
+      expect(asked.sort()).toEqual([46, 47])
+    })
+
+    it('never asks about a process that does not reach a reaper', () => {
+      const asked: number[] = []
+      selectLeftovers({
+        before: { processes: BEFORE, folders: [] },
+        after: { processes: [...BEFORE, row(40, 999, 'floti', 10), row(60, 11, 'bash', 15), row(50, 30, 'node', 20)], folders: [] },
+        self: 50,
+        tmp: TMP,
+        places: PLACES,
+        inspect: (pid) => {
+          asked.push(pid)
+          return UNREADABLE
+        }
+      })
+      expect(asked).toEqual([])
+    })
   })
 
   it('takes a reused pid for a different process', () => {
@@ -147,7 +255,9 @@ describe('what the leftover check selects', () => {
       before: { processes: BEFORE, folders: [] },
       after: { processes: after, folders: [] },
       self: 50,
-      tmp: TMP
+      tmp: TMP,
+      places: PLACES,
+      inspect: unreadable
     })
     expect(pids(leftovers.processes)).toEqual([12, 70])
   })
@@ -160,7 +270,9 @@ describe('what the leftover check selects', () => {
         folders: ['node-compile-cache', 'helm compile cache probe-1']
       },
       self: 50,
-      tmp: TMP
+      tmp: TMP,
+      places: PLACES,
+      inspect: unreadable
     })
     expect(leftovers).toEqual({ folders: [], processes: [] })
   })
@@ -179,7 +291,9 @@ describe('what the leftover check selects', () => {
       before: { processes: BEFORE, folders: [] },
       after: { processes: after, folders: [] },
       self: 50,
-      tmp: TMP
+      tmp: TMP,
+      places: PLACES,
+      inspect: unreadable
     })
     expect(leftovers).toEqual({ folders: [], processes: [] })
   })
@@ -189,7 +303,9 @@ describe('what the leftover check selects', () => {
       before: { processes: null, folders: [] },
       after: { processes: null, folders: ['helm world-1'] },
       self: 50,
-      tmp: TMP
+      tmp: TMP,
+      places: PLACES,
+      inspect: unreadable
     })
     expect(leftovers).toEqual({ folders: [join(TMP, 'helm world-1')], processes: null })
   })
@@ -234,6 +350,80 @@ describe('the per-OS process listing', () => {
   })
 })
 
+describe("reading a process's mark and working folder", () => {
+  const MARK = 'abc123'
+
+  /** An OS that answers from hand-written files and command output, and fails anything else. */
+  function fakeOs(files: Record<string, string>, links: Record<string, string>, output: Record<string, string>) {
+    const runs: string[] = []
+    const io: InspectIo = {
+      readFile: (path) => {
+        const text = files[path]
+        if (text === undefined) throw Object.assign(new Error(`EACCES: ${path}`), { code: 'EACCES' })
+        return text
+      },
+      readLink: (path) => {
+        const target = links[path]
+        if (target === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' })
+        return target
+      },
+      run: (file, args) => {
+        const line = [file, ...args].join(' ')
+        runs.push(line)
+        const text = output[line]
+        if (text === undefined) throw new Error(`${file} exited with 1`)
+        return text
+      }
+    }
+    return { io, runs }
+  }
+
+  it('reads Linux /proc: the exact mark among the environment, and a working folder even once it is removed', () => {
+    const { io } = fakeOs(
+      {
+        '/proc/7/environ': `PATH=/usr/bin\0TEST_LEFTOVERS_MARK=${MARK}\0HOME=/home/runner\0`,
+        '/proc/8/environ': `TEST_LEFTOVERS_MARK=${MARK}0\0`
+      },
+      { '/proc/7/cwd': '/tmp/floti test 1 (deleted)', '/proc/8/cwd': '/' },
+      {}
+    )
+    expect(inspectProcess(7, MARK, 'linux', io)).toEqual({ marked: true, cwd: '/tmp/floti test 1' })
+    expect(inspectProcess(8, MARK, 'linux', io)).toEqual({ marked: false, cwd: '/' })
+    // Another user's process, or one that has ended.
+    expect(inspectProcess(9, MARK, 'linux', io)).toEqual(UNREADABLE)
+  })
+
+  it('reads macOS ps -E and lsof', () => {
+    const { io, runs } = fakeOs(
+      {},
+      {},
+      {
+        'ps -wwE -o command= -p 7': `/opt/node/bin/node -e x leaky-step-child PATH=/usr/bin TEST_LEFTOVERS_MARK=${MARK} HOME=/Users/runner\n`,
+        'lsof -a -d cwd -p 7 -Fn': 'p7\nfcwd\nn/Users/runner/work/helm/helm\n',
+        'ps -wwE -o command= -p 8': 'bash /Library/Application Support/Veertu/Anka/addons/ankaupd.sh PATH=/usr/bin\n',
+        'lsof -a -d cwd -p 8 -Fn': 'p8\nfcwd\nn/\n'
+      }
+    )
+    expect(inspectProcess(7, MARK, 'darwin', io)).toEqual({ marked: true, cwd: '/Users/runner/work/helm/helm' })
+    expect(inspectProcess(8, MARK, 'darwin', io)).toEqual({ marked: false, cwd: '/' })
+    expect(inspectProcess(9, MARK, 'darwin', io)).toEqual(UNREADABLE)
+    expect(runs).toContain('lsof -a -d cwd -p 9 -Fn')
+  })
+
+  it('reads nothing on Windows, where an orphan names its dead parent instead, and nothing for an empty mark', () => {
+    const { io, runs } = fakeOs({ '/proc/7/environ': 'TEST_LEFTOVERS_MARK=\0' }, {}, {})
+    expect(inspectProcess(7, MARK, 'win32', io)).toEqual(UNREADABLE)
+    expect(runs).toEqual([])
+    expect(inspectProcess(7, '', 'linux', io).marked).toBe(false)
+  })
+
+  it('takes the working folder from the n line of lsof -Fn', () => {
+    expect(parseLsofCwd('p12\nfcwd\nn/Users/runner/work/helm helm\n')).toBe('/Users/runner/work/helm helm')
+    expect(parseLsofCwd('p12\n')).toBeNull()
+    expect(parseLsofCwd('')).toBeNull()
+  })
+})
+
 let temp: string
 const started: number[] = []
 
@@ -258,16 +448,30 @@ function alive(pid: number): boolean {
   }
 }
 
-function inPrivateTemp(command: string, args: string[]): { status: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(command, args, {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    env: { ...process.env, TEMP: temp, TMP: temp, TMPDIR: temp }
-  })
+/**
+ * Runs a command in the checkout with the private temp folder. CI's own
+ * `GITHUB_ENV` is never passed on: a `before` here appending to it would hand
+ * this test's mark to the job's later steps. The step's own mark, which CI
+ * gives every step after its `before`, is passed as `mark` says.
+ */
+function inPrivateTemp(
+  command: string,
+  args: string[],
+  { mark, githubEnv }: { mark?: string; githubEnv?: string } = {}
+): { status: number | null; stdout: string; stderr: string } {
+  const env: NodeJS.ProcessEnv = { ...process.env, TEMP: temp, TMP: temp, TMPDIR: temp }
+  delete env['GITHUB_ENV']
+  delete env['TEST_LEFTOVERS_MARK']
+  if (mark !== undefined) env['TEST_LEFTOVERS_MARK'] = mark
+  if (githubEnv !== undefined) env['GITHUB_ENV'] = githubEnv
+  const result = spawnSync(command, args, { cwd: REPO_ROOT, encoding: 'utf8', env })
   return { status: result.status, stdout: result.stdout, stderr: result.stderr }
 }
 
 const script = (...args: string[]) => inPrivateTemp(process.execPath, [SCRIPT, ...args])
+
+/** The state a `before` recorded. */
+const recorded = (state: string): State => JSON.parse(readFileSync(state, 'utf8')) as State
 
 /** The folder and process the fixture says it left, recorded so the test ends them. */
 function leaked(stdout: string): { pid: number; folder: string } {
@@ -314,7 +518,8 @@ describe('the leftover check around a step', () => {
   it('reports a leaked folder and process and fails, then passes once they are gone, deleting and ending nothing itself', async () => {
     const state = join(temp, 'state.json')
     expect(script('before', state).status).toBe(0)
-    const left = leaked(inPrivateTemp(process.execPath, [FIXTURE]).stdout)
+    // As CI runs it: the step after `before` carries its mark, and runs in the checkout.
+    const left = leaked(inPrivateTemp(process.execPath, [FIXTURE], { mark: recorded(state).mark }).stdout)
 
     const failed = script('after', state)
     expect(failed.status).toBe(1)
@@ -350,6 +555,20 @@ describe('the leftover check around a step', () => {
 
   it('passes a command that left nothing behind', async () => {
     await expectPasses(() => script(process.execPath, '-e', 'const done = true'))
+  })
+
+  it('hands its mark to the CI steps after it through GITHUB_ENV, and records it with the checkout', () => {
+    const state = join(temp, 'state.json')
+    const githubEnv = join(temp, 'github env')
+    writeFileSync(githubEnv, 'EARLIER=1\n')
+    expect(inPrivateTemp(process.execPath, [SCRIPT, 'before', state], { githubEnv }).status).toBe(0)
+    const { mark, checkout } = recorded(state)
+    expect(mark).toMatch(/^[0-9a-f]{32}$/)
+    expect(checkout).toBe(REPO_ROOT)
+    expect(readFileSync(githubEnv, 'utf8')).toBe(`EARLIER=1\nTEST_LEFTOVERS_MARK=${mark}\n`)
+    // Each step gets a mark of its own.
+    expect(script('before', state).status).toBe(0)
+    expect(recorded(state).mark).not.toBe(mark)
   })
 
   it('refuses no command at all', () => {

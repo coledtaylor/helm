@@ -214,7 +214,15 @@ status when the command failed, 1 when it left anything, and 0 otherwise.
 It reports only what appeared while the command ran, so other sessions and
 earlier runs' folders never fail it, and it deletes and ends nothing itself.
 CI takes the two halves as steps of their own: `before <state-file>` ahead of
-the tests and `after <state-file>` behind them.
+the tests and `after <state-file>` behind them. `before` makes a mark for the
+step and hands it to the later steps through `GITHUB_ENV`, as
+`TEST_LEFTOVERS_MARK`; the local command puts it in the command's environment.
+On macOS and Linux a process the tests left is adopted by init, launchd or a
+subreaper, which also starts the machine's own daemons, so an adopted process
+counts only when it carries the mark or runs inside a test temp folder or the
+checkout (the host starts its sessions and plugin programs with a cleared
+environment, in a test folder). A Windows orphan names its dead parent, which
+is enough there.
 
 ## Windows, macOS and Linux
 

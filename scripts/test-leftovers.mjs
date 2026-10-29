@@ -5,13 +5,27 @@
 //   node scripts/test-leftovers.mjs before <state-file>   # CI: before the step
 //   node scripts/test-leftovers.mjs after <state-file>    # CI: after it
 //
-// `before` records the process table and the test temp folders already in the
-// temp folder. `after` lists what the step left: each test temp folder that
-// was not there before, by its full path, and each process of a kind tests
-// start that the step started and is still alive, by pid, name and command
-// line. It exits 1 when it lists anything, 0 otherwise. The wrapper form does
-// both around one command, run through the shell as a package script is, and
-// exits with the command's status when it failed, or 1 for leftovers.
+// `before` records the process table, the test temp folders already in the
+// temp folder, the folder it runs from (the checkout) and a random mark for
+// the step. When `GITHUB_ENV` is set it appends `TEST_LEFTOVERS_MARK=<mark>`
+// to that file, so the CI steps after it, and everything they start, carry
+// the mark in their environment. `after` lists what the step left: each test
+// temp folder that was not there before, by its full path, and each process of
+// a kind tests start that the step started and is still alive, by pid, name
+// and command line. It exits 1 when it lists anything, 0 otherwise. The
+// wrapper form does both around one command, run through the shell as a
+// package script is with the mark in its environment, and exits with the
+// command's status when it failed, or 1 for leftovers.
+//
+// A process the step left on Windows names its dead parent, which is enough
+// to tell it is the step's. On macOS and Linux it is adopted by init, launchd
+// or a subreaper, which also starts every daemon (the runner's own updater,
+// a systemd service), so the table alone cannot tell the two apart there. An
+// adopted process counts as the step's only when the step marked it: it
+// carries the step's mark in its environment, or it runs inside a test temp
+// folder or the checkout. The second is what marks a leaked host session or
+// plugin program, which the host starts with a cleared environment. A process
+// whose environment and working folder cannot be read is not the step's.
 //
 // It only reports. It never deletes a folder or ends a process: what a test
 // left is evidence, and a process here may be someone else's.
@@ -23,10 +37,14 @@
 // tests never start (a linker's PDB server) is not a test's process.
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { appendFileSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+/** The environment variable that carries a step's mark into what it starts. */
+export const MARK_VARIABLE = 'TEST_LEFTOVERS_MARK'
 
 /**
  * The folders tests make in the OS temp folder: the host testkit's `TestDirs`,
@@ -90,21 +108,25 @@ export function processName(raw) {
  * - reaching one of the check's ancestors that started after the snapshot
  *   (the after-step's own shell and its console host in CI) means it is the
  *   check's, and it is not reported;
+ * - running out of live parents means it was the step's, and it is reported:
+ *   a Windows orphan names a dead parent;
  * - reaching one of the check's ancestors that was there before and adopts
- *   orphans (init or a subreaper), or running out of live parents, means it
- *   was the step's, and it is reported. A Windows orphan names a dead parent,
- *   and a POSIX orphan is re-parented to init or a subreaper, which are the
- *   check's ancestors too;
+ *   orphans (init, launchd or a subreaper) means it was orphaned by the step
+ *   or started by that reaper as a daemon, and the table cannot say which. It
+ *   is reported only when the step marked it or a process between it and the
+ *   reaper (`inspect` says it carries the mark, or runs inside a test temp
+ *   folder or the checkout, as `places` names them);
  * - reaching any other ancestor of the check that was there before means that
  *   ancestor started it beside the check (vitest's other workers around the
  *   check's own test, Helm's other sessions around a check run in one of its
  *   terminals), and it is not reported: what the step started descends from
  *   the check, or was orphaned and adopted by a reaper.
  *
+ * `inspect` is asked only about processes that reach a reaper, once each.
  * `processes` is null on either side when the table could not be read, and
  * then only folders are judged.
  */
-export function selectLeftovers({ before, after, self, tmp }) {
+export function selectLeftovers({ before, after, self, tmp, places, inspect }) {
   const beforeFolders = new Set(before.folders)
   const folders = after.folders.filter((name) => isTestFolder(name) && !beforeFolders.has(name)).map((name) => join(tmp, name))
   if (before.processes === null || after.processes === null) return { folders, processes: null }
@@ -129,17 +151,64 @@ export function selectLeftovers({ before, after, self, tmp }) {
   const selfRow = byPid.get(self)
   const checkAncestors = new Set(selfRow === undefined ? [self] : [self, ...chain(selfRow).map((row) => row.pid)])
 
+  const inspected = new Map()
+  const markedByStep = (row) => {
+    if (!inspected.has(row.pid)) {
+      const { marked, cwd } = inspect(row.pid)
+      inspected.set(row.pid, marked || (cwd !== null && inStepPlace(cwd, places)))
+    }
+    return inspected.get(row.pid)
+  }
+
   const processes = after.processes.filter((row) => {
     if (existed.has(key(row)) || !isTestProcess(row.name) || checkAncestors.has(row.pid)) return false
+    const adopted = [row]
     for (const parent of chain(row)) {
       if (parent.pid === self) return false
       const old = existed.has(key(parent))
-      if (checkAncestors.has(parent.pid)) return old && isReaper(parent)
+      if (checkAncestors.has(parent.pid)) return old && isReaper(parent) && adopted.some(markedByStep)
       if (old) return false
+      adopted.push(parent)
     }
     return true
   })
   return { folders, processes }
+}
+
+/** True when `path` is `folder` or inside it. */
+function isWithin(folder, path) {
+  const rest = relative(folder, path)
+  return rest === '' || (rest !== '..' && !rest.startsWith(`..${sep}`) && !isAbsolute(rest))
+}
+
+/** True for a working folder inside a test temp folder or the checkout. */
+function inStepPlace(cwd, { temps, checkouts }) {
+  return (
+    checkouts.some((checkout) => isWithin(checkout, cwd)) ||
+    temps.some((temp) => {
+      const rest = relative(temp, cwd)
+      return rest !== '' && isWithin(temp, cwd) && isTestFolder(rest.split(sep, 1)[0])
+    })
+  )
+}
+
+/** A path as given and as the file system resolves it, which is how a process's working folder reads. */
+function bothSpellings(path) {
+  try {
+    const real = realpathSync(path)
+    return real === path ? [path] : [path, real]
+  } catch {
+    return [path]
+  }
+}
+
+/**
+ * The folders a step's processes run in: the temp folder its test folders are
+ * made in, and the checkout. macOS reaches its temp folder through a link
+ * (`/var` is `/private/var`), and a process's working folder reads resolved.
+ */
+export function stepPlaces(tmp, checkout) {
+  return { temps: bothSpellings(tmp), checkouts: bothSpellings(checkout) }
 }
 
 /** One report line per leftover, or none when there are none. */
@@ -248,10 +317,11 @@ function readWindowsTable(run) {
 }
 
 /**
- * The process table, read the one way each OS offers: the one place this
- * script branches on the OS. Null for an OS it has no listing for, which
- * leaves the folders still checked. `run` is `execFileSync`'s shape, passed
- * in so a test can see what each listing is run with.
+ * The process table, read the one way each OS offers: with `inspectProcess`
+ * below, the only place this script branches on the OS. Null for an OS it
+ * has no listing for, which leaves the folders still checked. `run` is
+ * `execFileSync`'s shape, passed in so a test can see what each listing is
+ * run with.
  */
 export function readProcessTable(platform = process.platform, run = execFileSync) {
   switch (platform) {
@@ -270,15 +340,78 @@ export function readProcessTable(platform = process.platform, run = execFileSync
   }
 }
 
+/** The working folder in `lsof -Fn` output: the line starting with `n`. Null when there is none. */
+export function parseLsofCwd(text) {
+  const line = text.split('\n').find((l) => l.startsWith('n'))
+  return line === undefined || line.length === 1 ? null : line.slice(1).trimEnd()
+}
+
+/** What `inspectProcess` reads with, passed in so a test can answer for the OS. */
+const SYSTEM_IO = { run: execFileSync, readFile: readFileSync, readLink: readlinkSync }
+
+const attempt = (read, fallback) => {
+  try {
+    return read()
+  } catch {
+    return fallback
+  }
+}
+
+/**
+ * Whether a process carries the step's mark in its environment, and its
+ * working folder, read beside the process table the way each OS offers, and
+ * asked only about a process a reaper adopted. Either reads as unmarked or null
+ * when the OS will not say (another user's process, or one that has ended).
+ * Linux has both under `/proc`, where a working folder that was removed
+ * reads with ` (deleted)` after its path. macOS prints the environment after
+ * the command line in `ps -E` and the working folder in `lsof`.
+ */
+export function inspectProcess(pid, mark, platform = process.platform, io = SYSTEM_IO) {
+  const entry = `${MARK_VARIABLE}=${mark}`
+  const carries = (words) => typeof mark === 'string' && mark !== '' && words.includes(entry)
+  switch (platform) {
+    case 'linux':
+      return {
+        marked: attempt(() => carries(io.readFile(`/proc/${pid}/environ`, 'utf8').split('\0')), false),
+        cwd: attempt(() => io.readLink(`/proc/${pid}/cwd`).replace(/ \(deleted\)$/, ''), null)
+      }
+    case 'darwin':
+      return {
+        marked: attempt(() => carries(io.run('ps', ['-wwE', '-o', 'command=', '-p', String(pid)], LIST_OPTIONS).split(/\s+/)), false),
+        cwd: attempt(() => parseLsofCwd(io.run('lsof', ['-a', '-d', 'cwd', '-p', String(pid), '-Fn'], LIST_OPTIONS)), null)
+      }
+    default:
+      return { marked: false, cwd: null }
+  }
+}
+
 /** The process table and the temp folder's test folders, now. */
 export function snapshot(tmp = tmpdir()) {
   return { tmp, processes: readProcessTable(), folders: readdirSync(tmp).filter(isTestFolder) }
 }
 
-/** Checks a snapshot taken before the step against now, prints what was left, and answers the exit code. */
+/**
+ * The state a step is checked against: a snapshot, the folder the check runs
+ * from, and a new mark. With `githubEnv`, the mark is appended to that file,
+ * so the CI steps after this one inherit it.
+ */
+export function begin({ githubEnv, tmp = tmpdir(), checkout = process.cwd() } = {}) {
+  const mark = randomBytes(16).toString('hex')
+  if (githubEnv) appendFileSync(githubEnv, `${MARK_VARIABLE}=${mark}\n`)
+  return { ...snapshot(tmp), checkout, mark }
+}
+
+/** Checks a state taken before the step against now, prints what was left, and answers the exit code. */
 export function check(before) {
   const after = snapshot(before.tmp)
-  const leftovers = selectLeftovers({ before, after, self: process.pid, tmp: before.tmp })
+  const leftovers = selectLeftovers({
+    before,
+    after,
+    self: process.pid,
+    tmp: before.tmp,
+    places: stepPlaces(before.tmp, before.checkout),
+    inspect: (pid) => inspectProcess(pid, before.mark)
+  })
   if (leftovers.processes === null) {
     console.log(`test-leftovers: no process listing on ${process.platform}; checked the temp folder only`)
   }
@@ -299,7 +432,7 @@ function main(argv) {
   const [first, ...rest] = argv
   if ((first === 'before' || first === 'after') && rest.length === 1) {
     if (first === 'before') {
-      writeFileSync(rest[0], JSON.stringify(snapshot()))
+      writeFileSync(rest[0], JSON.stringify(begin({ githubEnv: process.env.GITHUB_ENV })))
       return 0
     }
     return check(JSON.parse(readFileSync(rest[0], 'utf8')))
@@ -312,11 +445,15 @@ function main(argv) {
     return 2
   }
 
-  const before = snapshot()
+  const before = begin()
   // The command is a test command's own words (`pnpm check`, `cargo nextest
   // run`), found on the PATH, so it goes through the shell as a package
   // script's does.
-  const result = spawnSync(argv.map(word).join(' '), { stdio: 'inherit', shell: true })
+  const result = spawnSync(argv.map(word).join(' '), {
+    stdio: 'inherit',
+    shell: true,
+    env: { ...process.env, [MARK_VARIABLE]: before.mark }
+  })
   if (result.error) console.error(result.error.message)
   const status = result.error ? 1 : (result.status ?? 1)
   const leftovers = check(before)
