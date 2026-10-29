@@ -35,6 +35,13 @@
 //! `echo: <line>`. At its prompt, `/exit <code>` exits with `code`,
 //! `/print <hex>` writes those bytes, and `/child` and `/gui-child` start a
 //! child. It exits 0 when stdin ends.
+//!
+//! It, and every child it starts, exits 0 once the test process that owns it
+//! is gone: the one the `test-owner` file nearest above its record folder
+//! names (the working folder when it records nowhere), which `TestDirs` writes
+//! (`owner.rs`).
+
+mod owner;
 
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
@@ -43,6 +50,8 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use floti_host::platform::process_tree::{Native, ProcessTree};
+use floti_protocol::Knowable;
 use serde_json::json;
 
 const LOG_VAR: &str = "FLOTI_FAKE_AGENT_LOG";
@@ -121,6 +130,16 @@ impl Record {
 }
 
 fn main() {
+    let watched = std::env::var_os(LOG_VAR)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok());
+    if let Some(folder) = watched {
+        // Unknown is not gone: only an owner the OS says has exited ends it.
+        owner::exit_when_owner_is_gone(&folder, |pid| {
+            Native.is_alive(pid) != Knowable::Known(false)
+        });
+    }
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut record = Record::new(argv.clone());
     record.save();

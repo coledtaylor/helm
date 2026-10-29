@@ -121,6 +121,80 @@ fn starts_a_program_with_no_console_as_a_child_of_its_own() {
     assert_eq!(running, Knowable::Known(true), "the child lives on");
 }
 
+#[test]
+fn exits_with_its_child_once_the_test_process_that_owns_it_is_gone() {
+    let dirs = TestDirs::new();
+    let agent = fake_agent!(&dirs);
+    // A stand-in for the test process, made the owner of everything in
+    // `dirs`, and ended below as a crash would end a test.
+    let mut owner = Command::new(agent.exe())
+        .arg("--fake-sleep=600000")
+        .current_dir(dirs.folder("owner"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    dirs.own(owner.id());
+
+    // Owned by this test process, for the barrier below.
+    let others = TestDirs::new();
+    let other_agent = fake_agent!(&others);
+    let mut other = command(&other_agent, others.root()).spawn().unwrap();
+
+    // Its input stays open, so nothing but its owner going can end it.
+    let mut fake = command(&agent, dirs.root())
+        .arg("--fake-child")
+        .spawn()
+        .unwrap();
+    let record = agent.wait_for_record(fake.id(), PATIENCE, |record| {
+        !record.children.is_empty()
+    });
+    let child = record.children[0];
+    agent.wait_for_record(child, PATIENCE, |_| true);
+    assert_eq!(NativeTree.is_alive(child), Knowable::Known(true));
+    other_agent.wait_for_record(other.id(), PATIENCE, |_| true);
+
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+
+    let status = wait_for_exit(&mut fake);
+    assert_eq!(status.code(), Some(0));
+    let deadline = std::time::Instant::now() + PATIENCE;
+    while NativeTree.is_alive(child) != Knowable::Known(false) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the fake's child {child} did not exit within {PATIENCE:?} of its owner"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    // The barrier: by now the other fake, polling as often, has had as long
+    // to end, and its owner, this test process, still runs.
+    assert!(
+        other.try_wait().unwrap().is_none(),
+        "a fake whose owner still runs ended"
+    );
+    drop(other.stdin.take());
+    assert_eq!(wait_for_exit(&mut other).code(), Some(0));
+    drop(fake);
+}
+
+/// Waits up to the patience for `child` to exit.
+fn wait_for_exit(child: &mut std::process::Child) -> std::process::ExitStatus {
+    let deadline = std::time::Instant::now() + PATIENCE;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the fake {} did not exit within {PATIENCE:?}", child.id());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 /// The pid of the only run recorded so far.
 fn child_pid(agent: &floti_host::testkit::FakeAgent) -> u32 {
     let records = agent.records();

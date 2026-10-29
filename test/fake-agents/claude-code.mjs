@@ -35,6 +35,10 @@
 // `<config>/fake-agent/<pid>.json` in the shared run-log shape (`common.mjs`),
 // so a test can assert what reached the session without reading the screen.
 //
+// An interactive run, and the child `/child` starts, exit once the test
+// process that owns them is gone: the one a `test-owner` file names in the
+// config folder or a folder above it (`watchOwner` in `common.mjs`).
+//
 // Commands typed at its prompt:
 //   /exit        exit 0
 //   /crash       exit 3
@@ -65,7 +69,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fakeVersion, parseArgv, RunLog, UsageError, writeJsonAtomically } from './common.mjs'
+import { childScript, fakeVersion, parseArgv, RunLog, UsageError, watchOwner, writeJsonAtomically } from './common.mjs'
 
 const BACKEND = 'claude-code'
 const VERSION = fakeVersion('2.1.999')
@@ -578,7 +582,7 @@ function submit(line) {
     return answer('Or see https://example.test/bare for more.')
   }
   if (command === '/child') {
-    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], { stdio: 'ignore' })
+    const child = spawn(process.execPath, ['-e', childScript(configDir)], { stdio: 'ignore' })
     children.push(child)
     return answer(`child ${String(child.pid)}`)
   }
@@ -624,6 +628,9 @@ function onKey(key) {
 
 process.on('SIGINT', () => exit(130))
 process.on('SIGTERM', () => exit(143))
+// The test that owns this run is gone (crashed or killed), so nothing will
+// end it: it ends itself, as closing it would.
+watchOwner(configDir, () => exit(0))
 process.stdout.on('resize', () => {
   log.resized.push({ cols: process.stdout.columns, rows: process.stdout.rows })
   saveLog()

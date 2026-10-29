@@ -7,8 +7,83 @@
 // to `<its config dir>/fake-agent/<pid>.json` in the shape `RunLog` below, so
 // the host's Rust tests and the desktop's TypeScript tests read one format.
 
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+
+/**
+ * The file that names the test process owning every fake started under the
+ * folder it is in: a test's world (`createWorld`) or the host testkit's
+ * `TestDirs` writes its own pid there. A fake looks for it from its run-log
+ * folder up, and exits once that process is gone, so a fake whose test
+ * crashed or was killed does not outlive it. The owner is the test process,
+ * never the fake's parent: a session that leaves its agent running when it is
+ * closed still leaves it running for as long as the test does.
+ *
+ * A file rather than a variable or an argument, because the fake must read
+ * its arguments as the CLI does, and the host clears a session's environment.
+ */
+export const OWNER_FILE = 'test-owner'
+
+/** How often a fake asks whether its owner is still running. */
+export const OWNER_POLL_MS = 250
+
+/**
+ * The pid in the nearest `OWNER_FILE` at or above `folder`, or null when
+ * there is none: a fake run outside any test's folder has no owner.
+ */
+export function findOwner(folder) {
+  for (let dir = folder; ; dir = dirname(dir)) {
+    let text = null
+    try {
+      text = readFileSync(join(dir, OWNER_FILE), 'utf8')
+    } catch {
+      // None here; look further up.
+    }
+    const pid = text === null ? NaN : Number(text.trim())
+    if (Number.isSafeInteger(pid) && pid > 0) return pid
+    if (dirname(dir) === dir) return null
+  }
+}
+
+/** Whether `pid` is running: signal 0 sends nothing, and EPERM means it runs as someone else. */
+export function isRunning(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === 'EPERM'
+  }
+}
+
+/**
+ * Calls `onGone` once the owner `findOwner(folder)` names has exited, polling
+ * on a timer that keeps nothing alive by itself. Does nothing when there is
+ * no owner.
+ */
+export function watchOwner(folder, onGone) {
+  const owner = findOwner(folder)
+  if (owner === null) return
+  const timer = setInterval(() => {
+    if (isRunning(owner)) return
+    clearInterval(timer)
+    onGone()
+  }, OWNER_POLL_MS)
+  timer.unref()
+}
+
+/**
+ * The script for `node -e` that a fake runs as a long-lived child of its own:
+ * it does nothing until the owner `findOwner(folder)` names has exited, and
+ * nothing forever when there is none.
+ */
+export function childScript(folder) {
+  const owner = findOwner(folder)
+  if (owner === null) return 'setInterval(() => {}, 1 << 30)'
+  return (
+    `setInterval(() => { try { process.kill(${String(owner)}, 0) } ` +
+    `catch (error) { if (error.code !== 'EPERM') process.exit(0) } }, ${String(OWNER_POLL_MS)})`
+  )
+}
 
 /**
  * The version a fake reports: its own default, or the one a test asks for

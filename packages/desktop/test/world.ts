@@ -82,13 +82,28 @@ export function repoRoot(): string {
   return dir
 }
 
+/**
+ * The file in a world's root that names the test process owning it. Every
+ * fake agent started in the world (`test/fake-agents/common.mjs`, which spells
+ * the name too) finds it from its config folder up and exits once that
+ * process is gone, so a fake whose test crashed or was killed does not run on.
+ */
+export const FAKE_AGENT_OWNER_FILE = 'test-owner'
+
 /** Variables from the machine running the tests that must not reach the world. */
 const LEAKY = /^(ANTHROPIC_|CLAUDE|GH_|GITHUB_|ELECTRON_RUN_AS_NODE$|PORTABLE_EXECUTABLE_DIR$)/i
 
+/**
+ * A new world in the temp folder, which in a vitest run is the run's root
+ * (`test/run-root.ts`), so the run removes it when it ends even if this test
+ * never reaches `disposeWorld`. It is owned by this process: its fake agents
+ * exit once this process is gone.
+ */
 export function createWorld(): World {
   // Real path: on macOS the temporary folder is reached through /var, a link to
   // /private/var, and a process's own cwd always names the real one.
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'helm world-')))
+  writeFileSync(join(root, FAKE_AGENT_OWNER_FILE), String(process.pid))
   const home = join(root, 'home')
   const claudeDir = join(home, '.claude')
   const portableDir = join(root, 'app')

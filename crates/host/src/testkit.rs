@@ -22,9 +22,13 @@
 //! A test leaves nothing behind: [`TestDirs`] fails the test that leaves a
 //! file in its tree open, and a dropped [`RunningHost`] stops its host before
 //! the test's folders go, a panicking test's included, then fails the test
-//! that never stopped it.
+//! that never stopped it. A fake started in a [`TestDirs`] exits once the test
+//! process is gone ([`owner`]), so a test that crashed or was killed leaves no
+//! fake running.
 
 mod client;
+#[path = "../testkit/owner.rs"]
+pub mod owner;
 
 pub use client::{PATIENCE, TestClient, names_unserved_channel};
 
@@ -157,7 +161,16 @@ impl TestDirs {
             root: Some(root),
         };
         dirs.mark_secret_seal(crate::plugins::secrets::seal::TEST_SEAL_KEY_FILE);
+        dirs.own(std::process::id());
         dirs
+    }
+
+    /// Makes `pid` the owner of every fake started in this tree: each exits
+    /// once that process is gone. [`TestDirs::new`] makes it this test
+    /// process.
+    pub fn own(&self, pid: u32) {
+        std::fs::write(self.root().join(owner::OWNER_FILE), pid.to_string())
+            .expect("name the test's owner in its folder");
     }
 
     /// Makes a host over this tree's data folder a computer with no secret
