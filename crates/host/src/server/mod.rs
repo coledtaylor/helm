@@ -93,6 +93,28 @@ pub const DEVICES_FILE: &str = "devices.json";
 /// handshake before the host closes it.
 pub const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
 
+/// The file in a data folder that gives a test build's host a handshake
+/// deadline of its own, in milliseconds, so the test of the deadline against
+/// the executable need not wait the real one out. A production build never
+/// reads it.
+#[cfg(any(test, feature = "testkit"))]
+pub const TEST_HANDSHAKE_DEADLINE_MARKER: &str = "floti-test-handshake-deadline";
+
+/// How long a connection to the host over the data folder `data` has to
+/// finish the handshake: [`HANDSHAKE_DEADLINE`], or in a test build what
+/// [`TEST_HANDSHAKE_DEADLINE_MARKER`] there says.
+fn handshake_deadline(data: &Path) -> Duration {
+    #[cfg(any(test, feature = "testkit"))]
+    if let Some(ms) = std::fs::read_to_string(data.join(TEST_HANDSHAKE_DEADLINE_MARKER))
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+    {
+        return Duration::from_millis(ms);
+    }
+    let _ = data;
+    HANDSHAKE_DEADLINE
+}
+
 /// How long a stop waits, once the sessions have ended, for the store to be
 /// let go before it releases the data folder anyway.
 const RELEASE_WAIT: Duration = Duration::from_secs(10);
@@ -276,6 +298,7 @@ impl Host {
         let host_key: Arc<KeyPair> =
             Arc::new(load_or_create_key_pair(&folders.data.join(HOST_KEY_FILE))?);
         let devices = Arc::new(DeviceRegistry::in_data_folder(&folders.data));
+        let deadline = handshake_deadline(&folders.data);
         // Launch folders a crashed run left, once their owners are gone.
         sweep_launch_folders(&folders.data, &process_tree::Native);
         let listener = socket::Native.bind(&endpoint)?;
@@ -307,7 +330,11 @@ impl Host {
         let accepting = tokio::spawn(accept(
             listener,
             Arc::clone(&features),
-            Admission { host_key, devices },
+            Admission {
+                host_key,
+                devices,
+                deadline,
+            },
             identity,
             stopper.clone(),
             shutdown_rx,

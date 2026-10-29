@@ -32,6 +32,15 @@ use crate::{Error, Result};
 /// whole tree is ended. Today's app gives the same.
 pub const GRACE: Duration = Duration::from_millis(1500);
 
+/// What a closed session's grace thread does: waits up to [`GRACE`] for the
+/// program to exit (`exited_within`), and ends its tree outright (`force`)
+/// when it has not. Apart from the waiting, so a test can step it.
+pub(super) fn end_after_grace(exited_within: impl FnOnce(Duration) -> bool, force: impl FnOnce()) {
+    if !exited_within(GRACE) {
+        force();
+    }
+}
+
 /// How long the output of a program that has exited may keep arriving
 /// before the session is reported ended without the rest. A child that kept
 /// the terminal open would otherwise hold the session open.
@@ -426,9 +435,12 @@ impl Session {
         drop(lock(&self.pty).take());
         let session = Arc::clone(self);
         let _ = spawn_thread(format!("session {} grace", self.id), move || {
-            if session.wait_exit(GRACE).is_none() {
-                let _ = session.tree.end_tree(session.pid, Ending::Forced);
-            }
+            end_after_grace(
+                |grace| session.wait_exit(grace).is_some(),
+                || {
+                    let _ = session.tree.end_tree(session.pid, Ending::Forced);
+                },
+            );
         });
     }
 

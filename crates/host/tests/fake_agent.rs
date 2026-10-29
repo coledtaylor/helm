@@ -147,9 +147,7 @@ fn exits_with_its_child_once_the_test_process_that_owns_it_is_gone() {
         .arg("--fake-child")
         .spawn()
         .unwrap();
-    let record = agent.wait_for_record(fake.id(), PATIENCE, |record| {
-        !record.children.is_empty()
-    });
+    let record = agent.wait_for_record(fake.id(), PATIENCE, |record| !record.children.is_empty());
     let child = record.children[0];
     agent.wait_for_record(child, PATIENCE, |_| true);
     assert_eq!(NativeTree.is_alive(child), Knowable::Known(true));

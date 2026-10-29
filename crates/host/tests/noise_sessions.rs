@@ -24,9 +24,7 @@ use floti_host::platform::socket::{
     Endpoint, LocalListener, LocalSocket, LocalStream, Native as NativeSocket,
 };
 use floti_host::platform::startup;
-use floti_host::server::{
-    HANDSHAKE_DEADLINE, HOST_KEY_FILE, HostConfig, SOCKET_NAME, host_public_key,
-};
+use floti_host::server::{HOST_KEY_FILE, HostConfig, SOCKET_NAME, host_public_key};
 use floti_host::testkit::{
     FakeAgent, PATIENCE, RunningHost, TEST_DEVICE_NAME, TestClient, TestDirs, pair_test_device,
     test_device_key,
@@ -42,6 +40,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinHandle;
 
 const CAPABILITIES: &[&str] = &["files", "terminal"];
+
+/// The handshake deadline the stalled-handshake test gives its host.
+const STALL_DEADLINE: Duration = Duration::from_secs(2);
 
 /// Both IK handshake messages on the wire: a 2-byte length, then 96 bytes
 /// from the device and 48 from the host.
@@ -755,6 +756,11 @@ async fn s9_a_connection_that_does_not_speak_the_handshake_is_closed_unanswered_
 async fn s10_a_connection_that_stalls_before_or_inside_the_handshake_is_closed_at_the_deadline_and_logged()
  {
     let dirs = TestDirs::new();
+    // A deadline of the test's own: the real one's length is stepped in the
+    // connection's unit tests, and this one only shows the refusals happen,
+    // and are logged, while another client is served. It still leaves the
+    // served client's handshake, a few milliseconds, far inside it.
+    dirs.with_handshake_deadline(STALL_DEADLINE);
     let host = HostProcess::start(&dirs);
     let endpoint = binary_endpoint(&dirs);
     let host_key = host_key_of(&dirs).await;
@@ -771,9 +777,8 @@ async fn s10_a_connection_that_stalls_before_or_inside_the_handshake_is_closed_a
     assert!(client.request::<SessionList>(&()).await.is_ok());
 
     let (to_silent, to_partway) = tokio::join!(
-        // The deadline, then the patience any wait is given on a slow machine.
-        read_until_closed_within(&mut silent, HANDSHAKE_DEADLINE + PATIENCE),
-        read_until_closed_within(&mut partway, HANDSHAKE_DEADLINE + PATIENCE)
+        read_until_closed_within(&mut silent, PATIENCE),
+        read_until_closed_within(&mut partway, PATIENCE)
     );
     assert!(to_silent.is_empty() && to_partway.is_empty());
 

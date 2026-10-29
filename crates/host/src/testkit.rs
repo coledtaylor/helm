@@ -173,6 +173,18 @@ impl TestDirs {
             .expect("name the test's owner in its folder");
     }
 
+    /// Gives a host over this tree's data folder `deadline` to finish a
+    /// connection's handshake in, in place of the real one, so a test of the
+    /// deadline against the executable does not wait the real one out.
+    pub fn with_handshake_deadline(&self, deadline: Duration) {
+        std::fs::write(
+            self.data
+                .join(crate::server::TEST_HANDSHAKE_DEADLINE_MARKER),
+            deadline.as_millis().to_string(),
+        )
+        .expect("mark the test's data folder");
+    }
+
     /// Makes a host over this tree's data folder a computer with no secret
     /// store, as Linux with no Secret Service is: nothing can be sealed.
     /// Otherwise a host here seals plugin secrets with a key file in the data

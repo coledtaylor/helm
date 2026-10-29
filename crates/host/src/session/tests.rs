@@ -14,6 +14,7 @@ use alacritty_terminal::term::cell::{Cell, Hyperlink};
 use floti_protocol::Knowable;
 use tokio::sync::mpsc::error::TryRecvError;
 
+use super::live::end_after_grace;
 use super::redraw::primary_grid;
 use super::*;
 use crate::agent::{AgentBackend, LaunchFolder, LaunchRequest};
@@ -752,15 +753,38 @@ fn closing_a_session_ends_its_program_and_children_within_the_grace() {
     });
     let child = record.children[0];
 
-    // The grace, then the patience any wait is given on a slow machine.
+    // The agent takes the polite ending; what follows when one does not is
+    // stepped below, rather than waited out.
     session.close();
     assert!(
-        session.wait_exit(GRACE + PATIENCE).is_some(),
+        session.wait_exit(PATIENCE).is_some(),
         "the session did not end"
     );
     wait_until("the agent's child to end", || {
         Native.is_alive(child) == Knowable::Known(false)
     });
+}
+
+#[test]
+fn a_closed_session_still_running_after_the_grace_is_ended_outright() {
+    let mut waited = None;
+    let mut forced = false;
+    end_after_grace(
+        |grace| {
+            waited = Some(grace);
+            false
+        },
+        || forced = true,
+    );
+    assert_eq!(waited, Some(GRACE));
+    assert!(forced);
+}
+
+#[test]
+fn a_closed_session_that_ends_within_the_grace_is_not_ended_outright() {
+    let mut forced = false;
+    end_after_grace(|_| true, || forced = true);
+    assert!(!forced);
 }
 
 #[test]

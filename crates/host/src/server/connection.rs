@@ -2,7 +2,8 @@
 //! requests, subscriptions and session terminals, until the client goes or
 //! the host stops.
 //!
-//! The handshake runs on the raw stream within [`HANDSHAKE_DEADLINE`]. The
+//! The handshake runs on the raw stream within the admission's deadline
+//! ([`HANDSHAKE_DEADLINE`](super::HANDSHAKE_DEADLINE) in a host). The
 //! device's key arrives in its first message and is checked against the
 //! device registry before the host writes anything; a connection that is not
 //! a handshake, whose first message does not decrypt, whose key is unknown or
@@ -27,6 +28,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use floti_protocol::channel::{RequestChannel, Router};
 use floti_protocol::channels::host::{HostStop, HostStopReason};
@@ -41,16 +43,19 @@ use floti_protocol::{
     CapabilitySet, ClientChannels, CreditReceiver, DEFAULT_INITIAL_CREDIT, FrameDecoder,
     HostIdentity, Message, Outbox, ProtocolError, encode_frame,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 
 use super::events::{Publication, Start};
 use super::features::Features;
-use super::{CATALOGUE, HANDSHAKE_DEADLINE, Stopper, unserved};
+use super::{CATALOGUE, Stopper, unserved};
 use crate::devices::{DeviceRegistry, Standing};
 use crate::platform::socket::LocalStream;
 use crate::session::{ClientId, Session, SessionOutput};
+
+#[cfg(test)]
+mod tests;
 
 const READ_CHUNK: usize = 64 * 1024;
 
@@ -82,12 +87,13 @@ pub(crate) fn served_channels(features: &Features) -> BTreeSet<&'static str> {
     served
 }
 
-/// What the handshake needs: the host's key and the registry it checks
-/// each device against.
+/// What the handshake needs: the host's key, the registry it checks each
+/// device against, and how long a connection has to finish it.
 #[derive(Clone)]
 pub(crate) struct Admission {
     pub host_key: Arc<KeyPair>,
     pub devices: Arc<DeviceRegistry>,
+    pub deadline: Duration,
 }
 
 /// Why a connection was closed before `hello`, as the host's log says it.
@@ -96,7 +102,7 @@ enum Refusal {
     Revoked(PublicKey),
     Unchecked(PublicKey, crate::Error),
     Failed(NoiseError),
-    TimedOut,
+    TimedOut(Duration),
     Ended,
     ReadFailed(std::io::Error),
 }
@@ -112,10 +118,9 @@ impl fmt::Display for Refusal {
                 key.fingerprint()
             ),
             Self::Failed(err) => write!(f, "failed handshake: {err}"),
-            Self::TimedOut => write!(
-                f,
-                "the handshake did not finish in time ({HANDSHAKE_DEADLINE:?})"
-            ),
+            Self::TimedOut(deadline) => {
+                write!(f, "the handshake did not finish in time ({deadline:?})")
+            }
             Self::Ended => write!(f, "the connection ended before the handshake finished"),
             Self::ReadFailed(err) => write!(f, "the handshake could not be read: {err}"),
         }
@@ -142,12 +147,7 @@ struct OpenStream {
 /// Serves one client until it disconnects or the host stops.
 pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: ConnectionContext) {
     let mut shutdown = context.shutdown;
-    let admitted = tokio::time::timeout(
-        HANDSHAKE_DEADLINE,
-        admit(&mut stream, &context.admission, &mut shutdown),
-    )
-    .await
-    .unwrap_or(Err(Some(Refusal::TimedOut)));
+    let admitted = admit_within_deadline(&mut stream, &context.admission, &mut shutdown).await;
     let (transport, rest) = match admitted {
         Ok(admitted) => admitted,
         Err(refusal) => {
@@ -187,11 +187,22 @@ pub(crate) async fn serve(mut stream: LocalStream, client: ClientId, context: Co
     connection.features.client_left(client);
 }
 
+/// [`admit`], cut off at the admission's deadline.
+async fn admit_within_deadline(
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    admission: &Admission,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Result<(Transport, Vec<u8>), Option<Refusal>> {
+    tokio::time::timeout(admission.deadline, admit(stream, admission, shutdown))
+        .await
+        .unwrap_or(Err(Some(Refusal::TimedOut(admission.deadline))))
+}
+
 /// The responder's half of the handshake, on the raw stream: the session and
 /// any bytes read past the device's first message, which belong to it. The
 /// error is why the device was refused, or `None` when the host is stopping.
 async fn admit(
-    stream: &mut LocalStream,
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     admission: &Admission,
     shutdown: &mut watch::Receiver<bool>,
 ) -> Result<(Transport, Vec<u8>), Option<Refusal>> {
