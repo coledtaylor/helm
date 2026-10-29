@@ -84,8 +84,15 @@ desktop against a backend waits until the desktop talks to the Rust host.
 
 The host process itself is tested in `crates/host/tests/host.rs`, through
 `TestClient` (`testkit/client.rs`): a protocol client that connects on the
-local socket, says `hello`, makes typed requests and reads a session's
-terminal, granting credit as it reads. Most tests run a `Host` in the test
+local socket, runs the Noise handshake as the testkit's device, paired with
+that host and pinned to its key, says `hello`, makes typed requests and reads
+a session's terminal, granting credit as it reads. `RunningHost` pairs the
+device into its host's registry before serving, and `pair_test_device` does
+the same for the executable, so a test still connects with an endpoint and
+its capabilities alone. `noise_sessions.rs` tests the handshake itself: what
+crosses the socket, read through a tap that relays one endpoint to another,
+and clients that misbehave, built as raw sockets from the protocol's Noise
+layer, against the executable, whose stderr is the host's log. Most tests run a `Host` in the test
 process on a `TestDirs`; the ones about the executable (one instance per data
 folder and socket, the SSH refusal, Ctrl+C and SIGTERM, a killed host) run the
 built `floti host` with `FLOTI_DATA_DIR`, `FLOTI_RUNTIME_DIR` and the other
@@ -114,9 +121,13 @@ when it runs, so a language the app highlights and the host does not fails it.
 compile-time OS conditional (`cfg(windows)`, `cfg!(unix)`, `target_os` and
 the like) appears outside `src/platform/mod.rs` and the per-OS
 implementations of the platform concerns (`startup`, `socket`, `folders`,
-`process_tree`, `process_table`, `links`, `launcher`). Behaviour that
-differs by OS goes behind one of those interfaces, with an implementation for
-each OS.
+`process_tree`, `process_table`, `links`, `launcher`, `private_files`).
+Behaviour that differs by OS goes behind one of those interfaces, with an
+implementation for each OS. `private_files` is tested by what the OS reports
+for a written file: mode `0600` on macOS and Linux, and on Windows a
+protected access list with one entry, the current user's, read the way the
+pipe's is; each with a control file made the ordinary way that the check
+rejects.
 
 ## Running them
 

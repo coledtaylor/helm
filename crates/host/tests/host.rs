@@ -20,7 +20,8 @@ use floti_host::platform::startup;
 use floti_host::server::{Host, HostConfig, SOCKET_NAME, unserved};
 use floti_host::store::Store;
 use floti_host::testkit::{
-    FakeAgent, FakeAgentRecord, PATIENCE, RunningHost, TestClient, TestDirs, names_unserved_channel,
+    FakeAgent, FakeAgentRecord, PATIENCE, RunningHost, TestClient, TestDirs,
+    names_unserved_channel, pair_test_device,
 };
 use floti_host::{Error, fake_agent};
 use floti_protocol::channel::{from_payload, to_payload};
@@ -195,8 +196,11 @@ fn runs_in(agent: &FakeAgent, cwd: &Path, except: &[u32]) -> Vec<FakeAgentRecord
     }
 }
 
-/// The `floti host` executable, with every folder in `dirs`.
+/// The `floti host` executable, with every folder in `dirs`, and the
+/// testkit's device paired with the host it will be, so a [`TestClient`] at
+/// [`binary_endpoint`] is let in.
 fn floti_host_command(dirs: &TestDirs) -> Command {
+    pair_test_device(&binary_endpoint(dirs), &dirs.data);
     let mut command = Command::new(env!("CARGO_BIN_EXE_floti"));
     command
         .arg("host")

@@ -55,6 +55,15 @@ serde_json = "1"
 # Profiles, templates and harness manifests are YAML. A maintained fork of
 # serde_yaml, which is no longer maintained.
 serde_yaml_ng = "0.10"
+# The Noise sessions every client connection runs, never hand-rolled. Only the
+# pure-Rust primitives Noise_IK_25519_ChaChaPoly_BLAKE2s needs: its `std`
+# feature would pull in ring's C and assembly, and snow needs only `alloc`.
+snow = { version = "0.10", default-features = false, features = [
+    "use-blake2",
+    "use-chacha20poly1305",
+    "use-curve25519",
+    "use-getrandom",
+] }
 # Code highlighting with the pure-Rust regex engine, so no OS needs Oniguruma.
 # Its themes are syntect's own; its grammars are two-face's below.
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
@@ -95,3 +104,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_UI_Shell",
 ] }
+# Wipes a private key's bytes when it is dropped. The version snow's own
+# ciphers already use.
+zeroize = "1"

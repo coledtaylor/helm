@@ -12,6 +12,12 @@
 //!   [`fake_agent!`](crate::fake_agent).
 //! - [`RunningHost`]: a host serving on a thread and runtime of its own,
 //!   which the test stops.
+//! - [`TestClient`]: a protocol client that runs the Noise handshake as the
+//!   testkit's device ([`test_device_key`]). [`RunningHost`] pairs that
+//!   device into its host's registry before serving and records where the
+//!   host keeps its key, so a test connects with an endpoint and nothing
+//!   else; [`pair_test_device`] does the same for a host started another
+//!   way, such as the `floti host` executable.
 //!
 //! A test leaves nothing behind: [`TestDirs`] fails the test that leaves a
 //! file in its tree open, and a dropped [`RunningHost`] stops its host before
@@ -22,15 +28,16 @@ mod client;
 
 pub use client::{PATIENCE, TestClient, names_unserved_channel};
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::mpsc;
+use std::sync::{LazyLock, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use floti_protocol::BackendId;
 use floti_protocol::channels::host::HostStopReason;
+use floti_protocol::noise::{KeyPair, PublicKey};
 use serde::Deserialize;
 use tempfile::TempDir;
 
@@ -38,12 +45,73 @@ use crate::Result;
 use crate::agent::{
     AgentBackend, Launch, LaunchFolder, LaunchRequest, LaunchSpec, ResumeRequest, Resumer,
 };
+use crate::devices::DeviceRegistry;
 use crate::platform::folders::{Folders, UserEnv};
 use crate::platform::socket::{Endpoint, LocalSocket, Native as NativeSocket};
 use crate::server::{Host, HostConfig, Stopper};
 
 /// The variable naming the folder the fake agent records each run in.
 pub const FAKE_AGENT_LOG_VAR: &str = "FLOTI_FAKE_AGENT_LOG";
+
+/// The name the testkit's device is paired under.
+pub const TEST_DEVICE_NAME: &str = "floti host tests";
+
+/// The device every [`TestClient`] in this test process connects as. Its key
+/// lives in memory only.
+static TEST_DEVICE: LazyLock<KeyPair> =
+    LazyLock::new(|| KeyPair::generate().expect("make the testkit's device key"));
+
+/// For each endpoint a test host serves at, the data folder that host keeps
+/// its key and registry in.
+static HOSTS: LazyLock<Mutex<HashMap<Endpoint, PathBuf>>> = LazyLock::new(Default::default);
+
+fn test_device() -> &'static KeyPair {
+    &TEST_DEVICE
+}
+
+/// The public key of the device [`TestClient`] connects as.
+pub fn test_device_key() -> PublicKey {
+    TEST_DEVICE.public()
+}
+
+/// Says the host serving at `endpoint` keeps its data in `data`, so a
+/// [`TestClient`] pins that host's key, without pairing anything yet.
+fn record_host(endpoint: &Endpoint, data: &Path) {
+    HOSTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(endpoint.clone(), data.to_path_buf());
+}
+
+/// Pairs the testkit's device with the host whose data folder is `data`,
+/// and records that the host serving at `endpoint` is that one: what
+/// [`RunningHost`] does before it serves, for a host started another way,
+/// such as the `floti host` executable. The folder is made if it is new.
+pub fn pair_test_device(endpoint: &Endpoint, data: &Path) {
+    record_host(endpoint, data);
+    pair_into(data);
+}
+
+fn pair_into(data: &Path) {
+    DeviceRegistry::in_data_folder(data)
+        .pair(test_device_key(), TEST_DEVICE_NAME)
+        .unwrap_or_else(|err| panic!("pair the testkit's device in {}: {err}", data.display()));
+}
+
+/// The data folder of the host serving at `endpoint`.
+fn data_folder_of(endpoint: &Endpoint) -> PathBuf {
+    HOSTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(endpoint)
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!(
+                "no test host is known at {endpoint}: start it with RunningHost, take its \
+                 endpoint from TestDirs::endpoint, or name it to pair_test_device"
+            )
+        })
+}
 
 /// How long a dropped [`TestDirs`] keeps trying to remove its tree: an OS can
 /// let go of an exited process's files a moment after the exit.
@@ -129,9 +197,13 @@ impl TestDirs {
     }
 
     /// A socket endpoint no other test is using: a uniquely named pipe on
-    /// Windows, a socket in this tree's runtime folder elsewhere.
+    /// Windows, a socket in this tree's runtime folder elsewhere. A
+    /// [`TestClient`] connecting to it pins the key of a host whose data is
+    /// in this tree's data folder.
     pub fn endpoint(&self) -> Endpoint {
-        NativeSocket.endpoint(&self.runtime, &unique_name())
+        let endpoint = NativeSocket.endpoint(&self.runtime, &unique_name());
+        record_host(&endpoint, &self.data);
+        endpoint
     }
 }
 
@@ -232,6 +304,8 @@ impl RunningHost {
         config: HostConfig,
         look: impl FnOnce(&Host) -> T + Send + 'static,
     ) -> (Self, T) {
+        // Before it serves: a test's first client is let in.
+        pair_test_device(&config.endpoint, &config.folders.data);
         let (started_tx, started) = mpsc::channel::<Result<(Stopper, T)>>();
         let (done_tx, done) = mpsc::channel();
         let thread = std::thread::Builder::new()

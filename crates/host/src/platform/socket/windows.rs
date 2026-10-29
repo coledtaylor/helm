@@ -161,16 +161,16 @@ fn create_instance(
 
 /// A self-relative security descriptor whose protected access list has one
 /// entry: full access for the current user.
-struct UserOnlyDescriptor(PSECURITY_DESCRIPTOR);
+pub(crate) struct UserOnlyDescriptor(PSECURITY_DESCRIPTOR);
 
 // SAFETY: the descriptor is heap memory from LocalAlloc that nothing mutates
-// after it is built; it is only read, by CreateNamedPipe.
+// after it is built; it is only read, by CreateNamedPipe and CreateFileW.
 unsafe impl Send for UserOnlyDescriptor {}
 // SAFETY: as above, shared reads of immutable memory.
 unsafe impl Sync for UserOnlyDescriptor {}
 
 impl UserOnlyDescriptor {
-    fn for_current_user() -> io::Result<Self> {
+    pub(crate) fn for_current_user() -> io::Result<Self> {
         let sid = CurrentUser::query()?.sid_string()?;
         // D:P is a protected access list, so nothing is inherited into it;
         // (A;;GA;;;sid) allows generic all to the user, and nobody else.
@@ -194,6 +194,11 @@ impl UserOnlyDescriptor {
         }
         Ok(Self(descriptor))
     }
+
+    /// The descriptor, valid while `self` lives.
+    pub(crate) fn as_ptr(&self) -> PSECURITY_DESCRIPTOR {
+        self.0
+    }
 }
 
 impl Drop for UserOnlyDescriptor {
@@ -205,13 +210,13 @@ impl Drop for UserOnlyDescriptor {
 
 /// The user this process runs as: its token's TOKEN_USER, which holds the
 /// SID.
-struct CurrentUser {
+pub(crate) struct CurrentUser {
     /// A TOKEN_USER and the SID it points into, in u64s for alignment.
     buffer: Vec<u64>,
 }
 
 impl CurrentUser {
-    fn query() -> io::Result<Self> {
+    pub(crate) fn query() -> io::Result<Self> {
         let mut raw: HANDLE = ptr::null_mut();
         // SAFETY: the pseudo handle needs no closing; `raw` receives a token
         // handle, owned below.
@@ -246,7 +251,7 @@ impl CurrentUser {
     }
 
     /// The user's SID, valid while `self` lives.
-    fn sid(&self) -> PSID {
+    pub(crate) fn sid(&self) -> PSID {
         // SAFETY: GetTokenInformation(TokenUser) wrote a TOKEN_USER at the
         // start of the buffer.
         unsafe { (*self.buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid }

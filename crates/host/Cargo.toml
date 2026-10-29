@@ -61,6 +61,7 @@ tempfile = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 two-face.workspace = true
+zeroize.workspace = true
 
 # Only the per-OS implementations under src/platform use these.
 [target.'cfg(windows)'.dependencies]
