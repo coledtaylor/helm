@@ -60,7 +60,10 @@ export function startServer(): Promise<SampleServer> {
   return startSampleServer({ token: TOKEN })
 }
 
-/** The plugin page at `path` (`dist/panels/main.html`), once the window has framed it. */
+/**
+ * The plugin page at `path` (`dist/panels/main.html`), once the window has
+ * framed it and a pointer over it reaches it.
+ */
 export async function pluginFrame(ui: Page, path: string, plugin = 'sample'): Promise<Frame> {
   const url = `helm-plugin://${plugin}/${path}`
   let found: Frame | undefined
@@ -72,5 +75,34 @@ export async function pluginFrame(ui: Page, path: string, plugin = 'sample'): Pr
       return found.evaluate(() => typeof (window as unknown as { helm?: unknown }).helm === 'object').catch(() => false)
     })
     .toBe(true)
+  await pointerReaches(found as Frame)
   return found as Frame
+}
+
+/**
+ * Waits until a pointer over the page in `frame` reaches the page.
+ *
+ * A plugin page runs in a process of its own. For a moment after it is framed,
+ * Chromium still routes a pointer over it to Helm's window, where it lands on
+ * the `<iframe>` and the page never hears it, so a click made then is lost; on
+ * a loaded machine the moment is long enough for a test to click in it. A move
+ * the page itself hears is the sign that a click will reach it.
+ */
+async function pointerReaches(frame: Frame): Promise<void> {
+  type Heard = Window & { pointerHeard?: boolean }
+  await frame.evaluate(() => {
+    window.addEventListener('pointermove', () => ((window as Heard).pointerHeard = true), { once: true })
+  })
+  let moves = 0
+  await expect
+    .poll(
+      async () => {
+        // A pointer that stays where it is sends no move, so each look moves it.
+        moves += 1
+        await frame.locator('body').hover({ position: { x: 1 + (moves % 2), y: 1 } })
+        return frame.evaluate(() => (window as Heard).pointerHeard === true)
+      },
+      { message: `a pointer over ${frame.url()} never reached the page` }
+    )
+    .toBe(true)
 }
