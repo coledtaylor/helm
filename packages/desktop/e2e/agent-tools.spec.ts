@@ -1,5 +1,6 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { PATIENCE } from '../../../test/patience'
 import { bearerOf, callTool, readMcpConfig, rpc } from '../test/mcp-client'
 import { claudeRunIn, expect, startSession, test, typeLine } from './helm'
 
@@ -209,7 +210,7 @@ test('the user shares a page with a session, which reads and drives it until the
 
     // Text that arrives late is waited for.
     expect((await tool('browser_click', { selector: 'button' })).isError).toBe(false)
-    expect((await tool('browser_wait_for', { text: 'Ready now', timeout: 15 })).text).toMatch(/^"Ready now" appeared after /)
+    expect((await tool('browser_wait_for', { text: 'Ready now', timeout: PATIENCE / 1000 })).text).toMatch(/^"Ready now" appeared after /)
 
     // The wheel turns the right way, by as much as it was asked to.
     const scrolled = await tool('browser_scroll', { dy: 600 })

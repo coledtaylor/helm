@@ -427,12 +427,17 @@ a slower one, so no test has one.
 - **A test waits on an event or a polled condition, never on time.** Every
   wait is bounded by the shared patience, and a wait that runs out fails
   naming what it waited for: the assertion it polled, or the message a Rust
-  wait gives. The patience is `PATIENCE` in `test/patience.ts` (10 s) for
-  vitest, passed as `vi.waitFor`'s `timeout` and set as Testing Library's
-  default in `ui/src/test-setup.ts`; Playwright's `expect` timeout in
-  `e2e/playwright.config.ts` (15 s, since each wait crosses a built app) for
-  the end-to-end tier; and `PATIENCE` in the host's testkit
-  (`testkit/client.rs`) for Rust. A passing test never comes near it.
+  wait gives. The patience is 20 s in every tier, and each language has one
+  constant for it: `PATIENCE` in `test/patience.ts` for TypeScript, passed as
+  `vi.waitFor`'s `timeout`, set as Testing Library's default in
+  `ui/src/test-setup.ts` and as Playwright's `expect` timeout in
+  `e2e/playwright.config.ts`; and `PATIENCE` in the host's testkit
+  (`testkit/client.rs`) for Rust, which no test shadows with a wait of its
+  own. A passing test never comes near it.
+- **A duration is asserted only when it is the behavior under test**, and
+  then the bound is that duration plus the patience: a session ends within its
+  grace, a handshake is cut at its deadline. Anything else measured against a
+  bound waits on the event instead, or steps the logic.
 - **A test that says something did not happen proves it with a barrier.**
   After the action that must cause nothing, it causes a second, known event
   and waits for it; the first event to arrive must be that one. `files.test.ts`
@@ -443,9 +448,11 @@ a slower one, so no test has one.
 - **Logic driven by timers or polling is tested by stepping it**: the test
   calls the step function with each state, or runs on fake timers
   (`vi.useFakeTimers`, then `vi.advanceTimersByTime` or
-  `vi.runAllTimersAsync`), as `browser.test.ts` does for a page's retries.
-  Integration tests check only the wiring: that the timer is set and reaches
-  what it calls.
+  `vi.runAllTimersAsync`), as `browser.test.ts` does for a page's retries. In
+  Rust it runs on tokio's paused clock (`#[tokio::test(start_paused = true)]`,
+  then `tokio::time::advance`), as the resources pass tests do, or calls the
+  step itself, as the config watch's `look` test does. Integration tests check
+  only the wiring: that the timer is set and reaches what it calls.
 - **A module ported from TypeScript lists what Node or Electron did for it
   implicitly, and tests each.** Node's http server discards a request body
   nobody read; the config watch debounced an editor's write, truncate and

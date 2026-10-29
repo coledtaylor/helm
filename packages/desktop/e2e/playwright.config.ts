@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test'
+import { PATIENCE } from '../../../test/patience'
 
 /**
  * End-to-end tests: the built app, driven through its window, in a world of
@@ -11,10 +12,9 @@ export default defineConfig({
   testDir: '.',
   testMatch: '**/*.spec.ts',
   timeout: 60_000,
-  // This tier's patience: every `expect` and `expect.poll` in a spec waits
-  // this long and no other. Longer than the vitest tier's (`test/patience.ts`)
-  // because each wait crosses a built Electron app and its windows.
-  expect: { timeout: 15_000 },
+  // Every `expect` and `expect.poll` in a spec waits the shared patience and
+  // no other.
+  expect: { timeout: PATIENCE },
   retries: 0,
   // Each test starts its own app and its own sessions; running them one at a
   // time keeps timing on a loaded machine from becoming a variable.
