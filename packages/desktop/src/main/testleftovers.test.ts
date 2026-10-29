@@ -102,6 +102,39 @@ describe('what the leftover check selects', () => {
     expect(leftovers).toEqual({ folders: [], processes: [] })
   })
 
+  it('never reports what a process the check runs under starts beside it', () => {
+    // The check runs under a test runner or an app that keeps starting work of
+    // its own: vitest's other workers, Helm's other sessions. Only init or a
+    // subreaper adopts what the step left, so a new process under any other
+    // ancestor of the check was started by that ancestor, not by the step.
+    const after = [
+      ...BEFORE,
+      row(95, 20, 'node', 18, 'node vitest/dist/workers/forks.js'),
+      row(96, 95, 'floti', 19),
+      row(97, 10, 'bash', 19),
+      row(50, 30, 'node', 20)
+    ]
+    const leftovers = selectLeftovers({
+      before: { processes: BEFORE, folders: [] },
+      after: { processes: after, folders: [] },
+      self: 50,
+      tmp: TMP
+    })
+    expect(leftovers).toEqual({ folders: [], processes: [] })
+  })
+
+  it('reports an orphan a subreaper adopted, as WSL and systemd adopt them', () => {
+    const before = [...BEFORE, row(25, 20, 'Relay(274)', 5, '/init'), row(26, 25, 'systemd', 5, '/usr/lib/systemd/systemd --user')]
+    const after = [...before, row(43, 25, 'node', 12), row(44, 26, 'floti', 13), row(50, 26, 'node', 20)]
+    const leftovers = selectLeftovers({
+      before: { processes: before, folders: [] },
+      after: { processes: after, folders: [] },
+      self: 50,
+      tmp: TMP
+    })
+    expect(pids(leftovers.processes)).toEqual([43, 44])
+  })
+
   it('takes a reused pid for a different process', () => {
     // pid 12 was another session's fake agent; it ended, and the step left a
     // node that Windows gave the same pid.

@@ -42,6 +42,19 @@ export const TEST_FOLDER_PREFIXES = ['floti test ', 'helm world-', 'helm-test-po
  */
 const TEST_PROCESS_NAMES = new Set(['node', 'sh', 'bash', 'dash', 'zsh', 'cmd', 'powershell', 'pwsh', 'conhost'])
 
+/**
+ * The processes that adopt an orphan on macOS and Linux: init (pid 1, and the
+ * `/init` relay WSL runs each session under), systemd as a user's subreaper,
+ * and launchd. Windows adopts nothing: an orphan keeps naming its dead parent.
+ */
+const REAPER_NAMES = new Set(['init', 'systemd', 'launchd'])
+
+/** True for a process that adopts orphans, by its name or the program it runs. */
+function isReaper(row) {
+  const program = row.commandLine === null ? '' : processName(row.commandLine.split(/\s/, 1)[0])
+  return row.pid === 1 || REAPER_NAMES.has(row.name) || REAPER_NAMES.has(program)
+}
+
 /** True for a temp folder entry a test made. */
 export function isTestFolder(name) {
   return TEST_FOLDER_PREFIXES.some((prefix) => name.startsWith(prefix))
@@ -77,10 +90,16 @@ export function processName(raw) {
  * - reaching one of the check's ancestors that started after the snapshot
  *   (the after-step's own shell and its console host in CI) means it is the
  *   check's, and it is not reported;
- * - reaching one of the check's ancestors that was there before, or running
- *   out of live parents, means it was the step's, and it is reported. A
- *   Windows orphan names a dead parent, and a POSIX orphan is re-parented to
- *   init or a subreaper, which are the check's ancestors too.
+ * - reaching one of the check's ancestors that was there before and adopts
+ *   orphans (init or a subreaper), or running out of live parents, means it
+ *   was the step's, and it is reported. A Windows orphan names a dead parent,
+ *   and a POSIX orphan is re-parented to init or a subreaper, which are the
+ *   check's ancestors too;
+ * - reaching any other ancestor of the check that was there before means that
+ *   ancestor started it beside the check (vitest's other workers around the
+ *   check's own test, Helm's other sessions around a check run in one of its
+ *   terminals), and it is not reported: what the step started descends from
+ *   the check, or was orphaned and adopted by a reaper.
  *
  * `processes` is null on either side when the table could not be read, and
  * then only folders are judged.
@@ -115,7 +134,7 @@ export function selectLeftovers({ before, after, self, tmp }) {
     for (const parent of chain(row)) {
       if (parent.pid === self) return false
       const old = existed.has(key(parent))
-      if (checkAncestors.has(parent.pid)) return old
+      if (checkAncestors.has(parent.pid)) return old && isReaper(parent)
       if (old) return false
     }
     return true
