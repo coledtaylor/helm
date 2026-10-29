@@ -25,6 +25,9 @@ export default defineConfig({
     // Native modules and temp directories: a worker per file keeps a failing
     // test from leaving an open SQLite handle in a process another test reuses.
     pool: 'forks',
+    // On a developer's machine the suite keeps to a quarter of the cores, so
+    // the desktop stays usable while it runs; on CI it has the runner.
+    maxWorkers: process.env.CI ? undefined : '25%',
     testTimeout: 30_000,
     // `pnpm test` runs with --coverage; a targeted `vitest run <file>` does
     // not, so a narrow run never trips the thresholds.
