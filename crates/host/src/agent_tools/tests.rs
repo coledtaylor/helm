@@ -732,8 +732,12 @@ async fn stopping_closes_the_port_and_a_listener_started_after_knows_no_earlier_
 
     world.listener.stop().await;
     assert_eq!(world.listener.address(), None);
+    // A fork another test makes meanwhile (a pty's child before it execs,
+    // the process-tree guard before it closes what it inherited) holds a
+    // copy of the listening socket for a moment, so the port stops accepting
+    // soon after stop returns rather than at once.
     assert!(
-        !accepts(address).await,
+        refuses_soon(address).await,
         "the port accepts nothing once stop returns"
     );
 
