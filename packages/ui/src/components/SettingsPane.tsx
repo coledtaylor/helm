@@ -233,6 +233,9 @@ export interface SettingsPaneProps {
   /** Reopen what a crash took without asking. Also ticked from the offer itself. */
   restoreWithoutAsking: boolean
   onRestoreWithoutAskingChange: (next: boolean) => void
+  /** Run sessions and terminals in the local host. Read when Helm starts, so a change waits for the next start. */
+  sessionsInHost: boolean
+  onSessionsInHostChange: (next: boolean) => void
 }
 
 /**
@@ -338,7 +341,9 @@ export function SettingsPane({
   sessionMcp,
   onSessionMcpChange,
   restoreWithoutAsking,
-  onRestoreWithoutAskingChange
+  onRestoreWithoutAskingChange,
+  sessionsInHost,
+  onSessionsInHostChange
 }: SettingsPaneProps): JSX.Element {
   const found = status !== null && status.path !== null && status.version !== null
   const overridden = status?.source === 'setting'
@@ -614,6 +619,8 @@ export function SettingsPane({
               onMcpChange={onSessionMcpChange}
               restore={restoreWithoutAsking}
               onRestoreChange={onRestoreWithoutAskingChange}
+              inHost={sessionsInHost}
+              onInHostChange={onSessionsInHostChange}
             />
           )}
 
@@ -1474,12 +1481,16 @@ function SessionsGroup({
   mcp,
   onMcpChange,
   restore,
-  onRestoreChange
+  onRestoreChange,
+  inHost,
+  onInHostChange
 }: {
   mcp: boolean
   onMcpChange: (next: boolean) => void
   restore: boolean
   onRestoreChange: (next: boolean) => void
+  inHost: boolean
+  onInHostChange: (next: boolean) => void
 }): JSX.Element {
   return (
     <Group
@@ -1516,6 +1527,22 @@ function SessionsGroup({
             checked={restore}
             onChange={() => onRestoreChange(!restore)}
             label="Resume after a crash without asking"
+          />
+        </span>
+      </Row>
+      <Row
+        label="Run sessions in the local host"
+        hint={
+          inHost
+            ? 'Sessions and terminals run in the local host program, which Helm starts and stops. Takes effect the next time Helm starts.'
+            : 'Sessions and terminals run in Helm itself. Takes effect the next time Helm starts.'
+        }
+      >
+        <span data-settings-sessions-in-host={String(inHost)}>
+          <Checkbox
+            checked={inHost}
+            onChange={() => onInHostChange(!inHost)}
+            label="Run sessions in the local host"
           />
         </span>
       </Row>

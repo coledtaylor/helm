@@ -542,6 +542,9 @@ export const SETTING_VALIDATORS: SettingValidators = {
    */
   sessionMcp: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
 
+  /** Strict for the same reason: `'false'` would start the host. */
+  sessionsInHost: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
+
   /**
    * Addresses the browser pane has been to, newest first.
    *

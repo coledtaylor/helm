@@ -99,6 +99,8 @@ function paneProps(overrides: Partial<SettingsPaneProps> = {}): SettingsPaneProp
     onSessionMcpChange: vi.fn(),
     restoreWithoutAsking: false,
     onRestoreWithoutAskingChange: vi.fn(),
+    sessionsInHost: DEFAULT_SETTINGS.sessionsInHost,
+    onSessionsInHostChange: vi.fn(),
     ...overrides
   }
 }

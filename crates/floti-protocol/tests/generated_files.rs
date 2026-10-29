@@ -4,10 +4,14 @@
 use std::path::{Path, PathBuf};
 
 use floti_protocol::generate::{
-    GENERATED_DIR, REGENERATE_COMMAND, SCHEMA_FILE, TSCONFIG_FILE, TYPESCRIPT_FILE, generated_dir,
-    json_schema, stale_files, typescript, write_generated,
+    GENERATED_DIR, REGENERATE_COMMAND, SCHEMA_FILE, TSCONFIG_FILE, TYPESCRIPT_FILE,
+    frame_fixture_messages, frame_fixtures, generated_dir, json_schema, stale_files, typescript,
+    write_generated,
 };
-use floti_protocol::{Bytes, Capability, Catalogue, EventChannel, RequestChannel, StreamChannel};
+use floti_protocol::{
+    Bytes, Capability, Catalogue, EventChannel, FrameDecoder, RequestChannel, StreamChannel,
+    encode_frame,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -208,6 +212,30 @@ fn a_missing_generated_file_is_reported_as_out_of_date() {
             "{GENERATED_DIR}/{TSCONFIG_FILE} is out of date. Run `{REGENERATE_COMMAND}`."
         )]
     );
+}
+
+#[test]
+fn the_frame_fixtures_are_frames_of_a_hello_a_response_an_event_and_stream_data_that_decode_to_their_messages()
+ {
+    let file: serde_json::Value = serde_json::from_str(&frame_fixtures()).unwrap();
+    let frames = file.as_object().unwrap();
+    let messages = frame_fixture_messages();
+    assert_eq!(
+        frames.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["event", "hello", "response", "streamData"]
+    );
+    for (name, message) in messages {
+        let hex = frames[name].as_str().unwrap();
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap())
+            .collect();
+        assert_eq!(bytes, encode_frame(&message).unwrap(), "{name}");
+        let mut decoder = FrameDecoder::new();
+        decoder.push(&bytes);
+        assert_eq!(decoder.drain().unwrap(), [message], "{name}");
+        decoder.finish().unwrap();
+    }
 }
 
 #[test]

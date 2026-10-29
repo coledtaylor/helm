@@ -21,6 +21,10 @@ use crate::frame::MAX_FRAME_LEN;
 use crate::message::Message;
 use crate::version::PROTOCOL_VERSION;
 
+mod frames;
+
+pub use frames::{frame_fixture_messages, frame_fixtures};
+
 /// The command that writes the generated files.
 pub const REGENERATE_COMMAND: &str = "cargo run -p floti-protocol --bin generate";
 
@@ -30,6 +34,9 @@ pub const GENERATED_DIR: &str = "crates/floti-protocol/generated";
 pub const SCHEMA_FILE: &str = "floti-protocol.schema.json";
 pub const TYPESCRIPT_FILE: &str = "floti-protocol.generated.ts";
 pub const TSCONFIG_FILE: &str = "tsconfig.json";
+/// Frames this crate encoded, as hex by name, for a client written in another
+/// language to pin its CBOR encoding to ([`frame_fixtures`]).
+pub const FRAMES_FILE: &str = "floti-protocol.frames.json";
 
 /// One file the generator writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +60,10 @@ pub fn generated_files(catalogue: &Catalogue) -> Vec<GeneratedFile> {
         GeneratedFile {
             name: TSCONFIG_FILE,
             contents: tsconfig(),
+        },
+        GeneratedFile {
+            name: FRAMES_FILE,
+            contents: frame_fixtures(),
         },
     ]
 }

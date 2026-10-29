@@ -200,7 +200,8 @@ describe('settings', () => {
       restoreWithoutAsking: true,
       browserRecentUrls: ['http://localhost:3000/', 'https://example.com/docs'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
-      sessionMcp: false
+      sessionMcp: false,
+      sessionsInHost: true
     } satisfies AppSettings
 
     writeSettings(store, written)
@@ -221,6 +222,30 @@ describe('settings', () => {
         expect(readSettings(reopened)).toMatchObject({ theme: 'dark', scanRoots: [dir] })
       } finally {
         reopened.close()
+      }
+    })
+  })
+
+  it('keeps running sessions in the local host off until it is turned on, on across a restart, and off again once turned off', async () => {
+    expect(readSettings(store).sessionsInHost).toBe(false)
+    await withFile((file, onFile) => {
+      expect(readSettings(onFile).sessionsInHost).toBe(false)
+      writeSettings(onFile, { sessionsInHost: true })
+      onFile.close()
+
+      const turnedOn = openStore({ file })
+      try {
+        expect(readSettings(turnedOn).sessionsInHost).toBe(true)
+        writeSettings(turnedOn, { sessionsInHost: false })
+      } finally {
+        turnedOn.close()
+      }
+
+      const turnedOff = openStore({ file })
+      try {
+        expect(readSettings(turnedOff).sessionsInHost).toBe(false)
+      } finally {
+        turnedOff.close()
       }
     })
   })
@@ -745,6 +770,12 @@ describe('settings validation', () => {
       bad: ['false', 'true', 0, 1, null, [], {}]
     },
     {
+      // A string that reads as off would start the host.
+      key: 'sessionsInHost',
+      good: [true, false],
+      bad: ['false', 'true', 0, 1, null, [], {}]
+    },
+    {
       // The interesting rejections are the ones that would put a row in the
       // dropdown that does nothing when clicked: a bare word, a relative path,
       // and `file:` - which the pane refuses to navigate to, so it must not be
@@ -905,7 +936,8 @@ describe('settings validation', () => {
       restoreWithoutAsking: true,
       browserRecentUrls: ['http://localhost:3000/'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
-      sessionMcp: false
+      sessionMcp: false,
+      sessionsInHost: true
     })
 
     expect(() => writeSettings(store, readSettings(store))).not.toThrow()
@@ -951,7 +983,8 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   restoreWithoutAsking: true,
   browserRecentUrls: ['http://localhost:3000/'],
   browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
-  sessionMcp: false
+  sessionMcp: false,
+  sessionsInHost: true
 })
 
 describe('pinned projects', () => {

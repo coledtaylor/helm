@@ -1646,6 +1646,18 @@ export interface AppSettings {
    * not mounted, no route exists, and the app is exactly what it was without it.
    */
   sessionMcp: boolean
+
+  /**
+   * Whether sessions and terminals run in the local host (the `floti` program)
+   * rather than in Helm's own main process.
+   *
+   * Off by default: the main process is the path every user has, and the host
+   * is the switch being made one slice at a time. Read once, when Helm starts,
+   * because the sessions running under one implementation cannot move to the
+   * other; a change takes effect the next time Helm starts, and the row says
+   * so. Off is Helm exactly as it was: no host started, no host folder made.
+   */
+  sessionsInHost: boolean
 }
 
 /** How many addresses the dropdown offers. Ten, and no manager behind it. */
@@ -1715,7 +1727,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // working tree - happens to somebody who never went looking for a setting,
   // and because what it serves is a strictly smaller grant than the tick above
   // it. See the field for what is not in it, which is what makes that true.
-  sessionMcp: true
+  sessionMcp: true,
+  sessionsInHost: false
 }
 
 /**

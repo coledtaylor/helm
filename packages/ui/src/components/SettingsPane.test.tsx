@@ -125,6 +125,8 @@ function renderPane(overrides: Partial<SettingsPaneProps> = {}) {
     onSessionMcpChange: vi.fn(),
     restoreWithoutAsking: false,
     onRestoreWithoutAskingChange: vi.fn(),
+    sessionsInHost: false,
+    onSessionsInHostChange: vi.fn(),
     ...overrides
   }
   const view = render(<SettingsPane {...props} />)
@@ -194,7 +196,8 @@ describe('SettingsPane', () => {
       ],
       Sessions: [
         ['checkbox', 'Let Claude see the other sessions'],
-        ['checkbox', 'Resume after a crash without asking']
+        ['checkbox', 'Resume after a crash without asking'],
+        ['checkbox', 'Run sessions in the local host']
       ],
       Updates: [
         ['checkbox', 'Check for new releases on launch'],
@@ -537,6 +540,26 @@ describe('SettingsPane', () => {
     expect(props.onRestoreWithoutAskingChange).toHaveBeenLastCalledWith(true)
     rerender({ section: 'sessions', restoreWithoutAsking: true })
     expect(group('Sessions').textContent).toContain('reopens every session it was running, in the tab it had')
+  })
+
+  it('turns running sessions in the local host on and off, and says each change takes effect the next time Helm starts', async () => {
+    const { props, rerender } = renderPane({ section: 'sessions', sessionsInHost: false })
+    const tick = (): HTMLElement =>
+      within(group('Sessions')).getByRole('checkbox', { name: 'Run sessions in the local host' })
+    const sessions = (): string => group('Sessions').textContent ?? ''
+    expect(tick()).toHaveProperty('checked', false)
+    expect(sessions()).toContain('Sessions and terminals run in Helm itself. Takes effect the next time Helm starts.')
+
+    await userEvent.click(tick())
+    expect(props.onSessionsInHostChange).toHaveBeenLastCalledWith(true)
+    rerender({ section: 'sessions', sessionsInHost: true })
+    expect(tick()).toHaveProperty('checked', true)
+    expect(sessions()).toContain(
+      'Sessions and terminals run in the local host program, which Helm starts and stops. Takes effect the next time Helm starts.'
+    )
+
+    await userEvent.click(tick())
+    expect(props.onSessionsInHostChange).toHaveBeenLastCalledWith(false)
   })
 })
 

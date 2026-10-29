@@ -2563,6 +2563,8 @@ export function App(): JSX.Element {
       onSessionMcpChange={(sessionMcp) => writeSettings({ sessionMcp })}
       restoreWithoutAsking={settings?.restoreWithoutAsking ?? DEFAULT_SETTINGS.restoreWithoutAsking}
       onRestoreWithoutAskingChange={(restoreWithoutAsking) => writeSettings({ restoreWithoutAsking })}
+      sessionsInHost={settings?.sessionsInHost ?? DEFAULT_SETTINGS.sessionsInHost}
+      onSessionsInHostChange={(sessionsInHost) => writeSettings({ sessionsInHost })}
       filesWrap={filesWrap}
       onFilesWrapChange={setFilesWrap}
       onTranscriptArchiveMaxBytesChange={(transcriptArchiveMaxBytes) =>

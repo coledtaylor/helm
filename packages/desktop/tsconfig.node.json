@@ -14,6 +14,7 @@
     "../../test/patience.ts",
     "../../test/run-root.ts",
     "../../vitest.config.ts",
+    "../../crates/floti-protocol/generated/floti-protocol.generated.ts",
     "electron.vite.config.ts",
     "inline-script.ts"
   ]
