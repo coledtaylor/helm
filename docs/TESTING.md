@@ -286,7 +286,8 @@ tier above, so keep this one small.
   frame's process ends, Playwright counts the whole window as crashed and will
   not drive it again, so the crash test drives the window through the main
   process instead.
-- Wait on conditions (`expect`, `expect.poll`), never on sleeps.
+- Wait on conditions (`expect`, `expect.poll`), never on sleeps, and with the
+  config's timeout, never one of their own (see "Waiting" below).
 
 ## The fake agents
 
@@ -360,6 +361,42 @@ backend code: the backend's tests drive the fake, never the real CLI.
 - A bug gets a failing test before its fix.
 - **A test leaves nothing behind**: no temporary folder, no process, no read of
   the real home. A failed test is the only exception.
+
+## Waiting
+
+A test passes or fails the same way on a fast machine and a slow one. A sleep
+followed by an assertion passes on the machine it was written on and fails on
+a slower one, so no test has one.
+
+- **A test waits on an event or a polled condition, never on time.** Every
+  wait is bounded by the shared patience, and a wait that runs out fails
+  naming what it waited for: the assertion it polled, or the message a Rust
+  wait gives. The patience is `PATIENCE` in `test/patience.ts` (10 s) for
+  vitest, passed as `vi.waitFor`'s `timeout` and set as Testing Library's
+  default in `ui/src/test-setup.ts`; Playwright's `expect` timeout in
+  `e2e/playwright.config.ts` (15 s, since each wait crosses a built app) for
+  the end-to-end tier; and `PATIENCE` in the host's testkit
+  (`testkit/client.rs`) for Rust. A passing test never comes near it.
+- **A test that says something did not happen proves it with a barrier.**
+  After the action that must cause nothing, it causes a second, known event
+  and waits for it; the first event to arrive must be that one. `files.test.ts`
+  lets go of a watch, writes a file, watches again and writes another: the
+  second file is told, and the first never was. Or it steps the logic, as
+  below. Never "sleep, then assert nothing came", which proves only that
+  nothing came yet.
+- **Logic driven by timers or polling is tested by stepping it**: the test
+  calls the step function with each state, or runs on fake timers
+  (`vi.useFakeTimers`, then `vi.advanceTimersByTime` or
+  `vi.runAllTimersAsync`), as `browser.test.ts` does for a page's retries.
+  Integration tests check only the wiring: that the timer is set and reaches
+  what it calls.
+- **A module ported from TypeScript lists what Node or Electron did for it
+  implicitly, and tests each.** Node's http server discards a request body
+  nobody read; the config watch debounced an editor's write, truncate and
+  write again. A port that does not do the same loses it without a sound, and
+  only a test that names it notices.
+- A sleep inside a fake that plays a slow program is fine, as long as no
+  assertion depends on its length.
 
 ## Not covered by tests
 
