@@ -38,6 +38,8 @@ export function selectLeftovers(input: {
 export function formatLeftovers(leftovers: Leftovers): string[]
 export function parseWindowsTable(text: string): ProcessRow[]
 export function parsePsTable(table: string, args: string): ProcessRow[]
-export function readProcessTable(platform?: NodeJS.Platform): ProcessRow[] | null
+/** What `readProcessTable` runs each listing with: `execFileSync`'s shape, answering stdout. */
+export type ListingRunner = (file: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => string
+export function readProcessTable(platform?: NodeJS.Platform, run?: ListingRunner): ProcessRow[] | null
 export function snapshot(tmp?: string): Snapshot
 export function check(before: Snapshot): 0 | 1

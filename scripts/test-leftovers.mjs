@@ -23,7 +23,7 @@
 // tests never start (a linker's PDB server) is not a test's process.
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -227,22 +227,42 @@ export function parsePsTable(table, args) {
 const LIST_OPTIONS = { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }
 
 /**
+ * Runs the Windows pass with a temp folder of its own, removed once it ends.
+ * PowerShell writes a pair of `__PSScriptPolicyTest_*` files into its TEMP at
+ * every start and, on a loaded machine, does not always manage to delete them;
+ * in the temp folder this script checks, they would be the check's own litter.
+ */
+function readWindowsTable(run) {
+  const own = mkdtempSync(join(tmpdir(), 'test-leftovers powershell-'))
+  try {
+    return parseWindowsTable(
+      run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_TABLE_SCRIPT], {
+        ...LIST_OPTIONS,
+        env: { ...process.env, TEMP: own, TMP: own }
+      })
+    )
+  } finally {
+    // Retried because an antivirus scan of PowerShell's files can hold them a moment.
+    rmSync(own, { recursive: true, force: true, maxRetries: 5 })
+  }
+}
+
+/**
  * The process table, read the one way each OS offers: the one place this
  * script branches on the OS. Null for an OS it has no listing for, which
- * leaves the folders still checked.
+ * leaves the folders still checked. `run` is `execFileSync`'s shape, passed
+ * in so a test can see what each listing is run with.
  */
-export function readProcessTable(platform = process.platform) {
+export function readProcessTable(platform = process.platform, run = execFileSync) {
   switch (platform) {
     case 'win32':
-      return parseWindowsTable(
-        execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_TABLE_SCRIPT], LIST_OPTIONS)
-      )
+      return readWindowsTable(run)
     case 'darwin':
     case 'linux': {
       const env = { ...process.env, LC_ALL: 'C' }
       return parsePsTable(
-        execFileSync('ps', ['-A', '-o', 'pid=,ppid=,lstart=,comm='], { ...LIST_OPTIONS, env }),
-        execFileSync('ps', ['-A', '-o', 'pid=,args='], { ...LIST_OPTIONS, env })
+        run('ps', ['-A', '-o', 'pid=,ppid=,lstart=,comm='], { ...LIST_OPTIONS, env }),
+        run('ps', ['-A', '-o', 'pid=,args='], { ...LIST_OPTIONS, env })
       )
     }
     default:

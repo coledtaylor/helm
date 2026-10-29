@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -9,6 +9,7 @@ import {
   parsePsTable,
   parseWindowsTable,
   processName,
+  readProcessTable,
   selectLeftovers,
   type ProcessRow
 } from '../../../../scripts/test-leftovers.mjs'
@@ -353,5 +354,43 @@ describe('the leftover check around a step', () => {
 
   it('refuses no command at all', () => {
     expect(script().status).toBe(2)
+  })
+
+  it('leaves nothing of its own in the temp folder it checks', () => {
+    const state = join(temp, 'state.json')
+    expect(script('before', state).status).toBe(0)
+    expect(script('after', state).status).toBe(0)
+    expect(readdirSync(temp)).toEqual(['state.json'])
+  })
+})
+
+describe('reading the process table on Windows', () => {
+  it("gives PowerShell a temp folder of its own and removes it, so PowerShell's policy probe files never reach the checked temp folder", () => {
+    const calls: { file: string; temp: string | undefined; tmp: string | undefined; existed: boolean }[] = []
+    const run = (file: string, _args: readonly string[], options: { env?: NodeJS.ProcessEnv }): string => {
+      const own = options.env?.['TEMP']
+      calls.push({ file, temp: own, tmp: options.env?.['TMP'], existed: own !== undefined && existsSync(own) })
+      return '[]'
+    }
+    expect(readProcessTable('win32', run)).toEqual([])
+    expect(calls).toHaveLength(1)
+    const [call] = calls as [(typeof calls)[number]]
+    expect(call.file).toBe('powershell.exe')
+    expect(call.temp, 'PowerShell is given its own TEMP').toBeDefined()
+    expect(call.temp).not.toBe(tmpdir())
+    expect(call.tmp).toBe(call.temp)
+    expect(call.existed, 'the folder is there while PowerShell runs').toBe(true)
+    expect(existsSync(call.temp as string), 'the folder is gone once the table is read').toBe(false)
+  })
+
+  it('removes its own folder when PowerShell fails', () => {
+    let own: string | undefined
+    const run = (_file: string, _args: readonly string[], options: { env?: NodeJS.ProcessEnv }): string => {
+      own = options.env?.['TEMP']
+      throw new Error('powershell.exe is not there')
+    }
+    expect(() => readProcessTable('win32', run)).toThrow('powershell.exe is not there')
+    expect(own).toBeDefined()
+    expect(existsSync(own as string)).toBe(false)
   })
 })
