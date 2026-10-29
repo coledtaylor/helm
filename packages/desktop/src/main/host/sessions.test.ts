@@ -211,6 +211,20 @@ describe('sessions through the local host', () => {
     expect(w.host.sessions.runningCount()).toBe(1)
   })
 
+  it('counts nothing as running once Helm is quitting, so closing the window asks nothing more', async () => {
+    const w = world()
+    w.connection.answer('session:start', () => row())
+    await w.connect()
+    await w.host.sessions.start({ cwd: '/work/app', cols: 80, rows: 24 })
+    w.host.sessions.shutdown()
+
+    expect(w.host.sessions.runningCount()).toBe(0)
+    expect(w.host.sessions.list()).toEqual([])
+    await expect(w.host.sessions.confirmCloseAll()).resolves.toBe(true)
+    expect(w.asked).toEqual([])
+    expect(w.connection.streamsFor('session:data', 7)[0]?.closed).toBe(true)
+  })
+
   it('keeps an exited session’s tab until it is closed, and tells the window it exited', async () => {
     const w = world()
     w.connection.answer('session:start', () => row())

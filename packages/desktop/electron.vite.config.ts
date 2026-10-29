@@ -21,10 +21,16 @@ import { inlineScript } from './inline-script'
  */
 const BUNDLED_WORKSPACE_PACKAGES = ['@helm/core', '@helm/ui', '@coledtaylor/helm-plugin-sdk']
 
+/**
+ * `cborg`, the local host's framing, ships ESM only, with no `require` export,
+ * and main is CommonJS: it is bundled into main rather than loaded beside it.
+ */
+const BUNDLED_INTO_MAIN = [...BUNDLED_WORKSPACE_PACKAGES, 'cborg']
+
 export default defineConfig({
   main: {
     // `?script`: the plugin bridge, built into a string main serves to plugin pages.
-    plugins: [externalizeDepsPlugin({ exclude: BUNDLED_WORKSPACE_PACKAGES }), inlineScript()],
+    plugins: [externalizeDepsPlugin({ exclude: BUNDLED_INTO_MAIN }), inlineScript()],
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') }

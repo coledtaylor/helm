@@ -303,8 +303,41 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
     expect(host.exitCode).toBe(0)
   })
 
+  it('starts the host when Helm has paired with none and no code waits, then enrols through the one it started', async () => {
+    const world = new World({ bridges: [exits(4), connects] })
+    const local = await startLocalHost(WIN_PLACES, world.deps())
+
+    expect(world.programs()).toEqual([
+      `bridge ${WIN_PLACES.dataDir}\\host-client`,
+      'host --until-stdin-closes',
+      `bridge ${WIN_PLACES.dataDir}\\host-client`
+    ])
+    expect(local.startedHost).toBe(true)
+    await local.stop()
+    expect(world.spawned[1]!.exitCode).toBe(0)
+  })
+
+  it('says Helm is not paired when the host it would start is already running, with no code for Helm', async () => {
+    const world = new World({
+      bridges: [exits(4)],
+      // A second host on the same folders refuses to start.
+      hosts: [(child) => queueMicrotask(() => child.exit(1))]
+    })
+    expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
+      `Helm is not paired with the local host, and the host offered no one-time code for it to enrol with${TURN_OFF}`
+    )
+    expect(world.programs()).toEqual([`bridge ${WIN_PLACES.dataDir}\\host-client`, 'host --until-stdin-closes'])
+  })
+
+  it('says Helm is not paired when the host it started still offers no code', async () => {
+    const world = new World({ bridges: [exits(4), exits(4)] })
+    expect(await refusal(startLocalHost(WIN_PLACES, world.deps()))).toBe(
+      `Helm is not paired with the local host, and the host offered no one-time code for it to enrol with${TURN_OFF}`
+    )
+    expect(world.spawned[1]!.stdin.writableEnded).toBe(true)
+  })
+
   it.each([
-    [4, 'Helm is not paired with the local host, and the host offered no one-time code for it to enrol with'],
     [5, 'The local host did not prove the key Helm expected, so Helm did not connect to it'],
     [6, 'The local host closed the connection'],
     [1, 'The connection to the local host failed: floti bridge exited with status 1']

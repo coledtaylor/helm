@@ -274,9 +274,26 @@ export async function startLocalHost(places: HostPlaces, deps: LauncherDeps): Pr
 
   let attempt = await bridge()
   let host: StartedHost | null = null
-  if ('exit' in attempt && attempt.exit.error === undefined && attempt.exit.code === BRIDGE_EXIT.unreachable) {
-    deps.log('host: no local host answered; starting one')
-    host = await startHost(binary, options, deps)
+  const first = 'exit' in attempt && attempt.exit.error === undefined ? attempt.exit.code : null
+  // A client that has pinned no host does not knock on the socket, so "not
+  // paired, no code" is also what it says when no host is running at all; a
+  // host started then writes the code it enrols with. One already running
+  // refuses to start a second on its folders, and the sentence stays "not paired".
+  if (first === BRIDGE_EXIT.unreachable || first === BRIDGE_EXIT.notPinned) {
+    deps.log(
+      first === BRIDGE_EXIT.unreachable
+        ? 'host: no local host answered; starting one'
+        : 'host: not paired with a host and no code waits; starting one'
+    )
+    const unpaired = attempt
+    try {
+      host = await startHost(binary, options, deps)
+    } catch (error) {
+      if (first === BRIDGE_EXIT.notPinned && error instanceof HostEndedEarly && 'exit' in unpaired) {
+        throw bridgeFailure(unpaired.exit, binary, false)
+      }
+      throw error
+    }
     try {
       attempt = await bridge()
     } catch (error) {
@@ -372,9 +389,14 @@ async function startHost(binary: string, options: SpawnOptions, deps: LauncherDe
   }
   if (outcome.error !== undefined) throw couldNotRun(binary, outcome.error)
   deps.log(`host: the local host Helm started stopped before it was ready (${describeExit(outcome)})`)
-  throw failure(
-    outcome.code === null
-      ? `The local host stopped before it was ready, stopped by ${outcome.signal ?? 'a signal'}`
-      : `The local host stopped before it was ready, with status ${outcome.code}`
+  throw new HostEndedEarly(
+    `${
+      outcome.code === null
+        ? `The local host stopped before it was ready, stopped by ${outcome.signal ?? 'a signal'}`
+        : `The local host stopped before it was ready, with status ${outcome.code}`
+    }; ${TURN_OFF}`
   )
 }
+
+/** A host Helm started that exited before it said it was listening, as one already running on its folders does. */
+class HostEndedEarly extends LocalHostError {}

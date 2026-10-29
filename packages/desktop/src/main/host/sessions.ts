@@ -354,6 +354,9 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
       for (const subscription of subscriptions) subscription.unsubscribe()
       subscriptions = []
       streams.closeAll()
+      // Every session ends with the quit, as Helm's own do, so nothing is left
+      // for the window's close to ask about while the host stops them.
+      records.clear()
     }
   }
 
