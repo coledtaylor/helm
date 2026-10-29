@@ -282,6 +282,27 @@ describe('what the leftover check selects', () => {
     expect(leftovers).toEqual({ folders: [], processes: [] })
   })
 
+  it('reports a console host only beside the program it serves', () => {
+    const after = [
+      ...BEFORE,
+      // The console host of a program that has just exited, still closing.
+      row(70, 999, 'conhost', 12),
+      // A program the step left, with its console host.
+      row(71, 999, 'node', 13, 'node fake-agent.mjs'),
+      row(72, 71, 'conhost', 14),
+      row(50, 30, 'node', 20)
+    ]
+    const leftovers = selectLeftovers({
+      before: { processes: BEFORE, folders: [] },
+      after: { processes: after, folders: [] },
+      self: 50,
+      tmp: TMP,
+      places: PLACES,
+      inspect: unreadable
+    })
+    expect(pids(leftovers.processes)).toEqual([71, 72])
+  })
+
   it("never reports the check's own shell, its console host or its lister", () => {
     // In CI the after-step's shell started after the snapshot.
     const after = [

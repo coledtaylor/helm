@@ -124,6 +124,11 @@ export function processName(raw) {
  *   terminals), and it is not reported: what the step started descends from
  *   the check, or was orphaned and adopted by a reaper.
  *
+ * A Windows console host (`conhost`) is reported only beside the program it
+ * serves, its parent. It ends after that program does, so one whose program
+ * is gone is the tail of an exit the check caught, not something left
+ * running; a program the step left is reported with its console host.
+ *
  * `inspect` is asked only about processes that reach a reaper, once each.
  * `processes` is null on either side when the table could not be read, and
  * then only folders are judged.
@@ -174,7 +179,8 @@ export function selectLeftovers({ before, after, self, tmp, places, inspect }) {
     }
     return true
   })
-  return { folders, processes }
+  const reported = new Set(processes.map((row) => row.pid))
+  return { folders, processes: processes.filter((row) => row.name !== 'conhost' || reported.has(row.parentPid)) }
 }
 
 /** True when `path` is `folder` or inside it. */
