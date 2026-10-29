@@ -50,6 +50,9 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
 - `pnpm test:posix` runs the processes-and-ports, overlay, process-tree and
   data-directory tests where that code is the POSIX one: natively on macOS and
   Linux, and under Linux in WSL from Windows.
+- A test leaves nothing behind, and CI fails a run whose tests leave a test
+  temp folder or a process: `node scripts/test-leftovers.mjs <test command>`
+  is the same check locally. It reports and fails; it never deletes or kills.
 - Every change ships with its tests: a bug gets a failing test before the fix,
   a feature gets tests that cover it. [docs/TESTING.md](docs/TESTING.md) says
   which kind.

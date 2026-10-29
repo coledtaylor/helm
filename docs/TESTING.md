@@ -200,7 +200,21 @@ cargo nextest run -p floti-host <filter>   # the tests whose names contain <filt
 cargo test --doc --workspace       # the doctests, which nextest does not run
 cargo run -p floti-protocol --bin generate                      # rewrite the generated schema and TypeScript
 pnpm exec tsc -p crates/floti-protocol/generated/tsconfig.json  # the generated TypeScript under strict settings
+node scripts/test-leftovers.mjs pnpm check                      # runs a test command, then fails for anything it left behind
+node scripts/test-leftovers.mjs cargo nextest run --workspace   # the same around the host tests
 ```
+
+`scripts/test-leftovers.mjs` is the check CI runs after `pnpm check` and after
+the host tests, on every runner. Around a command it runs it, then lists each
+test temp folder (`floti test *`, `helm world-*`, `helm-test-posix-*`) the
+command left in the temp folder and each process of a kind tests start
+(`floti*`, Node, shells, `conhost`) that the command started and is still
+running, with its pid, name and command line. It exits with the command's
+status when the command failed, 1 when it left anything, and 0 otherwise.
+It reports only what appeared while the command ran, so other sessions and
+earlier runs' folders never fail it, and it deletes and ends nothing itself.
+CI takes the two halves as steps of their own: `before <state-file>` ahead of
+the tests and `after <state-file>` behind them.
 
 ## Windows, macOS and Linux
 
@@ -416,7 +430,10 @@ backend code: the backend's tests drive the fake, never the real CLI.
   evidence.
 - A bug gets a failing test before its fix.
 - **A test leaves nothing behind**: no temporary folder, no process, no read of
-  the real home. A failed test is the only exception.
+  the real home. A failed test is the only exception. CI fails a run that
+  leaves a test temp folder or a process behind, and
+  `node scripts/test-leftovers.mjs <test command>` is the same check locally
+  (see "Running them").
 
 ## Waiting
 

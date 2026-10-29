@@ -19,6 +19,8 @@ on:
       - "packages/desktop/src/shared/ipc.ts"
       # The agent backends' tests run these fake CLIs.
       - "test/fake-agents/**"
+      # The step after the tests runs this.
+      - "scripts/test-leftovers.mjs"
       - ".github/workflows/host.yml"
       - ".config/nextest.toml"
   pull_request:
@@ -30,6 +32,7 @@ on:
       - "packages/core/drizzle/**"
       - "packages/desktop/src/shared/ipc.ts"
       - "test/fake-agents/**"
+      - "scripts/test-leftovers.mjs"
       - ".github/workflows/host.yml"
       - ".config/nextest.toml"
 
@@ -86,9 +89,20 @@ jobs:
         with:
           tool: cargo-nextest@0.9.150
 
+      # What is running and which test temp folders exist before the tests, so
+      # the step after them reports only what they left (docs/TESTING.md).
+      - name: Snapshot processes and temp folders
+        run: node scripts/test-leftovers.mjs before "${{ runner.temp }}/leftovers-host.json"
+
       - name: Test
         run: cargo nextest run --workspace --locked --profile ci
 
       # nextest does not run doctests.
       - name: Doctests
         run: cargo test --doc --workspace --locked
+
+      # A test leaves nothing behind. This fails the job naming each test temp
+      # folder the tests left and each process they started that is still
+      # alive.
+      - name: Nothing left behind by the tests
+        run: node scripts/test-leftovers.mjs after "${{ runner.temp }}/leftovers-host.json"

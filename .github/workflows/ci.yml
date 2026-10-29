@@ -73,10 +73,20 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # What is running and which test temp folders exist before the check, so
+      # the step after it reports only what the check left (docs/TESTING.md).
+      - name: Snapshot processes and temp folders
+        run: node scripts/test-leftovers.mjs before "${{ runner.temp }}/leftovers-check.json"
+
       # One step, not three: the gate has one definition, in package.json, and
       # CI runs exactly what a developer runs.
       - name: Check (typecheck, lint, unit and integration tests)
         run: pnpm check
+
+      # A test leaves nothing behind. This fails the job naming each test temp
+      # folder the check left and each process it started that is still alive.
+      - name: Nothing left behind by the check
+        run: node scripts/test-leftovers.mjs after "${{ runner.temp }}/leftovers-check.json"
 
       - name: Build
         run: pnpm build
