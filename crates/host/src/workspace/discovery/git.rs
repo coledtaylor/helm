@@ -112,6 +112,20 @@ pub fn is_git_repo(project: &Path) -> bool {
     std::fs::metadata(project.join(".git")).is_ok()
 }
 
+/// The branch `cwd` has checked out, as a session's row records it at spawn:
+/// `None` for a detached head, a folder outside any repository, or a `git`
+/// that could not answer, never a guess.
+pub fn read_git_branch(cwd: &Path) -> Option<String> {
+    let stdout = run_git(
+        cwd,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        GIT_TIMEOUT,
+    )
+    .ok()?;
+    let branch = stdout.trim();
+    (!branch.is_empty()).then(|| branch.to_owned())
+}
+
 /// `project`'s branch, ahead and behind counts and changed paths, from one
 /// `git status --porcelain=v2 --branch`. `None` when it is not a
 /// repository (or its folder cannot be read); a repository git could not

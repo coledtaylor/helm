@@ -32,6 +32,43 @@ struct Watched {
     path: PathBuf,
     /// The hash the host last saw, empty for a file that is not there.
     hash: String,
+    /// A new hash one look saw, told only when the next look sees it again:
+    /// a write that truncates and then writes can be caught between the two,
+    /// and an empty file it never meant to leave is not news.
+    seen: Option<String>,
+}
+
+impl Watched {
+    fn new(path: PathBuf) -> Self {
+        let hash = read_file(&path).hash;
+        Self {
+            path,
+            hash,
+            seen: None,
+        }
+    }
+
+    /// The change to tell, once the file has held new bytes for two looks
+    /// running.
+    fn look(&mut self) -> Option<ConfigExternalChange> {
+        let now = read_file(&self.path);
+        if now.hash == self.hash {
+            self.seen = None;
+            return None;
+        }
+        if self.seen.as_ref() != Some(&now.hash) {
+            self.seen = Some(now.hash);
+            return None;
+        }
+        self.seen = None;
+        self.hash.clone_from(&now.hash);
+        Some(ConfigExternalChange {
+            path: self.path.display().to_string(),
+            hash: now.hash,
+            exists: now.exists,
+            mtime_ms: now.mtime_ms,
+        })
+    }
 }
 
 /// Every client's watched file.
@@ -54,6 +91,7 @@ impl Changing<'_> {
         for watched in self.by_client.values_mut() {
             if paths.contains(&watched.path) {
                 watched.hash = read_file(&watched.path).hash;
+                watched.seen = None;
             }
         }
     }
@@ -91,8 +129,7 @@ impl Watches {
                 if by_client.get(&client).is_some_and(|w| w.path == path) {
                     return;
                 }
-                let hash = read_file(&path).hash;
-                by_client.insert(client, Watched { path, hash });
+                by_client.insert(client, Watched::new(path));
             }
         }
     }
@@ -111,19 +148,7 @@ impl Watches {
             let mut by_client = self.lock();
             by_client
                 .iter_mut()
-                .filter_map(|(client, watched)| {
-                    let now = read_file(&watched.path);
-                    (now.hash != watched.hash).then(|| {
-                        watched.hash.clone_from(&now.hash);
-                        let change = ConfigExternalChange {
-                            path: watched.path.display().to_string(),
-                            hash: now.hash,
-                            exists: now.exists,
-                            mtime_ms: now.mtime_ms,
-                        };
-                        (*client, change)
-                    })
-                })
+                .filter_map(|(client, watched)| Some((*client, watched.look()?)))
                 .collect()
         };
         // Told outside the lock: a sink is free to take its time.
@@ -140,5 +165,42 @@ fn poll(watches: &Weak<Watches>) {
             Some(watches) => watches.look(),
             None => return,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::files::hash_content;
+    use super::*;
+    use crate::testkit::TestDirs;
+
+    #[test]
+    fn a_change_is_told_once_it_has_held_for_two_looks_and_a_write_caught_halfway_is_not() {
+        let dirs = TestDirs::new();
+        let file = dirs.root().join("CLAUDE.md");
+        std::fs::write(&file, "one\n").unwrap();
+        let mut watched = Watched::new(normalize(&file));
+
+        // Truncated, then written: a look between the two sees an empty file.
+        std::fs::write(&file, "").unwrap();
+        assert!(watched.look().is_none());
+        std::fs::write(&file, "three\n").unwrap();
+        assert!(watched.look().is_none());
+        let change = watched.look().expect("told once it held");
+        assert_eq!(change.hash, hash_content("three\n"));
+        assert!(change.exists);
+        assert!(watched.look().is_none());
+
+        // A file emptied and left empty is told too, a look later.
+        std::fs::write(&file, "").unwrap();
+        assert!(watched.look().is_none());
+        assert_eq!(watched.look().expect("told").hash, hash_content(""));
+
+        // A change undone before the second look is nothing.
+        std::fs::write(&file, "four\n").unwrap();
+        assert!(watched.look().is_none());
+        std::fs::write(&file, "").unwrap();
+        assert!(watched.look().is_none());
+        assert!(watched.look().is_none());
     }
 }

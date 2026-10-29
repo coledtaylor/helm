@@ -228,6 +228,58 @@ fn floti_host_command(dirs: &TestDirs) -> Command {
     command
 }
 
+/// A `floti host` executable a test started. One still running when it is
+/// dropped, because the test failed before it stopped the host, is killed
+/// and reaped there, and what it started goes with it, which the host
+/// arranges itself. So no host outlives its test, and none holds a file
+/// open in the `TestDirs` declared before it, which drops after it.
+///
+/// A test that ends without stopping or killing its host, and is not
+/// already failing, fails saying so once the host is killed.
+struct HostProcess(Option<Child>);
+
+impl HostProcess {
+    fn spawn(command: &mut Command) -> Self {
+        Self(Some(command.spawn().expect("run floti host")))
+    }
+
+    /// The host's process, for a test that reads all of its output, which
+    /// waits for it to exit.
+    fn into_child(mut self) -> Child {
+        self.0.take().expect("the host's process")
+    }
+}
+
+impl std::ops::Deref for HostProcess {
+    type Target = Child;
+
+    fn deref(&self) -> &Child {
+        self.0.as_ref().expect("the host's process")
+    }
+}
+
+impl std::ops::DerefMut for HostProcess {
+    fn deref_mut(&mut self) -> &mut Child {
+        self.0.as_mut().expect("the host's process")
+    }
+}
+
+impl Drop for HostProcess {
+    fn drop(&mut self) {
+        let Some(mut child) = self.0.take() else {
+            return;
+        };
+        let running = !matches!(child.try_wait(), Ok(Some(_)));
+        if running {
+            let _ = child.kill();
+            let _ = child.wait();
+            if !std::thread::panicking() {
+                panic!("the test ended without stopping its floti host, which was killed");
+            }
+        }
+    }
+}
+
 /// Where the `floti host` executable listens with `dirs`' folders.
 fn binary_endpoint(dirs: &TestDirs) -> Endpoint {
     NativeSocket.endpoint(&dirs.runtime, SOCKET_NAME)
@@ -279,8 +331,11 @@ fn wait_exit(child: &mut Child) -> ExitStatus {
     }
 }
 
-fn output_of(child: Child) -> (String, String) {
-    let output = child.wait_with_output().expect("read the host's output");
+fn output_of(host: HostProcess) -> (String, String) {
+    let output = host
+        .into_child()
+        .wait_with_output()
+        .expect("read the host's output");
     (
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -334,7 +389,7 @@ async fn s1_floti_host_is_one_executable_that_starts_and_serves_clients() {
         exe.display()
     );
 
-    let mut host = floti_host_command(&dirs).spawn().expect("run floti host");
+    let mut host = HostProcess::spawn(&mut floti_host_command(&dirs));
     let pid = host.id();
     let endpoint = binary_endpoint(&dirs);
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
@@ -404,6 +459,32 @@ async fn s1_floti_host_is_one_executable_that_starts_and_serves_clients() {
     assert!(stdout.contains("Floti host stopped."), "{stdout}{stderr}");
 }
 
+#[test]
+fn a_test_that_fails_while_its_floti_host_runs_leaves_neither_the_host_nor_its_folders_behind() {
+    let (started, ran) = std::sync::mpsc::channel();
+    let failed = std::thread::spawn(move || {
+        let dirs = TestDirs::new();
+        let host = HostProcess::spawn(&mut floti_host_command(&dirs));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        // Serving, so it has its store and socket open in the folders.
+        let _client = runtime.block_on(TestClient::connect(&binary_endpoint(&dirs), TERMINAL));
+        started
+            .send((dirs.root().to_path_buf(), host.id()))
+            .unwrap();
+        panic!("a test failing while its host runs");
+    })
+    .join();
+    assert!(failed.is_err(), "the test was meant to fail");
+
+    let (root, pid) = ran.recv().expect("the host was started");
+    assert_eq!(
+        NativeTree.is_alive(pid),
+        Knowable::Known(false),
+        "the failed test's host {pid} is still running"
+    );
+    assert!(!root.exists(), "the failed test left {}", root.display());
+}
+
 // ---------------------------------------------------------------------------
 // The executable's home: the agent folder it reads, and its local day
 // ---------------------------------------------------------------------------
@@ -468,7 +549,7 @@ fn claude_conversation(home: &Path, cwd: &Path, assistant_at: &[u64]) {
     .unwrap();
 }
 
-async fn stop_executable(client: &mut TestClient, mut host: Child) {
+async fn stop_executable(client: &mut TestClient, mut host: HostProcess) {
     client
         .request::<HostStop>(&HostStopRequest {
             reason: HostStopReason::Stop,
@@ -481,10 +562,7 @@ async fn stop_executable(client: &mut TestClient, mut host: Child) {
 /// Runs the executable with `dirs` and `TZ` set to `zone`, reads usage once
 /// and stops it. Claude Code's reading of it.
 async fn claude_usage_from_executable(dirs: &TestDirs, zone: &str) -> UsageSnapshot {
-    let host = floti_host_command(dirs)
-        .env("TZ", zone)
-        .spawn()
-        .expect("run floti host");
+    let host = HostProcess::spawn(floti_host_command(dirs).env("TZ", zone));
     let mut client = TestClient::connect(&binary_endpoint(dirs), &[]).await;
     let readings = client.request::<ReadUsage>(&()).await.expect("read usage");
     stop_executable(&mut client, host).await;
@@ -501,7 +579,7 @@ async fn the_executable_reads_only_the_agent_folder_under_its_home() {
     claude_conversation(&dirs.home, &cwd, &[now_ms() - 60_000]);
     let config = dirs.home.join(".claude");
 
-    let host = floti_host_command(&dirs).spawn().expect("run floti host");
+    let host = HostProcess::spawn(&mut floti_host_command(&dirs));
     let mut client = TestClient::connect(&binary_endpoint(&dirs), &[]).await;
     let summary = client
         .request::<HistoryRefresh>(&())
@@ -629,7 +707,7 @@ fn s5_floti_host_started_from_ssh_refuses_in_one_sentence_and_opens_nothing() {
 #[tokio::test(flavor = "multi_thread")]
 async fn s8_a_second_floti_host_exits_saying_one_is_running_and_the_first_keeps_serving() {
     let dirs = TestDirs::new();
-    let mut first = floti_host_command(&dirs).spawn().expect("run floti host");
+    let mut first = HostProcess::spawn(&mut floti_host_command(&dirs));
     let endpoint = binary_endpoint(&dirs);
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     let folder = dirs.folder("a project");
@@ -846,10 +924,7 @@ async fn stop_floti_host_with(signal: fn(u32) -> std::io::Result<()>) {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let (log_var, log_dir) = agent.log_env();
-    let mut host = floti_host_command(&dirs)
-        .env(log_var, log_dir)
-        .spawn()
-        .expect("run floti host");
+    let mut host = HostProcess::spawn(floti_host_command(&dirs).env(log_var, log_dir));
     let endpoint = binary_endpoint(&dirs);
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     let folder = dirs.folder("a project");
@@ -1093,10 +1168,7 @@ async fn a_killed_floti_host_takes_every_process_its_sessions_and_terminals_star
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
     let (log_var, log_dir) = agent.log_env();
-    let mut host = floti_host_command(&dirs)
-        .env(log_var, log_dir)
-        .spawn()
-        .expect("run floti host");
+    let mut host = HostProcess::spawn(floti_host_command(&dirs).env(log_var, log_dir));
     let mut client = TestClient::connect(&binary_endpoint(&dirs), TERMINAL).await;
 
     // A session: the shell, running the fake agent, which starts a child on
@@ -1267,7 +1339,7 @@ async fn s12_after_a_stop_for_an_update_the_next_start_offers_the_sessions_once_
 async fn s12_after_floti_host_is_killed_the_next_start_offers_its_sessions_and_starts_none() {
     let dirs = TestDirs::new();
     let agent = fake_agent!(&dirs);
-    let mut host = floti_host_command(&dirs).spawn().expect("run floti host");
+    let mut host = HostProcess::spawn(&mut floti_host_command(&dirs));
     let endpoint = binary_endpoint(&dirs);
     let mut client = TestClient::connect(&endpoint, TERMINAL).await;
     let folder = dirs.folder("a project");

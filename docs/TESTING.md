@@ -117,6 +117,21 @@ checks that every file at its target is still there afterwards.
 `packages/core/src/content/highlight.ts` and `packages/ui/src/lib/languages.ts`
 when it runs, so a language the app highlights and the host does not fails it.
 
+The agent tools listener is tested at three levels. `src/agent_tools/tests.rs`
+drives the listener with families made in the test: loopback only, 401 before
+the body is read, 404 for a family switched off, Origin refused, one token
+per session. `src/server/session_tools/tests.rs` calls floti-sessions on a
+world made in the test, for what a real host cannot be put in on demand (a
+listing not ready yet, a token whose session is not live). And
+`crates/host/tests/agent_tools.rs` runs a `RunningHost` with sessions on the
+fake agent (`FakeAgent::backend(..).with_agent_tools()`, which takes agent
+tools as Claude Code does) and the fake `claude`, reads each session's URL
+and token out of the `--mcp-config` file it was launched with, and calls the
+listener over HTTP as a session would: registration and the launch folder,
+revocation at exit and at stop, the settings switch, the sweep at start, and
+what `sessions_list` and `session_detail` answer, with nothing of another
+session's conversation in any answer.
+
 `crates/host/tests/os_conditionals.rs` fails, naming each `file:line`, when a
 compile-time OS conditional (`cfg(windows)`, `cfg!(unix)`, `target_os` and
 the like) appears outside `src/platform/mod.rs` and the per-OS

@@ -66,6 +66,7 @@ pub(crate) struct Sessions {
     focus: Arc<Mutex<Focus>>,
     /// Asks the activity pass to run now rather than at its next tick.
     nudge: mpsc::Sender<()>,
+    activity: ActivityHandle,
 }
 
 /// Closes waiting for a client to agree.
@@ -150,12 +151,15 @@ impl Sessions {
             hosted.terminals().exits(),
             Arc::clone(&events),
         ));
-        let watcher = ActivityWatcher {
+        let reader = Arc::new(ActivityReader {
             hosted: Arc::downgrade(&hosted),
             events: Arc::clone(&events),
-            tracker,
-            last: first,
-        };
+            state: Mutex::new(ActivityState {
+                tracker,
+                last: first,
+            }),
+        });
+        let watcher = Arc::clone(&reader);
         std::thread::Builder::new()
             .name("session activity".to_owned())
             .spawn(move || watcher.run(&nudged))
@@ -167,7 +171,13 @@ impl Sessions {
             confirms: Mutex::new(Confirms::default()),
             focus,
             nudge,
+            activity: ActivityHandle(reader),
         })
+    }
+
+    /// The activity pass, for what inside the host reads the listing.
+    pub fn activity(&self) -> ActivityHandle {
+        self.activity.clone()
     }
 
     /// The activity pass runs now: something it reads has just moved.
@@ -380,17 +390,25 @@ fn read_activity(hosted: &Hosted, tracker: &mut ActivityTracker) -> Activity {
     }
 }
 
-/// Reads the records on a timer, and at once when nudged, until the host
-/// goes.
-struct ActivityWatcher {
+/// The one reader of the backends' records: on a timer and at once when
+/// nudged ([`ActivityReader::run`]), and whenever something in the host asks
+/// for the listing as of now ([`ActivityHandle::read_now`]). Each read is
+/// published to the clients when it changed anything.
+struct ActivityReader {
     hosted: Weak<Hosted>,
     events: Arc<Events>,
+    /// The joins kept from pass to pass and the last read, behind one lock,
+    /// so two reads never interleave.
+    state: Mutex<ActivityState>,
+}
+
+struct ActivityState {
     tracker: ActivityTracker,
     last: Activity,
 }
 
-impl ActivityWatcher {
-    fn run(mut self, nudged: &mpsc::Receiver<()>) {
+impl ActivityReader {
+    fn run(&self, nudged: &mpsc::Receiver<()>) {
         loop {
             match nudged.recv_timeout(ACTIVITY_POLL) {
                 Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -398,30 +416,50 @@ impl ActivityWatcher {
             }
             // Several nudges at once are one read.
             while nudged.try_recv().is_ok() {}
-            let Some(hosted) = self.hosted.upgrade() else {
+            if self.read_now().is_none() {
                 return;
-            };
-            let next = read_activity(&hosted, &mut self.tracker);
-            drop(hosted);
-            self.publish(next);
+            }
         }
     }
 
-    fn publish(&mut self, next: Activity) {
+    /// Reads the records now, publishes what changed, and answers the
+    /// machine-wide listing; `None` once the host has gone.
+    fn read_now(&self) -> Option<SessionsOverview> {
+        let hosted = self.hosted.upgrade()?;
+        let mut state = lock(&self.state);
+        let next = read_activity(&hosted, &mut state.tracker);
+        drop(hosted);
+        let overview = next.overview.clone();
+        state.publish(next, &self.events);
+        Some(overview)
+    }
+}
+
+/// The activity pass, for what inside the host asks for the listing as of
+/// now: a session tool re-reads it for every call.
+#[derive(Clone)]
+pub(crate) struct ActivityHandle(Arc<ActivityReader>);
+
+impl ActivityHandle {
+    /// Every live agent session on the machine, read now. `None` once the
+    /// host has gone. Blocking: it reads each backend's records.
+    pub fn read_now(&self) -> Option<SessionsOverview> {
+        self.0.read_now()
+    }
+}
+
+impl ActivityState {
+    fn publish(&mut self, next: Activity, events: &Events) {
         if self.last.same_as(&next.states, &next.overview.sessions) {
             return;
         }
         if self.last.overview.sessions != next.overview.sessions
-            && let Err(err) = self
-                .events
-                .set_state::<SessionsOverviewChanged, _>(&next.overview)
+            && let Err(err) = events.set_state::<SessionsOverviewChanged, _>(&next.overview)
         {
             eprintln!("floti host: {err}");
         }
         if self.last.states != next.states
-            && let Err(err) = self
-                .events
-                .set_state::<SessionActivityChanged, _>(&next.states)
+            && let Err(err) = events.set_state::<SessionActivityChanged, _>(&next.states)
         {
             eprintln!("floti host: {err}");
         }

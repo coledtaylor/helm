@@ -43,7 +43,8 @@ use tempfile::TempDir;
 
 use crate::Result;
 use crate::agent::{
-    AgentBackend, Launch, LaunchFolder, LaunchRequest, LaunchSpec, ResumeRequest, Resumer,
+    AgentBackend, AgentToolServer, AgentTools, Composition, Launch, LaunchFolder, LaunchRequest,
+    LaunchSpec, Registration, ResumeRequest, Resumer,
 };
 use crate::devices::DeviceRegistry;
 use crate::platform::folders::{Folders, UserEnv};
@@ -611,6 +612,7 @@ impl FakeAgent {
             id: BackendId::new(FakeAgentBackend::ID),
             agent: self.clone(),
             args: args.into_iter().map(Into::into).collect(),
+            agent_tools: false,
         }
     }
 
@@ -671,25 +673,80 @@ pub struct FakeAgentBackend {
     id: BackendId,
     agent: FakeAgent,
     args: Vec<OsString>,
+    /// Whether it takes agent tools, as [`Self::with_agent_tools`] says.
+    agent_tools: bool,
 }
 
 impl FakeAgentBackend {
     pub const ID: &'static str = "fake-agent";
 
+    /// This backend, taking agent tools as Claude Code does: one
+    /// `--mcp-config <file>` per launch, the file in the launch's own folder
+    /// naming each family at its URL with the session's bearer token, and
+    /// nothing with no family.
+    #[must_use]
+    pub fn with_agent_tools(mut self) -> Self {
+        self.agent_tools = true;
+        self
+    }
+
     fn spec(
         &self,
         cwd: &Path,
+        composition: &Composition,
         extra: impl IntoIterator<Item = OsString>,
         conversation_id: String,
         folder: &LaunchFolder,
-    ) -> Launch {
-        Launch::plain(LaunchSpec {
+    ) -> Result<Launch> {
+        let tools = match self.agent_tools() {
+            Some(tools) => tools.register(&composition.agent_tools, folder)?,
+            None => Registration::default(),
+        };
+        let mut env = vec![self.agent.log_env()];
+        env.extend(tools.env);
+        Ok(Launch::plain(LaunchSpec {
             program: self.agent.exe.clone().into_os_string(),
-            args: self.args.iter().cloned().chain(extra).collect(),
+            args: self
+                .args
+                .iter()
+                .cloned()
+                .chain(tools.args)
+                .chain(extra)
+                .collect(),
             cwd: cwd.to_path_buf(),
-            env: vec![self.agent.log_env()],
+            env,
             conversation_id: Some(conversation_id),
             launch_folder: Some(folder.path().to_path_buf()),
+        }))
+    }
+}
+
+impl AgentTools for FakeAgentBackend {
+    fn register(&self, servers: &[AgentToolServer], folder: &LaunchFolder) -> Result<Registration> {
+        if servers.is_empty() {
+            return Ok(Registration::default());
+        }
+        let servers: serde_json::Map<String, serde_json::Value> = servers
+            .iter()
+            .map(|server| {
+                (
+                    server.name.clone(),
+                    serde_json::json!({
+                        "type": "http",
+                        "url": server.url,
+                        "headers": { "Authorization": format!("Bearer {}", server.token) },
+                    }),
+                )
+            })
+            .collect();
+        let document = serde_json::json!({ "mcpServers": servers });
+        let file = folder.write(
+            "mcp.json",
+            serde_json::to_vec_pretty(&document).expect("json"),
+        )?;
+        Ok(Registration {
+            args: vec!["--mcp-config".into(), file.into_os_string()],
+            env: Vec::new(),
         })
     }
 }
@@ -706,27 +763,33 @@ impl AgentBackend for FakeAgentBackend {
     /// A new launch is given a conversation id of its own, as Claude Code's
     /// `--session-id` gives one, so its session can be restored.
     fn launch(&self, request: &LaunchRequest, folder: &LaunchFolder) -> Result<Launch> {
-        Ok(self.spec(
+        self.spec(
             &request.folder,
+            &request.composition,
             request.prompt.iter().map(OsString::from),
             format!("fake-conversation-{}", unique_name()),
             folder,
-        ))
+        )
     }
 
     fn resumer(&self) -> Option<&dyn Resumer> {
         Some(self)
     }
+
+    fn agent_tools(&self) -> Option<&dyn AgentTools> {
+        if self.agent_tools { Some(self) } else { None }
+    }
 }
 
 impl Resumer for FakeAgentBackend {
     fn resume(&self, request: &ResumeRequest, folder: &LaunchFolder) -> Result<Launch> {
-        Ok(self.spec(
+        self.spec(
             &request.folder,
+            &request.composition,
             ["--resume".into(), request.conversation_id.clone().into()],
             request.conversation_id.clone(),
             folder,
-        ))
+        )
     }
 }
 

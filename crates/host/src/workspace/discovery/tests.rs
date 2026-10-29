@@ -414,3 +414,25 @@ fn takes_the_newer_scan_when_the_two_finish_in_the_order_they_started() {
     assert!(found.contains(&world.added));
     assert!(Path::new(&world.added).starts_with(world.dirs.root()));
 }
+
+#[test]
+fn the_branch_at_spawn_is_the_checked_out_branch_and_none_without_one() {
+    let dirs = TestDirs::new();
+    let repo = crate::testkit::GitRepo::init(dirs.folder("repo"));
+    repo.write("readme.md", "one");
+    repo.commit_all("first");
+    assert_eq!(
+        super::git::read_git_branch(repo.path()).as_deref(),
+        Some("main")
+    );
+    repo.git(&["checkout", "--quiet", "-b", "feature/two"]);
+    assert_eq!(
+        super::git::read_git_branch(repo.path()).as_deref(),
+        Some("feature/two")
+    );
+    // A detached head has no branch, and neither has a folder outside any
+    // repository: neither is guessed.
+    repo.git(&["checkout", "--quiet", "--detach"]);
+    assert_eq!(super::git::read_git_branch(repo.path()), None);
+    assert_eq!(super::git::read_git_branch(&dirs.folder("plain")), None);
+}
