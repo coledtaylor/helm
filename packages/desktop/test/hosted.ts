@@ -93,9 +93,10 @@ export async function hostInWorld(options: HostOptions = {}): Promise<HostedWorl
         timeout: PATIENCE
       })
       services.store.close()
-      // The pty reports its exit when its own process ends; the `claude` under
-      // it can take a moment longer to leave its working directory, which
-      // Windows will not remove while anything is in it.
+      // Closing a tab ends everything the session started, but the pty can
+      // report its exit while a process under it that has been told to end is
+      // still leaving its working directory, which Windows will not remove
+      // while anything is in it.
       await vi.waitFor(() => disposeWorld(world), { timeout: PATIENCE, interval: 250 })
     }
   }

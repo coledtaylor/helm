@@ -17,7 +17,12 @@ import { execFile, execFileSync } from 'node:child_process'
  * `taskkill /T` walks the tree the way node-pty could not.
  *
  * For a session it is not a substitute for `IPty.kill()`, which is still what
- * releases the ConPTY handles: this runs alongside it.
+ * releases the ConPTY handles: this runs alongside it, in the order
+ * `TREE_BEFORE_HANGUP` gives.
+ *
+ * `done` runs once the kill has been carried out, on every path: at once for a
+ * pid that names nothing, before this returns when `sync`, and when the
+ * process-table read or `taskkill` has finished otherwise.
  *
  * One way per OS family:
  *
@@ -31,10 +36,13 @@ import { execFile, execFileSync } from 'node:child_process'
  *   reads the table *before* anything is killed, because a child whose parent
  *   has exited is re-parented and no longer names it.
  */
-export function treeKill(pid: number, sync: boolean): void {
-  if (pid <= 0) return
+export function treeKill(pid: number, sync: boolean, done: () => void = () => undefined): void {
+  if (pid <= 0) {
+    done()
+    return
+  }
   if (process.platform === 'win32') {
-    windowsTreeKill(pid, sync)
+    windowsTreeKill(pid, sync, done)
     return
   }
   if (sync) {
@@ -45,12 +53,30 @@ export function treeKill(pid: number, sync: boolean): void {
       // No table: the group kill below still ends everything in the group.
     }
     posixKill(pid, table)
+    done()
     return
   }
   execFile('ps', PS_TREE_ARGS, { encoding: 'utf8', timeout: 4000 }, (error, stdout) => {
     posixKill(pid, error === null ? stdout : null)
+    done()
   })
 }
+
+/**
+ * Whether a session's tree is ended before its pty is released, rather than
+ * after the pty's own hangup has had `GRACE_MS` to work.
+ *
+ * - **Windows**: tree first. `IPty.kill()` hits `AttachConsole failed` and ends
+ *   only the pty's own process, which under a `.cmd` shim (how npm installs
+ *   `claude`) is `cmd.exe`: the agent under it keeps running, orphaned, in the
+ *   session's folder, and once its parent is gone `/T` no longer finds it. So
+ *   `taskkill /T` goes while the root still names its children, and the pty is
+ *   released when it has finished.
+ * - **macOS and Linux**: hangup first. The pty's `SIGHUP` reaches the whole
+ *   group and is what a program expects at a closed terminal; the tree kill
+ *   follows only if the root outlives the grace.
+ */
+export const TREE_BEFORE_HANGUP: boolean = process.platform === 'win32'
 
 /**
  * The spawn option that puts a child in a process group of its own on macOS
@@ -112,7 +138,7 @@ function posixKill(pid: number, table: string | null): void {
   for (const child of below) signal(child)
 }
 
-function windowsTreeKill(pid: number, sync: boolean): void {
+function windowsTreeKill(pid: number, sync: boolean, done: () => void): void {
   const args = ['/PID', String(pid), '/T', '/F']
   if (sync) {
     try {
@@ -120,7 +146,9 @@ function windowsTreeKill(pid: number, sync: boolean): void {
     } catch {
       // Exit code 128 means "no such process", which is the outcome we wanted.
     }
+    done()
     return
   }
-  execFile('taskkill.exe', args, { windowsHide: true, timeout: 4000 }, () => undefined)
+  // Any error, "no such process" included, still means there is nothing more to do.
+  execFile('taskkill.exe', args, { windowsHide: true, timeout: 4000 }, () => done())
 }

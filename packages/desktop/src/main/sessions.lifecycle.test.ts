@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { BrowserWindow } from 'electron'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -84,10 +84,19 @@ describe('session lifecycle', () => {
   const listed = (id: number): SessionRecord | undefined =>
     h.host.list().find((session) => session.id === id)
 
-  /** Closes tabs without asking and waits for their processes to be gone. */
+  /**
+   * Closes tabs without asking and waits for everything they started to be
+   * gone: the pty's own process, and the fake `claude` under it. On Windows the
+   * pty's process is the `cmd.exe` of the `.cmd` shim, so the first ending says
+   * nothing about the agent.
+   */
   const end = async (...records: SessionRecord[]): Promise<void> => {
+    const runs = await Promise.all(records.map((record) => h.run(record)))
     for (const record of records) await h.host.close({ id: record.id, force: true })
     await vi.waitFor(() => expect(records.filter((r) => h.host.pid(r.id) !== null)).toEqual([]), {
+      timeout: PATIENCE
+    })
+    await vi.waitFor(() => expect(runs.filter((run) => processAlive(run.pid)).map((run) => run.pid)).toEqual([]), {
       timeout: PATIENCE
     })
   }
@@ -203,6 +212,19 @@ describe('session lifecycle', () => {
     await vi.waitFor(() => expect(processAlive(run.pid)).toBe(false), { timeout: PATIENCE })
     await vi.waitFor(() => expect(row(record.id)?.status).toBe('exited'), { timeout: PATIENCE })
     expect(row(record.id)?.durationMs).toBeGreaterThan(0)
+  })
+
+  it('ends everything a closed tab started, so its working folder can be removed', async () => {
+    const folder = join(h.world.projectsDir, 'delta')
+    mkdirSync(folder)
+    const records = await Promise.all([start(folder, 'delta'), start(folder, 'delta')])
+    await Promise.all(records.map((record) => h.ready(record.id)))
+
+    await end(...records)
+
+    // Nothing is left in the folder, so it goes at the first try.
+    rmSync(folder, { recursive: true })
+    expect(existsSync(folder)).toBe(false)
   })
 
   it('does not give a new launch the name of an ended tab that is still open', async () => {

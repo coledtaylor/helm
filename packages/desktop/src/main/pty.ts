@@ -4,7 +4,7 @@ import { readdirSync } from 'node:fs'
 import * as pty from 'node-pty'
 import { release } from 'node:os'
 import { join } from 'node:path'
-import { treeKill } from './treekill'
+import { TREE_BEFORE_HANGUP, treeKill } from './treekill'
 
 /**
  * Environment variables Electron injects (or that leak from the dev toolchain)
@@ -185,6 +185,8 @@ export interface SessionHandle {
 interface LiveSession extends SessionHandle {
   pty: pty.IPty
   hardKillTimer: NodeJS.Timeout | null
+  /** Set by the first `killSession`, so a second close starts nothing more. */
+  ending: boolean
 }
 
 const live = new Map<string, LiveSession>()
@@ -205,6 +207,7 @@ export function spawnSession(opts: SessionSpawnOptions): SessionHandle {
     pid: p.pid,
     pty: p,
     hardKillTimer: null,
+    ending: false,
     write: (data) => {
       try {
         p.write(data)
@@ -243,21 +246,37 @@ export function liveSessionIds(): string[] {
   return [...live.keys()]
 }
 
+/**
+ * Ends a session and everything it started, in the order `TREE_BEFORE_HANGUP`
+ * gives for this OS. Idempotent: a second call while the first is ending it
+ * does nothing.
+ */
 export function killSession(id: string): void {
   const session = live.get(id)
-  if (!session) return
+  if (!session || session.ending) return
+  session.ending = true
 
+  if (TREE_BEFORE_HANGUP) {
+    // The tree goes while its root still names its children, as at quit; the
+    // pty is released once the kill has finished, whether or not its exit has
+    // been reported by then.
+    treeKill(session.pid, false, () => releasePty(session))
+    return
+  }
+  releasePty(session)
+  // `onExit` clears this. If it has not fired by then the process outlived the
+  // polite kill, which is exactly the case deviation #8 predicted.
+  session.hardKillTimer = setTimeout(() => {
+    if (live.has(id)) treeKill(session.pid, false)
+  }, GRACE_MS)
+}
+
+/** `IPty.kill()`: the hangup, and what releases the pty's handles. */
+function releasePty(session: LiveSession): void {
   try {
     session.pty.kill()
   } catch {
     // Already gone.
-  }
-  // `onExit` clears this. If it has not fired by then the process outlived the
-  // polite kill, which is exactly the case deviation #8 predicted.
-  if (!session.hardKillTimer) {
-    session.hardKillTimer = setTimeout(() => {
-      if (live.has(id)) treeKill(session.pid, false)
-    }, GRACE_MS)
   }
 }
 

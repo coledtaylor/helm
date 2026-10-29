@@ -89,6 +89,31 @@ describe('treeKill', () => {
     })
   }
 
+  it('says when the kill has been carried out, once, before returning only at quit', async () => {
+    for (const sync of [true, false]) {
+      const { top, below } = await startTree(POSIX_OWN_GROUP)
+      const all = [top.pid ?? -1, ...below]
+      let calls = 0
+      treeKill(top.pid ?? -1, sync, () => {
+        calls += 1
+      })
+      expect(calls).toBe(sync ? 1 : 0)
+      await vi.waitFor(() => expect(calls).toBe(1), { timeout: PATIENCE })
+      await vi.waitFor(() => expect(all.filter(alive)).toEqual([]), { timeout: PATIENCE })
+      expect(calls).toBe(1)
+    }
+  })
+
+  it('says it is done at once for a pid that names no process', () => {
+    for (const sync of [true, false]) {
+      let calls = 0
+      treeKill(0, sync, () => {
+        calls += 1
+      })
+      expect(calls).toBe(1)
+    }
+  })
+
   it.runIf(process.platform !== 'win32')(
     'ends the children of a program that leads no process group of its own',
     async () => {
