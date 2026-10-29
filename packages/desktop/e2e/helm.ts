@@ -6,6 +6,7 @@ import {
   type Locator,
   type Page
 } from '@playwright/test'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { createWorld, disposeWorld, fakeClaudeLogs, repoRoot, seedSettings, type FakeClaudeLog, type World } from '../test/world'
 
@@ -111,6 +112,34 @@ export async function startSession(window: Page, project: string): Promise<numbe
 export async function typeLine(pane: Locator, text: string): Promise<void> {
   await pane.getByRole('textbox', { name: 'Terminal input' }).pressSequentially(text)
   await pane.page().keyboard.press('Enter')
+}
+
+/** The pid of Helm's main process: `app.process()` is the launcher Playwright started. */
+export const mainPid = (helm: Helm): Promise<number> => helm.app.evaluate(() => process.pid)
+
+/** The `floti` programs a process started, by pid: the host and the bridge. */
+export function flotiChildren(parent: number): number[] {
+  if (process.platform === 'win32') {
+    const out = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-Command',
+        `Get-CimInstance Win32_Process -Filter "ParentProcessId=${String(parent)} AND Name='floti.exe'" | ForEach-Object { $_.ProcessId }`
+      ],
+      { encoding: 'utf8' }
+    )
+    return out
+      .split(/\r?\n/)
+      .map((line) => Number(line.trim()))
+      .filter((pid) => pid > 0)
+  }
+  const out = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,comm='], { encoding: 'utf8' })
+  return out
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/))
+    .filter(([, ppid, comm]) => Number(ppid) === parent && (comm ?? '').endsWith('floti'))
+    .map(([pid]) => Number(pid))
 }
 
 /** Whether a process is still running. `EPERM` means it exists and is not ours to signal. */

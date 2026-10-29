@@ -40,6 +40,8 @@ on:
       # The afterPack hook, and the spawn-helper fix it and postinstall share.
       - packages/desktop/scripts/after-pack.mjs
       - packages/desktop/scripts/spawn-helper.mjs
+      # The `floti` host the artefacts carry.
+      - packages/desktop/scripts/stage-floti.mjs
       - packages/desktop/scripts/screenshots/**
       # The launch and the fake-claude world the capture runs in.
       - packages/desktop/e2e/helm.ts
@@ -79,6 +81,11 @@ jobs:
       - name: Read the version the artefacts are named for
         run: |
           echo "VERSION=$(node -p "require('./packages/desktop/package.json').version")" >>"$GITHUB_ENV"
+
+      # The artefacts carry the `floti` host, built from rust-toolchain.toml's
+      # toolchain by scripts/stage-floti.mjs.
+      - name: Rust toolchain
+        run: rustup toolchain install
 
       # As `release-mac` in release.yml builds it: ad-hoc signed
       # (`identity: '-'` in electron-builder.yml), with no Developer ID,

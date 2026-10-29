@@ -111,6 +111,11 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # The artefacts carry the `floti` host, built from rust-toolchain.toml's
+      # toolchain by scripts/stage-floti.mjs.
+      - name: Rust toolchain
+        run: rustup toolchain install
+
       # Ad-hoc signed (`identity: '-'` in electron-builder.yml): there is no
       # Developer ID, and no certificate or secret is involved.
       - name: Build artefacts
@@ -178,6 +183,11 @@ jobs:
           # this step is the thing that already told you why.
           where.exe pnpm || echo '(no pnpm on PATH - dist-win.mjs will say so)'
           pnpm --version
+
+      # The artefacts carry the `floti` host, built from rust-toolchain.toml's
+      # toolchain by scripts/stage-floti.mjs.
+      - name: Rust toolchain
+        run: rustup toolchain install
 
       - name: Build artefacts
         run: pnpm dist:win

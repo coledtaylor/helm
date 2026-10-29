@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-app/
+dist-host/
 out/
 reports/
 *.local

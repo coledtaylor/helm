@@ -101,7 +101,12 @@ const PACKAGE_INPUTS = [
   join(desktopDir, 'package.json'),
   join(desktopDir, 'electron-builder.yml'),
   join(desktopDir, 'scripts', 'dist-win.mjs'),
-  join(repoRoot, 'pnpm-lock.yaml')
+  join(desktopDir, 'scripts', 'stage-floti.mjs'),
+  join(repoRoot, 'pnpm-lock.yaml'),
+  // The `floti` host the artefacts carry beside the app.
+  join(repoRoot, 'crates'),
+  join(repoRoot, 'Cargo.toml'),
+  join(repoRoot, 'Cargo.lock')
 ]
 
 /**

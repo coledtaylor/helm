@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
@@ -7,14 +6,15 @@ import { fakeClaudeLogs, seedSettings, type FakeClaudeLog, type World } from '..
 import {
   claudeRunIn,
   expect,
+  flotiChildren,
   launchHelm,
+  mainPid,
   processAlive,
   sessionIdOf,
   startSession,
   terminalText,
   test as base,
-  typeLine,
-  type Helm
+  typeLine
 } from './helm'
 
 /**
@@ -35,34 +35,6 @@ const enrolmentFile = (world: World): string => join(world.dataDir, 'host', 'dat
 type Bridge = { helm: { invoke: (channel: string, payload?: unknown) => Promise<unknown> } }
 const invoke = <T>(window: Page, channel: string): Promise<T> =>
   window.evaluate((name) => (window as unknown as Bridge).helm.invoke(name), channel) as Promise<T>
-
-/** The pid of Helm's main process: `app.process()` is the launcher Playwright started. */
-const mainPid = (helm: Helm): Promise<number> => helm.app.evaluate(() => process.pid)
-
-/** The `floti` programs a process started, by pid: the host and the bridge. */
-function flotiChildren(parent: number): number[] {
-  if (process.platform === 'win32') {
-    const out = execFileSync(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-Command',
-        `Get-CimInstance Win32_Process -Filter "ParentProcessId=${String(parent)} AND Name='floti.exe'" | ForEach-Object { $_.ProcessId }`
-      ],
-      { encoding: 'utf8' }
-    )
-    return out
-      .split(/\r?\n/)
-      .map((line) => Number(line.trim()))
-      .filter((pid) => pid > 0)
-  }
-  const out = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,comm='], { encoding: 'utf8' })
-  return out
-    .split('\n')
-    .map((line) => line.trim().split(/\s+/))
-    .filter(([, ppid, comm]) => Number(ppid) === parent && (comm ?? '').endsWith('floti'))
-    .map(([pid]) => Number(pid))
-}
 
 /** How many times `text` is on a session's screen. */
 const count = (screen: string, text: string): number => screen.split(text).length - 1

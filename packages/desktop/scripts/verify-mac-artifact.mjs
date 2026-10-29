@@ -199,6 +199,16 @@ function appProblems(app, origin) {
       fail(`node-pty spawn-helper is not executable (mode ${mode}), so no terminal can start`)
     }
   }
+  // Where `flotiBinary` looks for the local host in a packaged build.
+  const floti = join(resources, 'floti')
+  if (!existsSync(floti)) fail('Contents/Resources/floti is missing, so sessions cannot run in the local host')
+  else {
+    try {
+      accessSync(floti, constants.X_OK)
+    } catch {
+      fail('Contents/Resources/floti is not executable, so sessions cannot run in the local host')
+    }
+  }
   return problems
 }
 

@@ -1,8 +1,18 @@
 import type { Locator, Page } from '@playwright/test'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fakeClaudeLogs } from '../test/world'
-import { claudeRunIn, expect, processAlive, startSession, terminalText, test, typeLine } from './helm'
+import {
+  claudeRunIn,
+  expect,
+  flotiChildren,
+  mainPid,
+  processAlive,
+  startSession,
+  terminalText,
+  test,
+  typeLine
+} from './helm'
 
 test('a session starts in a project, takes input and ends', async ({ helm, world }) => {
   const { window } = helm
@@ -53,6 +63,46 @@ test('quitting Helm ends every session and everything a session started', async 
 
   await helm.app.close()
   await expect.poll(() => pids.filter(processAlive)).toEqual([])
+})
+
+test('with the local host setting never changed, sessions run in Helm itself: no host process starts and no host folder is made', async ({
+  helm,
+  world
+}) => {
+  const { window } = helm
+  const settings = await window.evaluate(() =>
+    (window as unknown as { helm: { invoke: (channel: string) => Promise<{ sessionsInHost: boolean }> } }).helm.invoke(
+      'settings:read'
+    )
+  )
+  expect(settings.sessionsInHost).toBe(false)
+
+  const id = await startSession(window, 'alpha')
+  const pane = window.getByRole('region', { name: 'First pane' })
+  await typeLine(pane, 'hello there')
+  await expect.poll(() => terminalText(window, id)).toContain('You said: hello there')
+  await pane.getByRole('tab', { name: 'alpha, ready' }).dblclick()
+  const field = pane.getByRole('textbox', { name: 'Rename this tab' })
+  await field.pressSequentially('review')
+  await field.press('Enter')
+  await expect(pane.getByRole('tab', { name: 'review, ready' })).toBeVisible()
+
+  // The agent is a child of Helm's main process, and nothing Helm started is `floti`.
+  const main = await mainPid(helm)
+  const run = await claudeRunIn(world, world.projects.alpha)
+  expect(processAlive(run.pid)).toBe(true)
+  expect(flotiChildren(main)).toEqual([])
+
+  await pane.getByRole('button', { name: 'Close review' }).click()
+  await window
+    .getByRole('alertdialog', { name: '“review” is still running.' })
+    .getByRole('button', { name: 'End session' })
+    .click()
+  await expect.poll(() => processAlive(run.pid)).toBe(false)
+
+  await helm.app.close()
+  expect(existsSync(join(world.dataDir, 'host'))).toBe(false)
+  expect(existsSync(join(world.dataDir, 'host-client'))).toBe(false)
 })
 
 test('a session tab is renamed, then closed with confirmation', async ({ helm, world }) => {

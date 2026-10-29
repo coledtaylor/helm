@@ -20,9 +20,15 @@ electron-builder makes a dmg only there:
 | `Helm-<version>-arm64.dmg` | Disk image: Helm.app beside an Applications link to drag it onto. Apple Silicon only. |
 | `Helm-<version>-arm64-mac.zip` | The same Helm.app, zipped, for anyone who would rather not mount an image. |
 
-Every build comes out of the same code. Nothing is compiled: `npmRebuild: false`
-and the native modules ship N-API prebuilds for each platform, so a clean
-checkout needs no compiler, no Python and no build tools.
+Every build comes out of the same code. No node module is compiled:
+`npmRebuild: false` and the native modules ship N-API prebuilds for each
+platform, so a clean checkout needs no C compiler, no Python and no build tools.
+The one thing compiled is the `floti` host, which runs sessions when "Run
+sessions in the local host" is on: both commands first run
+`scripts/stage-floti.mjs`, which builds it in release with the Rust toolchain
+`rust-toolchain.toml` names and copies it to `packages/desktop/dist-host/`.
+electron-builder carries it beside the app, at `resources\floti.exe` on Windows
+and `Contents/Resources/floti` on macOS, where the app looks for it.
 
 ### The Mac build is ad-hoc signed
 
