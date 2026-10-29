@@ -1,20 +1,19 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { inject } from 'vitest'
-import { ELECTRON_FAKE_ROOT } from './electron-setup'
+import { RUN_ROOT } from '../../../test/run-root'
 
 /**
- * The run's app folder, which `electron-setup.ts` makes and removes. There is
- * no fallback: a fixed folder shared between runs would outlive them all.
+ * The faked app's folder, in the run's root (`test/run-root.ts`), which the
+ * run removes when it ends. There is no fallback: a fixed folder shared
+ * between runs would outlive them all.
  */
 function appRoot(): string {
-  const root = inject(ELECTRON_FAKE_ROOT)
+  const root = inject(RUN_ROOT)
   if (!root) {
-    throw new Error(
-      'electronFake: no app folder for this run; the desktop project runs packages/desktop/test/electron-setup.ts as its globalSetup'
-    )
+    throw new Error('electronFake: no root for this run; vitest.config.ts runs test/run-root.ts as its globalSetup')
   }
-  return root
+  return join(root, 'electron app')
 }
 
 /**

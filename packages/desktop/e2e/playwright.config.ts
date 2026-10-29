@@ -16,6 +16,8 @@ export default defineConfig({
   // no other.
   expect: { timeout: PATIENCE },
   retries: 0,
+  // The run's root, which every world lands in, removed when the run ends.
+  globalSetup: './run-root.ts',
   // Each test starts its own app and its own sessions; running them one at a
   // time keeps timing on a loaded machine from becoming a variable.
   workers: 1,

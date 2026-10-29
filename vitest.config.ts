@@ -27,8 +27,12 @@ export default defineConfig({
     pool: 'forks',
     // On a developer's machine the suite keeps to a quarter of the cores, so
     // the desktop stays usable while it runs; on CI it has the runner.
-    maxWorkers: process.env.CI ? undefined : '25%',
+    ...(process.env.CI ? {} : { maxWorkers: '25%' }),
     testTimeout: 30_000,
+    // One folder per run that every temp folder its tests make lands in,
+    // removed when the run ends, crashed workers included (test/run-root.ts).
+    // Every project extends this config, so every project runs it.
+    globalSetup: ['test/run-root.ts'],
     // `pnpm test` runs with --coverage; a targeted `vitest run <file>` does
     // not, so a narrow run never trips the thresholds.
     coverage: {
@@ -77,9 +81,7 @@ export default defineConfig({
         test: {
           name: 'desktop',
           include: ['packages/desktop/src/main/**/*.test.ts', 'packages/desktop/test/**/*.test.ts'],
-          environment: 'node',
-          // The faked Electron app's folder, one per run, removed when it ends.
-          globalSetup: ['packages/desktop/test/electron-setup.ts']
+          environment: 'node'
         }
       },
       {

@@ -47,11 +47,13 @@ import { fileURLToPath } from 'node:url'
 export const MARK_VARIABLE = 'TEST_LEFTOVERS_MARK'
 
 /**
- * The folders tests make in the OS temp folder: the host testkit's `TestDirs`,
- * the desktop tests' world, and `pnpm test:posix`'s mirror. Rust's tempfile
- * uses the same temp folder as `os.tmpdir()`.
+ * The folders tests make in the OS temp folder: a vitest run's root
+ * (`test/run-root.ts`), which holds every temp folder its tests make, the
+ * host testkit's `TestDirs`, the end-to-end tests' worlds, and
+ * `pnpm test:posix`'s mirror. Rust's tempfile uses the same temp folder as
+ * `os.tmpdir()`.
  */
-export const TEST_FOLDER_PREFIXES = ['floti test ', 'helm world-', 'helm-test-posix-']
+export const TEST_FOLDER_PREFIXES = ['helm-test-run-', 'floti test ', 'helm world-', 'helm-test-posix-']
 
 /**
  * The kinds of process tests start: every `floti*` binary of crates/host, Node

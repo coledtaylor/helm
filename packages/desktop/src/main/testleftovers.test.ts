@@ -81,14 +81,19 @@ describe('what the leftover check selects', () => {
       before: { processes: BEFORE, folders: ['helm world-old'] },
       after: {
         processes: after,
-        folders: ['helm world-old', 'floti test abc', 'helm world-xyz', 'helm-test-posix-1']
+        folders: ['helm world-old', 'floti test abc', 'helm world-xyz', 'helm-test-posix-1', 'helm-test-run-a1']
       },
       self: 50,
       tmp: TMP,
       places: PLACES,
       inspect: inspector({ 41: { marked: true } })
     })
-    expect(leftovers.folders).toEqual([join(TMP, 'floti test abc'), join(TMP, 'helm world-xyz'), join(TMP, 'helm-test-posix-1')])
+    expect(leftovers.folders).toEqual([
+      join(TMP, 'floti test abc'),
+      join(TMP, 'helm world-xyz'),
+      join(TMP, 'helm-test-posix-1'),
+      join(TMP, 'helm-test-run-a1')
+    ])
     expect(pids(leftovers.processes)).toEqual([40, 41, 42])
     expect(formatLeftovers(leftovers)).toContain('  process  40 floti floti host --listen 127.0.0.1:0')
     expect(formatLeftovers(leftovers)).toContain(`  folder   ${join(TMP, 'floti test abc')}`)
