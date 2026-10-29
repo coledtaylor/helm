@@ -82,7 +82,8 @@ pub trait ProcessTree {
     /// a tree [`ProcessTree::end_tree`] can end: on macOS and Linux the
     /// leader of a process group of its own, since a group is the tree; on
     /// Windows, started with no console window, since `taskkill /T` finds
-    /// the tree by parent. Nothing else about how it starts changes.
+    /// the tree by parent. It holds no descriptor of this process's but its
+    /// standard three. Nothing else about how it starts changes.
     fn prepare_root(&self, command: &mut std::process::Command) {
         let _ = command;
     }

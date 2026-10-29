@@ -68,6 +68,59 @@ fn the_tree_under_a_process_is_its_children_theirs_and_no_others() {
     assert_eq!(tree_under(&table, 40, |_, _| true), Vec::<u32>::new());
 }
 
+/// A program started as a tree's root holds nothing of this process's but
+/// its standard three. A descriptor open without close-on-exec when it
+/// starts - on macOS, a pipe another thread's spawn has just made, before
+/// it is marked - is not held by the program: the pipe's reader sees its end
+/// once this process lets go of its own copy.
+#[cfg(unix)]
+#[test]
+fn a_root_holds_no_descriptor_of_the_host_but_its_standard_three() {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    let mut ends = [0; 2];
+    // SAFETY: `pipe` fills the two descriptors it makes, without close-on-exec.
+    assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+    // SAFETY: both were just made and nothing else owns them.
+    let (reader, writer) =
+        unsafe { (OwnedFd::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1])) };
+
+    let mut command = Command::new(fake_agent_exe());
+    command
+        .arg("--fake-child=60000")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    Native.prepare_root(&mut command);
+    let mut agent = command.spawn().unwrap();
+    let mut line = String::new();
+    BufReader::new(agent.stdout.take().expect("the agent's output"))
+        .read_line(&mut line)
+        .expect("read the agent's child");
+    let grandchild: Option<u32> = line
+        .trim()
+        .strip_prefix("child: ")
+        .and_then(|pid| pid.parse().ok());
+
+    // The program is running, so whatever it holds it holds now.
+    drop(writer);
+    let mut byte = 0u8;
+    // SAFETY: reads at most one byte into `byte`; the pipe is non-blocking.
+    let read = unsafe {
+        let raw = reader.as_raw_fd();
+        libc::fcntl(raw, libc::F_SETFL, libc::O_NONBLOCK);
+        libc::read(raw, (&raw mut byte).cast(), 1)
+    };
+    let held = std::io::Error::last_os_error();
+
+    drop(agent.stdin.take());
+    agent.wait().unwrap();
+    if let Some(pid) = grandchild {
+        Native.end_tree(pid, Ending::Forced).unwrap();
+    }
+    assert_eq!(read, 0, "the program holds the pipe's write end: {held}");
+}
+
 /// A program this process started, and the child that one started, are
 /// both found under this process.
 #[test]

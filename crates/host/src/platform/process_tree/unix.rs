@@ -122,7 +122,27 @@ impl ProcessTree for Native {
     }
 
     fn prepare_root(&self, command: &mut std::process::Command) {
-        std::os::unix::process::CommandExt::process_group(command, 0);
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+        // Every descriptor past the standard three closes on exec. On macOS
+        // a pipe is made, then marked close-on-exec, in two steps; one that
+        // another thread's spawn has just made arrives open here, and this
+        // program would hold the write end of that program's input for as
+        // long as it ran, so that program would never read to its end.
+        let open_max = open_max();
+        // SAFETY: the closure makes only `fcntl` calls, which are
+        // async-signal-safe, on plain values.
+        unsafe {
+            command.pre_exec(move || {
+                for fd in 3..open_max {
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
+                        libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+                    }
+                }
+                Ok(())
+            });
+        }
     }
 }
 
