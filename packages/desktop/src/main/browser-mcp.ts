@@ -20,6 +20,7 @@ import {
   type SessionToolsWorld
 } from './session-tools'
 import type { BrowserConsoleEntry } from '../shared/ipc'
+import browserToolTable from '../../../../crates/host/src/server/browser_tools.json'
 
 /**
  * Helm's tools, served to the sessions it hosts.
@@ -107,22 +108,72 @@ import type { BrowserConsoleEntry } from '../shared/ipc'
 const PROTOCOL_VERSION = '2025-06-18'
 const KNOWN_VERSIONS = new Set(['2025-06-18', '2025-03-26', '2024-11-05'])
 
+/** One browser tool as a session is told about it: everything but what it does. */
+export interface BrowserToolSpec {
+  name: string
+  description: string
+  inputSchema: Record<string, unknown>
+}
+
+/**
+ * The browser tools' table: the server's name and route, its instructions,
+ * and each tool's name, description and input schema. It lives once, in
+ * `crates/host/src/server/browser_tools.json`, because the host serves the same
+ * family to the sessions it runs and a session must be told the same thing by
+ * either: the user's `mcp__helm-browser__*` permission rules name these tools.
+ */
+export const BROWSER_TOOL_TABLE: {
+  name: string
+  path: string
+  instructions: string
+  tools: readonly BrowserToolSpec[]
+} = browserToolTable
+
+/**
+ * Each tool in the table with what it does, in the table's order. Throws
+ * naming every tool that is in the table with nothing to run it, or has a run
+ * and no entry in the table: either would be a tool listed that cannot answer,
+ * or one that answers and is never listed.
+ */
+export function pairBrowserTools<R>(
+  specs: readonly BrowserToolSpec[],
+  runs: Readonly<Record<string, R>>
+): Array<BrowserToolSpec & { run: R }> {
+  const listed = new Set(specs.map((spec) => spec.name))
+  const unrun = specs.filter((spec) => !Object.hasOwn(runs, spec.name)).map((spec) => spec.name)
+  const unlisted = Object.keys(runs).filter((name) => !listed.has(name))
+  if (unrun.length > 0 || unlisted.length > 0) {
+    throw new Error(
+      [
+        unrun.length > 0 ? `in the browser tool table with nothing to run them: ${unrun.join(', ')}` : '',
+        unlisted.length > 0 ? `run but not in the browser tool table: ${unlisted.join(', ')}` : ''
+      ]
+        .filter((part) => part !== '')
+        .join('; ')
+    )
+  }
+  return specs.map((spec) => ({ ...spec, run: runs[spec.name] as R }))
+}
+
 /** The name the browser tools appear under in a session. One server, one name. */
-export const MCP_SERVER_NAME = 'helm-browser'
+export const MCP_SERVER_NAME = BROWSER_TOOL_TABLE.name
 
 /** Its route. One per family, and nothing answers on any other. */
-const MCP_PATH = '/mcp'
+const MCP_PATH = BROWSER_TOOL_TABLE.path
 
 /** Past this a request body is refused unread. A tool call is a few hundred bytes. */
 const MAX_BODY_BYTES = 4 * 1024 * 1024
 
-/** How many nodes a snapshot may carry before it says it was cut short. */
-const SNAPSHOT_MAX_NODES = 600
+/**
+ * How many nodes a snapshot may carry before it says it was cut short. This
+ * and the limits below are stated in the table's descriptions too.
+ */
+export const SNAPSHOT_MAX_NODES = 600
 /** What `browser_text` answers with at most, unless asked for more. */
-const TEXT_MAX_CHARS = 20_000
+export const TEXT_MAX_CHARS = 20_000
 /** `browser_wait_for`: how long by default, the longest it will, and how often it looks. */
-const WAIT_DEFAULT_S = 10
-const WAIT_MAX_S = 60
+export const WAIT_DEFAULT_S = 10
+export const WAIT_MAX_S = 60
 const WAIT_POLL_MS = 150
 
 interface JsonRpcRequest {
@@ -407,641 +458,393 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
   // The tools
   // -------------------------------------------------------------------------
 
-  interface Tool {
-    name: string
-    description: string
-    inputSchema: {
-      type: 'object'
-      properties: Record<string, unknown>
-      required?: string[]
-      additionalProperties: false
-    }
-    run: (session: AgentSession, args: Args) => Promise<ToolResult>
-  }
+  type Run = (session: AgentSession, args: Args) => Promise<ToolResult>
 
-  const TAB_ARG = {
-    tab: {
-      type: 'number',
-      description:
-        'The tab id from browser_open or browser_tabs. Defaults to the last tab this session used.'
-    }
-  }
+  /**
+   * What each tool does, by name. What a session is told about it (its
+   * description and input schema) is the shared table, `BROWSER_TOOL_TABLE`,
+   * and `pairBrowserTools` refuses a tool that is in one and not the other.
+   */
+  const RUNS: Record<string, Run> = {
+    async browser_open(session, args) {
+      const wanted = allowedUrl(args.url, 'browser_open')
+      if ('problem' in wanted) return fail(wanted.problem)
 
-  const TOOLS: Tool[] = [
-    {
-      name: 'browser_open',
-      description:
-        "Open a URL in a new tab of Helm's browser. Returns the tab id, the URL it landed on and the page title. A bare port number means a dev server on this machine. To move a tab you already have, use browser_navigate.",
-      inputSchema: {
-        type: 'object',
-        properties: {
-          url: { type: 'string', description: 'An http or https URL, or a bare port number.' },
-          tab: {
-            type: 'number',
-            description: 'Navigate this tab instead of opening a new one. The same as browser_navigate.'
-          }
-        },
-        required: ['url'],
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const wanted = allowedUrl(args.url, 'browser_open')
-        if ('problem' in wanted) return fail(wanted.problem)
-
-        if (num(args.tab) !== null) {
-          const tab = drivenTab(session, args)
-          if ('problem' in tab) return fail(tab.problem)
-          const answer = browsers.navigateFor(session.opener, tab.id, wanted.url)
-          if (answer.state === null) return fail(answer.problem ?? 'That tab is gone.')
-          const settled = await settleTab(tab.id)
-          return ok(describeTab(settled ?? answer.state))
-        }
-
-        const answer = await browsers.openFor(session.opener, wanted.url)
-        if (answer.state === null) return fail(answer.problem ?? 'Helm could not open that tab.')
-        session.lastTab = answer.state.id
-        const settled = await settleTab(answer.state.id)
+      if (num(args.tab) !== null) {
+        const tab = drivenTab(session, args)
+        if ('problem' in tab) return fail(tab.problem)
+        const answer = browsers.navigateFor(session.opener, tab.id, wanted.url)
+        if (answer.state === null) return fail(answer.problem ?? 'That tab is gone.')
+        const settled = await settleTab(tab.id)
         return ok(describeTab(settled ?? answer.state))
       }
+
+      const answer = await browsers.openFor(session.opener, wanted.url)
+      if (answer.state === null) return fail(answer.problem ?? 'Helm could not open that tab.')
+      session.lastTab = answer.state.id
+      const settled = await settleTab(answer.state.id)
+      return ok(describeTab(settled ?? answer.state))
     },
 
-    {
-      name: 'browser_navigate',
-      description:
-        'Send a tab you may drive to a URL, or go back, forward or reload it. Answers with where it landed and the page title. A new tab is browser_open.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...TAB_ARG,
-          url: { type: 'string', description: 'An http or https URL, or a bare port number.' },
-          go: { type: 'string', enum: ['back', 'forward', 'reload'], description: 'Instead of a url.' }
-        },
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const go = str(args.go)
-        if ((args.url === undefined) === (go === null)) {
-          return fail('browser_navigate needs a url, or go: "back", "forward" or "reload" - one of the two.')
-        }
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
+    async browser_navigate(session, args) {
+      const go = str(args.go)
+      if ((args.url === undefined) === (go === null)) {
+        return fail('browser_navigate needs a url, or go: "back", "forward" or "reload" - one of the two.')
+      }
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
 
-        if (go === null) {
-          const wanted = allowedUrl(args.url, 'browser_navigate')
-          if ('problem' in wanted) return fail(wanted.problem)
-          const answer = browsers.navigateFor(session.opener, tab.id, wanted.url)
-          if (answer.state === null) return fail(answer.problem ?? 'That tab is gone.')
-          return ok(describeTab((await settleTab(tab.id)) ?? answer.state))
-        }
+      if (go === null) {
+        const wanted = allowedUrl(args.url, 'browser_navigate')
+        if ('problem' in wanted) return fail(wanted.problem)
+        const answer = browsers.navigateFor(session.opener, tab.id, wanted.url)
+        if (answer.state === null) return fail(answer.problem ?? 'That tab is gone.')
+        return ok(describeTab((await settleTab(tab.id)) ?? answer.state))
+      }
 
-        const before = browsers.states(tab.id)[0]
-        if (before === undefined) return fail('That tab is gone.')
-        if (go === 'back' && !before.canGoBack) return fail(`Tab #${String(tab.id)} has nothing to go back to.`)
-        if (go === 'forward' && !before.canGoForward) {
-          return fail(`Tab #${String(tab.id)} has nothing to go forward to.`)
-        }
-        if (go === 'back') browsers.back(tab.id)
-        else if (go === 'forward') browsers.forward(tab.id)
-        else if (go === 'reload') browsers.reload(tab.id, false)
-        else return fail(`browser_navigate cannot go "${go}". It goes "back", "forward" or "reload".`)
-        return ok(describeTab((await settleMove(tab.id, before.url)) ?? before))
+      const before = browsers.states(tab.id)[0]
+      if (before === undefined) return fail('That tab is gone.')
+      if (go === 'back' && !before.canGoBack) return fail(`Tab #${String(tab.id)} has nothing to go back to.`)
+      if (go === 'forward' && !before.canGoForward) {
+        return fail(`Tab #${String(tab.id)} has nothing to go forward to.`)
+      }
+      if (go === 'back') browsers.back(tab.id)
+      else if (go === 'forward') browsers.forward(tab.id)
+      else if (go === 'reload') browsers.reload(tab.id, false)
+      else return fail(`browser_navigate cannot go "${go}". It goes "back", "forward" or "reload".`)
+      return ok(describeTab((await settleMove(tab.id, before.url)) ?? before))
+    },
+
+    async browser_tabs(session) {
+      const states = browsers.states()
+      if (states.length === 0) {
+        return ok('No browser tabs are open. browser_open makes one.')
+      }
+      const lines = states.map((state) => {
+        const opener = browsers.openerOf(state.id)
+        const shared = browsers.sharedWith(state.id)
+        const whose =
+          opener !== null
+            ? opener.key === session.opener.key
+              ? 'yours'
+              : `opened by the session "${opener.name}"`
+            : shared === null
+              ? 'opened by the user'
+              : shared.key === session.opener.key
+                ? 'opened by the user, shared with you: read and drive it, but it is theirs to close'
+                : `opened by the user, shared with the session "${shared.name}"`
+        return `#${String(state.id)}  ${state.url === '' ? '(blank)' : state.url}\n    title: ${
+          state.title === '' ? '(none)' : state.title
+        }\n    loading: ${String(state.loading)}   ${whose}${
+          state.problem === null ? '' : `\n    problem: ${state.problem}`
+        }`
+      })
+      return ok(lines.join('\n'))
+    },
+
+    async browser_snapshot(session, args) {
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
+      const max = Math.max(20, Math.min(4000, num(args.maxNodes) ?? SNAPSHOT_MAX_NODES))
+      const answer = await browsers.evaluate(tab.id, snapshotScript(max))
+      if (!answer.ok) return fail(`Helm could not read that page: ${answer.error ?? 'unknown'}`)
+      let parsed: SnapshotResult
+      try {
+        parsed = JSON.parse(answer.value) as SnapshotResult
+      } catch {
+        return fail(`Helm could not read that page; it answered: ${answer.value.slice(0, 200)}`)
+      }
+      return ok(renderSnapshot(tab.id, parsed))
+    },
+
+    async browser_text(session, args) {
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
+      const answer = await browsers.evaluate(
+        tab.id,
+        onTarget(
+          args,
+          `const el = __helmTarget(); if (!el) return JSON.stringify({ missing: true });
+           return JSON.stringify({ text: el.innerText ?? el.textContent ?? '', url: location.href })`
+        )
+      )
+      if (!answer.ok) return fail(`Helm could not read that page: ${answer.error ?? 'unknown'}`)
+      let read: { missing?: boolean; text?: string; url?: string }
+      try {
+        read = JSON.parse(answer.value) as typeof read
+      } catch {
+        return fail(`Helm could not read that page; it answered: ${answer.value.slice(0, 200)}`)
+      }
+      if (read.missing === true) return fail(missingElement(args))
+      const text = tidyText(read.text ?? '')
+      const max = Math.max(200, Math.min(100_000, num(args.maxChars) ?? TEXT_MAX_CHARS))
+      const from = Math.max(0, Math.min(text.length, num(args.offset) ?? 0))
+      const to = Math.min(text.length, from + max)
+      return ok(
+        [
+          `tab: ${String(tab.id)}`,
+          `url: ${read.url ?? ''}`,
+          text.length === 0
+            ? 'characters: none'
+            : `characters: ${String(from)}-${String(to)} of ${String(text.length)}`,
+          '',
+          text.length === 0 ? '(no text is rendered there)' : text.slice(from, to),
+          ...(to < text.length ? ['', `(more: pass offset ${String(to)})`] : [])
+        ].join('\n')
+      )
+    },
+
+    async browser_screenshot(session, args) {
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
+      const shot = await browsers.capturePng(tab.id)
+      if (shot === null) return fail('That browser tab is gone.')
+      if (shot.width < 2 || shot.height < 2) {
+        return fail(
+          `Helm captured a ${String(shot.width)}x${String(
+            shot.height
+          )} image, which means that tab has no rectangle to paint into. This is a bug in Helm rather than something to work around.`
+        )
+      }
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Tab #${String(tab.id)}, ${String(shot.width)}x${String(shot.height)}.`
+          },
+          { type: 'image', data: shot.png.toString('base64'), mimeType: 'image/png' }
+        ]
       }
     },
 
-    {
-      name: 'browser_tabs',
-      description:
-        "Every tab open in Helm's browser: id, URL, title, whether it is loading, and whose it is. You may drive your own tabs and the ones the user shares with you; the rest are listed so you can see them, not drive them.",
-      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      async run(session) {
-        const states = browsers.states()
-        if (states.length === 0) {
-          return ok('No browser tabs are open. browser_open makes one.')
-        }
-        const lines = states.map((state) => {
-          const opener = browsers.openerOf(state.id)
-          const shared = browsers.sharedWith(state.id)
-          const whose =
-            opener !== null
-              ? opener.key === session.opener.key
-                ? 'yours'
-                : `opened by the session "${opener.name}"`
-              : shared === null
-                ? 'opened by the user'
-                : shared.key === session.opener.key
-                  ? 'opened by the user, shared with you: read and drive it, but it is theirs to close'
-                  : `opened by the user, shared with the session "${shared.name}"`
-          return `#${String(state.id)}  ${state.url === '' ? '(blank)' : state.url}\n    title: ${
-            state.title === '' ? '(none)' : state.title
-          }\n    loading: ${String(state.loading)}   ${whose}${
-            state.problem === null ? '' : `\n    problem: ${state.problem}`
-          }`
-        })
-        return ok(lines.join('\n'))
-      }
+    async browser_console(session, args) {
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
+      const entries = browsers.entries(tab.id)
+      const from = Math.max(0, Math.min(entries.length, num(args.cursor) ?? 0))
+      const slice = entries.slice(from)
+      const head = `cursor: ${String(entries.length)}${
+        slice.length === 0 ? '\n(nothing new)' : ''
+      }`
+      return ok([head, ...slice.map(consoleLine)].join('\n'))
     },
 
-    {
-      name: 'browser_snapshot',
-      description:
-        'A trimmed structural view of the page: its landmarks, headings, links, controls and text, each with a [ref=...] you can pass to browser_click or browser_type. Read this rather than taking a screenshot - it is cheaper and far more reliable for finding an element.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...TAB_ARG,
-          maxNodes: {
-            type: 'number',
-            description: `How many nodes at most. Default ${String(SNAPSHOT_MAX_NODES)}.`
-          }
-        },
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
-        const max = Math.max(20, Math.min(4000, num(args.maxNodes) ?? SNAPSHOT_MAX_NODES))
-        const answer = await browsers.evaluate(tab.id, snapshotScript(max))
-        if (!answer.ok) return fail(`Helm could not read that page: ${answer.error ?? 'unknown'}`)
-        let parsed: SnapshotResult
-        try {
-          parsed = JSON.parse(answer.value) as SnapshotResult
-        } catch {
-          return fail(`Helm could not read that page; it answered: ${answer.value.slice(0, 200)}`)
-        }
-        return ok(renderSnapshot(tab.id, parsed))
-      }
+    async browser_click(session, args) {
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
+      const at = await pointFor(tab.id, args, 'browser_click', 'click')
+      if ('problem' in at) return fail(at.problem)
+      const button = str(args.button)
+      const clickCount = num(args.clickCount)
+      await browsers.pointer(tab.id, at.x, at.y, {
+        ...(button === 'right' || button === 'middle' ? { button } : {}),
+        ...(clickCount === null ? {} : { clickCount })
+      })
+      return ok(`Clicked ${at.what} at (${String(Math.round(at.x))}, ${String(Math.round(at.y))}).`)
     },
 
-    {
-      name: 'browser_text',
-      description:
-        "The page's text as a person reads it - what is rendered, without the markup - or one element's, named by ref or selector. Long text comes in pieces, and the answer says where the next one starts.",
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...TAB_ARG,
-          ref: { type: 'string', description: 'A [ref=...] from browser_snapshot.' },
-          selector: { type: 'string', description: 'A CSS selector, if you have no ref.' },
-          offset: { type: 'number', description: 'Where to start, from the previous answer. Default 0.' },
-          maxChars: { type: 'number', description: `How much at most. Default ${String(TEXT_MAX_CHARS)}.` }
-        },
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
+    async browser_hover(session, args) {
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
+      const at = await pointFor(tab.id, args, 'browser_hover', 'point at')
+      if ('problem' in at) return fail(at.problem)
+      await browsers.hover(tab.id, at.x, at.y)
+      return ok(
+        `The pointer is over ${at.what} at (${String(Math.round(at.x))}, ${String(Math.round(at.y))}).`
+      )
+    },
+
+    async browser_type(session, args) {
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
+      const text = str(args.text)
+      if (text === null) return fail('browser_type needs text.')
+
+      let into = 'the focused element'
+      if (str(args.ref) !== null || str(args.selector) !== null) {
+        const focused = await browsers.evaluate(
+          tab.id,
+          inPage(
+            args,
+            `const el = __helmTarget(); if (!el) return 'missing';
+             el.scrollIntoView({ block: 'center', inline: 'center' });
+             el.focus();
+             ${args.clear === true ? 'if (typeof el.select === "function") el.select();' : ''}
+             return document.activeElement === el ? 'focused' : 'not-focusable'`
+          )
+        )
+        if (!focused.ok) return fail(`Helm could not reach that element: ${focused.error ?? ''}`)
+        if (focused.value === 'missing') return fail(missingElement(args))
+        if (focused.value === 'not-focusable') {
+          return fail(
+            'That element cannot take the caret, so there is nothing to type into. Click it first, or name the field itself.'
+          )
+        }
+        into = describeTarget(args)
+      } else if (args.clear === true) {
+        await browsers.evaluate(
+          tab.id,
+          `(() => { const el = document.activeElement;
+             if (el && typeof el.select === 'function') el.select(); return true })()`
+        )
+      }
+
+      await browsers.typeInto(tab.id, text)
+      if (args.submit === true) await browsers.press(tab.id, 'Enter')
+      return ok(
+        `Typed ${JSON.stringify(text)} into ${into}${args.submit === true ? ' and pressed Enter' : ''}.`
+      )
+    },
+
+    async browser_press(session, args) {
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
+      const key = str(args.key)
+      if (key === null) return fail('browser_press needs a key.')
+      const modifiers = Array.isArray(args.modifiers)
+        ? args.modifiers.filter(
+            (m): m is 'shift' | 'control' | 'alt' | 'meta' =>
+              m === 'shift' || m === 'control' || m === 'alt' || m === 'meta'
+          )
+        : []
+      await browsers.press(tab.id, key, modifiers)
+      return ok(
+        `Pressed ${modifiers.length === 0 ? key : `${modifiers.join('+')}+${key}`} in tab #${String(
+          tab.id
+        )}.`
+      )
+    },
+
+    async browser_select(session, args) {
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
+      if (str(args.ref) === null && str(args.selector) === null) {
+        return fail('browser_select needs the select: a ref from browser_snapshot, or a CSS selector.')
+      }
+      const values = Array.isArray(args.values)
+        ? args.values.filter((value): value is string => typeof value === 'string')
+        : []
+      if (values.length === 0) return fail('browser_select needs at least one value.')
+      const answer = await browsers.evaluate(tab.id, inPage(args, selectBody(values)))
+      if (!answer.ok) return fail(`Helm could not reach that element: ${answer.error ?? ''}`)
+      let picked: SelectResult
+      try {
+        picked = JSON.parse(answer.value) as SelectResult
+      } catch {
+        return fail(`Helm could not read that select; the page answered: ${answer.value.slice(0, 200)}`)
+      }
+      return picked.chosen === undefined ? fail(selectRefusal(args, picked)) : ok(
+        `Chose ${picked.chosen.map((label) => JSON.stringify(label)).join(', ')} in ${describeTarget(args)}.`
+      )
+    },
+
+    async browser_scroll(session, args) {
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
+
+      if (str(args.ref) !== null || str(args.selector) !== null) {
         const answer = await browsers.evaluate(
           tab.id,
-          onTarget(
+          inPage(
             args,
-            `const el = __helmTarget(); if (!el) return JSON.stringify({ missing: true });
-             return JSON.stringify({ text: el.innerText ?? el.textContent ?? '', url: location.href })`
+            `const el = __helmTarget(); if (!el) return 'missing';
+             el.scrollIntoView({ block: 'center', inline: 'nearest' });
+             return JSON.stringify([Math.round(window.scrollX), Math.round(window.scrollY)])`
           )
         )
-        if (!answer.ok) return fail(`Helm could not read that page: ${answer.error ?? 'unknown'}`)
-        let read: { missing?: boolean; text?: string; url?: string }
-        try {
-          read = JSON.parse(answer.value) as typeof read
-        } catch {
-          return fail(`Helm could not read that page; it answered: ${answer.value.slice(0, 200)}`)
-        }
-        if (read.missing === true) return fail(missingElement(args))
-        const text = tidyText(read.text ?? '')
-        const max = Math.max(200, Math.min(100_000, num(args.maxChars) ?? TEXT_MAX_CHARS))
-        const from = Math.max(0, Math.min(text.length, num(args.offset) ?? 0))
-        const to = Math.min(text.length, from + max)
-        return ok(
-          [
-            `tab: ${String(tab.id)}`,
-            `url: ${read.url ?? ''}`,
-            text.length === 0
-              ? 'characters: none'
-              : `characters: ${String(from)}-${String(to)} of ${String(text.length)}`,
-            '',
-            text.length === 0 ? '(no text is rendered there)' : text.slice(from, to),
-            ...(to < text.length ? ['', `(more: pass offset ${String(to)})`] : [])
-          ].join('\n')
-        )
-      }
-    },
-
-    {
-      name: 'browser_screenshot',
-      description:
-        'A PNG of the page as it is rendered right now. Prefer browser_snapshot for finding elements; use this when the question is about what something looks like.',
-      inputSchema: { type: 'object', properties: { ...TAB_ARG }, additionalProperties: false },
-      async run(session, args) {
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
-        const shot = await browsers.capturePng(tab.id)
-        if (shot === null) return fail('That browser tab is gone.')
-        if (shot.width < 2 || shot.height < 2) {
-          return fail(
-            `Helm captured a ${String(shot.width)}x${String(
-              shot.height
-            )} image, which means that tab has no rectangle to paint into. This is a bug in Helm rather than something to work around.`
-          )
-        }
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Tab #${String(tab.id)}, ${String(shot.width)}x${String(shot.height)}.`
-            },
-            { type: 'image', data: shot.png.toString('base64'), mimeType: 'image/png' }
-          ]
-        }
-      }
-    },
-
-    {
-      name: 'browser_console',
-      description:
-        "What the page has written to its console, and any load errors, since the cursor you pass. Answers with a new cursor - pass it back to see only what is new.",
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...TAB_ARG,
-          cursor: {
-            type: 'number',
-            description: 'The cursor from a previous call. Omit for everything Helm still holds.'
-          }
-        },
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
-        const entries = browsers.entries(tab.id)
-        const from = Math.max(0, Math.min(entries.length, num(args.cursor) ?? 0))
-        const slice = entries.slice(from)
-        const head = `cursor: ${String(entries.length)}${
-          slice.length === 0 ? '\n(nothing new)' : ''
-        }`
-        return ok([head, ...slice.map(consoleLine)].join('\n'))
-      }
-    },
-
-    {
-      name: 'browser_click',
-      description:
-        'Click an element with a real mouse event - the same sequence a person produces, which pages sometimes react to when a scripted click does nothing. Name the element with ref (from browser_snapshot) or a CSS selector, or give x and y in the page.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...TAB_ARG,
-          ref: { type: 'string', description: 'A [ref=...] from browser_snapshot.' },
-          selector: { type: 'string', description: 'A CSS selector, if you have no ref.' },
-          x: { type: 'number', description: 'Page x, when there is no element to name.' },
-          y: { type: 'number', description: 'Page y.' },
-          button: { type: 'string', enum: ['left', 'right', 'middle'] },
-          clickCount: { type: 'number', description: '2 for a double click.' }
-        },
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
-        const at = await pointFor(tab.id, args, 'browser_click', 'click')
-        if ('problem' in at) return fail(at.problem)
-        const button = str(args.button)
-        const clickCount = num(args.clickCount)
-        await browsers.pointer(tab.id, at.x, at.y, {
-          ...(button === 'right' || button === 'middle' ? { button } : {}),
-          ...(clickCount === null ? {} : { clickCount })
-        })
-        return ok(`Clicked ${at.what} at (${String(Math.round(at.x))}, ${String(Math.round(at.y))}).`)
-      }
-    },
-
-    {
-      name: 'browser_hover',
-      description:
-        'Move a real mouse pointer over an element and leave it there, pressing nothing - for menus, tooltips and anything else that opens on hover. Name the element with ref or selector, or give x and y in the page.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...TAB_ARG,
-          ref: { type: 'string', description: 'A [ref=...] from browser_snapshot.' },
-          selector: { type: 'string', description: 'A CSS selector, if you have no ref.' },
-          x: { type: 'number', description: 'Page x, when there is no element to name.' },
-          y: { type: 'number', description: 'Page y.' }
-        },
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
-        const at = await pointFor(tab.id, args, 'browser_hover', 'point at')
-        if ('problem' in at) return fail(at.problem)
-        await browsers.hover(tab.id, at.x, at.y)
-        return ok(
-          `The pointer is over ${at.what} at (${String(Math.round(at.x))}, ${String(Math.round(at.y))}).`
-        )
-      }
-    },
-
-    {
-      name: 'browser_type',
-      description:
-        'Type text with real key events. Name an element with ref or selector to put the caret in it first, or omit both to type into whatever the page has focused.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...TAB_ARG,
-          text: { type: 'string' },
-          ref: { type: 'string', description: 'A [ref=...] from browser_snapshot.' },
-          selector: { type: 'string' },
-          clear: { type: 'boolean', description: 'Select what is there first, so typing replaces it.' },
-          submit: { type: 'boolean', description: 'Press Enter afterwards.' }
-        },
-        required: ['text'],
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
-        const text = str(args.text)
-        if (text === null) return fail('browser_type needs text.')
-
-        let into = 'the focused element'
-        if (str(args.ref) !== null || str(args.selector) !== null) {
-          const focused = await browsers.evaluate(
-            tab.id,
-            inPage(
-              args,
-              `const el = __helmTarget(); if (!el) return 'missing';
-               el.scrollIntoView({ block: 'center', inline: 'center' });
-               el.focus();
-               ${args.clear === true ? 'if (typeof el.select === "function") el.select();' : ''}
-               return document.activeElement === el ? 'focused' : 'not-focusable'`
-            )
-          )
-          if (!focused.ok) return fail(`Helm could not reach that element: ${focused.error ?? ''}`)
-          if (focused.value === 'missing') return fail(missingElement(args))
-          if (focused.value === 'not-focusable') {
-            return fail(
-              'That element cannot take the caret, so there is nothing to type into. Click it first, or name the field itself.'
-            )
-          }
-          into = describeTarget(args)
-        } else if (args.clear === true) {
-          await browsers.evaluate(
-            tab.id,
-            `(() => { const el = document.activeElement;
-               if (el && typeof el.select === 'function') el.select(); return true })()`
-          )
-        }
-
-        await browsers.typeInto(tab.id, text)
-        if (args.submit === true) await browsers.press(tab.id, 'Enter')
-        return ok(
-          `Typed ${JSON.stringify(text)} into ${into}${args.submit === true ? ' and pressed Enter' : ''}.`
-        )
-      }
-    },
-
-    {
-      name: 'browser_press',
-      description:
-        'Press one key, with modifiers. Key names are Chromium\'s: "Enter", "Tab", "Escape", "ArrowDown", "a". Modifiers are "shift", "control", "alt", "meta".',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...TAB_ARG,
-          key: { type: 'string' },
-          modifiers: { type: 'array', items: { type: 'string' } }
-        },
-        required: ['key'],
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
-        const key = str(args.key)
-        if (key === null) return fail('browser_press needs a key.')
-        const modifiers = Array.isArray(args.modifiers)
-          ? args.modifiers.filter(
-              (m): m is 'shift' | 'control' | 'alt' | 'meta' =>
-                m === 'shift' || m === 'control' || m === 'alt' || m === 'meta'
-            )
-          : []
-        await browsers.press(tab.id, key, modifiers)
-        return ok(
-          `Pressed ${modifiers.length === 0 ? key : `${modifiers.join('+')}+${key}`} in tab #${String(
-            tab.id
-          )}.`
-        )
-      }
-    },
-
-    {
-      name: 'browser_select',
-      description:
-        'Choose options in a <select>, by value or by the text shown, and fire the input and change events a person choosing them fires. Name the select with ref or selector. More than one value only for a select that takes several.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...TAB_ARG,
-          ref: { type: 'string', description: 'A [ref=...] from browser_snapshot.' },
-          selector: { type: 'string', description: 'A CSS selector, if you have no ref.' },
-          values: { type: 'array', items: { type: 'string' }, description: 'Option values or the text they show.' }
-        },
-        required: ['values'],
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
-        if (str(args.ref) === null && str(args.selector) === null) {
-          return fail('browser_select needs the select: a ref from browser_snapshot, or a CSS selector.')
-        }
-        const values = Array.isArray(args.values)
-          ? args.values.filter((value): value is string => typeof value === 'string')
-          : []
-        if (values.length === 0) return fail('browser_select needs at least one value.')
-        const answer = await browsers.evaluate(tab.id, inPage(args, selectBody(values)))
         if (!answer.ok) return fail(`Helm could not reach that element: ${answer.error ?? ''}`)
-        let picked: SelectResult
-        try {
-          picked = JSON.parse(answer.value) as SelectResult
-        } catch {
-          return fail(`Helm could not read that select; the page answered: ${answer.value.slice(0, 200)}`)
-        }
-        return picked.chosen === undefined ? fail(selectRefusal(args, picked)) : ok(
-          `Chose ${picked.chosen.map((label) => JSON.stringify(label)).join(', ')} in ${describeTarget(args)}.`
+        if (answer.value === 'missing') return fail(missingElement(args))
+        return ok(`Brought ${describeTarget(args)} into view; the page is scrolled to (${answer.value.slice(1, -1).replace(',', ', ')}).`)
+      }
+
+      const dy = num(args.dy) ?? 0
+      const dx = num(args.dx) ?? 0
+      if (dy === 0 && dx === 0) {
+        return fail('browser_scroll needs dy or dx in pixels, or an element to bring into view.')
+      }
+      const view = browsers.viewport(tab.id)
+      if (view === null) return fail('That tab is gone.')
+      // The point in the page's pixels, for the page; in the view's for the
+      // wheel. The same conversion `pointFor` makes.
+      const page = {
+        x: num(args.x) ?? view.width / view.zoom / 2,
+        y: num(args.y) ?? view.height / view.zoom / 2
+      }
+      const before = await scrolled(tab.id, page)
+      await browsers.scroll(tab.id, page.x * view.zoom, page.y * view.zoom, dx * view.zoom, dy * view.zoom)
+      const after = await scrolled(tab.id, page)
+      if (before === null || after === null) return fail('Helm could not read where that page is scrolled to.')
+      return ok(describeScroll(before, after, dx, dy, page))
+    },
+
+    async browser_wait_for(session, args) {
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
+      const asked = (['text', 'textGone', 'selector'] as const).filter((key) => str(args[key]) !== null)
+      const seconds = num(args.seconds)
+      if (asked.length > 1 || (asked.length === 1 && seconds !== null)) {
+        return fail(
+          'browser_wait_for waits for one thing: text, textGone or selector - or seconds on its own. To wait at most so long for something, pass timeout.'
         )
       }
-    },
-
-    {
-      name: 'browser_scroll',
-      description:
-        "Scroll with a real mouse wheel: dy pixels down and dx right (negative for up and left), at x and y in the page or its middle by default - whatever is under that point scrolls, as under a person's wheel. Or name an element with ref or selector to bring it into view.",
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...TAB_ARG,
-          dy: { type: 'number', description: 'Pixels down; negative is up.' },
-          dx: { type: 'number', description: 'Pixels right; negative is left.' },
-          x: { type: 'number', description: 'Where the wheel turns, in the page. Default the middle.' },
-          y: { type: 'number' },
-          ref: { type: 'string', description: 'Bring this [ref=...] into view instead.' },
-          selector: { type: 'string', description: 'Or this CSS selector.' }
-        },
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
-
-        if (str(args.ref) !== null || str(args.selector) !== null) {
-          const answer = await browsers.evaluate(
-            tab.id,
-            inPage(
-              args,
-              `const el = __helmTarget(); if (!el) return 'missing';
-               el.scrollIntoView({ block: 'center', inline: 'nearest' });
-               return JSON.stringify([Math.round(window.scrollX), Math.round(window.scrollY)])`
-            )
-          )
-          if (!answer.ok) return fail(`Helm could not reach that element: ${answer.error ?? ''}`)
-          if (answer.value === 'missing') return fail(missingElement(args))
-          return ok(`Brought ${describeTarget(args)} into view; the page is scrolled to (${answer.value.slice(1, -1).replace(',', ', ')}).`)
-        }
-
-        const dy = num(args.dy) ?? 0
-        const dx = num(args.dx) ?? 0
-        if (dy === 0 && dx === 0) {
-          return fail('browser_scroll needs dy or dx in pixels, or an element to bring into view.')
-        }
-        const view = browsers.viewport(tab.id)
-        if (view === null) return fail('That tab is gone.')
-        // The point in the page's pixels, for the page; in the view's for the
-        // wheel. The same conversion `pointFor` makes.
-        const page = {
-          x: num(args.x) ?? view.width / view.zoom / 2,
-          y: num(args.y) ?? view.height / view.zoom / 2
-        }
-        const before = await scrolled(tab.id, page)
-        await browsers.scroll(tab.id, page.x * view.zoom, page.y * view.zoom, dx * view.zoom, dy * view.zoom)
-        const after = await scrolled(tab.id, page)
-        if (before === null || after === null) return fail('Helm could not read where that page is scrolled to.')
-        return ok(describeScroll(before, after, dx, dy, page))
+      if (seconds !== null) {
+        const ms = Math.max(0, Math.min(WAIT_MAX_S, seconds)) * 1000
+        await pause(ms)
+        return ok(`Waited ${String(ms / 1000)}s.`)
       }
-    },
 
-    {
-      name: 'browser_wait_for',
-      description:
-        'Wait until text appears in the page, text goes away, or a CSS selector matches something visible - or, given none of those, until the page has finished loading. Or just wait some seconds. Answers when it happens, or says that it never did.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...TAB_ARG,
-          text: { type: 'string', description: 'Wait for this text to appear.' },
-          textGone: { type: 'string', description: 'Wait for this text to go away.' },
-          selector: { type: 'string', description: 'Wait for something visible to match this.' },
-          seconds: { type: 'number', description: `Just wait this long, up to ${String(WAIT_MAX_S)}.` },
-          timeout: {
-            type: 'number',
-            description: `Give up after this many seconds. Default ${String(WAIT_DEFAULT_S)}, at most ${String(WAIT_MAX_S)}.`
+      const limit = Math.max(0.1, Math.min(WAIT_MAX_S, num(args.timeout) ?? WAIT_DEFAULT_S))
+      const started = Date.now()
+      const condition = asked[0]
+      const target = condition === undefined ? '' : String(args[condition])
+      const looking = condition === undefined ? null : { condition, script: waitScript(condition, target) }
+      const took = (): string => `${(Math.round((Date.now() - started) / 100) / 10).toFixed(1)}s`
+      for (;;) {
+        const state = browsers.states(tab.id)[0]
+        if (state === undefined) return fail(`Tab #${String(tab.id)} closed while this was waiting.`)
+        if (looking === null) {
+          if (!state.loading) return ok(`Loaded after ${took()}.\n${describeTab(state)}`)
+        } else {
+          const answer = await browsers.evaluate(tab.id, looking.script)
+          // A page between documents cannot be asked anything; that is "not
+          // yet", and the next look is in a moment.
+          if (answer.ok && answer.value.startsWith('bad:')) {
+            return fail(`${JSON.stringify(target)} is not a selector the page accepts: ${answer.value.slice(4)}`)
           }
-        },
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
-        const asked = (['text', 'textGone', 'selector'] as const).filter((key) => str(args[key]) !== null)
-        const seconds = num(args.seconds)
-        if (asked.length > 1 || (asked.length === 1 && seconds !== null)) {
+          if (answer.ok && answer.value === 'yes') return ok(`${waited(looking.condition, target)} after ${took()}.`)
+        }
+        if (Date.now() - started >= limit * 1000) {
           return fail(
-            'browser_wait_for waits for one thing: text, textGone or selector - or seconds on its own. To wait at most so long for something, pass timeout.'
+            `Waited ${String(limit)}s, and ${
+              looking === null ? 'the page was still loading' : notYet(looking.condition, target)
+            } in tab #${String(tab.id)}.`
           )
         }
-        if (seconds !== null) {
-          const ms = Math.max(0, Math.min(WAIT_MAX_S, seconds)) * 1000
-          await pause(ms)
-          return ok(`Waited ${String(ms / 1000)}s.`)
-        }
-
-        const limit = Math.max(0.1, Math.min(WAIT_MAX_S, num(args.timeout) ?? WAIT_DEFAULT_S))
-        const started = Date.now()
-        const condition = asked[0]
-        const target = condition === undefined ? '' : String(args[condition])
-        const looking = condition === undefined ? null : { condition, script: waitScript(condition, target) }
-        const took = (): string => `${(Math.round((Date.now() - started) / 100) / 10).toFixed(1)}s`
-        for (;;) {
-          const state = browsers.states(tab.id)[0]
-          if (state === undefined) return fail(`Tab #${String(tab.id)} closed while this was waiting.`)
-          if (looking === null) {
-            if (!state.loading) return ok(`Loaded after ${took()}.\n${describeTab(state)}`)
-          } else {
-            const answer = await browsers.evaluate(tab.id, looking.script)
-            // A page between documents cannot be asked anything; that is "not
-            // yet", and the next look is in a moment.
-            if (answer.ok && answer.value.startsWith('bad:')) {
-              return fail(`${JSON.stringify(target)} is not a selector the page accepts: ${answer.value.slice(4)}`)
-            }
-            if (answer.ok && answer.value === 'yes') return ok(`${waited(looking.condition, target)} after ${took()}.`)
-          }
-          if (Date.now() - started >= limit * 1000) {
-            return fail(
-              `Waited ${String(limit)}s, and ${
-                looking === null ? 'the page was still loading' : notYet(looking.condition, target)
-              } in tab #${String(tab.id)}.`
-            )
-          }
-          await pause(WAIT_POLL_MS)
-        }
+        await pause(WAIT_POLL_MS)
       }
     },
 
-    {
-      name: 'browser_evaluate',
-      description:
-        'Run JavaScript in the page and answer with what it evaluated to. The escape hatch: prefer browser_snapshot, browser_click and browser_type, which are more legible in a transcript and do not depend on the page internals staying put.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...TAB_ARG,
-          expression: { type: 'string', description: 'A JavaScript expression.' }
-        },
-        required: ['expression'],
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
-        const source = str(args.expression)
-        if (source === null) return fail('browser_evaluate needs an expression.')
-        const answer = await browsers.evaluate(tab.id, source)
-        if (!answer.ok) return fail(`The page raised: ${answer.error ?? 'an error with no message'}`)
-        return ok(answer.value === '' ? '(empty string)' : answer.value)
-      }
+    async browser_evaluate(session, args) {
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
+      const source = str(args.expression)
+      if (source === null) return fail('browser_evaluate needs an expression.')
+      const answer = await browsers.evaluate(tab.id, source)
+      if (!answer.ok) return fail(`The page raised: ${answer.error ?? 'an error with no message'}`)
+      return ok(answer.value === '' ? '(empty string)' : answer.value)
     },
 
-    {
-      name: 'browser_close',
-      description:
-        "Close a tab this session opened. Tabs the user opened are theirs to close, shared with you or not. Your own tabs also stay when this session ends - the page is the user's then.",
-      inputSchema: {
-        type: 'object',
-        properties: { tab: { type: 'number' } },
-        required: ['tab'],
-        additionalProperties: false
-      },
-      async run(session, args) {
-        const tab = drivenTab(session, args)
-        if ('problem' in tab) return fail(tab.problem)
-        const answer = browsers.closeFor(session.opener, tab.id)
-        if (!answer.closed) return fail(answer.problem ?? 'That tab could not be closed.')
-        if (session.lastTab === tab.id) session.lastTab = null
-        return ok(`Closed tab #${String(tab.id)}.`)
-      }
+    async browser_close(session, args) {
+      const tab = drivenTab(session, args)
+      if ('problem' in tab) return fail(tab.problem)
+      const answer = browsers.closeFor(session.opener, tab.id)
+      if (!answer.closed) return fail(answer.problem ?? 'That tab could not be closed.')
+      if (session.lastTab === tab.id) session.lastTab = null
+      return ok(`Closed tab #${String(tab.id)}.`)
     }
-  ]
+  }
+
+  const TOOLS = pairBrowserTools(BROWSER_TOOL_TABLE.tools, RUNS)
 
   // -------------------------------------------------------------------------
   // The route table: one entry per family of tools
@@ -1072,8 +875,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     {
       name: MCP_SERVER_NAME,
       path: MCP_PATH,
-      instructions:
-        "These tools drive the browser pane inside Helm, the app hosting this session. Tabs you open appear in the user's Browser tab, behind the page they are looking at, labelled with this session's name, and stay there when the session ends. The user can also share one of their own tabs with this session: browser_tabs lists it as shared with you, and you may read and drive it but not close it. Read a page with browser_snapshot or browser_text before clicking anything.",
+      instructions: BROWSER_TOOL_TABLE.instructions,
       enabled: () => options.settings().browserMcp,
       listed: () =>
         TOOLS.map((tool) => ({

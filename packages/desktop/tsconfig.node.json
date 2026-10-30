@@ -15,6 +15,7 @@
     "../../test/run-root.ts",
     "../../vitest.config.ts",
     "../../crates/floti-protocol/generated/floti-protocol.generated.ts",
+    "../../crates/host/src/server/browser_tools.json",
     "electron.vite.config.ts",
     "inline-script.ts"
   ]

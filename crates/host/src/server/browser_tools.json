@@ -1,0 +1,417 @@
+{
+  "name": "helm-browser",
+  "path": "/mcp",
+  "instructions": "These tools drive the browser pane inside Helm, the app hosting this session. Tabs you open appear in the user's Browser tab, behind the page they are looking at, labelled with this session's name, and stay there when the session ends. The user can also share one of their own tabs with this session: browser_tabs lists it as shared with you, and you may read and drive it but not close it. Read a page with browser_snapshot or browser_text before clicking anything.",
+  "tools": [
+    {
+      "name": "browser_open",
+      "description": "Open a URL in a new tab of Helm's browser. Returns the tab id, the URL it landed on and the page title. A bare port number means a dev server on this machine. To move a tab you already have, use browser_navigate.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "An http or https URL, or a bare port number."
+          },
+          "tab": {
+            "type": "number",
+            "description": "Navigate this tab instead of opening a new one. The same as browser_navigate."
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_navigate",
+      "description": "Send a tab you may drive to a URL, or go back, forward or reload it. Answers with where it landed and the page title. A new tab is browser_open.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number",
+            "description": "The tab id from browser_open or browser_tabs. Defaults to the last tab this session used."
+          },
+          "url": {
+            "type": "string",
+            "description": "An http or https URL, or a bare port number."
+          },
+          "go": {
+            "type": "string",
+            "enum": [
+              "back",
+              "forward",
+              "reload"
+            ],
+            "description": "Instead of a url."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_tabs",
+      "description": "Every tab open in Helm's browser: id, URL, title, whether it is loading, and whose it is. You may drive your own tabs and the ones the user shares with you; the rest are listed so you can see them, not drive them.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_snapshot",
+      "description": "A trimmed structural view of the page: its landmarks, headings, links, controls and text, each with a [ref=...] you can pass to browser_click or browser_type. Read this rather than taking a screenshot - it is cheaper and far more reliable for finding an element.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number",
+            "description": "The tab id from browser_open or browser_tabs. Defaults to the last tab this session used."
+          },
+          "maxNodes": {
+            "type": "number",
+            "description": "How many nodes at most. Default 600."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_text",
+      "description": "The page's text as a person reads it - what is rendered, without the markup - or one element's, named by ref or selector. Long text comes in pieces, and the answer says where the next one starts.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number",
+            "description": "The tab id from browser_open or browser_tabs. Defaults to the last tab this session used."
+          },
+          "ref": {
+            "type": "string",
+            "description": "A [ref=...] from browser_snapshot."
+          },
+          "selector": {
+            "type": "string",
+            "description": "A CSS selector, if you have no ref."
+          },
+          "offset": {
+            "type": "number",
+            "description": "Where to start, from the previous answer. Default 0."
+          },
+          "maxChars": {
+            "type": "number",
+            "description": "How much at most. Default 20000."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_screenshot",
+      "description": "A PNG of the page as it is rendered right now. Prefer browser_snapshot for finding elements; use this when the question is about what something looks like.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number",
+            "description": "The tab id from browser_open or browser_tabs. Defaults to the last tab this session used."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_console",
+      "description": "What the page has written to its console, and any load errors, since the cursor you pass. Answers with a new cursor - pass it back to see only what is new.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number",
+            "description": "The tab id from browser_open or browser_tabs. Defaults to the last tab this session used."
+          },
+          "cursor": {
+            "type": "number",
+            "description": "The cursor from a previous call. Omit for everything Helm still holds."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_click",
+      "description": "Click an element with a real mouse event - the same sequence a person produces, which pages sometimes react to when a scripted click does nothing. Name the element with ref (from browser_snapshot) or a CSS selector, or give x and y in the page.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number",
+            "description": "The tab id from browser_open or browser_tabs. Defaults to the last tab this session used."
+          },
+          "ref": {
+            "type": "string",
+            "description": "A [ref=...] from browser_snapshot."
+          },
+          "selector": {
+            "type": "string",
+            "description": "A CSS selector, if you have no ref."
+          },
+          "x": {
+            "type": "number",
+            "description": "Page x, when there is no element to name."
+          },
+          "y": {
+            "type": "number",
+            "description": "Page y."
+          },
+          "button": {
+            "type": "string",
+            "enum": [
+              "left",
+              "right",
+              "middle"
+            ]
+          },
+          "clickCount": {
+            "type": "number",
+            "description": "2 for a double click."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_hover",
+      "description": "Move a real mouse pointer over an element and leave it there, pressing nothing - for menus, tooltips and anything else that opens on hover. Name the element with ref or selector, or give x and y in the page.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number",
+            "description": "The tab id from browser_open or browser_tabs. Defaults to the last tab this session used."
+          },
+          "ref": {
+            "type": "string",
+            "description": "A [ref=...] from browser_snapshot."
+          },
+          "selector": {
+            "type": "string",
+            "description": "A CSS selector, if you have no ref."
+          },
+          "x": {
+            "type": "number",
+            "description": "Page x, when there is no element to name."
+          },
+          "y": {
+            "type": "number",
+            "description": "Page y."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_type",
+      "description": "Type text with real key events. Name an element with ref or selector to put the caret in it first, or omit both to type into whatever the page has focused.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number",
+            "description": "The tab id from browser_open or browser_tabs. Defaults to the last tab this session used."
+          },
+          "text": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string",
+            "description": "A [ref=...] from browser_snapshot."
+          },
+          "selector": {
+            "type": "string"
+          },
+          "clear": {
+            "type": "boolean",
+            "description": "Select what is there first, so typing replaces it."
+          },
+          "submit": {
+            "type": "boolean",
+            "description": "Press Enter afterwards."
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_press",
+      "description": "Press one key, with modifiers. Key names are Chromium's: \"Enter\", \"Tab\", \"Escape\", \"ArrowDown\", \"a\". Modifiers are \"shift\", \"control\", \"alt\", \"meta\".",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number",
+            "description": "The tab id from browser_open or browser_tabs. Defaults to the last tab this session used."
+          },
+          "key": {
+            "type": "string"
+          },
+          "modifiers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_select",
+      "description": "Choose options in a <select>, by value or by the text shown, and fire the input and change events a person choosing them fires. Name the select with ref or selector. More than one value only for a select that takes several.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number",
+            "description": "The tab id from browser_open or browser_tabs. Defaults to the last tab this session used."
+          },
+          "ref": {
+            "type": "string",
+            "description": "A [ref=...] from browser_snapshot."
+          },
+          "selector": {
+            "type": "string",
+            "description": "A CSS selector, if you have no ref."
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Option values or the text they show."
+          }
+        },
+        "required": [
+          "values"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_scroll",
+      "description": "Scroll with a real mouse wheel: dy pixels down and dx right (negative for up and left), at x and y in the page or its middle by default - whatever is under that point scrolls, as under a person's wheel. Or name an element with ref or selector to bring it into view.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number",
+            "description": "The tab id from browser_open or browser_tabs. Defaults to the last tab this session used."
+          },
+          "dy": {
+            "type": "number",
+            "description": "Pixels down; negative is up."
+          },
+          "dx": {
+            "type": "number",
+            "description": "Pixels right; negative is left."
+          },
+          "x": {
+            "type": "number",
+            "description": "Where the wheel turns, in the page. Default the middle."
+          },
+          "y": {
+            "type": "number"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Bring this [ref=...] into view instead."
+          },
+          "selector": {
+            "type": "string",
+            "description": "Or this CSS selector."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_wait_for",
+      "description": "Wait until text appears in the page, text goes away, or a CSS selector matches something visible - or, given none of those, until the page has finished loading. Or just wait some seconds. Answers when it happens, or says that it never did.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number",
+            "description": "The tab id from browser_open or browser_tabs. Defaults to the last tab this session used."
+          },
+          "text": {
+            "type": "string",
+            "description": "Wait for this text to appear."
+          },
+          "textGone": {
+            "type": "string",
+            "description": "Wait for this text to go away."
+          },
+          "selector": {
+            "type": "string",
+            "description": "Wait for something visible to match this."
+          },
+          "seconds": {
+            "type": "number",
+            "description": "Just wait this long, up to 60."
+          },
+          "timeout": {
+            "type": "number",
+            "description": "Give up after this many seconds. Default 10, at most 60."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_evaluate",
+      "description": "Run JavaScript in the page and answer with what it evaluated to. The escape hatch: prefer browser_snapshot, browser_click and browser_type, which are more legible in a transcript and do not depend on the page internals staying put.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number",
+            "description": "The tab id from browser_open or browser_tabs. Defaults to the last tab this session used."
+          },
+          "expression": {
+            "type": "string",
+            "description": "A JavaScript expression."
+          }
+        },
+        "required": [
+          "expression"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_close",
+      "description": "Close a tab this session opened. Tabs the user opened are theirs to close, shared with you or not. Your own tabs also stay when this session ends - the page is the user's then.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "tab"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

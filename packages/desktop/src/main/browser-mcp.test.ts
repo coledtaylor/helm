@@ -7,7 +7,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, writeSessionMcpConfig, type AppSettings } from '@helm/core'
 import { callTool, rpc, rpcResult, send, toolNames } from '../../test/mcp-client'
 import type { BrowserHost, BrowserOpener } from './browser'
-import { createBrowserMcp, type BrowserMcpHost, type BrowserMcpRegistration } from './browser-mcp'
+import {
+  BROWSER_TOOL_TABLE,
+  createBrowserMcp,
+  pairBrowserTools,
+  SNAPSHOT_MAX_NODES,
+  TEXT_MAX_CHARS,
+  WAIT_DEFAULT_S,
+  WAIT_MAX_S,
+  type BrowserMcpHost,
+  type BrowserMcpRegistration
+} from './browser-mcp'
 import type { ToolAnswer, ToolCallRequest, ToolServer } from './plugins/tools'
 import type { BrowserConsoleEntry, BrowserState } from '../shared/ipc'
 import { PATIENCE } from '../../../../test/patience'
@@ -1170,6 +1180,49 @@ describe('the tool endpoint', () => {
       await vi.waitFor(() => expect(calls).toHaveLength(3), { timeout: PATIENCE })
       endpoint.release(beta.token)
       expect(calls[2]?.signal.aborted).toBe(true)
+    })
+  })
+
+  describe('the shared browser tool table', () => {
+    it('lists exactly the tools, descriptions, input schemas and instructions in the table the host reads', async () => {
+      await endpoint.start()
+      const alpha = register('alpha')
+      expect(BROWSER_TOOL_TABLE.name).toBe('helm-browser')
+      const { tools } = await rpcResult<{ tools: unknown[] }>(alpha.browser, alpha.token, 'tools/list')
+      expect(tools).toEqual(BROWSER_TOOL_TABLE.tools)
+      const init = await rpcResult<{ instructions: string }>(alpha.browser, alpha.token, 'initialize', {})
+      expect(init.instructions).toBe(BROWSER_TOOL_TABLE.instructions)
+    })
+
+    it('has a run for every tool in the table and no run outside it', () => {
+      // Building an endpoint pairs the table with the runs, and throws on a
+      // tool in one and not the other.
+      expect(() => make()).not.toThrow()
+      expect(BROWSER_TOOL_TABLE.tools.map((tool) => tool.name).sort()).toEqual(BROWSER_TOOLS)
+    })
+
+    it('refuses a table and runs that disagree, naming each tool in one and not the other', () => {
+      const spec = (name: string) => ({ name, description: name, inputSchema: { type: 'object' } })
+      const run = (): void => undefined
+      expect(() => pairBrowserTools([spec('browser_open'), spec('browser_fly')], { browser_open: run })).toThrow(
+        'in the browser tool table with nothing to run them: browser_fly'
+      )
+      expect(() => pairBrowserTools([spec('browser_open')], { browser_open: run, browser_dig: run })).toThrow(
+        'run but not in the browser tool table: browser_dig'
+      )
+      const paired = pairBrowserTools([spec('browser_open')], { browser_open: run })
+      expect(paired).toEqual([{ ...spec('browser_open'), run }])
+    })
+
+    it('states the limits the tools apply in their descriptions', () => {
+      const describe = (name: string): string =>
+        JSON.stringify(BROWSER_TOOL_TABLE.tools.find((tool) => tool.name === name)?.inputSchema ?? null)
+      expect(describe('browser_snapshot')).toContain(`Default ${String(SNAPSHOT_MAX_NODES)}.`)
+      expect(describe('browser_text')).toContain(`Default ${String(TEXT_MAX_CHARS)}.`)
+      expect(describe('browser_wait_for')).toContain(`up to ${String(WAIT_MAX_S)}.`)
+      expect(describe('browser_wait_for')).toContain(
+        `Default ${String(WAIT_DEFAULT_S)}, at most ${String(WAIT_MAX_S)}.`
+      )
     })
   })
 })
