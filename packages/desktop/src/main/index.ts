@@ -502,6 +502,12 @@ function startApp(options: AppOptions = {}): void {
     win.on('blur', () => desktopHost.refocus())
   }
 
+  /**
+   * Helm's settings as the window is told them: with sessions in the local
+   * host, the scan roots, pins and setup stamp are the host's, laid over.
+   */
+  const windowSettings = (own: AppSettings): AppSettings => desktopHost?.workspace.overlay(own) ?? own
+
   const sessions: SessionHost =
     desktopHost?.sessions ??
     createSessionHost({
@@ -624,7 +630,7 @@ function startApp(options: AppOptions = {}): void {
     settings: () => services.settings,
     writeSettings: (patch) => {
       const next = updateSettings(services, patch)
-      emit(win, 'settings:changed', next)
+      emit(win, 'settings:changed', windowSettings(next))
     },
     onChanged: (state) => emit(win, 'browser:changed', state),
     onOpened: (opened) => emit(win, 'browser:opened', opened),
@@ -763,6 +769,9 @@ function startApp(options: AppOptions = {}): void {
     // With sessions in the local host, the console reads and writes through
     // the host; the local service above stays for the template service only.
     ...(desktopHost !== null ? { configConsole: desktopHost.config } : {}),
+    // And discovery, the scan roots, setup, harnesses and templates are the
+    // host's; Helm's own scan and templates folder are left alone.
+    ...(desktopHost !== null ? { workspace: desktopHost.workspace } : {}),
     content,
     files,
     templates,
@@ -776,12 +785,20 @@ function startApp(options: AppOptions = {}): void {
     rendererReady: () => {
       // Every terminal drawn afresh into the page that has just loaded.
       desktopHost?.streams.resume()
-      emit(win, 'settings:changed', services.settings)
       pushTheme({ services, themes, plugins, window: () => win })
-      // The first scan is kicked off by the main process rather than waited on
-      // by the renderer: the launcher paints from the cache immediately and
-      // this replaces it when it lands.
-      void runScan(services, { includeGit: true })
+      if (desktopHost !== null) {
+        // The host scans, and says so on `scan:status` and `discovery:updated`
+        // itself; a host that cannot be reached says why where the scan shows.
+        void desktopHost.workspace.settings().then((settings) => emit(win, 'settings:changed', settings))
+        void desktopHost.workspace.scan(true).catch((err: unknown) => {
+          emit(win, 'scan:status', { running: false, error: err instanceof Error ? err.message : String(err) })
+        })
+      } else {
+        emit(win, 'settings:changed', services.settings)
+        // The first scan is kicked off by the main process rather than waited on
+        // by the renderer: the launcher paints from the cache immediately and
+        // this replaces it when it lands.
+        void runScan(services, { includeGit: true })
         .then((result) => {
           emit(win, 'discovery:updated', result)
           // The first scan is also what adopts the default roots on a fresh
@@ -796,7 +813,8 @@ function startApp(options: AppOptions = {}): void {
             error: err instanceof Error ? err.message : String(err)
           })
         })
-      emit(win, 'scan:status', { running: true })
+        emit(win, 'scan:status', { running: true })
+      }
 
       // Off the renderer's critical path: the first pass reads 875 KB and
       // writes 3,470 rows, which is ~30ms the launcher should not spend
@@ -887,10 +905,15 @@ function startApp(options: AppOptions = {}): void {
    */
   let gitRefreshInFlight = false
   win.on('focus', () => {
-    if (gitRefreshInFlight || services.lastScan === null) return
+    if (gitRefreshInFlight) return
+    if ((desktopHost?.workspace.lastScan() ?? services.lastScan) === null) return
     gitRefreshInFlight = true
-    void refreshGit(services)
-      .then((states) => emit(win, 'git:updated', states))
+    // The host reads git on its own machine and pushes it on `git:updated`.
+    const refreshed =
+      desktopHost !== null
+        ? desktopHost.workspace.refreshGit()
+        : refreshGit(services).then((states) => emit(win, 'git:updated', states))
+    void refreshed
       .catch(() => undefined)
       .finally(() => {
         gitRefreshInFlight = false
@@ -948,6 +971,7 @@ function startApp(options: AppOptions = {}): void {
         desktopHost.profiles.shutdown()
         desktopHost.history.shutdown()
         desktopHost.config.shutdown()
+        desktopHost.workspace.shutdown()
         desktopHost.sessions.shutdown()
         desktopHost.pterm.shutdown()
         void desktopHost.link.stop().finally(() => {

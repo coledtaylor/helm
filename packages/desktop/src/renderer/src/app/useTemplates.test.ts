@@ -93,6 +93,24 @@ describe('useTemplates', () => {
     return hook
   }
 
+  it('says why when the templates cannot be read, rather than listing none', async () => {
+    const unreachable = 'No local host answered on its socket.'
+    bridge.answer('template:list', () => {
+      throw new Error(unreachable)
+    })
+    bridge.answer('template:detail', () => {
+      throw new Error(unreachable)
+    })
+    bridge.answer('config:scopes', () => [USER])
+    const hook = renderHook(() => useTemplates())
+    await waitFor(() => expect(hook.result.current.listProblems).toEqual([unreachable]))
+    expect(hook.result.current.templates).toEqual([])
+
+    act(() => hook.result.current.openManager())
+    act(() => hook.result.current.select('client'))
+    await waitFor(() => expect(hook.result.current.problems).toEqual([unreachable]))
+  })
+
   it('creates a template, selects it, and lists it from a fresh read', async () => {
     const { result } = await managing()
     act(() => result.current.create('acme'))

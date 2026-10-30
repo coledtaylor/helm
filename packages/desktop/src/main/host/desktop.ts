@@ -5,14 +5,14 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { listProfiles } from '@helm/core'
-import { findClaudeExecutable } from '../claude-cli'
+import { findClaudeExecutable, setClaudeOverride } from '../claude-cli'
 import { emit } from '../ipc'
-import { appMode, dataDir } from '../paths'
+import { appMode, dataDir, templatesDir } from '../paths'
 import { showExitNotification, type Confirm } from '../sessions'
 import type { BrowserMcpHost } from '../browser-mcp'
 import type { PluginToolProvider } from '../plugins/tools'
 import { nativeProfileDialogs } from '../profiles'
-import { knownProject, updateSettings, type Services } from '../services'
+import { updateSettings, type Services } from '../services'
 import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
 import { createHostConfig, type HostConfig } from './config'
 import { createHostHistory, type HostHistory } from './history'
@@ -24,6 +24,7 @@ import type { HostSettingsPatch } from './protocol'
 import { createHostPtermHost } from './pterm'
 import { createHostSessions, hostSettingsFor, type Emit, type HostSessions } from './sessions'
 import { createTerminalStreams, type TerminalStreams } from './streams'
+import { createHostWorkspace, type HostWorkspace } from './workspace'
 
 /**
  * Everything the app needs to run its sessions and terminals in the local
@@ -45,6 +46,11 @@ export interface DesktopHost extends HostSessions {
   history: HostHistory
   /** The config console, which reads and writes the agent's configuration in the host while sessions run there. */
   config: HostConfig
+  /**
+   * Discovery, scan roots, harnesses, setup, templates and the host's half of
+   * the settings, which the host keeps while sessions run there.
+   */
+  workspace: HostWorkspace
 }
 
 export interface DesktopHostDeps {
@@ -69,7 +75,8 @@ export function connectLocalHost(log: (line: string) => void): Promise<LocalHost
       dataDir,
       packaged: app.isPackaged,
       resourcesPath: process.resourcesPath,
-      repoRoot: repoRoot()
+      repoRoot: repoRoot(),
+      templatesDir
     },
     {
       platform: process.platform,
@@ -111,6 +118,17 @@ export function createDesktopHost({
   const log = (line: string): void => console.log(line)
   const link = createLocalHostLink(() => hostSettingsFor(services.settings, findClaudeExecutable()), log)
   const send: Emit = (channel, payload) => emit(window(), channel, payload)
+  const workspace = createHostWorkspace({
+    link,
+    emit: send,
+    own: () => services.settings,
+    writeOwn: (patch) => updateSettings(services, patch),
+    claudePicked: (path) => {
+      updateSettings(services, { claudePath: path })
+      setClaudeOverride(path)
+    },
+    log
+  })
   const streams = createTerminalStreams({
     connection: () => link.current(),
     deliver: (channel, id, data) => send(channel, { id, data }),
@@ -129,7 +147,7 @@ export function createDesktopHost({
       return win !== null && !win.isDestroyed() && win.isFocused()
     },
     layout: services.lost.layout,
-    knownProject: (cwd) => knownProject(services, cwd),
+    knownProject: (cwd) => workspace.knownProject(cwd),
     onActivityChange,
     browserTools: () => services.settings.browserMcp,
     browserIdentityEnded: (key) => browserTools()?.forgetOpener(key),
@@ -165,10 +183,10 @@ export function createDesktopHost({
   const config = createHostConfig({
     link,
     emit: send,
-    // Discovery runs in Helm's main process this run, so the sidebar's scan is Helm's own.
-    scanned: () => services.lastScan?.projects ?? [],
+    // The sidebar's harnesses and projects are the host's scan.
+    scanned: () => workspace.lastScan()?.projects ?? [],
     log
   })
   const pterm = createHostPtermHost({ link, streams, emit: send, log })
-  return { ...hosted, link, streams, pterm, browserRelay, pluginRelay, profiles, history, config }
+  return { ...hosted, link, streams, pterm, browserRelay, pluginRelay, profiles, history, config, workspace }
 }

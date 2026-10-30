@@ -1,9 +1,7 @@
 import { resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { FakeConnection, fakeLink } from '../../../test/host-connection'
-import type { HostConnection } from './client'
+import { FakeConnection, fakeLink, reconnectingLink } from '../../../test/host-connection'
 import { createHostConfig, mergeConfigScopes, type ScannedFolder } from './config'
-import type { HostLink } from './link'
 import type * as P from './protocol'
 
 const HOME = resolve('/fixture home/.claude')
@@ -114,33 +112,6 @@ function world(connection: FakeConnection | null = new FakeConnection(), scanned
     log: (line) => logged.push(line)
   })
   return { connection: connection ?? new FakeConnection(), link, config, emitted, logged }
-}
-
-/** A link whose connection can be replaced, the way a host that restarted is reached again. */
-function reconnectingLink(first: FakeConnection) {
-  const listeners: Array<(connection: HostConnection) => void | Promise<void>> = []
-  let current = first
-  let attempt: Promise<HostConnection> | null = null
-  const connect = async (): Promise<HostConnection> => {
-    for (const listener of listeners) await listener(current.asConnection())
-    return current.asConnection()
-  }
-  const link: HostLink & { reconnect(next: FakeConnection): Promise<void> } = {
-    connection: () => (attempt ??= connect()),
-    current: () => current.asConnection(),
-    settled: () => Promise.resolve(),
-    onConnected: (listener) => {
-      listeners.push(listener)
-    },
-    writeSettings: () => undefined,
-    stop: () => Promise.resolve(),
-    async reconnect(next) {
-      current = next
-      attempt = connect()
-      await attempt
-    }
-  }
-  return link
 }
 
 describe('the config console through the local host', () => {

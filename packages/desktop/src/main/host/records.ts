@@ -1,4 +1,8 @@
 import type {
+  AppSettings,
+  CachedProject,
+  DiscoveryResult,
+  GitState,
   HistoryPage,
   HistoryQuery,
   HistorySession,
@@ -14,7 +18,15 @@ import type {
   UsageSnapshot,
   WriteConfigResult
 } from '@helm/core'
-import type { EffectiveViewRequest, LaunchedProfile, LaunchedSession } from '../../shared/ipc'
+import type {
+  ClaudeAuth,
+  ClaudeStatus,
+  EffectiveViewRequest,
+  LaunchedProfile,
+  LaunchedSession,
+  ScanStatus
+} from '../../shared/ipc'
+import { CLAUDE_TESTED_RANGE } from '../setup'
 import type * as P from './protocol'
 
 /**
@@ -234,4 +246,105 @@ export function offerFromHost(offer: P.RestoreOffer, layout: SavedPaneLayout | n
     blocked: session.blocked
   }))
   return { sessions, elsewhere: offer.elsewhere, layout }
+}
+
+/**
+ * The settings the host keeps for every client: the folders it scans, the
+ * projects pinned out of their harness, and whether setup was finished. Every
+ * other setting is Helm's own, the window's, or one Helm tells the host on
+ * every connect (`hostSettingsFor`).
+ */
+export const HOST_WORKSPACE_KEYS = ['scanRoots', 'pinnedProjects', 'firstRunCompletedAt'] as const
+
+export type HostWorkspaceKey = (typeof HOST_WORKSPACE_KEYS)[number]
+
+/** Helm's settings with the host's workspace keys laid over, or Helm's own while there are none. */
+export function settingsWithHost(own: AppSettings, host: P.HostSettings | null): AppSettings {
+  if (host === null) return own
+  return {
+    ...own,
+    scanRoots: host.scanRoots,
+    pinnedProjects: host.pinnedProjects,
+    firstRunCompletedAt: host.firstRunCompletedAt
+  }
+}
+
+/** A window's settings patch, split into what the host keeps and what Helm keeps. */
+export function splitSettingsPatch(patch: Partial<AppSettings>): {
+  host: P.HostSettingsPatch
+  own: Partial<AppSettings>
+} {
+  const host: P.HostSettingsPatch = {}
+  const own: Partial<AppSettings> = { ...patch }
+  if (patch.scanRoots !== undefined) host.scanRoots = patch.scanRoots
+  if (patch.pinnedProjects !== undefined) host.pinnedProjects = patch.pinnedProjects
+  if (patch.firstRunCompletedAt !== undefined) host.firstRunCompletedAt = patch.firstRunCompletedAt
+  for (const key of HOST_WORKSPACE_KEYS) delete own[key]
+  return { host, own }
+}
+
+/** A repository's state: one git answered has no `error` at all, as Helm's own discovery says. */
+export function gitStateFromHost(state: P.GitState | null | undefined): GitState | null {
+  if (state === null || state === undefined) return null
+  const { error, ...rest } = state
+  return error === null ? rest : { ...rest, error }
+}
+
+/** Git state by project path. */
+export function gitStatesFromHost(states: Partial<Record<string, P.GitState | null>>): Record<string, GitState | null> {
+  const out: Record<string, GitState | null> = {}
+  for (const [path, state] of Object.entries(states)) out[path] = gitStateFromHost(state)
+  return out
+}
+
+export function discoveryFromHost(result: P.DiscoveryResult): DiscoveryResult {
+  return { ...result, projects: result.projects.map((project) => ({ ...project, git: gitStateFromHost(project.git) })) }
+}
+
+export function cachedProjectsFromHost(rows: readonly P.CachedProject[]): CachedProject[] {
+  return rows.map((row) => ({ ...row, git: gitStateFromHost(row.git) }))
+}
+
+/** A scan's state: a scan that did not fail has no `error` at all, as Helm's own scan says. */
+export function scanStatusFromHost(status: P.ScanStatus): ScanStatus {
+  return status.error === null ? { running: status.running } : { running: status.running, error: status.error }
+}
+
+const AUTH: Record<'true' | 'false', ClaudeAuth> = { true: 'authenticated', false: 'unauthenticated' }
+
+/**
+ * What the host found of Claude Code, in the setup pane's words. A host with
+ * no Claude Code backend has found nothing about it, which is Unknown - not
+ * "not installed" - with the sentence that says why.
+ */
+export function claudeStatusFromHost(status: P.BackendStatus | undefined): ClaudeStatus {
+  if (status === undefined) {
+    const why = 'The local host has no Claude Code backend, so whether Claude Code is installed is unknown.'
+    return {
+      path: null,
+      source: null,
+      version: null,
+      semver: null,
+      tested: false,
+      testedRange: { ...CLAUDE_TESTED_RANGE },
+      configDir: '',
+      configDirExists: false,
+      auth: 'unknown',
+      authSignal: why,
+      error: why
+    }
+  }
+  return {
+    path: status.path,
+    source: status.source,
+    version: status.version,
+    semver: status.semver,
+    tested: status.tested,
+    testedRange: status.testedRange,
+    configDir: status.configDir ?? '',
+    configDirExists: status.configDirExists,
+    auth: status.signedIn.state === 'known' ? AUTH[status.signedIn.value ? 'true' : 'false'] : 'unknown',
+    authSignal: status.signInSignal,
+    error: status.error
+  }
 }

@@ -63,6 +63,13 @@ export interface HostPlaces {
   resourcesPath: string
   /** The checkout an unpackaged build runs from, whose `target/debug` holds `floti`. */
   repoRoot: string
+  /**
+   * Helm's templates folder (`paths.ts`). The host keeps its templates in
+   * `templates` inside its config folder, so the folder holding this one is
+   * the host's config folder in every run: one templates folder, whichever of
+   * the two serves it.
+   */
+  templatesDir: string
 }
 
 /** A child process, as much of one as this needs; `child_process.spawn` returns one. */
@@ -129,20 +136,23 @@ export function clientFolder(places: HostPlaces, platform: NodeJS.Platform): str
  * The environment both programs run with. The installed app uses the host's
  * own folders, so it passes its environment as it is; every other run moves
  * the host's folders inside Helm's data directory, so a dev or check run never
- * meets the user's real host.
+ * meets the user's real host. The config folder is the one exception, in every
+ * run: it is the folder holding Helm's templates folder, which is all the
+ * host keeps there.
  */
 export function hostEnvironment(
   places: HostPlaces,
   deps: Pick<LauncherDeps, 'platform' | 'env' | 'tmpdir'>
 ): NodeJS.ProcessEnv {
-  if (places.appMode === 'installed') return { ...deps.env }
   const paths = pathsFor(deps.platform)
+  const config = paths.dirname(places.templatesDir)
+  if (places.appMode === 'installed') return { ...deps.env, FLOTI_CONFIG_DIR: config }
   const root = paths.join(places.dataDir, 'host')
   return {
     ...deps.env,
     FLOTI_DATA_DIR: paths.join(root, 'data'),
     FLOTI_LOG_DIR: paths.join(root, 'logs'),
-    FLOTI_CONFIG_DIR: paths.join(root, 'config'),
+    FLOTI_CONFIG_DIR: config,
     FLOTI_RUNTIME_DIR: runtimeFolder(places.dataDir, deps)
   }
 }

@@ -28,6 +28,8 @@ export interface SetupPaneProps {
   roots: string[]
   /** Directories discovery can justify suggesting. Often empty, which is fine. */
   suggestions: string[]
+  /** Why the suggestions could not be looked for, in place of them; null when they were. */
+  suggestionsError?: string | null
   /** Projects the current roots turned up, so "it worked" is visible here. */
   projectCount: number
   scanning: boolean
@@ -59,6 +61,7 @@ export function SetupPane({
   status,
   roots,
   suggestions,
+  suggestionsError = null,
   projectCount,
   scanning,
   checking,
@@ -115,6 +118,16 @@ export function SetupPane({
                 </li>
               ))}
             </ul>
+          )}
+
+          {suggestionsError !== null && (
+            <p
+              role="alert"
+              data-setup-suggestions-error
+              className="mb-3 rounded-raised border border-danger/30 bg-danger/10 px-3 py-1.5 text-[11px] text-danger"
+            >
+              {suggestionsError}
+            </p>
           )}
 
           {suggestions.filter((s) => !roots.some((r) => r.toLowerCase() === s.toLowerCase()))

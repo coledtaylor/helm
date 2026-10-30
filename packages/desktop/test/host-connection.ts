@@ -198,3 +198,29 @@ export function fakeLink(
   }
   return link
 }
+
+/** A link whose connection can be replaced, the way a host that restarted is reached again. */
+export function reconnectingLink(first: FakeConnection): HostLink & { reconnect(next: FakeConnection): Promise<void> } {
+  const listeners: Array<(connection: HostConnection) => void | Promise<void>> = []
+  let current = first
+  let attempt: Promise<HostConnection> | null = null
+  const connect = async (): Promise<HostConnection> => {
+    for (const listener of listeners) await listener(current.asConnection())
+    return current.asConnection()
+  }
+  return {
+    connection: () => (attempt ??= connect()),
+    current: () => current.asConnection(),
+    settled: () => Promise.resolve(),
+    onConnected: (listener) => {
+      listeners.push(listener)
+    },
+    writeSettings: () => undefined,
+    stop: () => Promise.resolve(),
+    async reconnect(next) {
+      current = next
+      attempt = connect()
+      await attempt
+    }
+  }
+}

@@ -113,12 +113,19 @@ export function useTemplates(): TemplatesState {
    */
   useEffect(() => {
     let cancelled = false
-    void helm.invoke('template:list').then((listing) => {
-      if (cancelled) return
-      setTemplates(listing.templates)
-      setTemplatesDir(listing.dir)
-      setListProblems(listing.problems)
-    })
+    void helm.invoke('template:list').then(
+      (listing) => {
+        if (cancelled) return
+        setTemplates(listing.templates)
+        setTemplatesDir(listing.dir)
+        setListProblems(listing.problems)
+      },
+      // Could not look, which is not "no templates": the sentence goes where a
+      // template that could not be read is named.
+      (err: unknown) => {
+        if (!cancelled) setListProblems([err instanceof Error ? err.message : String(err)])
+      }
+    )
     return () => {
       cancelled = true
     }
@@ -141,7 +148,9 @@ export function useTemplates(): TemplatesState {
       .then((next) => {
         if (!cancelled) setDetail(next)
       })
-      .catch(() => undefined)
+      .catch((err: unknown) => {
+        if (!cancelled) setProblems([err instanceof Error ? err.message : String(err)])
+      })
     return () => {
       cancelled = true
     }

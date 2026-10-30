@@ -25,7 +25,8 @@ const WIN_PLACES: HostPlaces = {
   dataDir: 'C:\\Users\\me\\AppData\\Local\\Helm\\dev\\helm-data',
   packaged: false,
   resourcesPath: 'C:\\Program Files\\Helm\\resources',
-  repoRoot: 'C:\\src\\my helm'
+  repoRoot: 'C:\\src\\my helm',
+  templatesDir: 'C:\\Users\\me\\AppData\\Local\\Helm\\dev\\helm-data\\templates'
 }
 
 /** A child process with in-memory pipes, whose program the test plays. */
@@ -200,18 +201,28 @@ describe('the local host launcher', { timeout: PATIENCE }, () => {
           PATH: 'x',
           FLOTI_DATA_DIR: `${WIN_PLACES.dataDir}\\host\\data`,
           FLOTI_LOG_DIR: `${WIN_PLACES.dataDir}\\host\\logs`,
-          FLOTI_CONFIG_DIR: `${WIN_PLACES.dataDir}\\host\\config`,
+          FLOTI_CONFIG_DIR: WIN_PLACES.dataDir,
           FLOTI_RUNTIME_DIR: `${WIN_PLACES.dataDir}\\host\\run`
         })
       }
     })
 
-    it('leaves the installed app on the host’s own folders', () => {
+    it('leaves the installed app on the host’s own folders but the config folder, which holds Helm’s templates', () => {
       const env = hostEnvironment(
-        { ...WIN_PLACES, appMode: 'installed' },
+        { ...WIN_PLACES, appMode: 'installed', templatesDir: 'C:\\Users\\me\\.config\\helm\\templates' },
         { platform: 'win32', env: { PATH: 'x' }, tmpdir: () => 'C:\\Temp' }
       )
-      expect(env).toEqual({ PATH: 'x' })
+      expect(env).toEqual({ PATH: 'x', FLOTI_CONFIG_DIR: 'C:\\Users\\me\\.config\\helm' })
+    })
+
+    it('points the host’s config folder at the folder holding Helm’s templates folder in every run', () => {
+      for (const appMode of ['installed', 'portable', 'dev', 'dev-live'] as const) {
+        const env = hostEnvironment(
+          { ...WIN_PLACES, dataDir: '/home/me/.config/Helm', appMode, templatesDir: '/home/me/.config/helm/templates' },
+          { platform: 'linux', env: {}, tmpdir: () => '/tmp' }
+        )
+        expect(env['FLOTI_CONFIG_DIR']).toBe('/home/me/.config/helm')
+      }
     })
 
     it('keeps the socket under the macOS and Linux path limit when the data directory is too deep for it', () => {

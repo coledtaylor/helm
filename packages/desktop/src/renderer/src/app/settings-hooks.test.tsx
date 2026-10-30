@@ -244,4 +244,39 @@ describe('useSetup', () => {
     expect(result.current.checking).toBe(false)
     expect(result.current.status).toMatchObject({ source: 'setting', path: 'D:\\picked\\claude.cmd', version: '2.1.500' })
   })
+
+  it('says the host could not be reached when setup, its suggestions or its templates cannot be read, never none', async () => {
+    const unreachable = 'No local host answered on its socket.'
+    const refuse = (): never => {
+      throw new Error(unreachable)
+    }
+    bridge.answer('setup:status', refuse)
+    bridge.answer('roots:suggest', refuse)
+    bridge.answer('template:list', refuse)
+    const { result } = renderHook(() => useSetup(DEFAULT_SETTINGS, () => undefined))
+
+    await vi.waitFor(() => expect(result.current.suggestionsError).toBe(unreachable), { timeout: PATIENCE })
+    expect(result.current.suggestions).toEqual([])
+    await vi.waitFor(() => expect(result.current.status?.error).toBe(unreachable), { timeout: PATIENCE })
+    // Nothing found and nothing known: not "not signed in", not a version.
+    expect(result.current.status).toMatchObject({ path: null, version: null, auth: 'unknown', authSignal: unreachable })
+
+    act(() => result.current.openDialog('new'))
+    await vi.waitFor(() => expect(result.current.templateProblems).toEqual([unreachable]), { timeout: PATIENCE })
+  })
+})
+
+describe('useLauncher when the projects cannot be read', () => {
+  it('says why in the sidebar rather than painting no projects', async () => {
+    bridge.answer('app:info', () => ({}) as AppInfo)
+    bridge.answer('settings:read', () => DEFAULT_SETTINGS)
+    bridge.answer('discovery:cached', () => {
+      throw new Error('No local host answered on its socket.')
+    })
+    const { result } = renderHook(() => useLauncher())
+    await vi.waitFor(() => expect(result.current.scanError).toBe('No local host answered on its socket.'), {
+      timeout: PATIENCE
+    })
+    expect(result.current.discovery).toBeNull()
+  })
 })

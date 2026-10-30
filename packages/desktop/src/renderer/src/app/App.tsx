@@ -2347,6 +2347,7 @@ export function App(): JSX.Element {
             status={setup.status}
             roots={settings?.scanRoots ?? []}
             suggestions={setup.suggestions}
+            suggestionsError={setup.suggestionsError}
             projectCount={discovery?.projects.length ?? 0}
             scanning={launcher.scanning}
             checking={setup.checking}

@@ -1,15 +1,6 @@
 import { app, type BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron'
 import { homedir } from 'node:os'
-import {
-  createHarness,
-  forgetProjects,
-  pluginThemeOf,
-  isWithin,
-  listTemplates,
-  orphanedProjectPaths,
-  previewTemplate,
-  suggestRoots
-} from '@helm/core'
+import { pluginThemeOf } from '@helm/core'
 import type { BrowserHost } from './browser'
 import type { BrowserMcpHost } from './browser-mcp'
 import type { ConfigService } from './config'
@@ -26,13 +17,14 @@ import { applyWindowTheme } from './chrome'
 import type { ThemeService } from './themes'
 import type { PtermHost } from './pterm'
 import { readClaudeVersion, setClaudeOverride } from './claude-cli'
-import { readClaudeStatus, verifyClaudeAt } from './setup'
+import { readClaudeStatus } from './setup'
 import { checkForUpdate, RELEASES_PAGE } from './update'
-import { appMode, dataDir, dbFile, templatesDir } from './paths'
+import { appMode, dataDir, dbFile } from './paths'
 import type { PluginHost } from './plugins/host'
 import { activePty, windowsBuildNumber } from './pty'
 import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from './profiles'
-import { cachedProjects, runScan, updateSettings, type Services } from './services'
+import type { Services } from './services'
+import { localWorkspace, type WorkspaceService } from './workspace'
 import type { SessionHost } from './sessions'
 import type { ActivityService } from './activity'
 import type { ResourcesService } from './resources'
@@ -159,6 +151,12 @@ interface IpcContextBase {
   files: FilesService
   /** Authors what `template:list` reads back; see `templates.ts`. */
   templates: TemplateService
+  /**
+   * Discovery, scan roots, harnesses, setup, templates and the settings the
+   * window reads: the local host's when sessions run there
+   * (`host/workspace.ts`), and Helm's own (`localWorkspace`) otherwise.
+   */
+  workspace?: WorkspaceService | undefined
   /** Built-in and user themes, and the watch on the user's; see `themes.ts`. */
   themes: ThemeService
   /** Plugin folders, their pages' bridge calls, services and secrets; see `plugins/host.ts`. */
@@ -212,19 +210,14 @@ export function registerIpc(ctx: IpcContext): void {
       ...(ctx.claudeHome !== undefined ? { configDir: ctx.claudeHome } : {})
     })
 
-  /** Adds paths that are not already roots, and tells the window. */
-  const addRoots = (paths: string[]): string[] => {
-    const merged = [...services.settings.scanRoots]
-    for (const path of paths) {
-      if (!merged.some((existing) => existing.toLowerCase() === path.toLowerCase())) {
-        merged.push(path)
-      }
-    }
-    if (merged.length === services.settings.scanRoots.length) return services.settings.scanRoots
-    const next = updateSettings(services, { scanRoots: merged })
-    emit(ctx.window(), 'settings:changed', next)
-    return next.scanRoots
-  }
+  const workspace: WorkspaceService =
+    ctx.workspace ??
+    localWorkspace({
+      services,
+      emit: (channel, payload) => emit(ctx.window(), channel, payload),
+      claudeStatus,
+      templates: ctx.templates
+    })
 
   const requests: RequestHandlers = {
     'app:info': async () => ({
@@ -244,10 +237,10 @@ export function registerIpc(ctx: IpcContext): void {
       releasesUrl: RELEASES_PAGE
     }),
 
-    'settings:read': () => services.settings,
+    'settings:read': () => workspace.settings(),
 
-    'settings:write': (patch) => {
-      const next = updateSettings(services, patch)
+    'settings:write': async (patch) => {
+      const next = await workspace.writeSettings(patch)
       emit(ctx.window(), 'settings:changed', next)
       // The session host reads the override, not the settings, so a picked CLI
       // written through this channel has to reach it too - otherwise sessions
@@ -311,26 +304,19 @@ export function registerIpc(ctx: IpcContext): void {
       return next
     },
 
-    'discovery:cached': () => cachedProjects(services),
+    'discovery:cached': () => workspace.cached(),
 
-    'discovery:scan': async (payload) => {
-      emit(ctx.window(), 'scan:status', { running: true })
-      try {
-        const result = await runScan(services, { includeGit: payload?.includeGit ?? true })
-        emit(ctx.window(), 'discovery:updated', result)
-        return result
-      } finally {
-        emit(ctx.window(), 'scan:status', { running: false })
-      }
-    },
+    'discovery:scan': (payload) => workspace.scan(payload?.includeGit ?? true),
 
-    'roots:suggest': () => suggestRoots(),
+    'roots:suggest': () => workspace.suggestRoots(),
 
+    // The picker is the window's own; the folders chosen go wherever the roots
+    // are kept.
     'roots:add': async () => {
       const title = 'Add a folder to scan'
       if (ctx.chooseDirectory) {
         const picked = ctx.chooseDirectory(title)
-        return picked === null ? services.settings.scanRoots : addRoots([picked])
+        return picked === null ? (await workspace.settings()).scanRoots : workspace.acceptRoots([picked])
       }
       const win = ctx.window()
       const options: Electron.OpenDialogOptions = {
@@ -340,37 +326,18 @@ export function registerIpc(ctx: IpcContext): void {
       const result = win
         ? await dialog.showOpenDialog(win, options)
         : await dialog.showOpenDialog(options)
-      if (result.canceled || result.filePaths.length === 0) return services.settings.scanRoots
-      return addRoots(result.filePaths)
+      if (result.canceled || result.filePaths.length === 0) return (await workspace.settings()).scanRoots
+      return workspace.acceptRoots(result.filePaths)
     },
 
-    'roots:accept': ({ path }) => addRoots([path]),
+    'roots:accept': ({ path }) => workspace.acceptRoots([path]),
 
-    'roots:remove': ({ path }) => {
-      const merged = services.settings.scanRoots.filter(
-        (existing) => existing.toLowerCase() !== path.toLowerCase()
-      )
-      const next = updateSettings(services, { scanRoots: merged })
-      // The rows this root put in the discovery cache go with it. Nothing else
-      // can take them: the next scan does not walk a root that is no longer a
-      // root, so a row left here would go on painting at every start, in a tree
-      // that no longer holds it once the scan lands - the flicker being the
-      // small half of it, and "Helm still lists a folder I removed" the rest.
-      // Rows a *remaining* root still covers are kept; see `orphanedProjectPaths`.
-      forgetProjects(
-        services.store,
-        orphanedProjectPaths(
-          cachedProjects(services).map((project) => project.path),
-          path,
-          next.scanRoots
-        )
-      )
-      emit(ctx.window(), 'settings:changed', next)
-      return next.scanRoots
-    },
+    'roots:remove': ({ path }) => workspace.removeRoot(path),
 
-    'setup:status': () => claudeStatus(),
+    'setup:status': () => workspace.setupStatus(),
 
+    // The picker is the window's own; the executable chosen is checked, and
+    // kept, wherever sessions run.
     'setup:locateClaude': async () => {
       const title = 'Locate the claude executable'
       let picked: string | undefined
@@ -394,28 +361,10 @@ export function registerIpc(ctx: IpcContext): void {
           : await dialog.showOpenDialog(options)
         picked = result.canceled ? undefined : result.filePaths[0]
       }
-      if (picked === undefined) {
-        return claudeStatus()
-      }
-
-      // Verified before it is saved. A setting that points at the wrong program
-      // is a launch failure two screens later with nothing to connect it to.
-      const check = await verifyClaudeAt(picked)
-      if (!check.ok) {
-        const status = await claudeStatus()
-        return { ...status, error: check.problem }
-      }
-      const next = updateSettings(services, { claudePath: picked })
-      setClaudeOverride(picked)
-      emit(ctx.window(), 'settings:changed', next)
-      return claudeStatus(picked)
+      return picked === undefined ? workspace.setupStatus() : workspace.locateClaude(picked)
     },
 
-    'setup:complete': () => {
-      const next = updateSettings(services, { firstRunCompletedAt: new Date().toISOString() })
-      emit(ctx.window(), 'settings:changed', next)
-      return next
-    },
+    'setup:complete': () => workspace.completeSetup(),
 
     'path:chooseDirectory': async ({ title }) => {
       if (ctx.chooseDirectory) return { path: ctx.chooseDirectory(title ?? 'Choose a folder') }
@@ -451,53 +400,24 @@ export function registerIpc(ctx: IpcContext): void {
       return { path: result.canceled ? null : (result.filePaths[0] ?? null) }
     },
 
-    'harness:create': async (request) => {
-      const result = await createHarness({
-        mode: request.mode,
-        dir: request.dir,
-        templatesDir,
-        ...(request.name !== undefined ? { name: request.name } : {}),
-        // 'new' only. The contract says so and `createHarness` enforces it, but
-        // dropping it here as well means a renderer that sent one by mistake
-        // cannot even reach the code that would have to ignore it.
-        ...(request.template !== undefined && request.mode === 'new'
-          ? { template: request.template }
-          : {})
-      })
-      if (result.path === null) {
-        return { ...result, roots: services.settings.scanRoots }
-      }
-      // A harness the launcher cannot see is not one the user created, so the
-      // root goes in with it - unless a root already covers it, in which case
-      // adding the harness itself would list it twice.
-      const covered = services.settings.scanRoots.some((root) =>
-        isWithin(root, result.path as string)
-      )
-      const roots = covered ? services.settings.scanRoots : addRoots([result.path])
-      return { ...result, roots }
-    },
+    'harness:create': (request) => workspace.createHarness(request),
 
-    'template:list': () => listTemplates(templatesDir),
+    'template:list': () => workspace.templates.list(),
 
-    'template:preview': ({ template, mode }) =>
-      previewTemplate({
-        templatesDir,
-        template,
-        ...(mode !== undefined ? { mode } : {})
-      }),
+    'template:preview': (request) => workspace.templates.preview(request),
 
     // Authoring. Every one of these writes inside the templates directory and
     // nowhere else; `template:import` is the only one that reads outside it,
     // and reading is all it does - see `assertTemplateWritable`.
-    'template:detail': ({ template }) => ctx.templates.detail(template),
-    'template:create': (request) => ctx.templates.create(request),
-    'template:rename': (request) => ctx.templates.rename(request),
-    'template:delete': ({ template }) => ctx.templates.remove(template),
-    'template:metadata': (request) => ctx.templates.metadata(request),
-    'template:substitute': (request) => ctx.templates.substitute(request),
-    'template:import': (request) => ctx.templates.importFiles(request),
-    'template:folderPreview': (request) => ctx.templates.folderPreview(request),
-    'template:fromFolder': (request) => ctx.templates.fromFolder(request),
+    'template:detail': ({ template }) => workspace.templates.detail(template),
+    'template:create': (request) => workspace.templates.create(request),
+    'template:rename': (request) => workspace.templates.rename(request),
+    'template:delete': ({ template }) => workspace.templates.remove(template),
+    'template:metadata': (request) => workspace.templates.metadata(request),
+    'template:substitute': (request) => workspace.templates.substitute(request),
+    'template:import': (request) => workspace.templates.importFiles(request),
+    'template:folderPreview': (request) => workspace.templates.folderPreview(request),
+    'template:fromFolder': (request) => workspace.templates.fromFolder(request),
 
     'update:check': () => checkForUpdate(),
 

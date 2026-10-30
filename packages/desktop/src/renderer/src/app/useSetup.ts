@@ -30,10 +30,36 @@ export type HarnessDialogMode = 'new' | 'convert'
  */
 const MINIMAL = 'minimal'
 
+const sentence = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+/**
+ * What the pane shows when Claude Code's status could not be read at all -
+ * the local host out of reach: nothing found and nothing known, with the
+ * sentence that says why in the places the pane says why.
+ */
+export function unreadableStatus(err: unknown): ClaudeStatus {
+  const why = sentence(err)
+  return {
+    path: null,
+    source: null,
+    version: null,
+    semver: null,
+    tested: false,
+    testedRange: { min: '', max: '' },
+    configDir: '',
+    configDirExists: false,
+    auth: 'unknown',
+    authSignal: why,
+    error: why
+  }
+}
+
 export interface SetupState {
   status: ClaudeStatus | null
   checking: boolean
   suggestions: string[]
+  /** Why the suggestions could not be looked for; null when they were. */
+  suggestionsError: string | null
   /** Whether the setup pane owns the window. */
   needed: boolean
   recheck: () => void
@@ -89,6 +115,7 @@ export function useSetup(
   const [status, setStatus] = useState<ClaudeStatus | null>(null)
   const [checking, setChecking] = useState(false)
   const [suggestions, setSuggestions] = useState<string[]>([])
+  const [suggestionsError, setSuggestionsError] = useState<string | null>(null)
   const [dialog, setDialog] = useState<HarnessDialogMode | null>(null)
   const [dialogDir, setDialogDir] = useState('')
   const [dialogMode, setDialogMode] = useState<HarnessDialogMode>('new')
@@ -106,12 +133,18 @@ export function useSetup(
     setChecking(true)
     void helm
       .invoke('setup:status')
-      .then(setStatus)
+      .then(setStatus, (err: unknown) => setStatus(unreadableStatus(err)))
       .finally(() => setChecking(false))
   }, [])
 
   useEffect(() => {
-    void helm.invoke('roots:suggest').then(setSuggestions)
+    void helm.invoke('roots:suggest').then(
+      (next) => {
+        setSuggestions(next)
+        setSuggestionsError(null)
+      },
+      (err: unknown) => setSuggestionsError(sentence(err))
+    )
   }, [])
 
   /**
@@ -125,9 +158,14 @@ export function useSetup(
    */
   useEffect(() => {
     let cancelled = false
-    void helm.invoke('setup:status').then((next) => {
-      if (!cancelled) setStatus(next)
-    })
+    void helm.invoke('setup:status').then(
+      (next) => {
+        if (!cancelled) setStatus(next)
+      },
+      (err: unknown) => {
+        if (!cancelled) setStatus(unreadableStatus(err))
+      }
+    )
     return () => {
       cancelled = true
     }
@@ -137,12 +175,15 @@ export function useSetup(
     setChecking(true)
     void helm
       .invoke('setup:locateClaude')
-      .then((next) => {
-        setStatus(next)
-        // A newly picked CLI is a reason to look at the banner again, whether it
-        // fixed the warning or introduced one.
-        setBannerDismissed(false)
-      })
+      .then(
+        (next) => {
+          setStatus(next)
+          // A newly picked CLI is a reason to look at the banner again, whether it
+          // fixed the warning or introduced one.
+          setBannerDismissed(false)
+        },
+        (err: unknown) => setStatus(unreadableStatus(err))
+      )
       .finally(() => setChecking(false))
   }, [])
 
@@ -169,11 +210,16 @@ export function useSetup(
    * whole reason this is a callback rather than three lines inside `openDialog`.
    */
   const refreshTemplates = useCallback(() => {
-    void helm.invoke('template:list').then((listing) => {
-      setTemplates(listing.templates)
-      setTemplatesDir(listing.dir)
-      setTemplateProblems(listing.problems)
-    })
+    void helm.invoke('template:list').then(
+      (listing) => {
+        setTemplates(listing.templates)
+        setTemplatesDir(listing.dir)
+        setTemplateProblems(listing.problems)
+      },
+      // Could not look: the sentence, in the place a template that could not
+      // be read is named, rather than a picker that lists none.
+      (err: unknown) => setTemplateProblems([sentence(err)])
+    )
   }, [])
 
   const openDialog = useCallback(
@@ -298,6 +344,7 @@ export function useSetup(
     status,
     checking,
     suggestions,
+    suggestionsError,
     needed,
     recheck,
     locateClaude,

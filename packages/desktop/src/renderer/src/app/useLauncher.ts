@@ -112,7 +112,15 @@ export function useLauncher(): LauncherState {
       setInfo(appInfo)
       adopt(loaded)
 
-      const cached = await helm.invoke('discovery:cached')
+      let cached: CachedProject[]
+      try {
+        cached = await helm.invoke('discovery:cached')
+      } catch (err) {
+        // Could not look, which is not "no projects": the sidebar says why,
+        // where a failed scan says why, and paints no tree in its place.
+        setScanError(err instanceof Error ? err.message : String(err))
+        return
+      }
       // A scan started by the main process may already have landed; do not let
       // the cache overwrite fresher data.
       setDiscovery((current) => current ?? discoveryFromCache(cached, loaded.scanRoots))
