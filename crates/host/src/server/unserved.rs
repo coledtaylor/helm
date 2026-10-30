@@ -44,10 +44,6 @@ fn entry_covers(entry: &str, channel: &str) -> bool {
 /// Every channel not served yet, by the feature that will serve it.
 pub const NOT_YET_SERVED: &[Later] = &[
     Later {
-        feature: "agent tools listener",
-        channels: &["agentBrowser:*"],
-    },
-    Later {
         feature: "plugin pages",
         channels: &[
             "plugins:call",
@@ -180,13 +176,13 @@ mod tests {
     fn the_list_names_each_served_channel_left_on_it() {
         let catalogue = Catalogue::protocol();
         let mut served = all_unlisted(&catalogue);
-        served.insert("agentBrowser:call");
+        served.insert("plugins:log");
         served.insert("plugins:setTools");
         let drift = drift(&catalogue, &served);
         assert_eq!(
             drift.served_but_listed,
             vec![
-                ("agentBrowser:call", "agent tools listener"),
+                ("plugins:log", "plugin services"),
                 ("plugins:setTools", "plugin tool families")
             ]
         );
@@ -195,7 +191,7 @@ mod tests {
             "{drift}"
         );
         let said = drift.to_string();
-        assert!(said.contains("`agentBrowser:call` is served"), "{said}");
+        assert!(said.contains("`plugins:log` is served"), "{said}");
         assert!(said.contains("`plugins:setTools` is served"), "{said}");
     }
 
@@ -227,12 +223,7 @@ mod tests {
     #[test]
     fn every_entry_is_labelled_with_the_feature_that_will_serve_it() {
         let features: BTreeSet<&str> = NOT_YET_SERVED.iter().map(|later| later.feature).collect();
-        for permanent in [
-            "agent tools listener",
-            "plugin pages",
-            "plugin services",
-            "plugin tool families",
-        ] {
+        for permanent in ["plugin pages", "plugin services", "plugin tool families"] {
             assert!(features.contains(permanent), "{permanent} is missing");
         }
         assert!(
@@ -244,10 +235,10 @@ mod tests {
 
     #[test]
     fn a_refusal_names_the_channel_and_its_feature() {
-        let later = later("agentBrowser:call").unwrap();
+        let later = later("plugins:setTools").unwrap();
         assert_eq!(
-            refusal("agentBrowser:call", later),
-            "This host does not serve `agentBrowser:call` yet: it comes with the agent tools listener."
+            refusal("plugins:setTools", later),
+            "This host does not serve `plugins:setTools` yet: it comes with the plugin tool families."
         );
     }
 }

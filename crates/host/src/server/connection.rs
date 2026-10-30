@@ -469,10 +469,14 @@ impl Connection {
                 let answer = self.answer(channels, &request);
                 self.outbox.push(answer);
             }
-            Message::Subscribe(subscribe) => self.subscribe(channels, &subscribe),
+            Message::Subscribe(subscribe) => {
+                self.subscribe(channels, &subscribe);
+                self.features.subscriptions_changed(self.client, channels);
+            }
             Message::Unsubscribe(unsubscribe) => {
                 channels.unsubscribe(unsubscribe.subscription);
                 self.snapshot_seq.remove(&unsubscribe.subscription);
+                self.features.subscriptions_changed(self.client, channels);
             }
             Message::StreamOpen(open) => self.open_stream(channels, &open, output_tx),
             Message::StreamData(data) => self.input(&data),

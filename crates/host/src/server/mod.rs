@@ -38,6 +38,7 @@
 //! serve it, and is answered with an error naming it.
 
 mod agent_tools;
+mod browser_tools;
 mod connection;
 mod enrolment;
 mod events;
@@ -462,7 +463,7 @@ impl Host {
 /// sessions, the activity pass and the processes-and-ports pass, given to
 /// every launch from now on, and revoking each session's token as it ends.
 fn start_agent_tools(hosted: &Arc<Hosted>, features: &Features) -> Result<Arc<HostAgentTools>> {
-    let tools = Arc::new(HostAgentTools::new());
+    let tools = Arc::new(HostAgentTools::new(Arc::clone(features.browser())));
     let settings = features.settings();
     tools.follow(&settings.read()?);
     let following = Arc::downgrade(&tools);

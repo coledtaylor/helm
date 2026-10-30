@@ -21,6 +21,7 @@ struct TestFamily {
     name: &'static str,
     route: &'static str,
     on: AtomicBool,
+    grantable: AtomicBool,
 }
 
 impl TestFamily {
@@ -29,11 +30,18 @@ impl TestFamily {
             name,
             route,
             on: AtomicBool::new(true),
+            grantable: AtomicBool::new(true),
         })
     }
 
     fn switch(&self, on: bool) {
         self.on.store(on, Ordering::SeqCst);
+    }
+
+    /// Whether a launch now may be given it, as an attached browser decides
+    /// for helm-browser.
+    fn grantable_now(&self, grantable: bool) {
+        self.grantable.store(grantable, Ordering::SeqCst);
     }
 }
 
@@ -52,6 +60,10 @@ impl ToolFamily for TestFamily {
 
     fn is_on(&self) -> bool {
         self.on.load(Ordering::SeqCst)
+    }
+
+    fn grantable(&self) -> bool {
+        self.grantable.load(Ordering::SeqCst)
     }
 
     fn tools(&self) -> Vec<Tool> {
@@ -838,6 +850,76 @@ async fn a_family_switched_off_has_no_route_no_server_and_no_tools_until_it_is_b
     );
     assert_eq!(world.listener.served_names(), ["floti-test", "floti-other"]);
 
+    world.listener.stop().await;
+}
+
+#[tokio::test]
+async fn a_family_a_launch_was_not_given_answers_its_token_404_even_once_it_could_be_given() {
+    let world = two_families();
+    world.test.grantable_now(false);
+    let alpha = world.grant();
+    let address = world.address();
+    let names: Vec<&str> = alpha.servers.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["floti-other"], "a launch is not told of it");
+    let alpha_token = token(&alpha).to_owned();
+    assert_eq!(
+        rpc(address, "/mcp/test", &alpha_token, "tools/list", json!({}))
+            .await
+            .status,
+        404
+    );
+
+    // It can be given now, to a launch from now on; the earlier token still
+    // has no route to it, and keeps the route it was given.
+    world.test.grantable_now(true);
+    let beta = world.grant();
+    let names: Vec<&str> = beta.servers.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["floti-test", "floti-other"]);
+    assert_eq!(
+        rpc(address, "/mcp/test", &alpha_token, "tools/list", json!({}))
+            .await
+            .status,
+        404
+    );
+    assert_eq!(
+        rpc(address, "/mcp/other", &alpha_token, "tools/list", json!({}))
+            .await
+            .status,
+        200
+    );
+    assert_eq!(
+        rpc(address, "/mcp/test", token(&beta), "tools/list", json!({}))
+            .await
+            .status,
+        200
+    );
+
+    // A token given it keeps it while it cannot be given to a launch.
+    world.test.grantable_now(false);
+    assert_eq!(
+        rpc(address, "/mcp/test", token(&beta), "tools/list", json!({}))
+            .await
+            .status,
+        200
+    );
+    // Off is still off, for the token that was given it.
+    world.test.switch(false);
+    assert_eq!(
+        rpc(address, "/mcp/test", token(&beta), "tools/list", json!({}))
+            .await
+            .status,
+        404
+    );
+
+    world.listener.stop().await;
+}
+
+#[tokio::test]
+async fn with_no_family_that_can_be_given_no_token_is_minted() {
+    let world = two_families();
+    world.test.grantable_now(false);
+    world.other.grantable_now(false);
+    assert_eq!(world.listener.grant().expect("no bind is attempted"), None);
     world.listener.stop().await;
 }
 

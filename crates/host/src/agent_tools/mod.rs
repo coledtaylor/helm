@@ -19,6 +19,10 @@
 //! - **Off is off.** A family switched off has no route (404 to a caller
 //!   holding a token), no entry in a launch's servers and no tool. With every
 //!   family off nothing binds and no token is minted.
+//! - **A token reaches what its launch was given.** Each grant records the
+//!   families it names, and a family the launch was not given answers its
+//!   token 404 exactly as one switched off, even once it could be given to
+//!   a launch now (a browser attached after the session started).
 //! - **Origin is checked first**, because a page in a browser on this machine
 //!   can reach a loopback port. A request announcing a non-loopback `Origin`
 //!   is refused 403 before its token is even compared.
@@ -28,9 +32,10 @@
 //! GET), body size. Only a request that passed every one reaches `rmcp`, which
 //! speaks the MCP protocol for each family over stateless streamable HTTP.
 //!
-//! **Named families, one listener.** Each family is a name (`floti-<x>`), a
-//! route, an instructions block, a tool table and an on/off check read on
-//! every request ([`ToolFamily`]). One port and one token per session serve
+//! **Named families, one listener.** Each family is a name (such as
+//! `helm-browser`, the name the agent's permission rules use), a route, an
+//! instructions block, a tool table, an on/off check read on every request,
+//! and whether a launch now may be given it ([`ToolFamily`]). One port and one token per session serve
 //! them all, and each family's "off" is three separate facts rather than a
 //! promise: its route answers 404, its name is absent from a launch's
 //! servers, and its tools are in no list.
@@ -64,7 +69,7 @@ pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = CallToolResult> + Send + '
 
 /// One family of agent tools on the listener.
 pub trait ToolFamily: Send + Sync + 'static {
-    /// Its name as a session lists it, such as `floti-sessions`.
+    /// Its name as a session lists it, such as `helm-browser`.
     fn name(&self) -> &str;
 
     /// The path it is served at, such as `/mcp/sessions`. Exact: no other
@@ -77,6 +82,14 @@ pub trait ToolFamily: Send + Sync + 'static {
     /// Whether it is switched on. Read on every request, so switching a
     /// family off takes its route away from running sessions at once.
     fn is_on(&self) -> bool;
+
+    /// Whether a launch now is given it, while it is on: a family that needs
+    /// something only some moments have, such as an attached browser, says
+    /// no while it lacks it. Read at grant only; a session already holding
+    /// it keeps its route.
+    fn grantable(&self) -> bool {
+        true
+    }
 
     /// Its tools, as `tools/list` answers them. A tool that changes nothing
     /// is marked with `readOnlyHint`.
@@ -114,8 +127,9 @@ pub struct Caller {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
     pub id: GrantId,
-    /// The families on at launch, each at its `127.0.0.1` address and with
-    /// the session's token. Never empty: with no family on there is no grant.
+    /// The families on and grantable at launch, each at its `127.0.0.1`
+    /// address and with the session's token. Never empty: with no family to
+    /// give there is no grant.
     pub servers: Vec<AgentToolServer>,
 }
 
@@ -197,12 +211,16 @@ impl AgentToolsListener {
         Ok(())
     }
 
-    /// Mints a token for a session about to launch, binding first when it
-    /// is not bound. `None`, with no token minted and nothing bound, when no
-    /// family is on.
+    /// Mints a token for a session about to launch, for every family on and
+    /// grantable now, binding first when it is not bound. `None`, with no
+    /// token minted and nothing bound, when there is no such family.
     pub fn grant(&self) -> Result<Option<Grant>> {
         let mut socket = self.socket();
-        let on: Vec<&Arc<dyn ToolFamily>> = self.router.families_on().collect();
+        let on: Vec<&Arc<dyn ToolFamily>> = self
+            .router
+            .families_on()
+            .filter(|family| family.grantable())
+            .collect();
         if on.is_empty() {
             return Ok(None);
         }
@@ -210,7 +228,8 @@ impl AgentToolsListener {
             *socket = Some(self.bind()?);
         }
         let port = socket.as_ref().map_or(0, |bound| bound.address.port());
-        let (id, token) = self.router.tokens().mint();
+        let names = on.iter().map(|family| family.name().to_owned()).collect();
+        let (id, token) = self.router.tokens().mint(names);
         let servers = on
             .into_iter()
             .map(|family| AgentToolServer {

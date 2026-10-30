@@ -9,8 +9,10 @@
 //! route away from running sessions at once, or gives it back. Stopping the
 //! host stops the listener, revoking every token, before the sessions end.
 //!
-//! Today that is floti-sessions alone ([`SessionTools`]), on the
-//! `sessionMcp` setting.
+//! Today that is helm-browser ([`BrowserTools`]), on the `browserMcp`
+//! setting and given to a launch only while a client with a browser pane is
+//! attached, and floti-sessions ([`SessionTools`]), on the `sessionMcp`
+//! setting.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +21,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use floti_protocol::channels::workspace::HostSettings;
 use tokio::sync::broadcast::{self, error::RecvError};
 
+use super::browser_tools::BrowserTools;
+use super::features::BrowserRelay;
 use super::hosted::Hosted;
 use super::records::ExitNotice;
 use super::session_tools::{SessionTools, SessionsWorld};
@@ -28,6 +32,7 @@ use crate::session::SessionId;
 
 pub(crate) struct HostAgentTools {
     listener: AgentToolsListener,
+    browser: Arc<BrowserTools>,
     sessions: Arc<SessionTools>,
     held: Mutex<Held>,
     /// Set by the first stop: from then on nothing is granted.
@@ -48,12 +53,18 @@ struct Held {
 
 impl HostAgentTools {
     /// The listener with every family, each off until [`Self::follow`] reads
-    /// the settings. Call it inside the host's runtime.
-    pub fn new() -> Self {
+    /// the settings, the browser tools carried through `relay`. Call it
+    /// inside the host's runtime.
+    pub fn new(relay: Arc<BrowserRelay>) -> Self {
+        let browser = Arc::new(BrowserTools::new(relay));
         let sessions = Arc::new(SessionTools::new());
-        let families: Vec<Arc<dyn ToolFamily>> = vec![Arc::clone(&sessions) as Arc<dyn ToolFamily>];
+        let families: Vec<Arc<dyn ToolFamily>> = vec![
+            Arc::clone(&browser) as Arc<dyn ToolFamily>,
+            Arc::clone(&sessions) as Arc<dyn ToolFamily>,
+        ];
         Self {
             listener: AgentToolsListener::new(families),
+            browser,
             sessions,
             held: Mutex::new(Held::default()),
             stopped: AtomicBool::new(false),
@@ -69,6 +80,7 @@ impl HostAgentTools {
     /// token held, the socket is let go. Nothing binds here: the first grant
     /// binds, so a host whose sessions take no agent tools holds no port.
     pub fn follow(&self, settings: &HostSettings) {
+        self.browser.switch(settings.browser_mcp);
         self.sessions.switch(settings.session_mcp);
         if self.stopped.load(Ordering::SeqCst) || !self.listener.served_names().is_empty() {
             return;
@@ -79,8 +91,9 @@ impl HostAgentTools {
     }
 
     /// A token for a launch about to be composed, with an entry for each
-    /// family on; `None`, with nothing bound and no token minted, when every
-    /// family is off or the host is stopping.
+    /// family on that can be given now (helm-browser only while a browser
+    /// client is attached); `None`, with nothing bound and no token minted,
+    /// when there is none or the host is stopping.
     pub fn grant(&self) -> Result<Option<Grant>> {
         if self.stopped.load(Ordering::SeqCst) {
             return Ok(None);
@@ -188,16 +201,23 @@ pub(crate) async fn revoke_at_exit(
 mod tests {
     use super::*;
 
-    fn settings(session_mcp: bool) -> HostSettings {
+    /// Every family on, or every family off.
+    fn settings(on: bool) -> HostSettings {
         HostSettings {
-            session_mcp,
+            browser_mcp: on,
+            session_mcp: on,
             ..crate::workspace::settings::defaults()
         }
     }
 
+    fn tools() -> HostAgentTools {
+        let events = Arc::new(super::super::events::Events::new());
+        HostAgentTools::new(Arc::new(BrowserRelay::new(&events)))
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn s8_with_every_family_off_nothing_binds_and_no_token_is_minted() {
-        let tools = HostAgentTools::new();
+        let tools = tools();
         tools.follow(&settings(false));
         assert!(tools.grant().unwrap().is_none());
         assert_eq!(tools.listener.address(), None);
@@ -217,7 +237,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn s7_a_stopped_host_grants_nothing_and_holds_no_port() {
-        let tools = HostAgentTools::new();
+        let tools = tools();
         tools.follow(&settings(true));
         let grant = tools.grant().unwrap().unwrap();
         tools.started(grant.id, SessionId(1));
@@ -231,7 +251,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_session_that_ends_before_its_launch_returns_has_its_token_revoked_on_start() {
-        let tools = HostAgentTools::new();
+        let tools = tools();
         tools.follow(&settings(true));
         let grant = tools.grant().unwrap().unwrap();
         tools.ended(SessionId(4));

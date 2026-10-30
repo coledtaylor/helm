@@ -18,13 +18,19 @@ use floti_host::platform::process_tree::{Native as NativeTree, ProcessTree};
 use floti_host::platform::socket::Endpoint;
 use floti_host::server::HostConfig;
 use floti_host::testkit::{FakeAgent, GitRepo, PATIENCE, RunningHost, TestClient, TestDirs};
+use floti_protocol::channel::{EventChannel, from_payload, to_payload};
+use floti_protocol::channels::agent_browser::{
+    AgentBrowserAnswer, AgentBrowserCalls, AgentBrowserOutcome, AgentBrowserToolAnswer,
+    AgentBrowserToolCall,
+};
 use floti_protocol::channels::common::SessionRecord;
 use floti_protocol::channels::host::HostStopReason;
 use floti_protocol::channels::sessions::{
-    CloseSessionRequest, SessionClose, SessionStart, StartSessionRequest,
+    CloseSessionRequest, SessionClose, SessionList, SessionStart, StartSessionRequest,
 };
 use floti_protocol::channels::workspace::{HostSettingsPatch, WriteSettings};
-use floti_protocol::{BackendId, Knowable};
+use floti_protocol::message::{ErrorCode, ErrorReply};
+use floti_protocol::{BackendId, Knowable, Message};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -211,6 +217,8 @@ struct Tooled {
     url: String,
     /// Its bearer token, from the file.
     token: String,
+    /// helm-browser's URL and token, when the file names it.
+    browser: Option<(String, String)>,
 }
 
 impl Tooled {
@@ -218,16 +226,8 @@ impl Tooled {
         let document: Value =
             serde_json::from_slice(&std::fs::read(&config).expect("read the tool file"))
                 .expect("the tool file is JSON");
-        let server = &document["mcpServers"]["floti-sessions"];
-        let url = server["url"]
-            .as_str()
-            .expect("floti-sessions' URL")
-            .to_owned();
-        let token = server["headers"]["Authorization"]
-            .as_str()
-            .and_then(|value| value.strip_prefix("Bearer "))
-            .expect("a bearer token")
-            .to_owned();
+        let (url, token) = server_in(&document, "floti-sessions").expect("a floti-sessions entry");
+        let browser = server_in(&document, "helm-browser");
         Self {
             record,
             pid,
@@ -235,7 +235,45 @@ impl Tooled {
             config,
             url,
             token,
+            browser,
         }
+    }
+
+    /// The names of the servers its tool file names, sorted.
+    fn servers(&self) -> Vec<String> {
+        let document: Value =
+            serde_json::from_slice(&std::fs::read(&self.config).expect("read the tool file"))
+                .expect("the tool file is JSON");
+        let mut names: Vec<String> = document["mcpServers"]
+            .as_object()
+            .expect("a server map")
+            .keys()
+            .cloned()
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// helm-browser's URL and token.
+    fn browser(&self) -> (&str, &str) {
+        let (url, token) = self.browser.as_ref().expect("a helm-browser entry");
+        (url, token)
+    }
+
+    /// One browser tool call, made while the test answers it elsewhere.
+    fn call_browser(&self, tool: &'static str, arguments: Value) -> tokio::task::JoinHandle<Value> {
+        let (url, token) = self.browser();
+        let (url, token) = (url.to_owned(), token.to_owned());
+        tokio::spawn(async move {
+            rpc(
+                &url,
+                Some(&token),
+                "tools/call",
+                json!({ "name": tool, "arguments": arguments }),
+            )
+            .await
+            .result()
+        })
     }
 
     async fn list(&self) -> (bool, String) {
@@ -249,6 +287,18 @@ impl Tooled {
     async fn tools_list(&self) -> Reply {
         rpc(&self.url, Some(&self.token), "tools/list", json!({})).await
     }
+}
+
+/// The URL and bearer token of the server named `name` in a tool file.
+fn server_in(document: &Value, name: &str) -> Option<(String, String)> {
+    let server = document["mcpServers"].get(name)?;
+    let url = server["url"].as_str().expect("a server's URL").to_owned();
+    let token = server["headers"]["Authorization"]
+        .as_str()
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .expect("a bearer token")
+        .to_owned();
+    Some((url, token))
 }
 
 async fn start(
@@ -1260,4 +1310,380 @@ fn profile(world: &World, name: &str, root: &Path, overlay: &Path) -> u64 {
     )
     .expect("insert a profile");
     u64::try_from(db.last_insert_rowid()).unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// helm-browser: carried to the attached window with a browser pane
+// ---------------------------------------------------------------------------
+
+/// What Helm's window declares: a terminal and a browser pane.
+const BROWSER: &[&str] = &["terminal", "browser"];
+
+/// The subscription a browser client hears calls on.
+const CALLS: u64 = 40;
+
+impl World {
+    /// A client with a browser pane listening for browser tool calls: Helm's
+    /// window, as far as the host can tell.
+    async fn browser_client(&self) -> TestClient {
+        let mut client = TestClient::connect(&self.endpoint, BROWSER).await;
+        client
+            .subscribe_quietly(CALLS, AgentBrowserCalls::NAME)
+            .await;
+        // Messages are handled in order: once this is answered, the
+        // subscription is in.
+        client
+            .request::<SessionList>(&())
+            .await
+            .expect("the sessions are listed");
+        client
+    }
+
+    /// Switches helm-browser, as the settings pane does.
+    async fn browser_tools(&self, client: &mut TestClient, on: bool) {
+        client
+            .request::<WriteSettings>(&HostSettingsPatch {
+                browser_mcp: Some(on),
+                ..HostSettingsPatch::default()
+            })
+            .await
+            .expect("the settings are written");
+    }
+}
+
+/// The browser tools' table, as the desktop's listener reads it too.
+fn browser_table() -> Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("server")
+        .join("browser_tools.json");
+    serde_json::from_slice(&std::fs::read(path).expect("read the table")).expect("JSON")
+}
+
+/// The next browser tool call `client` is sent.
+async fn next_call(client: &mut TestClient) -> AgentBrowserToolCall {
+    loop {
+        match client.next(PATIENCE).await {
+            Some(Message::Event(event)) if event.subscription == CALLS => {
+                return from_payload(&event.payload).expect("a browser tool call");
+            }
+            Some(_) => {}
+            None => panic!("no browser tool call within {PATIENCE:?}"),
+        }
+    }
+}
+
+async fn answer(
+    client: &mut TestClient,
+    call_id: u64,
+    outcome: AgentBrowserOutcome,
+) -> Result<(), ErrorReply> {
+    client
+        .request::<AgentBrowserAnswer>(&AgentBrowserToolAnswer { call_id, outcome })
+        .await
+}
+
+fn done(result: &Value) -> AgentBrowserOutcome {
+    AgentBrowserOutcome::Done {
+        value: to_payload(result).expect("encode a tool result"),
+    }
+}
+
+fn says_no_browser_is_attached(result: &Value) {
+    assert_eq!(result["isError"], true, "{result}");
+    let text = result["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(text.contains("No browser is attached"), "{text}");
+    assert!(text.contains("Helm"), "{text}");
+}
+
+/// The status a request with `method`, `token` and `origin` is answered
+/// with, its body `{}`.
+async fn status_of(url: &str, method: &str, token: Option<&str>, origin: Option<&str>) -> u16 {
+    let (address, path) = split_url(url);
+    let body = "{}";
+    let mut head = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\n",
+        body.len()
+    );
+    if let Some(token) = token {
+        head.push_str(&format!("Authorization: Bearer {token}\r\n"));
+    }
+    if let Some(origin) = origin {
+        head.push_str(&format!("Origin: {origin}\r\n"));
+    }
+    head.push_str("\r\n");
+    tokio::time::timeout(PATIENCE, async {
+        let mut stream = TcpStream::connect(address).await.expect("connect");
+        stream.write_all(head.as_bytes()).await.expect("send");
+        stream.write_all(body.as_bytes()).await.expect("send");
+        let mut answer = Vec::new();
+        stream.read_to_end(&mut answer).await.expect("read");
+        parse_reply(&answer).status
+    })
+    .await
+    .expect("an answer within the patience")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s2_s3_a_session_started_with_helms_window_attached_lists_todays_browser_tools_and_that_window_answers_its_calls()
+ {
+    let world = World::new();
+    let host = world.host();
+    let mut desktop = world.browser_client().await;
+    let mut client = world.client().await;
+    let alpha = world
+        .fake_session(&mut client, &world.folder("alpha"), "alpha")
+        .await;
+
+    // Named as today, at today's route, with the session's one token on the
+    // one port.
+    assert_eq!(alpha.servers(), ["floti-sessions", "helm-browser"]);
+    let (url, token) = alpha.browser();
+    let (address, path) = split_url(url);
+    assert_eq!(path, "/mcp");
+    assert_eq!(address, split_url(&alpha.url).0);
+    assert_eq!(token, alpha.token);
+
+    // Exactly today's tools and instructions.
+    let table = browser_table();
+    let initialized = rpc(
+        url,
+        Some(token),
+        "initialize",
+        json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "claude-code", "version": "2.1.300" },
+        }),
+    )
+    .await
+    .result();
+    assert_eq!(initialized["serverInfo"]["name"], "helm-browser");
+    assert_eq!(initialized["instructions"], table["instructions"]);
+    let listed = rpc(url, Some(token), "tools/list", json!({}))
+        .await
+        .result();
+    assert_eq!(listed["tools"], table["tools"]);
+
+    // A call reaches the window, naming the session, and its answer, image
+    // included, is the agent's.
+    let calling = alpha.call_browser("browser_screenshot", json!({ "tab": 3 }));
+    let call = next_call(&mut desktop).await;
+    assert_eq!(call.session, alpha.record.id);
+    assert_eq!(call.tool, "browser_screenshot");
+    assert_eq!(
+        from_payload::<Value>(&call.arguments).unwrap(),
+        json!({ "tab": 3 })
+    );
+    let screenshot = json!({
+        "content": [
+            { "type": "text", "text": "Tab 3, https://example.com/." },
+            { "type": "image", "data": "iVBORw0KGgoAAAANSUhEUg==", "mimeType": "image/png" },
+        ],
+        "isError": false,
+    });
+    answer(&mut desktop, call.call_id, done(&screenshot))
+        .await
+        .expect("the window's answer is taken");
+    assert_eq!(calling.await.unwrap(), screenshot);
+
+    // A refusal is the agent's to read, as the window words it.
+    let calling = alpha.call_browser("browser_open", json!({ "url": "https://example.com" }));
+    let call = next_call(&mut desktop).await;
+    let sentence = "That page is outside what this session may reach.";
+    answer(
+        &mut desktop,
+        call.call_id,
+        AgentBrowserOutcome::Failed {
+            message: sentence.to_owned(),
+        },
+    )
+    .await
+    .expect("the window's answer is taken");
+    let result = calling.await.unwrap();
+    assert_eq!(result["isError"], true, "{result}");
+    assert_eq!(result["content"][0]["text"], sentence);
+
+    close(&mut client, &alpha.record).await;
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s9_a_session_started_with_no_browser_attached_has_no_helm_browser_entry_route_or_tool() {
+    let world = World::new();
+    let host = world.host();
+    // A terminal client, as a script or another device starts sessions.
+    let mut client = world.client().await;
+    let alpha = world
+        .fake_session(&mut client, &world.folder("alpha"), "alpha")
+        .await;
+    assert_eq!(alpha.servers(), ["floti-sessions"]);
+    let (address, _) = split_url(&alpha.url);
+    let route = format!("http://{address}/mcp");
+    let reply = rpc(&route, Some(&alpha.token), "tools/list", json!({})).await;
+    assert_eq!(reply.status, 404, "{reply:?}");
+    let reply = rpc(
+        &route,
+        Some(&alpha.token),
+        "tools/call",
+        json!({ "name": "browser_tabs", "arguments": {} }),
+    )
+    .await;
+    assert_eq!(reply.status, 404, "{reply:?}");
+    let listed = alpha.tools_list().await.result();
+    for tool in listed["tools"].as_array().unwrap() {
+        let name = tool["name"].as_str().unwrap();
+        assert!(!name.starts_with("browser_"), "{name}");
+    }
+
+    // A window attaching later gives later launches the browser tools, never
+    // this one.
+    let _desktop = world.browser_client().await;
+    let reply = rpc(&route, Some(&alpha.token), "tools/list", json!({})).await;
+    assert_eq!(reply.status, 404, "{reply:?}");
+    let beta = world
+        .fake_session(&mut client, &world.folder("beta"), "beta")
+        .await;
+    assert_eq!(beta.servers(), ["floti-sessions", "helm-browser"]);
+    let (url, token) = beta.browser();
+    assert_eq!(
+        rpc(url, Some(token), "tools/list", json!({})).await.status,
+        200
+    );
+
+    close(&mut client, &alpha.record).await;
+    close(&mut client, &beta.record).await;
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s10_s11_s12_when_helms_window_detaches_browser_calls_fail_at_once_and_a_window_attached_again_takes_the_next()
+ {
+    let world = World::new();
+    let host = world.host();
+    let mut desktop = world.browser_client().await;
+    let mut client = world.client().await;
+    let alpha = world
+        .fake_session(&mut client, &world.folder("alpha"), "alpha")
+        .await;
+
+    // In flight when the window goes: it fails at once, saying why.
+    let waiting = alpha.call_browser(
+        "browser_wait_for",
+        json!({ "text": "Ready", "timeout": 60 }),
+    );
+    let call = next_call(&mut desktop).await;
+    assert_eq!(call.tool, "browser_wait_for");
+    drop(desktop);
+    says_no_browser_is_attached(&waiting.await.unwrap());
+
+    // Made after it went: the same sentence, and the session's other tools
+    // keep answering.
+    says_no_browser_is_attached(&alpha.call_browser("browser_tabs", json!({})).await.unwrap());
+    let (failed, listing) = alpha.list().await;
+    assert!(!failed, "{listing}");
+
+    // A window attached again carries out the session's next call.
+    let mut again = world.browser_client().await;
+    let calling = alpha.call_browser("browser_tabs", json!({}));
+    let call = next_call(&mut again).await;
+    assert_eq!(call.session, alpha.record.id);
+    assert_eq!(call.tool, "browser_tabs");
+    let tabs = json!({
+        "content": [{ "type": "text", "text": "No tabs are open." }],
+        "isError": false,
+    });
+    answer(&mut again, call.call_id, done(&tabs))
+        .await
+        .expect("the window's answer is taken");
+    assert_eq!(calling.await.unwrap(), tabs);
+
+    close(&mut client, &alpha.record).await;
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn s13_the_browser_tools_route_refuses_as_helms_listener_does_and_only_the_window_a_call_went_to_answers_it()
+ {
+    let world = World::new();
+    let host = world.host();
+    let mut desktop = world.browser_client().await;
+    let mut second = world.browser_client().await;
+    let mut client = world.client().await;
+    let alpha = world
+        .fake_session(&mut client, &world.folder("alpha"), "alpha")
+        .await;
+    let (url, token) = alpha.browser();
+
+    // No token, a token that is not the session's, a web page's Origin, a
+    // method other than POST.
+    assert_eq!(status_of(url, "POST", None, None).await, 401);
+    assert_eq!(
+        status_of(url, "POST", Some(&"0".repeat(64)), None).await,
+        401
+    );
+    assert_eq!(
+        status_of(url, "POST", Some(&format!("{token}0")), None).await,
+        401
+    );
+    assert_eq!(
+        status_of(url, "POST", Some(token), Some("https://example.com")).await,
+        403
+    );
+    assert_eq!(status_of(url, "GET", Some(token), None).await, 405);
+    assert_eq!(status_of(url, "DELETE", Some(token), None).await, 405);
+
+    // A call goes to the window attached first, and only that window answers
+    // it: another window and a client without a browser are refused.
+    let calling = alpha.call_browser("browser_tabs", json!({}));
+    let call = next_call(&mut desktop).await;
+    let forged = json!({
+        "content": [{ "type": "text", "text": "forged" }],
+        "isError": false,
+    });
+    let refused = answer(&mut second, call.call_id, done(&forged))
+        .await
+        .expect_err("another window cannot answer it");
+    assert!(
+        refused.message.contains("sent to another client"),
+        "{refused:?}"
+    );
+    let refused = answer(&mut client, call.call_id, done(&forged))
+        .await
+        .expect_err("a client without a browser cannot answer it");
+    assert_eq!(refused.code, ErrorCode::MissingCapability, "{refused:?}");
+    let tabs = json!({
+        "content": [{ "type": "text", "text": "Tab 1 is yours." }],
+        "isError": false,
+    });
+    answer(&mut desktop, call.call_id, done(&tabs))
+        .await
+        .expect("the window's answer is taken");
+    assert_eq!(calling.await.unwrap(), tabs);
+
+    // Switched off in the host's settings: 404 at once, and a launch now has
+    // no helm-browser entry. Switched on, the running session's route answers
+    // again.
+    world.browser_tools(&mut client, false).await;
+    assert_eq!(status_of(url, "POST", Some(token), None).await, 404);
+    let beta = world
+        .fake_session(&mut client, &world.folder("beta"), "beta")
+        .await;
+    assert_eq!(beta.servers(), ["floti-sessions"]);
+    world.browser_tools(&mut client, true).await;
+    assert_eq!(
+        rpc(url, Some(token), "tools/list", json!({})).await.status,
+        200
+    );
+
+    // After the session ended: 401.
+    close(&mut client, &alpha.record).await;
+    eventually("alpha's browser token is refused", async || {
+        (status_of(url, "POST", Some(token), None).await == 401).then_some(())
+    })
+    .await;
+
+    close(&mut client, &beta.record).await;
+    host.stop(HostStopReason::Stop).await;
 }

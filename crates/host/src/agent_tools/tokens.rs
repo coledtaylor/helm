@@ -1,4 +1,7 @@
-//! The tokens a listener has minted, and which session holds each.
+//! The tokens a listener has minted, which session holds each, and which
+//! families each was granted.
+
+use std::sync::Arc;
 
 use subtle::ConstantTimeEq;
 
@@ -22,11 +25,25 @@ struct Held {
     token: String,
     grant: GrantId,
     session: Option<SessionId>,
+    families: Arc<[String]>,
+}
+
+/// Who a live token is, and the families its launch was given.
+pub(super) struct Holder {
+    pub caller: Caller,
+    families: Arc<[String]>,
+}
+
+impl Holder {
+    /// Whether its launch was given the family named `name`.
+    pub fn holds(&self, name: &str) -> bool {
+        self.families.iter().any(|family| family == name)
+    }
 }
 
 impl Tokens {
-    /// A new token, of 32 bytes from the OS.
-    pub(super) fn mint(&mut self) -> (GrantId, String) {
+    /// A new token, of 32 bytes from the OS, for a launch given `families`.
+    pub(super) fn mint(&mut self, families: Vec<String>) -> (GrantId, String) {
         let mut bytes = [0u8; TOKEN_BYTES];
         fill_random(&mut bytes);
         let token = hex(&bytes);
@@ -36,6 +53,7 @@ impl Tokens {
             token: token.clone(),
             grant,
             session: None,
+            families: families.into(),
         });
         (grant, token)
     }
@@ -58,20 +76,23 @@ impl Tokens {
         self.held.is_empty()
     }
 
-    /// Who an `Authorization` header's value is, when it is exactly
-    /// `Bearer <a live token>`.
+    /// Who an `Authorization` header's value is, and what it was granted,
+    /// when it is exactly `Bearer <a live token>`.
     ///
     /// Every live token is compared, in constant time and without stopping at
     /// a match, so how long the answer takes says nothing about how much of a
     /// guess was right or which token it was.
-    pub(super) fn resolve(&self, authorization: &[u8]) -> Option<Caller> {
+    pub(super) fn resolve(&self, authorization: &[u8]) -> Option<Holder> {
         let offered = bearer(authorization)?;
         let mut found = None;
         for held in &self.held {
             if bool::from(held.token.as_bytes().ct_eq(offered)) {
-                found = Some(Caller {
-                    grant: held.grant,
-                    session: held.session,
+                found = Some(Holder {
+                    caller: Caller {
+                        grant: held.grant,
+                        session: held.session,
+                    },
+                    families: Arc::clone(&held.families),
                 });
             }
         }

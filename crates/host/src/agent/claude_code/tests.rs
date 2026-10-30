@@ -483,7 +483,7 @@ fn the_prompt_arrives_as_the_prompt_after_every_variadic_list() {
         composition: Composition {
             extra_folders: vec![access.clone()],
             overlays: vec![overlay],
-            agent_tools: vec![server("floti-browser", "token-1")],
+            agent_tools: vec![server("helm-browser", "token-1")],
             ..Composition::default()
         },
     });
@@ -500,7 +500,7 @@ fn the_prompt_arrives_as_the_prompt_after_every_variadic_list() {
             .unwrap()
             .keys()
             .collect::<Vec<_>>(),
-        ["floti-browser"]
+        ["helm-browser"]
     );
 }
 
@@ -625,7 +625,7 @@ fn a_conversation_resumes_in_the_folder_its_transcript_recorded() {
         conversation_id: id.into(),
         folder: folder.clone(),
         composition: Composition {
-            agent_tools: vec![server("floti-browser", "resume-token")],
+            agent_tools: vec![server("helm-browser", "resume-token")],
             permission_mode: Some(PermissionMode::Plan),
             ..Composition::default()
         },
@@ -650,7 +650,7 @@ fn a_conversation_resumes_in_the_folder_its_transcript_recorded() {
     succeeded(&output);
     assert_eq!(log["resumed"], true);
     assert_eq!(log["sessionId"], id);
-    assert!(log["mcpServers"]["floti-browser"].is_object());
+    assert!(log["mcpServers"]["helm-browser"].is_object());
 
     // The CLI finds no conversation anywhere else, which is why the folder
     // matters.
@@ -861,7 +861,7 @@ fn agent_tools_are_one_file_per_launch_with_the_sessions_token_and_never_on_a_co
         name: "tools".into(),
         composition: Composition {
             agent_tools: vec![
-                server("floti-browser", "secret-token-123"),
+                server("helm-browser", "secret-token-123"),
                 server("floti-sessions", "secret-token-123"),
             ],
             ..Composition::default()
@@ -879,7 +879,7 @@ fn agent_tools_are_one_file_per_launch_with_the_sessions_token_and_never_on_a_co
     assert_eq!(args.iter().filter(|arg| *arg == "--mcp-config").count(), 1);
 
     let document: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    for name in ["floti-browser", "floti-sessions"] {
+    for name in ["helm-browser", "floti-sessions"] {
         assert_eq!(
             document["mcpServers"][name],
             json!({
@@ -949,7 +949,7 @@ fn a_leftover_launch_folder_with_its_tool_file_goes_only_when_its_owner_is_prova
         folder: world.folder("work"),
         name: "left over".into(),
         composition: Composition {
-            agent_tools: vec![server("floti-browser", "t")],
+            agent_tools: vec![server("helm-browser", "t")],
             ..Composition::default()
         },
         ..LaunchRequest::default()

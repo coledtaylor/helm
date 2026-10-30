@@ -240,6 +240,17 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
   session id.
 - These tools are awareness only. Nothing sends a session anything, waits on
   one or hands one work.
+- The Floti host serves its own sessions' agent tools on its own listener
+  (`crates/host/src/agent_tools`), with the same rules. Its `helm-browser`
+  is today's family: name, route, instructions and tools come from
+  `crates/host/src/server/browser_tools.json`, the one table both listeners
+  read. The host has no browser, so each call goes over `agentBrowser:call`
+  to the attached client that declared `browser`, naming the caller's
+  session, and that client's answer is the tool's. A launch is given
+  `helm-browser` only while such a client is attached, and each token
+  reaches only the families its launch was given (404 otherwise). A call
+  made with none attached, or waiting on a client that leaves, fails at once
+  saying no browser is attached. Nothing there waits on a timer.
 
 ## Plugins
 

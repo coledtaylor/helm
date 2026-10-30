@@ -316,7 +316,7 @@ pub struct Composition {
 /// bearer token for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentToolServer {
-    /// Its name as the agent lists it, such as `floti-browser`.
+    /// Its name as the agent lists it, such as `helm-browser`.
     pub name: String,
     pub url: String,
     pub token: String,

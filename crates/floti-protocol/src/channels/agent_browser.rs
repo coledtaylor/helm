@@ -90,8 +90,9 @@ impl AgentBrowserOutcome {
     /// The answer to a call made while no client with a browser is attached.
     pub fn no_browser_client() -> Self {
         Self::Failed {
-            message: "No client with a browser is attached to this Floti host, so there is no \
-                      browser to drive. Open Floti on a device with a browser pane and try again."
+            message: "No browser is attached: Helm's window is not connected to the host this \
+                      session runs in, so there is no browser pane to drive. Open Helm, then try \
+                      again."
                 .into(),
         }
     }

@@ -18,7 +18,10 @@
 //! - [`content`]: notes and documents, and the renderer.
 //! - [`files`]: the Files view.
 //! - [`plugins`]: registered plugin folders and `plugins:changed`.
+//! - [`agent_browser`]: the agent browser tools' calls, carried to a client
+//!   with a browser pane, and its answers.
 
+mod agent_browser;
 mod config;
 mod content;
 mod discovery;
@@ -34,8 +37,8 @@ mod workspace;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use floti_protocol::Payload;
 use floti_protocol::channel::{Router, StreamChannel, from_payload};
+use floti_protocol::{ClientChannels, Payload};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::HostRun;
@@ -43,6 +46,7 @@ use super::events::Events;
 use super::hosted::Hosted;
 use crate::platform::folders::Folders;
 use crate::session::{ClientId, Session, SessionOutput};
+pub(crate) use agent_browser::BrowserRelay;
 pub use resources::ResourcesHandle;
 pub(crate) use sessions::ActivityHandle;
 pub(crate) use workspace::WorkspaceContext;
@@ -65,6 +69,12 @@ pub(crate) trait Feature: Send + Sync {
     /// Registers each terminal stream it serves.
     fn streams<'a>(&'a self, streams: &mut Streams<'a>) {
         let _ = streams;
+    }
+
+    /// `client` subscribed or unsubscribed: `channels` are its
+    /// subscriptions now.
+    fn subscriptions_changed(&self, client: ClientId, channels: &ClientChannels<'_>) {
+        let _ = (client, channels);
     }
 
     /// `client`'s connection has ended: whatever the feature holds for it
@@ -136,6 +146,7 @@ pub(crate) struct Features {
     resources: ResourcesHandle,
     activity: ActivityHandle,
     settings: Arc<SettingsService>,
+    browser: Arc<BrowserRelay>,
 }
 
 impl Features {
@@ -156,6 +167,7 @@ impl Features {
         let handle = resources.handle();
         let sessions = sessions::Sessions::new(&context)?;
         let activity = sessions.activity();
+        let browser = Arc::new(BrowserRelay::new(&context.events));
         let features: Vec<Box<dyn Feature>> = vec![
             Box::new(sessions),
             Box::new(history::History::new(&context)?),
@@ -168,6 +180,7 @@ impl Features {
             Box::new(content::Content::new(&context)?),
             Box::new(files::Files::new(&context)?),
             Box::new(plugins::Plugins::new(&context)?),
+            Box::new(Arc::clone(&browser)),
         ];
         Ok(Self {
             features,
@@ -175,6 +188,7 @@ impl Features {
             resources: handle,
             activity,
             settings: Arc::clone(&context.workspace.settings),
+            browser,
         })
     }
 
@@ -192,6 +206,12 @@ impl Features {
         &self.settings
     }
 
+    /// The agent browser tools' relay, for the family that carries calls on
+    /// it.
+    pub fn browser(&self) -> &Arc<BrowserRelay> {
+        &self.browser
+    }
+
     /// The processes-and-ports pass, for what inside the host asks for it.
     pub fn resources(&self) -> &ResourcesHandle {
         &self.resources
@@ -201,6 +221,13 @@ impl Features {
     pub fn requests<'a>(&'a self, client: ClientId, router: &mut Router<'a>) {
         for feature in &self.features {
             feature.requests(client, router);
+        }
+    }
+
+    /// Tells every feature `client`'s subscriptions are now `channels`.
+    pub fn subscriptions_changed(&self, client: ClientId, channels: &ClientChannels<'_>) {
+        for feature in &self.features {
+            feature.subscriptions_changed(client, channels);
         }
     }
 

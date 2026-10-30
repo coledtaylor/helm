@@ -10,9 +10,9 @@
 //!    a path that does not exist is answered exactly as one that does, and
 //!    the body is never read: like every refusal before step 5, it is only
 //!    thrown away, unparsed, once the answer is decided.
-//! 3. **Route** (404): a path no family serves, or a switched-off family's.
-//!    After the token, so a switched-off family is a clean 404 to a session
-//!    that holds one.
+//! 3. **Route** (404): a path no family serves, a switched-off family's, or
+//!    a family the token's launch was not given. After the token, so each is
+//!    a clean 404 to a session that holds one.
 //! 4. **Method** (405, `Allow: POST`): nothing here pushes to a session, so
 //!    there is no SSE stream to GET.
 //! 5. **Body size** (413), read at most once and only now.
@@ -141,7 +141,7 @@ impl Router {
             )));
         }
 
-        let Some(caller) =
+        let Some(holder) =
             authorization(&parts.headers).and_then(|value| self.tokens().resolve(value.as_bytes()))
         else {
             let mut answer = refusal(
@@ -155,11 +155,9 @@ impl Router {
         };
 
         let path = parts.uri.path();
-        let Some(family) = self
-            .families
-            .iter()
-            .find(|family| family.def.route() == path && family.def.is_on())
-        else {
+        let Some(family) = self.families.iter().find(|family| {
+            family.def.route() == path && family.def.is_on() && holder.holds(family.def.name())
+        }) else {
             return Err(Box::new(refusal(StatusCode::NOT_FOUND, "Not found.")));
         };
 
@@ -174,7 +172,7 @@ impl Router {
             return Err(Box::new(answer));
         }
 
-        Ok((family, caller))
+        Ok((family, holder.caller))
     }
 }
 

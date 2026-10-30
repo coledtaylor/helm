@@ -166,7 +166,13 @@ and token out of the `--mcp-config` file it was launched with, and calls the
 listener over HTTP as a session would: registration and the launch folder,
 revocation at exit and at stop, the settings switch, the sweep at start, and
 what `sessions_list` and `session_detail` answer, with nothing of another
-session's conversation in any answer.
+session's conversation in any answer. Its helm-browser tests attach a
+`TestClient` that declares `browser` and listens on `agentBrowser:call`, in
+place of Helm's window, and answer each call it is sent: the tool table a
+session lists, a call carried to that client and its answer handed back, no
+family for a launch with no browser attached, a call failing at once when
+the client leaves, and the refusals on the route. The relay itself
+(`src/server/features/agent_browser.rs`) has unit tests with no listener.
 
 `crates/host/tests/os_conditionals.rs` fails, naming each `file:line`, when a
 compile-time OS conditional (`cfg(windows)`, `cfg!(unix)`, `target_os` and
