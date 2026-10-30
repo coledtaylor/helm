@@ -135,6 +135,27 @@ describe('ConfigEditor: a hook', () => {
   })
 })
 
+describe('ConfigEditor: a credential file', () => {
+  it('says what .credentials.json is and offers nothing to read or edit', async () => {
+    const settings = fixture.file('.claude/settings.json')
+    const credentials: ConfigFile = {
+      ...settings,
+      path: settings.path.replace('settings.json', '.credentials.json'),
+      relPath: '.credentials.json',
+      kind: 'other',
+      name: '.credentials.json'
+    }
+    const props = await editorProps('.claude/settings.json', { file: credentials, loaded: null, rendered: null })
+    const { container } = render(<ConfigEditor {...props} />)
+
+    const pane = container.querySelector('[data-config-opaque]') as HTMLElement
+    expect(pane.textContent).toContain('OAuth tokens, written by `claude` at sign-in. Helm never opens this file.')
+    expect(screen.queryByText('Reading…')).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Mode' })).toBeNull()
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+})
+
 describe('ConfigEditor: a skill', () => {
   it('opens rendered, with its frontmatter as chips and no textarea; Edit shows the source', async () => {
     render(<ConfigEditor {...(await editorProps('.claude/skills/think/SKILL.md'))} />)

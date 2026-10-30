@@ -204,7 +204,7 @@ fn scopes_are_the_user_scope_then_each_profile_folder_once() {
 }
 
 #[test]
-fn a_scope_tree_lists_its_config_files_and_never_a_credential_file() {
+fn a_scope_tree_lists_its_config_files_and_a_credential_file_by_name_only() {
     let world = World::new();
     world.put(&world.claude.join("CLAUDE.md"), "# me\n");
     world.put(&world.claude.join("settings.json"), "{}\n");
@@ -233,8 +233,15 @@ fn a_scope_tree_lists_its_config_files_and_never_a_credential_file() {
     assert!(rel.contains(&"CLAUDE.md"), "{rel:?}");
     assert!(rel.contains(&"settings.json"), "{rel:?}");
     assert!(rel.contains(&"skills/review/SKILL.md"), "{rel:?}");
+    // Listed so the console can say what it is, from its directory entry.
+    let credential = user
+        .files
+        .iter()
+        .find(|file| file.rel_path == ".credentials.json")
+        .unwrap_or_else(|| panic!("{rel:?}"));
+    assert_eq!(credential.kind, ConfigFileKind::Other);
+    assert_eq!(credential.description, None);
     for file in &user.files {
-        assert!(!file.rel_path.contains("credentials"), "{rel:?}");
         assert!(!file.rel_path.ends_with(".key"), "{rel:?}");
     }
     let skill = user
@@ -289,6 +296,61 @@ fn a_file_is_read_with_its_hash_and_a_credential_file_is_never_opened() {
         .unwrap();
     assert!(!missing.exists);
     assert_eq!(missing.content, "");
+}
+
+#[test]
+fn a_credential_file_the_tree_lists_is_never_opened_by_a_watch_or_a_change() {
+    const SECRET: &str = "{\"secret\":true}";
+    let world = World::new();
+    let notes = world.claude.join("CLAUDE.md");
+    world.put(&notes, "# me\n");
+    let credential = world.claude.join(".credentials.json");
+    world.put(&credential, SECRET);
+    let version = world
+        .write(
+            &world.claude,
+            &notes,
+            "# me, again\n",
+            Some(hash_content("# me\n")),
+        )
+        .snapshot_id
+        .unwrap();
+    let snapshots_before = world.snapshot_count();
+    let scope = World::scope(&world.claude);
+    let path = credential.display().to_string();
+
+    let watch = world.console.watch(ClientId(1), Some(&path));
+    let write = world.console.write(&WriteConfigRequest {
+        scope_path: scope.clone(),
+        path: path.clone(),
+        content: "{}".to_owned(),
+        expected_hash: None,
+        reason: ConfigWriteReason::Edit,
+    });
+    let restore = world.console.restore(version, &path);
+    let rename = world.console.rename(&RenameConfigRequest {
+        scope_path: scope.clone(),
+        path: path.clone(),
+        name: "elsewhere".to_owned(),
+    });
+    let delete = world.console.delete(&DeleteConfigRequest {
+        scope_path: scope,
+        path,
+    });
+
+    for (what, outcome) in [
+        ("watch", watch.map(|_| ())),
+        ("write", write.map(|_| ())),
+        ("restore", restore.map(|_| ())),
+        ("rename", rename.map(|_| ())),
+        ("delete", delete.map(|_| ())),
+    ] {
+        let sentence = outcome.expect_err(what);
+        assert!(sentence.contains("credential"), "{what}: {sentence}");
+    }
+    assert_eq!(World::text(&credential), SECRET);
+    // Nothing was snapshotted, so nothing read its bytes into floti.db.
+    assert_eq!(world.snapshot_count(), snapshots_before);
 }
 
 #[test]
@@ -1398,7 +1460,8 @@ mod over_the_protocol {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_client_reads_scopes_trees_files_and_the_effective_view_and_never_a_credential() {
+    async fn a_client_reads_scopes_trees_files_and_the_effective_view_and_never_a_credentials_bytes()
+     {
         let served = Served::start();
         served.add_profile("Work", &served.project, &[&served.other]);
         put(&served.claude.join("CLAUDE.md"), "# me\n");
@@ -1445,8 +1508,10 @@ mod over_the_protocol {
         let rel: Vec<&str> = user.files.iter().map(|f| f.rel_path.as_str()).collect();
         assert!(rel.contains(&"CLAUDE.md"), "{rel:?}");
         assert!(rel.contains(&"settings.json"), "{rel:?}");
+        // The credentials file is a row by name, for the console to say what
+        // it is; the reads below show its bytes are refused.
+        assert!(rel.contains(&".credentials.json"), "{rel:?}");
         for listed in &user.files {
-            assert!(!listed.rel_path.contains("credentials"), "{rel:?}");
             assert!(!listed.rel_path.ends_with(".key"), "{rel:?}");
         }
         let project = client

@@ -12,6 +12,8 @@ import { expect, test as base } from './helm'
  */
 const ORIGINAL = '# Alpha\r\n\r\nThe original instructions, café included.  \r\n'
 const EDITED = '# Alpha\n\nRewritten from the config console.\n'
+const CREDENTIALS_MARKER = 'MARKER-credential-e2e'
+const CREDENTIALS = `{"claudeAiOauth":{"accessToken":"${CREDENTIALS_MARKER}"}}`
 
 const test = base.extend({
   world: async ({ world }, use) => {
@@ -37,6 +39,24 @@ async function chooseScope(window: Page, name: string): Promise<void> {
   await expect(scope).not.toHaveValue('')
   if ((await scope.inputValue()) !== value) await scope.selectOption(value!)
   await expect(scope).toHaveValue(value!)
+}
+
+/**
+ * The user's `.credentials.json`, selected: the console names it, says Helm
+ * never opens it, and offers no mode to read or edit it in.
+ */
+async function selectCredentials(window: Page, world: World): Promise<void> {
+  const file = join(world.claudeDir, '.credentials.json')
+  writeFileSync(file, CREDENTIALS)
+
+  await window.getByRole('button', { name: 'Config', exact: true }).click()
+  await chooseScope(window, 'User')
+  await window.getByRole('group', { name: 'Configuration files' }).getByRole('button', { name: /\.credentials\.json/ }).click()
+
+  await expect(window.getByText('Helm never opens this file.', { exact: false })).toBeVisible()
+  await expect(window.getByRole('group', { name: 'Mode' })).toHaveCount(0)
+  await expect(window.getByText(CREDENTIALS_MARKER, { exact: false })).toHaveCount(0)
+  expect(readFileSync(file, 'utf8')).toBe(CREDENTIALS)
 }
 
 async function editSaveAndRestore(window: Page, world: World): Promise<void> {
@@ -69,4 +89,18 @@ inHost('a CLAUDE.md edited and saved in the config console through the local hos
   helm
 }) => {
   await editSaveAndRestore(helm.window, world)
+})
+
+test('the user’s .credentials.json, selected in the config console, says what it is and shows none of it', async ({
+  world,
+  helm
+}) => {
+  await selectCredentials(helm.window, world)
+})
+
+inHost('the user’s .credentials.json, selected in the config console through the local host, says what it is and shows none of it', async ({
+  world,
+  helm
+}) => {
+  await selectCredentials(helm.window, world)
 })

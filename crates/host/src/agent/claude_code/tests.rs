@@ -1540,10 +1540,15 @@ fn no_answer_carries_a_credential_and_every_credential_path_is_named() {
         .read_config_files(Some(&project))
         .known()
         .unwrap();
+    // The credentials file is a row the console can name, from its directory
+    // entry alone; the session keys sit in working storage and are not listed.
+    let credential = files
+        .iter()
+        .find(|file| file.path.ends_with(".credentials.json"))
+        .expect("the credentials file is listed");
+    assert_eq!(credential.description, None);
     assert!(
-        files
-            .iter()
-            .all(|file| !file.path.ends_with(".credentials.json") && !file.path.ends_with(".key")),
+        files.iter().all(|file| !file.path.ends_with(".key")),
         "{files:?}"
     );
     let named = world.backend.credential_paths();
@@ -2139,7 +2144,7 @@ fn usage_that_cannot_be_read_is_no_number_never_zero() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn config_files_are_the_ones_the_console_lists_with_its_summaries_and_never_a_credential() {
+fn config_files_are_the_ones_the_console_lists_with_its_summaries_and_a_credential_unopened() {
     let world = World::new();
     let user = &world.config;
     write(&user.join("CLAUDE.md"), "# me");
@@ -2160,7 +2165,13 @@ fn config_files_are_the_ones_the_console_lists_with_its_summaries_and_never_a_cr
         &user.join("workflows").join("ship.js"),
         "export const meta = { name: 'release', description: 'Ship it' }\n",
     );
-    write(&user.join(".credentials.json"), "{}");
+    write(
+        &user.join(".credentials.json"),
+        "---
+description: MARKER-credential
+---
+",
+    );
     write(&user.join("sessions").join("1.json"), "{}");
     write(&user.join("sessions").join("1.abc.key"), "secret");
     write(&user.join("projects").join("p").join("x.jsonl"), "{}");
@@ -2187,12 +2198,13 @@ fn config_files_are_the_ones_the_console_lists_with_its_summaries_and_never_a_cr
             (ConfigFileKind::Command, "spec:plan", Some("Plan a spec")),
             (ConfigFileKind::Agent, "reviewer", Some("Reviews")),
             (ConfigFileKind::Workflow, "release", Some("Ship it")),
+            (ConfigFileKind::Other, ".credentials.json", None),
             (ConfigFileKind::ClaudeMd, "CLAUDE.md", None),
             (ConfigFileKind::SettingsLocal, "settings.local.json", None),
             (ConfigFileKind::Mcp, ".mcp.json", None),
         ]
     );
-    assert!(files.iter().all(|file| !file.path.contains(".credentials")));
+    assert!(files.iter().all(|file| !file.path.ends_with(".key")));
 }
 
 // ---------------------------------------------------------------------------

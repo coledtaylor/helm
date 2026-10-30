@@ -1,5 +1,5 @@
 //! Config scopes and their trees, read through the backend's
-//! [`ConfigSource`], which lists no credential file.
+//! [`ConfigSource`], which lists a credential file without opening it.
 
 use std::path::{Path, PathBuf};
 

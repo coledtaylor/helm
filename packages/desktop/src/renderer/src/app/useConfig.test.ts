@@ -219,6 +219,27 @@ describe('useConfig: could not look', () => {
   })
 })
 
+describe('useConfig: a credential file', () => {
+  const CREDENTIALS = file('.credentials.json', 'other', '.credentials.json')
+
+  it('selects .credentials.json without asking for its bytes, a watch or its versions', async () => {
+    const { result } = await openOnApp(() => [SKILL, CREDENTIALS])
+    act(() => result.current.select(SKILL))
+    await waitFor(() => expect(result.current.loaded?.path).toBe(SKILL.path))
+    const reads = bridge.invoked('config:read').length
+    const listings = bridge.invoked('config:snapshots').length
+
+    act(() => result.current.select(CREDENTIALS))
+    await waitFor(() => expect(bridge.invoked('config:watch').at(-1)).toEqual({ path: null }))
+    expect(result.current.selected).toBe(CREDENTIALS)
+    expect(result.current.loaded).toBeNull()
+    expect(bridge.invoked('config:read')).toHaveLength(reads)
+    expect(bridge.invoked('config:snapshots')).toHaveLength(listings)
+    expect(bridge.invoked('config:watch')).not.toContainEqual({ path: CREDENTIALS.path })
+    expect(bridge.invoked('config:read')).not.toContainEqual({ path: CREDENTIALS.path })
+  })
+})
+
 describe('useConfig: the scope list and live state', () => {
   it('asks for the scopes again on Refresh, so a new one appears in the switcher', async () => {
     let scopes = [USER, APP]

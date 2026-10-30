@@ -4,9 +4,10 @@
 //! `SKILL.md` and the name is the folder; a command's namespace is its path
 //! (`commands/spec/plan.md` is `/spec:plan`); a workflow is named by the
 //! `meta.name` its script declares. Linked folders are not followed, the
-//! folders the CLI keeps as working storage are skipped, and no credential
-//! file is ever listed. Reads only, and only the head of a file that can
-//! carry a description.
+//! folders the CLI keeps as working storage are skipped, and a credential
+//! file is listed from its directory entry alone, never opened, so the
+//! console can say what it is. Reads only, and only the head of a file that
+//! can carry a description.
 
 use std::cmp::Ordering;
 use std::path::{Component, Path, PathBuf};
@@ -100,38 +101,59 @@ const ORDER: &[ConfigFileKind] = &[
 /// workflow's `meta` are at the top by definition.
 const HEAD_BYTES: usize = 4096;
 
-/// The user's config files, then `project`'s, never one of `credentials`.
+/// The user's config files, then `project`'s.
+///
+/// One of `credentials` is listed as a row from its directory entry (its
+/// name, size and time) and never opened, not even for a description: the
+/// console names the file and says why it shows nothing of it, and the
+/// sign-in rule is that a credential's existence is all anything looks at.
 pub(super) fn config_files(
     config_dir: &Path,
     project: Option<&Path>,
     credentials: &[PathBuf],
 ) -> Result<Vec<ConfigFile>> {
-    let is_credential = |path: &Path| {
-        credentials
-            .iter()
-            .any(|credential| same_path(credential, path))
-    };
-    let mut files = scope_files(config_dir, config_dir, false)?;
+    let mut files = scope_files(config_dir, config_dir, false, credentials)?;
     if let Some(project) = project {
-        files.extend(scope_files(project, &project.join(".claude"), true)?);
+        files.extend(scope_files(
+            project,
+            &project.join(".claude"),
+            true,
+            credentials,
+        )?);
     }
-    files.retain(|file| !is_credential(Path::new(&file.path)));
     Ok(files)
 }
 
-/// Whether two paths name the same file, ignoring case on every OS: a
-/// credential is left out of a listing whenever it might be the same file,
-/// and leaving out a look-alike costs nothing.
-fn same_path(a: &Path, b: &Path) -> bool {
-    a.as_os_str().eq_ignore_ascii_case(b.as_os_str())
+/// Whether `path` might be one of `credentials`, ignoring case on every OS:
+/// a look-alike left unopened costs nothing.
+fn is_credential(credentials: &[PathBuf], path: &Path) -> bool {
+    credentials.iter().any(|credential| {
+        credential
+            .as_os_str()
+            .eq_ignore_ascii_case(path.as_os_str())
+    })
 }
 
 /// One scope's files, sorted by kind and then name. `loose` adds the
 /// `CLAUDE.md` and `.mcp.json` beside a project's `.claude`.
-fn scope_files(base: &Path, claude_dir: &Path, loose: bool) -> Result<Vec<ConfigFile>> {
+fn scope_files(
+    base: &Path,
+    claude_dir: &Path,
+    loose: bool,
+    credentials: &[PathBuf],
+) -> Result<Vec<ConfigFile>> {
     let mut files = Vec::new();
     match std::fs::read_dir(claude_dir) {
-        Ok(_) => walk(base, claude_dir, claude_dir, 0, &mut files),
+        Ok(_) => walk(
+            &Tree {
+                base,
+                claude_dir,
+                credentials,
+            },
+            claude_dir,
+            0,
+            &mut files,
+        ),
         // A project with no `.claude` is the normal case.
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(source) => return Err(Error::path("list", claude_dir, source)),
@@ -177,7 +199,14 @@ fn compare_names(a: &str, b: &str) -> Ordering {
         .then_with(|| a.cmp(b))
 }
 
-fn walk(base: &Path, claude_dir: &Path, dir: &Path, depth: usize, files: &mut Vec<ConfigFile>) {
+/// What a walk of one config folder holds fixed as it descends.
+struct Tree<'a> {
+    base: &'a Path,
+    claude_dir: &'a Path,
+    credentials: &'a [PathBuf],
+}
+
+fn walk(tree: &Tree<'_>, dir: &Path, depth: usize, files: &mut Vec<ConfigFile>) {
     if depth > MAX_DEPTH {
         return;
     }
@@ -194,14 +223,14 @@ fn walk(base: &Path, claude_dir: &Path, dir: &Path, depth: usize, files: &mut Ve
         // dir nor a file here and is not walked into.
         if kind.is_dir() {
             if !SKIPPED_DIRS.contains(&name.to_lowercase().as_str()) {
-                walk(base, claude_dir, &path, depth + 1, files);
+                walk(tree, &path, depth + 1, files);
             }
             continue;
         }
         if !kind.is_file() {
             continue;
         }
-        let inside = parts(claude_dir, &path);
+        let inside = parts(tree.claude_dir, &path);
         let Some((what, what_name)) = classify(&inside) else {
             continue;
         };
@@ -210,7 +239,7 @@ fn walk(base: &Path, claude_dir: &Path, dir: &Path, depth: usize, files: &mut Ve
             continue;
         };
         let binary = !extension(&name).is_some_and(|ext| TEXT_EXT.contains(&ext.as_str()));
-        let (display_name, description) = if binary {
+        let (display_name, description) = if binary || is_credential(tree.credentials, &path) {
             (what_name, None)
         } else if what == ConfigFileKind::Workflow {
             let meta = workflow_meta(&read_head(&path));
@@ -226,7 +255,7 @@ fn walk(base: &Path, claude_dir: &Path, dir: &Path, depth: usize, files: &mut Ve
         } else {
             (what_name, None)
         };
-        let rel = parts(base, &path).join("/");
+        let rel = parts(tree.base, &path).join("/");
         files.push(entry(
             &path,
             rel,

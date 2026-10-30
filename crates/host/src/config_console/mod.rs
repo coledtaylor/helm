@@ -2,8 +2,9 @@
 //! the effective view of a launch, and every change to a config file.
 //!
 //! Reads come through the backend's
-//! [`ConfigSource`](crate::agent::ConfigSource), which lists no credential
-//! file, and a credential path is refused if a client names one. Every
+//! [`ConfigSource`](crate::agent::ConfigSource), which lists a credential
+//! file without opening it, and every read, watch or change that names a
+//! credential path is refused before anything opens it. Every
 //! change - a write, create, rename, delete, restore, MCP approval, and the
 //! file the agent's CLI rewrites for an MCP add or remove - goes through the
 //! one snapshot-first writer ([`writer::SnapshotWriter`]): the bytes it
@@ -278,7 +279,10 @@ impl ConfigConsole {
         }
     }
 
+    /// Every change snapshots the bytes it replaces, which means reading
+    /// them, so a credential file is refused before any change, as a read is.
     pub fn write(&self, request: &WriteConfigRequest) -> Result<WriteConfigResult, String> {
+        self.refuse_credential(&normalize(Path::new(&request.path)))?;
         self.change(|writer| writer.write(request), Self::written)
     }
 
@@ -306,6 +310,7 @@ impl ConfigConsole {
     }
 
     pub fn restore(&self, id: u64, path: &str) -> Result<WriteConfigResult, String> {
+        self.refuse_credential(&normalize(Path::new(path)))?;
         self.change(|writer| writer.restore(id, Path::new(path)), Self::written)
     }
 
@@ -325,6 +330,7 @@ impl ConfigConsole {
         scope_path: &str,
         path: &str,
     ) -> Result<(ConfigScope, Vec<ConfigFile>, ConfigFile), String> {
+        self.refuse_credential(&normalize(Path::new(path)))?;
         let scope = self.scope_for(scope_path)?;
         let files = tree::scope_files(self.backend.as_ref(), &scope)?;
         let target = normalize(Path::new(path));

@@ -81,7 +81,8 @@ pub trait AgentBackend: Send + Sync {
         None
     }
 
-    /// The agent's config files, credential files never among them.
+    /// The agent's config files. A credential file among them is listed
+    /// from its directory entry and never opened.
     fn config(&self) -> Option<&dyn ConfigSource> {
         None
     }
@@ -229,8 +230,8 @@ pub trait UsageSource: Send + Sync {
 
 /// The agent's config files.
 pub trait ConfigSource: Send + Sync {
-    /// The user's files, and `project`'s when one is given. Never a
-    /// credential file.
+    /// The user's files, and `project`'s when one is given. A credential
+    /// file is listed from its directory entry alone, never opened.
     fn config_files(&self, project: Option<&Path>) -> Result<Vec<ConfigFile>>;
 
     /// The agent's side of the config console - its config folder, its
