@@ -817,7 +817,7 @@ impl AgentTools for FakeAgentBackend {
         if servers.is_empty() {
             return Ok(Registration::default());
         }
-        let servers: serde_json::Map<String, serde_json::Value> = servers
+        let entries: serde_json::Map<String, serde_json::Value> = servers
             .iter()
             .map(|server| {
                 (
@@ -830,13 +830,25 @@ impl AgentTools for FakeAgentBackend {
                 )
             })
             .collect();
-        let document = serde_json::json!({ "mcpServers": servers });
+        let document = serde_json::json!({ "mcpServers": entries });
         let file = folder.write(
             "mcp.json",
             serde_json::to_vec_pretty(&document).expect("json"),
         )?;
+        // As Claude Code is given them: the read-only tools allowed after
+        // the file.
+        let mut args: Vec<OsString> = vec!["--mcp-config".into(), file.into_os_string()];
+        let allowed: Vec<OsString> = servers
+            .iter()
+            .flat_map(|server| server.allowed_tool_rules())
+            .map(OsString::from)
+            .collect();
+        if !allowed.is_empty() {
+            args.push("--allowedTools".into());
+            args.extend(allowed);
+        }
         Ok(Registration {
-            args: vec!["--mcp-config".into(), file.into_os_string()],
+            args,
             env: Vec::new(),
         })
     }

@@ -15,8 +15,23 @@ use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData, RoleServer, ServerHandler};
+use tokio::sync::watch;
 
 use super::{Caller, ToolFamily};
+
+/// Set once nobody waits on a call any more: the session cancelled it, or
+/// its token was revoked. Put in the request's extensions by the listener.
+#[derive(Clone)]
+pub(super) struct Abandoned(pub watch::Receiver<bool>);
+
+impl Abandoned {
+    /// Resolves once the call is abandoned; never, when it is not.
+    async fn wait(mut self) {
+        if self.0.wait_for(|abandoned| *abandoned).await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
 
 /// The revisions spoken, newest first. A client asking for one of them gets
 /// it; any other gets the first, so a client is never told its own unknown
@@ -87,12 +102,12 @@ impl ServerHandler for FamilyServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let caller = context
-            .extensions
-            .get::<http::request::Parts>()
+        let parts = context.extensions.get::<http::request::Parts>();
+        let caller = parts
             .and_then(|parts| parts.extensions.get::<Caller>())
             .copied()
             .ok_or_else(|| ErrorData::internal_error("a call arrived with no caller", None))?;
+        let abandoned = parts.and_then(|parts| parts.extensions.get::<Abandoned>().cloned());
         if self.get_tool(&request.name).is_none() {
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "{} has no tool named {}.",
@@ -102,10 +117,26 @@ impl ServerHandler for FamilyServer {
             .into());
         }
         let arguments = request.arguments.unwrap_or_default();
-        Ok(self
-            .family
-            .call(caller, &request.name, arguments)
-            .await
-            .into())
+        let call = self.family.call(caller, &request.name, arguments);
+        // Dropping the family's future is how a call learns nobody waits on
+        // it: its connection closed (rmcp cancels the request), the session
+        // cancelled it, or its token was revoked.
+        let abandoned = async {
+            match abandoned {
+                Some(abandoned) => abandoned.wait().await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            result = call => Ok(result.into()),
+            () = context.ct.cancelled() => Err(abandoned_error()),
+            () = abandoned => Err(abandoned_error()),
+        }
     }
+}
+
+/// What a call nobody waits on is answered with, should the answer still
+/// reach anyone.
+fn abandoned_error() -> ErrorData {
+    ErrorData::internal_error("The call was cancelled before it was answered.", None)
 }

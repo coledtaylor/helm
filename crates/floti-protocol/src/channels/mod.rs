@@ -78,6 +78,7 @@ macro_rules! stream_channel {
 }
 
 pub mod agent_browser;
+pub mod agent_plugin;
 pub mod boundary;
 pub mod common;
 pub mod host;
@@ -95,4 +96,5 @@ pub fn declare(catalogue: &mut Catalogue) {
     workspace::declare(catalogue);
     plugins::declare(catalogue);
     agent_browser::declare(catalogue);
+    agent_plugin::declare(catalogue);
 }

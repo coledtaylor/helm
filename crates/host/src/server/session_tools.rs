@@ -1,5 +1,7 @@
-//! floti-sessions: what the other sessions on this machine are doing, served
-//! to the host's sessions on the agent tools listener at `/mcp/sessions`.
+//! helm-sessions: what the other sessions on this machine are doing, served
+//! to the host's sessions on the agent tools listener at `/mcp/sessions`,
+//! under today's name and with today's tools and instructions
+//! (`session_tools.json`).
 //!
 //! **Read-only awareness, so a session can get out of another's way.** Two
 //! agents in one working tree is the failure this exists to prevent, and it is
@@ -34,32 +36,49 @@ mod tests;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, LazyLock, OnceLock, Weak};
 
 use floti_protocol::channels::sessions::{LiveSession, SessionResources, SessionsOverview};
-use serde_json::{Value, json};
+use serde::Deserialize;
+use serde_json::Value;
 
 use super::features::{ActivityHandle, ResourcesHandle};
 use super::hosted::{Hosted, session_id};
 use super::records;
 use crate::agent::claude_code::parse_instant;
 use crate::agent_tools::{
-    CallToolResult, Caller, ContentBlock, JsonObject, Tool, ToolAnnotations, ToolFamily, ToolFuture,
+    CallToolResult, Caller, ContentBlock, JsonObject, Tool, ToolFamily, ToolFuture,
 };
 use crate::session::describe::{
     HostedSessionFacts, SessionDetailInput, describe_session_detail, describe_session_gone,
     describe_session_listing, held_by,
 };
 
-/// The name the tools appear under in a session.
-pub(crate) const SESSION_TOOLS_NAME: &str = "floti-sessions";
+/// The session tools as the desktop serves them today: name, route,
+/// instructions and each tool's name, description and input schema, from
+/// `session_tools.json`, the one table the desktop's own listener reads too,
+/// so a session is told the same thing by either and the user's
+/// `mcp__helm-sessions__*` permission rules apply unchanged.
+#[derive(Debug, Deserialize)]
+struct Table {
+    name: String,
+    path: String,
+    instructions: String,
+    tools: Vec<Spec>,
+}
 
-/// Its route on the listener.
-pub(crate) const SESSION_TOOLS_ROUTE: &str = "/mcp/sessions";
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Spec {
+    name: String,
+    description: String,
+    input_schema: JsonObject,
+}
 
-/// What a session is told when it connects: the one place a model reliably
-/// reads, and the sentence it has to read is "awareness, not coordination".
-pub(crate) const SESSION_TOOLS_INSTRUCTIONS: &str = "These tools tell you what other Claude Code sessions are running on this machine, so you can stay out of their way - two agents in one working tree is the thing they exist to prevent. They are read-only and there is no way to send another session anything through them: nothing here starts, stops, waits on, or messages a session, and no tool will ever return any part of another session’s conversation. Check sessions_list before starting long work in a directory.";
+static TABLE: LazyLock<Table> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("session_tools.json"))
+        .expect("session_tools.json is the session tools' table")
+});
 
 const SESSIONS_LIST: &str = "sessions_list";
 const SESSION_DETAIL: &str = "session_detail";
@@ -68,11 +87,11 @@ const SESSION_DETAIL: &str = "session_detail";
 /// sentence rather than a failure that sticks: the session's tools work once
 /// the listing is ready.
 const STILL_STARTING: &str =
-    "Floti cannot answer that right now - it is still starting up. Try again in a moment.";
+    "Helm cannot answer that right now - it is still starting up. Try again in a moment.";
 
 /// The answer to `session_detail` with no pid from a token with no live
 /// session behind it.
-const NO_LIVE_SESSION: &str = "Floti has no live session for this token, which should not happen while your session is running. Call sessions_list to see what it does have.";
+const NO_LIVE_SESSION: &str = "Helm has no live session for this token, which should not happen while your session is running. Call sessions_list to see what it does have.";
 
 /// What one processes-and-ports pass answers, as a future the world can box.
 pub(crate) type PassFuture<'a> = Pin<Box<dyn Future<Output = Vec<SessionResources>> + Send + 'a>>;
@@ -126,15 +145,15 @@ impl SessionTools {
 
 impl ToolFamily for SessionTools {
     fn name(&self) -> &str {
-        SESSION_TOOLS_NAME
+        &TABLE.name
     }
 
     fn route(&self) -> &str {
-        SESSION_TOOLS_ROUTE
+        &TABLE.path
     }
 
     fn instructions(&self) -> &str {
-        SESSION_TOOLS_INSTRUCTIONS
+        &TABLE.instructions
     }
 
     fn is_on(&self) -> bool {
@@ -142,33 +161,17 @@ impl ToolFamily for SessionTools {
     }
 
     fn tools(&self) -> Vec<Tool> {
-        vec![
-            Tool::new(
-                SESSIONS_LIST,
-                "Every Claude Code session running on this machine right now - what it is called, which directory it is working in, whether it is busy, idle or waiting on the user, and how long it has been that way. Sessions started outside Floti are listed too, because one of those holds a working tree exactly as hard as a Floti session does. Read-only: this tells you what is happening and gives you no way to affect it, and it never returns any part of another session’s conversation. Worth calling before you start long work in a directory somebody else may already be in.",
-                schema(json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false,
-                })),
-            )
-            .with_annotations(ToolAnnotations::new().read_only(true)),
-            Tool::new(
-                SESSION_DETAIL,
-                "What one session is working in and what it is holding: its working directory, the branch it started on, the profile it was launched from, the processes running under it and the ports those are listening on. Pass a pid from sessions_list, or no pid at all for your own session. For a session Floti did not start there is nothing beyond what sessions_list already showed, and it says so. Read-only, and it never returns any part of another session’s conversation - not its transcript, not its prompts, not its output, and not the arguments it was launched with.",
-                schema(json!({
-                    "type": "object",
-                    "properties": {
-                        "pid": {
-                            "type": "number",
-                            "description": "The pid from sessions_list. Omit it for your own session - which one that is comes from the token this session was given, never from anything you pass.",
-                        },
-                    },
-                    "additionalProperties": false,
-                })),
-            )
-            .with_annotations(ToolAnnotations::new().read_only(true)),
-        ]
+        TABLE
+            .tools
+            .iter()
+            .map(|spec| {
+                Tool::new(
+                    spec.name.clone(),
+                    spec.description.clone(),
+                    spec.input_schema.clone(),
+                )
+            })
+            .collect()
     }
 
     fn call<'a>(&'a self, caller: Caller, name: &'a str, arguments: JsonObject) -> ToolFuture<'a> {
@@ -182,7 +185,7 @@ impl ToolFamily for SessionTools {
             match name {
                 SESSIONS_LIST => list(world, me).await,
                 SESSION_DETAIL => detail(world, me, &arguments).await,
-                other => problem(&format!("{SESSION_TOOLS_NAME} has no tool named {other}.")),
+                other => problem(&format!("{} has no tool named {other}.", TABLE.name)),
             }
         })
     }
@@ -296,13 +299,6 @@ fn text(body: String) -> CallToolResult {
 
 fn problem(body: &str) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(body.to_owned())])
-}
-
-fn schema(value: Value) -> JsonObject {
-    match value {
-        Value::Object(map) => map,
-        _ => unreachable!("a tool's schema is an object"),
-    }
 }
 
 /// The world the host answers from: its sessions, the activity pass and the

@@ -241,16 +241,26 @@ workspace (`Cargo.toml` at the root) for the Floti host; pnpm does not see it.
 - These tools are awareness only. Nothing sends a session anything, waits on
   one or hands one work.
 - The Floti host serves its own sessions' agent tools on its own listener
-  (`crates/host/src/agent_tools`), with the same rules. Its `helm-browser`
-  is today's family: name, route, instructions and tools come from
-  `crates/host/src/server/browser_tools.json`, the one table both listeners
-  read. The host has no browser, so each call goes over `agentBrowser:call`
-  to the attached client that declared `browser`, naming the caller's
-  session, and that client's answer is the tool's. A launch is given
-  `helm-browser` only while such a client is attached, and each token
-  reaches only the families its launch was given (404 otherwise). A call
-  made with none attached, or waiting on a client that leaves, fails at once
-  saying no browser is attached. Nothing there waits on a timer.
+  (`crates/host/src/agent_tools`), with the same rules and today's names.
+  `helm-browser` and `helm-sessions` take name, route, instructions and
+  tools from `crates/host/src/server/browser_tools.json` and
+  `session_tools.json`, the tables both listeners read. The host has no
+  browser, so each browser call goes over `agentBrowser:call` to the
+  attached client that declared `browser`, naming the caller's session, and
+  that client's answer is the tool's. A launch is given `helm-browser` only
+  while such a client is attached, and each token reaches only the families
+  its launch was given (404 otherwise). A call made with none attached, or
+  waiting on a client that leaves, fails at once saying no browser is
+  attached. Nothing there waits on a timer.
+- The host has no plugins of its own for agent tools: a client offers its
+  plugins' servers (`agentPlugin:offer`, replacing its last offer) and
+  answers their calls (`agentPlugin:call`, `agentPlugin:answer`). Each is
+  served as `helm-plugin-<id>` at `/mcp/plugin/<id>`, given to launches only
+  while that client listens, its read-only tools passed as `--allowedTools`.
+  A server left out of an offer answers 404 at once; a call is withdrawn
+  (`agentPlugin:cancel`) when the session cancels it, its request goes away
+  or the session ends; with its client gone, a call fails at once saying
+  Helm's window is not connected.
 
 ## Plugins
 

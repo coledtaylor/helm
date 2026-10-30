@@ -443,7 +443,11 @@ impl StatusSource for ClaudeCodeBackend {
 
 impl AgentTools for ClaudeCodeBackend {
     /// One `--mcp-config` file in the launch folder naming each family with
-    /// the session's bearer token. No families, no file and no flag.
+    /// the session's bearer token, then `--allowedTools` naming each tool a
+    /// family lists as read-only. No families, no file and no flag. Both
+    /// flags are variadic, so they come in that order before the next flag
+    /// (see `argv`), and no rule is passed for a server the file does not
+    /// name.
     fn register(&self, servers: &[AgentToolServer], folder: &LaunchFolder) -> Result<Registration> {
         if servers.is_empty() {
             return Ok(Registration::default());
@@ -461,8 +465,18 @@ impl AgentTools for ClaudeCodeBackend {
         }
         let json = serde_json::json!({ "mcpServers": document });
         let file = folder.write("mcp.json", serde_json::to_vec_pretty(&json).expect("json"))?;
+        let mut args: Vec<OsString> = vec!["--mcp-config".into(), file.into_os_string()];
+        let allowed: Vec<OsString> = servers
+            .iter()
+            .flat_map(|server| server.allowed_tool_rules())
+            .map(OsString::from)
+            .collect();
+        if !allowed.is_empty() {
+            args.push("--allowedTools".into());
+            args.extend(allowed);
+        }
         Ok(Registration {
-            args: vec!["--mcp-config".into(), file.into_os_string()],
+            args,
             env: Vec::new(),
         })
     }

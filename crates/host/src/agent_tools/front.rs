@@ -18,9 +18,15 @@
 //! 5. **Body size** (413), read at most once and only now.
 //! 6. **JSON-RPC** (200 with an error): not JSON, a batch, or a method no
 //!    family has, answered as today's listener answers them.
+//!
+//! A tool call is abandoned, and its family's future dropped, when nobody is
+//! waiting for its answer any more: its connection closed, the session sent
+//! `notifications/cancelled` naming it (on another request: the transport is
+//! stateless), or the session's token was revoked.
 
+use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -36,12 +42,12 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinSet;
 
-use super::mcp::{self, FamilyService};
+use super::mcp::{self, Abandoned, FamilyService};
 use super::tokens::Tokens;
-use super::{Caller, ToolFamily};
+use super::{Caller, FamilySource, GrantId, ToolFamily};
 
 /// The largest request body read: far past any tool call's arguments.
 pub(super) const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
@@ -56,34 +62,96 @@ type Answer = Response<BoxBody<Bytes, Infallible>>;
 
 /// The families and the tokens, shared by every connection.
 pub(super) struct Router {
-    families: Vec<Family>,
+    /// The families this listener always has, in order.
+    families: Vec<Arc<Family>>,
+    /// The families that come and go, read on every request and grant.
+    source: Option<Arc<dyn FamilySource>>,
     tokens: Mutex<Tokens>,
+    /// The tool calls each grant has waiting, by JSON-RPC id, so a session's
+    /// `notifications/cancelled` and its token's revocation reach them.
+    in_flight: Mutex<InFlight>,
 }
+
+type InFlight = HashMap<GrantId, HashMap<String, watch::Sender<bool>>>;
 
 struct Family {
     def: Arc<dyn ToolFamily>,
     service: FamilyService,
 }
 
+impl Family {
+    fn new(def: Arc<dyn ToolFamily>) -> Arc<Self> {
+        Arc::new(Self {
+            service: mcp::service(Arc::clone(&def)),
+            def,
+        })
+    }
+}
+
 impl Router {
-    pub(super) fn new(families: Vec<Arc<dyn ToolFamily>>) -> Self {
+    pub(super) fn new(
+        families: Vec<Arc<dyn ToolFamily>>,
+        source: Option<Arc<dyn FamilySource>>,
+    ) -> Self {
         Self {
-            families: families
-                .into_iter()
-                .map(|def| Family {
-                    service: mcp::service(Arc::clone(&def)),
-                    def,
-                })
-                .collect(),
+            families: families.into_iter().map(Family::new).collect(),
+            source,
             tokens: Mutex::new(Tokens::default()),
+            in_flight: Mutex::new(HashMap::new()),
         }
     }
 
-    pub(super) fn families_on(&self) -> impl Iterator<Item = &Arc<dyn ToolFamily>> {
-        self.families
+    /// Every family now: the fixed ones, then each from the source whose
+    /// name and route no family before it has.
+    fn families_now(&self) -> Vec<Arc<dyn ToolFamily>> {
+        let mut all: Vec<Arc<dyn ToolFamily>> = self
+            .families
             .iter()
-            .map(|family| &family.def)
-            .filter(|def| def.is_on())
+            .map(|family| Arc::clone(&family.def))
+            .collect();
+        if let Some(source) = &self.source {
+            for family in source.families() {
+                let clashes = all
+                    .iter()
+                    .any(|other| other.name() == family.name() || other.route() == family.route());
+                if !clashes && family.route().starts_with('/') {
+                    all.push(family);
+                }
+            }
+        }
+        all
+    }
+
+    /// The families switched on now.
+    pub(super) fn families_on(&self) -> Vec<Arc<dyn ToolFamily>> {
+        self.families_now()
+            .into_iter()
+            .filter(|family| family.is_on())
+            .collect()
+    }
+
+    /// Abandons every call `grant` has waiting: its token is gone.
+    pub(super) fn abandon_grant(&self, grant: GrantId) {
+        if let Some(calls) = self.in_flight().remove(&grant) {
+            for abandoned in calls.values() {
+                let _ = abandoned.send(true);
+            }
+        }
+    }
+
+    /// Abandons every call waiting: the listener is stopping.
+    pub(super) fn abandon_all(&self) {
+        for (_, calls) in self.in_flight().drain() {
+            for abandoned in calls.values() {
+                let _ = abandoned.send(true);
+            }
+        }
+    }
+
+    fn in_flight(&self) -> MutexGuard<'_, InFlight> {
+        self.in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(super) fn tokens(&self) -> MutexGuard<'_, Tokens> {
@@ -116,6 +184,34 @@ impl Router {
         if let Some(refused) = jsonrpc_refusal(&body, family.def.name()) {
             return refused;
         }
+        // A call is registered so it can be abandoned; a cancel abandons the
+        // one it names, of this token's calls only.
+        let _waiting = match cancellation_of(&body) {
+            Cancellation::Call(key) => {
+                let (abandoned, watching) = watch::channel(false);
+                self.in_flight()
+                    .entry(caller.grant)
+                    .or_default()
+                    .insert(key.clone(), abandoned);
+                parts.extensions.insert(Abandoned(watching));
+                Some(Waiting {
+                    router: self,
+                    grant: caller.grant,
+                    key,
+                })
+            }
+            Cancellation::Cancel(key) => {
+                if let Some(abandoned) = self
+                    .in_flight()
+                    .get(&caller.grant)
+                    .and_then(|calls| calls.get(&key))
+                {
+                    let _ = abandoned.send(true);
+                }
+                None
+            }
+            Cancellation::None => None,
+        };
         // Every answer here is JSON, so what the caller says it accepts
         // changes nothing; `rmcp` would refuse a client that left
         // `text/event-stream` out, which no rule here asks for.
@@ -133,7 +229,7 @@ impl Router {
 
     /// The first four checks, made on the head alone: the family a request
     /// is for and who is calling, or the refusal it gets.
-    fn admit(&self, parts: &Parts) -> Result<(&Family, Caller), Box<Answer>> {
+    fn admit(&self, parts: &Parts) -> Result<(Arc<Family>, Caller), Box<Answer>> {
         if !origin_allowed(&parts.headers) {
             return Err(Box::new(refusal(
                 StatusCode::FORBIDDEN,
@@ -155,10 +251,20 @@ impl Router {
         };
 
         let path = parts.uri.path();
-        let Some(family) = self.families.iter().find(|family| {
-            family.def.route() == path && family.def.is_on() && holder.holds(family.def.name())
-        }) else {
-            return Err(Box::new(refusal(StatusCode::NOT_FOUND, "Not found.")));
+        let admits = |def: &Arc<dyn ToolFamily>| {
+            def.route() == path && def.is_on() && holder.holds(def.name())
+        };
+        let family = match self.families.iter().find(|family| admits(&family.def)) {
+            Some(family) => Arc::clone(family),
+            None => match self
+                .families_now()
+                .into_iter()
+                .skip(self.families.len())
+                .find(admits)
+            {
+                Some(def) => Family::new(def),
+                None => return Err(Box::new(refusal(StatusCode::NOT_FOUND, "Not found."))),
+            },
         };
 
         if parts.method != Method::POST {
@@ -173,6 +279,56 @@ impl Router {
         }
 
         Ok((family, holder.caller))
+    }
+}
+
+/// Takes a call out of the waiting ones once it is answered or dropped.
+struct Waiting<'a> {
+    router: &'a Router,
+    grant: GrantId,
+    key: String,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        let mut in_flight = self.router.in_flight();
+        if let Some(calls) = in_flight.get_mut(&self.grant) {
+            calls.remove(&self.key);
+            if calls.is_empty() {
+                in_flight.remove(&self.grant);
+            }
+        }
+    }
+}
+
+/// What a body says about cancellation.
+enum Cancellation {
+    /// A `tools/call` request, by its id: one that can be abandoned.
+    Call(String),
+    /// `notifications/cancelled`, naming the request it gives up on.
+    Cancel(String),
+    None,
+}
+
+fn cancellation_of(body: &[u8]) -> Cancellation {
+    let Ok(serde_json::Value::Object(message)) = serde_json::from_slice(body) else {
+        return Cancellation::None;
+    };
+    let method = message
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    match message.get("id").filter(|id| !id.is_null()) {
+        Some(id) if method == "tools/call" => Cancellation::Call(id.to_string()),
+        Some(_) => Cancellation::None,
+        None if method == "notifications/cancelled" => message
+            .get("params")
+            .and_then(|params| params.get("requestId"))
+            .filter(|id| !id.is_null())
+            .map_or(Cancellation::None, |id| {
+                Cancellation::Cancel(id.to_string())
+            }),
+        None => Cancellation::None,
     }
 }
 

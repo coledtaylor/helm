@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use floti_protocol::BackendId;
 use floti_protocol::channels::sessions::SessionActivity;
+use serde_json::json;
 
 use super::*;
 use crate::session::SessionId;
@@ -122,7 +123,7 @@ async fn s24_a_tool_called_before_the_listing_is_ready_says_to_try_again_and_wor
     assert!(!failed, "{listing}");
     assert!(
         listing.starts_with(
-            "1 Claude Code session running on this machine, 1 of them hosted by Floti."
+            "1 Claude Code session running on this machine, 1 of them hosted by Helm."
         ),
         "{listing}"
     );
@@ -182,31 +183,28 @@ async fn s20_a_token_whose_session_is_not_live_marks_no_session_and_has_no_own_d
 }
 
 #[test]
-fn the_family_is_floti_sessions_at_its_route_with_two_read_only_tools_and_off_until_switched() {
+fn the_family_is_todays_helm_sessions_at_its_route_from_the_shared_table_and_off_until_switched() {
     let tools = SessionTools::new();
-    assert_eq!(tools.name(), "floti-sessions");
+    assert_eq!(tools.name(), "helm-sessions");
     assert_eq!(tools.route(), "/mcp/sessions");
-    assert!(tools.instructions().contains("read-only"));
+    let table: Value =
+        serde_json::from_str(include_str!("../session_tools.json")).expect("the table is JSON");
+    assert_eq!(tools.instructions(), table["instructions"]);
     assert!(!tools.is_on());
     tools.switch(true);
     assert!(tools.is_on());
-    let listed: Vec<(String, Option<bool>)> = tools
+    // Listed exactly as the table says, as today's listener lists them: no
+    // annotation, so nothing is allowed without asking on their account.
+    let listed: Vec<Value> = tools
         .tools()
         .iter()
-        .map(|tool| {
-            (
-                tool.name.to_string(),
-                tool.annotations
-                    .as_ref()
-                    .and_then(|notes| notes.read_only_hint),
-            )
-        })
+        .map(|tool| serde_json::to_value(tool).expect("a tool is JSON"))
         .collect();
-    assert_eq!(
-        listed,
-        [
-            ("sessions_list".to_owned(), Some(true)),
-            ("session_detail".to_owned(), Some(true)),
-        ]
-    );
+    assert_eq!(Value::Array(listed), table["tools"]);
+}
+
+#[test]
+fn a_session_is_told_helm_is_still_starting_or_has_no_live_session_for_its_token() {
+    assert!(STILL_STARTING.starts_with("Helm cannot answer that right now"));
+    assert!(NO_LIVE_SESSION.starts_with("Helm has no live session for this token"));
 }

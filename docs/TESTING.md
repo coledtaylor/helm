@@ -156,7 +156,7 @@ when it runs, so a language the app highlights and the host does not fails it.
 The agent tools listener is tested at three levels. `src/agent_tools/tests.rs`
 drives the listener with families made in the test: loopback only, 401 before
 the body is read, 404 for a family switched off, Origin refused, one token
-per session. `src/server/session_tools/tests.rs` calls floti-sessions on a
+per session. `src/server/session_tools/tests.rs` calls helm-sessions on a
 world made in the test, for what a real host cannot be put in on demand (a
 listing not ready yet, a token whose session is not live). And
 `crates/host/tests/agent_tools.rs` runs a `RunningHost` with sessions on the
@@ -171,8 +171,16 @@ session's conversation in any answer. Its helm-browser tests attach a
 place of Helm's window, and answer each call it is sent: the tool table a
 session lists, a call carried to that client and its answer handed back, no
 family for a launch with no browser attached, a call failing at once when
-the client leaves, and the refusals on the route. The relay itself
-(`src/server/features/agent_browser.rs`) has unit tests with no listener.
+the client leaves, and the refusals on the route. Its helm-sessions test
+compares what a session lists with `src/server/session_tools.json`, the table
+the desktop reads too. Its plugin tests attach a `TestClient` that listens on
+`agentPlugin:call` and `agentPlugin:cancel` and offers a plugin server: the
+tools a session lists and the read-only one in `--allowedTools`, a call
+answered by that client, a server left out of the next offer refused to a
+running session at once, calls failing at once when the client leaves, and a
+call withdrawn from the client when the session cancels it or ends. The relays
+themselves (`src/server/features/agent_browser.rs`, `agent_plugin.rs`) have
+unit tests with no listener.
 
 `crates/host/tests/os_conditionals.rs` fails, naming each `file:line`, when a
 compile-time OS conditional (`cfg(windows)`, `cfg!(unix)`, `target_os` and

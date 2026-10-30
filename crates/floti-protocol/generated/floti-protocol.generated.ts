@@ -45,6 +45,92 @@ tool: string,
 arguments: unknown, };
 
 /**
+ * A call nobody waits on any more.
+ */
+export type AgentPluginCallCancel = { 
+/**
+ * The `callId` of the call withdrawn.
+ */
+callId: number, };
+
+/**
+ * What a plugin tool call came to.
+ */
+export type AgentPluginOutcome = { "status": "done", value: unknown, } | { "status": "failed", message: string, };
+
+/**
+ * One plugin's tools, as a session reads them.
+ */
+export type AgentPluginServer = { 
+/**
+ * Its name as a session lists it, such as `helm-plugin-trackr`: the
+ * name the user's permission rules use.
+ */
+name: string, 
+/**
+ * The plugin's id: lower-case letters, digits and dashes. The server is
+ * served at `/mcp/plugin/<plugin>`.
+ */
+plugin: string, 
+/**
+ * What `initialize` tells a session, exactly as it reads it.
+ */
+instructions: string, tools: Array<AgentPluginTool>, };
+
+/**
+ * The plugin tool servers one client answers.
+ */
+export type AgentPluginServers = { servers: Array<AgentPluginServer>, };
+
+/**
+ * One tool of a plugin's server.
+ */
+export type AgentPluginTool = { name: string, description: string, 
+/**
+ * Its arguments' JSON Schema, an object.
+ */
+inputSchema: unknown, 
+/**
+ * Changes nothing: listed with `readOnlyHint`, and allowed without
+ * asking in the sessions launched while it is offered.
+ */
+readOnly: boolean, };
+
+/**
+ * The client's answer to a plugin tool call.
+ */
+export type AgentPluginToolAnswer = { 
+/**
+ * The `callId` of the call it answers.
+ */
+callId: number, outcome: AgentPluginOutcome, };
+
+/**
+ * One plugin tool call.
+ */
+export type AgentPluginToolCall = { 
+/**
+ * Chosen by the host; the answer and a cancel name it.
+ */
+callId: number, 
+/**
+ * The id of the hosted session whose agent called the tool.
+ */
+session: number, 
+/**
+ * The plugin's id.
+ */
+plugin: string, 
+/**
+ * The tool's name, as the server lists it.
+ */
+tool: string, 
+/**
+ * The tool's arguments, as the agent sent them.
+ */
+arguments: unknown, };
+
+/**
  * The host's identity.
  */
 export type AppInfo = { version: string, mode: AppMode, dataDir: string, dbFile: string, 
@@ -2924,6 +3010,8 @@ export type WriteConflict = { onDiskHash: string, onDiskContent: string, mtimeMs
 /** Every request channel: what it takes, what it answers and the capability it needs. */
 export interface RequestChannels {
   "agentBrowser:answer": { request: AgentBrowserToolAnswer; response: null; capability: "browser" };
+  "agentPlugin:answer": { request: AgentPluginToolAnswer; response: null; capability: null };
+  "agentPlugin:offer": { request: AgentPluginServers; response: null; capability: null };
   "app:info": { request: null; response: AppInfo; capability: null };
   "archive:conversation": { request: HistorySessionRef; response: ArchivedConversation | null; capability: null };
   "archive:stats": { request: null; response: ArchiveStats; capability: null };
@@ -3039,6 +3127,8 @@ export interface RequestChannels {
 /** Every event channel: its events, its snapshot (null when it carries no state) and the capability it needs. */
 export interface EventChannels {
   "agentBrowser:call": { event: AgentBrowserToolCall; snapshot: null; capability: "browser" };
+  "agentPlugin:call": { event: AgentPluginToolCall; snapshot: null; capability: null };
+  "agentPlugin:cancel": { event: AgentPluginCallCancel; snapshot: null; capability: null };
   "archive:changed": { event: ArchiveStats; snapshot: ArchiveStats; capability: null };
   "config:externalChange": { event: ConfigExternalChange; snapshot: null; capability: null };
   "discovery:updated": { event: DiscoveryResult; snapshot: DiscoveryResult | null; capability: null };
@@ -3073,6 +3163,10 @@ export interface StreamChannels {
 export const CHANNELS = [
   { name: "agentBrowser:answer", kind: "request", capability: "browser" },
   { name: "agentBrowser:call", kind: "event", capability: "browser" },
+  { name: "agentPlugin:answer", kind: "request", capability: null },
+  { name: "agentPlugin:call", kind: "event", capability: null },
+  { name: "agentPlugin:cancel", kind: "event", capability: null },
+  { name: "agentPlugin:offer", kind: "request", capability: null },
   { name: "app:info", kind: "request", capability: null },
   { name: "archive:changed", kind: "event", capability: null },
   { name: "archive:conversation", kind: "request", capability: null },

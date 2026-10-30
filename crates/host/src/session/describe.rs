@@ -1,6 +1,6 @@
 //! What one session may be told about the others, in words.
 //!
-//! The shaping half of the host's session-awareness tools: the floti-sessions
+//! The shaping half of the host's session-awareness tools: the helm-sessions
 //! family defines them and holds the token, and this decides what an answer
 //! says. It is apart from the family so that it can be unit tested on plain
 //! values - the tools themselves need two real sessions to say anything.
@@ -249,12 +249,10 @@ fn describe_status(session: &LiveSession, read_at_ms: u64) -> String {
         // admitting it cannot read something. Neither is "idle", which is the
         // guess that would make an agent walk into a working tree.
         None if !session.registered => {
-            "unknown - the host started it and Claude Code has not written a record for it yet"
+            "unknown - Helm started it and Claude Code has not written a record for it yet"
                 .to_owned()
         }
-        None => {
-            "unknown - it has registered but published no status the host recognises".to_owned()
-        }
+        None => "unknown - it has registered but published no status Helm recognises".to_owned(),
         Some(SessionActivity::Waiting) => {
             // The agent's own sentence, verbatim and never matched against: it
             // comes from whatever dialog is on top. Measured values on
@@ -325,7 +323,7 @@ pub fn describe_session_listing(
         // Not an empty string, and not an error. "Nothing is running" is a
         // real answer and it is the one that decides whether to start
         // something.
-        return "No Claude Code sessions are running on this machine - not even this one, which means the host read the registry and found nothing in it.".to_owned();
+        return "No Claude Code sessions are running on this machine - not even this one, which means Helm read the registry and found nothing in it.".to_owned();
     }
 
     let hosted = sessions
@@ -333,7 +331,7 @@ pub fn describe_session_listing(
         .filter(|session| session.host_session_id.is_some())
         .count();
     let head = format!(
-        "{} Claude Code session{} running on this machine, {hosted} of them hosted by Floti.",
+        "{} Claude Code session{} running on this machine, {hosted} of them hosted by Helm.",
         sessions.len(),
         if sessions.len() == 1 { "" } else { "s" },
     );
@@ -344,8 +342,8 @@ pub fn describe_session_listing(
             let is_caller =
                 caller_host_session_id.is_some() && session.host_session_id == caller_host_session_id;
             let hosted = match session.host_session_id {
-                None => "no - started somewhere else on this machine, so Floti knows only what Claude Code publishes about it".to_owned(),
-                Some(id) => format!("yes, as host session {id}"),
+                None => "no - started somewhere else on this machine, so Helm knows only what Claude Code publishes about it".to_owned(),
+                Some(id) => format!("yes, in Helm tab {id}"),
             };
             [
                 format!(
@@ -380,12 +378,12 @@ pub fn describe_session_listing(
 fn describe_resources(holding: Option<&SessionHolding>, read_at_ms: u64) -> Vec<String> {
     let Some(holding) = holding else {
         return vec![
-            "Holding      unknown - the host has not looked at this machine’s processes for this session.".to_owned(),
+            "Holding      unknown - Helm has not looked at this machine’s processes for this session.".to_owned(),
         ];
     };
 
     let looked = format!(
-        "the host last looked {} ago",
+        "Helm last looked {} ago",
         elapsed(read_at_ms, holding.at_ms)
     );
 
@@ -452,7 +450,7 @@ fn describe_resources(holding: Option<&SessionHolding>, read_at_ms: u64) -> Vec<
         Some(ports) => {
             for port in ports {
                 let addresses = if port.addresses.is_empty() {
-                    "an address the host could not read".to_owned()
+                    "an address Helm could not read".to_owned()
                 } else {
                     port.addresses.join(", ")
                 };
@@ -508,7 +506,7 @@ pub fn describe_session_detail(input: SessionDetailInput<'_>) -> String {
                 .unwrap_or("version not published")
         ));
         lines.push(String::new());
-        lines.push("Floti did not start this session, so there is nothing else to know about it: no branch, no profile, no overlays, no process tree and no ports. Everything above comes from the record Claude Code writes for every session on this machine.".to_owned());
+        lines.push("Helm did not start this session, so there is nothing else to know about it: no branch, no profile, no overlays, no process tree and no ports. Everything above comes from the record Claude Code writes for every session on this machine.".to_owned());
         return lines.join("\n");
     };
 
@@ -528,7 +526,7 @@ pub fn describe_session_detail(input: SessionDetailInput<'_>) -> String {
         Some(at) => format!("{} ago", elapsed(read_at_ms, at)),
     };
 
-    lines.push(format!("host session {}", hosted.host_session_id));
+    lines.push(format!("Helm tab     {}", hosted.host_session_id));
     lines.push(format!("branch       {branch}"));
     lines.push(format!(
         "profile      {}",

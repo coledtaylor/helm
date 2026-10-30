@@ -44,6 +44,7 @@ mod enrolment;
 mod events;
 mod features;
 mod hosted;
+mod plugin_tools;
 pub(crate) mod records;
 mod session_tools;
 pub mod unserved;
@@ -463,7 +464,10 @@ impl Host {
 /// sessions, the activity pass and the processes-and-ports pass, given to
 /// every launch from now on, and revoking each session's token as it ends.
 fn start_agent_tools(hosted: &Arc<Hosted>, features: &Features) -> Result<Arc<HostAgentTools>> {
-    let tools = Arc::new(HostAgentTools::new(Arc::clone(features.browser())));
+    let tools = Arc::new(HostAgentTools::new(
+        Arc::clone(features.browser()),
+        Arc::clone(features.plugin_tools()),
+    ));
     let settings = features.settings();
     tools.follow(&settings.read()?);
     let following = Arc::downgrade(&tools);

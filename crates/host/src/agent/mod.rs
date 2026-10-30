@@ -314,12 +314,26 @@ pub struct Composition {
 
 /// One family of Floti's agent tools: a loopback address and the session's
 /// bearer token for it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentToolServer {
     /// Its name as the agent lists it, such as `helm-browser`.
     pub name: String,
     pub url: String,
     pub token: String,
+    /// Its tools the session calls without asking, by the name the family
+    /// lists them under: the ones it lists as read-only. Fixed at launch, as
+    /// an allow rule is; a deny rule of the user's still wins.
+    pub allowed_tools: Vec<String>,
+}
+
+impl AgentToolServer {
+    /// Each allowed tool as the agent's permission rules name it:
+    /// `mcp__<server>__<tool>`.
+    pub fn allowed_tool_rules(&self) -> impl Iterator<Item = String> + '_ {
+        self.allowed_tools
+            .iter()
+            .map(|tool| format!("mcp__{}__{tool}", self.name))
+    }
 }
 
 /// What registering agent tools adds to a launch.

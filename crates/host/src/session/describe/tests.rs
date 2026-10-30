@@ -141,7 +141,7 @@ fn the_listing_lists_a_session_the_host_did_not_start_and_says_that_is_what_it_i
         Some(7),
     );
     assert!(
-        text.contains("2 Claude Code sessions running on this machine, 1 of them hosted by Floti."),
+        text.contains("2 Claude Code sessions running on this machine, 1 of them hosted by Helm."),
         "{text}"
     );
     assert!(text.contains("\"in a terminal\""), "{text}");
@@ -191,7 +191,7 @@ fn the_listing_reports_an_unreadable_status_as_unknown_rather_than_as_idle() {
         None,
     );
     assert!(
-        no_status.contains("published no status the host recognises"),
+        no_status.contains("published no status Helm recognises"),
         "{no_status}"
     );
     assert!(!no_status.contains("idle"), "{no_status}");
@@ -277,13 +277,13 @@ fn detail_says_what_is_knowable_about_a_session_the_host_did_not_start_and_no_mo
         read_at_ms: READ_AT,
         is_caller: false,
     });
-    assert!(text.contains("Floti did not start this session"), "{text}");
+    assert!(text.contains("Helm did not start this session"), "{text}");
     assert!(text.contains(r"C:\repos\api"), "{text}");
     // The sentence names what is missing; what must not appear is a *field*
     // claiming to know it.
     assert!(!has_line_starting(&text, "branch "), "{text}");
     assert!(!has_line_starting(&text, "profile "), "{text}");
-    assert!(!has_line_starting(&text, "host session "), "{text}");
+    assert!(!has_line_starting(&text, "Helm tab "), "{text}");
     assert!(!has_line_starting(&text, "Holding"), "{text}");
 }
 
@@ -446,7 +446,7 @@ fn detail_prints_the_tree_with_its_ports_and_admits_what_it_could_not_read() {
     );
     // The root itself is not printed as one of its own children.
     assert!(!text.contains("claude.exe #4242"), "{text}");
-    assert!(text.contains("the host last looked 2s ago"), "{text}");
+    assert!(text.contains("Helm last looked 2s ago"), "{text}");
 }
 
 #[test]

@@ -39,6 +39,15 @@
 //! them all, and each family's "off" is three separate facts rather than a
 //! promise: its route answers 404, its name is absent from a launch's
 //! servers, and its tools are in no list.
+//!
+//! **Families that come and go.** Besides the families it is built with, a
+//! listener reads a [`FamilySource`] on every request and every grant, such
+//! as the plugin tool servers a client offers: one that leaves the source
+//! answers 404 at once, and one that joins it reaches the launches after.
+//!
+//! **Read-only is allowed.** A tool a family lists with `readOnlyHint` is
+//! named in its launch entry's allowed tools, which the agent is given as an
+//! allow rule, fixed at launch.
 
 mod front;
 mod mcp;
@@ -97,7 +106,15 @@ pub trait ToolFamily: Send + Sync + 'static {
 
     /// Answers one call to `name`, one of [`Self::tools`], for `caller`.
     /// A failure is an answer too: a failed call the model can read.
+    /// Dropping the future abandons the call: nobody waits on it any more.
     fn call<'a>(&'a self, caller: Caller, name: &'a str, arguments: JsonObject) -> ToolFuture<'a>;
+}
+
+/// Families that come and go, read on every request and every grant.
+pub trait FamilySource: Send + Sync + 'static {
+    /// The families now. One whose name or route a family before it has is
+    /// passed over.
+    fn families(&self) -> Vec<Arc<dyn ToolFamily>>;
 }
 
 /// One minted token, by an id that is not the token: what the host keeps to
@@ -158,6 +175,18 @@ impl AgentToolsListener {
     ///
     /// Outside a Tokio runtime, or when two families share a name or a route.
     pub fn new(families: Vec<Arc<dyn ToolFamily>>) -> Self {
+        Self::with_source(families, None)
+    }
+
+    /// A listener for `families` and whatever `source` has when asked.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::new`].
+    pub fn with_source(
+        families: Vec<Arc<dyn ToolFamily>>,
+        source: Option<Arc<dyn FamilySource>>,
+    ) -> Self {
         for (index, family) in families.iter().enumerate() {
             assert!(
                 family.route().starts_with('/'),
@@ -174,7 +203,7 @@ impl AgentToolsListener {
             }
         }
         Self {
-            router: Arc::new(Router::new(families)),
+            router: Arc::new(Router::new(families, source)),
             socket: Mutex::new(None),
             runtime: Handle::current(),
         }
@@ -184,6 +213,7 @@ impl AgentToolsListener {
     pub fn served_names(&self) -> Vec<String> {
         self.router
             .families_on()
+            .iter()
             .map(|family| family.name().to_owned())
             .collect()
     }
@@ -201,7 +231,7 @@ impl AgentToolsListener {
     /// Called when a family's switch changes.
     pub fn sync(&self) -> Result<()> {
         let mut socket = self.socket();
-        if self.router.families_on().next().is_some() {
+        if !self.router.families_on().is_empty() {
             if socket.is_none() {
                 *socket = Some(self.bind()?);
             }
@@ -216,9 +246,10 @@ impl AgentToolsListener {
     /// token minted and nothing bound, when there is no such family.
     pub fn grant(&self) -> Result<Option<Grant>> {
         let mut socket = self.socket();
-        let on: Vec<&Arc<dyn ToolFamily>> = self
+        let on: Vec<Arc<dyn ToolFamily>> = self
             .router
             .families_on()
+            .into_iter()
             .filter(|family| family.grantable())
             .collect();
         if on.is_empty() {
@@ -236,6 +267,7 @@ impl AgentToolsListener {
                 name: family.name().to_owned(),
                 url: format!("http://127.0.0.1:{port}{}", family.route()),
                 token: token.clone(),
+                allowed_tools: read_only_tools(family.as_ref()),
             })
             .collect();
         Ok(Some(Grant { id, servers }))
@@ -252,7 +284,8 @@ impl AgentToolsListener {
         let mut socket = self.socket();
         let mut tokens = self.router.tokens();
         tokens.revoke(grant);
-        if tokens.is_empty() && self.router.families_on().next().is_none() {
+        self.router.abandon_grant(grant);
+        if tokens.is_empty() && self.router.families_on().is_empty() {
             release(&mut socket);
         }
     }
@@ -262,6 +295,7 @@ impl AgentToolsListener {
     /// tokens this one handed out.
     pub async fn stop(&self) {
         self.router.tokens().revoke_all();
+        self.router.abandon_all();
         let bound = self.socket().take();
         if let Some(bound) = bound {
             let _ = bound.stop.send(());
@@ -311,4 +345,20 @@ fn release(socket: &mut Option<Bound>) {
     if let Some(bound) = socket.take() {
         let _ = bound.stop.send(());
     }
+}
+
+/// The tools `family` lists with `readOnlyHint`, by name: the ones a launch
+/// is allowed to call without asking.
+fn read_only_tools(family: &dyn ToolFamily) -> Vec<String> {
+    family
+        .tools()
+        .into_iter()
+        .filter(|tool| {
+            tool.annotations
+                .as_ref()
+                .and_then(|notes| notes.read_only_hint)
+                == Some(true)
+        })
+        .map(|tool| tool.name.into_owned())
+        .collect()
 }

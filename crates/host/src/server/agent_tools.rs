@@ -11,8 +11,10 @@
 //!
 //! Today that is helm-browser ([`BrowserTools`]), on the `browserMcp`
 //! setting and given to a launch only while a client with a browser pane is
-//! attached, and floti-sessions ([`SessionTools`]), on the `sessionMcp`
-//! setting.
+//! attached; helm-sessions ([`SessionTools`]), on the `sessionMcp` setting;
+//! and `helm-plugin-<id>` for each plugin tool server a client offers
+//! ([`PluginFamilies`]), given to a launch only while that client is
+//! attached.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,12 +24,13 @@ use floti_protocol::channels::workspace::HostSettings;
 use tokio::sync::broadcast::{self, error::RecvError};
 
 use super::browser_tools::BrowserTools;
-use super::features::BrowserRelay;
+use super::features::{BrowserRelay, PluginRelay};
 use super::hosted::Hosted;
+use super::plugin_tools::PluginFamilies;
 use super::records::ExitNotice;
 use super::session_tools::{SessionTools, SessionsWorld};
 use crate::Result;
-use crate::agent_tools::{AgentToolsListener, Grant, GrantId, ToolFamily};
+use crate::agent_tools::{AgentToolsListener, FamilySource, Grant, GrantId, ToolFamily};
 use crate::session::SessionId;
 
 pub(crate) struct HostAgentTools {
@@ -53,9 +56,9 @@ struct Held {
 
 impl HostAgentTools {
     /// The listener with every family, each off until [`Self::follow`] reads
-    /// the settings, the browser tools carried through `relay`. Call it
-    /// inside the host's runtime.
-    pub fn new(relay: Arc<BrowserRelay>) -> Self {
+    /// the settings, the browser tools carried through `relay` and the
+    /// plugins' through `plugins`. Call it inside the host's runtime.
+    pub fn new(relay: Arc<BrowserRelay>, plugins: Arc<PluginRelay>) -> Self {
         let browser = Arc::new(BrowserTools::new(relay));
         let sessions = Arc::new(SessionTools::new());
         let families: Vec<Arc<dyn ToolFamily>> = vec![
@@ -63,7 +66,10 @@ impl HostAgentTools {
             Arc::clone(&sessions) as Arc<dyn ToolFamily>,
         ];
         Self {
-            listener: AgentToolsListener::new(families),
+            listener: AgentToolsListener::with_source(
+                families,
+                Some(Arc::new(PluginFamilies::new(plugins)) as Arc<dyn FamilySource>),
+            ),
             browser,
             sessions,
             held: Mutex::new(Held::default()),
@@ -71,7 +77,7 @@ impl HostAgentTools {
         }
     }
 
-    /// What floti-sessions answers from.
+    /// What helm-sessions answers from.
     pub fn answer_from(&self, world: Arc<dyn SessionsWorld>) {
         self.sessions.answer_from(world);
     }
@@ -212,7 +218,10 @@ mod tests {
 
     fn tools() -> HostAgentTools {
         let events = Arc::new(super::super::events::Events::new());
-        HostAgentTools::new(Arc::new(BrowserRelay::new(&events)))
+        HostAgentTools::new(
+            Arc::new(BrowserRelay::new(&events)),
+            Arc::new(PluginRelay::new(&events)),
+        )
     }
 
     #[tokio::test(flavor = "multi_thread")]

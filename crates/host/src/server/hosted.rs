@@ -136,7 +136,9 @@ impl Hosted {
             Ok(grant) => (grant.map(|grant| (Arc::clone(tools), grant)), None),
             Err(err) => (
                 None,
-                Some(format!("This session has no Floti agent tools: {err}.")),
+                Some(format!(
+                    "This session has none of Helm's agent tools: {err}."
+                )),
             ),
         }
     }

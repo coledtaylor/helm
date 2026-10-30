@@ -269,6 +269,7 @@ fn server(name: &str, token: &str) -> AgentToolServer {
         name: name.to_owned(),
         url: format!("http://127.0.0.1:41000/mcp/{name}"),
         token: token.to_owned(),
+        allowed_tools: Vec::new(),
     }
 }
 
@@ -862,7 +863,7 @@ fn agent_tools_are_one_file_per_launch_with_the_sessions_token_and_never_on_a_co
         composition: Composition {
             agent_tools: vec![
                 server("helm-browser", "secret-token-123"),
-                server("floti-sessions", "secret-token-123"),
+                server("helm-sessions", "secret-token-123"),
             ],
             ..Composition::default()
         },
@@ -879,7 +880,7 @@ fn agent_tools_are_one_file_per_launch_with_the_sessions_token_and_never_on_a_co
     assert_eq!(args.iter().filter(|arg| *arg == "--mcp-config").count(), 1);
 
     let document: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    for name in ["helm-browser", "floti-sessions"] {
+    for name in ["helm-browser", "helm-sessions"] {
         assert_eq!(
             document["mcpServers"][name],
             json!({
@@ -903,7 +904,7 @@ fn agent_tools_are_one_file_per_launch_with_the_sessions_token_and_never_on_a_co
     let (output, log) = world.run(&launch, "/exit\n");
     succeeded(&output);
     assert_eq!(
-        log["mcpServers"]["floti-sessions"]["headers"]["Authorization"],
+        log["mcpServers"]["helm-sessions"]["headers"]["Authorization"],
         "Bearer secret-token-123"
     );
     // No `claude mcp add-json`: the user's config files hold no token.
@@ -919,6 +920,56 @@ fn agent_tools_are_one_file_per_launch_with_the_sessions_token_and_never_on_a_co
     // The file goes with its launch folder when the session ends.
     folder.remove().unwrap();
     assert!(!file.exists());
+}
+
+#[test]
+fn a_familys_read_only_tools_are_allowed_after_the_tool_file_and_before_the_next_flag() {
+    let world = World::new();
+    let mut notes = server("helm-plugin-notes", "t");
+    notes.allowed_tools = vec!["find".into(), "get".into()];
+    let mut tasks = server("helm-plugin-tasks", "t");
+    tasks.allowed_tools = vec!["list".into()];
+    let (launch, folder) = world.launch(&LaunchRequest {
+        folder: world.folder("work"),
+        name: "allowed".into(),
+        composition: Composition {
+            agent_tools: vec![server("helm-browser", "t"), notes, tasks],
+            model: Some("opus".into()),
+            ..Composition::default()
+        },
+        prompt: Some("start here".into()),
+    });
+    let args = world.args(&launch);
+    let at = args.iter().position(|arg| arg == "--mcp-config").unwrap();
+    assert_eq!(args[at + 1], text(folder.path().join("mcp.json")));
+    assert_eq!(
+        args[at + 2..at + 6],
+        [
+            "--allowedTools",
+            "mcp__helm-plugin-notes__find",
+            "mcp__helm-plugin-notes__get",
+            "mcp__helm-plugin-tasks__list",
+        ]
+    );
+    // The next argument is a flag, and the prompt is still last behind `--`.
+    assert!(args[at + 6].starts_with("--"), "{args:?}");
+    assert_eq!(args[args.len() - 2..], ["--", "start here"]);
+    assert_eq!(
+        args.iter().filter(|arg| *arg == "--allowedTools").count(),
+        1
+    );
+
+    // None read-only: no flag at all.
+    let (launch, _folder) = world.launch(&LaunchRequest {
+        folder: world.folder("work"),
+        name: "none allowed".into(),
+        composition: Composition {
+            agent_tools: vec![server("helm-sessions", "t")],
+            ..Composition::default()
+        },
+        ..LaunchRequest::default()
+    });
+    assert!(!world.args(&launch).contains(&"--allowedTools".to_owned()));
 }
 
 #[test]

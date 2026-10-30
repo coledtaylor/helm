@@ -20,8 +20,11 @@
 //! - [`plugins`]: registered plugin folders and `plugins:changed`.
 //! - [`agent_browser`]: the agent browser tools' calls, carried to a client
 //!   with a browser pane, and its answers.
+//! - [`agent_plugin`]: the plugin tool servers a client offers, their calls
+//!   carried to it, and its answers.
 
 mod agent_browser;
+mod agent_plugin;
 mod config;
 mod content;
 mod discovery;
@@ -47,6 +50,7 @@ use super::hosted::Hosted;
 use crate::platform::folders::Folders;
 use crate::session::{ClientId, Session, SessionOutput};
 pub(crate) use agent_browser::BrowserRelay;
+pub(crate) use agent_plugin::{PluginRelay, PluginServer};
 pub use resources::ResourcesHandle;
 pub(crate) use sessions::ActivityHandle;
 pub(crate) use workspace::WorkspaceContext;
@@ -147,6 +151,7 @@ pub(crate) struct Features {
     activity: ActivityHandle,
     settings: Arc<SettingsService>,
     browser: Arc<BrowserRelay>,
+    plugin_tools: Arc<PluginRelay>,
 }
 
 impl Features {
@@ -168,6 +173,7 @@ impl Features {
         let sessions = sessions::Sessions::new(&context)?;
         let activity = sessions.activity();
         let browser = Arc::new(BrowserRelay::new(&context.events));
+        let plugin_tools = Arc::new(PluginRelay::new(&context.events));
         let features: Vec<Box<dyn Feature>> = vec![
             Box::new(sessions),
             Box::new(history::History::new(&context)?),
@@ -181,6 +187,7 @@ impl Features {
             Box::new(files::Files::new(&context)?),
             Box::new(plugins::Plugins::new(&context)?),
             Box::new(Arc::clone(&browser)),
+            Box::new(Arc::clone(&plugin_tools)),
         ];
         Ok(Self {
             features,
@@ -189,6 +196,7 @@ impl Features {
             activity,
             settings: Arc::clone(&context.workspace.settings),
             browser,
+            plugin_tools,
         })
     }
 
@@ -210,6 +218,12 @@ impl Features {
     /// it.
     pub fn browser(&self) -> &Arc<BrowserRelay> {
         &self.browser
+    }
+
+    /// The plugin tools' relay, for the families served from what clients
+    /// offer.
+    pub fn plugin_tools(&self) -> &Arc<PluginRelay> {
+        &self.plugin_tools
     }
 
     /// The processes-and-ports pass, for what inside the host asks for it.

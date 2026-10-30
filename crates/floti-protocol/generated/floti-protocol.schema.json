@@ -87,6 +87,183 @@
       ],
       "type": "object"
     },
+    "AgentPluginCallCancel": {
+      "description": "A call nobody waits on any more.",
+      "properties": {
+        "callId": {
+          "description": "The `callId` of the call withdrawn.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "callId"
+      ],
+      "type": "object"
+    },
+    "AgentPluginOutcome": {
+      "description": "What a plugin tool call came to.",
+      "oneOf": [
+        {
+          "description": "The plugin answered; `value` is the MCP tool result for the agent.",
+          "properties": {
+            "status": {
+              "const": "done",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "status",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "No answer; `message` is the sentence the agent reads.",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "status": {
+              "const": "failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AgentPluginServer": {
+      "description": "One plugin's tools, as a session reads them.",
+      "properties": {
+        "instructions": {
+          "description": "What `initialize` tells a session, exactly as it reads it.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Its name as a session lists it, such as `helm-plugin-trackr`: the\nname the user's permission rules use.",
+          "type": "string"
+        },
+        "plugin": {
+          "description": "The plugin's id: lower-case letters, digits and dashes. The server is\nserved at `/mcp/plugin/<plugin>`.",
+          "type": "string"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/AgentPluginTool"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "plugin",
+        "instructions",
+        "tools"
+      ],
+      "type": "object"
+    },
+    "AgentPluginServers": {
+      "description": "The plugin tool servers one client answers.",
+      "properties": {
+        "servers": {
+          "items": {
+            "$ref": "#/$defs/AgentPluginServer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "servers"
+      ],
+      "type": "object"
+    },
+    "AgentPluginTool": {
+      "description": "One tool of a plugin's server.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "inputSchema": {
+          "description": "Its arguments' JSON Schema, an object."
+        },
+        "name": {
+          "type": "string"
+        },
+        "readOnly": {
+          "description": "Changes nothing: listed with `readOnlyHint`, and allowed without\nasking in the sessions launched while it is offered.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "inputSchema",
+        "readOnly"
+      ],
+      "type": "object"
+    },
+    "AgentPluginToolAnswer": {
+      "description": "The client's answer to a plugin tool call.",
+      "properties": {
+        "callId": {
+          "description": "The `callId` of the call it answers.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outcome": {
+          "$ref": "#/$defs/AgentPluginOutcome"
+        }
+      },
+      "required": [
+        "callId",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "AgentPluginToolCall": {
+      "description": "One plugin tool call.",
+      "properties": {
+        "arguments": {
+          "description": "The tool's arguments, as the agent sent them."
+        },
+        "callId": {
+          "description": "Chosen by the host; the answer and a cancel name it.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plugin": {
+          "description": "The plugin's id.",
+          "type": "string"
+        },
+        "session": {
+          "description": "The id of the hosted session whose agent called the tool.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool": {
+          "description": "The tool's name, as the server lists it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "callId",
+        "session",
+        "plugin",
+        "tool",
+        "arguments"
+      ],
+      "type": "object"
+    },
     "AppInfo": {
       "description": "The host's identity.",
       "properties": {
@@ -9188,6 +9365,46 @@
       "kind": "event",
       "name": "agentBrowser:call",
       "snapshot": null
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "agentPlugin:answer",
+      "request": {
+        "$ref": "#/$defs/AgentPluginToolAnswer"
+      },
+      "response": {
+        "type": "null"
+      }
+    },
+    {
+      "capability": null,
+      "event": {
+        "$ref": "#/$defs/AgentPluginToolCall"
+      },
+      "kind": "event",
+      "name": "agentPlugin:call",
+      "snapshot": null
+    },
+    {
+      "capability": null,
+      "event": {
+        "$ref": "#/$defs/AgentPluginCallCancel"
+      },
+      "kind": "event",
+      "name": "agentPlugin:cancel",
+      "snapshot": null
+    },
+    {
+      "capability": null,
+      "kind": "request",
+      "name": "agentPlugin:offer",
+      "request": {
+        "$ref": "#/$defs/AgentPluginServers"
+      },
+      "response": {
+        "type": "null"
+      }
     },
     {
       "capability": null,
