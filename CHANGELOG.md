@@ -14,6 +14,29 @@ A version with no section here does not release: the workflow fails rather than
 publishing an empty body, because the step a person can skip is the step that
 gets skipped.
 
+## 2.4.1-preview.2
+
+A preview, not a release: nothing offers it as an update.
+
+**Sessions in the local host**
+
+With Settings > Sessions > "Run sessions in the local host" on, Helm now does
+nearly everything it does with the switch off.
+
+- Sessions get Helm's agent tools under the same names: the browser tools,
+  the sessions list and each plugin's tools work as before, and permission
+  rules that name them still apply.
+- Saved profiles launch with everything they set up, and a plugin can start
+  a session once you agree in Helm's dialog. Profiles saved before you turned
+  the switch on are copied over the first time Helm starts with it; Helm's
+  own copies are left as they were for when it is off.
+- History, the transcript archive, usage, the config console, project
+  discovery, setup, settings, templates and the Files view come from the
+  host, so they see the sessions that run there.
+- Still to come: the sessions pane's processes and ports come from Helm
+  itself and may not show them for a session in the host, and a config
+  file's versions saved with the switch off are listed only with it off.
+
 ## 2.4.1-preview.1
 
 A preview, not a release: nothing offers it as an update.
