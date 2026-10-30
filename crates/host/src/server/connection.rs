@@ -56,6 +56,7 @@ use tokio::task::JoinHandle;
 use super::enrolment::{Claim, Enrolment, FIRST_ADMIN_NAME};
 use super::events::{Publication, Start};
 use super::features::Features;
+use super::stopper::ReservedStop;
 use super::{CATALOGUE, Stopper, unserved};
 use crate::devices::{DeviceRegistry, Standing};
 use crate::platform::socket::LocalStream;
@@ -313,8 +314,9 @@ struct Connection {
     streams: HashMap<u64, OpenStream>,
     /// Streams whose session has ended, closed once their output is sent.
     closing: BTreeSet<u64>,
-    /// A stop a client asked for, made once its answer has been sent.
-    stop_after_flush: Option<HostStopReason>,
+    /// A stop a client asked for, reserved when it was answered and carried
+    /// out once the answer has been sent.
+    stop_after_flush: Option<ReservedStop>,
 }
 
 /// Why the connection ends.
@@ -404,9 +406,8 @@ impl Connection {
             if self.flush().await.is_err() {
                 return;
             }
-            if let Some(reason) = self.stop_after_flush.take() {
-                self.stopper.stop(reason);
-            }
+            // Dropping the reserved stop carries it out.
+            drop(self.stop_after_flush.take());
             let ended = tokio::select! {
                 read = self.reader.read(&mut buf) => match read {
                     Ok(0) | Err(_) => Err(End::Gone),
@@ -510,8 +511,13 @@ impl Connection {
             &mut stop,
         )
         .dispatch(request);
-        if matches!(answer, Message::Response(_)) && stop.is_some() {
-            self.stop_after_flush = stop;
+        // Taken before the answer is queued, so nothing asked once the client
+        // has its answer replaces it. A later stop finds it taken and is
+        // answered all the same.
+        if matches!(answer, Message::Response(_))
+            && let Some(reserved) = stop.and_then(|reason| self.stopper.reserve(reason))
+        {
+            self.stop_after_flush = Some(reserved);
         }
         answer
     }

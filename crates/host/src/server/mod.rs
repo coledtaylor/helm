@@ -47,7 +47,10 @@ mod hosted;
 mod plugin_tools;
 pub(crate) mod records;
 mod session_tools;
+mod stopper;
 pub mod unserved;
+
+pub use stopper::Stopper;
 
 use std::collections::BTreeSet;
 
@@ -252,25 +255,6 @@ pub fn shell_backend(env: &UserEnv) -> PlainCommandBackend {
     )
 }
 
-/// Asks a running host to stop. The first reason given is the one it stops
-/// for.
-#[derive(Clone)]
-pub struct Stopper(Arc<watch::Sender<Option<HostStopReason>>>);
-
-impl Stopper {
-    /// Asks for a stop for `reason`; whether this was the first ask, which
-    /// the host stops for.
-    pub fn stop(&self, reason: HostStopReason) -> bool {
-        self.0.send_if_modified(|current| {
-            if current.is_some() {
-                return false;
-            }
-            *current = Some(reason);
-            true
-        })
-    }
-}
-
 /// A running host.
 pub struct Host {
     hosted: Arc<Hosted>,
@@ -352,8 +336,7 @@ impl Host {
         let features = Arc::new(Features::new(Arc::clone(&hosted), folders, run)?);
         let agent_tools = start_agent_tools(&hosted, &features)?;
 
-        let (stop_tx, stop_requested) = watch::channel(None);
-        let stopper = Stopper(Arc::new(stop_tx));
+        let (stopper, stop_requested) = Stopper::new();
         let (shutdown, shutdown_rx) = watch::channel(false);
         let accepting = tokio::spawn(accept(
             listener,

@@ -568,7 +568,14 @@ fn s15_a_session_runs_in_a_pty_in_its_folder_with_the_session_environment_and_re
     );
 
     // Byte for byte: B attached after A, so what B was sent live is exactly
-    // the end of what A was sent.
+    // the end of what A was sent. Both take in what has arrived under the
+    // lock the session sends its output under, so neither is a piece ahead.
+    session
+        .with_screen(|_| {
+            a.pump();
+            b.pump();
+        })
+        .expect("the session still has its screen");
     assert!(!b.data.is_empty());
     assert!(
         a.data.ends_with(&b.data),
@@ -618,16 +625,20 @@ fn s16_a_client_attaching_mid_session_gets_the_screen_then_the_live_output() {
     b.wait_for_text("echo: second");
     settle(&session, &mut [&mut a, &mut b]);
 
-    assert!(
-        a.data.ends_with(&b.data),
-        "B's live output is not exactly the end of A's"
-    );
-    let mut b_screen = b.replay(size);
-    let mut a_screen = a.replay(size);
     session
         .with_screen(|host| {
-            assert_same_screen(host, &mut b_screen);
-            assert_same_screen(host, &mut a_screen);
+            // The session feeds its screen and sends its clients each piece
+            // of output under the lock held here, so once both have taken in
+            // what has arrived they were sent exactly what the screen shows,
+            // even when the program printed more after it caught up.
+            a.pump();
+            b.pump();
+            assert!(
+                a.data.ends_with(&b.data),
+                "B's live output is not exactly the end of A's"
+            );
+            assert_same_screen(host, &mut b.replay(size));
+            assert_same_screen(host, &mut a.replay(size));
         })
         .expect("the session still has its screen");
 
