@@ -2,7 +2,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Locator, Page } from '@playwright/test'
 import type { AppSettings } from '@helm/core'
-import { bearerOf, callTool, readMcpConfig } from '../test/mcp-client'
+import { bearerOf, callTool, readMcpConfig, rpc, rpcResult, toolNames } from '../test/mcp-client'
 import { fakeClaudeLogs, seedSettings, type FakeClaudeLog, type World } from '../test/world'
 import { harnessIn, plantHarness, removeShims } from '../test/overlay-world'
 import { startBrowserFixture } from './browser-fixture'
@@ -343,6 +343,72 @@ withSample(
     expect(sessions).toEqual([
       expect.objectContaining({ name: 'Second item', projectPath: world.projects.alpha })
     ])
+  }
+)
+
+withSample(
+  "a session in the host calls the sample plugin's tools and Helm's session tools, served by the host and answered by Helm",
+  async ({ helm, sample, world }) => {
+    const ui = helm.window
+    await ui.evaluate(
+      ({ token, host }) =>
+        (window as unknown as Bridge).helm.invoke('secrets:save', {
+          key: 'sample-token',
+          value: token,
+          hosts: [host],
+          plugins: ['sample']
+        }),
+      { token: TOKEN, host: sample.server.url }
+    )
+    await startSession(ui, 'alpha')
+
+    // The host wrote the session's tools, under today's names, in its own
+    // launch folder: Helm's own listener is not there to.
+    const run = await claudeRunIn(world, world.projects.alpha)
+    const file = run.argv[run.argv.indexOf('--mcp-config') + 1] ?? ''
+    expect(file.toLowerCase().startsWith(join(world.dataDir, 'host').toLowerCase())).toBe(true)
+    const config = readMcpConfig(file)
+    expect(Object.keys(config.mcpServers).sort()).toEqual(['helm-browser', 'helm-plugin-sample', 'helm-sessions'])
+    const plugin = config.mcpServers['helm-plugin-sample']
+    const sessions = config.mcpServers['helm-sessions']
+    if (plugin === undefined || sessions === undefined) throw new Error(`missing servers in ${JSON.stringify(config)}`)
+    expect(new URL(plugin.url).pathname).toBe('/mcp/plugin/sample')
+    // The one tool the manifest marks read-only is allowed without asking.
+    expect(run.allowedTools).toEqual(['mcp__helm-plugin-sample__list_items'])
+
+    // Listed as Helm's listener lists it, and answered by the plugin's
+    // background page through its own network and secret.
+    const token = bearerOf(plugin)
+    expect(await toolNames(plugin.url, token)).toEqual(['list_items', 'create_item'])
+    const init = await rpcResult<{ instructions: string }>(plugin.url, token, 'initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'claude-code', version: '2.1.999' }
+    })
+    expect(init.instructions).toContain('"Sample", a plugin the user added to Helm')
+    const unread = await callTool(plugin.url, token, 'list_items', { unreadOnly: true })
+    expect(unread.isError).toBe(false)
+    expect(JSON.parse(unread.text)).toEqual([
+      { id: '2', title: 'Second item', read: false },
+      { id: '1', title: 'Welcome', read: false }
+    ])
+    expect(await callTool(plugin.url, token, 'create_item', {})).toMatchObject({
+      isError: true,
+      text: 'create_item needs a title.'
+    })
+
+    // Helm's session tools, from the host: the session sees itself.
+    const listing = await callTool(sessions.url, bearerOf(sessions), 'sessions_list')
+    expect(listing.isError).toBe(false)
+    expect(listing.text).toContain('alpha')
+
+    // Turned off in Settings: gone from the running session at once.
+    await ui.getByRole('navigation', { name: 'Destinations' }).getByRole('button', { name: 'Settings' }).click()
+    await ui.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Sample', exact: true }).click()
+    const group = ui.locator('[data-settings-group="plugin-tools"]')
+    await group.getByRole('checkbox', { name: 'Offer to sessions' }).click()
+    await expect(group.locator('[data-plugin-tools-state]')).toHaveText('No session gets them.')
+    await expect.poll(async () => (await rpc(plugin.url, token, 'tools/list')).status).toBe(404)
   }
 )
 
