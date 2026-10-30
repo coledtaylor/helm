@@ -176,6 +176,49 @@ describe('useConfig: health', () => {
   })
 })
 
+describe('useConfig: could not look', () => {
+  const UNREACHABLE = 'No local host answered on its socket; turn off “Run sessions in the local host” in Settings.'
+  const refuse = (): never => {
+    throw new Error(`Error invoking remote method 'config:scopes': Error: ${UNREACHABLE}`)
+  }
+
+  it('says why the scopes could not be read, never an empty switcher', async () => {
+    bridge.answer('config:scopes', refuse)
+    bridge.answer('config:watch', () => undefined)
+    const { result } = renderHook(() => useConfig())
+    await waitFor(() => expect(result.current.listError).toBe(`Error: ${UNREACHABLE}`))
+    expect(result.current.scopes).toEqual([])
+    expect(result.current.treeLoading).toBe(false)
+  })
+
+  it('says why a scope’s files could not be read, rather than reading forever', async () => {
+    const { result } = await openOnApp(() => [SKILL])
+    expect(result.current.listError).toBeNull()
+    bridge.answer('config:tree', () => {
+      throw new Error(UNREACHABLE)
+    })
+    act(() => result.current.refresh())
+    await waitFor(() => expect(result.current.listError).toBe(UNREACHABLE))
+    expect(result.current.treeLoading).toBe(false)
+
+    // Once the host answers again, so does the list.
+    bridge.answer('config:tree', () => treeOf([SKILL]))
+    act(() => result.current.refresh())
+    await waitFor(() => expect(result.current.tree?.files).toEqual([SKILL]))
+    expect(result.current.listError).toBeNull()
+  })
+
+  it('says why a file’s versions could not be listed, never that it has none', async () => {
+    const { result } = await openOnApp(() => [SKILL])
+    bridge.answer('config:snapshots', () => {
+      throw new Error(UNREACHABLE)
+    })
+    act(() => result.current.select(SKILL))
+    await waitFor(() => expect(result.current.editorError).toBe(UNREACHABLE))
+    expect(result.current.loaded?.path).toBe(SKILL.path)
+  })
+})
+
 describe('useConfig: the scope list and live state', () => {
   it('asks for the scopes again on Refresh, so a new one appears in the switcher', async () => {
     let scopes = [USER, APP]

@@ -14,6 +14,7 @@ import type { PluginToolProvider } from '../plugins/tools'
 import { nativeProfileDialogs } from '../profiles'
 import { knownProject, updateSettings, type Services } from '../services'
 import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
+import { createHostConfig, type HostConfig } from './config'
 import { createHostHistory, type HostHistory } from './history'
 import { startLocalHost, type HostChild, type LocalHost } from './launcher'
 import { createHostLink, type HostLink } from './link'
@@ -42,6 +43,8 @@ export interface DesktopHost extends HostSessions {
   profiles: HostProfiles
   /** Session history, the transcript archive and usage, which the host keeps while sessions run there. */
   history: HostHistory
+  /** The config console, which reads and writes the agent's configuration in the host while sessions run there. */
+  config: HostConfig
 }
 
 export interface DesktopHostDeps {
@@ -159,6 +162,13 @@ export function createDesktopHost({
     log
   })
   const history = createHostHistory({ link, emit: send, log })
+  const config = createHostConfig({
+    link,
+    emit: send,
+    // Discovery runs in Helm's main process this run, so the sidebar's scan is Helm's own.
+    scanned: () => services.lastScan?.projects ?? [],
+    log
+  })
   const pterm = createHostPtermHost({ link, streams, emit: send, log })
-  return { ...hosted, link, streams, pterm, browserRelay, pluginRelay, profiles, history }
+  return { ...hosted, link, streams, pterm, browserRelay, pluginRelay, profiles, history, config }
 }

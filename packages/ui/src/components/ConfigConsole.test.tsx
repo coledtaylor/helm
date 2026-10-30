@@ -65,6 +65,16 @@ const rows = (): Map<string, HTMLElement> =>
       ])
   )
 
+describe('ConfigConsole when the files could not be read', () => {
+  it('says why in the list’s place, rather than reading forever or showing an empty scope', () => {
+    const sentence = 'No local host answered on its socket.'
+    renderConsole({ scopes: [], scopePath: '', tree: null, listError: sentence })
+    expect(within(list()).getByRole('alert').textContent).toBe(sentence)
+    expect(within(list()).queryByText('Reading…')).toBeNull()
+    expect(screen.queryByText('Unreadable')).not.toBeNull()
+  })
+})
+
 describe('bundledWith and skillHolding', () => {
   const file = (relPath: string, kind: ConfigFile['kind']): ConfigFile => ({
     path: `C:\\p\\${relPath.replaceAll('/', '\\')}`,

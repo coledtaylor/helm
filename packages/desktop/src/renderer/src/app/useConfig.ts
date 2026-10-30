@@ -68,6 +68,12 @@ export interface ConfigState {
 
   tree: ConfigTree | null
   treeLoading: boolean
+  /**
+   * Why the scope list or this scope's files could not be read - the host
+   * could not be reached, most plausibly. The list says so rather than
+   * reading forever or showing nothing.
+   */
+  listError: string | null
   refresh: () => void
   refreshing: boolean
 
@@ -164,10 +170,12 @@ interface Answered<T> {
 
 export function useConfig(): ConfigState {
   const [scopes, setScopes] = useState<ConfigScope[]>([])
+  const [scopesError, setScopesError] = useState<string | null>(null)
   const [scopePath, setScopePathState] = useState('')
   const [view, setView] = useState<ConfigViewKind>('files')
 
   const [treeAnswer, setTreeAnswer] = useState<Answered<ConfigTree | null> | null>(null)
+  const [treeError, setTreeError] = useState<Answered<string> | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [treeVersion, setTreeVersion] = useState(0)
 
@@ -199,12 +207,17 @@ export function useConfig(): ConfigState {
   // Scopes
   // -------------------------------------------------------------------------
   const loadScopes = useCallback(() => {
-    void helm.invoke('config:scopes').then((list) => {
-      setScopes(list)
-      // The user scope first: it is the layer under every other one, and the
-      // only scope that is always there.
-      setScopePathState((current) => (current === '' ? (list[0]?.path ?? '') : current))
-    })
+    void helm
+      .invoke('config:scopes')
+      .then((list) => {
+        setScopes(list)
+        setScopesError(null)
+        // The user scope first: it is the layer under every other one, and the
+        // only scope that is always there.
+        setScopePathState((current) => (current === '' ? (list[0]?.path ?? '') : current))
+      })
+      // Could not look is said, never painted as a switcher with nothing in it.
+      .catch((err: unknown) => setScopesError(readable(err)))
   }, [])
 
   useEffect(loadScopes, [loadScopes])
@@ -241,10 +254,12 @@ export function useConfig(): ConfigState {
       .then((result) => {
         if (ticket !== treeSeq.current) return
         setTreeAnswer({ key: treeKey, value: result })
+        setTreeError(null)
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (ticket !== treeSeq.current) return
         setTreeAnswer({ key: treeKey, value: null })
+        setTreeError({ key: treeKey, value: readable(err) })
       })
       .finally(() => {
         if (ticket === treeSeq.current) setRefreshing(false)
@@ -255,6 +270,7 @@ export function useConfig(): ConfigState {
   // between scopes is worse than one that lags by a frame.
   const tree = treeAnswer?.value ?? null
   const treeLoading = scopePath !== '' && treeAnswer?.key !== treeKey
+  const listError = scopesError ?? (treeError?.key === treeKey ? treeError.value : null)
 
   const setScopePath = useCallback((path: string) => {
     setScopePathState(path)
@@ -302,6 +318,8 @@ export function useConfig(): ConfigState {
         void helm
           .invoke('config:snapshots', { scopePath, path })
           .then((rows) => setSnapshotAnswer({ key, value: rows }))
+          // Versions that could not be listed are said, never shown as none.
+          .catch((err: unknown) => setEditorError(readable(err)))
       }
     },
     [scopePath]
@@ -832,6 +850,7 @@ export function useConfig(): ConfigState {
     setView,
     tree,
     treeLoading,
+    listError,
     refresh,
     refreshing,
     selected,

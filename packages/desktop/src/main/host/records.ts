@@ -11,9 +11,10 @@ import type {
   SessionActivityState,
   SessionRecord,
   SessionsOverview,
-  UsageSnapshot
+  UsageSnapshot,
+  WriteConfigResult
 } from '@helm/core'
-import type { LaunchedProfile, LaunchedSession } from '../../shared/ipc'
+import type { EffectiveViewRequest, LaunchedProfile, LaunchedSession } from '../../shared/ipc'
 import type * as P from './protocol'
 
 /**
@@ -190,6 +191,30 @@ export function usageFromHost(readings: readonly P.UsageSnapshot[], backend: str
 /** A reading of nothing, with the sentence that says why. */
 export function unreadableUsage(detail: string): UsageSnapshot {
   return { file: '', fetchedAtMs: null, limits: [], problem: { kind: 'unreadable', detail }, spend: null }
+}
+
+/**
+ * A config write's answer: a write with no conflict or no other refusal has
+ * neither at all, as Helm's own writer answers.
+ */
+export function writeConfigResultFromHost(result: P.WriteConfigResult): WriteConfigResult {
+  return {
+    ok: result.ok,
+    file: result.file,
+    snapshotId: result.snapshotId,
+    unchanged: result.unchanged,
+    ...(result.conflict === null ? {} : { conflict: result.conflict }),
+    ...(result.error === null ? {} : { error: result.error })
+  }
+}
+
+/** The window's request for an effective view, with every field it left out said. */
+export function effectiveRequestForHost(request: EffectiveViewRequest): P.EffectiveViewRequest {
+  return {
+    profileId: request.profileId ?? null,
+    cwd: request.cwd ?? null,
+    overlays: request.overlays ?? []
+  }
 }
 
 /**

@@ -13,6 +13,7 @@ import {
 import type { BrowserHost } from './browser'
 import type { BrowserMcpHost } from './browser-mcp'
 import type { ConfigService } from './config'
+import { localConfigConsole, type ConfigConsoleService } from './config-console'
 import { highlightForEditor, type ContentService } from './content'
 import type { FilesService } from './files'
 import type { TemplateService } from './templates'
@@ -147,6 +148,11 @@ interface IpcContextBase {
   browserMcp: BrowserMcpHost | null
   /** The one surface that writes to a `.claude` tree; see `config.ts`. */
   config: ConfigService
+  /**
+   * The config console as the window reaches it: the local host's when
+   * sessions run there (`host/config.ts`), and `config` above otherwise.
+   */
+  configConsole?: ConfigConsoleService | undefined
   /** Reads, renders and searches what Claude writes; see `content.ts`. */
   content: ContentService
   /** The Files view's tree, file reads, Ctrl+P list and watches; see `files.ts`. */
@@ -197,6 +203,7 @@ export function registerIpc(ctx: IpcContext): void {
     )
   const historyReads: HistoryReads =
     ctx.historyReads !== undefined ? ctx.historyReads : localHistoryReads(services.store, ctx)
+  const configConsole: ConfigConsoleService = ctx.configConsole ?? localConfigConsole(ctx.config)
 
   /** The CLI status, always read against the same config directory. */
   const claudeStatus = (picked?: string): ReturnType<typeof readClaudeStatus> =>
@@ -575,37 +582,35 @@ export function registerIpc(ctx: IpcContext): void {
     // highlighter, and nothing about a draft in a box belongs to a scope.
     'editor:highlight': ({ path, source }) => highlightForEditor(path, source),
 
-    'config:scopes': () => ctx.config.scopes(),
-    'config:tree': ({ scopePath }) => ctx.config.tree(scopePath),
-    'config:read': ({ path }) => ctx.config.read(path),
-    'config:render': ({ path, source }) => ctx.config.render(path, source),
+    'config:scopes': () => configConsole.scopes(),
+    'config:tree': ({ scopePath }) => configConsole.tree(scopePath),
+    'config:read': ({ path }) => configConsole.read(path),
+    'config:render': ({ path, source }) => configConsole.render(path, source),
     // Every byte Helm writes into a `.claude` tree goes through this one
     // handler, which is what makes "no write without a snapshot" a property of
     // the app rather than of whoever remembered to take one.
-    'config:write': (request) => ctx.config.write(request),
-    'config:snapshots': ({ scopePath, path }) => ctx.config.snapshots(scopePath, path),
-    'config:snapshot': ({ id }) => ctx.config.snapshot(id),
-    'config:restore': ({ id, path }) => ctx.config.restore(id, path),
-    'config:watch': ({ path }) => {
-      ctx.config.watch(path)
-    },
+    'config:write': (request) => configConsole.write(request),
+    'config:snapshots': ({ scopePath, path }) => configConsole.snapshots(scopePath, path),
+    'config:snapshot': ({ id }) => configConsole.snapshot(id),
+    'config:restore': ({ id, path }) => configConsole.restore(id, path),
+    'config:watch': ({ path }) => configConsole.watch(path),
 
     // The other three things a directory supports. They reach the same
     // snapshot-first path `config:write` does; what is new here is the
     // question, not a second route to the disk.
-    'config:create': (request) => ctx.config.create(request),
-    'config:rename': (request) => ctx.config.rename(request),
-    'config:delete': (request) => ctx.config.remove(request),
+    'config:create': (request) => configConsole.create(request),
+    'config:rename': (request) => configConsole.rename(request),
+    'config:delete': (request) => configConsole.remove(request),
 
-    'config:effective': (request) => ctx.config.effective(request),
+    'config:effective': (request) => configConsole.effective(request),
 
-    'config:mcpPreview': (request) => ctx.config.mcpPreview(request),
-    'config:mcpAdd': (request) => ctx.config.mcpAdd(request),
-    'config:mcpRemove': (request) => ctx.config.mcpRemove(request),
-    'config:mcpApprove': (request) => ctx.config.mcpApprove(request),
-    'config:mcpList': ({ cwd }) => ctx.config.mcpList(cwd),
+    'config:mcpPreview': (request) => configConsole.mcpPreview(request),
+    'config:mcpAdd': (request) => configConsole.mcpAdd(request),
+    'config:mcpRemove': (request) => configConsole.mcpRemove(request),
+    'config:mcpApprove': (request) => configConsole.mcpApprove(request),
+    'config:mcpList': ({ cwd }) => configConsole.mcpList(cwd),
 
-    'config:doctor': () => ctx.config.doctor(),
+    'config:doctor': () => configConsole.doctor(),
 
     'usage:read': () => historyReads.usage(),
 

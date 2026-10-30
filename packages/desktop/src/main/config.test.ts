@@ -119,6 +119,43 @@ describe('config service', () => {
     expect(readFileSync(file, 'utf8')).toBe(original)
   })
 
+  it('answers the window through Helm’s own console as it always has: a version before every write, a stale save refused, create, rename and delete kept', async () => {
+    const { localConfigConsole } = await import('./config-console')
+    const local = localConfigConsole(config)
+    const file = join(project, 'CLAUDE.md')
+    const original = '# Alpha\r\n\r\nThe local console, café included.  \r\n'
+    writeFileSync(file, original)
+
+    expect((await local.scopes()).map((scope) => scope.path)).toEqual(config.scopes().map((scope) => scope.path))
+    const read = await local.read(file)
+    const saved = await local.write({ scopePath: project, path: file, content: 'mine\n', expectedHash: read.hash, reason: 'edit' })
+    expect(saved.ok).toBe(true)
+    expect(saved).not.toHaveProperty('conflict')
+    expect(readFileSync(file, 'utf8')).toBe('mine\n')
+    expect((await local.snapshots(project, file))[0]?.contentHash).toBe(hashContent(original))
+
+    // Another program writes after the console read it: the save is refused and the file keeps their bytes.
+    writeFileSync(file, 'theirs\n')
+    const stale = await local.write({ scopePath: project, path: file, content: 'mine again\n', expectedHash: saved.file.hash, reason: 'edit' })
+    expect(stale.ok).toBe(false)
+    expect(stale.conflict?.onDiskContent).toBe('theirs\n')
+    expect(readFileSync(file, 'utf8')).toBe('theirs\n')
+
+    const restored = await local.restore(saved.snapshotId!, file)
+    expect(restored.ok).toBe(true)
+    expect(readFileSync(file, 'utf8')).toBe(original)
+
+    const created = await local.create({ scopePath: project, kind: 'command', name: 'local-check' })
+    expect(created.ok).toBe(true)
+    const renamed = await local.rename({ scopePath: project, path: created.path!, name: 'local-checked' })
+    expect(renamed.ok).toBe(true)
+    const removed = await local.remove({ scopePath: project, path: renamed.path! })
+    expect(removed.removed.map((entry) => entry.snapshotId)).toHaveLength(1)
+    expect(existsSync(renamed.path!)).toBe(false)
+    // Outside the scope is refused, as a sentence, never a write.
+    await expect(local.remove({ scopePath: project, path: join(world.root, 'elsewhere.md') })).rejects.toThrow()
+  })
+
   it('writes nothing when the snapshot cannot be taken', async () => {
     const file = join(project, '.claude', 'settings.json')
     mkdirSync(join(project, '.claude'), { recursive: true })

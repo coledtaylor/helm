@@ -760,6 +760,9 @@ function startApp(options: AppOptions = {}): void {
       ? { history: historyHome.index.history, archive: historyHome.index.archive, usage: historyHome.usage }
       : { historyReads: historyHome.reads }),
     config,
+    // With sessions in the local host, the console reads and writes through
+    // the host; the local service above stays for the template service only.
+    ...(desktopHost !== null ? { configConsole: desktopHost.config } : {}),
     content,
     files,
     templates,
@@ -944,6 +947,7 @@ function startApp(options: AppOptions = {}): void {
         desktopHost.pluginRelay.stop()
         desktopHost.profiles.shutdown()
         desktopHost.history.shutdown()
+        desktopHost.config.shutdown()
         desktopHost.sessions.shutdown()
         desktopHost.pterm.shutdown()
         void desktopHost.link.stop().finally(() => {

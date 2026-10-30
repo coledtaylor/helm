@@ -35,6 +35,12 @@ export interface ConfigConsoleProps {
   tree: ConfigTree | null
   treeLoading: boolean
   /**
+   * Why the scopes or this scope's files could not be read. Said in the list's
+   * place, so "could not look" is never painted as an empty scope or as a
+   * read that never ends.
+   */
+  listError?: string | null | undefined
+  /**
    * What a session in one working directory would resolve, which is where every
    * row's live state comes from. Null while it is being computed, or while the
    * one held is the answer to a different question - the rows then say nothing
@@ -174,6 +180,7 @@ export function ConfigConsole({
   onViewChange,
   tree,
   treeLoading,
+  listError = null,
   live,
   selected,
   onSelect,
@@ -430,13 +437,15 @@ export function ConfigConsole({
                     bundle is inside it, and saying both is what explains where
                     a file somebody can see in Explorer has gone. */}
                 <span className="tabular-nums">
-                  {tree === null
-                    ? 'Reading…'
-                    : filter !== ''
-                      ? `${shown}/${total}`
-                      : rows === total
-                        ? `${total} ${total === 1 ? 'file' : 'files'}`
-                        : `${rows} entries · ${total} files`}
+                  {listError !== null
+                    ? 'Unreadable'
+                    : tree === null
+                      ? 'Reading…'
+                      : filter !== ''
+                        ? `${shown}/${total}`
+                        : rows === total
+                          ? `${total} ${total === 1 ? 'file' : 'files'}`
+                          : `${rows} entries · ${total} files`}
                 </span>
                 {/* Whose session the states on these rows are about.
                     A resolution is a working directory, not a scope: the same
@@ -470,7 +479,11 @@ export function ConfigConsole({
               onKeyDown={onListKeyDown}
               className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1"
             >
-              {tree === null || treeLoading ? (
+              {listError !== null ? (
+                <p data-config-list-error role="alert" className="px-2 py-6 text-center text-[12px] text-danger">
+                  {listError}
+                </p>
+              ) : tree === null || treeLoading ? (
                 <p className="px-2 py-6 text-center text-[12px] text-fg-subtle">Reading&hellip;</p>
               ) : groups.length === 0 ? (
                 <Empty scope={scope} filtering={filter !== '' && total > 0} />

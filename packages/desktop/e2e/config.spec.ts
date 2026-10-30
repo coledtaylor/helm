@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
+import { seedSettings, type World } from '../test/world'
 import { expect, test as base } from './helm'
 
 /**
@@ -19,6 +20,14 @@ const test = base.extend({
   }
 })
 
+/** The same world with "Run sessions in the local host" on: the console reads and writes through the host. */
+const inHost = test.extend({
+  world: async ({ world }, use) => {
+    seedSettings(world, { sessionsInHost: true })
+    await use(world)
+  }
+})
+
 async function chooseScope(window: Page, name: string): Promise<void> {
   const scope = window.getByRole('combobox', { name: 'Scope' })
   const value = await scope.locator('option', { hasText: new RegExp(`^${name}\\b`) }).getAttribute('value')
@@ -30,11 +39,7 @@ async function chooseScope(window: Page, name: string): Promise<void> {
   await expect(scope).toHaveValue(value!)
 }
 
-test('a CLAUDE.md edited and saved in the config console, then restored to its original bytes', async ({
-  world,
-  helm
-}) => {
-  const { window } = helm
+async function editSaveAndRestore(window: Page, world: World): Promise<void> {
   const file = join(world.projects.alpha, 'CLAUDE.md')
 
   await window.getByRole('button', { name: 'Config', exact: true }).click()
@@ -50,4 +55,18 @@ test('a CLAUDE.md edited and saved in the config console, then restored to its o
   await window.getByRole('button', { name: 'Restore', exact: true }).click()
   await expect.poll(() => readFileSync(file, 'utf8')).toBe(ORIGINAL)
   await expect(window.getByRole('button', { name: '2 versions', exact: true })).toBeVisible()
+}
+
+test('a CLAUDE.md edited and saved in the config console, then restored to its original bytes', async ({
+  world,
+  helm
+}) => {
+  await editSaveAndRestore(helm.window, world)
+})
+
+inHost('a CLAUDE.md edited and saved in the config console through the local host, then restored to its original bytes', async ({
+  world,
+  helm
+}) => {
+  await editSaveAndRestore(helm.window, world)
 })
