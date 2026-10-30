@@ -555,19 +555,66 @@ describe('sessions through the local host', () => {
     })
   })
 
+  describe('the plugins’ tools', () => {
+    it('gives each running session an id of its own for plugins, apart from its browser key, with its label and folder', async () => {
+      const w = world({ listed: [row(), row({ id: 8, name: 'api', cwd: '/work/api' }), row({ id: 9, status: 'exited' })] })
+      await w.connect()
+
+      const app = w.host.pluginCaller(7)
+      const api = w.host.pluginCaller(8)
+      expect(app).toEqual({ id: expect.stringMatching(/^[0-9a-f-]{36}$/) as string, name: 'app', cwd: '/work/app' })
+      expect(api).toMatchObject({ name: 'api', cwd: '/work/api' })
+      expect(api?.id).not.toBe(app?.id)
+      // Not the host's row id, and not the session's browser identity.
+      expect(app?.id).not.toBe('7')
+      expect(app?.id).not.toBe(w.host.sessions.browserOpener(7)?.key)
+      // Asked again, the same id: a plugin can tell its calls apart by session.
+      expect(w.host.pluginCaller(7)).toEqual(app)
+      // An ended session, and one the window does not know, are nobody.
+      expect(w.host.pluginCaller(9)).toBeNull()
+      expect(w.host.pluginCaller(10)).toBeNull()
+    })
+
+    it('drops a session’s id when it exits, when its tab is closed and when Helm quits', async () => {
+      const w = world({ listed: [row(), row({ id: 8, name: 'api' }), row({ id: 9, name: 'docs' })] })
+      await w.connect()
+      const before = [7, 8, 9].map((id) => w.host.pluginCaller(id)?.id)
+
+      w.connection.push('session:exit', row({ status: 'exited', exitCode: 0 }))
+      expect(w.host.pluginCaller(7)).toBeNull()
+      await w.host.sessions.close({ id: 8 })
+      expect(w.host.pluginCaller(8)).toBeNull()
+      // A session still running keeps its id until Helm quits.
+      expect(w.host.pluginCaller(9)?.id).toBe(before[2])
+      w.host.sessions.shutdown()
+      expect(w.host.pluginCaller(9)).toBeNull()
+    })
+  })
+
   describe('the settings the host is given', () => {
-    it('writes the claude, the shell, and whether the browser tools are on and held to this machine', () => {
+    it('writes the claude, the shell, whether the browser tools are on and held to this machine, and whether the session tools are on', () => {
       expect(
-        hostSettingsFor({ ...DEFAULT_SETTINGS, claudePath: null, terminalShell: 'pwsh', browserMcp: false, browserMcpLocalOnly: true }, '/bin/claude')
+        hostSettingsFor(
+          {
+            ...DEFAULT_SETTINGS,
+            claudePath: null,
+            terminalShell: 'pwsh',
+            browserMcp: false,
+            browserMcpLocalOnly: true,
+            sessionMcp: false
+          },
+          '/bin/claude'
+        )
       ).toEqual({
         backendPaths: { [CLAUDE_CODE_BACKEND]: '/bin/claude' },
         terminalShell: 'pwsh',
         browserMcp: false,
-        browserMcpLocalOnly: true
+        browserMcpLocalOnly: true,
+        sessionMcp: false
       })
       expect(
-        hostSettingsFor({ ...DEFAULT_SETTINGS, browserMcp: true, browserMcpLocalOnly: false }, null)
-      ).toMatchObject({ browserMcp: true, browserMcpLocalOnly: false })
+        hostSettingsFor({ ...DEFAULT_SETTINGS, browserMcp: true, browserMcpLocalOnly: false, sessionMcp: true }, null)
+      ).toMatchObject({ browserMcp: true, browserMcpLocalOnly: false, sessionMcp: true })
     })
   })
 })

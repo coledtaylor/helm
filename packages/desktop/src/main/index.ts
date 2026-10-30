@@ -411,6 +411,11 @@ function startApp(options: AppOptions = {}): void {
    */
   let browserMcp: BrowserMcpHost | null = null
   /**
+   * What tells the local host a plugin's tools came or went, while sessions
+   * run there: set once the desktop host below exists.
+   */
+  let hostPluginToolsChanged = (): void => undefined
+  /**
    * Helm's sessions as plugins see them, which needs the session host and the
    * activity service made below. Until then there are none, which was true a
    * moment ago; the first `sessions` event corrects a page that asked early.
@@ -424,8 +429,12 @@ function startApp(options: AppOptions = {}): void {
     bridge: pluginBridge,
     stylesheet: pluginStylesheet,
     // A plugin's tools coming or going can be the difference between a
-    // listener and none.
-    onToolsChanged: () => void browserMcp?.sync(),
+    // listener and none; with sessions in the local host, the host serves
+    // them and is offered them again.
+    onToolsChanged: () => {
+      void browserMcp?.sync()
+      hostPluginToolsChanged()
+    },
     // Called only once the user has agreed in the window, which is long after
     // the session host below exists.
     startSession: (request) => sessions.startWithPrompt(request),
@@ -459,10 +468,15 @@ function startApp(options: AppOptions = {}): void {
         window: () => win,
         confirm: options.confirm ?? sessionConfirm(() => win),
         onActivityChange: () => plugins.sessionsChanged(),
-        browserTools: () => browserMcp
+        browserTools: () => browserMcp,
+        plugins: {
+          servers: () => plugins.toolServers(),
+          call: (request, signal) => plugins.callTool(request, signal)
+        }
       })
     : null
   if (desktopHost !== null) {
+    hostPluginToolsChanged = () => desktopHost.pluginRelay.offer()
     void desktopHost.link.connection().catch((err: unknown) => {
       console.warn(err instanceof Error ? err.message : String(err))
     })
@@ -613,6 +627,9 @@ function startApp(options: AppOptions = {}): void {
    * `start()` answers rather than throws: a machine where the loopback bind
    * fails is a machine where Helm still works, with no browser tools and a line
    * on the console saying so.
+   *
+   * With sessions in the local host it never listens: the host serves their
+   * tools, and this only answers the browser calls the host relays.
    */
   browserMcp = createBrowserMcp({
     browsers,
@@ -622,7 +639,8 @@ function startApp(options: AppOptions = {}): void {
     plugins: {
       servers: () => plugins.toolServers(),
       call: (request, signal) => plugins.callTool(request, signal)
-    }
+    },
+    listen: desktopHost === null
   })
   void browserMcp.start().then(({ started, problem }) => {
     if (started) {
@@ -632,7 +650,10 @@ function startApp(options: AppOptions = {}): void {
           bound?.port ?? 0
         )} (loopback, token-gated)`
       )
-    } else if (services.settings.browserMcp || services.settings.sessionMcp || plugins.toolServers().length > 0) {
+    } else if (
+      desktopHost === null &&
+      (services.settings.browserMcp || services.settings.sessionMcp || plugins.toolServers().length > 0)
+    ) {
       console.warn(`Helm's tools are not available: ${problem ?? 'unknown'}`)
     }
   })
@@ -896,6 +917,7 @@ function startApp(options: AppOptions = {}): void {
       if (hostStop === 'running') {
         hostStop = 'stopping'
         desktopHost.browserRelay.stop()
+        desktopHost.pluginRelay.stop()
         desktopHost.profiles.shutdown()
         desktopHost.sessions.shutdown()
         desktopHost.pterm.shutdown()

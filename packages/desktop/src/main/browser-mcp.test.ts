@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { request } from 'node:http'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -11,6 +11,7 @@ import type { BrowserHost, BrowserOpener } from './browser'
 import {
   BROWSER_TOOL_TABLE,
   createBrowserMcp,
+  NOT_LISTENING_IN_HOST,
   pairBrowserTools,
   SNAPSHOT_MAX_NODES,
   TEXT_MAX_CHARS,
@@ -21,6 +22,8 @@ import {
   type BrowserToolResult
 } from './browser-mcp'
 import { ANSWER_TOO_LARGE, createBrowserToolRelay, NOT_A_BROWSER_SESSION } from './host/browser-tools'
+import { createPluginToolRelay } from './host/plugin-tools'
+import { SESSION_TOOL_TABLE } from './session-tools'
 import { MAX_FRAME_LEN } from './host/protocol'
 import type * as P from './host/protocol'
 import type { ToolAnswer, ToolCallRequest, ToolServer } from './plugins/tools'
@@ -1324,6 +1327,99 @@ describe('the tool endpoint', () => {
       await vi.waitFor(() => expect(calls).toHaveLength(3), { timeout: PATIENCE })
       endpoint.release(beta.token)
       expect(calls[2]?.signal.aborted).toBe(true)
+    })
+
+    it('answers a call the local host relays with the very tool result its own route answers', async () => {
+      await endpoint.start()
+      const alpha = register('alpha')
+      const connection = new FakeConnection()
+      const link = fakeLink(connection)
+      const answers = new Map<number, (answer: P.AgentPluginToolAnswer) => void>()
+      connection.answer('agentPlugin:answer', (answer) => {
+        answers.get(answer.callId)?.(answer)
+        return null
+      })
+      createPluginToolRelay({
+        link,
+        servers: () => servers,
+        call: (request, signal) => {
+          calls.push({ request, signal })
+          return answerWith(request, signal)
+        },
+        caller: (session) => (session === 3 ? { id: 'minted-in-main', name: 'alpha', cwd: 'C:/work/alpha' } : null),
+        log: () => undefined
+      })
+      await link.connect()
+
+      const pluginAnswers: ToolAnswer[] = [
+        { ok: true, text: 'two cards' },
+        { ok: false, message: 'The board is locked.' }
+      ]
+      for (const [callId, answer] of pluginAnswers.entries()) {
+        answerWith = () => Promise.resolve(answer)
+        const routed = await rpcResult<unknown>(trackerUrl(alpha), alpha.token, 'tools/call', {
+          name: 'list_cards',
+          arguments: {}
+        })
+        const relayed = new Promise<P.AgentPluginToolAnswer>((resolve) => answers.set(callId, resolve))
+        connection.push('agentPlugin:call', { callId, session: 3, plugin: 'tracker', tool: 'list_cards', arguments: {} })
+        expect((await relayed).outcome).toEqual({ status: 'done', value: routed })
+      }
+      // The relay names the session as main knows it, never by a token.
+      expect(calls.at(-1)?.request.session).toEqual({ id: 'minted-in-main', name: 'alpha', cwd: 'C:/work/alpha' })
+    })
+  })
+
+  describe('with sessions in the local host', () => {
+    beforeEach(() => {
+      endpoint = createBrowserMcp({
+        browsers: browsers.host,
+        settings: () => settings,
+        dir,
+        sessions: () => null,
+        plugins: {
+          servers: () => [
+            { plugin: 'notes', name: 'Notes', server: 'helm-plugin-notes', instructions: null, tools: [] }
+          ],
+          call: () => Promise.resolve({ ok: true, text: '' })
+        },
+        listen: false
+      })
+    })
+
+    it('binds nothing, mints no token and registers nobody, whatever is switched on', async () => {
+      settings = { ...settings, browserMcp: true, sessionMcp: true }
+      expect(await endpoint.start()).toEqual({ started: false, problem: NOT_LISTENING_IN_HOST })
+      await endpoint.sync()
+      expect(endpoint.running()).toBe(false)
+      expect(endpoint.address()).toBeNull()
+      expect(endpoint.register({ id: 'x', name: 'alpha', cwd: 'C:/work/alpha' })).toBeNull()
+      expect(readdirSync(dir)).toEqual([])
+    })
+
+    it('still answers the browser calls the host relays', async () => {
+      const answer = await endpoint.runBrowserTool({ key: 'host-key', name: 'alpha' }, 'browser_tabs', {})
+      expect(answer.isError).toBeUndefined()
+      expect(answer.content[0]?.text).toContain('No browser tabs are open')
+    })
+  })
+
+  describe('the shared session tool table', () => {
+    it('lists exactly the tools, descriptions, input schemas and instructions in the table the host reads', async () => {
+      await endpoint.start()
+      const alpha = register('alpha')
+      expect(SESSION_TOOL_TABLE.name).toBe('helm-sessions')
+      expect(new URL(alpha.sessions).pathname).toBe(SESSION_TOOL_TABLE.path)
+      const { tools } = await rpcResult<{ tools: unknown[] }>(alpha.sessions, alpha.token, 'tools/list')
+      expect(tools).toEqual(SESSION_TOOL_TABLE.tools)
+      const init = await rpcResult<{ serverInfo: { name: string }; instructions: string }>(
+        alpha.sessions,
+        alpha.token,
+        'initialize',
+        {}
+      )
+      expect(init.serverInfo.name).toBe('helm-sessions')
+      expect(init.instructions).toBe(SESSION_TOOL_TABLE.instructions)
     })
   })
 

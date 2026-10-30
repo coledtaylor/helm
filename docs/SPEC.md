@@ -1208,7 +1208,10 @@ about the user's own `gh`: Helm no longer runs it.
   return **no part of any session's conversation**: no transcript, no prompt, no
   output, and not the argv a session was launched with, which carries both a
   session's opening prompt and the path to that session's own bearer token. See
-  4.7 and CLAUDE.md's rules.
+  4.7 and CLAUDE.md's rules. With "Run sessions in the local host" on, Helm
+  binds nothing at all: the local host serves the same families, each plugin's
+  tools among them, on the same terms and on loopback, to the sessions it runs,
+  and carries each browser and plugin call to Helm's window to answer.
 - **The browser partition holds credentials, and Helm reads none of them.**
   It holds whatever cookies the sites you visit set, exactly as a browser
   profile does: nothing in the app opens that cookie jar, and the only thing

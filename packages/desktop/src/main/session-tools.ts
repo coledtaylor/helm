@@ -13,6 +13,8 @@ import {
 import type { ActivityService } from './activity'
 import type { ResourcesService } from './resources'
 import type { SessionHost } from './sessions'
+import { pairTools, type ToolSpec, type ToolTable } from './tool-table'
+import sessionToolTable from '../../../../crates/host/src/server/session_tools.json'
 
 /**
  * Helm's session-awareness tools: what the other sessions are doing.
@@ -76,15 +78,22 @@ import type { SessionHost } from './sessions'
  * work at all.
  */
 
+/**
+ * The session tools' table: the server's name and route, its instructions, and
+ * each tool's name, description and input schema. It lives once, in
+ * `crates/host/src/server/session_tools.json`, because the local host serves
+ * the same family to the sessions it runs (`tool-table.ts`).
+ */
+export const SESSION_TOOL_TABLE: ToolTable = sessionToolTable
+
 /** The name the tools appear under in a session. */
-export const SESSION_TOOLS_SERVER_NAME = 'helm-sessions'
+export const SESSION_TOOLS_SERVER_NAME = SESSION_TOOL_TABLE.name
 
 /** Its own route on the one listener. Nothing answers here with the tick off. */
-export const SESSION_TOOLS_PATH = '/mcp/sessions'
+export const SESSION_TOOLS_PATH = SESSION_TOOL_TABLE.path
 
 /** What a client is told the moment it connects. */
-export const SESSION_TOOLS_INSTRUCTIONS =
-  'These tools tell you what other Claude Code sessions are running on this machine, so you can stay out of their way - two agents in one working tree is the thing they exist to prevent. They are read-only and there is no way to send another session anything through them: nothing here starts, stops, waits on, or messages a session, and no tool will ever return any part of another session’s conversation. Check sessions_list before starting long work in a directory.'
+export const SESSION_TOOLS_INSTRUCTIONS = SESSION_TOOL_TABLE.instructions
 
 /**
  * What a session tool answers with.
@@ -98,20 +107,10 @@ export interface SessionToolAnswer {
   isError?: boolean
 }
 
-export interface SessionTool {
-  name: string
-  description: string
-  inputSchema: {
-    type: 'object'
-    properties: Record<string, unknown>
-    required?: string[]
-    additionalProperties: false
-  }
-  run: (
-    caller: { token: string },
-    args: Record<string, unknown>
-  ) => Promise<SessionToolAnswer>
-}
+/** What one session tool does, given who called it and its arguments. */
+export type SessionToolRun = (caller: { token: string }, args: Record<string, unknown>) => Promise<SessionToolAnswer>
+
+export type SessionTool = ToolSpec & { run: SessionToolRun }
 
 /**
  * Everything these tools need from the rest of the app, injected.
@@ -241,13 +240,13 @@ export function createSessionTools(world: () => SessionToolsWorld | null): Sessi
     'Helm cannot answer that right now - it is still starting up. Try again in a moment.'
   )
 
-  return [
-    {
-      name: 'sessions_list',
-      description:
-        'Every Claude Code session running on this machine right now - what it is called, which directory it is working in, whether it is busy, idle or waiting on the user, and how long it has been that way. Sessions started outside Helm are listed too, because one of those holds a working tree exactly as hard as a Helm tab does. Read-only: this tells you what is happening and gives you no way to affect it, and it never returns any part of another session’s conversation. Worth calling before you start long work in a directory somebody else may already be in.',
-      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      run: async (caller) => {
+  /**
+   * What each tool does, by name. What a session is told about it (its
+   * description and input schema) is the shared table, `SESSION_TOOL_TABLE`,
+   * and `pairTools` refuses a tool that is in one and not the other.
+   */
+  const runs: Record<string, SessionToolRun> = {
+    sessions_list: async (caller) => {
         const app = world()
         if (app === null) return unavailable
         // Now rather than up to 750ms ago. The registry pass is a `readdir` and
@@ -264,25 +263,9 @@ export function createSessionTools(world: () => SessionToolsWorld | null): Sessi
             })
           )
         )
-      }
     },
 
-    {
-      name: 'session_detail',
-      description:
-        'What one session is working in and what it is holding: its working directory, the branch it started on, the profile it was launched from, the processes running under it and the ports those are listening on. Pass a pid from sessions_list, or no pid at all for your own session. For a session Helm did not start there is nothing beyond what sessions_list already showed, and it says so. Read-only, and it never returns any part of another session’s conversation - not its transcript, not its prompts, not its output, and not the arguments it was launched with.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          pid: {
-            type: 'number',
-            description:
-              'The pid from sessions_list. Omit it for your own session - which one that is comes from the token this session was given, never from anything you pass.'
-          }
-        },
-        additionalProperties: false
-      },
-      run: async (caller, args) => {
+    session_detail: async (caller, args) => {
         const app = world()
         if (app === null) return unavailable
 
@@ -354,7 +337,8 @@ export function createSessionTools(world: () => SessionToolsWorld | null): Sessi
             isCaller: me !== null && target.helmSessionId === me
           })
         )
-      }
     }
-  ]
+  }
+
+  return pairTools('session', SESSION_TOOL_TABLE.tools, runs)
 }

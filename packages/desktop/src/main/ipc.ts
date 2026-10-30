@@ -229,13 +229,15 @@ export function registerIpc(ctx: IpcContext): void {
       // launch from one path and `claude mcp add` from another.
       if (patch.claudePath !== undefined) setClaudeOverride(next.claudePath)
       // Sessions in the local host run the `claude` and open the shell the
-      // host was told, and get the browser tools and their reach as it was
-      // told, so it is told again at once when any of those changes.
+      // host was told, and get the browser and session tools and the browser's
+      // reach as it was told, so it is told again at once when any of those
+      // changes.
       if (
         patch.claudePath !== undefined ||
         patch.terminalShell !== undefined ||
         patch.browserMcp !== undefined ||
-        patch.browserMcpLocalOnly !== undefined
+        patch.browserMcpLocalOnly !== undefined ||
+        patch.sessionMcp !== undefined
       ) {
         ctx.hostSettingsChanged?.()
       }

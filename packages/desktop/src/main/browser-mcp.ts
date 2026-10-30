@@ -19,6 +19,8 @@ import {
   SESSION_TOOLS_SERVER_NAME,
   type SessionToolsWorld
 } from './session-tools'
+import { pairTools, type ToolSpec, type ToolTable } from './tool-table'
+import type { ToolAnswer as PluginToolAnswer } from './plugins/tools'
 import type { BrowserConsoleEntry } from '../shared/ipc'
 import browserToolTable from '../../../../crates/host/src/server/browser_tools.json'
 
@@ -109,11 +111,7 @@ const PROTOCOL_VERSION = '2025-06-18'
 const KNOWN_VERSIONS = new Set(['2025-06-18', '2025-03-26', '2024-11-05'])
 
 /** One browser tool as a session is told about it: everything but what it does. */
-export interface BrowserToolSpec {
-  name: string
-  description: string
-  inputSchema: Record<string, unknown>
-}
+export type BrowserToolSpec = ToolSpec
 
 /**
  * The browser tools' table: the server's name and route, its instructions,
@@ -122,37 +120,14 @@ export interface BrowserToolSpec {
  * family to the sessions it runs and a session must be told the same thing by
  * either: the user's `mcp__helm-browser__*` permission rules name these tools.
  */
-export const BROWSER_TOOL_TABLE: {
-  name: string
-  path: string
-  instructions: string
-  tools: readonly BrowserToolSpec[]
-} = browserToolTable
+export const BROWSER_TOOL_TABLE: ToolTable = browserToolTable
 
-/**
- * Each tool in the table with what it does, in the table's order. Throws
- * naming every tool that is in the table with nothing to run it, or has a run
- * and no entry in the table: either would be a tool listed that cannot answer,
- * or one that answers and is never listed.
- */
+/** Each browser tool in the table with what it does (`pairTools`). */
 export function pairBrowserTools<R>(
   specs: readonly BrowserToolSpec[],
   runs: Readonly<Record<string, R>>
 ): Array<BrowserToolSpec & { run: R }> {
-  const listed = new Set(specs.map((spec) => spec.name))
-  const unrun = specs.filter((spec) => !Object.hasOwn(runs, spec.name)).map((spec) => spec.name)
-  const unlisted = Object.keys(runs).filter((name) => !listed.has(name))
-  if (unrun.length > 0 || unlisted.length > 0) {
-    throw new Error(
-      [
-        unrun.length > 0 ? `in the browser tool table with nothing to run them: ${unrun.join(', ')}` : '',
-        unlisted.length > 0 ? `run but not in the browser tool table: ${unlisted.join(', ')}` : ''
-      ]
-        .filter((part) => part !== '')
-        .join('; ')
-    )
-  }
-  return specs.map((spec) => ({ ...spec, run: runs[spec.name] as R }))
+  return pairTools('browser', specs, runs)
 }
 
 /** The name the browser tools appear under in a session. One server, one name. */
@@ -319,16 +294,42 @@ export interface BrowserMcpOptions {
   sessions?: (() => SessionToolsWorld | null) | undefined
   /** The plugins offering tools, and a way to call one; absent for an endpoint without them. */
   plugins?: PluginToolProvider | undefined
+  /**
+   * False when Helm's sessions run in the local host, which serves their agent
+   * tools itself: then nothing here binds, mints a token or writes a
+   * `--mcp-config`, whatever the settings and plugins say, and the endpoint
+   * only answers `runBrowserTool` for the calls the host relays. True when
+   * absent.
+   */
+  listen?: boolean | undefined
 }
 
 /** A plugin's route: `/mcp/plugin/<id>`. An id is lower-case letters, digits and dashes, so it needs no escaping. */
 const PLUGIN_PATH_PREFIX = '/mcp/plugin/'
 
-/** What a session is told about a plugin's tools before the plugin's own words. */
-function pluginInstructions(server: ToolServer): string {
+/**
+ * What a session is told about a plugin's tools before the plugin's own words:
+ * by this listener, and by the local host, which is offered it as it is.
+ */
+export function pluginInstructions(server: ToolServer): string {
   const provenance = `These tools come from "${server.name}", a plugin the user added to Helm, the app hosting this session. The plugin answers every call; Helm passes it on.`
   return server.instructions === null ? provenance : `${provenance}\n\n${server.instructions}`
 }
+
+/**
+ * The tool result a session reads for a plugin's answer: its text, or why
+ * there is none as an error. The same for a call on this listener and one the
+ * local host relays.
+ */
+export function pluginToolResult(answer: PluginToolAnswer): BrowserToolResult {
+  return answer.ok
+    ? { content: [{ type: 'text', text: answer.text }] }
+    : { content: [{ type: 'text', text: answer.message }], isError: true }
+}
+
+/** Why there is no listener while sessions run in the local host. */
+export const NOT_LISTENING_IN_HOST =
+  "Helm's sessions run in the local host, which serves their agent tools, so Helm binds no port and passes no --mcp-config."
 
 // ---------------------------------------------------------------------------
 
@@ -969,7 +970,7 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
           },
           signal
         )
-        return answer.ok ? ok(answer.text) : fail(answer.message)
+        return pluginToolResult(answer)
       }
     }))
   }
@@ -1343,6 +1344,9 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
   const host: BrowserMcpHost = {
     async start() {
       if (server !== null) return { started: true, problem: null }
+      // The host serves the tools of the sessions it runs: a listener here
+      // would be a port and tokens for nobody.
+      if (options.listen === false) return { started: false, problem: NOT_LISTENING_IN_HOST }
       // Every family off is no listener at all, which is the state the app was
       // in before any of this existed. One family on is one route.
       if (!routes().some((route) => route.enabled())) {

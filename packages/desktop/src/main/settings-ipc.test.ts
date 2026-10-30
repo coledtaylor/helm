@@ -185,6 +185,15 @@ describe('settings over IPC', () => {
       await invoke('settings:write', { browserSearch: 'off' })
       expect(hostSettingsChanged).toHaveBeenCalledTimes(4)
     })
+
+    it('tells the host at once when the session tools are switched off or on', async () => {
+      hostSettingsChanged.mockClear()
+      await invoke('settings:write', { sessionMcp: false })
+      expect(hostSettingsChanged).toHaveBeenCalledTimes(1)
+      await invoke('settings:write', { sessionMcp: true })
+      expect(hostSettingsChanged).toHaveBeenCalledTimes(2)
+      expect(stored()).toMatchObject({ sessionMcp: true })
+    })
   })
 
   describe('validation', () => {

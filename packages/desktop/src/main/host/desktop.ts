@@ -10,11 +10,13 @@ import { emit } from '../ipc'
 import { appMode, dataDir } from '../paths'
 import { showExitNotification, type Confirm } from '../sessions'
 import type { BrowserMcpHost } from '../browser-mcp'
+import type { PluginToolProvider } from '../plugins/tools'
 import { nativeProfileDialogs } from '../profiles'
 import { knownProject, updateSettings, type Services } from '../services'
 import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
 import { startLocalHost, type HostChild, type LocalHost } from './launcher'
 import { createHostLink, type HostLink } from './link'
+import { createPluginToolRelay, type PluginToolRelay } from './plugin-tools'
 import { createHostProfiles, type HostProfiles } from './profiles'
 import type { HostSettingsPatch } from './protocol'
 import { createHostPtermHost } from './pterm'
@@ -33,6 +35,8 @@ export interface DesktopHost extends HostSessions {
   pterm: ReturnType<typeof createHostPtermHost>
   /** Answers the browser tool calls the host relays from its sessions. */
   browserRelay: BrowserToolRelay
+  /** Offers the host Helm's plugin tool servers and answers the calls it relays to them. */
+  pluginRelay: PluginToolRelay
   /** Helm's saved profiles, which live in the host while sessions run there. */
   profiles: HostProfiles
 }
@@ -44,6 +48,8 @@ export interface DesktopHostDeps {
   onActivityChange: () => void
   /** Helm's browser tools, which answer the calls; null until they exist. */
   browserTools: () => BrowserMcpHost | null
+  /** Helm's plugins offering tools, and a way to call one. */
+  plugins: PluginToolProvider
 }
 
 /** The checkout an unpackaged build runs from: `out/main` is three folders inside it. */
@@ -93,7 +99,8 @@ export function createDesktopHost({
   window,
   confirm,
   onActivityChange,
-  browserTools
+  browserTools,
+  plugins
 }: DesktopHostDeps): DesktopHost {
   const log = (line: string): void => console.log(line)
   const link = createLocalHostLink(() => hostSettingsFor(services.settings, findClaudeExecutable()), log)
@@ -129,6 +136,13 @@ export function createDesktopHost({
     run: (opener, tool, args) => browserTools()?.runBrowserTool(opener, tool, args) ?? null,
     log
   })
+  const pluginRelay = createPluginToolRelay({
+    link,
+    servers: () => plugins.servers(),
+    call: (request, signal) => plugins.call(request, signal),
+    caller: (session) => hosted.pluginCaller(session),
+    log
+  })
   const profiles = createHostProfiles({
     link,
     dialogs: nativeProfileDialogs(window),
@@ -143,5 +157,5 @@ export function createDesktopHost({
     log
   })
   const pterm = createHostPtermHost({ link, streams, emit: send, log })
-  return { ...hosted, link, streams, pterm, browserRelay, profiles }
+  return { ...hosted, link, streams, pterm, browserRelay, pluginRelay, profiles }
 }

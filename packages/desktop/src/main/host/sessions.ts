@@ -1,4 +1,5 @@
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
+import type { ToolSession } from '@coledtaylor/helm-plugin-sdk'
 import {
   sessionLabel,
   type AppSettings,
@@ -51,8 +52,14 @@ import type { TerminalStreams } from './streams'
  * running session's identity at those tools is a random key minted here, held
  * only in main and dropped when the session ends, which also ends every page
  * the user shared with it. The host holds the session's token, so no token
- * answers here (`tokenHolder`), and the other families stay Helm's own
- * listener's.
+ * answers here (`tokenHolder`).
+ *
+ * The plugins' tools: the host serves each plugin's tool server and relays
+ * each call here (`plugin-tools.ts`), naming the host session. What a plugin
+ * is told the session is by (`pluginCaller`) is an id minted here per running
+ * session, apart from its browser key, with its label and folder: never the
+ * host's row id, its token or anything of its conversation. It is dropped when
+ * the session ends.
  */
 
 /** The one backend Helm launches. */
@@ -61,8 +68,8 @@ export const CLAUDE_CODE_BACKEND = 'claude-code'
 /**
  * What Helm writes to the host on every connect: the `claude` its sessions
  * run - the one chosen in Settings, or the one Helm finds - the shell a
- * terminal opens, and whether its sessions get the browser tools and whether
- * those are held to this machine.
+ * terminal opens, whether its sessions get the browser tools and whether
+ * those are held to this machine, and whether they get the session tools.
  */
 export function hostSettingsFor(settings: AppSettings, discovered: string | null): P.HostSettingsPatch {
   const claude = settings.claudePath ?? discovered
@@ -70,7 +77,8 @@ export function hostSettingsFor(settings: AppSettings, discovered: string | null
     ...(claude === null ? {} : { backendPaths: { [CLAUDE_CODE_BACKEND]: claude } }),
     terminalShell: settings.terminalShell,
     browserMcp: settings.browserMcp,
-    browserMcpLocalOnly: settings.browserMcpLocalOnly
+    browserMcpLocalOnly: settings.browserMcpLocalOnly,
+    sessionMcp: settings.sessionMcp
   }
 }
 
@@ -107,6 +115,12 @@ export interface HostSessions {
   activity: ActivityService
   /** The window gained or lost focus: what its user can see has changed. */
   refocus: () => void
+  /**
+   * Who a running host session is to a plugin's tools: an id minted here when
+   * first asked for and kept until the session ends, its label and its
+   * folder. Null for a session that is not running here.
+   */
+  pluginCaller: (id: number) => ToolSession | null
 }
 
 const isRunning = (record: SessionRecord): boolean => record.status === 'running'
@@ -123,9 +137,12 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
   let subscriptions: HostSubscription[] = []
   /** Each running session's key at the browser tools, minted when first asked for. */
   const openerKeys = new Map<number, string>()
+  /** Each running session's id at the plugins' tools, minted when first asked for. */
+  const pluginIds = new Map<number, string>()
 
-  /** Ends a session's identity at the browser tools, if it had one. */
+  /** Ends a session's identities at the browser and plugin tools, if it had any. */
   const dropOpener = (id: number): void => {
+    pluginIds.delete(id)
     const key = openerKeys.get(id)
     if (key === undefined) return
     openerKeys.delete(id)
@@ -445,6 +462,7 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
       subscriptions = []
       streams.closeAll()
       for (const id of [...openerKeys.keys()]) dropOpener(id)
+      pluginIds.clear()
       // Every session ends with the quit, as Helm's own do, so nothing is left
       // for the window's close to ask about while the host stops them.
       records.clear()
@@ -487,5 +505,16 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
     stop: () => undefined
   }
 
-  return { sessions, restore, activity, refocus: sendFocus }
+  const pluginCaller = (id: number): ToolSession | null => {
+    const record = records.get(id)
+    if (record === undefined || !isRunning(record)) return null
+    let minted = pluginIds.get(id)
+    if (minted === undefined) {
+      minted = randomUUID()
+      pluginIds.set(id, minted)
+    }
+    return { id: minted, name: sessionLabel(record), cwd: record.cwd }
+  }
+
+  return { sessions, restore, activity, refocus: sendFocus, pluginCaller }
 }

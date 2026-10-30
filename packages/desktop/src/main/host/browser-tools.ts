@@ -57,19 +57,21 @@ const failed = (message: string): P.AgentBrowserOutcome => ({ status: 'failed', 
  */
 export function outcomeFor(callId: number, result: BrowserToolResult): P.AgentBrowserOutcome {
   const outcome: P.AgentBrowserOutcome = { status: 'done', value: result }
+  return fitsOneFrame('agentBrowser:answer', { callId, outcome }) ? outcome : failed(ANSWER_TOO_LARGE)
+}
+
+/**
+ * Whether `payload` fits in one frame as a request on `channel`: measured as
+ * the request it goes out in, with the widest id one can carry.
+ */
+export function fitsOneFrame(channel: 'agentBrowser:answer' | 'agentPlugin:answer', payload: unknown): boolean {
   try {
-    // Measured as the request it goes out in, with the widest id one can carry.
-    encodeFrame({
-      type: 'request',
-      id: Number.MAX_SAFE_INTEGER,
-      channel: 'agentBrowser:answer',
-      payload: { callId, outcome }
-    } as P.Message)
+    encodeFrame({ type: 'request', id: Number.MAX_SAFE_INTEGER, channel, payload } as P.Message)
   } catch (error) {
-    if (error instanceof FrameError) return failed(ANSWER_TOO_LARGE)
+    if (error instanceof FrameError) return false
     throw error
   }
-  return outcome
+  return true
 }
 
 export function createBrowserToolRelay(deps: BrowserToolRelayDeps): BrowserToolRelay {
