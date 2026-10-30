@@ -456,7 +456,8 @@ function startApp(options: AppOptions = {}): void {
         services,
         window: () => win,
         confirm: options.confirm ?? sessionConfirm(() => win),
-        onActivityChange: () => plugins.sessionsChanged()
+        onActivityChange: () => plugins.sessionsChanged(),
+        browserTools: () => browserMcp
       })
     : null
   if (desktopHost !== null) {
@@ -880,6 +881,7 @@ function startApp(options: AppOptions = {}): void {
       event.preventDefault()
       if (hostStop === 'running') {
         hostStop = 'stopping'
+        desktopHost.browserRelay.stop()
         desktopHost.sessions.shutdown()
         desktopHost.pterm.shutdown()
         void desktopHost.link.stop().finally(() => {

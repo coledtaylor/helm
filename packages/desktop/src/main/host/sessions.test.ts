@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import type { SessionRecord } from '@helm/core'
+import { DEFAULT_SETTINGS, type SessionRecord } from '@helm/core'
 import { FakeConnection, fakeLink } from '../../../test/host-connection'
 import type { ConfirmRequest } from '../sessions'
 import type * as P from './protocol'
-import { CLAUDE_CODE_BACKEND, PLUGIN_START_REFUSED, PROFILE_REFUSED, createHostSessions } from './sessions'
+import { CLAUDE_CODE_BACKEND, PLUGIN_START_REFUSED, PROFILE_REFUSED, createHostSessions, hostSettingsFor } from './sessions'
 import { createTerminalStreams } from './streams'
 
 const ROW: P.SessionRecord = {
@@ -34,6 +34,10 @@ interface World {
   notified: SessionRecord[]
   connect(): Promise<void>
   focused: { value: boolean }
+  /** Whether Helm's browser tools are on in Settings. */
+  browserTools: { value: boolean }
+  /** The browser tool identities that ended, by key, in order. */
+  identitiesEnded: string[]
 }
 
 function world(
@@ -46,6 +50,8 @@ function world(
   const asked: ConfirmRequest[] = []
   const notified: SessionRecord[] = []
   const focused = { value: true }
+  const browserTools = { value: true }
+  const identitiesEnded: string[] = []
   const streams = createTerminalStreams({
     connection: () => link.current(),
     deliver: (channel, id, data) => emitted.push({ channel, payload: { id, data } }),
@@ -63,6 +69,8 @@ function world(
     windowFocused: () => focused.value,
     layout: null,
     history: () => null,
+    browserTools: () => browserTools.value,
+    browserIdentityEnded: (key) => identitiesEnded.push(key),
     log: () => undefined
   })
   return {
@@ -72,6 +80,8 @@ function world(
     asked,
     notified,
     focused,
+    browserTools,
+    identitiesEnded,
     connect: () => link.connect()
   }
 }
@@ -344,5 +354,92 @@ describe('sessions through the local host', () => {
     await expect(w.host.sessions.settled()).resolves.toBeUndefined()
     await expect(w.host.restore.offer()).resolves.toBeNull()
     await expect(w.host.sessions.confirmCloseAll()).resolves.toBe(true)
+  })
+
+  describe('the browser tools', () => {
+    it('gives each running session an identity of its own while they are on: a key kept until it ends, and its label', async () => {
+      const w = world({ listed: [row(), row({ id: 8, name: 'api', cwd: '/work/api' }), row({ id: 9, status: 'exited' })] })
+      await w.connect()
+
+      const app = w.host.sessions.browserOpener(7)
+      const api = w.host.sessions.browserOpener(8)
+      expect(app).toEqual({ key: expect.stringMatching(/^[0-9a-f]{64}$/) as string, name: 'app' })
+      expect(api?.name).toBe('api')
+      expect(api?.key).not.toBe(app?.key)
+      // Asked again, the same identity: a tab it opened stays its own.
+      expect(w.host.sessions.browserOpener(7)).toEqual(app)
+      // An ended session, and one the window does not know, have none.
+      expect(w.host.sessions.browserOpener(9)).toBeNull()
+      expect(w.host.sessions.browserOpener(10)).toBeNull()
+
+      // The label is the tab's name now; the key does not move with it.
+      w.connection.answer('session:rename', ({ id, label }) => row({ id, label }))
+      w.host.sessions.rename({ id: 7, label: 'frontend' })
+      expect(w.host.sessions.browserOpener(7)).toEqual({ key: app?.key, name: 'frontend' })
+
+      // The share menu: every running session, by id and label.
+      expect(w.host.sessions.browserSessions()).toEqual([
+        { session: 7, name: 'frontend' },
+        { session: 8, name: 'api' }
+      ])
+      // The host holds the token; no token answers here.
+      expect(w.host.sessions.tokenHolder(app?.key ?? '')).toBeNull()
+    })
+
+    it('answers for no session and offers none to share with while the browser tools are off', async () => {
+      const w = world({ listed: [row()] })
+      await w.connect()
+      w.browserTools.value = false
+      expect(w.host.sessions.browserOpener(7)).toBeNull()
+      expect(w.host.sessions.browserSessions()).toEqual([])
+
+      w.browserTools.value = true
+      expect(w.host.sessions.browserOpener(7)).not.toBeNull()
+      expect(w.host.sessions.browserSessions()).toEqual([{ session: 7, name: 'app' }])
+    })
+
+    it('ends a session’s identity, and so its shares, when it exits, when its tab is closed and when Helm quits', async () => {
+      const w = world({
+        listed: [row(), row({ id: 8, name: 'api' }), row({ id: 9, name: 'docs' })]
+      })
+      await w.connect()
+      const keyOf = (id: number): string => w.host.sessions.browserOpener(id)?.key ?? ''
+      const [app, api, docs] = [keyOf(7), keyOf(8), keyOf(9)]
+
+      w.connection.push('session:exit', row({ status: 'exited', exitCode: 0 }))
+      expect(w.identitiesEnded).toEqual([app])
+      expect(w.host.sessions.browserOpener(7)).toBeNull()
+      expect(w.host.sessions.browserSessions().map((share) => share.session)).toEqual([8, 9])
+
+      await w.host.sessions.close({ id: 8 })
+      expect(w.identitiesEnded).toEqual([app, api])
+      expect(w.host.sessions.browserOpener(8)).toBeNull()
+
+      w.host.sessions.shutdown()
+      expect(w.identitiesEnded).toEqual([app, api, docs])
+    })
+
+    it('mints nothing for a session that was never asked about, and ends nothing for it', async () => {
+      const w = world({ listed: [row()] })
+      await w.connect()
+      w.connection.push('session:exit', row({ status: 'exited', exitCode: 0 }))
+      expect(w.identitiesEnded).toEqual([])
+    })
+  })
+
+  describe('the settings the host is given', () => {
+    it('writes the claude, the shell, and whether the browser tools are on and held to this machine', () => {
+      expect(
+        hostSettingsFor({ ...DEFAULT_SETTINGS, claudePath: null, terminalShell: 'pwsh', browserMcp: false, browserMcpLocalOnly: true }, '/bin/claude')
+      ).toEqual({
+        backendPaths: { [CLAUDE_CODE_BACKEND]: '/bin/claude' },
+        terminalShell: 'pwsh',
+        browserMcp: false,
+        browserMcpLocalOnly: true
+      })
+      expect(
+        hostSettingsFor({ ...DEFAULT_SETTINGS, browserMcp: true, browserMcpLocalOnly: false }, null)
+      ).toMatchObject({ browserMcp: true, browserMcpLocalOnly: false })
+    })
   })
 })

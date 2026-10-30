@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import {
   sessionLabel,
   type AppSettings,
@@ -32,8 +33,15 @@ import type { TerminalStreams } from './streams'
  * and Helm shows.
  *
  * Not through the host yet, and refused with one sentence rather than run
- * here: a launch with a saved profile and a session a plugin starts. Agent
- * tools are not given to these sessions, so nothing answers for a token.
+ * here: a launch with a saved profile and a session a plugin starts.
+ *
+ * The browser tools: the host serves `helm-browser` to its sessions and relays
+ * each call here (`browser-tools.ts`), where Helm's own tools answer it. A
+ * running session's identity at those tools is a random key minted here, held
+ * only in main and dropped when the session ends, which also ends every page
+ * the user shared with it. The host holds the session's token, so no token
+ * answers here (`tokenHolder`), and the other families stay Helm's own
+ * listener's.
  */
 
 /** The one backend Helm launches. */
@@ -46,14 +54,17 @@ export const PLUGIN_START_REFUSED = `A plugin starting a session is not availabl
 
 /**
  * What Helm writes to the host on every connect: the `claude` its sessions
- * run - the one chosen in Settings, or the one Helm finds - and the shell a
- * terminal opens.
+ * run - the one chosen in Settings, or the one Helm finds - the shell a
+ * terminal opens, and whether its sessions get the browser tools and whether
+ * those are held to this machine.
  */
 export function hostSettingsFor(settings: AppSettings, discovered: string | null): P.HostSettingsPatch {
   const claude = settings.claudePath ?? discovered
   return {
     ...(claude === null ? {} : { backendPaths: { [CLAUDE_CODE_BACKEND]: claude } }),
-    terminalShell: settings.terminalShell
+    terminalShell: settings.terminalShell,
+    browserMcp: settings.browserMcp,
+    browserMcpLocalOnly: settings.browserMcpLocalOnly
   }
 }
 
@@ -75,6 +86,10 @@ export interface HostSessionsDeps {
   history: (sessionId: string) => HistorySession | null
   /** After the host's session activity or overview moved, for plugins listing sessions. */
   onActivityChange?: () => void
+  /** Whether Helm's browser tools are on in Settings; off, no session has an identity at them. */
+  browserTools?: () => boolean
+  /** A session's identity at the browser tools has ended with it: its shares end too. */
+  browserIdentityEnded?: (key: string) => void
   log: (line: string) => void
 }
 
@@ -98,6 +113,18 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
   let states: SessionActivityState[] = []
   let overview: SessionsOverview = { sessions: [], readAtMs: 0 }
   let subscriptions: HostSubscription[] = []
+  /** Each running session's key at the browser tools, minted when first asked for. */
+  const openerKeys = new Map<number, string>()
+
+  /** Ends a session's identity at the browser tools, if it had one. */
+  const dropOpener = (id: number): void => {
+    const key = openerKeys.get(id)
+    if (key === undefined) return
+    openerKeys.delete(id)
+    deps.browserIdentityEnded?.(key)
+  }
+
+  const browserToolsOn = (): boolean => deps.browserTools?.() ?? false
 
   const announce = (): void => {
     for (const listener of changed) listener()
@@ -109,6 +136,7 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
   const adopt = (record: SessionRecord): SessionRecord => {
     records.set(record.id, record)
     if (isRunning(record)) streams.open('session:data', record.id)
+    else dropOpener(record.id)
     return record
   }
 
@@ -125,6 +153,7 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
   const onExit = (row: P.SessionRecord): void => {
     const record = sessionFromHost(row)
     streams.close('session:data', record.id)
+    dropOpener(record.id)
     // A session whose tab was closed has nobody to tell.
     if (!records.has(record.id)) return
     records.set(record.id, record)
@@ -266,6 +295,7 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
       }
       records.delete(req.id)
       grids.delete(req.id)
+      dropOpener(req.id)
       streams.close('session:data', req.id)
       if (focused.includes(req.id)) {
         focused = focused.filter((id) => id !== req.id)
@@ -319,9 +349,23 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
     // The host follows a session's conversation itself, from Claude Code's records.
     noteConversation: () => undefined,
 
+    // The host holds each session's token and answers for it itself.
     tokenHolder: () => null,
-    browserOpener: () => null,
-    browserSessions: () => [],
+
+    browserOpener(id) {
+      const record = records.get(id)
+      if (!browserToolsOn() || record === undefined || !isRunning(record)) return null
+      let key = openerKeys.get(id)
+      if (key === undefined) {
+        key = randomBytes(32).toString('hex')
+        openerKeys.set(id, key)
+      }
+      return { key, name: sessionLabel(record) }
+    },
+
+    browserSessions: () =>
+      browserToolsOn() ? running().map((record) => ({ session: record.id, name: sessionLabel(record) })) : [],
+
     pluginSessions: () => [],
 
     onChanged(listener) {
@@ -354,6 +398,7 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
       for (const subscription of subscriptions) subscription.unsubscribe()
       subscriptions = []
       streams.closeAll()
+      for (const id of [...openerKeys.keys()]) dropOpener(id)
       // Every session ends with the quit, as Helm's own do, so nothing is left
       // for the window's close to ask about while the host stops them.
       records.clear()

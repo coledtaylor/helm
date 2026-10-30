@@ -147,8 +147,9 @@ export interface IpcContext {
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
   /**
-   * Called when the `claude` path or the terminal shell changes, when sessions
-   * run in the local host, which is told both. Absent otherwise.
+   * Called when the `claude` path, the terminal shell, or either browser tools
+   * setting changes, when sessions run in the local host, which is told all
+   * four. Absent otherwise.
    */
   hostSettingsChanged?: (() => void) | undefined
   /**
@@ -225,8 +226,16 @@ export function registerIpc(ctx: IpcContext): void {
       // launch from one path and `claude mcp add` from another.
       if (patch.claudePath !== undefined) setClaudeOverride(next.claudePath)
       // Sessions in the local host run the `claude` and open the shell the
-      // host was told, so it is told again when either changes.
-      if (patch.claudePath !== undefined || patch.terminalShell !== undefined) ctx.hostSettingsChanged?.()
+      // host was told, and get the browser tools and their reach as it was
+      // told, so it is told again at once when any of those changes.
+      if (
+        patch.claudePath !== undefined ||
+        patch.terminalShell !== undefined ||
+        patch.browserMcp !== undefined ||
+        patch.browserMcpLocalOnly !== undefined
+      ) {
+        ctx.hostSettingsChanged?.()
+      }
       /*
        * The endpoint follows its own tick, immediately.
        *

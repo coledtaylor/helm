@@ -76,6 +76,8 @@ describe('settings over IPC', () => {
   let nativeTheme: Electron.NativeTheme
   let update: typeof UpdateModule
   const events: Array<{ channel: EventChannel; payload: unknown }> = []
+  /** What tells the local host Helm's settings again, as `index.ts` passes it when sessions run there. */
+  const hostSettingsChanged = vi.fn()
   const win = {
     isDestroyed: () => false,
     setBackgroundColor: vi.fn(),
@@ -150,7 +152,8 @@ describe('settings over IPC', () => {
       files: {} as never,
       templates: {} as never,
       themes,
-      rendererReady: () => undefined
+      rendererReady: () => undefined,
+      hostSettingsChanged
     })
   })
 
@@ -166,6 +169,22 @@ describe('settings over IPC', () => {
     win.setBackgroundColor.mockClear()
     win.setTitleBarOverlay.mockClear()
     electron.pick = null
+  })
+
+  describe('sessions in the local host', () => {
+    it('tells the host at once when the browser tools are switched off or on or held to this machine, and not for what it is not given', async () => {
+      hostSettingsChanged.mockClear()
+      await invoke('settings:write', { browserMcp: false })
+      expect(hostSettingsChanged).toHaveBeenCalledTimes(1)
+      await invoke('settings:write', { browserMcp: true })
+      await invoke('settings:write', { browserMcpLocalOnly: true })
+      await invoke('settings:write', { browserMcpLocalOnly: false })
+      expect(hostSettingsChanged).toHaveBeenCalledTimes(4)
+      expect(stored()).toMatchObject({ browserMcp: true, browserMcpLocalOnly: false })
+
+      await invoke('settings:write', { browserSearch: 'off' })
+      expect(hostSettingsChanged).toHaveBeenCalledTimes(4)
+    })
   })
 
   describe('validation', () => {

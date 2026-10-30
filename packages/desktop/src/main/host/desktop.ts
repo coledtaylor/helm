@@ -8,7 +8,9 @@ import { findClaudeExecutable } from '../claude-cli'
 import { emit } from '../ipc'
 import { appMode, dataDir } from '../paths'
 import { showExitNotification, type Confirm } from '../sessions'
+import type { BrowserMcpHost } from '../browser-mcp'
 import type { Services } from '../services'
+import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
 import { startLocalHost, type HostChild, type LocalHost } from './launcher'
 import { createHostLink, type HostLink } from './link'
 import type { HostSettingsPatch } from './protocol'
@@ -26,6 +28,8 @@ export interface DesktopHost extends HostSessions {
   link: HostLink
   streams: TerminalStreams
   pterm: ReturnType<typeof createHostPtermHost>
+  /** Answers the browser tool calls the host relays from its sessions. */
+  browserRelay: BrowserToolRelay
 }
 
 export interface DesktopHostDeps {
@@ -33,6 +37,8 @@ export interface DesktopHostDeps {
   window: () => BrowserWindow | null
   confirm: Confirm
   onActivityChange: () => void
+  /** Helm's browser tools, which answer the calls; null until they exist. */
+  browserTools: () => BrowserMcpHost | null
 }
 
 /** The checkout an unpackaged build runs from: `out/main` is three folders inside it. */
@@ -77,7 +83,13 @@ export function createLocalHostLink(settings: () => HostSettingsPatch, log: (lin
   })
 }
 
-export function createDesktopHost({ services, window, confirm, onActivityChange }: DesktopHostDeps): DesktopHost {
+export function createDesktopHost({
+  services,
+  window,
+  confirm,
+  onActivityChange,
+  browserTools
+}: DesktopHostDeps): DesktopHost {
   const log = (line: string): void => console.log(line)
   const link = createLocalHostLink(() => hostSettingsFor(services.settings, findClaudeExecutable()), log)
   const send: Emit = (channel, payload) => emit(window(), channel, payload)
@@ -101,8 +113,16 @@ export function createDesktopHost({ services, window, confirm, onActivityChange 
     layout: services.lost.layout,
     history: (sessionId) => readHistorySession(services.store, sessionId),
     onActivityChange,
+    browserTools: () => services.settings.browserMcp,
+    browserIdentityEnded: (key) => browserTools()?.forgetOpener(key),
+    log
+  })
+  const browserRelay = createBrowserToolRelay({
+    link,
+    opener: (session) => hosted.sessions.browserOpener(session),
+    run: (opener, tool, args) => browserTools()?.runBrowserTool(opener, tool, args) ?? null,
     log
   })
   const pterm = createHostPtermHost({ link, streams, emit: send, log })
-  return { ...hosted, link, streams, pterm }
+  return { ...hosted, link, streams, pterm, browserRelay }
 }

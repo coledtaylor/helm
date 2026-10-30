@@ -129,8 +129,11 @@ export interface HostConnection {
   readonly ended: Promise<string>
 }
 
-/** What the desktop says it can do; the host ignores names it does not know. */
-const CAPABILITIES: Capability[] = ['terminal']
+/**
+ * What the desktop says it can do; the host ignores names it does not know.
+ * `browser`: its browser pane answers the browser tools' calls (`browser-tools.ts`).
+ */
+const CAPABILITIES: Capability[] = ['terminal', 'browser']
 
 /**
  * Credit is returned once this much has been consumed rather than per chunk,

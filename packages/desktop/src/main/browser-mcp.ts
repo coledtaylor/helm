@@ -195,6 +195,9 @@ interface ToolResult {
   isError?: boolean
 }
 
+/** What a browser tool answers: MCP's `tools/call` result, as a session reads it. */
+export type BrowserToolResult = ToolResult
+
 /** One live session's identity and the tab it is working in. */
 interface AgentSession {
   opener: BrowserOpener
@@ -285,6 +288,17 @@ export interface BrowserMcpHost {
   attach(token: string, file: string | null): void
   /** Forget a session: revoke the token, drop the file. Safe to call twice. */
   release(token: string | null): void
+  /**
+   * Runs one browser tool for the session `opener` names, without HTTP: how a
+   * session in the local host has its calls answered, relayed by the host
+   * (`host/browser-tools.ts`). The same tools, the same tab rule, the same
+   * reach rule and the same sentences as the `helm-browser` route, because it
+   * is the same code; and refused, as the route is absent, while the browser
+   * tools are switched off.
+   */
+  runBrowserTool(opener: BrowserOpener, tool: string, args: unknown): Promise<BrowserToolResult>
+  /** Forget an identity `runBrowserTool` ran for: the tab it last used, and every page shared with it. */
+  forgetOpener(key: string): void
 }
 
 export interface BrowserMcpOptions {
@@ -320,6 +334,8 @@ function pluginInstructions(server: ToolServer): string {
 
 export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
   const sessions = new Map<string, AgentSession>()
+  /** The identities `runBrowserTool` ran for, by key: sessions in the local host, which hold no token here. */
+  const relayed = new Map<string, AgentSession>()
   let server: Server | null = null
 
   const { browsers } = options
@@ -871,28 +887,30 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
 
   const sessionTools = createSessionTools(() => options.sessions?.() ?? null)
 
-  const ROUTES: Route[] = [
-    {
-      name: MCP_SERVER_NAME,
-      path: MCP_PATH,
-      instructions: BROWSER_TOOL_TABLE.instructions,
-      enabled: () => options.settings().browserMcp,
-      listed: () =>
-        TOOLS.map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema
-        })),
-      async call(session, name, args) {
-        const tool = TOOLS.find((entry) => entry.name === name)
-        if (tool === undefined) {
-          return fail(
-            `Helm's browser server has no tool called "${name}". It has: ${TOOLS.map((t) => t.name).join(', ')}.`
-          )
-        }
-        return tool.run(session, args)
+  const browserRoute: Route = {
+    name: MCP_SERVER_NAME,
+    path: MCP_PATH,
+    instructions: BROWSER_TOOL_TABLE.instructions,
+    enabled: () => options.settings().browserMcp,
+    listed: () =>
+      TOOLS.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema
+      })),
+    async call(session, name, args) {
+      const tool = TOOLS.find((entry) => entry.name === name)
+      if (tool === undefined) {
+        return fail(
+          `Helm's browser server has no tool called "${name}". It has: ${TOOLS.map((t) => t.name).join(', ')}.`
+        )
       }
-    },
+      return tool.run(session, args)
+    }
+  }
+
+  const ROUTES: Route[] = [
+    browserRoute,
     {
       name: SESSION_TOOLS_SERVER_NAME,
       path: SESSION_TOOLS_PATH,
@@ -1283,21 +1301,27 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
     if (method === 'tools/call') {
       const call = (params ?? {}) as { name?: unknown; arguments?: unknown }
       const name = typeof call.name === 'string' ? call.name : ''
-      const args =
-        typeof call.arguments === 'object' && call.arguments !== null && !Array.isArray(call.arguments)
-          ? (call.arguments as Args)
-          : {}
-      try {
-        return await route.call(session, name, args, signal)
-      } catch (err) {
-        // A thrown tool is still an answer to the model, not a transport
-        // failure: it can read the sentence and try something else.
-        return fail(
-          `${name} failed inside Helm: ${err instanceof Error ? err.message : String(err)}`
-        )
-      }
+      return runTool(route, session, name, call.arguments, signal)
     }
     return undefined
+  }
+
+  /** One tool call on a family, from a request or a relayed call: its arguments read without trusting them. */
+  const runTool = async (
+    route: Route,
+    session: AgentSession,
+    name: string,
+    input: unknown,
+    signal: AbortSignal
+  ): Promise<ToolResult> => {
+    const args = typeof input === 'object' && input !== null && !Array.isArray(input) ? (input as Args) : {}
+    try {
+      return await route.call(session, name, args, signal)
+    } catch (err) {
+      // A thrown tool is still an answer to the model, not a transport
+      // failure: it can read the sentence and try something else.
+      return fail(`${name} failed inside Helm: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1446,6 +1470,30 @@ export function createBrowserMcp(options: BrowserMcpOptions): BrowserMcpHost {
       if (token === null) return
       const session = sessions.get(token)
       if (session !== undefined) forget(token, session)
+    },
+
+    runBrowserTool(opener, tool, args) {
+      // The route's own switch: off, there is no route, so there is no call.
+      if (!browserRoute.enabled()) {
+        return Promise.resolve(
+          fail("Helm's browser tools are switched off in Settings > Browser, so this session has none to call.")
+        )
+      }
+      let session = relayed.get(opener.key)
+      if (session === undefined) {
+        session = { opener, id: '', cwd: '', lastTab: null, file: null, inFlight: new Map() }
+        relayed.set(opener.key, session)
+      } else {
+        // The key is the identity; the name is the session's label now.
+        session.opener = opener
+      }
+      return runTool(browserRoute, session, tool, args, new AbortController().signal)
+    },
+
+    forgetOpener(key) {
+      relayed.delete(key)
+      // A page shared with an identity is shared with nobody once it is gone.
+      browsers.revoke(key)
     }
   }
   return host
