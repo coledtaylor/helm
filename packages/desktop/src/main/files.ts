@@ -8,9 +8,11 @@ import {
   readFilesStatus,
   readFileView,
   type ContentDirListing,
+  type DiscoveryResult,
   type FileListing,
   type FilesStatus,
-  type FileView
+  type FileView,
+  type Profile
 } from '@helm/core'
 
 /**
@@ -95,6 +97,41 @@ interface Watched {
 }
 
 const keyOf = (path: string): string => resolve(path).toLowerCase()
+
+/**
+ * What Helm knows of this run's folders, from wherever it keeps them: Helm's
+ * own main process, or the local host when sessions run there. With sessions
+ * in the host, Helm's own scan is never taken and its own session host is
+ * never made, so only the host's answers name a folder at all.
+ */
+export interface KnownFolders {
+  /** The last scan, harnesses and projects alike; null before the first. */
+  scan: DiscoveryResult | null
+  profiles: readonly Profile[]
+  sessions: ReadonlyArray<{ cwd: string }>
+}
+
+/**
+ * Every folder the Files view may be pointed at, and the only ones a file may
+ * be handed on from: each scanned harness and project, each folder a saved
+ * profile names (its root and its overlays, which a session reads and no scan
+ * may have reached), and the folder each hosted session is working in. Each
+ * folder once, in that order.
+ */
+export function filesRoots({ scan, profiles, sessions }: KnownFolders): string[] {
+  const roots = new Map<string, string>()
+  const add = (path: string): void => {
+    const key = keyOf(path)
+    if (!roots.has(key)) roots.set(key, path)
+  }
+  for (const project of scan?.projects ?? []) add(project.path)
+  for (const profile of profiles) {
+    add(profile.root)
+    for (const overlay of profile.overlays) add(overlay)
+  }
+  for (const session of sessions) add(session.cwd)
+  return [...roots.values()]
+}
 
 /**
  * A `vscode://file/...` URL for a path, at a line where there is one.

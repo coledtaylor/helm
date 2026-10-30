@@ -39,7 +39,7 @@ import {
 import { createConfigService } from './config'
 import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from './profiles'
 import { createTemplateService } from './templates'
-import { createFilesService } from './files'
+import { createFilesService, filesRoots } from './files'
 import {
   attachArtifactConsole,
   CONTENT_SCHEME,
@@ -602,16 +602,21 @@ function startApp(options: AppOptions = {}): void {
   attachArtifactConsole(win, (entry) => emit(win, 'content:artifactConsole', entry))
 
   /**
-   * The Files view. Its roots are the content viewer's scopes - every project,
-   * harness and profile folder - and the folder each hosted session is working
+   * The Files view, and with sessions in the local host its hand-off to VS
+   * Code alone (the host reads the files then). Its roots are every project,
+   * harness and profile folder, and the folder each hosted session is working
    * in, because "the files of the session in front of me" is the question it
-   * answers and a profile's session can run somewhere no scan reached.
+   * answers and a profile's session can run somewhere no scan reached. With
+   * sessions in the local host, the scan, the profiles and the sessions are all
+   * the host's: Helm's own scan never runs then.
    */
   const files = createFilesService({
-    roots: () => [
-      ...content.scopes().map((scope) => scope.path),
-      ...sessions.list().map((session) => session.cwd)
-    ],
+    roots: () =>
+      filesRoots({
+        scan: desktopHost === null ? services.lastScan : desktopHost.workspace.lastScan(),
+        profiles: profileList(),
+        sessions: sessions.list()
+      }),
     onChanged: (root, paths) => emit(win, 'files:changed', { root, paths }),
     protocolHandler: (url) => app.getApplicationNameForProtocol(url),
     openExternal: (url) => shell.openExternal(url)
