@@ -3,8 +3,10 @@
 //!
 //! History and the archive are indexed from the first backend that declares
 //! history, by a pass ([`crate::history::index_history`]) that runs on a
-//! timer, starting with the host, and when a client asks for a refresh. A
-//! pass waits for the one before it to finish, so passes never overlap.
+//! timer, starting with the host, when a session the host runs ends, so its
+//! conversation is listed without anybody asking, and when a client asks for
+//! a refresh. A pass waits for the one before it to finish, so passes never
+//! overlap.
 //! Every pass that changed what the index or the archive holds sends the
 //! whole state on `history:changed` or `archive:changed`; a rename sends
 //! `history:changed` too, so every client lists the new name.
@@ -13,7 +15,7 @@
 //! `usage:changed` carries the whole set whenever a reading changed.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use floti_protocol::BackendId;
@@ -23,6 +25,7 @@ use floti_protocol::channels::sessions::{
     HistoryRefresh, HistoryRename, HistorySessions, ReadArchiveStats, ReadHistorySummary,
     ReadUsage, UsageChanged,
 };
+use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::time::MissedTickBehavior;
 
 use super::{Feature, FeatureContext};
@@ -31,6 +34,7 @@ use crate::history::index::HistoryIndex;
 use crate::history::{Indexed, archive, index_history, read_indexed};
 use crate::server::events::Events;
 use crate::server::hosted::Hosted;
+use crate::server::records::ExitNotice;
 use crate::session::ClientId;
 use crate::store::Store;
 use crate::usage::{SystemDay, UsageReader};
@@ -88,6 +92,7 @@ impl History {
             .serve_state::<ArchiveChanged, _>(&indexed.stats)?;
         context.events.serve_state::<UsageChanged, _>(&readings)?;
 
+        let exits = hosted.ledger().exits();
         let shared = Arc::new(Shared {
             hosted,
             events: Arc::clone(&context.events),
@@ -100,6 +105,7 @@ impl History {
         });
         every(&shared, PASS_EVERY, |shared| shared.pass().map(drop));
         every(&shared, USAGE_EVERY, Shared::read_usage);
+        tokio::spawn(pass_on_exits(exits, Arc::downgrade(&shared)));
         Ok(Self { shared })
     }
 }
@@ -207,6 +213,32 @@ impl Shared {
             self.events.set_state::<UsageChanged, _>(&readings)?;
         }
         Ok(())
+    }
+}
+
+/// A pass each time a session the host runs ends: what it said is in the
+/// agent's record by then, and every client lists it at once rather than at
+/// the next tick. Exits that arrive while a pass runs are taken together by
+/// the next one, which reads everything recorded since. Holds the feature
+/// weakly; the exits close with the host and this ends.
+async fn pass_on_exits(mut exits: broadcast::Receiver<ExitNotice>, shared: Weak<Shared>) {
+    loop {
+        match exits.recv().await {
+            Ok(_) | Err(RecvError::Lagged(_)) => {
+                let Some(shared) = shared
+                    .upgrade()
+                    .filter(|shared| !shared.stopping.load(Ordering::SeqCst))
+                else {
+                    return;
+                };
+                match tokio::task::spawn_blocking(move || shared.pass().map(drop)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => eprintln!("floti host: {err}"),
+                    Err(_) => return,
+                }
+            }
+            Err(RecvError::Closed) => return,
+        }
     }
 }
 

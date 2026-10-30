@@ -402,6 +402,7 @@ over the window, or Electron's own guards on a page.
 | `browser` | browsing; the security posture; the refusals; a cookie surviving a restart |
 | `agent-tools` | a session drives the browser pane through its own token, and only its own tabs |
 | `plugins` | the sample plugin against a server of its own: its background page, a secret it asks for, its panel, badge, status and a tab with parameters; `helm.fetch` held to the manifest's origins on every redirect; Helm's shortcuts from inside a plugin page and its commands from Ctrl+Shift+P; a crashed plugin page and Reload; an unsupported `apiVersion` said in Settings, and a plugin turned off and on; a theme change reaching a page without reloading it; a session calling the plugin's tools, answered by its background page, and losing them when they are turned off in Settings |
+| `host-sessions` | with "Run sessions in the local host" on: the first start enrolling as the host's first admin; a session and a project terminal in the host, drawn again after a reload; a host session's browser tools, a profile's and a plugin's sessions, and the plugin's and Helm's session tools through the host; quitting, and Helm killed outright; an ended session listed in history and archived by the host, nothing of it in `helm.db`, and resumed through the host where it ran; the status bar showing the usage the host read, and a rewritten reading reaching it |
 
 - **Each test gets a world** (`test/world.ts`): a temporary root with a space in
   its path, in the run's root, named owner of its fake agents (a `test-owner`

@@ -8,11 +8,6 @@ import {
   listTemplates,
   orphanedProjectPaths,
   previewTemplate,
-  readArchivedConversation,
-  readHistoryProjects,
-  readHistoryPrompts,
-  readHistorySessions,
-  renameHistorySession,
   suggestRoots
 } from '@helm/core'
 import type { BrowserHost } from './browser'
@@ -24,6 +19,7 @@ import type { TemplateService } from './templates'
 import type { RestoreService } from './restore'
 import type { ArchiveService } from './archive'
 import type { HistoryService } from './history'
+import { localHistoryReads, type HistoryReads } from './history-reads'
 import type { UsageService } from './usage'
 import { applyWindowTheme } from './chrome'
 import type { ThemeService } from './themes'
@@ -95,7 +91,32 @@ export function emit<K extends EventChannel>(
   win.webContents.send(channel, payload)
 }
 
-export interface IpcContext {
+/**
+ * Where history, the transcript archive and usage are read this run: Helm's
+ * own services over `helm.db`, or - when sessions run in the local host - the
+ * host's, through `HistoryReads`, with none of Helm's own built.
+ */
+type HistoryWiring =
+  | {
+      /** Keeps the index over `~/.claude/history.jsonl` current; see `history.ts`. */
+      history: HistoryService
+      /** Keeps the conversations Claude Code deletes; see `archive.ts`. */
+      archive: ArchiveService
+      /** Mirrors Claude Code's cached plan-limit figures; see `usage.ts`. */
+      usage: UsageService
+      historyReads?: undefined
+    }
+  | {
+      /** The local host's history, archive and usage; see `host/history.ts`. */
+      historyReads: HistoryReads
+      history?: undefined
+      archive?: undefined
+      usage?: undefined
+    }
+
+export type IpcContext = IpcContextBase & HistoryWiring
+
+interface IpcContextBase {
   services: Services
   window: () => BrowserWindow | null
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
@@ -124,12 +145,6 @@ export interface IpcContext {
    * a token.
    */
   browserMcp: BrowserMcpHost | null
-  /** Keeps the index over `~/.claude/history.jsonl` current; see `history.ts`. */
-  history: HistoryService
-  /** Keeps the conversations Claude Code deletes; see `archive.ts`. */
-  archive: ArchiveService
-  /** Mirrors Claude Code's cached plan-limit figures; see `usage.ts`. */
-  usage: UsageService
   /** The one surface that writes to a `.claude` tree; see `config.ts`. */
   config: ConfigService
   /** Reads, renders and searches what Claude writes; see `content.ts`. */
@@ -145,9 +160,10 @@ export interface IpcContext {
   /** Called when the renderer reports it has mounted. */
   rendererReady: () => void
   /**
-   * Called when the `claude` path, the terminal shell, or either browser tools
-   * setting changes, when sessions run in the local host, which is told all
-   * four. Absent otherwise.
+   * Called when the `claude` path, the terminal shell, the archive's ceiling,
+   * either browser tools setting or the session tools setting changes, when
+   * sessions run in the local host, which is told all of them. Absent
+   * otherwise.
    */
   hostSettingsChanged?: (() => void) | undefined
   /**
@@ -179,6 +195,8 @@ export function registerIpc(ctx: IpcContext): void {
     createLocalProfiles(services, nativeProfileDialogs(ctx.window), (channel, payload) =>
       emit(ctx.window(), channel, payload)
     )
+  const historyReads: HistoryReads =
+    ctx.historyReads !== undefined ? ctx.historyReads : localHistoryReads(services.store, ctx)
 
   /** The CLI status, always read against the same config directory. */
   const claudeStatus = (picked?: string): ReturnType<typeof readClaudeStatus> =>
@@ -230,11 +248,12 @@ export function registerIpc(ctx: IpcContext): void {
       if (patch.claudePath !== undefined) setClaudeOverride(next.claudePath)
       // Sessions in the local host run the `claude` and open the shell the
       // host was told, and get the browser and session tools and the browser's
-      // reach as it was told, so it is told again at once when any of those
-      // changes.
+      // reach as it was told, and the host holds its archive to the ceiling it
+      // was told, so it is told again at once when any of those changes.
       if (
         patch.claudePath !== undefined ||
         patch.terminalShell !== undefined ||
+        patch.transcriptArchiveMaxBytes !== undefined ||
         patch.browserMcp !== undefined ||
         patch.browserMcpLocalOnly !== undefined ||
         patch.sessionMcp !== undefined
@@ -531,16 +550,15 @@ export function registerIpc(ctx: IpcContext): void {
 
     'profile:launch': (request) => ctx.sessions.launchProfile(request),
 
-    'history:summary': () => ctx.history.summary(),
-    'history:sessions': (query) => readHistorySessions(services.store, query ?? {}),
-    'history:prompts': ({ sessionId }) => readHistoryPrompts(services.store, sessionId),
-    'history:projects': () => readHistoryProjects(services.store),
-    'history:refresh': () => ctx.history.refresh(),
+    'history:summary': () => historyReads.summary(),
+    'history:sessions': (query) => historyReads.sessions(query ?? {}),
+    'history:prompts': ({ sessionId }) => historyReads.prompts(sessionId),
+    'history:projects': () => historyReads.projects(),
+    'history:refresh': () => historyReads.refresh(),
     // The one write in this family. It touches `history_names` and nothing the
     // index owns, so no pass is forced and no other window has to be told: the
     // renderer adopts the row it gets back.
-    'history:rename': ({ sessionId, name }) =>
-      renameHistorySession(services.store, sessionId, name),
+    'history:rename': ({ sessionId, name }) => historyReads.rename(sessionId, name),
     // Awaited by the renderer for the same reason `session:start` is: the
     // reasons a resume cannot happen are sentences, and a tab is the wrong
     // place to learn them.
@@ -548,9 +566,10 @@ export function registerIpc(ctx: IpcContext): void {
 
     // Read-only, both of them, and there is deliberately no third channel here
     // that captures or deletes anything: what the archive holds is decided by a
-    // pass in the main process, and the ceiling is an ordinary setting.
-    'archive:conversation': ({ sessionId }) => readArchivedConversation(services.store, sessionId),
-    'archive:stats': () => ctx.archive.stats(),
+    // pass in the main process or the local host, and the ceiling is an
+    // ordinary setting.
+    'archive:conversation': ({ sessionId }) => historyReads.conversation(sessionId),
+    'archive:stats': () => historyReads.archiveStats(),
 
     // A free function rather than a method on either service: one editor, one
     // highlighter, and nothing about a draft in a box belongs to a scope.
@@ -588,10 +607,7 @@ export function registerIpc(ctx: IpcContext): void {
 
     'config:doctor': () => ctx.config.doctor(),
 
-    // The last reading rather than a fresh read: the service keeps itself
-    // current, and a status bar that hit the disk every time it repainted
-    // would be the one surface in the app that does.
-    'usage:read': () => ctx.usage.snapshot(),
+    'usage:read': () => historyReads.usage(),
 
     'content:scopes': () => ctx.content.scopes(),
     'content:document': ({ scopePath, path }) => ctx.content.document(scopePath, path),

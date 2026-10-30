@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Profile, ProfileDraft, SessionRecord } from '@helm/core'
 import { helm } from './bridge'
+import { readable } from './errors'
 import { estimateGrid } from './terminals'
 
 /**
@@ -36,12 +37,6 @@ export interface ProfilesState {
   launch: (profile: Profile, paneSize: HTMLElement | null) => Promise<SessionRecord | null>
 }
 
-/** Electron prefixes a renderer-side rejection with the channel it came from. */
-function readable(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err)
-  return message.replace(/^Error invoking remote method '[^']*':\s*/, '')
-}
-
 export function useProfiles(): ProfilesState {
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [launching, setLaunching] = useState<number[]>([])
@@ -50,7 +45,12 @@ export function useProfiles(): ProfilesState {
 
   useEffect(() => {
     const off = helm.on('profiles:changed', setProfiles)
-    void helm.invoke('profile:list').then(setProfiles)
+    // A list that could not be read says why - with sessions in the local
+    // host, that Helm could not reach it - rather than showing no profiles.
+    void helm
+      .invoke('profile:list')
+      .then(setProfiles)
+      .catch((err: unknown) => setError(readable(err)))
     return off
   }, [])
 

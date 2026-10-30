@@ -3,7 +3,6 @@ import type { ToolSession } from '@coledtaylor/helm-plugin-sdk'
 import {
   sessionLabel,
   type AppSettings,
-  type HistorySession,
   type SavedPaneLayout,
   type SessionActivityState,
   type SessionRecord,
@@ -18,6 +17,7 @@ import type { HostLink } from './link'
 import type * as P from './protocol'
 import {
   activityFromHost,
+  historySessionFromHost,
   launchedFromHost,
   launchedProfileFromHost,
   offerFromHost,
@@ -68,14 +68,16 @@ export const CLAUDE_CODE_BACKEND = 'claude-code'
 /**
  * What Helm writes to the host on every connect: the `claude` its sessions
  * run - the one chosen in Settings, or the one Helm finds - the shell a
- * terminal opens, whether its sessions get the browser tools and whether
- * those are held to this machine, and whether they get the session tools.
+ * terminal opens, the ceiling its transcript archive is held to, whether its
+ * sessions get the browser tools and whether those are held to this machine,
+ * and whether they get the session tools.
  */
 export function hostSettingsFor(settings: AppSettings, discovered: string | null): P.HostSettingsPatch {
   const claude = settings.claudePath ?? discovered
   return {
     ...(claude === null ? {} : { backendPaths: { [CLAUDE_CODE_BACKEND]: claude } }),
     terminalShell: settings.terminalShell,
+    transcriptArchiveMaxBytes: settings.transcriptArchiveMaxBytes,
     browserMcp: settings.browserMcp,
     browserMcpLocalOnly: settings.browserMcpLocalOnly,
     sessionMcp: settings.sessionMcp
@@ -98,8 +100,6 @@ export interface HostSessionsDeps {
   layout: SavedPaneLayout | null
   /** The discovered project at a folder, by the path discovery spells it, or null. */
   knownProject: (cwd: string) => string | null
-  /** A conversation in Helm's history index, for what a resume says it reopened. */
-  history: (sessionId: string) => HistorySession | null
   /** After the host's session activity or overview moved, for plugins listing sessions. */
   onActivityChange?: () => void
   /** Whether Helm's browser tools are on in Settings; off, no session has an identity at them. */
@@ -328,10 +328,9 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
       })
       const session = adopt(sessionFromHost(resumed.session))
       announce()
-      // What the window's history pane knows the conversation as; the host's
-      // index reads the same history file.
-      const history = deps.history(req.sessionId) ?? (resumed.history as unknown as HistorySession)
-      return { session, history }
+      // The host's own history row for it: with sessions in the host, the
+      // window's history pane lists the host's index too.
+      return { session, history: historySessionFromHost(resumed.history) }
     },
 
     // A crash's sessions are offered back by the host (`restore` below).

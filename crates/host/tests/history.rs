@@ -31,7 +31,7 @@ use floti_protocol::channels::sessions::{
     ArchiveStats, HistoryChanged, HistoryPage, HistoryProjects, HistoryPrompts, HistoryQuery,
     HistoryRefresh, HistoryRename, HistorySearchScope, HistorySession, HistorySessionRef,
     HistorySessions, HistorySummary, ReadArchiveStats, ReadHistorySummary,
-    RenameHistorySessionRequest,
+    RenameHistorySessionRequest, SessionStart, StartSessionRequest,
 };
 use floti_protocol::{BackendId, EventChannel, Message, Payload};
 use serde_json::json;
@@ -1257,6 +1257,34 @@ impl Claude {
         }
     }
 
+    /// A host whose Claude Code runs the fake `claude`
+    /// (`test/fake-agents/claude-code.mjs`) under Node, keeping its records
+    /// in this world's config folder as the CLI does.
+    fn hosting_config(&self) -> HostConfig {
+        let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("test")
+            .join("fake-agents")
+            .join("claude-code.mjs");
+        let backend = ClaudeCodeBackend::new(
+            ClaudeCodeSettings {
+                search_first: Vec::new(),
+                program: "node".into(),
+                leading_args: vec![script.into_os_string()],
+                config_dir: self.config.clone(),
+                pass_config_dir: true,
+                api_key_set: false,
+            },
+            Arc::new(NativeTree),
+        );
+        HostConfig {
+            inherited_env: std::env::vars_os().collect(),
+            backends: vec![Arc::new(backend) as Arc<dyn AgentBackend>],
+            ..self.config()
+        }
+    }
+
     fn open_store(&self) -> Store {
         Store::open(&self.dirs.data).expect("open the store")
     }
@@ -1964,6 +1992,60 @@ async fn the_start_up_pass_indexes_and_archives_what_happened_while_the_host_was
         .unwrap()
         .expect("archived on the start-up pass");
     assert_eq!(conversation.message_count, 2);
+    host.stop(HostStopReason::Stop).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_conversation_that_ends_in_the_host_is_indexed_and_archived_without_a_refresh() {
+    let world = Claude::new();
+    let project = world.project("alpha");
+    let config = world.hosting_config();
+    let endpoint = config.endpoint.clone();
+    let host = RunningHost::start(config);
+    let mut client = TestClient::connect(&endpoint, &["terminal"]).await;
+    let start: HistorySummary = snapshot(client.subscribe_on(1, HistoryChanged::NAME).await);
+    assert_eq!(start.sessions, 0);
+
+    let session = client
+        .request::<SessionStart>(&StartSessionRequest {
+            backend: Some(BackendId::claude_code()),
+            cwd: project.display().to_string(),
+            cols: 80,
+            rows: 24,
+            ..StartSessionRequest::default()
+        })
+        .await
+        .unwrap();
+    client.attach(2, session.id).await;
+    client.type_into(2, b"plan the release\r/exit\r").await;
+
+    // No refresh is asked for: the session's end is what indexes it.
+    let summary =
+        event_until::<HistorySummary>(&mut client, 1, |summary| summary.sessions == 1).await;
+    assert_eq!(
+        (summary.sessions, summary.prompts, summary.resumable),
+        (1, 1, 1)
+    );
+    let page = client
+        .request::<HistorySessions>(&HistoryQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(page.sessions[0].first_prompt, "plan the release");
+    let conversation = client
+        .request::<ArchiveConversation>(&HistorySessionRef {
+            session_id: page.sessions[0].session_id.clone(),
+        })
+        .await
+        .unwrap()
+        .expect("archived by the same pass");
+    assert_eq!(
+        conversation
+            .messages
+            .iter()
+            .map(|m| m.text.as_str())
+            .collect::<Vec<_>>(),
+        ["plan the release", "You said: plan the release"]
+    );
     host.stop(HostStopReason::Stop).await;
 }
 

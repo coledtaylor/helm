@@ -1,7 +1,7 @@
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Locator, Page } from '@playwright/test'
-import type { AppSettings } from '@helm/core'
+import { openStore, readArchiveStats, readHistorySessions, type AppSettings } from '@helm/core'
 import { bearerOf, callTool, readMcpConfig, rpc, rpcResult, toolNames } from '../test/mcp-client'
 import { fakeClaudeLogs, seedSettings, type FakeClaudeLog, type World } from '../test/world'
 import { harnessIn, plantHarness, removeShims } from '../test/overlay-world'
@@ -465,4 +465,92 @@ test('after Helm is killed outright, the host went with it, and the sessions it 
   expect(resumed?.argv[(resumed?.argv.indexOf('--resume') ?? 0) + 1]).toBe(run.sessionId)
   const back = await sessionIdOf(window, 'alpha, ready')
   await expect.poll(() => terminalText(window, back)).toContain(`Resumed ${run.sessionId}`)
+})
+
+test('a session ended in the host is in the history without a refresh, its archive opens, and it resumes in its folder through the host', async ({
+  helm,
+  world
+}) => {
+  const { window } = helm
+  const id = await startSession(window, 'alpha')
+  const pane = window.getByRole('region', { name: 'First pane' })
+  await typeLine(pane, 'plan the release')
+  await expect.poll(() => terminalText(window, id)).toContain('You said: plan the release')
+  const first = await claudeRunIn(world, world.projects.alpha)
+  await typeLine(pane, '/exit')
+  await expect(window.getByRole('tab', { name: 'alpha, ended' })).toBeVisible()
+
+  await window.getByRole('navigation', { name: 'Destinations' }).getByRole('button', { name: 'Session history' }).click()
+  const row = window.getByRole('group', { name: 'Sessions' }).getByRole('button', { name: /^plan the release/ })
+  await expect(row).toContainText('alpha')
+  await row.click()
+  // The host's archive took the conversation in the same pass that listed it.
+  await expect(window.getByText('You said: plan the release').first()).toBeVisible()
+
+  // The host indexed and archived it; Helm's own database holds none of it.
+  const store = openStore({ file: join(world.dataDir, 'helm.db') })
+  try {
+    expect(readHistorySessions(store, {}).total).toBe(0)
+    expect(readArchiveStats(store, 1024 ** 3).sessions).toBe(0)
+  } finally {
+    store.close()
+  }
+
+  await window.getByRole('button', { name: 'Resume in a tab' }).click()
+  await expect(window.getByRole('tab', { name: /^plan the release/ })).toBeVisible()
+  let resumed: FakeClaudeLog | undefined
+  await expect
+    .poll(() => {
+      resumed = fakeClaudeLogs(world).find((log) => log.resumed)
+      return resumed !== undefined
+    })
+    .toBe(true)
+  const run = resumed as FakeClaudeLog
+  expect(run.argv[run.argv.indexOf('--resume') + 1]).toBe(first.sessionId)
+  expect(run.cwd.toLowerCase()).toBe(world.projects.alpha.toLowerCase())
+  const resumedId = await sessionIdOf(window, /^plan the release/)
+  await expect.poll(() => terminalText(window, resumedId)).toContain(`Resumed ${first.sessionId}`)
+})
+
+/** Claude Code's cached plan-limit figures, one session limit at `percent`, as the CLI writes them. */
+function writeUsage(world: World, percent: number): void {
+  writeFileSync(
+    join(world.home, '.claude.json'),
+    JSON.stringify({
+      hasCompletedOnboarding: true,
+      userID: 'helm-tests',
+      cachedUsageUtilization: {
+        fetchedAtMs: Date.now(),
+        utilization: {
+          limits: [
+            {
+              kind: 'session',
+              group: 'session',
+              percent,
+              severity: 'normal',
+              resets_at: new Date(Date.now() + 3 * 3_600_000).toISOString(),
+              is_active: true
+            }
+          ]
+        }
+      }
+    })
+  )
+}
+
+const withUsage = test.extend({
+  world: async ({ world }, use) => {
+    writeUsage(world, 42)
+    await use(world)
+  }
+})
+
+withUsage('the status bar shows the usage figures the host read, and a rewritten reading reaches it', async ({
+  helm,
+  world
+}) => {
+  const segment = helm.window.locator('[data-usage-segment]')
+  await expect(segment).toContainText('42%')
+  writeUsage(world, 77)
+  await expect(segment).toContainText('77%')
 })

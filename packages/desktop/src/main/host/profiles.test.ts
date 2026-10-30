@@ -108,6 +108,33 @@ describe('profiles in the local host', () => {
     expect(w.emitted.map((list) => list.map((p) => p.name))).toEqual([['api'], ['api', 'web']])
   })
 
+  it('answers a list asked for before the first connect has finished with the host’s profiles, not an empty one', async () => {
+    const w = world({ copied: true, hosted: [profile(1, 'api'), profile(2, 'web')] })
+    expect(w.link.current()).toBeNull()
+    expect((await w.profiles.list()).map((p) => p.name)).toEqual(['api', 'web'])
+    expect(w.profiles.current().map((p) => p.name)).toEqual(['api', 'web'])
+  })
+
+  it('says why when the host cannot be reached, rather than listing no profiles as if there were none', async () => {
+    const sentence = 'Helm could not find the local host program at /nowhere/floti; turn it off.'
+    const profiles = createHostProfiles({
+      link: fakeLink(null, sentence),
+      dialogs: {
+        confirmDelete: () => Promise.resolve(false),
+        chooseExportFile: () => Promise.resolve(null),
+        chooseImportFile: () => Promise.resolve(null)
+      },
+      emit: () => undefined,
+      ownProfiles: () => [],
+      copied: () => true,
+      markCopied: () => undefined,
+      readFile: () => Promise.reject(new Error('unused')),
+      writeFile: () => Promise.resolve(),
+      log: () => undefined
+    })
+    await expect(profiles.list()).rejects.toThrow(sentence)
+  })
+
   it('saves a draft through the host and passes its problems back unchanged', async () => {
     const w = world({ copied: true })
     const draft = profileDraft(own(0, 'hub', null))

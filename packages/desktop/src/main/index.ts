@@ -62,8 +62,9 @@ import {
 } from './browser'
 import { createBrowserMcp, type BrowserMcpHost } from './browser-mcp'
 import { sessionToolsWorld, type SessionToolsWorld } from './session-tools'
-import { createHistoryIndex } from './history'
-import { createUsageService } from './usage'
+import { createHistoryIndex, type HistoryIndex } from './history'
+import type { HistoryReads } from './history-reads'
+import { createUsageService, type UsageService } from './usage'
 import { maybeCheckForUpdate } from './update'
 import {
   createSessionHost,
@@ -87,6 +88,13 @@ import { runClaudeChecks } from './claudecheck'
 import { findClaudeExecutable, setClaudeOverride } from './claude-cli'
 import { pickerAnswer, runPackagingChecks } from './packagingcheck'
 import { screenshot } from './bridge'
+
+/** Helm's own history index, archive and usage reader, when they run in this process. */
+interface LocalHistory {
+  kind: 'local'
+  index: HistoryIndex
+  usage: UsageService
+}
 
 /**
  * Two products in one binary.
@@ -534,23 +542,35 @@ function startApp(options: AppOptions = {}): void {
     })
 
   /*
-   * The archive, and the session index that feeds it. `createHistoryIndex`
-   * wires the one to the other; `main/history.ts` says how.
+   * Session history, the transcript archive and usage, from the one place
+   * they are kept this run. With sessions in the local host, the host indexes,
+   * archives into its own database and reads usage, and Helm builds none of
+   * its own: no pass, no watch, nothing written to `helm.db`, whose own index
+   * and archive stay as they were for when the setting is off again.
+   *
+   * Otherwise Helm's own: the archive and the session index that feeds it
+   * (`createHistoryIndex` wires the one to the other; `main/history.ts` says
+   * how), and the usage reader.
    */
-  const historyIndex = createHistoryIndex({
-    store: services.store,
-    home: options.claudeHome,
-    maxBytes: () => services.settings.transcriptArchiveMaxBytes,
-    onHistoryChange: (summary) => emit(win, 'history:changed', summary),
-    onArchiveChange: (stats) => emit(win, 'archive:changed', stats)
-  })
-  const { history, archive } = historyIndex
-
-  const usage = createUsageService({
-    store: services.store,
-    ...(options.claudeHome !== undefined ? { home: options.claudeHome } : {}),
-    onChange: (snapshot) => emit(win, 'usage:changed', snapshot)
-  })
+  const historyHome: LocalHistory | { kind: 'host'; reads: HistoryReads } =
+    desktopHost !== null
+      ? { kind: 'host', reads: desktopHost.history }
+      : {
+          kind: 'local',
+          index: createHistoryIndex({
+            store: services.store,
+            home: options.claudeHome,
+            maxBytes: () => services.settings.transcriptArchiveMaxBytes,
+            onHistoryChange: (summary) => emit(win, 'history:changed', summary),
+            onArchiveChange: (stats) => emit(win, 'archive:changed', stats)
+          }),
+          usage: createUsageService({
+            store: services.store,
+            ...(options.claudeHome !== undefined ? { home: options.claudeHome } : {}),
+            onChange: (snapshot) => emit(win, 'usage:changed', snapshot)
+          })
+        }
+  const localHistory = historyHome.kind === 'local' ? historyHome : null
 
   /*
    * The saved profiles, from the one place they live this run: the local host
@@ -689,7 +709,7 @@ function startApp(options: AppOptions = {}): void {
       store: services.store,
       sessions,
       refreshHistory: () => {
-        history.refresh()
+        localHistory?.index.history.refresh()
       },
       // Read here rather than from the activity poller's last pass, which only
       // starts once the window is up and would answer "nothing is running" to
@@ -736,9 +756,9 @@ function startApp(options: AppOptions = {}): void {
     pterm,
     browsers,
     browserMcp,
-    history,
-    archive,
-    usage,
+    ...(historyHome.kind === 'local'
+      ? { history: historyHome.index.history, archive: historyHome.index.archive, usage: historyHome.usage }
+      : { historyReads: historyHome.reads }),
     config,
     content,
     files,
@@ -779,23 +799,27 @@ function startApp(options: AppOptions = {}): void {
       // writes 3,470 rows, which is ~30ms the launcher should not spend
       // before it paints. The window gets `history:changed` when it lands.
       setImmediate(() => {
-        // The first pass, which the archive rides, and then the watches.
-        try {
-          emit(win, 'history:changed', historyIndex.start())
-        } catch (err) {
-          console.warn(`history index could not be built: ${String(err)}`)
-        }
+        // Helm's own index and usage reader only: with sessions in the local
+        // host, the host keeps both and the window has them from it.
+        if (localHistory !== null) {
+          // The first pass, which the archive rides, and then the watches.
+          try {
+            emit(win, 'history:changed', localHistory.index.start())
+          } catch (err) {
+            console.warn(`history index could not be built: ${String(err)}`)
+          }
 
-        // Cheap by comparison - one 134 KB file, parsed - but it is on the
-        // same "after the first paint" footing: the status bar has everything
-        // else it needs before this lands, and gets `usage:changed` when it
-        // does.
-        try {
-          emit(win, 'usage:changed', usage.refresh())
-        } catch (err) {
-          console.warn(`usage figures could not be read: ${String(err)}`)
+          // Cheap by comparison - one 134 KB file, parsed - but it is on the
+          // same "after the first paint" footing: the status bar has
+          // everything else it needs before this lands, and gets
+          // `usage:changed` when it does.
+          try {
+            emit(win, 'usage:changed', localHistory.usage.refresh())
+          } catch (err) {
+            console.warn(`usage figures could not be read: ${String(err)}`)
+          }
+          localHistory.usage.start()
         }
-        usage.start()
 
         // And the one request Helm's own process makes. Here rather than at
         // startup for the reason everything else in this block is: it is worth
@@ -919,6 +943,7 @@ function startApp(options: AppOptions = {}): void {
         desktopHost.browserRelay.stop()
         desktopHost.pluginRelay.stop()
         desktopHost.profiles.shutdown()
+        desktopHost.history.shutdown()
         desktopHost.sessions.shutdown()
         desktopHost.pterm.shutdown()
         void desktopHost.link.stop().finally(() => {
@@ -934,8 +959,8 @@ function startApp(options: AppOptions = {}): void {
     persistBounds()
     // Before the store is let go of: a debounced index pass, or a config watch
     // firing after `will-quit`, would write to a closed connection.
-    historyIndex.stop()
-    usage.stop()
+    localHistory?.index.stop()
+    localHistory?.usage.stop()
     config.stop()
     files.stop()
     // Plugins' services are processes like a session's, ended the same way:

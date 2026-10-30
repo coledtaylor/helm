@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { listProfiles, readHistorySession } from '@helm/core'
+import { listProfiles } from '@helm/core'
 import { findClaudeExecutable } from '../claude-cli'
 import { emit } from '../ipc'
 import { appMode, dataDir } from '../paths'
@@ -14,6 +14,7 @@ import type { PluginToolProvider } from '../plugins/tools'
 import { nativeProfileDialogs } from '../profiles'
 import { knownProject, updateSettings, type Services } from '../services'
 import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
+import { createHostHistory, type HostHistory } from './history'
 import { startLocalHost, type HostChild, type LocalHost } from './launcher'
 import { createHostLink, type HostLink } from './link'
 import { createPluginToolRelay, type PluginToolRelay } from './plugin-tools'
@@ -39,6 +40,8 @@ export interface DesktopHost extends HostSessions {
   pluginRelay: PluginToolRelay
   /** Helm's saved profiles, which live in the host while sessions run there. */
   profiles: HostProfiles
+  /** Session history, the transcript archive and usage, which the host keeps while sessions run there. */
+  history: HostHistory
 }
 
 export interface DesktopHostDeps {
@@ -124,7 +127,6 @@ export function createDesktopHost({
     },
     layout: services.lost.layout,
     knownProject: (cwd) => knownProject(services, cwd),
-    history: (sessionId) => readHistorySession(services.store, sessionId),
     onActivityChange,
     browserTools: () => services.settings.browserMcp,
     browserIdentityEnded: (key) => browserTools()?.forgetOpener(key),
@@ -156,6 +158,7 @@ export function createDesktopHost({
     writeFile: (path, text) => writeFile(path, text, 'utf8'),
     log
   })
+  const history = createHostHistory({ link, emit: send, log })
   const pterm = createHostPtermHost({ link, streams, emit: send, log })
-  return { ...hosted, link, streams, pterm, browserRelay, pluginRelay, profiles }
+  return { ...hosted, link, streams, pterm, browserRelay, pluginRelay, profiles, history }
 }

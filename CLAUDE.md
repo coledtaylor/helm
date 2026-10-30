@@ -374,7 +374,8 @@ app's folder, on any OS.
   Helm and Floti, except config console writes and hooks the user installs
   from it, each through `writeConfigFile` (or its host equivalent), which
   snapshots the file first and aborts if it cannot. The transcript archive
-  copies into `helm.db` and never writes there. What a launch needs (agent
+  copies into `helm.db`, or the host's `floti.db` with "Run sessions in the
+  local host" on, and never writes there. What a launch needs (agent
   tools, settings, composed instructions, overlays) is a per-launch file under
   the data directory, never a write into the agent's config.
 - Session state comes from each backend's own signals, read only; an agent

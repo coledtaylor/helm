@@ -11,6 +11,7 @@ import type {
 } from '@helm/core'
 import type { SessionHistoryProps } from '@helm/ui'
 import { helm } from './bridge'
+import { readable } from './errors'
 import { estimateGrid } from './terminals'
 
 /**
@@ -67,12 +68,6 @@ export interface HistoryState {
   dismissResumeError: () => void
 }
 
-/** Electron prefixes a renderer-side rejection with the channel it came from. */
-function readable(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err)
-  return message.replace(/^Error invoking remote method '[^']*':\s*/, '')
-}
-
 /**
  * Long enough that a typed word is one query rather than seven, short enough
  * that the list feels attached to the keyboard. The query itself is ~1ms; this
@@ -118,17 +113,26 @@ export function useHistory(): HistoryState {
   const [resuming, setResuming] = useState<string | null>(null)
   const [resumeError, setResumeError] = useState<string | null>(null)
 
+  // A read that fails says why in the pane's error line - with sessions in the
+  // local host, that Helm could not reach it - rather than leaving the counts
+  // blank as if there were nothing.
   useEffect(() => {
     const off = helm.on('history:changed', setSummary)
-    void helm.invoke('history:summary').then(setSummary)
+    void helm
+      .invoke('history:summary')
+      .then(setSummary)
+      .catch((err: unknown) => setError(readable(err)))
     return off
   }, [])
 
-  // Pushed, for the reason the summary is: a pass in the main process captures
-  // a conversation without the window having asked for anything.
+  // Pushed, for the reason the summary is: a pass in the main process or the
+  // local host captures a conversation without the window having asked.
   useEffect(() => {
     const off = helm.on('archive:changed', setArchiveStats)
-    void helm.invoke('archive:stats').then(setArchiveStats)
+    void helm
+      .invoke('archive:stats')
+      .then(setArchiveStats)
+      .catch((err: unknown) => setError(readable(err)))
     return off
   }, [])
 

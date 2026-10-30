@@ -186,6 +186,13 @@ describe('settings over IPC', () => {
       expect(hostSettingsChanged).toHaveBeenCalledTimes(4)
     })
 
+    it('tells the host at once when the archive’s ceiling changes', async () => {
+      hostSettingsChanged.mockClear()
+      await invoke('settings:write', { transcriptArchiveMaxBytes: 512 * 1024 * 1024 })
+      expect(hostSettingsChanged).toHaveBeenCalledTimes(1)
+      expect(stored()).toMatchObject({ transcriptArchiveMaxBytes: 512 * 1024 * 1024 })
+    })
+
     it('tells the host at once when the session tools are switched off or on', async () => {
       hostSettingsChanged.mockClear()
       await invoke('settings:write', { sessionMcp: false })

@@ -213,6 +213,20 @@ describe('the history pane over the session index', () => {
     expect(bridge.invoked('history:refresh')).toEqual([])
   })
 
+  it('says Helm could not reach the local host when its reads fail, rather than listing nothing as if there were nothing', async () => {
+    const unreachable = 'No local host answered on its socket; turn off “Run sessions in the local host” in Settings.'
+    const refuse = (channel: string) => () => {
+      throw new Error(`Error invoking remote method '${channel}': Error: ${unreachable}`)
+    }
+    for (const channel of ['history:summary', 'history:sessions', 'archive:stats'] as const) {
+      bridge.answer(channel, refuse(channel))
+    }
+    render(<HistoryPage />)
+
+    await waitFor(() => expect(screen.getByText(unreachable)).toBeTruthy())
+    expect(rows()).toHaveLength(0)
+  })
+
   it('finds a word said in an archived conversation only when searching conversations', async () => {
     const user = userEvent.setup()
     render(<HistoryPage />)

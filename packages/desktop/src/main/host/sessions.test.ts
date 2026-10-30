@@ -71,7 +71,6 @@ function world(
     layout: null,
     // Helm knows one project, at /work/app.
     knownProject: (cwd) => (cwd.toLowerCase() === '/work/app' ? '/work/app' : null),
-    history: () => null,
     browserTools: () => browserTools.value,
     browserIdentityEnded: (key) => identitiesEnded.push(key),
     log: () => undefined
@@ -166,12 +165,28 @@ describe('sessions through the local host', () => {
     expect(w.connection.streamsFor('session:data', 8)).toHaveLength(1)
   })
 
-  it('resumes a conversation from history through the host', async () => {
+  it('resumes a conversation from history through the host, and names the host’s history row for it', async () => {
     const w = world()
-    w.connection.answer('history:resume', () => ({
-      session: row({ id: 9 }),
-      history: { sessionId: 'c0ffee00-0000-4000-8000-000000000003' } as P.HistorySession
-    }))
+    const history: P.HistorySession = {
+      sessionId: 'c0ffee00-0000-4000-8000-000000000003',
+      backend: CLAUDE_CODE_BACKEND,
+      project: '/work/app',
+      projectName: 'app',
+      promptCount: 1,
+      firstAt: 1_790_848_700_000,
+      lastAt: 1_790_848_800_000,
+      firstPrompt: 'plan the release',
+      title: 'plan the release',
+      titleFallback: false,
+      label: 'Release prep',
+      transcriptFile: '/home/.claude/projects/app/c0ffee00.jsonl',
+      transcriptBytes: 900,
+      projectExists: true,
+      archive: 'archived',
+      archivedMessages: 2,
+      match: null
+    }
+    w.connection.answer('history:resume', () => ({ session: row({ id: 9 }), history }))
     const resumed = await w.host.sessions.resume({
       sessionId: 'c0ffee00-0000-4000-8000-000000000003',
       cols: 80,
@@ -182,6 +197,14 @@ describe('sessions through the local host', () => {
       { sessionId: 'c0ffee00-0000-4000-8000-000000000003', cols: 80, rows: 24 }
     ])
     expect(resumed.session.id).toBe(9)
+    expect(resumed.history).toMatchObject({
+      sessionId: 'c0ffee00-0000-4000-8000-000000000003',
+      project: '/work/app',
+      title: 'plan the release',
+      label: 'Release prep'
+    })
+    expect(resumed.history).not.toHaveProperty('backend')
+    expect(resumed.history).not.toHaveProperty('match')
     expect(w.host.sessions.list().map((session) => session.id)).toEqual([9])
   })
 
@@ -592,13 +615,14 @@ describe('sessions through the local host', () => {
   })
 
   describe('the settings the host is given', () => {
-    it('writes the claude, the shell, whether the browser tools are on and held to this machine, and whether the session tools are on', () => {
+    it('writes the claude, the shell, the archive’s ceiling, whether the browser tools are on and held to this machine, and whether the session tools are on', () => {
       expect(
         hostSettingsFor(
           {
             ...DEFAULT_SETTINGS,
             claudePath: null,
             terminalShell: 'pwsh',
+            transcriptArchiveMaxBytes: 256 * 1024 * 1024,
             browserMcp: false,
             browserMcpLocalOnly: true,
             sessionMcp: false
@@ -608,6 +632,7 @@ describe('sessions through the local host', () => {
       ).toEqual({
         backendPaths: { [CLAUDE_CODE_BACKEND]: '/bin/claude' },
         terminalShell: 'pwsh',
+        transcriptArchiveMaxBytes: 256 * 1024 * 1024,
         browserMcp: false,
         browserMcpLocalOnly: true,
         sessionMcp: false

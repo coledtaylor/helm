@@ -91,18 +91,17 @@ export function createHostProfiles(deps: HostProfilesDeps): HostProfiles {
   })
 
   return {
+    // Through the connection, which joins the first connect while it is in
+    // flight: a list asked for before Helm reached the host is the host's,
+    // and with no host it rejects with the sentence saying why, never an
+    // empty list standing in for "could not look".
     async list() {
-      let connection: HostConnection
-      try {
-        connection = await host()
-      } catch {
-        // No host, no profiles of its to list; launching one says why.
-        return known
-      }
-      known = (await connection.request('profile:list', null)).map(profileFromHost)
+      known = (await (await host()).request('profile:list', null)).map(profileFromHost)
       return known
     },
 
+    // The last list the host sent, for main's readers that cannot wait (the
+    // config and content scopes); empty until the first connect.
     current: () => known,
 
     async save(req) {
