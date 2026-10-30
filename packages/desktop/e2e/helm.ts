@@ -7,7 +7,9 @@ import {
   type Page
 } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { removeShims } from '../test/overlay-world'
 import { createWorld, disposeWorld, fakeClaudeLogs, repoRoot, seedSettings, type FakeClaudeLog, type World } from '../test/world'
 
 export { expect }
@@ -31,19 +33,43 @@ export async function launchHelm(world: World): Promise<Helm> {
 }
 
 /**
+ * Where a launch's overlay shims are built: Helm's data folder, or the local
+ * host's launch folders inside it while sessions run there.
+ */
+export const shimFolderOf = (world: World, sessionsInHost: boolean): string =>
+  sessionsInHost ? join(world.dataDir, 'host', 'data', 'launches') : join(world.dataDir, 'overlays')
+
+/**
+ * Unlinks the overlay shims the local host's launches built in a world: they
+ * hold links into the world's harness, and a link is never walked when the
+ * world is removed.
+ */
+export function removeHostShims(world: World): void {
+  const launches = join(world.dataDir, 'host', 'data', 'launches')
+  if (!existsSync(launches)) return
+  for (const launch of readdirSync(launches)) removeShims(join(launches, launch, 'overlays'))
+}
+
+/**
  * A test with a fresh world, seeded and torn down around it. `helm` is the app,
  * launched once; a test that restarts it calls `relaunch`.
+ *
+ * `sessionsInHost` seeds "Run sessions in the local host" on: the
+ * `in the local host` project in `playwright.config.ts` runs the specs it
+ * names again that way.
  */
 export const test = base.extend<{
+  sessionsInHost: boolean
   world: World
   helm: Helm
   relaunch: () => Promise<Helm>
 }>({
-  // eslint-disable-next-line no-empty-pattern
-  world: async ({}, use) => {
+  sessionsInHost: [false, { option: true }],
+  world: async ({ sessionsInHost }, use) => {
     const world = createWorld()
-    seedSettings(world)
+    seedSettings(world, sessionsInHost ? { sessionsInHost: true } : {})
     await use(world)
+    if (sessionsInHost) removeHostShims(world)
     disposeWorld(world)
   },
   helm: async ({ world }, use) => {

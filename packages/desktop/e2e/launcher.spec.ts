@@ -2,7 +2,16 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { removeShims } from '../test/overlay-world'
 import { fakeClaudeLogs, seedProfile, type FakeClaudeLog } from '../test/world'
-import { claudeRunIn, expect, sessionIdOf, startSession, terminalText, test as base, typeLine } from './helm'
+import {
+  claudeRunIn,
+  expect,
+  sessionIdOf,
+  shimFolderOf,
+  startSession,
+  terminalText,
+  test as base,
+  typeLine
+} from './helm'
 
 /**
  * The new-session launcher. The world gets a profile before the app starts,
@@ -38,7 +47,11 @@ const test = base.extend({
 
 const after = (argv: readonly string[], flag: string): string | undefined => argv[argv.indexOf(flag) + 1]
 
-test('Ctrl+N starts a session in a folder found by typing, with the profile and mode picked there', async ({ helm, world }) => {
+test('Ctrl+N starts a session in a folder found by typing, with the profile and mode picked there', async ({
+  helm,
+  world,
+  sessionsInHost
+}) => {
   const { window } = helm
   await expect(window.getByRole('button', { name: 'Start a session in alpha' })).toBeAttached()
 
@@ -69,7 +82,9 @@ test('Ctrl+N starts a session in a folder found by typing, with the profile and 
   expect(after(run.argv, '-n')).toBe('alpha')
   expect(after(run.argv, '--model')).toBe('sonnet')
   expect(after(run.argv, '--permission-mode')).toBe('plan')
-  expect((after(run.argv, '--plugin-dir') ?? '').toLowerCase()).toContain(join(world.dataDir, 'overlays').toLowerCase())
+  expect((after(run.argv, '--plugin-dir') ?? '').toLowerCase()).toContain(
+    shimFolderOf(world, sessionsInHost).toLowerCase()
+  )
 })
 
 test('a conversation that ended reopens from the launcher, in the pane beside', async ({ helm, world }) => {
