@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createFilesService, vscodeUrl, type FilesService } from './files'
+import type { DiscoveryResult, Profile, Project } from '@helm/core'
+import { createFilesService, filesRoots, vscodeUrl, type FilesService, type KnownFolders } from './files'
 import { PATIENCE } from '../../../../test/patience'
 
 /**
@@ -138,6 +139,58 @@ describe('the Files service', () => {
     expect(service.editor()).toBeNull()
     expect(await service.openInEditor(join(root, 'src', 'a.ts'), null)).toEqual({ opened: false })
     expect(opened).toHaveLength(1)
+  })
+})
+
+describe('filesRoots', () => {
+  const scanOf = (...paths: string[]): DiscoveryResult => ({
+    roots: [],
+    harnesses: [],
+    projects: paths.map((path) => ({ path }) as Project),
+    errors: [],
+    scannedAt: '2026-01-01T00:00:00.000Z',
+    durationMs: 0
+  })
+  const profileAt = (root: string, overlays: string[] = []): Profile => ({ root, overlays }) as Profile
+
+  it('with sessions in the local host, hands on a file from a folder the host knows and nothing else', async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'helm files-elsewhere-'))
+    try {
+      const profileRoot = join(elsewhere, 'profile root')
+      const overlay = join(elsewhere, 'overlay')
+      const sessionCwd = join(elsewhere, 'session cwd')
+      const stranger = join(elsewhere, 'stranger')
+      for (const folder of [profileRoot, overlay, sessionCwd, stranger]) mkdirSync(folder)
+
+      // What the host answers: its scan, its profiles and its sessions. Helm's
+      // own scan is never taken with sessions in the host, so it has none.
+      const host: KnownFolders = {
+        scan: scanOf(root),
+        profiles: [profileAt(profileRoot, [overlay])],
+        sessions: [{ cwd: sessionCwd }]
+      }
+      expect(filesRoots(host)).toEqual([root, profileRoot, overlay, sessionCwd])
+
+      known = filesRoots(host)
+      for (const folder of [root, profileRoot, overlay, sessionCwd]) {
+        expect(await service.openInEditor(join(folder, 'a.ts'), 1)).toEqual({ opened: true })
+      }
+      expect(await service.openInEditor(join(stranger, 'a.ts'), 1)).toEqual({ opened: false })
+      expect(opened).toHaveLength(4)
+
+      // Before the host has answered, nothing is a folder Helm knows.
+      known = filesRoots({ scan: null, profiles: [], sessions: [] })
+      expect(await service.openInEditor(join(root, 'src', 'a.ts'), 1)).toEqual({ opened: false })
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true })
+    }
+  })
+
+  it('names each folder once, however many of the three name it', () => {
+    const spelledAgain = join(root, 'src', '..')
+    expect(
+      filesRoots({ scan: scanOf(root, root), profiles: [profileAt(spelledAgain, [root])], sessions: [{ cwd: root }] })
+    ).toEqual([root])
   })
 })
 
