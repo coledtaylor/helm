@@ -224,3 +224,10 @@ export async function refreshGit(services: Services): Promise<Record<string, Git
 export function cachedProjects(services: Services): ReturnType<typeof readCachedProjects> {
   return readCachedProjects(services.store)
 }
+
+/** The discovered project at `cwd`, by the path discovery spells it, or null. */
+export function knownProject(services: Services, cwd: string): string | null {
+  const wanted = cwd.toLowerCase()
+  const projects = services.lastScan?.projects ?? readCachedProjects(services.store)
+  return projects.find((project) => project.path.toLowerCase() === wanted)?.path ?? null
+}

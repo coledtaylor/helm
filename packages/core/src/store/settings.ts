@@ -545,6 +545,13 @@ export const SETTING_VALIDATORS: SettingValidators = {
   /** Strict for the same reason: `'false'` would start the host. */
   sessionsInHost: (value) => (typeof value === 'boolean' ? null : 'must be a boolean'),
 
+  /** An instant Helm wrote, checked as `lastUpdateCheckAt` is. */
+  profilesCopiedToHostAt: (value) => {
+    if (value === null) return null
+    if (typeof value !== 'string') return 'must be an ISO 8601 string or null'
+    return Number.isFinite(Date.parse(value)) ? null : 'must be an ISO 8601 instant'
+  },
+
   /**
    * Addresses the browser pane has been to, newest first.
    *

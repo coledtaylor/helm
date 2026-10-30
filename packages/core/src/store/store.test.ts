@@ -201,7 +201,8 @@ describe('settings', () => {
       browserRecentUrls: ['http://localhost:3000/', 'https://example.com/docs'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
       sessionMcp: false,
-      sessionsInHost: true
+      sessionsInHost: true,
+      profilesCopiedToHostAt: '2026-10-29T08:00:00.000Z'
     } satisfies AppSettings
 
     writeSettings(store, written)
@@ -776,6 +777,12 @@ describe('settings validation', () => {
       bad: ['false', 'true', 0, 1, null, [], {}]
     },
     {
+      // A value that is not an instant would read as "copied" and never copy.
+      key: 'profilesCopiedToHostAt',
+      good: [null, '2026-10-29T08:00:00.000Z'],
+      bad: ['yes', '', 0, true, {}]
+    },
+    {
       // The interesting rejections are the ones that would put a row in the
       // dropdown that does nothing when clicked: a bare word, a relative path,
       // and `file:` - which the pane refuses to navigate to, so it must not be
@@ -937,7 +944,8 @@ describe('settings validation', () => {
       browserRecentUrls: ['http://localhost:3000/'],
       browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
       sessionMcp: false,
-      sessionsInHost: true
+      sessionsInHost: true,
+      profilesCopiedToHostAt: null
     })
 
     expect(() => writeSettings(store, readSettings(store))).not.toThrow()
@@ -984,7 +992,8 @@ const DEFAULT_SETTINGS_SHAPE = (dir: string): typeof DEFAULT_SETTINGS => ({
   browserRecentUrls: ['http://localhost:3000/'],
   browserProjectUrls: { [join(dir, 'alpha').toLowerCase()]: 'http://localhost:5173/' },
   sessionMcp: false,
-  sessionsInHost: true
+  sessionsInHost: true,
+  profilesCopiedToHostAt: null
 })
 
 describe('pinned projects', () => {

@@ -1658,6 +1658,17 @@ export interface AppSettings {
    * so. Off is Helm exactly as it was: no host started, no host folder made.
    */
   sessionsInHost: boolean
+  /**
+   * When Helm's saved profiles were copied into the local host, ISO 8601, or
+   * null while they never have been.
+   *
+   * Internal state, like `lastUpdateCheckAt`, and not in the settings pane.
+   * With `sessionsInHost` on, profiles live in the host; the first time Helm
+   * connects to one it copies its own into it, once, and this is what keeps a
+   * profile deleted in the host afterwards from being copied back on the next
+   * start. Helm's own profiles are never changed by the copy.
+   */
+  profilesCopiedToHostAt: string | null
 }
 
 /** How many addresses the dropdown offers. Ten, and no manager behind it. */
@@ -1728,7 +1739,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // and because what it serves is a strictly smaller grant than the tick above
   // it. See the field for what is not in it, which is what makes that true.
   sessionMcp: true,
-  sessionsInHost: false
+  sessionsInHost: false,
+  profilesCopiedToHostAt: null
 }
 
 /**

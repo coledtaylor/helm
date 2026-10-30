@@ -9,7 +9,6 @@ import {
   noteConversation as recordConversation,
   PERMISSION_MODES,
   prepareLaunch,
-  readCachedProjects,
   readGitBranch,
   readHistorySession,
   readProfile,
@@ -39,7 +38,7 @@ import {
 import { emit } from './ipc'
 import { shimRoot } from './paths'
 import { killAllSessionsSync, killSession, spawnSession, type SessionHandle } from './pty'
-import type { Services } from './services'
+import { knownProject, type Services } from './services'
 import type {
   BrowserShare,
   CloseSessionRequest,
@@ -771,13 +770,6 @@ export function createSessionHost({
     return { session, plan }
   }
 
-  /** The discovered project at `cwd`, by the path discovery spells it, or null. */
-  const knownProject = (cwd: string): string | null => {
-    const wanted = cwd.toLowerCase()
-    const projects = services.lastScan?.projects ?? readCachedProjects(services.store)
-    return projects.find((project) => project.path.toLowerCase() === wanted)?.path ?? null
-  }
-
   /** What a composed launch says about itself, for the window to report. */
   const composed = (session: SessionRecord, plan: LaunchPlan): LaunchedSession => ({
     session,
@@ -808,7 +800,7 @@ export function createSessionHost({
           cwd: req.cwd,
           // A folder Helm knows as a project is recorded as one, so the
           // session is that project's in the sidebar and its crumb.
-          projectPath: knownProject(req.cwd),
+          projectPath: knownProject(services, req.cwd),
           name: req.name,
           profile: null,
           permissionMode: null,

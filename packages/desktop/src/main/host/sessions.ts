@@ -15,7 +15,14 @@ import type { EventChannel, EventPayload } from '../../shared/ipc'
 import type { HostConnection, HostSubscription } from './client'
 import type { HostLink } from './link'
 import type * as P from './protocol'
-import { activityFromHost, launchedFromHost, offerFromHost, overviewFromHost, sessionFromHost } from './records'
+import {
+  activityFromHost,
+  launchedFromHost,
+  launchedProfileFromHost,
+  offerFromHost,
+  overviewFromHost,
+  sessionFromHost
+} from './records'
 import type { TerminalStreams } from './streams'
 
 /**
@@ -32,8 +39,12 @@ import type { TerminalStreams } from './streams'
  * nobody saw, which the host judges from what this client says it can see
  * and Helm shows.
  *
- * Not through the host yet, and refused with one sentence rather than run
- * here: a launch with a saved profile and a session a plugin starts.
+ * A launch with a saved profile names the host's profile, and the host
+ * composes it (`profile:launch`, or `session:launch` with its id): with the
+ * setting on, profiles live in the host (`profiles.ts`). A session a plugin
+ * starts, once the user agreed in Helm's dialog, is handed to the host as the
+ * dialog showed it - the folder, the name, the first message - with nothing
+ * composed here.
  *
  * The browser tools: the host serves `helm-browser` to its sessions and relays
  * each call here (`browser-tools.ts`), where Helm's own tools answer it. A
@@ -46,11 +57,6 @@ import type { TerminalStreams } from './streams'
 
 /** The one backend Helm launches. */
 export const CLAUDE_CODE_BACKEND = 'claude-code'
-
-const TURN_OFF = 'turn off “Run sessions in the local host” in Settings to use it.'
-
-export const PROFILE_REFUSED = `Launching with a saved profile is not available through the local host yet; ${TURN_OFF}`
-export const PLUGIN_START_REFUSED = `A plugin starting a session is not available through the local host yet; ${TURN_OFF}`
 
 /**
  * What Helm writes to the host on every connect: the `claude` its sessions
@@ -82,6 +88,8 @@ export interface HostSessionsDeps {
   windowFocused: () => boolean
   /** The pane layout the last run saved, which the restore offer is placed by. */
   layout: SavedPaneLayout | null
+  /** The discovered project at a folder, by the path discovery spells it, or null. */
+  knownProject: (cwd: string) => string | null
   /** A conversation in Helm's history index, for what a resume says it reopened. */
   history: (sessionId: string) => HistorySession | null
   /** After the host's session activity or overview moved, for plugins listing sessions. */
@@ -207,41 +215,71 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
 
   const running = (): SessionRecord[] => [...records.values()].filter(isRunning)
 
+  /** A session with no profile and nothing composed: a folder, a name, and maybe a first message. */
+  async function startPlain(req: {
+    cwd: string
+    projectPath: string | null
+    name: string | null
+    openingPrompt: string | null
+    cols: number
+    rows: number
+  }): Promise<SessionRecord> {
+    const connection = await host()
+    const row = await connection.request('session:start', {
+      cwd: req.cwd,
+      projectPath: req.projectPath,
+      name: req.name,
+      backend: CLAUDE_CODE_BACKEND,
+      profileId: null,
+      overlays: null,
+      extraFolders: null,
+      model: null,
+      effort: null,
+      agent: null,
+      permissionMode: null,
+      openingPrompt: req.openingPrompt,
+      cols: req.cols,
+      rows: req.rows
+    })
+    const record = adopt(sessionFromHost(row))
+    announce()
+    return record
+  }
+
   const sessions: SessionHost = {
-    async start(req) {
-      const connection = await host()
-      const row = await connection.request('session:start', {
+    start: (req) =>
+      startPlain({
         cwd: req.cwd,
         projectPath: req.projectPath ?? null,
         name: req.name ?? null,
-        backend: CLAUDE_CODE_BACKEND,
-        profileId: null,
-        overlays: null,
-        extraFolders: null,
-        model: null,
-        effort: null,
-        agent: null,
-        permissionMode: null,
         openingPrompt: null,
         cols: req.cols,
         rows: req.rows
-      })
-      const record = adopt(sessionFromHost(row))
-      announce()
-      return record
-    },
+      }),
 
-    startWithPrompt: () => Promise.reject(new Error(PLUGIN_START_REFUSED)),
+    // What the dialog showed, and nothing else: the host makes the name
+    // unique and puts the prompt last on the command line, as `claude -n
+    // <name> <prompt>` reads in the dialog.
+    startWithPrompt: (req) =>
+      startPlain({
+        cwd: req.cwd,
+        // A folder Helm knows as a project is recorded as one, so the session
+        // is that project's in the sidebar and its crumb.
+        projectPath: deps.knownProject(req.cwd),
+        name: req.name,
+        openingPrompt: req.prompt,
+        cols: req.cols,
+        rows: req.rows
+      }),
 
     async launch(req) {
-      if (req.profileId !== null) throw new Error(PROFILE_REFUSED)
       const connection = await host()
       const launched = launchedFromHost(
         await connection.request('session:launch', {
           cwd: req.cwd,
           projectPath: req.projectPath ?? null,
           name: req.name ?? null,
-          profileId: null,
+          profileId: req.profileId,
           permissionMode: req.permissionMode,
           resume: req.resume,
           backend: CLAUDE_CODE_BACKEND,
@@ -254,7 +292,15 @@ export function createHostSessions(deps: HostSessionsDeps): HostSessions {
       return launched
     },
 
-    launchProfile: () => Promise.reject(new Error(PROFILE_REFUSED)),
+    async launchProfile(req) {
+      const connection = await host()
+      const launched = launchedProfileFromHost(
+        await connection.request('profile:launch', { profileId: req.profileId, cols: req.cols, rows: req.rows })
+      )
+      adopt(launched.session)
+      announce()
+      return launched
+    },
 
     async resume(req) {
       const connection = await host()

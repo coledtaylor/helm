@@ -36,7 +36,7 @@ import {
   type WriteConfigRequest,
   type WriteConfigResult
 } from '@helm/core'
-import { listProfiles } from '@helm/core'
+import { listProfiles, type Profile } from '@helm/core'
 import type { Services } from './services'
 
 /**
@@ -402,6 +402,8 @@ function artifactWikilinks(
 
 export interface ContentServiceDeps {
   services: Services
+  /** The saved profiles as last known, from wherever they live; Helm's database when absent. */
+  profiles?: (() => Profile[]) | undefined
 }
 
 /** How long a tree is trusted before a fresh open re-walks it. */
@@ -454,7 +456,10 @@ export async function highlightForEditor(
   }
 }
 
-export function createContentService({ services }: ContentServiceDeps): ContentService {
+export function createContentService({
+  services,
+  profiles = () => listProfiles(services.store)
+}: ContentServiceDeps): ContentService {
   const cache = new Map<string, ScopeCache>()
 
   const key = (scopePath: string): string => resolve(scopePath).toLowerCase()
@@ -488,7 +493,7 @@ export function createContentService({ services }: ContentServiceDeps): ContentS
     for (const project of projects) {
       if (project.kind !== 'harness') add(project.path, 'project', project.name)
     }
-    for (const profile of listProfiles(services.store)) {
+    for (const profile of profiles()) {
       add(profile.root, 'project')
       for (const overlay of profile.overlays) add(overlay, 'project')
     }

@@ -1,18 +1,21 @@
 import { app, type BrowserWindow } from 'electron'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { readHistorySession } from '@helm/core'
+import { listProfiles, readHistorySession } from '@helm/core'
 import { findClaudeExecutable } from '../claude-cli'
 import { emit } from '../ipc'
 import { appMode, dataDir } from '../paths'
 import { showExitNotification, type Confirm } from '../sessions'
 import type { BrowserMcpHost } from '../browser-mcp'
-import type { Services } from '../services'
+import { nativeProfileDialogs } from '../profiles'
+import { knownProject, updateSettings, type Services } from '../services'
 import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
 import { startLocalHost, type HostChild, type LocalHost } from './launcher'
 import { createHostLink, type HostLink } from './link'
+import { createHostProfiles, type HostProfiles } from './profiles'
 import type { HostSettingsPatch } from './protocol'
 import { createHostPtermHost } from './pterm'
 import { createHostSessions, hostSettingsFor, type Emit, type HostSessions } from './sessions'
@@ -30,6 +33,8 @@ export interface DesktopHost extends HostSessions {
   pterm: ReturnType<typeof createHostPtermHost>
   /** Answers the browser tool calls the host relays from its sessions. */
   browserRelay: BrowserToolRelay
+  /** Helm's saved profiles, which live in the host while sessions run there. */
+  profiles: HostProfiles
 }
 
 export interface DesktopHostDeps {
@@ -111,6 +116,7 @@ export function createDesktopHost({
       return win !== null && !win.isDestroyed() && win.isFocused()
     },
     layout: services.lost.layout,
+    knownProject: (cwd) => knownProject(services, cwd),
     history: (sessionId) => readHistorySession(services.store, sessionId),
     onActivityChange,
     browserTools: () => services.settings.browserMcp,
@@ -123,6 +129,19 @@ export function createDesktopHost({
     run: (opener, tool, args) => browserTools()?.runBrowserTool(opener, tool, args) ?? null,
     log
   })
+  const profiles = createHostProfiles({
+    link,
+    dialogs: nativeProfileDialogs(window),
+    emit: send,
+    ownProfiles: () => listProfiles(services.store),
+    copied: () => services.settings.profilesCopiedToHostAt !== null,
+    markCopied: () => {
+      updateSettings(services, { profilesCopiedToHostAt: new Date().toISOString() })
+    },
+    readFile: (path) => readFile(path, 'utf8'),
+    writeFile: (path, text) => writeFile(path, text, 'utf8'),
+    log
+  })
   const pterm = createHostPtermHost({ link, streams, emit: send, log })
-  return { ...hosted, link, streams, pterm, browserRelay }
+  return { ...hosted, link, streams, pterm, browserRelay, profiles }
 }

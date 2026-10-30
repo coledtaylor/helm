@@ -1,5 +1,6 @@
 import type {
   LiveSession,
+  Profile,
   RestorableSession,
   RestoreOffer,
   SavedPaneLayout,
@@ -7,7 +8,7 @@ import type {
   SessionRecord,
   SessionsOverview
 } from '@helm/core'
-import type { LaunchedSession } from '../../shared/ipc'
+import type { LaunchedProfile, LaunchedSession } from '../../shared/ipc'
 import type * as P from './protocol'
 
 /**
@@ -41,6 +42,36 @@ export function sessionFromHost(record: P.SessionRecord): SessionRecord {
 export function launchedFromHost(launched: P.LaunchedSession): LaunchedSession {
   return {
     session: sessionFromHost(launched.session),
+    overlays: launched.overlays,
+    composedInstructions: launched.composedInstructions,
+    warnings: launched.warnings
+  }
+}
+
+/** A saved profile: the protocol's and the window's are the same fields. */
+export function profileFromHost(profile: P.Profile): Profile {
+  return {
+    id: profile.id,
+    name: profile.name,
+    root: profile.root,
+    overlays: profile.overlays,
+    access: profile.access,
+    model: profile.model,
+    effort: profile.effort,
+    permissionMode: profile.permissionMode,
+    agent: profile.agent,
+    mcp: profile.mcp,
+    openingPrompt: profile.openingPrompt,
+    pinnedOrder: profile.pinnedOrder,
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt
+  }
+}
+
+export function launchedProfileFromHost(launched: P.LaunchedProfile): LaunchedProfile {
+  return {
+    session: sessionFromHost(launched.session),
+    profile: profileFromHost(launched.profile),
     overlays: launched.overlays,
     composedInstructions: launched.composedInstructions,
     warnings: launched.warnings

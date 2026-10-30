@@ -57,6 +57,47 @@ describe('config service', () => {
       .reverse()
       .map((row) => ({ reason: row.reason, content: row.content }))
 
+  it('reads profiles from the list it is given, for its folders and the effective view, and the Files view does too', async () => {
+    const { createConfigService } = await import('./config')
+    const { createContentService } = await import('./content')
+    const outside = join(world.root, 'outside root')
+    mkdirSync(outside, { recursive: true })
+    const hosted = [
+      {
+        id: 41,
+        name: 'from the host',
+        root: outside,
+        overlays: [project],
+        access: [],
+        model: null,
+        effort: null,
+        permissionMode: null,
+        agent: null,
+        mcp: [],
+        openingPrompt: null,
+        pinnedOrder: null,
+        createdAt: '2026-10-29T09:00:00.000Z',
+        updatedAt: '2026-10-29T09:00:00.000Z'
+      }
+    ]
+    let listed: typeof hosted = []
+    const fromList = createConfigService({ services, onExternalChange: () => undefined, profiles: () => listed })
+    const content = createContentService({ services, profiles: () => listed })
+    const has = (paths: string[]): boolean => paths.some((path) => path.toLowerCase() === outside.toLowerCase())
+    try {
+      expect(has(fromList.scopes().map((scope) => scope.path))).toBe(false)
+      expect(() => fromList.effective({ profileId: 41 })).toThrow('That profile no longer exists.')
+
+      // A profile saved where they live shows at once, with nothing restarted.
+      listed = hosted
+      expect(has(fromList.scopes().map((scope) => scope.path))).toBe(true)
+      expect(has(content.scopes().map((scope) => scope.path))).toBe(true)
+      expect(fromList.effective({ profileId: 41 })).toMatchObject({ profileId: 41, profileName: 'from the host' })
+    } finally {
+      fromList.stop()
+    }
+  })
+
   it('snapshots the bytes a write replaces, and restore brings them back exactly', () => {
     const file = join(project, 'CLAUDE.md')
     const original = '# Alpha\r\n\r\nKeep the CRLF and the trailing space. \r\n'

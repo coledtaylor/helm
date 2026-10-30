@@ -17,7 +17,6 @@ import {
   readConfigSnapshot,
   readConfigSnapshots,
   readConfigTree,
-  readProfile,
   removeMcpServer,
   renameConfigEntry,
   renderMarkdown,
@@ -40,6 +39,7 @@ import {
   type McpPreview,
   type McpResult,
   type McpScope,
+  type Profile,
   type RenameConfigRequest,
   type RenameConfigResult,
   type WriteConfigRequest,
@@ -95,6 +95,8 @@ export interface ConfigServiceDeps {
   onExternalChange: (change: ConfigExternalChange) => void
   /** Overridden to browse a fixture tree as the user scope. */
   userHome?: string | undefined
+  /** The saved profiles as last known, from wherever they live; Helm's database when absent. */
+  profiles?: (() => Profile[]) | undefined
 }
 
 /** Long enough for an editor's write-truncate-write to settle into one event. */
@@ -117,7 +119,8 @@ function claudeCommand(): ClaudeCommand {
 export function createConfigService({
   services,
   onExternalChange,
-  userHome
+  userHome,
+  profiles = () => listProfiles(services.store)
 }: ConfigServiceDeps): ConfigService {
   let watcher: FSWatcher | null = null
   let watched: string | null = null
@@ -211,7 +214,7 @@ export function createConfigService({
     for (const project of projects) {
       if (project.kind !== 'harness') add(project.path, 'project', project.name)
     }
-    for (const profile of listProfiles(services.store)) {
+    for (const profile of profiles()) {
       add(profile.root, 'project')
       for (const overlay of profile.overlays) add(overlay, 'project')
     }
@@ -238,7 +241,7 @@ export function createConfigService({
    */
   function effective(req: EffectiveViewRequest): EffectiveView {
     if (req.profileId !== null && req.profileId !== undefined) {
-      const profile = readProfile(services.store, req.profileId)
+      const profile = profiles().find((saved) => saved.id === req.profileId)
       if (!profile) throw new Error('That profile no longer exists.')
       return computeEffectiveView({
         cwd: profile.root,

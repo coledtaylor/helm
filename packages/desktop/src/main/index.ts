@@ -17,7 +17,8 @@ import {
   sessionRegistryDir,
   writeSetting,
   type AppliedTheme,
-  type AppSettings
+  type AppSettings,
+  type Profile
 } from '@helm/core'
 import type { PluginSession } from '@coledtaylor/helm-plugin-sdk'
 import { delimiter, isAbsolute, join } from 'node:path'
@@ -36,6 +37,7 @@ import {
   type Services
 } from './services'
 import { createConfigService } from './config'
+import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from './profiles'
 import { createTemplateService } from './templates'
 import { createFilesService } from './files'
 import {
@@ -536,13 +538,24 @@ function startApp(options: AppOptions = {}): void {
     onChange: (snapshot) => emit(win, 'usage:changed', snapshot)
   })
 
+  /*
+   * The saved profiles, from the one place they live this run: the local host
+   * when sessions run there, Helm's own database otherwise. Every reader of
+   * them in main reads this one.
+   */
+  const profileService: ProfileService =
+    desktopHost?.profiles ??
+    createLocalProfiles(services, nativeProfileDialogs(() => win), (channel, payload) => emit(win, channel, payload))
+  const profileList = (): Profile[] => profileService.current()
+
   const config = createConfigService({
     services,
+    profiles: profileList,
     ...(options.claudeHome !== undefined ? { userHome: options.claudeHome } : {}),
     onExternalChange: (change) => emit(win, 'config:externalChange', change)
   })
 
-  const content = createContentService({ services })
+  const content = createContentService({ services, profiles: profileList })
   attachArtifactConsole(win, (entry) => emit(win, 'content:artifactConsole', entry))
 
   /**
@@ -695,6 +708,7 @@ function startApp(options: AppOptions = {}): void {
   registerIpc({
     services,
     sessions,
+    profiles: profileService,
     restore,
     activity,
     resources,
@@ -882,6 +896,7 @@ function startApp(options: AppOptions = {}): void {
       if (hostStop === 'running') {
         hostStop = 'stopping'
         desktopHost.browserRelay.stop()
+        desktopHost.profiles.shutdown()
         desktopHost.sessions.shutdown()
         desktopHost.pterm.shutdown()
         void desktopHost.link.stop().finally(() => {

@@ -34,14 +34,7 @@ import { checkForUpdate, RELEASES_PAGE } from './update'
 import { appMode, dataDir, dbFile, templatesDir } from './paths'
 import type { PluginHost } from './plugins/host'
 import { activePty, windowsBuildNumber } from './pty'
-import {
-  exportProfile,
-  importProfile,
-  pinProfiles,
-  profiles,
-  removeProfile,
-  saveProfile
-} from './profiles'
+import { createLocalProfiles, nativeProfileDialogs, type ProfileService } from './profiles'
 import { cachedProjects, runScan, updateSettings, type Services } from './services'
 import type { SessionHost } from './sessions'
 import type { ActivityService } from './activity'
@@ -107,6 +100,11 @@ export interface IpcContext {
   window: () => BrowserWindow | null
   /** Owns the hosted `claude` processes; see `sessions.ts`. */
   sessions: SessionHost
+  /**
+   * The saved profiles: Helm's own database, or the local host's when sessions
+   * run there (`profiles.ts`). Helm's own when absent.
+   */
+  profiles?: ProfileService | undefined
   /** What a crash took, offered back once; see `restore.ts`. */
   restore: RestoreService
   /** What each of those is doing, from Claude Code's registry. */
@@ -176,6 +174,11 @@ export interface IpcContext {
 
 export function registerIpc(ctx: IpcContext): void {
   const { services } = ctx
+  const profileService =
+    ctx.profiles ??
+    createLocalProfiles(services, nativeProfileDialogs(ctx.window), (channel, payload) =>
+      emit(ctx.window(), channel, payload)
+    )
 
   /** The CLI status, always read against the same config directory. */
   const claudeStatus = (picked?: string): ReturnType<typeof readClaudeStatus> =>
@@ -516,33 +519,13 @@ export function registerIpc(ctx: IpcContext): void {
     },
     'pterm:shells': () => ctx.pterm.detected(),
 
-    'profile:list': () => profiles(services),
-
-    'profile:save': (request) => {
-      const result = saveProfile(services, request)
-      if (result.profile) emit(ctx.window(), 'profiles:changed', profiles(services))
-      return result
-    },
-
-    'profile:delete': async ({ id }) => {
-      const deleted = await removeProfile(services, ctx.window(), id)
-      if (deleted) emit(ctx.window(), 'profiles:changed', profiles(services))
-      return { deleted }
-    },
-
-    'profile:pin': ({ ids }) => {
-      const next = pinProfiles(services, ids)
-      emit(ctx.window(), 'profiles:changed', next)
-      return next
-    },
-
-    'profile:export': ({ id }) => exportProfile(services, ctx.window(), id),
-
-    'profile:import': async () => {
-      const result = await importProfile(services, ctx.window())
-      if (result.profile) emit(ctx.window(), 'profiles:changed', profiles(services))
-      return result
-    },
+    // Each write tells the window itself, from wherever the profiles live.
+    'profile:list': () => profileService.list(),
+    'profile:save': (request) => profileService.save(request),
+    'profile:delete': async ({ id }) => ({ deleted: await profileService.remove(id) }),
+    'profile:pin': ({ ids }) => profileService.pin(ids),
+    'profile:export': ({ id }) => profileService.exportProfile(id),
+    'profile:import': () => profileService.importProfile(),
 
     'profile:launch': (request) => ctx.sessions.launchProfile(request),
 

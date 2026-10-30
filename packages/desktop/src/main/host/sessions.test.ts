@@ -3,7 +3,8 @@ import { DEFAULT_SETTINGS, type SessionRecord } from '@helm/core'
 import { FakeConnection, fakeLink } from '../../../test/host-connection'
 import type { ConfirmRequest } from '../sessions'
 import type * as P from './protocol'
-import { CLAUDE_CODE_BACKEND, PLUGIN_START_REFUSED, PROFILE_REFUSED, createHostSessions, hostSettingsFor } from './sessions'
+import { HostRequestError } from './client'
+import { CLAUDE_CODE_BACKEND, createHostSessions, hostSettingsFor } from './sessions'
 import { createTerminalStreams } from './streams'
 
 const ROW: P.SessionRecord = {
@@ -68,6 +69,8 @@ function world(
     notify: (record) => notified.push(record),
     windowFocused: () => focused.value,
     layout: null,
+    // Helm knows one project, at /work/app.
+    knownProject: (cwd) => (cwd.toLowerCase() === '/work/app' ? '/work/app' : null),
     history: () => null,
     browserTools: () => browserTools.value,
     browserIdentityEnded: (key) => identitiesEnded.push(key),
@@ -182,19 +185,144 @@ describe('sessions through the local host', () => {
     expect(w.host.sessions.list().map((session) => session.id)).toEqual([9])
   })
 
-  it('refuses a launch with a saved profile and a plugin starting a session, with one sentence each, and asks the host nothing', async () => {
+  const PROFILE: P.Profile = {
+    id: 3,
+    name: 'hub dev',
+    root: '/work/hub',
+    overlays: ['/work/tools'],
+    access: ['/work/tools'],
+    model: 'sonnet',
+    effort: 'high',
+    permissionMode: 'acceptEdits',
+    agent: 'reviewer',
+    mcp: [],
+    openingPrompt: '/recap',
+    pinnedOrder: 0,
+    createdAt: '2026-10-29T09:00:00.000Z',
+    updatedAt: '2026-10-29T09:00:00.000Z'
+  }
+
+  /** The host's error reply, as the connection hands it to the caller. */
+  const refusal = (channel: string, sentence: string): HostRequestError =>
+    new HostRequestError(channel, 'failed', sentence)
+
+  it('launches a saved profile in the host, which composes it, and reports what it composed', async () => {
     const w = world()
+    w.connection.answer('profile:launch', () => ({
+      session: row({ id: 11, name: 'hub dev', cwd: '/work/hub', profileId: 3 }),
+      profile: PROFILE,
+      overlays: ['tools'],
+      composedInstructions: true,
+      warnings: ['an overlay has no .claude folder']
+    }))
+    const launched = await w.host.sessions.launchProfile({ profileId: 3, cols: 100, rows: 30 })
+
+    expect(w.connection.payloads('profile:launch')).toEqual([{ profileId: 3, cols: 100, rows: 30 }])
+    expect(launched).toEqual({
+      session: expect.objectContaining({ id: 11, name: 'hub dev', cwd: '/work/hub', profileId: 3 }),
+      profile: { ...PROFILE },
+      overlays: ['tools'],
+      composedInstructions: true,
+      warnings: ['an overlay has no .claude folder']
+    })
+    expect(w.host.sessions.list().map((session) => session.id)).toEqual([11])
+    expect(w.connection.streamsFor('session:data', 11)).toHaveLength(1)
+  })
+
+  it('launches from the launcher with a saved profile and the launcher’s permission mode, or none, in its folder', async () => {
+    const w = world()
+    w.connection.answer('session:launch', (request) => ({
+      session: row({ id: request.permissionMode === null ? 13 : 12, profileId: request.profileId }),
+      overlays: ['tools'],
+      composedInstructions: true,
+      warnings: [],
+      notTaken: []
+    }))
+    await w.host.sessions.launch({ cwd: '/work/app', profileId: 3, permissionMode: 'plan', resume: null, cols: 80, rows: 24 })
+    const unmoded = await w.host.sessions.launch({
+      cwd: '/work/app',
+      profileId: 3,
+      permissionMode: null,
+      resume: null,
+      cols: 80,
+      rows: 24
+    })
+
+    expect(w.connection.payloads('session:launch')).toEqual([
+      expect.objectContaining({ cwd: '/work/app', profileId: 3, permissionMode: 'plan', resume: null }),
+      expect.objectContaining({ cwd: '/work/app', profileId: 3, permissionMode: null, resume: null })
+    ])
+    expect(unmoded).toMatchObject({ session: { id: 13, profileId: 3 }, overlays: ['tools'], composedInstructions: true })
+  })
+
+  it('says the host’s sentence when the profile is gone, and nothing starts', async () => {
+    const w = world()
+    const gone = (channel: string) => () => {
+      throw refusal(channel, 'That profile no longer exists.')
+    }
+    w.connection.answer('profile:launch', gone('profile:launch')).answer('session:launch', gone('session:launch'))
+
+    await expect(w.host.sessions.launchProfile({ profileId: 3, cols: 80, rows: 24 })).rejects.toThrow(
+      'That profile no longer exists.'
+    )
     await expect(
       w.host.sessions.launch({ cwd: '/work/app', profileId: 3, permissionMode: null, resume: null, cols: 80, rows: 24 })
-    ).rejects.toThrow(PROFILE_REFUSED)
-    await expect(w.host.sessions.launchProfile({ profileId: 3, cols: 80, rows: 24 })).rejects.toThrow(PROFILE_REFUSED)
-    await expect(
-      w.host.sessions.startWithPrompt({ cwd: '/work/app', name: 'x', prompt: 'hi', cols: 80, rows: 24 })
-    ).rejects.toThrow(PLUGIN_START_REFUSED)
-    expect(PROFILE_REFUSED).toMatch(/not available through the local host yet/)
-    expect(PROFILE_REFUSED).toMatch(/Run sessions in the local host/)
-    expect(w.connection.sent).toEqual([])
+    ).rejects.toThrow('That profile no longer exists.')
     expect(w.host.sessions.list()).toEqual([])
+    expect(w.connection.streams).toEqual([])
+  })
+
+  it('starts a plugin’s session in the host with the folder, name and first message the dialog showed, recorded as the project Helm knows there', async () => {
+    const w = world()
+    w.connection.answer('session:start', (request) => row({ id: 14, name: `${request.name ?? ''}-2`, cwd: request.cwd }))
+    const record = await w.host.sessions.startWithPrompt({
+      cwd: '/WORK/APP',
+      name: 'review',
+      prompt: 'Review the open pull request',
+      cols: 120,
+      rows: 40
+    })
+    await w.host.sessions.startWithPrompt({ cwd: '/work/elsewhere', name: 'notes', prompt: 'hi', cols: 80, rows: 24 })
+
+    expect(w.connection.payloads('session:start')).toEqual([
+      {
+        cwd: '/WORK/APP',
+        projectPath: '/work/app',
+        name: 'review',
+        backend: CLAUDE_CODE_BACKEND,
+        profileId: null,
+        overlays: null,
+        extraFolders: null,
+        model: null,
+        effort: null,
+        agent: null,
+        permissionMode: null,
+        openingPrompt: 'Review the open pull request',
+        cols: 120,
+        rows: 40
+      },
+      expect.objectContaining({ cwd: '/work/elsewhere', projectPath: null, name: 'notes', openingPrompt: 'hi' })
+    ])
+    // The name the host made unique is the one the tab shows.
+    expect(record).toMatchObject({ id: 14, name: 'review-2', cwd: '/WORK/APP' })
+    expect(w.host.sessions.list().map((session) => session.id)).toEqual([14])
+  })
+
+  it('fails a plugin’s session with the host’s sentence when the host cannot start it, and no tab appears', async () => {
+    const w = world()
+    w.connection.answer('session:start', () => {
+      throw refusal('session:start', 'The folder /work/gone does not exist.')
+    })
+    await expect(
+      w.host.sessions.startWithPrompt({ cwd: '/work/gone', name: 'x', prompt: 'hi', cols: 80, rows: 24 })
+    ).rejects.toThrow('The folder /work/gone does not exist.')
+    expect(w.host.sessions.list()).toEqual([])
+
+    const hostless = world({ connection: null })
+    await expect(
+      hostless.host.sessions.startWithPrompt({ cwd: '/work/app', name: 'x', prompt: 'hi', cols: 80, rows: 24 })
+    ).rejects.toThrow('Helm could not find the local host program at /nowhere/floti; turn it off.')
+    expect(hostless.host.sessions.list()).toEqual([])
   })
 
   it('ends a session only once the user agrees, and then tells the host not to ask again', async () => {
