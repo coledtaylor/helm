@@ -2,7 +2,9 @@ import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Page } from '@playwright/test'
 import type { AppSettings } from '@helm/core'
+import { bearerOf, callTool, readMcpConfig } from '../test/mcp-client'
 import { fakeClaudeLogs, seedSettings, type FakeClaudeLog, type World } from '../test/world'
+import { startBrowserFixture } from './browser-fixture'
 import {
   claudeRunIn,
   expect,
@@ -161,6 +163,68 @@ test('a project’s terminal on the host takes input and is drawn again after a 
   await typeLine(pane, 'node -e "console.log(\'again=\' + (6 * 7))"')
   await expect.poll(shellText).toContain('again=42')
   expect(count(await shellText(), cwdLine)).toBe(1)
+})
+
+test('a session in the host opens, reads and clicks in a page of the Browser tab, under its own name', async ({
+  helm,
+  world
+}) => {
+  const fixture = await startBrowserFixture()
+  try {
+    const { window } = helm
+    await startSession(window, 'alpha')
+
+    // The user is looking at a page of their own.
+    await window.getByRole('navigation', { name: 'Destinations' }).getByRole('button', { name: 'Browser', exact: true }).click()
+    const address = window.getByRole('textbox', { name: 'Address' })
+    await address.fill(`${fixture.http}/find`)
+    await address.press('Enter')
+    const userTab = window.getByRole('tab', { name: /^Helm fixture find/ })
+    await expect(userTab).toBeVisible()
+
+    // The host wrote the session's tools under today's name, beside the
+    // host's own session tools.
+    const run = await claudeRunIn(world, world.projects.alpha)
+    const config = readMcpConfig(run.argv[run.argv.indexOf('--mcp-config') + 1] ?? '')
+    const browser = config.mcpServers['helm-browser']
+    if (browser === undefined) throw new Error(`no helm-browser in ${JSON.stringify(config)}`)
+    const token = bearerOf(browser)
+    const tool = (name: string, args: Record<string, unknown> = {}) => callTool(browser.url, token, name, args)
+
+    // Opened behind the user's page, labelled with the session's name.
+    const opened = await tool('browser_open', { url: `${fixture.http}/` })
+    expect(opened.isError).toBe(false)
+    expect(opened.text).toContain('title: Helm fixture one')
+    const agentTab = window.getByRole('tab', { name: /^Helm fixture one/ })
+    await expect(agentTab).toBeVisible()
+    await expect(agentTab.getByText('alpha', { exact: true })).toBeVisible()
+    await expect(agentTab).toHaveAttribute('aria-selected', 'false')
+    await expect(userTab).toHaveAttribute('aria-selected', 'true')
+
+    // Read, then clicked by the ref the snapshot gave: the link is followed
+    // in the session's tab, which keeps its name.
+    const snapshot = await tool('browser_snapshot')
+    expect(snapshot.isError).toBe(false)
+    const ref = /- link "Two".*\[ref=([\d.]+)\]/.exec(snapshot.text)?.[1]
+    expect(ref, snapshot.text).toBeDefined()
+    expect((await tool('browser_click', { ref })).isError).toBe(false)
+    const followed = window.getByRole('tab', { name: /^Helm fixture two/ })
+    await expect(followed).toBeVisible()
+    await expect(followed.getByText('alpha', { exact: true })).toBeVisible()
+    await expect(userTab).toHaveAttribute('aria-selected', 'true')
+    expect(fixture.requests).toContain(`${fixture.http}/two`)
+
+    // The user's page is listed as theirs and is not the session's to read.
+    const tabs = (await tool('browser_tabs')).text
+    const userBlock = tabs.split(/\n(?=#)/).find((block) => block.includes(`${fixture.http}/find`)) ?? ''
+    expect(userBlock).toContain('opened by the user')
+    const peek = await tool('browser_snapshot', { tab: Number(/^#(\d+) /.exec(userBlock)?.[1]) })
+    expect(peek.isError).toBe(true)
+    expect(peek.text).toContain('opened by the user')
+    expect(peek.text).not.toContain('needle')
+  } finally {
+    await fixture.close()
+  }
 })
 
 test('quitting ends every session in the host and leaves no host or bridge running', async ({ helm, world }) => {
