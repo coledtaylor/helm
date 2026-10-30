@@ -304,6 +304,7 @@ function withWikilinks(
  */
 export function registerContentProtocol(): void {
   protocol.handle(CONTENT_SCHEME, (request) => {
+    if (remoteArtifacts !== null) return answerFromHost(remoteArtifacts, request.url)
     let url: URL
     try {
       url = new URL(request.url)
@@ -358,6 +359,48 @@ export function registerContentProtocol(): void {
       }
     })
   })
+}
+
+/** What a remote source answers for an artifact address: its status, headers and whole body. */
+export interface RemoteArtifactAnswer {
+  status: number
+  headers: Array<[string, string]>
+  body: Uint8Array
+}
+
+type RemoteArtifacts = (url: string) => Promise<RemoteArtifactAnswer>
+
+/**
+ * Where artifact addresses are answered from when Helm did not mint them: the
+ * local host's, while sessions run there (`host/files.ts`), and null - Helm's
+ * own tokens above - otherwise.
+ */
+let remoteArtifacts: RemoteArtifacts | null = null
+
+export function serveArtifactsFrom(source: RemoteArtifacts | null): void {
+  remoteArtifacts = source
+}
+
+/**
+ * The host's answer, with its status (a 400, 403 or 404 kept as it said them)
+ * and headers, under the window's own policy: the frame is the window's, on
+ * the window's scheme, so the window's CSP is the one it is held to.
+ */
+export async function answerFromHost(source: RemoteArtifacts, url: string): Promise<Response> {
+  let answer: RemoteArtifactAnswer
+  try {
+    answer = await source(url)
+  } catch (err) {
+    return new Response(err instanceof Error ? err.message : String(err), { status: 502 })
+  }
+  const headers = new Headers()
+  for (const [name, value] of answer.headers) {
+    if (name.toLowerCase() !== 'content-security-policy') headers.append(name, value)
+  }
+  headers.set('content-security-policy', ARTIFACT_CSP)
+  headers.set('x-content-type-options', 'nosniff')
+  // A view onto a decoded frame may sit on a shared buffer, which a body cannot be.
+  return new Response(new Uint8Array(answer.body), { status: answer.status, headers })
 }
 
 interface ScopeCache {

@@ -5,8 +5,9 @@ import type { BrowserHost } from './browser'
 import type { BrowserMcpHost } from './browser-mcp'
 import type { ConfigService } from './config'
 import { localConfigConsole, type ConfigConsoleService } from './config-console'
-import { highlightForEditor, type ContentService } from './content'
+import type { ContentService } from './content'
 import type { FilesService } from './files'
+import { localFilesReads, type FilesReads } from './files-reads'
 import type { TemplateService } from './templates'
 import type { RestoreService } from './restore'
 import type { ArchiveService } from './archive'
@@ -149,6 +150,12 @@ interface IpcContextBase {
   content: ContentService
   /** The Files view's tree, file reads, Ctrl+P list and watches; see `files.ts`. */
   files: FilesService
+  /**
+   * What the Files view and the note viewer read, write and watch: the local
+   * host's when sessions run there (`host/files.ts`), and `content` and
+   * `files` above otherwise. Opening a file in an editor is `files`' either way.
+   */
+  filesReads?: FilesReads | undefined
   /** Authors what `template:list` reads back; see `templates.ts`. */
   templates: TemplateService
   /**
@@ -202,6 +209,7 @@ export function registerIpc(ctx: IpcContext): void {
   const historyReads: HistoryReads =
     ctx.historyReads !== undefined ? ctx.historyReads : localHistoryReads(services.store, ctx)
   const configConsole: ConfigConsoleService = ctx.configConsole ?? localConfigConsole(ctx.config)
+  const filesReads: FilesReads = ctx.filesReads ?? localFilesReads(ctx.content, ctx.files)
 
   /** The CLI status, always read against the same config directory. */
   const claudeStatus = (picked?: string): ReturnType<typeof readClaudeStatus> =>
@@ -500,7 +508,7 @@ export function registerIpc(ctx: IpcContext): void {
 
     // A free function rather than a method on either service: one editor, one
     // highlighter, and nothing about a draft in a box belongs to a scope.
-    'editor:highlight': ({ path, source }) => highlightForEditor(path, source),
+    'editor:highlight': ({ path, source }) => filesReads.highlight(path, source),
 
     'config:scopes': () => configConsole.scopes(),
     'config:tree': ({ scopePath }) => configConsole.tree(scopePath),
@@ -534,24 +542,24 @@ export function registerIpc(ctx: IpcContext): void {
 
     'usage:read': () => historyReads.usage(),
 
-    'content:scopes': () => ctx.content.scopes(),
-    'content:document': ({ scopePath, path }) => ctx.content.document(scopePath, path),
-    'content:render': ({ scopePath, path, source }) => ctx.content.render(scopePath, path, source),
-    'content:search': ({ scopePath, query }) => ctx.content.search(scopePath, query),
-    'content:write': (request) => ctx.content.write(request),
-    'content:snapshots': ({ scopePath, path }) => ctx.content.snapshots(scopePath, path),
-    'content:restore': ({ id, path }) => ctx.content.restore(id, path),
-    'content:artifact': ({ scopePath, path }) => ctx.content.artifact(scopePath, path),
-    'files:dir': ({ root, relPath }) => ctx.files.dir(root, relPath),
-    'files:status': ({ root }) => ctx.files.status(root),
-    'files:read': ({ root, path }) => ctx.files.read(root, path),
-    'files:list': ({ root }) => ctx.files.list(root),
-    'files:watch': ({ roots }) => ctx.files.watch(roots),
+    'content:scopes': () => filesReads.scopes(),
+    'content:document': ({ scopePath, path }) => filesReads.document(scopePath, path),
+    'content:render': ({ scopePath, path, source }) => filesReads.render(scopePath, path, source),
+    'content:search': ({ scopePath, query }) => filesReads.search(scopePath, query),
+    'content:write': (request) => filesReads.write(request),
+    'content:snapshots': ({ scopePath, path }) => filesReads.snapshots(scopePath, path),
+    'content:restore': ({ id, path }) => filesReads.restore(id, path),
+    'content:artifact': ({ scopePath, path }) => filesReads.artifact(scopePath, path),
+    'files:dir': ({ root, relPath }) => filesReads.dir(root, relPath),
+    'files:status': ({ root }) => filesReads.status(root),
+    'files:read': ({ root, path }) => filesReads.read(root, path),
+    'files:list': ({ root }) => filesReads.list(root),
+    'files:watch': ({ roots }) => filesReads.watch(roots),
     'files:editor': () => ({ name: ctx.files.editor() }),
     'files:openInEditor': ({ path, line }) => ctx.files.openInEditor(path, line),
 
-    'content:wikilink': ({ scopePath, target, from }) => ({
-      path: ctx.content.wikilink(scopePath, target, from)
+    'content:wikilink': async ({ scopePath, target, from }) => ({
+      path: await filesReads.wikilink(scopePath, target, from)
     }),
 
     // A link in a note or a terminal is the user's, not Helm's, so it opens

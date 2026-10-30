@@ -130,6 +130,15 @@ describe('ContentDocumentPane: a note', () => {
     expect(marks()).toBeGreaterThan(0)
   })
 
+  it('says its versions could not be read where their count would be', async () => {
+    const props = paneProps(await documentOf('notes/alpha.md'), {
+      snapshotsError: 'The local host is not running.'
+    })
+    render(<ContentDocumentPane {...props} />)
+    expect(screen.getByRole('alert').textContent).toBe('Versions could not be read: The local host is not running.')
+    expect(document.querySelector('[data-content-history]')).toBeNull()
+  })
+
   it('opens the note a live wikilink names, and does nothing for a broken one', async () => {
     const props = paneProps(await documentOf('notes/alpha.md'))
     render(<ContentDocumentPane {...props} />)

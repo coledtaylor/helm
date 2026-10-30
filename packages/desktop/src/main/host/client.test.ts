@@ -98,7 +98,7 @@ async function roundTrip(host: FakeHost, connection: HostConnection): Promise<Me
 }
 
 describe('the host client', { timeout: PATIENCE }, () => {
-  it('says hello as the desktop with the terminal and browser capabilities and the protocol version, and resolves on the welcome', async () => {
+  it('says hello as the desktop with the terminal, files and browser capabilities and the protocol version, and resolves on the welcome', async () => {
     const host = new FakeHost()
     const connecting = connectHost({
       transport: host.transport,
@@ -108,7 +108,7 @@ describe('the host client', { timeout: PATIENCE }, () => {
       type: 'hello',
       protocol: { major: 1, minor: 0 },
       client: { name: 'Helm 2.4.0', kind: 'desktop' },
-      capabilities: ['terminal', 'browser']
+      capabilities: ['terminal', 'files', 'browser']
     })
     host.send({ type: 'welcome', ...WELCOME })
     const connection = await connecting

@@ -76,6 +76,22 @@ describe('useFiles: the sidebar', () => {
     await waitFor(() => expect(bridge.invoked('files:watch').at(-1)).toEqual({ roots: [B] }))
   })
 
+  it('says the picker could not be read rather than offering no folders, and clears it once it is read', async () => {
+    bridge.answer('content:scopes', () => {
+      throw new Error('The local host is not running.')
+    })
+    const { result, rerender } = renderHook((options: FilesOptions) => useFiles(options), {
+      initialProps: { active: true, follow: null, shown: NONE, revision: 0 }
+    })
+    await waitFor(() => expect(result.current.rootsError).toMatch(/local host is not running/))
+    expect(result.current.roots).toEqual([])
+
+    bridge.answer('content:scopes', () => [{ kind: 'project', path: A, label: 'a' }])
+    rerender({ active: true, follow: null, shown: NONE, revision: 1 })
+    await waitFor(() => expect(result.current.rootsError).toBeNull())
+    expect(result.current.root).toBe(A)
+  })
+
   it('drops a listing that arrives for the project it has just left', async () => {
     let late: (value: ContentDirListing) => void = () => undefined
     bridge.answer('files:dir', ({ root, relPath }) =>

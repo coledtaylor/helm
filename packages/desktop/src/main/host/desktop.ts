@@ -15,6 +15,7 @@ import { nativeProfileDialogs } from '../profiles'
 import { updateSettings, type Services } from '../services'
 import { createBrowserToolRelay, type BrowserToolRelay } from './browser-tools'
 import { createHostConfig, type HostConfig } from './config'
+import { createHostFiles, type HostFiles } from './files'
 import { createHostHistory, type HostHistory } from './history'
 import { startLocalHost, type HostChild, type LocalHost } from './launcher'
 import { createHostLink, type HostLink } from './link'
@@ -51,6 +52,8 @@ export interface DesktopHost extends HostSessions {
    * the settings, which the host keeps while sessions run there.
    */
   workspace: HostWorkspace
+  /** The Files view, notes and artifacts, read and written in the host while sessions run there. */
+  files: HostFiles
 }
 
 export interface DesktopHostDeps {
@@ -187,6 +190,7 @@ export function createDesktopHost({
     scanned: () => workspace.lastScan()?.projects ?? [],
     log
   })
+  const files = createHostFiles({ link, emit: send, log })
   const pterm = createHostPtermHost({ link, streams, emit: send, log })
-  return { ...hosted, link, streams, pterm, browserRelay, pluginRelay, profiles, history, config, workspace }
+  return { ...hosted, link, streams, pterm, browserRelay, pluginRelay, profiles, history, config, workspace, files }
 }

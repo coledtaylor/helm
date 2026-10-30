@@ -3410,8 +3410,15 @@ export function App(): JSX.Element {
             ) : undefined
           }
         >
+          {files.rootsError !== null && (
+            <p data-files-roots-error role="alert" className="px-3.5 py-2 text-[12px] text-danger">
+              {files.rootsError}
+            </p>
+          )}
           {files.root === null ? (
-            <p className="px-3.5 py-6 text-[12px] text-fg-subtle">Choose a project above to see its files.</p>
+            files.rootsError === null && (
+              <p className="px-3.5 py-6 text-[12px] text-fg-subtle">Choose a project above to see its files.</p>
+            )
           ) : (
             <FilesTree
               rootLabel={folderName(files.root)}

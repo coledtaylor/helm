@@ -49,6 +49,8 @@ export interface DocumentState {
   artifactUrl: string | null
   artifactConsole: ArtifactConsoleEntry[]
   snapshots: ConfigSnapshotMeta[]
+  /** The save history could not be read, in a sentence; never an empty list in its place. */
+  snapshotsError: string | null
   saving: boolean
   error: string | null
   external: { hash: string; content: string; exists: boolean } | null
@@ -82,6 +84,7 @@ export function useDocument({ scopePath, path, kind, editing, parked }: Document
   const [document, setDocument] = useState<ContentDocument | null>(null)
   const [version, setVersion] = useState(0)
   const [snapshots, setSnapshots] = useState<ConfigSnapshotMeta[]>([])
+  const [snapshotsError, setSnapshotsError] = useState<string | null>(null)
   const [artifactUrl, setArtifactUrl] = useState<string | null>(null)
   const [artifactConsole, setArtifactConsole] = useState<ArtifactConsoleEntry[]>([])
   const [saving, setSaving] = useState(false)
@@ -122,9 +125,13 @@ export function useDocument({ scopePath, path, kind, editing, parked }: Document
     void helm
       .invoke('content:snapshots', { scopePath, path })
       .then((rows) => {
-        if (ticket === seq.current) setSnapshots(rows)
+        if (ticket !== seq.current) return
+        setSnapshots(rows)
+        setSnapshotsError(null)
       })
-      .catch(() => undefined)
+      .catch((err: unknown) => {
+        if (ticket === seq.current) setSnapshotsError(readable(err))
+      })
   }, [scopePath, path, version])
 
   // An artifact gets a URL its sandboxed frame may load - minted per read, so a
@@ -282,6 +289,7 @@ export function useDocument({ scopePath, path, kind, editing, parked }: Document
     artifactUrl,
     artifactConsole,
     snapshots,
+    snapshotsError,
     saving,
     error,
     external,

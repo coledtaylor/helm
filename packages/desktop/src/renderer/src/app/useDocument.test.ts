@@ -49,6 +49,18 @@ describe('useDocument', () => {
     expect(result.current.saving).toBe(false)
   })
 
+  it('says the save history could not be read rather than showing no versions', async () => {
+    bridge.answer('content:snapshots', () => {
+      throw new Error('The local host is not running.')
+    })
+    const { result } = renderHook(() => useDocument(options()))
+    await waitFor(() => expect(result.current.snapshotsError).toMatch(/local host is not running/))
+    expect(result.current.snapshots).toEqual([])
+    // The note itself still reads: only the history is unknown.
+    expect(result.current.document?.content.hash).toBe('h1')
+    expect(result.current.error).toBeNull()
+  })
+
   it('holds a write the file moved under as a conflict, and says what is on disk', async () => {
     bridge.answer('content:write', () => ({
       ok: false,

@@ -2,6 +2,7 @@ import type {
   AppSettings,
   CachedProject,
   DiscoveryResult,
+  FilesStatus,
   GitState,
   HistoryPage,
   HistoryQuery,
@@ -303,6 +304,14 @@ export function discoveryFromHost(result: P.DiscoveryResult): DiscoveryResult {
 
 export function cachedProjectsFromHost(rows: readonly P.CachedProject[]): CachedProject[] {
   return rows.map((row) => ({ ...row, git: gitStateFromHost(row.git) }))
+}
+
+/** A folder's git letters, by root-relative path; every path the host names has one. */
+export function filesStatusFromHost(status: P.FilesStatus): FilesStatus {
+  if (status.files === null) return { ...status, files: null }
+  const files: Record<string, P.GitFileState> = {}
+  for (const [path, state] of Object.entries(status.files)) if (state !== undefined) files[path] = state
+  return { ...status, files }
 }
 
 /** A scan's state: a scan that did not fail has no `error` at all, as Helm's own scan says. */

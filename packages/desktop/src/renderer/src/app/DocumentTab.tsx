@@ -111,6 +111,7 @@ export function DocumentTab({
       artifactUrl={doc.artifactUrl}
       artifactConsole={doc.artifactConsole}
       snapshots={doc.snapshots}
+      snapshotsError={doc.snapshotsError}
       saving={doc.saving}
       error={doc.error}
       external={doc.external}

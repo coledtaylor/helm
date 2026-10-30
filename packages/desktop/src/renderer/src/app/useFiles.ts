@@ -27,6 +27,11 @@ export interface FilesState {
   setRoot: (root: string) => void
   /** Every folder the sidebar can be pointed at, for its picker. */
   roots: readonly ContentScope[]
+  /**
+   * The picker's list could not be read, in a sentence; null when it was. Said
+   * rather than shown as an empty picker, which would read as no folders known.
+   */
+  rootsError: string | null
   dirs: ReadonlyMap<string, ContentDirListing>
   expanded: ReadonlySet<string>
   loadingDirs: ReadonlySet<string>
@@ -86,6 +91,7 @@ export function relativeTo(root: string, path: string): string {
 export function useFiles({ active, follow, shown, revision }: FilesOptions): FilesState {
   const [root, setRootState] = useState<string | null>(null)
   const [roots, setRoots] = useState<readonly ContentScope[]>([])
+  const [rootsError, setRootsError] = useState<string | null>(null)
   const [dirs, setDirs] = useState<ReadonlyMap<string, ContentDirListing>>(new Map())
   const [expandedByRoot, setExpandedByRoot] = useState<ReadonlyMap<string, ReadonlySet<string>>>(new Map())
   const [status, setStatus] = useState<FilesStatus | null>(null)
@@ -154,10 +160,11 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
       .invoke('content:scopes')
       .then((list) => {
         setRoots(list)
+        setRootsError(null)
         const first = list[0]
         if (active && rootRef.current === null && first !== undefined) setRoot(first.path)
       })
-      .catch(() => undefined)
+      .catch((err: unknown) => setRootsError(readable(err)))
   }, [active, setRoot, revision])
 
   const readDir = useCallback((relPath: string) => {
@@ -383,6 +390,7 @@ export function useFiles({ active, follow, shown, revision }: FilesOptions): Fil
     root,
     setRoot,
     roots,
+    rootsError,
     dirs,
     expanded,
     loadingDirs,

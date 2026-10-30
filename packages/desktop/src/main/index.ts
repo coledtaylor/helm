@@ -44,7 +44,8 @@ import {
   attachArtifactConsole,
   CONTENT_SCHEME,
   createContentService,
-  registerContentProtocol
+  registerContentProtocol,
+  serveArtifactsFrom
 } from './content'
 import { PLUGIN_SCHEME } from '../shared/ipc'
 import { createPluginHost } from './plugins/host'
@@ -485,6 +486,8 @@ function startApp(options: AppOptions = {}): void {
     : null
   if (desktopHost !== null) {
     hostPluginToolsChanged = () => desktopHost.pluginRelay.offer()
+    // An artifact frame keeps the window's scheme, answered from the host's bytes.
+    serveArtifactsFrom((url) => desktopHost.files.artifactBytes(url))
     void desktopHost.link.connection().catch((err: unknown) => {
       console.warn(err instanceof Error ? err.message : String(err))
     })
@@ -772,6 +775,9 @@ function startApp(options: AppOptions = {}): void {
     // And discovery, the scan roots, setup, harnesses and templates are the
     // host's; Helm's own scan and templates folder are left alone.
     ...(desktopHost !== null ? { workspace: desktopHost.workspace } : {}),
+    // And the Files view, notes and artifacts: Helm's own content and files
+    // services then read and watch nothing; opening an editor stays Helm's.
+    ...(desktopHost !== null ? { filesReads: desktopHost.files } : {}),
     content,
     files,
     templates,
@@ -972,6 +978,7 @@ function startApp(options: AppOptions = {}): void {
         desktopHost.history.shutdown()
         desktopHost.config.shutdown()
         desktopHost.workspace.shutdown()
+        desktopHost.files.shutdown()
         desktopHost.sessions.shutdown()
         desktopHost.pterm.shutdown()
         void desktopHost.link.stop().finally(() => {

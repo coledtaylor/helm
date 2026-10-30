@@ -172,6 +172,42 @@ describe('content service', () => {
     }
   })
 
+  it("answers an artifact from the host's bytes while sessions run there, under the window's policy", async () => {
+    const { serveArtifactsFrom } = await import('./content')
+    const asked: string[] = []
+    serveArtifactsFrom((url) => {
+      asked.push(url)
+      if (url.endsWith('/missing.js')) return Promise.resolve({ status: 404, headers: [], body: new Uint8Array() })
+      if (url.endsWith('/broken.js')) return Promise.reject(new Error('The connection to the local host was closed.'))
+      return Promise.resolve({
+        status: 200,
+        headers: [
+          ['content-type', 'text/html; charset=utf-8'],
+          ['content-security-policy', "default-src floti-artifact:"]
+        ],
+        body: new TextEncoder().encode('<p>from the host</p>')
+      })
+    })
+    try {
+      const page = await serve('helm-content://artifact/tok/report.html')
+      expect(page.status).toBe(200)
+      expect(await page.text()).toBe('<p>from the host</p>')
+      expect(page.headers.get('content-type')).toBe('text/html; charset=utf-8')
+      const csp = page.headers.get('content-security-policy') ?? ''
+      expect(csp).toContain("connect-src 'none'")
+      expect(csp).not.toContain('floti-artifact:')
+      expect(page.headers.get('x-content-type-options')).toBe('nosniff')
+
+      expect((await serve('helm-content://artifact/tok/missing.js')).status).toBe(404)
+      const broken = await serve('helm-content://artifact/tok/broken.js')
+      expect(broken.status).toBe(502)
+      expect(await broken.text()).toMatch(/local host was closed/)
+      expect(asked[0]).toBe('helm-content://artifact/tok/report.html')
+    } finally {
+      serveArtifactsFrom(null)
+    }
+  })
+
   it('stops highlighting past the ceiling and says so, for the editor', async () => {
     const { highlightForEditor } = await import('./content')
     const big = `${'const value = "x"\n'.repeat(Math.ceil((512 * 1024 + 1024) / 18))}`

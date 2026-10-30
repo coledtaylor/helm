@@ -41,6 +41,8 @@ export interface ContentDocumentPaneProps {
   artifactConsole: ArtifactConsoleEntry[]
 
   snapshots: ConfigSnapshotMeta[]
+  /** The save history could not be read, in a sentence: said where its count would be. */
+  snapshotsError?: string | null | undefined
   saving: boolean
   error: string | null
   external: { hash: string; content: string; exists: boolean } | null
@@ -96,6 +98,7 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
     artifactUrl,
     artifactConsole,
     snapshots,
+    snapshotsError = null,
     saving,
     error,
     external,
@@ -297,7 +300,12 @@ export function ContentDocumentPane(props: ContentDocumentPaneProps): JSX.Elemen
             )}
           </span>
 
-          {snapshots.length > 0 && (
+          {snapshotsError !== null && (
+            <span data-content-history-error role="alert" title={snapshotsError} className="text-[11px] text-danger">
+              Versions could not be read: {snapshotsError}
+            </span>
+          )}
+          {snapshotsError === null && snapshots.length > 0 && (
             <button
               type="button"
               data-content-history
