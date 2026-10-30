@@ -1,10 +1,12 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Page } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 import type { AppSettings } from '@helm/core'
 import { bearerOf, callTool, readMcpConfig } from '../test/mcp-client'
 import { fakeClaudeLogs, seedSettings, type FakeClaudeLog, type World } from '../test/world'
+import { harnessIn, plantHarness, removeShims } from '../test/overlay-world'
 import { startBrowserFixture } from './browser-fixture'
+import { TOKEN, installSample, pluginFrame, startServer, type SampleFixture } from './plugin-fixture'
 import {
   claudeRunIn,
   expect,
@@ -27,6 +29,39 @@ import {
 const test = base.extend({
   world: async ({ world }, use) => {
     seedSettings(world, { sessionsInHost: true })
+    await use(world)
+  }
+})
+
+/**
+ * A harness the first scan finds, `hub`, whose `repos/tools` has a skill to
+ * compose. The host's launch folders hold links into it, so any left are
+ * unlinked before the world is removed.
+ */
+const withHarness = test.extend({
+  world: async ({ world }, use) => {
+    plantHarness(world)
+    await use(world)
+    const launches = join(world.dataDir, 'host', 'data', 'launches')
+    if (existsSync(launches)) {
+      for (const launch of readdirSync(launches)) removeShims(join(launches, launch, 'overlays'))
+    }
+  }
+})
+
+/** The sample plugin, registered before the app starts, against a sample server on this machine. */
+const withSample = test.extend<{ sample: SampleFixture }>({
+  sample: [
+    // eslint-disable-next-line no-empty-pattern
+    async ({}, use) => {
+      const server = await startServer()
+      await use({ dir: '', server })
+      await server.close()
+    },
+    { scope: 'test' }
+  ],
+  world: async ({ world, sample }, use) => {
+    sample.dir = installSample(world, sample.server)
     await use(world)
   }
 })
@@ -226,6 +261,90 @@ test('a session in the host opens, reads and clicks in a page of the Browser tab
     await fixture.close()
   }
 })
+
+withHarness(
+  'a profile made in the New profile dialog launches in the host with its overlay, name and opening prompt',
+  async ({ helm, world }) => {
+    const { window } = helm
+    const hub = harnessIn(world)
+    const after = (argv: readonly string[], flag: string): string | undefined => argv[argv.indexOf(flag) + 1]
+    await expect(window.getByRole('button', { name: 'hub, 2 projects' })).toBeVisible()
+
+    await window.getByRole('navigation', { name: 'Destinations' }).getByRole('button', { name: 'Profiles' }).click()
+    await window.getByRole('button', { name: 'New profile' }).click()
+    const dialog = window.getByRole('dialog', { name: 'New profile' })
+    await dialog.getByRole('textbox', { name: 'Profile name' }).fill('hub dev')
+    await dialog.getByRole('textbox', { name: 'Root directory' }).fill(hub.root)
+    await dialog.getByRole('checkbox', { name: 'Compose tools' }).check()
+    await dialog.getByRole('textbox', { name: 'Opening prompt' }).fill('/recap')
+    await dialog.getByRole('button', { name: 'Save and start' }).click()
+    await expect(dialog).toBeHidden()
+    await expect(window.getByRole('list', { name: 'Saved profiles' }).getByRole('button', { name: /^hub dev/ })).toBeVisible()
+
+    // Saved in the host, not in Helm's own database.
+    const listed = await invoke<Array<{ name: string }>>(window, 'profile:list')
+    expect(listed.map((profile) => profile.name)).toEqual(['hub dev'])
+
+    await expect(window.getByRole('tab', { name: 'hub dev, ready' })).toBeVisible()
+    const id = await sessionIdOf(window, 'hub dev, ready')
+    await expect.poll(() => terminalText(window, id)).toContain('Claude Code v2.1.999 (fake)')
+
+    // Run by the host at the profile's root, the overlay a plugin directory in
+    // the host's own launch folder, named for the profile, its prompt first.
+    const run = await claudeRunIn(world, hub.root)
+    const pluginDir = after(run.argv, '--plugin-dir') ?? ''
+    expect(pluginDir.toLowerCase().startsWith(join(world.dataDir, 'host').toLowerCase())).toBe(true)
+    expect(existsSync(join(pluginDir, 'skills', hub.skill, 'SKILL.md'))).toBe(true)
+    expect(after(run.argv, '-n')).toBe('hub dev')
+    expect(run.openingPrompt).toBe('/recap')
+  }
+)
+
+withSample(
+  'a plugin page starts a session in the host from a click, as the dialog showed it',
+  async ({ helm, sample, world }) => {
+    const ui = helm.window
+    await ui.evaluate(
+      ({ token, host }) =>
+        (window as unknown as Bridge).helm.invoke('secrets:save', {
+          key: 'sample-token',
+          value: token,
+          hosts: [host],
+          plugins: ['sample']
+        }),
+      { token: TOKEN, host: sample.server.url }
+    )
+    await ui.getByRole('navigation', { name: 'Destinations' }).getByRole('button', { name: /^Sample/ }).click()
+    const panel = await pluginFrame(ui, 'dist/panels/main.html')
+    await panel.locator('[data-sample-item="2"]').click()
+    const item = await pluginFrame(ui, 'dist/tabs/item.html')
+    await expect(item.locator('h1')).toHaveText('Second item')
+
+    const dialog = ui.getByRole('alertdialog', { name: 'Sample wants to start a session' })
+    const field = (name: string): Locator => dialog.locator(`[data-plugin-session-field="${name}"] dd`)
+    await item.locator('[data-sample-session-folder]').fill(world.projects.alpha)
+    await item.locator('[data-sample-session-start]').click()
+    await expect(field('folder')).toHaveText(world.projects.alpha)
+    await expect(field('name')).toHaveText('Second item')
+    await expect(field('prompt')).toHaveText('work on Second item')
+    await expect(field('command')).toHaveText('claude -n "Second item" "work on Second item"')
+
+    await dialog.getByRole('button', { name: 'Start session' }).click()
+    await expect(dialog).toHaveCount(0)
+    await expect(ui.getByRole('tab', { name: 'Second item, ready' })).toHaveAttribute('aria-selected', 'true')
+    await expect(item.locator('[data-sample-session-result]')).toHaveText('Started.')
+
+    // The host ran it in that folder, under that name, with that first message.
+    const run = await claudeRunIn(world, world.projects.alpha)
+    expect(run.argv[run.argv.indexOf('-n') + 1]).toBe('Second item')
+    expect(run.openingPrompt).toBe('work on Second item')
+    expect(run.exitCode).toBeNull()
+    const sessions = await invoke<Array<{ name: string; projectPath: string | null }>>(ui, 'session:list')
+    expect(sessions).toEqual([
+      expect.objectContaining({ name: 'Second item', projectPath: world.projects.alpha })
+    ])
+  }
+)
 
 test('quitting ends every session in the host and leaves no host or bridge running', async ({ helm, world }) => {
   const { window } = helm
