@@ -896,6 +896,7 @@ async fn a_plugin_channel_not_served_yet_is_answered_naming_it_and_its_feature_a
         ("plugins:session", "plugin pages"),
         ("plugins:ui", "plugin pages"),
         ("plugins:deliver", "plugin pages"),
+        ("plugins:file", "plugin pages"),
         ("plugins:setTools", "plugin tool families"),
         ("plugins:log", "plugin logs and metrics"),
         ("plugins:metrics", "plugin logs and metrics"),

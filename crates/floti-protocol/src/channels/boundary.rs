@@ -2,8 +2,8 @@
 //!
 //! Each ipc.ts channel lands in exactly one place: declared in the protocol
 //! under its own name or a recorded backend-neutral rename, carried on a byte
-//! stream, kept by the client ([`CLIENT_ONLY`]), or kept inside the host
-//! ([`HOST_INTERNAL`]). A test reads ipc.ts and fails naming any channel that
+//! stream, kept by the client ([`CLIENT_ONLY`]), or kept between a plugin's
+//! background page and whatever runs it ([`HOST_INTERNAL`]). A test reads ipc.ts and fails naming any channel that
 //! lands nowhere, so a channel added there is placed here in the same change.
 //!
 //! The browser pane, clipboard, window, theme, dialogs and diagnostics belong
@@ -87,24 +87,27 @@ pub const CLIENT_ONLY: &[Outside] = &[
     ),
 ];
 
-/// Channels that stay inside the host: plugin background pages run there, so
-/// their tool calls, the answers and their state never cross the protocol.
+/// Channels between a plugin's background page and what runs it, which never
+/// cross the protocol. A v1 background page runs in the desktop's hidden
+/// plugin host window and these are Electron IPC inside the desktop, its tool
+/// calls reaching it through `agentPlugin:call`; a v2 background script runs
+/// in the host's engine and these stay inside the host.
 pub const HOST_INTERNAL: &[Outside] = &[
     outside(
         "plugins:tool",
-        "a session's call to a plugin tool, answered by its background page on the host",
+        "a session's call to a plugin tool, handed to its background page by whatever runs it",
     ),
     outside(
         "plugins:toolCancel",
-        "cancels a plugin tool call on the host",
+        "cancels a plugin tool call at whatever runs its background page",
     ),
     outside(
         "plugins:toolResult",
-        "a background page's answer to a plugin tool call, on the host",
+        "a background page's answer to a plugin tool call, to whatever runs it",
     ),
     outside(
         "plugins:backgroundState",
-        "a background page reporting its state to the host that runs it",
+        "a background page reporting its state to whatever runs it",
     ),
 ];
 

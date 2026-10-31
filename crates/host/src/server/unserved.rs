@@ -52,6 +52,7 @@ pub const NOT_YET_SERVED: &[Later] = &[
             "plugins:session",
             "plugins:ui",
             "plugins:deliver",
+            "plugins:file",
         ],
     },
     Later {

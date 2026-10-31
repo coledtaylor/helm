@@ -5199,6 +5199,77 @@
       ],
       "type": "object"
     },
+    "PluginFile": {
+      "description": "One file of a plugin's pages, or the part of it from an offset.\n\nA client reads from `offset + body.length` until it holds `totalBytes`.\nAn offset at or past the end answers 200 with an empty body. A refusal\nanswers its whole text whatever the offset. A client keeps a file it read\nfor this `version` and `revision`; once either moves, it asks again.",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/Bytes"
+        },
+        "contentType": {
+          "description": "What the file is served as, from its extension, or `text/plain` for\na refusal's text.",
+          "type": "string"
+        },
+        "revision": {
+          "description": "The host's revision of its read of the plugin's folder, as\n`plugins:list` gives it. 0 when no plugin that is on has this id.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "description": "200, or the refusal: 403 for a path outside the plugin's folder, 404\nfor a file that is not there or a plugin that is not on.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "totalBytes": {
+          "description": "The length of the whole file, or of the whole refusal.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "version": {
+          "description": "The plugin's version, as its manifest says it. Null when it says none\nor no plugin that is on has this id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "contentType",
+        "revision",
+        "totalBytes",
+        "body"
+      ],
+      "type": "object"
+    },
+    "PluginFileRequest": {
+      "description": "A file a plugin page loads, by the plugin and the path on its origin.",
+      "properties": {
+        "offset": {
+          "default": 0,
+          "description": "Where in the file to start. Left out, it starts at the first byte, so\na file within one piece takes one request.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "The path on that origin, percent-decoded, without its leading `/`:\n`panel/index.html`. The host resolves it inside the plugin's folder.",
+          "type": "string"
+        },
+        "plugin": {
+          "description": "The plugin's id: the host of its `helm-plugin://<id>/` origin, which\nthe client established from the frame, never from what the page asked.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin",
+        "path"
+      ],
+      "type": "object"
+    },
     "PluginInfo": {
       "description": "One registered plugin folder, as a client draws it.\n\nA folder whose manifest could not be read is still here, with `error`\nsaying why and every surface empty, so Settings can show it and offer\nReload. Only a plugin that is `enabled` with no `error` has surfaces on\nscreen.",
       "properties": {
@@ -10177,6 +10248,17 @@
       "kind": "event",
       "name": "plugins:deliver",
       "snapshot": null
+    },
+    {
+      "capability": "pluginPages",
+      "kind": "request",
+      "name": "plugins:file",
+      "request": {
+        "$ref": "#/$defs/PluginFileRequest"
+      },
+      "response": {
+        "$ref": "#/$defs/PluginFile"
+      }
     },
     {
       "capability": null,

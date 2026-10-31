@@ -1635,6 +1635,60 @@ export type PluginErrorCode = "not-declared" | "secret" | "network" | "timeout" 
 export type PluginExecInfo = { name: string, command: string, args: Array<string>, };
 
 /**
+ * One file of a plugin's pages, or the part of it from an offset.
+ *
+ * A client reads from `offset + body.length` until it holds `totalBytes`.
+ * An offset at or past the end answers 200 with an empty body. A refusal
+ * answers its whole text whatever the offset. A client keeps a file it read
+ * for this `version` and `revision`; once either moves, it asks again.
+ */
+export type PluginFile = { 
+/**
+ * 200, or the refusal: 403 for a path outside the plugin's folder, 404
+ * for a file that is not there or a plugin that is not on.
+ */
+status: number, 
+/**
+ * What the file is served as, from its extension, or `text/plain` for
+ * a refusal's text.
+ */
+contentType: string, 
+/**
+ * The plugin's version, as its manifest says it. Null when it says none
+ * or no plugin that is on has this id.
+ */
+version: string | null, 
+/**
+ * The host's revision of its read of the plugin's folder, as
+ * `plugins:list` gives it. 0 when no plugin that is on has this id.
+ */
+revision: number, 
+/**
+ * The length of the whole file, or of the whole refusal.
+ */
+totalBytes: number, body: Uint8Array, };
+
+/**
+ * A file a plugin page loads, by the plugin and the path on its origin.
+ */
+export type PluginFileRequest = { 
+/**
+ * The plugin's id: the host of its `helm-plugin://<id>/` origin, which
+ * the client established from the frame, never from what the page asked.
+ */
+plugin: string, 
+/**
+ * The path on that origin, percent-decoded, without its leading `/`:
+ * `panel/index.html`. The host resolves it inside the plugin's folder.
+ */
+path: string, 
+/**
+ * Where in the file to start. Left out, it starts at the first byte, so
+ * a file within one piece takes one request.
+ */
+offset: number, };
+
+/**
  * One registered plugin folder, as a client draws it.
  *
  * A folder whose manifest could not be read is still here, with `error`
@@ -3067,6 +3121,7 @@ export interface RequestChannels {
   "plugins:call": { request: PluginCallRequest; response: PluginCallOutcome; capability: "pluginPages" };
   "plugins:cancel": { request: PluginCancelRequest; response: null; capability: "pluginPages" };
   "plugins:command": { request: PluginCommandRequest; response: null; capability: null };
+  "plugins:file": { request: PluginFileRequest; response: PluginFile; capability: "pluginPages" };
   "plugins:list": { request: null; response: Array<PluginInfo>; capability: null };
   "plugins:log": { request: PluginPathRequest; response: Array<PluginLogLine>; capability: null };
   "plugins:metrics": { request: null; response: Array<PluginMetrics>; capability: null };
@@ -3230,6 +3285,7 @@ export const CHANNELS = [
   { name: "plugins:changed", kind: "event", capability: null },
   { name: "plugins:command", kind: "request", capability: null },
   { name: "plugins:deliver", kind: "event", capability: "pluginPages" },
+  { name: "plugins:file", kind: "request", capability: "pluginPages" },
   { name: "plugins:list", kind: "request", capability: null },
   { name: "plugins:log", kind: "request", capability: null },
   { name: "plugins:metrics", kind: "request", capability: null },

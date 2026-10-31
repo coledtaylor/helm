@@ -3,14 +3,21 @@
 //!
 //! How the ipc.ts channels map onto the protocol:
 //!
-//! - Plugins split along the line they already have. Background pages,
-//!   services, exec and agent tools run on the host; plugin pages render in a
-//!   client that declared `pluginPages`. So the channels between a page and
-//!   the host (`plugins:call`, `plugins:cancel`, `plugins:answer`) and the
-//!   host's pushes to pages (`plugins:ui`, `plugins:deliver`) need that
-//!   capability. The background host's own wires are inside the host and
+//! - Plugins split along the line they already have. A plugin is registered,
+//!   switched and read on the host, and its services and exec run there;
+//!   plugin pages render in a client that declared `pluginPages`. So the
+//!   channels between a page and the host (`plugins:call`, `plugins:cancel`,
+//!   `plugins:answer`), the host's pushes to pages (`plugins:ui`,
+//!   `plugins:deliver`) and the page files a client frames (`plugins:file`)
+//!   need that capability. A background page's own wires to whatever runs it
 //!   never cross the protocol:
 //!   [`HOST_INTERNAL`](super::boundary::HOST_INTERNAL).
+//! - `plugins:file` is not in ipc.ts: the desktop's main process answered its
+//!   frames' page loads from the plugin's folder in its own protocol handler.
+//!   A client whose plugins are on the host asks the host for each file
+//!   instead, a piece of at most [`PLUGIN_FILE_PIECE_LEN`] bytes at a time,
+//!   and keeps it for the plugin's version and the host's revision of its
+//!   read.
 //! - Fire-and-forget sends (`plugins:cancel`, `plugins:answer`) are requests,
 //!   so a client learns when one did not land.
 //! - Whole-state pushes (`plugins:changed`, `secrets:changed`) are events that
@@ -31,6 +38,7 @@ use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use ts_rs::TS;
 
+use crate::bytes::Bytes;
 use crate::channel::Catalogue;
 use crate::channels::common::SessionRecord;
 use crate::message::Payload;
@@ -55,6 +63,7 @@ pub fn declare(catalogue: &mut Catalogue) {
         .request::<PluginsOwnSecrets>()
         .request::<PluginsCancel>()
         .request::<PluginsAnswer>()
+        .request::<PluginsFile>()
         .event::<PluginsChanged>()
         .event::<PluginsUi>()
         .event::<PluginsDeliver>()
@@ -139,6 +148,14 @@ request_channel! {
     /// The secret dialog a plugin asked for has closed; the host answers the
     /// plugin's call.
     PluginsAnswer = "plugins:answer", PluginAnswerRequest => (), needs PluginPages
+}
+request_channel! {
+    /// One file of a plugin's pages, from `offset` on: its status, its
+    /// content type, the plugin's version and revision it was read at, and
+    /// at most [`PLUGIN_FILE_PIECE_LEN`] bytes of it. A refusal is an answer
+    /// with its status, not an error, so a frame sees the 403 and 404 it
+    /// always has.
+    PluginsFile = "plugins:file", PluginFileRequest => PluginFile, needs PluginPages
 }
 event_channel! {
     /// Every plugin folder, after anything about any of them moved.
@@ -304,6 +321,56 @@ pub struct PluginCancelRequest {
 #[serde(rename_all = "camelCase")]
 pub struct PluginAnswerRequest {
     pub request_id: String,
+}
+
+/// The most body bytes one `plugins:file` answer carries: 4 MiB, a quarter of
+/// [`MAX_FRAME_LEN`](crate::MAX_FRAME_LEN), which leaves the rest of the
+/// answer and the framing all the room they need.
+pub const PLUGIN_FILE_PIECE_LEN: u64 = 4 * 1024 * 1024;
+
+/// A file a plugin page loads, by the plugin and the path on its origin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginFileRequest {
+    /// The plugin's id: the host of its `helm-plugin://<id>/` origin, which
+    /// the client established from the frame, never from what the page asked.
+    pub plugin: String,
+    /// The path on that origin, percent-decoded, without its leading `/`:
+    /// `panel/index.html`. The host resolves it inside the plugin's folder.
+    pub path: String,
+    /// Where in the file to start. Left out, it starts at the first byte, so
+    /// a file within one piece takes one request.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub offset: u64,
+}
+
+/// One file of a plugin's pages, or the part of it from an offset.
+///
+/// A client reads from `offset + body.length` until it holds `totalBytes`.
+/// An offset at or past the end answers 200 with an empty body. A refusal
+/// answers its whole text whatever the offset. A client keeps a file it read
+/// for this `version` and `revision`; once either moves, it asks again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginFile {
+    /// 200, or the refusal: 403 for a path outside the plugin's folder, 404
+    /// for a file that is not there or a plugin that is not on.
+    pub status: u16,
+    /// What the file is served as, from its extension, or `text/plain` for
+    /// a refusal's text.
+    pub content_type: String,
+    /// The plugin's version, as its manifest says it. Null when it says none
+    /// or no plugin that is on has this id.
+    pub version: Option<String>,
+    /// The host's revision of its read of the plugin's folder, as
+    /// `plugins:list` gives it. 0 when no plugin that is on has this id.
+    #[ts(type = "number")]
+    pub revision: u64,
+    /// The length of the whole file, or of the whole refusal.
+    #[ts(type = "number")]
+    pub total_bytes: u64,
+    pub body: Bytes,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

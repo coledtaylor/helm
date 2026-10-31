@@ -21,8 +21,10 @@ const STATE: ChannelKind = ChannelKind::Event { snapshot: true };
 const REQUEST: ChannelKind = ChannelKind::Request;
 const PAGES: Option<Capability> = Some(Capability::PluginPages);
 
-/// Every ipc.ts host channel in this domain, as the protocol declares it.
+/// Every ipc.ts host channel in this domain, and `plugins:file`, which only
+/// a client's own protocol handler asks, as the protocol declares them.
 const DECLARED: &[(&str, ChannelKind, Option<Capability>)] = &[
+    ("plugins:file", REQUEST, PAGES),
     ("plugins:list", REQUEST, None),
     ("plugins:add", REQUEST, None),
     ("plugins:remove", REQUEST, None),
@@ -408,7 +410,7 @@ fn host_internal_and_client_only_plugin_channels_are_not_declared() {
     for name in host_internal {
         assert!(
             matches!(placement(&protocol, name), Some(Placement::HostInternal(_))),
-            "{name} stays inside the host"
+            "{name} stays between a background page and what runs it"
         );
     }
     assert!(matches!(
@@ -436,6 +438,7 @@ fn plugin_page_deliveries_and_ui_requests_are_events_only_a_plugin_pages_client_
         "plugins:call",
         "plugins:cancel",
         "plugins:answer",
+        "plugins:file",
     ] {
         let decl = catalogue.get(name).unwrap();
         assert!(!decl.covered_by(&terminal_only), "{name}");
@@ -799,6 +802,109 @@ fn every_kind_of_page_delivery_arrives_as_an_event_with_typed_data() {
     }
 }
 
+fn page_file(status: u16, content_type: &str, body: Vec<u8>) -> PluginFile {
+    PluginFile {
+        status,
+        content_type: content_type.into(),
+        version: Some("1.2.0".into()),
+        revision: 9,
+        total_bytes: body.len() as u64,
+        body: Bytes(body),
+    }
+}
+
+#[test]
+fn a_page_file_is_read_a_piece_at_a_time_with_its_status_type_version_and_revision() {
+    let request = PluginFileRequest {
+        plugin: "factory".into(),
+        path: "panel/my page.html".into(),
+        offset: 4,
+    };
+    exchange::<PluginsFile>(
+        request.clone(),
+        page_file(200, "text/html; charset=utf-8", b"<p>".to_vec()),
+    );
+    exchange::<PluginsFile>(
+        request.clone(),
+        page_file(403, "text/plain; charset=utf-8", b"Forbidden".to_vec()),
+    );
+    exchange::<PluginsFile>(
+        request,
+        PluginFile {
+            status: 404,
+            content_type: "text/plain; charset=utf-8".into(),
+            version: None,
+            revision: 0,
+            total_bytes: 9,
+            body: Bytes(b"Not found".to_vec()),
+        },
+    );
+
+    let png = page_file(200, "image/png", vec![0x89, b'P', b'N', b'G', 0, 0xFF]);
+    let wire = to_payload(&png).unwrap();
+    let field = |name: &str| {
+        wire.as_map()
+            .unwrap()
+            .iter()
+            .find(|(k, _)| k.as_text() == Some(name))
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(
+        field("body"),
+        Some(Value::Bytes(png.body.0.clone())),
+        "the body is a CBOR byte string"
+    );
+    assert_eq!(field("contentType"), Some(text("image/png")));
+    assert_eq!(field("version"), Some(text("1.2.0")));
+    assert_eq!(field("revision"), Some(Value::Integer(9.into())));
+    assert_eq!(field("totalBytes"), Some(Value::Integer(6.into())));
+
+    // A request that leaves the offset out starts at the first byte.
+    let bare = Value::Map(vec![
+        (text("plugin"), text("factory")),
+        (text("path"), text("index.html")),
+    ]);
+    let request: PluginFileRequest = from_payload(&bare).unwrap();
+    assert_eq!(request.offset, 0);
+}
+
+#[test]
+fn a_full_page_file_piece_and_its_framing_fit_in_one_frame() {
+    let piece = page_file(
+        200,
+        "application/javascript",
+        vec![0xFF; PLUGIN_FILE_PIECE_LEN as usize],
+    );
+    let frame = encode_frame(&Message::Response(Response {
+        id: u64::MAX,
+        payload: to_payload(&piece).unwrap(),
+    }))
+    .expect("a full piece is one frame");
+    assert!(frame.len() <= crate::frame::MAX_FRAME_LEN as usize + 4);
+    assert!(PLUGIN_FILE_PIECE_LEN * 2 < u64::from(crate::frame::MAX_FRAME_LEN));
+}
+
+#[test]
+fn page_files_are_asked_by_a_client_and_never_named_in_ipc_ts() {
+    use crate::channels::boundary::{Placement, placement};
+
+    let protocol = crate::channel::Catalogue::protocol();
+    assert!(matches!(
+        placement(&protocol, "plugins:file"),
+        Some(Placement::Declared("plugins:file"))
+    ));
+    let ipc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/desktop/src/shared/ipc.ts"),
+    )
+    .expect("shared/ipc.ts is readable");
+    assert!(ipc.contains("'plugins:list'"), "ipc.ts quotes its channels");
+    assert!(
+        !ipc.contains("'plugins:file'"),
+        "only the desktop's main process asks for page files"
+    );
+}
+
 #[test]
 fn the_plugin_list_is_state_with_a_snapshot() {
     state::<PluginsChanged>(plugins());
@@ -872,6 +978,9 @@ fn the_generated_typescript_keeps_the_ipc_ts_shapes() {
         "boolean | number | string | null",
         "description?: string",
         "args: unknown[]",
+        "offset: number",
+        "totalBytes: number",
+        "version: string | null",
     ] {
         assert!(ts.contains(expected), "missing `{expected}` in:\n{ts}");
     }
