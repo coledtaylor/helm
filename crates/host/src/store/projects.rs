@@ -115,6 +115,16 @@ pub fn forget_projects(conn: &mut Connection, paths: &[String]) -> Result<usize>
     Ok(doomed.len())
 }
 
+/// The cached project whose folder is `cwd`, compared ignoring case as the
+/// desktop's `knownProject` does, spelled as the scan found it; `None` for a
+/// folder no scan has found. A session started there is that project's.
+pub fn known_project(conn: &Connection, cwd: &str) -> Result<Option<String>> {
+    let wanted = cwd.to_lowercase();
+    Ok(all_paths(conn)?
+        .into_iter()
+        .find(|path| path.to_lowercase() == wanted))
+}
+
 fn all_paths(conn: &Connection) -> Result<Vec<String>> {
     let mut select = conn
         .prepare("SELECT path FROM projects")
@@ -288,6 +298,28 @@ mod tests {
         let left = read_cached_projects(store.connection()).unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].path, "/work/beta");
+    }
+
+    #[test]
+    fn a_folder_a_scan_found_is_known_as_its_project_in_any_case_and_another_is_not() {
+        let dirs = TestDirs::new();
+        let mut store = Store::open(&dirs.data).unwrap();
+        let alpha = project("/work/My Projects/Alpha", ProjectKind::Repo);
+        cache_projects(store.connection_mut(), &[alpha], &[], "t1").unwrap();
+
+        assert_eq!(
+            known_project(store.connection(), "/work/my projects/alpha").unwrap(),
+            Some("/work/My Projects/Alpha".to_owned())
+        );
+        assert_eq!(
+            known_project(store.connection(), "/work/My Projects/Alpha/src").unwrap(),
+            None,
+            "a folder inside a project is not that project"
+        );
+        assert_eq!(
+            known_project(store.connection(), "/elsewhere").unwrap(),
+            None
+        );
     }
 
     #[test]

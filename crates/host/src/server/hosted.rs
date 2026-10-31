@@ -169,6 +169,15 @@ impl Hosted {
         self.find_backend(id).is_some()
     }
 
+    /// The project a scan found at `cwd`, if any: what a session the host
+    /// composes itself there is recorded under. A cache it cannot read is
+    /// no project, so the session still starts.
+    pub fn known_project(&self, cwd: &str) -> Option<String> {
+        crate::store::projects::known_project(self.ledger.store().connection(), cwd)
+            .ok()
+            .flatten()
+    }
+
     /// The backend a request names, or the host's default when it names
     /// none.
     fn backend(

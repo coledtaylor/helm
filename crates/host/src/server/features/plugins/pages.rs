@@ -455,8 +455,11 @@ impl Pages {
         // is Claude Code's wherever this host runs it; a host without it
         // (a test's fake agent) starts its default.
         let claude = BackendId::claude_code();
+        // A folder a scan found is recorded as its project, as a start from
+        // the window is, so the session is grouped under it.
         let request = StartSessionRequest {
             backend: hosted.runs_backend(&claude).then_some(claude),
+            project_path: hosted.known_project(&ask.asked.cwd),
             cwd: ask.asked.cwd,
             name: Some(ask.asked.name),
             opening_prompt: Some(ask.asked.prompt),
